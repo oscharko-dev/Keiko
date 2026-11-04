@@ -11,7 +11,7 @@
       "seed": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
       "must": true,
       "private": true,
-      "terms": [["Tabellen"]]
+      "terms": [["Tabelle*"]]
     }
   ],
   "turns": [
@@ -31,7 +31,7 @@
       "question": "Wie soll ich dir Zahlen zeigen?",
       "expect": {
         "kind": "answer",
-        "terms": [["Tabellen"]]
+        "terms": [["Tabelle*"]]
       }
     },
     {
@@ -39,7 +39,7 @@
       "question": "Fasse mir die Quartalsergebnisse zusammen.",
       "expect": {
         "kind": "answer",
-        "terms": [["Tabellen"]]
+        "terms": [["Tabelle*"]]
       }
     },
     {

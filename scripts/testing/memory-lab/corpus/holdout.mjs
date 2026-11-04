@@ -161,8 +161,12 @@ function decrypt(envelope, key) {
  * exist, refuses paths inside the checkout and refuses to overwrite an existing holdout.
  */
 export function sealHoldout({ scenarios, out, keyFile }) {
-  const target = assertOutsideCheckout(out, "--out");
-  const keyPath = assertOutsideCheckout(keyFile, "--key-file");
+  // The guard resolves links to judge the destination; the files are then used as spelled, so the
+  // key reader still sees, and refuses, a key file that is itself a link.
+  assertOutsideCheckout(out, "--out");
+  assertOutsideCheckout(keyFile, "--key-file");
+  const target = resolve(out);
+  const keyPath = resolve(keyFile);
   if (existsSync(target)) throw new HoldoutError("refusing to overwrite an existing holdout");
   const set = loadScenarioDirectory(scenarios);
   if (set.length === 0) throw new HoldoutError("the scenario directory holds no scenario");
@@ -195,8 +199,10 @@ function readEnvelope(file) {
  * modified file fails without naming any content.
  */
 export function openSealedHoldout(file, keyFile) {
-  const source = assertOutsideCheckout(file, "--holdout");
-  const key = readKey(assertOutsideCheckout(keyFile, "--key-file"));
+  assertOutsideCheckout(file, "--holdout");
+  assertOutsideCheckout(keyFile, "--key-file");
+  const source = resolve(file);
+  const key = readKey(resolve(keyFile));
   const parsed = JSON.parse(decrypt(readEnvelope(source), key));
   if (!Array.isArray(parsed) || parsed.length === 0)
     throw new HoldoutError("the holdout holds no scenario");

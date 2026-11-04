@@ -1,8 +1,10 @@
 // Coverage of a corpus by scenario class and language (#4208). The epic requires at least 30 scenarios
 // per class and language per corpus version, so that a class result has a noise band at all. The
-// manifest of a build carries the counts behind that rule, and a focused build also names every
-// required class and language that fell short, so a shortage is a line in the manifest and not a
-// surprise in a report.
+// minimum counts distinct units (independent facts, changes, forgets and traps): one unit stated four
+// ways under three seeds is twelve scenarios, but one thing measured twelve times, and a class that
+// rests on six things has no breadth whatever its scenario count says. The manifest of a build
+// carries both counts, and a focused build names every required class and language whose units fall
+// short, so a shortage is a line in the manifest and not a surprise in a report.
 import { compareStrings } from "../../../lib/compare-strings.mjs";
 import { BLUEPRINT_LANGUAGES } from "./blueprint.mjs";
 
@@ -58,22 +60,22 @@ export function classCounts(entries) {
     );
 }
 
-/** The required class and language pairs below the minimum, with the count they reached. */
+/** The required class and language pairs whose distinct units fall below the minimum, with both counts. */
 export function shortfalls(counts, minimum = MINIMUM_PER_CLASS_AND_LANGUAGE) {
-  const reached = new Map(counts.map((row) => [`${row.class}/${row.language}`, row.scenarios]));
+  const reached = new Map(counts.map((row) => [`${row.class}/${row.language}`, row]));
   return REQUIRED_CLASSES.flatMap((className) =>
-    BLUEPRINT_LANGUAGES.map((language) => ({
-      class: className,
-      language,
-      scenarios: reached.get(`${className}/${language}`) ?? 0,
-    })),
-  ).filter((row) => row.scenarios < minimum);
+    BLUEPRINT_LANGUAGES.map((language) => {
+      const row = reached.get(`${className}/${language}`);
+      return { class: className, language, scenarios: row?.scenarios ?? 0, units: row?.units ?? 0 };
+    }),
+  ).filter((row) => row.units < minimum);
 }
 
 /** The coverage section of a focused build's manifest. */
 export function coverageSection(counts) {
   return {
     minimumPerClassAndLanguage: MINIMUM_PER_CLASS_AND_LANGUAGE,
+    minimumCounts: "units",
     requiredClasses: REQUIRED_CLASSES,
     shortfalls: shortfalls(counts),
   };

@@ -8,10 +8,9 @@
 // properties the scorer relies on: every sentence classifies as the scorer will judge it (correct,
 // stale, forgotten-returned or forbidden), no probe question gives its answer away, and every value
 // that looks like a credential or an identifier is one of the documented fake values (values.mjs).
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { scenarioDigest } from "../scenario.mjs";
-import { matchesTermGroups, scoreStore } from "../score.mjs";
+import { SetFileError, isRecord, loadJsonSet, nonEmptyString } from "../set-files.mjs";
+import { TERM_PREFIX_MARK, matchesTermGroups, scoreStore, validPrefixMark } from "../score.mjs";
 import { anyTermVisible, clozeQuestion, deriveOracle, factText } from "./oracle.mjs";
 import { opensWithMemoryCommand, sharedContentStems, stripSentenceEnd } from "./text.mjs";
 import { shannonEntropy, valueShapeFindings, visitStrings } from "./values.mjs";
@@ -51,23 +50,14 @@ const ROLE = /^[a-z][a-z-]{2,31}$/u;
 const MAX_FAKE_KEY_ENTROPY = 3.2;
 const SENTENCE_END = /[.!?]["”“)]?$/u;
 
-export class BlueprintError extends Error {
+export class BlueprintError extends SetFileError {
   constructor(id, message) {
-    super(`${id}: ${message}`);
-    this.name = "BlueprintError";
+    super("BlueprintError", id, message);
   }
 }
 
 function fail(id, message) {
   throw new BlueprintError(id, message);
-}
-
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function nonEmptyString(value) {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function checkFields(id, where, record, required, optional = []) {
@@ -110,9 +100,15 @@ function checkQuestion(id, where, value) {
 function checkTermGroup(id, where, group) {
   if (!Array.isArray(group) || group.length === 0 || group.length > LIMITS.alternatives)
     fail(id, `${where} groups need 1 to ${String(LIMITS.alternatives)} alternatives`);
-  for (const term of group)
+  for (const term of group) {
     if (!nonEmptyString(term) || term.length < 3 || term.length > 60)
       fail(id, `${where} terms must be 3 to 60 characters`);
+    if (!validPrefixMark(term))
+      fail(
+        id,
+        `${where} terms carry ${TERM_PREFIX_MARK} only at the end, after at least three characters`,
+      );
+  }
 }
 
 function checkTerms(id, where, groups) {
@@ -558,23 +554,7 @@ export function blueprintDigest(blueprint) {
   return scenarioDigest(blueprint);
 }
 
-function parseBlueprintFile(path) {
-  let parsed;
-  try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    throw new BlueprintError(path, `not valid JSON (${error.message})`);
-  }
-  return validateBlueprint(parsed);
-}
-
 /** Loads every `*.json` blueprint of a directory, sorted by id, refusing duplicate ids. */
 export function loadBlueprintDirectory(directory) {
-  const files = readdirSync(directory)
-    .filter((name) => name.endsWith(".json"))
-    .toSorted();
-  const blueprints = files.map((name) => parseBlueprintFile(join(directory, name)));
-  const duplicate = duplicateOf(blueprints.map((blueprint) => blueprint.id));
-  if (duplicate !== undefined) fail(duplicate, "duplicate blueprint id in the set");
-  return blueprints.toSorted((left, right) => left.id.localeCompare(right.id));
+  return loadJsonSet(directory, { validate: validateBlueprint, fail, what: "blueprint" });
 }

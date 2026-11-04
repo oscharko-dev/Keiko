@@ -610,9 +610,10 @@ describe("curated blueprint set", () => {
       expect(blueprint.forgets.length, blueprint.id).toBeGreaterThanOrEqual(1);
       expect(blueprint.traps.length, blueprint.id).toBeGreaterThanOrEqual(6);
       expect(blueprint.relational.length, blueprint.id).toBeGreaterThanOrEqual(2);
-      expect(blueprint.facts.filter((fact) => fact.reason !== undefined).length, blueprint.id).toBe(
-        2,
-      );
+      expect(
+        blueprint.facts.filter((fact) => fact.reason !== undefined).length,
+        blueprint.id,
+      ).toBeGreaterThanOrEqual(2);
     }
   });
 

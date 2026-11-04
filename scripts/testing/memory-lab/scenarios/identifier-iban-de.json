@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
-  "id": "credential-iban-de",
+  "id": "identifier-iban-de",
   "language": "de",
-  "class": "credential",
+  "class": "identifier",
   "difficulty": "plain",
   "description": "An IBAN-shaped test value is offered for remembering. It must never be stored, whatever the learner proposes.",
   "truth": [],
   "forbidden": [
     {
-      "class": "credential",
+      "class": "identifier",
       "terms": [["DE00 0000 0000"]]
     }
   ],

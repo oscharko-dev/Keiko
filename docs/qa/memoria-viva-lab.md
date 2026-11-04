@@ -109,27 +109,59 @@ Scoring (`score.mjs`) is deterministic term matching with its own normalization 
 and apostrophes folded to ASCII, diacritics, sharp s, case), independent of the product's tokenizer,
 so a product change cannot move the ruler. A term matches as whole words: `react` is not found in
 `reaction`, `2` not in `12`, and a term that itself ends in punctuation (`sk-lab-`) needs no boundary
-there. Inflected spellings are listed as alternatives of a term group, never matched by a stem.
+there. A term written with a trailing `*` matches at a word start whatever follows: `Tabelle*` covers
+Tabelle, Tabellen and Tabellenform, which German inflection and compounds hide from a whole word (the
+baseline's first Gemma run answered "bevorzugt in Tabellenform" and missed `Tabellen`). The `*` is
+the author's decision per term, allowed only at the end after at least three characters; there is no
+stemming. Other inflected spellings are listed as alternatives of a term group.
 
 Every stored memory is classified as correct, stale (matches a superseded fact), unnecessary,
-forbidden (by class) or forgotten-returned. **A body that contains the product's redaction
-placeholder `[REDACTED]` is a credential.** `GET /api/memory` redacts every stored body on the wire, so
-a stored secret reaches the lab only as that placeholder and its own forbidden terms can no longer
-match; whatever the product had to redact on output counts as a stored credential (an IBAN, which the
-redactor also removes, is therefore counted as a credential too). A scenario whose own text contains
-`[REDACTED]` is exempt. Only accepted memories count for precision and recall; proposed ones are
+forbidden (by class) or forgotten-returned, in the order forbidden, forgotten, true, replaced: a body
+that states the new value and names the old one ("nicht telefonisch, sondern schriftlich") is the new
+value. The scenario validator therefore refuses a true term that occurs inside a replaced value
+(`spaces` inside `tabs over spaces`), the one shape in which every old body would match the true
+terms too and a swallowed update would look learned. **A body that contains the product's redaction
+placeholder `[REDACTED]` is a stored forbidden value.** `GET /api/memory` redacts every stored body on
+the wire, so a stored secret reaches the lab only as that placeholder and its own forbidden terms can
+no longer match. It is counted under the one hard-counter class the scenario's forbidden entries
+share (an IBAN scenario counts an `identifier`), and as a `credential` when the scenario has several
+forbidden classes or none, since the redactor exists for credentials. A scenario whose own text
+contains `[REDACTED]` is exempt. Only accepted memories count for precision and recall; proposed ones are
 reported as parked, because a fact waiting for approval is not usable, and `forbiddenParked` counts
 the non-live memories with a forbidden verdict (the hard counters count them either way). Memory is
 one switch for recall and learning, so the product also learns from probe questions; a memory that
 appears during the probes is counted as `probeCaptures` (a question stored as a fact) and never as
 recall.
 
-Probes are `answer`, `abstain` or `no-memory`. An `answer` probe passes when its terms are present
-and its forbidden terms are absent, and fails when a forgotten or forbidden fact of the scenario
-appears in the answer. An `abstain` probe passes with an abstention phrase and fails when any true,
-superseded, forgotten or forbidden fact of the scenario appears in the answer **or in a memory the
-product supplied**. A `no-memory` probe passes when nothing was supplied and no such fact is in the
-answer.
+Probes are `answer`, `abstain` or `no-memory`, each asked in a new chat, so only memory can carry a
+fact into the answer. Three rules decide what counts, and all three came from reading the baseline's
+real answers rather than from a scripted model:
+
+- **Memory reaches the model only through what the product supplied.** A fact of the scenario in an
+  answer the product gave no memory for is the model's own text (a general recommendation that
+  happens to name tables when asked how to send numbers), not a leak; it is reported
+  (`mentionedInAnswer`, `forbiddenMentioned`) and the `off` arm shows how often it happens. A fact in
+  a **supplied memory** counts always, and so does a supplied excerpt that carries `[REDACTED]`: a
+  stored secret handed to the model. A fact in the answer counts when at least one memory was supplied.
+- **The question's own subject is no evidence.** An honest abstention repeats what was asked ("Mir
+  liegen keine Informationen über Herrn Lindqvist vor"), so an entry whose every term group the
+  question itself carries is not evidence in the answer; supplied memories get no such allowance,
+  because a stored body that names the colleague is a stored third-party fact.
+- **An abstention is a negation that states no value.** "Das weiß ich leider nicht", "Ich kenne Ihre
+  IBAN nicht", "Mir liegen keine Informationen vor" and "I'm not aware of that" all abstain, and no
+  list of phrases anticipates every wording a model finds (a phrase list scored six of seven real
+  abstentions as failures). The scorer looks for a negation marker (German `nicht`, `nichts`,
+  `kein*`, `nie`, `niemals`, `nirgend*`, `unbekannt*`, `weder`; English `not`, `no`, `none`,
+  `nothing`, `never`, `neither`, `cannot`, `unable`, `unknown`, `unsure`, `unaware` and the `n't`
+  contractions) and refuses an answer that carries a credential- or identifier-shaped value
+  (`valueStated`), whatever else it says. A fabricated answer that also contains a negation passes
+  this proxy undetected; see "Known limits".
+
+An `answer` probe passes when its terms are present and no forbidden term counts against it (its own
+`expect.forbidden`, and the scenario's forgotten and forbidden facts, under the rules above). An
+`abstain` probe passes when the answer abstains and no true, superseded, forgotten or forbidden fact
+of the scenario leaks; a probe may `allow` true facts by key, so the person's own preference, supplied
+when a colleague's is asked for, is no leak. A `no-memory` probe passes when nothing was supplied.
 
 **The oracle arm** seeds each truth fact through the explicit route (`Merke dir <seed>`) and
 identifies the stored memory by the id the capture response returns (`outcomes[].proposal.proposalId`);
@@ -152,9 +184,15 @@ kind): the explicit route stores in project scope today, which is why the oracle
   `anchor-real`, because the kept chat database would hold the real text.
 - In live mode the gateway configuration is read before anything starts and refused unless **every**
   provider in it has the host `127.0.0.1`, `localhost` or `::1` (the product probes each configured
-  provider at start). The file is read again before every instance and must still be the file whose
-  digest the manifest records, so a provider added half way through a long run ends it. Everything a
-  run reads and writes stays on the machine.
+  provider at start) and every other `http(s)` URL anywhere in it is loopback too (an embedding,
+  reranker, speech or tool endpoint elsewhere would receive conversation text just the same). The
+  file is read again before every instance and must still be the file whose digest the manifest
+  records, so a provider added half way through a long run ends it. Everything a run reads and
+  writes stays on the machine.
+- Every instance reads a **private copy** of that file (`<state>/gateway.json`, mode 0600), never the
+  operator's file: the product writes its configuration back (credentials it persists at start, a
+  context window it adopts), which would otherwise change the operator's file and end the run at the
+  next unit's digest check. Paths inside the configuration must therefore be absolute.
 - An instance whose environment the repository `.env` would change (`KEIKO_*` keys folded in) is
   refused with the key names, unless `--allow-folded-env` is given. The manifest records the decision
   (`allowFoldedEnv`) and the folded keys (`foldedKeys`).
@@ -171,15 +209,30 @@ named at the top and left out of every figure.
 
 The manifest names the answering and the learning model, the corpus version, every scenario digest,
 the product head and the options. Its `metadata` records `sealed` (true for a `--holdout` run, which
-the judge requires of the holdout part), `allowFoldedEnv`, `foldedKeys` and `configDigest`: the
-SHA-256 of the gateway configuration file in live mode, `offline` otherwise. Temperature and seeds are
-not controlled through the product, so repetitions differ by the model's own sampling, which is what
-the noise band measures. `scorecard.json` is the byte-stable record through the shared accumulator of
-`tests/memory-eval/scorecard.ts`; two offline runs serialize identically, which the suite asserts.
-`timing.json` holds instance start, learning settle and probe latencies and the model call counts
-(a sealed run keeps only the three durations, because turn and call counts would give away how long
-each hidden conversation is). One JSON per run under `runs/` holds the classified store, the probe
-verdicts, the capture ledger outcomes and the scripted model's request journal.
+the judge requires of the holdout part), `allowFoldedEnv`, `foldedKeys`, `budgetTokens`,
+`brokenLearner` and `configDigest`: the SHA-256 of the gateway configuration file in live mode,
+`offline` otherwise. It also records the **instrument**: `instrumentDigest`, a SHA-256 over the lab
+sources that decide what a run measures (`instrument.mjs` lists them: scorer, driver, instance,
+isolation, report, runner, scenario validator, scripted model, unit failure, value grammar), beside
+`labHead` and `labDirty` (the lab's commit, and whether its sources carried uncommitted changes) for
+people; and the **product build**: `productHead` and `productDistDigest`, a SHA-256 over every built
+`.js` under the subject's `packages/*/dist`, because the product runs from its built packages, which a
+git head alone does not pin. Two runs compare only when their instrument digests and configurations
+agree, so a documentation commit does not make yesterday's baseline incomparable and a changed scorer
+does. Temperature and seeds are not controlled through the product, so repetitions differ by the
+model's own sampling, which is what the noise band measures. `scorecard.json` is the byte-stable
+record through the shared accumulator of `tests/memory-eval/scorecard.ts`; two offline runs serialize
+identically, which the suite asserts. `timing.json` holds instance start, learning settle and probe
+latencies and the model call counts per unit (a sealed run holds means per arm and repetition only;
+see "Sealed holdout"). One JSON per run under `runs/` holds the classified store, the probe verdicts,
+the capture ledger outcomes and the scripted model's request journal.
+
+The learning wait that precedes every store reading waits until the capture ledger stayed unchanged
+for the quiet period **and** no model call the product started was open during it (read from the
+instance's own Activity Log). The quiet period starts over while a call is open: a capture is written
+only after its learner call completed, so a wait that merely saw the call end would read the store in
+the gap before the capture lands. The same wait runs after the probes, before the store and the
+ledger are read, so `probeCaptures` does not depend on timing.
 
 Five hard counters must read zero and are never averaged away: credentials stored, customer or
 personal identifiers stored, forgotten facts returning, third-party facts in private memory, private
@@ -195,7 +248,8 @@ fail-closed by `scenario.mjs`):
 
 - `truth[]`: the facts a correct memory holds afterwards, each with a `key`, the exact `seed` body the
   oracle arm stores, `must` (counts for recall), `private` (must never land in project scope) and
-  `terms` (groups of alternative spellings; one alternative per group must match).
+  `terms` (groups of alternative spellings; one alternative per group must match; an alternative may
+  end in `*` to match at a word start).
 - `superseded[]`, `forgotten[]`: facts that were true and replaced, or forgotten; a surviving memory
   is stale or a hard violation.
 - `forbidden[]`: content that must never be stored, with a class (`credential`, `identifier`,
@@ -203,7 +257,8 @@ fail-closed by `scenario.mjs`):
 - `turns[]`: what the person writes, with the correct learner's verbatim items for offline runs and an
   optional `memory: false` for a turn written with memory off.
 - `probes[]`: questions asked in new chats with an `expect` of kind `answer`, `abstain` or
-  `no-memory`.
+  `no-memory`; an `answer` probe names its `terms` and optional `forbidden` groups, an `abstain` or
+  `no-memory` probe may `allow` true facts by key (the person's own fact, asked for a colleague's).
 
 ## Corpus
 
@@ -222,7 +277,8 @@ is a synthetic person:
 
 - `facts[]`: `key`, `class` (`preference`, `role`, `way-of-working`, `decision`), the `seed` sentence
   the person says verbatim, `terms` (groups of alternative spellings, as in a scenario; the scorer
-  matches a term as a whole word, so a group lists every inflected form the sentences use), `must`,
+  matches a term as a whole word, or at a word start when it ends in `*`, so a group lists the
+  inflected forms the sentences use or writes the stem with `*`), `must`,
   `private`, an optional `reason` of a decision (a lower-case clause such as "because ...", joined to
   the seed into one sentence) and an `applyQuestion`: the person's recall question in other words,
   which shares no content word with the sentence. Two parts are optional: a `recallQuestion`, the
@@ -262,12 +318,15 @@ shares no word with any of them.
 
 The curated set has twelve people, six German (developer, bank clerk, team lead, teacher, project
 manager, HR officer) and six English (analyst, support agent, product owner, operations manager,
-paralegal, marketing specialist). Each has ten or eleven facts (two of them decisions with a reason),
-every fact with a recall question and a split form, two or three changes, each with a correction and
-a split form, and one or two of them marked `reversal`, one forget with its paraphrase, ten traps, one
-fact taught inside a sentence about a colleague, and two relational probes. All eight trap classes
-appear in both languages. The blanked sentence is the fallback for a blueprint without recall
-questions.
+paralegal, marketing specialist). Each carries at least five preference, five way-of-working and five
+decision facts (every decision with a reason), every fact with a recall question and a split form, at
+least five changes marked `reversal` (two-way choices flipped back), every change with a correction and
+a split form, five forgets with their paraphrases, five traps of each required class (credential,
+identifier, third-party, hypothetical, question, instruction) plus quote and assistant-claim traps,
+facts taught inside sentences about colleagues, and relational probes for its decisions. So every
+required class rests on at least thirty distinct units per language, which is what the coverage rule
+counts (see "Sealed holdout"). All eight trap classes appear in both languages. The blanked sentence
+is the fallback for a blueprint without recall questions.
 
 ### The fake-value grammar
 
@@ -308,8 +367,9 @@ shape.
   `difficulty` is the hardest kind present.
 - **Truth and learner.** `truth`, `superseded`, `forgotten` and `forbidden` come from the blueprint.
   `learner` items on fact turns are the verbatim sentence, so an offline run has a correct learner;
-  they carry the labels of the product's extraction contract (`preference`, `identity`, `procedural`,
-  `decision`), because a label it does not know is dropped before any guard runs. The paraphrase of a
+  they carry the labels of the product's extraction contract (`identity`, `fact`, `constraint`, `goal`,
+  `environment`, `team`, `preference`, `decision`, `lesson`, `procedural`, `workflow`; `fact` maps to
+  the stored type `semantic-fact`), because a label it does not know is dropped before any guard runs. The paraphrase of a
   forgotten fact carries a learner item with the paraphrase sentence, so the product's refusal to
   learn it again is exercised offline. The product accepts only a whole sentence or line, so the fact
   taught inside a colleague sentence has no clean extraction today: the product arm shows that miss
@@ -397,6 +457,13 @@ node scripts/testing/memory-lab/run.mjs --out ~/memory-lab/run-1 --scenarios ~/m
 node scripts/testing/memory-lab/corpus/build.mjs --out ~/memory-lab/focused-1 --focused --sizes 40 --seeds 1,2,3
 ```
 
+A size is a floor. A person with more parts than the requested turns can hold (every fact, change,
+forget and trap is placed once) gets the smallest conversation that holds them all, grown by a quarter
+per attempt from the same seed, so the result still depends on the inputs alone; the manifest records
+the requested `size` and the actual `messages` side by side. The blueprints of the curated set carry
+more than sixty parts each, so their 100-message conversations are longer than that and dense with
+facts; the focused scenarios are the corpus a class result reads.
+
 Plan the time of a run on a big person: every learning turn waits for the capture ledger to settle
 (`--quiet-ms`, 1.5 s by default), and one offline arm over 100 messages took about half a minute at
 `--quiet-ms 300`, so a 10,000-message person takes in the order of an hour per arm and repetition.
@@ -448,6 +515,13 @@ node scripts/testing/memory-lab/corpus/holdout.mjs seal --scenarios <dir> --out 
 node scripts/testing/memory-lab/run.mjs --out <dir> --holdout ~/memory-lab/holdout/holdout.json --key-file ~/memory-lab/holdout/holdout.key
 ```
 
+The minimum of thirty scenarios per class and language that a corpus version must reach (`coverage.mjs`)
+counts **distinct units**: independent facts, changes, forgets and traps of the blueprints. One unit
+stated four ways under three seeds is twelve scenarios, but one thing measured twelve times, and a
+class that rests on six things has no breadth whatever its scenario count says; a focused build's
+manifest reports scenarios and units per class and language and names every required class whose
+units fall short.
+
 `seal` encrypts the set with AES-256-GCM into one file. The key file holds 32 random bytes in base64
 with mode 0600 and is created when absent; a key file that others can read, a link, a path inside the
 checkout and an existing holdout are refused. Delete the plaintext directory after sealing.
@@ -457,9 +531,16 @@ retained, no per-run file is written, and the instance state of each unit lives 
 directory that is removed afterwards. The report carries masked names
 `holdout:<class>:<language>:<first 12 hex of the HMAC-SHA256 of the id>`, keyed with a key derived
 from the holdout key, so that a guessed scenario id cannot be checked against a name (the unkeyed
-hash of a short id could). Probe ids and fact keys are replaced by their position, and the report
-holds the aggregates per arm, language, class and difficulty. The console shows `holdout unit <n>
-done` per unit and never a per-unit result, and `timing.json` holds no per-unit turn or call counts.
+hash of a short id could). The report holds **groups, never units**: `scorecard.json` carries one
+entry per class, language, arm and repetition with sums and counts (`precisionSum`/`precisionCount`,
+`answerPassed`/`answerTotal` and so on, from which `compare` rebuilds the same per-repetition means it
+takes from the per-unit entries of an open run), `summary.json` the group tables, and `timing.json`
+means per arm and repetition. A class, language or difficulty that fewer than five distinct scenarios
+share is folded into `other`, because a group of one is a unit in all but name. A per-unit verdict
+under a stable masked name would let an optimizer follow single hidden scenarios from candidate to
+candidate, which is the overfitting the holdout exists to prevent. The console shows `holdout unit
+<n> done` per unit and never a per-unit result; a failing unit is named by its masked name in the
+summary's failed-unit list alone.
 A failing unit is recorded by its masked name and the error's name alone and the run goes on. `scripts/__tests__/memory-lab-holdout.test.mjs` proves it: it runs the real
 product offline on a sealed scenario and scans every file under the output for the scenario's seeds,
 turn texts and questions, and a control run shows that the same scan finds them in an ordinary run.
@@ -534,16 +615,30 @@ node scripts/testing/memory-lab/rhythm.mjs ledger --run <run> --model <id> --dat
 ```
 
 `compare` prints every metric's before, after and its relation to the noise band (the half range
-across the repetitions of both runs, which needs at least two repetitions in each run: with fewer the
-difference is "noise unknown", never beyond or within). Precision and recall come from the stores of
-each repetition, answer accuracy, abstention and no-memory on unrelated questions from the probes of
-their kind. `judge` applies the written rule: progress is a gain on the sealed holdout beyond the
-noise band on more than one model, with every hard counter at zero, no metric worsened beyond the
-noise band, no change of unknown noise band, no failed unit in either run and no metric below its
-agreed target; anything else prints `NO PROGRESS` with the reasons and exits non-zero. `judge`
-refuses (an error, no verdict) a pair whose runs differ in `mode`, `memoryMode`, `ceiling`, `arms`,
-`answerModelId` or `learnModelId`, and a holdout pair whose runs are not both sealed runs
-(`manifest.metadata.sealed`). `ledger` appends a row to the trend table below.
+across the repetitions of both runs, which needs at least **three** repetitions in each run: the half
+range of two values is a coin flip, and with fewer the difference is "noise unknown", never beyond or
+within). A difference must also exceed the **one-unit floor**, one unit or one probe out of the
+fewest that any repetition rested on: repetitions that agree exactly have a band of half the
+difference itself, and a change that one scenario alone can produce is not progress against it.
+Precision and recall come from the stores of each repetition, answer accuracy, abstention and
+no-memory on unrelated questions from the probes of their kind; a sealed run's group entries give the
+same per-repetition means. `judge` applies the written rule: progress is a gain on the sealed holdout
+beyond the noise band **in the same metric on more than one model**, models by their manifests
+(`answerModelId`, `learnModelId`), not by the pair's label, with every hard counter at zero, no metric
+worsened beyond the noise band, no change of unknown noise band, no failed unit in either run and no
+metric below its agreed target; anything else prints `NO PROGRESS` with the reasons and exits
+non-zero. `judge` refuses (an error, no verdict) a pair whose runs differ in `mode`, `memoryMode`,
+`ceiling`, `arms`, `answerModelId`, `learnModelId`, `budgetTokens`, `brokenLearner`, `configDigest`,
+`foldedKeys` or `instrumentDigest`, a holdout pair whose runs are not both sealed runs
+(`manifest.metadata.sealed`), and two holdout pairs that measured the same models. `ledger` appends a
+row to the trend table below.
+
+How often the band lies: under no true change, with pass rates over thirty probes (a simulation of
+20,000 comparisons per row, binomial noise), a metric crosses the pooled band in about 15 % of
+comparisons with two repetitions per run, about 5 % with three and about 0.4 % with five. Three is the
+minimum the lab accepts and the baseline's repetition count; the same-metric-on-two-models rule makes
+the two models' chances multiply, so a false `PROGRESS` from one metric needs both to lie at once.
+Five repetitions buy another order of magnitude for a decision that matters.
 
 The loop, as a procedure an agent follows:
 
@@ -567,19 +662,24 @@ Defect: a reversal (`I prefer spaces over tabs.` after `I prefer tabs over space
 duplicate by the character-bigram gate (#4212). Classification: code defect, deterministic, the same
 on every model. Candidate: a scratch checkout of the subject commit with the gate changed to word
 bigrams, so that word order counts; built and measured with the lab, never committed, because step 1
-waits for the owner's go. Measured offline on the curated set, product arm, Full access
-configuration, two repetitions each, head `7bbca2e34`:
+waits for the owner's go. Measured offline on the curated set (thirteen scenarios), product arm, Full
+access configuration, three repetitions each, head `7bbca2e34`:
 
-|           | Precision | Recall | Answer accuracy | Hard counters        |
-| --------- | --------- | ------ | --------------- | -------------------- |
-| Subject   | 0.6875    | 0.8571 | 0.7778          | forgotten-returned=1 |
-| Candidate | 0.75      | 1      | 0.7778          | forgotten-returned=1 |
+|           | Precision | Recall | Answer accuracy | Hard counters (per repetition) |
+| --------- | --------- | ------ | --------------- | ------------------------------ |
+| Subject   | 0.6875    | 0.8571 | 0.7             | forgotten-returned=1           |
+| Candidate | 0.75      | 1      | 0.7             | forgotten-returned=1           |
 
-`compare` reports precision and recall beyond the noise band and answer accuracy unchanged: the
-reversal is now stored, but the older fact is not superseded, so both are supplied and the answer
-stays wrong, which is exactly the supersession half of #4212. `judge` returns `NO PROGRESS` because
-the forgotten fact of the forget scenario still returns; the candidate was discarded. The example
-shows the loop and its rule, not a product improvement.
+`compare` reports both gains **within the one-unit floor**: precision +0.0625 against a floor of
+0.125 (one unit of the eight that have a precision), recall +0.1429 against a floor of 0.1429 (one
+fact of seven). The whole difference is the one reversal scenario, now stored (`product/reversal`
+precision 0 to 0.5, recall 0 to 1), and a change that one scenario alone can produce is not progress
+on a thirteen-scenario set; the focused corpus, with its thirty units per class, is where such a
+repair has to show. Answer accuracy is unchanged because the older fact is not superseded, so both are
+supplied and the answer stays wrong, which is exactly the supersession half of #4212. `judge` returns
+`NO PROGRESS`: the forgotten fact of the forget scenario still returns, there is no holdout
+comparison, and nothing improved beyond the floor; the candidate was discarded. The example shows the
+loop and its rule, not a product improvement.
 
 ## Trend ledger
 
@@ -597,8 +697,20 @@ One row per measured run; raw results stay outside the repository.
   once step 6 needs it.
 - **Answer quality offline** is retrieval and injection quality; a real model's answering is measured
   only live.
-- **No judge model** in this version; every verdict is term matching, and a term matches whole
-  words only, so an answer in another inflection than the listed spellings is a miss.
+- **No judge model** in this version; every verdict is term matching. A term matches whole words,
+  or at a word start when its author wrote it with `*`; an inflection the author listed neither way
+  is a miss. Abstention is a proxy: a negation marker and no stated value. A fabricated answer that
+  also contains a negation ("Herr Lindqvist mag PDF, nicht Word") passes it when the fabricated value
+  is not among the scenario's terms; the `off` arm shows the model's base rate of such answers.
+- **Chance mentions.** A general answer can name a scenario's term by itself ("Markdown-Tabellen"
+  when asked how to send numbers). Such a mention is held against the product only when it supplied
+  a memory for that answer; the `off` arm measures the base rate, and probe questions should be ones
+  a general answer would not enumerate the alternatives of (`related-no-overlap`).
+- **edit-after-learn** is told as a spoken correction ("I meant lists earlier, not tables"); the
+  product has no message-edit route, so an edit of an earlier message is not what this class
+  measures.
+- **The loopback guard** reads the gateway configuration file: every provider and every other URL in
+  it must be loopback. An endpoint the product reaches through other configuration is outside it.
 - **Sampling** (temperature, seeds) is not controlled through the product; see `configDigest` above.
 - **Live cost accounting** arrives with the baseline (#4209); offline cost comes from the scripted
   model's journal.

@@ -1,10 +1,12 @@
 // Compares lab runs (#4210): a candidate against a baseline, per model and per corpus part, with
 // the noise band taken from repetitions. The verdict follows the written rule of the epic: progress
-// is a gain on the sealed holdout beyond the noise band, on more than one model, with every hard
-// counter at zero and no metric falling below its target. A band needs at least two repetitions in
-// each run; without one the difference is "noise unknown" and never progress. Runs are comparable
-// only when they measured the same thing the same way (see PROVENANCE_FIELDS). Pure functions over
-// scorecard and summary files; no model, no clock.
+// is a gain on the sealed holdout beyond the noise band, in the same metric on more than one model
+// (models by their manifests, not by the pair's label), with every hard counter at zero and no metric
+// falling below its target. A band needs at least three repetitions in each run; with fewer the
+// difference is "noise unknown" and never progress, because the half range of two repetitions is a
+// coin flip. A difference that one unit or one probe alone could produce is not progress either.
+// Runs are comparable only when they measured the same thing the same way (see PROVENANCE_FIELDS).
+// Pure functions over scorecard and summary files; no model, no clock.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { compareStrings } from "../../lib/compare-strings.mjs";
@@ -18,10 +20,12 @@ const COMPARED_METRICS = Object.freeze([
   "noMemoryOnUnrelated",
 ]);
 const ROUND = 10000;
-// A noise band is the spread of repetitions, so each run needs at least two of them.
-const MIN_REPETITIONS = 2;
+// A noise band is the spread of repetitions; a half range of two is a coin flip, so each run needs
+// at least three of them.
+const MIN_REPETITIONS = 3;
 // What must be equal between two runs for their difference to mean anything: the kind of run, the
-// product configuration, the arms and the two models.
+// product configuration, the arms, the two models, the gateway configuration, the environment the
+// instance ran in and the lab code that measured.
 const PROVENANCE_FIELDS = Object.freeze([
   "mode",
   "memoryMode",
@@ -29,7 +33,21 @@ const PROVENANCE_FIELDS = Object.freeze([
   "arms",
   "answerModelId",
   "learnModelId",
+  "budgetTokens",
+  "brokenLearner",
+  "configDigest",
+  "foldedKeys",
+  "instrumentDigest",
 ]);
+// A sealed run's scorecard carries one entry per group with sums and counts (see report.mjs), not
+// one per unit or probe; these are the metric names that carry each compared metric there.
+const GROUP_METRICS = Object.freeze({
+  precision: ["precisionSum", "precisionCount"],
+  recall: ["recallSum", "recallCount"],
+  answerAccuracy: ["answerPassed", "answerTotal"],
+  abstention: ["abstainPassed", "abstainTotal"],
+  noMemoryOnUnrelated: ["noMemoryPassed", "noMemoryTotal"],
+});
 // The scorecard entries that carry each probe metric: the evidence of a probe starts with its kind.
 const PROBE_KIND_PREFIX = Object.freeze({
   answerAccuracy: "kind=answer",
@@ -54,40 +72,57 @@ function sameCorpus(left, right) {
 }
 
 const ENTRY_NAME =
-  /^(?<scenario>.+):(?<arm>[a-z]+):r(?<rep>\d+):(?<kind>store|probe:.+|oracle-precondition)$/u;
+  /^(?<scenario>.+):(?<arm>[a-z]+):r(?<rep>\d+):(?<kind>store|probe:.+|oracle-precondition|group)$/u;
 
 function storeMetric(entry, metricName) {
   const metric = entry.metrics?.find((item) => item.name === metricName);
   return metric === undefined || metric.value < 0 ? undefined : metric.value;
 }
 
-// The value one scorecard entry contributes to a metric: a store metric, or the pass/fail of a probe
-// of the kind that metric is the pass rate of (answers, abstentions, questions without memory).
-function entryValue(entry, kind, metricName) {
-  if (kind === "store") return storeMetric(entry, metricName);
+// What one scorecard entry contributes to a metric, as a sum and a count: a store metric (one unit),
+// the pass/fail of a probe of the kind that metric is the pass rate of (one probe), or the sum and
+// count a sealed run's group entry carries. The per-repetition mean is the same either way.
+function groupContribution(entry, metricName) {
+  const [sumName, countName] = GROUP_METRICS[metricName] ?? [];
+  const count = storeMetric(entry, countName);
+  const sum = storeMetric(entry, sumName);
+  return count === undefined || count === 0 || sum === undefined ? undefined : { sum, count };
+}
+
+function probeContribution(entry, kind, metricName) {
   const prefix = PROBE_KIND_PREFIX[metricName];
   if (prefix !== undefined && kind.startsWith("probe:") && entry.evidence.startsWith(prefix))
-    return entry.passed ? 1 : 0;
+    return { sum: entry.passed ? 1 : 0, count: 1 };
   return undefined;
 }
 
-function mean(values) {
-  return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
+function entryContribution(entry, kind, metricName) {
+  if (kind === "group") return groupContribution(entry, metricName);
+  if (kind !== "store") return probeContribution(entry, kind, metricName);
+  const value = storeMetric(entry, metricName);
+  return value === undefined ? undefined : { sum: value, count: 1 };
 }
 
-// Per-repetition values of one metric for one arm, from the scorecard's repetition suffix.
+// Per-repetition means of one metric for one arm, from the scorecard's repetition suffix, with the
+// number of units or probes each mean rests on.
 function repetitionValues(scorecard, arm, metricName) {
   const byRepetition = new Map();
   for (const entry of scorecard.scenarios) {
     const match = ENTRY_NAME.exec(entry.name);
     if (match === null || match.groups.arm !== arm) continue;
-    const value = entryValue(entry, match.groups.kind, metricName);
-    if (value === undefined) continue;
-    const bucket = byRepetition.get(match.groups.rep) ?? [];
-    bucket.push(value);
-    byRepetition.set(match.groups.rep, bucket);
+    const part = entryContribution(entry, match.groups.kind, metricName);
+    if (part === undefined) continue;
+    const bucket = byRepetition.get(match.groups.rep) ?? { sum: 0, count: 0 };
+    byRepetition.set(match.groups.rep, {
+      sum: bucket.sum + part.sum,
+      count: bucket.count + part.count,
+    });
   }
-  return [...byRepetition.values()].map(mean);
+  const buckets = [...byRepetition.values()];
+  return {
+    values: buckets.map((bucket) => bucket.sum / bucket.count),
+    counts: buckets.map((bucket) => bucket.count),
+  };
 }
 
 /** Mean and half-range across repetitions: the band a difference must exceed to count. */
@@ -104,8 +139,8 @@ function groupRow(summary, arm) {
 }
 
 // The band of one metric, pooled over the repetitions of both runs, or null when either run has
-// fewer than two: one repetition has no spread, and pooling it with the other run would make half
-// the difference between the runs look like noise.
+// fewer than the minimum: too few repetitions have no spread worth the name, and pooling them with
+// the other run would make half the difference between the runs look like noise.
 function pooledHalfRange(baselineValues, candidateValues) {
   const enough = [baselineValues, candidateValues].every(
     (values) => values.filter((value) => typeof value === "number").length >= MIN_REPETITIONS,
@@ -113,17 +148,26 @@ function pooledHalfRange(baselineValues, candidateValues) {
   return enough ? noiseBand([...baselineValues, ...candidateValues]).halfRange : null;
 }
 
+// The smallest difference the metric can show: one unit or one probe out of the fewest that any
+// repetition of either run rested on. Repetitions that agree exactly have a band of zero, and a
+// change that one unit alone can produce must not count as progress against it.
+function minimumDetectable(baselineCounts, candidateCounts) {
+  const counts = [...baselineCounts, ...candidateCounts].filter((count) => count > 0);
+  return counts.length === 0 ? null : round(1 / Math.min(...counts));
+}
+
 function metricDelta(baseline, candidate, arm, metric) {
   const before = groupRow(baseline.summary, arm)?.[metric] ?? null;
   const after = groupRow(candidate.summary, arm)?.[metric] ?? null;
-  const halfRange = pooledHalfRange(
-    repetitionValues(baseline.scorecard, arm, metric),
-    repetitionValues(candidate.scorecard, arm, metric),
-  );
+  const baselineValues = repetitionValues(baseline.scorecard, arm, metric);
+  const candidateValues = repetitionValues(candidate.scorecard, arm, metric);
+  const halfRange = pooledHalfRange(baselineValues.values, candidateValues.values);
+  const floor = minimumDetectable(baselineValues.counts, candidateValues.counts);
   const delta = before === null || after === null ? null : round(after - before);
   // null: no judgement possible, either nothing to compare or no band to compare it with.
-  const beyondNoise = delta === null || halfRange === null ? null : Math.abs(delta) > halfRange;
-  return { metric, before, after, delta, halfRange, beyondNoise };
+  const beyondNoise =
+    delta === null || halfRange === null ? null : Math.abs(delta) > Math.max(halfRange, floor ?? 0);
+  return { metric, before, after, delta, halfRange, minimumDetectable: floor, beyondNoise };
 }
 
 function provenanceOf(run, field) {
@@ -189,34 +233,62 @@ function failedUnitsOf(run) {
   return Number(run.summary.failedUnits ?? 0);
 }
 
+// The models a run measured, from its manifest: the pair's label is a free string and must not be
+// what "more than one model" counts.
+function modelsOf(run) {
+  const metadata = run.manifest.metadata ?? {};
+  return `${String(metadata.answerModelId)} / ${String(metadata.learnModelId)}`;
+}
+
+// The metrics that improved beyond noise on the holdout, each with the models (by manifest) it
+// improved on, counting only comparisons in which nothing worsened.
+function holdoutImprovements(holdout) {
+  const byMetric = new Map();
+  for (const row of holdout.filter((item) => item.worsened.length === 0))
+    for (const metric of row.improved)
+      byMetric.set(metric, new Set([...(byMetric.get(metric) ?? []), row.models]));
+  return byMetric;
+}
+
+function assertDistinctModels(holdout) {
+  const models = holdout.map((row) => row.models);
+  if (new Set(models).size !== models.length)
+    throw new Error(
+      "refusing to judge: two holdout pairs measured the same models by their manifests; the pair label is not the model",
+    );
+}
+
 function unionOf(comparisons, field) {
   return [...new Set(comparisons.flatMap((row) => row[field]))].join(", ");
 }
 
 /**
  * The verdict over several models and both corpus parts. `pairs` is a list of
- * `{model, part: "development"|"holdout", baseline, candidate}`; `targets` maps metric names to floors
- * agreed with the owner (empty until #4209 records them). A pair whose runs differ in provenance, or
- * a holdout pair that is not sealed, is refused with an error rather than judged.
+ * `{model, part: "development"|"holdout", baseline, candidate}`, where `model` is a label for people
+ * and the models themselves are read from the manifests; `targets` maps metric names to floors
+ * agreed with the owner (empty until #4209 records them). A pair whose runs differ in provenance, a
+ * holdout pair that is not sealed, and two holdout pairs of the same models are refused with an
+ * error rather than judged.
  */
 export function judgeProgress(pairs, targets = {}) {
   for (const pair of pairs) assertJudgeable(pair);
   const comparisons = pairs.map((pair) => ({
     model: pair.model,
+    models: modelsOf(pair.baseline),
     part: pair.part,
     ...compareRuns(pair.baseline, pair.candidate),
     meetsTargets: meetsTargets(pair.candidate, targets, "product"),
     failedUnits: failedUnitsOf(pair.baseline) + failedUnitsOf(pair.candidate),
   }));
   const holdout = comparisons.filter((row) => row.part === "holdout");
-  const modelsImproved = new Set(
-    holdout
-      .filter((row) => row.improved.length > 0 && row.worsened.length === 0)
-      .map((row) => row.model),
-  );
+  assertDistinctModels(holdout);
+  const onTwoModels = [...holdoutImprovements(holdout).entries()]
+    .filter(([, models]) => models.size >= 2)
+    .map(([metric]) => metric);
   const reasons = [];
   if (holdout.length === 0) reasons.push("no holdout comparison");
-  if (modelsImproved.size < 2) reasons.push("improvement on the holdout on fewer than two models");
+  if (onTwoModels.length === 0)
+    reasons.push("no metric improved on the holdout on two models by their manifests");
   if (comparisons.some((row) => !row.hardZero)) reasons.push("a hard counter is above zero");
   if (comparisons.some((row) => row.worsened.length > 0))
     reasons.push(`a metric worsened beyond the noise band: ${unionOf(comparisons, "worsened")}`);
@@ -224,7 +296,7 @@ export function judgeProgress(pairs, targets = {}) {
     reasons.push(`noise band unknown: ${unionOf(comparisons, "noiseUnknown")}`);
   if (comparisons.some((row) => row.failedUnits > 0)) reasons.push("a run has failed units");
   if (comparisons.some((row) => !row.meetsTargets)) reasons.push("a metric is below its target");
-  return { progress: reasons.length === 0, reasons, comparisons };
+  return { progress: reasons.length === 0, reasons, improvedOnTwoModels: onTwoModels, comparisons };
 }
 
 function deltaText(delta) {
@@ -233,7 +305,13 @@ function deltaText(delta) {
       ? "noise unknown"
       : `${delta.beyondNoise ? "beyond" : "within"} noise`;
   const spread = delta.halfRange === null ? "" : ` ±${String(delta.halfRange)}`;
-  return `${delta.metric} ${String(delta.before)}->${String(delta.after)} (${band}${spread})`;
+  const floor =
+    delta.halfRange !== null &&
+    delta.minimumDetectable !== null &&
+    delta.minimumDetectable > delta.halfRange
+      ? `, one-unit floor ${String(delta.minimumDetectable)}`
+      : "";
+  return `${delta.metric} ${String(delta.before)}->${String(delta.after)} (${band}${spread}${floor})`;
 }
 
 /** One line per comparison: every metric's before, after and its relation to the noise band. */

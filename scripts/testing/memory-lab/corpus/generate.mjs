@@ -9,7 +9,7 @@
 import { validateScenario } from "../scenario.mjs";
 import { blueprintDigest, validateBlueprint } from "./blueprint.mjs";
 import { deriveOracle } from "./oracle.mjs";
-import { HARDNESS_KINDS, buildUnits, hardnessCounts, placeUnits } from "./plan.mjs";
+import { HARDNESS_KINDS, TooShortError, buildUnits, hardnessCounts, placeUnits } from "./plan.mjs";
 import { deriveProbes } from "./probes.mjs";
 import { createRandom } from "./random.mjs";
 import { createCleanTester, createContext, realizePlan } from "./realize.mjs";
@@ -124,11 +124,31 @@ export function scenarioMeta({ blueprint, scenario, settings, plan, counts }) {
  * The pipeline both modes share, over a blueprint that is already validated (or a part of one):
  * plan, write, assemble, then prove from the finished scenario that every fact survived.
  */
+// A requested size is a floor. A person with more parts than the turns can hold gets the smallest
+// conversation that holds them all: the turn count grows by a quarter per attempt, each attempt from
+// the same seed, so the result depends on the inputs alone; the manifest records the requested size
+// and the actual message count side by side.
+const GROWTH = 1.25;
+const MAX_GROWTH_STEPS = 16;
+
+function planConversation(blueprint, settings, shape) {
+  let turnCount = Math.round(settings.size / 2);
+  for (let step = 0; ; step += 1) {
+    const random = createRandom(settings.seed);
+    const units = buildUnits(blueprint, random, shape.unitOptions);
+    try {
+      return { random, plan: { units, ...placeUnits(units, turnCount, random) }, turnCount };
+    } catch (error) {
+      if (!(error instanceof TooShortError) || step >= MAX_GROWTH_STEPS) throw error;
+      turnCount = Math.ceil(turnCount * GROWTH) + 1;
+    }
+  }
+}
+
 export async function runGeneration(blueprint, settings, shape) {
   const oracle = deriveOracle(blueprint);
-  const random = createRandom(settings.seed);
-  const units = buildUnits(blueprint, random, shape.unitOptions);
-  const plan = { units, ...placeUnits(units, Math.round(settings.size / 2), random) };
+  const { random, plan, turnCount } = planConversation(blueprint, settings, shape);
+  const { units } = plan;
   const isClean = createCleanTester(oracle);
   const context = createContext({ blueprint, writer: settings.writer, random, isClean });
   const { turns, designated } = await realizePlan(plan, context);
@@ -140,7 +160,7 @@ export async function runGeneration(blueprint, settings, shape) {
     blueprint,
     scenario,
     designated,
-    size: settings.size,
+    size: turnCount * 2,
     isClean,
     paraphrase: shape.paraphrase,
     edit: shape.unitOptions.edit === true,

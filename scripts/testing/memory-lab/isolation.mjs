@@ -24,11 +24,30 @@ const REAL_TEXT_CLASS_PREFIX = "anchor-";
 const REAL_CONVERSATION_CLASS = "anchor-real";
 
 function hostOf(provider) {
+  return hostOfUrl(provider?.baseUrl);
+}
+
+function hostOfUrl(text) {
   try {
-    return new URL(provider?.baseUrl).hostname;
+    return new URL(text).hostname;
   } catch {
     return undefined;
   }
+}
+
+const HTTP_URL = /^https?:\/\//iu;
+
+// Every http(s) URL anywhere in the configuration, not only the providers' base URLs: an embedding,
+// reranker, speech or tool endpoint elsewhere would receive conversation text just the same.
+function collectUrls(value, found = []) {
+  if (typeof value === "string") {
+    if (HTTP_URL.test(value.trim())) found.push(value.trim());
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectUrls(item, found);
+  } else if (value !== null && typeof value === "object") {
+    for (const item of Object.values(value)) collectUrls(item, found);
+  }
+  return found;
 }
 
 function readConfigText(path) {
@@ -52,13 +71,15 @@ function parseConfig(text) {
 /**
  * Reads the gateway configuration a live run points the product at and refuses it unless every
  * provider it names (not only the two models of the run: the product probes each configured
- * provider at start) lies on this machine: host 127.0.0.1, localhost or ::1. Everything a run reads
- * and writes stays on the machine, so a provider elsewhere would receive the conversations. Returns
- * the SHA-256 of the file's bytes, which the manifest records as the run's `configDigest`.
+ * provider at start) and every other URL in it lie on this machine: host 127.0.0.1, localhost or
+ * ::1. Everything a run reads and writes stays on the machine, so an endpoint elsewhere would
+ * receive the conversations. Returns the SHA-256 of the file's bytes, which the manifest records as
+ * the run's `configDigest`.
  */
 export function assertLoopbackGatewayConfig(path) {
   const text = readConfigText(path);
-  const providers = parseConfig(text)?.providers;
+  const parsed = parseConfig(text);
+  const providers = parsed?.providers;
   if (!Array.isArray(providers) || providers.length === 0)
     throw new LabConfigurationError("the gateway configuration names no provider");
   const remote = providers.filter((provider) => !LOOPBACK_HOSTS.has(hostOf(provider)));
@@ -68,6 +89,11 @@ export function assertLoopbackGatewayConfig(path) {
       `the gateway configuration names ${String(remote.length)} provider(s) outside this machine (${names}); a run talks to 127.0.0.1, localhost or ::1 only`,
     );
   }
+  const elsewhere = collectUrls(parsed).filter((url) => !LOOPBACK_HOSTS.has(hostOfUrl(url)));
+  if (elsewhere.length > 0)
+    throw new LabConfigurationError(
+      `the gateway configuration carries ${String(elsewhere.length)} URL(s) outside this machine beyond the providers' base URLs; every endpoint a run can reach must be 127.0.0.1, localhost or ::1`,
+    );
   return { digest: createHash("sha256").update(text).digest("hex") };
 }
 

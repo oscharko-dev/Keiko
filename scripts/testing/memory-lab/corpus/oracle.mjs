@@ -3,7 +3,7 @@
 // before any conversation exists, which is what lets thousands of generated conversations be scored
 // without anyone labelling them. The same derivation feeds the blueprint validator, the generator and
 // the scenario, so the three can never disagree about what the truth is.
-import { matchesTermGroups, normalizeText } from "../score.mjs";
+import { literalStem, matchesTermGroups, normalizeText } from "../score.mjs";
 import { blankValuePhrases } from "./cloze.mjs";
 import { stripSentenceEnd } from "./text.mjs";
 
@@ -98,7 +98,9 @@ export function deriveOracle(blueprint) {
 /** True when any alternative of any term group is still readable in `text`. */
 export function anyTermVisible(text, groups) {
   const haystack = normalizeText(text);
-  return groups.some((group) => group.some((term) => haystack.includes(normalizeText(term))));
+  return groups.some((group) =>
+    group.some((term) => haystack.includes(normalizeText(literalStem(term)))),
+  );
 }
 
 /**
@@ -109,7 +111,8 @@ export function anyTermVisible(text, groups) {
  * scorer about the many that mention nothing. The corpus tests pin it to the scorer's own function.
  */
 export function compileTermGroups(groups) {
-  const normalized = groups.map((group) => group.map((term) => normalizeText(term)));
+  // A term with the prefix mark occurs literally as its stem (`Tabelle*` is the substring "tabelle").
+  const normalized = groups.map((group) => group.map((term) => normalizeText(literalStem(term))));
   return (haystack) =>
     normalized.every((group) => group.some((term) => haystack.includes(term))) &&
     matchesTermGroups(haystack, groups);

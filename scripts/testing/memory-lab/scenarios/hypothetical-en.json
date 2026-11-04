@@ -11,7 +11,7 @@
       "seed": "I actually like plain text.",
       "must": true,
       "private": true,
-      "terms": [["plain text"]]
+      "terms": [["plain text", "plain-text", "plaintext"]]
     }
   ],
   "forbidden": [
@@ -37,7 +37,7 @@
       "question": "How do you like answers formatted?",
       "expect": {
         "kind": "answer",
-        "terms": [["plain text"]],
+        "terms": [["plain text", "plain-text", "plaintext"]],
         "forbidden": [["tables"]]
       }
     }

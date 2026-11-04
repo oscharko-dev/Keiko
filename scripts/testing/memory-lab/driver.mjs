@@ -136,6 +136,7 @@ async function runTurns(scenario, instance, context) {
       actions: sent.actions.map((action) => action?.kind ?? "unknown"),
       forgets,
       captures: settled.captures - before,
+      suppliedCount: sent.supplied.length,
       learnerUnused: context.fixture === undefined ? 0 : context.fixture.pendingLearner(),
     });
     context.fixture?.clearLearner();
@@ -310,6 +311,10 @@ export async function runScenario(scenario, instance, requested) {
   const learnedAt = Date.now();
   const memories = await listMemories(instance);
   const probes = await runProbes(scenario, instance, context);
+  // Probes run with memory on, so the product may still be learning from the last question; settle
+  // before the store and the ledger are read, otherwise probeCaptures would depend on timing.
+  if (context.arm !== "off")
+    await awaitLearning(instance, { ...context.learning, phase: "after the probes" });
   // Learning runs on probe questions too (memory is one switch for recall and learning), so a
   // question the product turns into a memory is counted here instead of passing as recall.
   const afterProbes = await listMemories(instance);

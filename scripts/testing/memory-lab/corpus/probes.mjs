@@ -117,6 +117,8 @@ function forgetProbes(blueprint) {
   });
 }
 
+// A trap that teaches the person's own fact inside a colleague's line allows that fact to be supplied
+// and mentioned when the colleague's is asked for: the person's preference is true and no leak.
 function trapProbes(blueprint) {
   return blueprint.traps.flatMap((trap, index) =>
     trap.question === undefined
@@ -125,7 +127,10 @@ function trapProbes(blueprint) {
           {
             id: `trap-${String(index + 1)}-${trap.class}`,
             question: trap.question,
-            expect: { kind: trap.class === "instruction" ? "no-memory" : "abstain" },
+            expect: {
+              kind: trap.class === "instruction" ? "no-memory" : "abstain",
+              ...(trap.teaches === undefined ? {} : { allow: [trap.teaches] }),
+            },
           },
         ],
   );

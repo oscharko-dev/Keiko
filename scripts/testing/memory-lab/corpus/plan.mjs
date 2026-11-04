@@ -220,8 +220,11 @@ function nearestFree(slots, target, length, lo, hi) {
   return undefined;
 }
 
+/** The refusal of a turn count that cannot hold every part; the generator grows the conversation on it. */
+export class TooShortError extends CorpusError {}
+
 function tooShort(turnCount) {
-  return new CorpusError(
+  return new TooShortError(
     `${String(turnCount)} turns are too few to place every part of the blueprint`,
   );
 }

@@ -467,15 +467,22 @@ describe("coverage by class and language", () => {
     const counts = classCounts(entries);
     const missing = shortfalls(counts);
     expect(missing).toHaveLength(REQUIRED_CLASSES.length * 2);
-    expect(missing).toContainEqual({ class: "update", language: "de", scenarios: 3 });
-    expect(missing).toContainEqual({ class: "preference", language: "en", scenarios: 0 });
-    expect(shortfalls(counts, 1)).not.toContainEqual({
+    expect(missing).toContainEqual({ class: "update", language: "de", scenarios: 3, units: 2 });
+    expect(missing).toContainEqual({ class: "preference", language: "en", scenarios: 0, units: 0 });
+    // The minimum counts distinct units: three scenarios of two units reach a minimum of two, not
+    // of three (the failure this pins: seeds and ways of saying it were counted as breadth).
+    expect(shortfalls(counts, 2)).not.toContainEqual(
+      expect.objectContaining({ class: "update", language: "de" }),
+    );
+    expect(shortfalls(counts, 3)).toContainEqual({
       class: "update",
       language: "de",
       scenarios: 3,
+      units: 2,
     });
     expect(coverageSection(counts)).toEqual({
       minimumPerClassAndLanguage: 30,
+      minimumCounts: "units",
       requiredClasses: REQUIRED_CLASSES,
       shortfalls: missing,
     });
@@ -483,7 +490,7 @@ describe("coverage by class and language", () => {
 });
 
 describe("the curated blueprints as a focused corpus", () => {
-  it("reach thirty scenarios per class and language for --focused --sizes 40 --seeds 1,2,3", async () => {
+  it("reach thirty distinct units per class and language for --focused --sizes 40 --seeds 1,2,3", async () => {
     const writer = createScriptedWriter();
     const jobs = curatedBlueprints().flatMap((blueprint) =>
       statements(blueprint).flatMap((job) => SEEDS.map((seed) => ({ ...job, seed }))),
@@ -507,8 +514,8 @@ describe("the curated blueprints as a focused corpus", () => {
       for (const language of ["de", "en"]) {
         const row = counts.find((entry) => entry.class === name && entry.language === language);
         expect(row.scenarios, `${name} ${language}`).toBeGreaterThanOrEqual(30);
-        // Several seeds and ways of saying it are not independent people: the units show how many are.
-        expect(row.units, `${name} ${language}`).toBeGreaterThanOrEqual(3);
+        // Several seeds and ways of saying it are not breadth: the minimum counts distinct units.
+        expect(row.units, `${name} ${language}`).toBeGreaterThanOrEqual(30);
       }
     const expected = curatedBlueprints().reduce(
       (sum, blueprint) =>
@@ -569,15 +576,20 @@ describe("focused build", () => {
       expect(row.scenarios).toBeGreaterThanOrEqual(row.units);
     }
     expect(manifest.coverage.minimumPerClassAndLanguage).toBe(30);
-    expect(manifest.coverage.shortfalls).toContainEqual({
-      class: "update",
-      language: "en",
-      scenarios: 8,
-    });
+    expect(manifest.coverage.minimumCounts).toBe("units");
+    expect(manifest.coverage.shortfalls).toContainEqual(
+      expect.objectContaining({ class: "update", language: "en", scenarios: 8 }),
+    );
+    const update = manifest.coverage.shortfalls.find(
+      (row) => row.class === "update" && row.language === "en",
+    );
+    expect(update.units).toBeGreaterThan(0);
+    expect(update.units).toBeLessThanOrEqual(update.scenarios);
     expect(manifest.coverage.shortfalls).toContainEqual({
       class: "update",
       language: "de",
       scenarios: 0,
+      units: 0,
     });
     const entry = manifest.entries.find((candidate) =>
       candidate.id.includes("-edit-number-format-plain-s2"),

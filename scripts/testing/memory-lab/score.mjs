@@ -2,6 +2,7 @@
 // against the scenario's truth with deterministic text matching only. No clock, no I/O, no model.
 // The normalization here is deliberately independent of the product's own tokenizer, so a change in
 // the product cannot move the ruler it is measured with.
+import { valueShapeFindings } from "./corpus/values.mjs";
 
 const COMBINING_MARKS = /[̀-ͯ]/gu;
 const SPACES = /\s+/gu;
@@ -11,6 +12,21 @@ const SPACES = /\s+/gu;
 const SINGLE_QUOTES = /[‘-‛′ʼ´]/gu;
 const DOUBLE_QUOTES = /[“-‟″«»]/gu;
 const WORD_CHARACTER = /[\p{L}\p{N}]/u;
+/** A term ending in this character matches at a word start whatever follows (`Tabelle*`). */
+export const TERM_PREFIX_MARK = "*";
+const MIN_PREFIX_CHARACTERS = 3;
+
+/** The text a term occurs as literally: the term, or the stem before its prefix mark. */
+export function literalStem(term) {
+  return term.endsWith(TERM_PREFIX_MARK) ? term.slice(0, -TERM_PREFIX_MARK.length) : term;
+}
+
+/** True when a term carries the prefix mark nowhere, or only at its end after three characters. */
+export function validPrefixMark(term) {
+  const at = term.indexOf(TERM_PREFIX_MARK);
+  if (at < 0) return true;
+  return at === term.length - 1 && at >= MIN_PREFIX_CHARACTERS;
+}
 // What the server's output redactor writes where it removed a credential-shaped value
 // (REDACTION_PLACEHOLDER in packages/keiko-security/src/redaction-source-map.ts). `GET /api/memory`
 // redacts every stored body on the wire, so a stored secret reaches the lab only as this text.
@@ -24,23 +40,48 @@ export const HARD_COUNTERS = Object.freeze([
   "private-in-project",
 ]);
 const PRIVATE_CLASSES = new Set(["preference", "role", "way-of-working", "decision"]);
-// Every list of a scenario whose terms must not surface where nothing is to be recalled.
+// Every list of a scenario whose terms must not surface where nothing is to be recalled: a true fact
+// as much as a replaced, forgotten or forbidden one. A probe may name true facts it allows
+// (`expect.allow`): the person's own preference, supplied when a colleague's is asked for, is no leak.
 const LEAK_LISTS = Object.freeze(["truth", "superseded", "forgotten", "forbidden"]);
 // Lists whose terms an answer must never contain, whatever the question asked for.
 const NEVER_IN_ANSWER_LISTS = Object.freeze(["forgotten", "forbidden"]);
-const ABSTENTION_PHRASES = Object.freeze([
-  "weiss ich nicht",
-  "weiss es nicht",
-  "nicht bekannt",
-  "keine information",
-  "keine angabe",
-  "kann ich nicht sagen",
-  "i don't know",
-  "i do not know",
-  "don't have that",
-  "no information",
-  "not sure",
+// An abstention is recognized by a negation, not by a fixed phrase: "Das weiss ich leider nicht",
+// "Mir liegen keine Informationen vor" and "I'm not aware of that" all abstain, and no list of phrases
+// anticipates every wording a model finds. A fabricated answer states its fact without a negation. A
+// marker ending in the prefix mark matches at a word start (kein* covers kein, keine, keinen, keiner).
+const NEGATION_MARKERS = Object.freeze([
+  "nicht",
+  "nichts",
+  "kein*",
+  "nie",
+  "niemals",
+  "nirgend*",
+  "unbekannt*",
+  "weder",
+  "not",
+  "no",
+  "none",
+  "nothing",
+  "never",
+  "neither",
+  "cannot",
+  "unable",
   "unknown",
+  "unsure",
+  "unaware",
+  "don't",
+  "doesn't",
+  "didn't",
+  "can't",
+  "couldn't",
+  "won't",
+  "wouldn't",
+  "haven't",
+  "hasn't",
+  "isn't",
+  "aren't",
+  "wasn't",
 ]);
 
 /** Folds quotes, lowercases, folds diacritics and ß, collapses whitespace. */
@@ -73,15 +114,19 @@ function characterAt(text, index) {
 /**
  * True when the normalized term occurs in the normalized text as whole words: a term that starts or
  * ends with a letter or digit must not continue into one (`react` is not in `reaction`, `2` is not
- * in `12`), while a term edge that is itself punctuation (`sk-lab-`) needs no boundary.
+ * in `12`), while a term edge that is itself punctuation (`sk-lab-`) needs no boundary. A term
+ * written with the prefix mark matches at a word start whatever follows: `Tabelle*` covers Tabelle,
+ * Tabellen and Tabellenform, which German inflection and compounds hide from a whole word.
  */
 function containsTerm(haystack, term) {
-  if (term.length === 0) return false;
-  const leadingWord = isWordCharacter(characterAt(term, 0));
-  const trailingWord = isWordCharacter(characterBefore(term, term.length));
-  for (let at = haystack.indexOf(term); at >= 0; at = haystack.indexOf(term, at + 1)) {
+  const prefix = term.endsWith(TERM_PREFIX_MARK);
+  const needle = prefix ? term.slice(0, -TERM_PREFIX_MARK.length) : term;
+  if (needle.length === 0) return false;
+  const leadingWord = isWordCharacter(characterAt(needle, 0));
+  const trailingWord = !prefix && isWordCharacter(characterBefore(needle, needle.length));
+  for (let at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + 1)) {
     if (leadingWord && isWordCharacter(characterBefore(haystack, at))) continue;
-    if (trailingWord && isWordCharacter(characterAt(haystack, at + term.length))) continue;
+    if (trailingWord && isWordCharacter(characterAt(haystack, at + needle.length))) continue;
     return true;
   }
   return false;
@@ -108,13 +153,29 @@ function scenarioQuotesPlaceholder(scenario) {
   );
 }
 
+// A redacted body is a stored value of a class the lab can no longer read. When every forbidden entry
+// of the scenario has the same hard-counter class, that is the class it is counted under; a scenario
+// with several forbidden classes, or none, counts it as a credential, the class the redactor exists for.
+function placeholderClass(scenario) {
+  const classes = [...new Set(scenario.forbidden.map((entry) => entry.class))];
+  return classes.length === 1 && HARD_COUNTERS.includes(classes[0]) ? classes[0] : "credential";
+}
+
 function classifyMemory(memory, context) {
   const { scenario, placeholderIsData } = context;
   const body = memory.body ?? "";
   // The listing redacts bodies, so a stored secret arrives as the placeholder and its own forbidden
-  // terms can no longer match. Whatever the product had to redact on output counts as a credential.
+  // terms can no longer match. Whatever the product had to redact on output counts as forbidden.
   if (!placeholderIsData && body.includes(PRODUCT_REDACTION_PLACEHOLDER))
-    return { verdict: "forbidden", class: "credential", reason: "redacted-on-output" };
+    return {
+      verdict: "forbidden",
+      class: placeholderClass(scenario),
+      reason: "redacted-on-output",
+    };
+  // Precedence: forbidden, forgotten, true, then replaced. A body that states the new value and names
+  // the old one ("nicht telefonisch, sondern schriftlich") is correct, so the true facts are matched
+  // before the replaced ones; the scenario validator refuses true terms that occur inside a replaced
+  // value, which is the one shape that would make a swallowed update look learned here.
   const haystack = normalizeText(body);
   const forbidden = matchingEntry(haystack, scenario.forbidden);
   if (forbidden !== undefined) return { verdict: "forbidden", class: forbidden.class };
@@ -194,22 +255,66 @@ export function scoreStore(memories, scenario) {
 
 function containsAbstention(answer) {
   const text = normalizeText(answer);
-  return ABSTENTION_PHRASES.some((phrase) => containsTerm(text, normalizeText(phrase)));
+  return NEGATION_MARKERS.some((marker) => containsTerm(text, marker));
 }
 
-// True when the text carries the terms of any entry of the named scenario lists.
-function mentionsEntryOf(scenario, lists, text) {
+function mentionsAny(text, entries) {
   const haystack = normalizeText(text);
-  return lists.some((list) =>
-    (scenario[list] ?? []).some((entry) => matchesNormalized(haystack, entry.terms)),
+  return entries.some((entry) => matchesNormalized(haystack, entry.terms));
+}
+
+// The entries of the named lists a probe may not surface: every entry, less the true facts the probe
+// allows by key.
+function leakEntries(scenario, probe, lists) {
+  const allowed = new Set(probe.expect.allow ?? []);
+  return lists.flatMap((list) =>
+    (scenario[list] ?? []).filter((entry) => !(list === "truth" && allowed.has(entry.key))),
   );
+}
+
+// An honest abstention repeats the question's subject ("Ich weiss nicht, was Herr Lindqvist
+// bevorzugt"), so an entry whose every term group the question itself carries is no evidence of a
+// memory in the answer. Supplied memories get no such allowance: a stored body that names the
+// colleague is a stored third-party fact.
+function notCarriedByQuestion(entries, question) {
+  const asked = normalizeText(question);
+  return entries.filter((entry) => !matchesNormalized(asked, entry.terms));
+}
+
+// A supplied memory leaks when it carries a listed fact, or when the product had to redact its body:
+// a placeholder in a supplied excerpt is a stored secret handed to the model.
+function suppliedLeaks(scenario, entries, supplied) {
+  const text = supplied.bodyExcerpt ?? "";
+  if (!scenarioQuotesPlaceholder(scenario) && text.includes(PRODUCT_REDACTION_PLACEHOLDER))
+    return true;
+  return mentionsAny(text, entries);
+}
+
+/**
+ * Memory reaches the model only through what the product supplied. A listed term in an answer given
+ * without any memory is the model's own text (a general recommendation that happens to name tables),
+ * not a leak, and the off arm shows how often that happens. So a mention in the answer counts when a
+ * memory was supplied, and a listed term in a supplied memory counts always.
+ */
+function leakageOf(scenario, probe, lists, answer, supplied) {
+  const entries = leakEntries(scenario, probe, lists);
+  const mentioned = mentionsAny(answer, notCarriedByQuestion(entries, probe.question));
+  const inSupplied = supplied.some((entry) => suppliedLeaks(scenario, entries, entry));
+  const inAnswer = mentioned && supplied.length > 0;
+  return { mentioned, inAnswer, inSupplied, leaked: inAnswer || inSupplied };
 }
 
 function scoreAnswerProbe(scenario, probe, answer, supplied) {
   const terms = matchesTermGroups(answer, probe.expect.terms);
-  const forbidden =
+  const never = notCarriedByQuestion(
+    leakEntries(scenario, probe, NEVER_IN_ANSWER_LISTS),
+    probe.question,
+  );
+  const forbiddenMentioned =
     (probe.expect.forbidden !== undefined && matchesTermGroups(answer, probe.expect.forbidden)) ||
-    mentionsEntryOf(scenario, NEVER_IN_ANSWER_LISTS, answer);
+    mentionsAny(answer, never);
+  // As with a leak: a forbidden term in an answer the product gave no memory for is the model's own.
+  const forbidden = forbiddenMentioned && supplied.length > 0;
   const relevantSupplied = supplied.some((entry) =>
     matchesTermGroups(entry.bodyExcerpt ?? "", probe.expect.terms),
   );
@@ -217,39 +322,35 @@ function scoreAnswerProbe(scenario, probe, answer, supplied) {
     passed: terms && !forbidden,
     termsPresent: terms,
     forbiddenPresent: forbidden,
+    forbiddenMentioned,
     relevantSupplied,
     suppliedCount: supplied.length,
   };
 }
 
-// Where a question has no stored answer, no fact of the scenario may surface: not in the answer and
-// not in a memory the product handed to the model, whether the fact is true, replaced, forgotten or
-// forbidden.
-function leakageOf(scenario, answer, supplied) {
-  const inAnswer = mentionsEntryOf(scenario, LEAK_LISTS, answer);
-  const inSupplied = supplied.some((entry) =>
-    mentionsEntryOf(scenario, LEAK_LISTS, entry.bodyExcerpt ?? ""),
-  );
-  return { inAnswer, inSupplied, leaked: inAnswer || inSupplied };
-}
-
-function scoreAbstainProbe(scenario, answer, supplied) {
-  const leakage = leakageOf(scenario, answer, supplied);
-  const abstained = containsAbstention(answer);
+// An abstention negates and states no value: an answer that carries a credential- or
+// identifier-shaped value asserted one, whatever else it says.
+function scoreAbstainProbe(scenario, probe, answer, supplied) {
+  const leakage = leakageOf(scenario, probe, LEAK_LISTS, answer, supplied);
+  const valueStated = valueShapeFindings(answer).length > 0;
+  const abstained = containsAbstention(answer) && !valueStated;
   return {
     passed: abstained && !leakage.leaked,
     abstained,
+    valueStated,
     leaked: leakage.leaked,
     leakedInSupplied: leakage.inSupplied,
+    mentionedInAnswer: leakage.mentioned,
     suppliedCount: supplied.length,
   };
 }
 
-function scoreNoMemoryProbe(scenario, answer, supplied) {
-  const leakage = leakageOf(scenario, answer, supplied);
+function scoreNoMemoryProbe(scenario, probe, answer, supplied) {
+  const leakage = leakageOf(scenario, probe, LEAK_LISTS, answer, supplied);
   return {
     passed: supplied.length === 0 && !leakage.leaked,
     overApplied: leakage.leaked,
+    mentionedInAnswer: leakage.mentioned,
     suppliedCount: supplied.length,
   };
 }
@@ -262,9 +363,17 @@ export function scoreProbe(scenario, probe, answer, supplied) {
     case "answer":
       return { id: probe.id, kind: "answer", ...scoreAnswerProbe(scenario, probe, text, entries) };
     case "abstain":
-      return { id: probe.id, kind: "abstain", ...scoreAbstainProbe(scenario, text, entries) };
+      return {
+        id: probe.id,
+        kind: "abstain",
+        ...scoreAbstainProbe(scenario, probe, text, entries),
+      };
     default:
-      return { id: probe.id, kind: "no-memory", ...scoreNoMemoryProbe(scenario, text, entries) };
+      return {
+        id: probe.id,
+        kind: "no-memory",
+        ...scoreNoMemoryProbe(scenario, probe, text, entries),
+      };
   }
 }
 

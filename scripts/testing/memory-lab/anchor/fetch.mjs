@@ -15,7 +15,8 @@
 //   LICENSES.md                 the license and citation of every set
 //
 // The fetcher is polite and resumable: one request at a time with a delay between requests, retries
-// with exponential backoff on network errors, timeouts, 429 and 5xx (honoring Retry-After), and a page
+// with exponential backoff on network errors, timeouts, 408, 422 (the datasets-server answers it
+// sporadically while degraded), 425, 429 and 5xx (honoring Retry-After), and a page
 // file that already holds the rows it would fetch is never requested again. Rows are stored as the
 // API returned them; credential-shaped strings are the conversion step's business (convert.mjs).
 import { existsSync, readFileSync } from "node:fs";

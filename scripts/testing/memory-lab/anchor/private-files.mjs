@@ -5,8 +5,10 @@
 // conversation text is parsed without ever quoting it in an error.
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   writeFileSync,
@@ -17,16 +19,43 @@ import { REPO_ROOT } from "../../coding-workbench-lab/lab-common.mjs";
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 
-// The deepest existing ancestor is resolved through symlinks and the missing tail appended, so a
-// symlink cannot carry a path that looks external into the checkout.
-function resolveThroughSymlinks(path) {
+function entryExists(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const MAX_LINK_DEPTH = 40;
+
+// The deepest existing entry (a dangling link counts as existing) is resolved through symlinks and
+// the missing tail appended, so a symlink cannot carry a path that looks external into the checkout.
+// A dangling link is followed to where it points, because `mkdir` would create the directory there;
+// a link that cannot be read at all is refused.
+function resolveThroughSymlinks(path, flag, depth = 0) {
   const tail = [];
   let probe = resolve(path);
-  while (!existsSync(probe) && dirname(probe) !== probe) {
+  while (!entryExists(probe) && dirname(probe) !== probe) {
     tail.unshift(basename(probe));
     probe = dirname(probe);
   }
-  return join(realpathSync(probe), ...tail);
+  try {
+    return join(realpathSync(probe), ...tail);
+  } catch {
+    if (depth >= MAX_LINK_DEPTH) throw new RangeError(`${flag} cannot be resolved (link chain)`);
+    const target = resolve(dirname(probe), readLinkOrFail(probe, flag));
+    return resolveThroughSymlinks(join(target, ...tail), flag, depth + 1);
+  }
+}
+
+function readLinkOrFail(path, flag) {
+  try {
+    return readlinkSync(path);
+  } catch {
+    throw new RangeError(`${flag} cannot be resolved`);
+  }
 }
 
 function isInside(parent, child) {
@@ -47,7 +76,7 @@ function enclosingWorkTree(directory) {
  * checkout of a linked worktree included). Returns the resolved absolute path.
  */
 export function assertOutsideCheckout(path, flag) {
-  const resolved = resolveThroughSymlinks(path);
+  const resolved = resolveThroughSymlinks(path, flag);
   if (isInside(realpathSync(REPO_ROOT), resolved))
     throw new RangeError(`${flag} must lie outside the checkout`);
   if (enclosingWorkTree(resolved) !== undefined)

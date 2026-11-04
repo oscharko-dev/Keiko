@@ -125,7 +125,8 @@ Behavior worth knowing:
   identifying user agent.
 - **Patient.** The filter API is slow and not always available: the first request of a set took 90
   seconds and a gateway answered 500 or 502 now and then when this was written. Network errors,
-  timeouts, 408, 425, 429 and 5xx are retried with exponential backoff (`--backoff-ms`, doubling,
+  timeouts, 408, 422 (the datasets-server answers it sporadically while degraded, observed on
+  2026-11-03), 425, 429 and 5xx are retried with exponential backoff (`--backoff-ms`, doubling,
   capped at 60 s, `Retry-After` honored) up to `--attempts` (default 8); a request times out after
   `--timeout-ms` (default 180 s). Any other 4xx fails at once.
 - **Limits.** The English slices need `--limit N` (rows); the German slices are fetched whole unless

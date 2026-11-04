@@ -108,9 +108,12 @@ describe("the chat-skills BFF", () => {
       throw new Error("the BFF needs built packages; run npm run build:packages");
     dir = mkdtempSync(join(tmpdir(), "chat-skills-serve-disconnect-"));
   });
-  afterEach(() => {
-    if (child !== undefined && child.exitCode === null && child.signalCode === null)
+  afterEach(async () => {
+    if (child !== undefined && child.exitCode === null && child.signalCode === null) {
+      const gone = new Promise((resolve) => child.once("exit", resolve));
       child.kill("SIGKILL");
+      await gone;
+    }
     child = undefined;
     rmSync(dir, { recursive: true, force: true });
   });

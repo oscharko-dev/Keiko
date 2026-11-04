@@ -3,9 +3,9 @@
 // turns a person writes, and the questions a later chat asks. The oracle never reaches the product;
 // the driver sends only the turns and the questions. Loading fails closed on any shape it does not
 // know, so a malformed fixture cannot silently measure nothing.
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { matchesTermGroups, validPrefixMark } from "./score.mjs";
+import { SetFileError, isRecord, loadJsonSet, nonEmptyString } from "./set-files.mjs";
 
 const SCENARIO_SCHEMA_VERSION = 1;
 const SCENARIO_LANGUAGES = Object.freeze(["de", "en", "mixed"]);
@@ -48,10 +48,9 @@ const FORBIDDEN_CLASSES = Object.freeze([
 ]);
 const PROBE_KINDS = Object.freeze(["answer", "abstain", "no-memory"]);
 
-class ScenarioError extends Error {
+class ScenarioError extends SetFileError {
   constructor(id, message) {
-    super(`${id}: ${message}`);
-    this.name = "ScenarioError";
+    super("ScenarioError", id, message);
   }
 }
 
@@ -59,22 +58,17 @@ function fail(id, message) {
   throw new ScenarioError(id, message);
 }
 
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function nonEmptyString(value) {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 // A term group is a list of alternative spellings; one alternative present means the group matched.
+// An alternative may end in the prefix mark (`Tabelle*`), which matches at a word start.
 function validTermGroups(groups) {
   return (
     Array.isArray(groups) &&
     groups.length > 0 &&
     groups.every(
       (group) =>
-        Array.isArray(group) && group.length > 0 && group.every((term) => nonEmptyString(term)),
+        Array.isArray(group) &&
+        group.length > 0 &&
+        group.every((term) => nonEmptyString(term) && validPrefixMark(term)),
     )
   );
 }
@@ -92,6 +86,23 @@ function validateTruth(id, truth) {
     if (fact.private !== undefined && typeof fact.private !== "boolean")
       fail(id, `${where}.private must be a boolean when present`);
   });
+}
+
+// A true term that occurs inside a replaced value cannot tell the old body from the new one: every
+// old body would match the true terms too, and a swallowed update would look learned.
+function validateTruthApartFromReplaced(id, truth, superseded) {
+  truth.forEach((fact, factIndex) =>
+    fact.terms.flat().forEach((term) => {
+      const replaced = (superseded ?? [])
+        .flatMap((entry) => entry.terms.flat())
+        .find((old) => matchesTermGroups(old, [[term]]));
+      if (replaced !== undefined)
+        fail(
+          id,
+          `truth[${String(factIndex)}].terms "${term}" occurs inside the replaced value "${replaced}"`,
+        );
+    }),
+  );
 }
 
 function validateTermList(id, list, name, withClass) {
@@ -129,7 +140,19 @@ function validateTurns(id, turns) {
   });
 }
 
-function validateExpectation(id, where, expect) {
+// `allow` names true facts (by key) that an abstain or no-memory probe tolerates in the answer and in
+// the supplied memories: the person's own fact, asked for a colleague's.
+function validateAllowance(id, where, expect, truthKeys) {
+  if (expect.allow === undefined) return;
+  if (expect.kind === "answer")
+    fail(id, `${where}.expect.allow is not measured on an answer probe`);
+  if (!Array.isArray(expect.allow) || expect.allow.length === 0)
+    fail(id, `${where}.expect.allow must be a non-empty array of truth keys`);
+  for (const key of expect.allow)
+    if (!truthKeys.has(key)) fail(id, `${where}.expect.allow names no truth key: ${String(key)}`);
+}
+
+function validateExpectation(id, where, expect, truthKeys) {
   if (!isRecord(expect) || !PROBE_KINDS.includes(expect.kind))
     fail(id, `${where}.expect.kind must be one of ${PROBE_KINDS.join("|")}`);
   if (expect.kind === "answer" && !validTermGroups(expect.terms))
@@ -138,9 +161,10 @@ function validateExpectation(id, where, expect) {
     fail(id, `${where}.expect.forbidden is only measured on an answer probe`);
   if (expect.forbidden !== undefined && !validTermGroups(expect.forbidden))
     fail(id, `${where}.expect.forbidden must be term groups when present`);
+  validateAllowance(id, where, expect, truthKeys);
 }
 
-function validateProbes(id, probes) {
+function validateProbes(id, probes, truthKeys) {
   if (!Array.isArray(probes) || probes.length === 0) fail(id, "probes must be a non-empty array");
   const seen = new Set();
   probes.forEach((probe, index) => {
@@ -150,7 +174,7 @@ function validateProbes(id, probes) {
     if (seen.has(probe.id)) fail(id, `${where}.id duplicates ${probe.id}`);
     seen.add(probe.id);
     if (!nonEmptyString(probe.question)) fail(id, `${where}.question is required`);
-    validateExpectation(id, where, probe.expect);
+    validateExpectation(id, where, probe.expect, truthKeys);
   });
 }
 
@@ -176,10 +200,11 @@ export function validateScenario(scenario) {
   const id = validateHeader(scenario);
   validateTruth(id, scenario.truth);
   validateTermList(id, scenario.superseded, "superseded", false);
+  validateTruthApartFromReplaced(id, scenario.truth, scenario.superseded);
   validateTermList(id, scenario.forgotten, "forgotten", false);
   validateTermList(id, scenario.forbidden, "forbidden", true);
   validateTurns(id, scenario.turns);
-  validateProbes(id, scenario.probes);
+  validateProbes(id, scenario.probes, new Set(scenario.truth.map((fact) => fact.key)));
   return Object.freeze({
     ...scenario,
     superseded: scenario.superseded ?? [],
@@ -206,28 +231,9 @@ export function scenarioDigest(scenario) {
     .digest("hex");
 }
 
-function parseScenarioFile(path) {
-  let parsed;
-  try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    throw new ScenarioError(path, `not valid JSON (${error.message})`);
-  }
-  return validateScenario(parsed);
-}
-
 /** Loads every `*.json` scenario of a directory, sorted by id, refusing duplicate ids. */
 export function loadScenarioDirectory(directory) {
-  const files = readdirSync(directory)
-    .filter((name) => name.endsWith(".json"))
-    .toSorted();
-  const scenarios = files.map((name) => parseScenarioFile(join(directory, name)));
-  const ids = new Set();
-  for (const scenario of scenarios) {
-    if (ids.has(scenario.id)) fail(scenario.id, "duplicate scenario id in the set");
-    ids.add(scenario.id);
-  }
-  return scenarios.toSorted((left, right) => left.id.localeCompare(right.id));
+  return loadJsonSet(directory, { validate: validateScenario, fail, what: "scenario" });
 }
 
 /** The versioned manifest of a scenario set: ids, classes, languages and per-scenario digests. */

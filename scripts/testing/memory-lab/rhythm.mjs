@@ -87,10 +87,22 @@ export function headroomReading() {
   };
 }
 
+/** Parses a percentage limit; anything that is not 0..100 is a usage error, never a silent verdict. */
+export function percentLimit(value, name) {
+  // Number("") is 0, so an empty value must be refused before it is parsed.
+  const parsed = typeof value === "string" && value.trim() !== "" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100)
+    throw new RangeError(`${name} must be a percentage between 0 and 100`);
+  return parsed;
+}
+
 function headroomCommand(values) {
+  // Windows reports load averages as zeros, which would read as an idle machine.
+  if (process.platform === "win32")
+    throw new RangeError("headroom needs load averages, which this platform does not report");
   const reading = headroomReading();
-  const maxCpu = Number(values["max-cpu"]);
-  const maxMemory = Number(values["max-memory"]);
+  const maxCpu = percentLimit(values["max-cpu"], "--max-cpu");
+  const maxMemory = percentLimit(values["max-memory"], "--max-memory");
   const ok = reading.cpuPercent <= maxCpu && reading.memoryPercent <= maxMemory;
   console.log(
     `headroom cpu=${String(reading.cpuPercent)}% memory=${String(reading.memoryPercent)}% ${ok ? "ok" : "busy"}`,

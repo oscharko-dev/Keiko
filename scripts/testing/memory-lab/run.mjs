@@ -25,6 +25,7 @@ import {
 } from "./corpus/holdout.mjs";
 import { ARMS, runScenario } from "./driver.mjs";
 import { CEILINGS, pendingGatewayCalls, startLabInstance } from "./instance.mjs";
+import { instrumentDigest, productDistDigest } from "./instrument.mjs";
 import {
   LabConfigurationError,
   assertGatewayConfigUnchanged,
@@ -225,15 +226,31 @@ function brokenLearnerItems(kind) {
   return () => [{ body: "Der Nutzer liebt Sardinen zum Fruehstueck.", type: "preference" }];
 }
 
-function productHead(subjectRoot) {
+function gitOutput(cwd, args) {
   try {
-    return execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: subjectRoot ?? REPO_ROOT,
-      encoding: "utf8",
-    }).trim();
+    return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
   } catch {
-    return "unknown";
+    return undefined;
   }
+}
+
+function productHead(subjectRoot) {
+  return gitOutput(subjectRoot ?? REPO_ROOT, ["rev-parse", "HEAD"]) ?? "unknown";
+}
+
+// The lab that measured, for people: its commit, and whether the lab sources carried uncommitted
+// changes at the time. The instrument digest beside it is what the judge compares.
+function labState() {
+  const status = gitOutput(REPO_ROOT, [
+    "status",
+    "--porcelain",
+    "--",
+    "scripts/testing/memory-lab",
+  ]);
+  return {
+    labHead: gitOutput(REPO_ROOT, ["rev-parse", "HEAD"]) ?? "unknown",
+    labDirty: status === undefined ? null : status.length > 0,
+  };
 }
 
 async function startFixture(options) {
@@ -350,10 +367,36 @@ function installInterruptHandlers() {
     });
 }
 
-// One row per unit. A sealed run keeps the shape of a hidden conversation out of the evidence: the
-// number of turns and of model calls would give away how long each conversation is, so only the
-// durations of the phases remain.
+function meanOf(values) {
+  return values.length === 0 ? null : Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+}
+
+// A sealed run keeps the shape of every hidden conversation out of the evidence: per-unit durations
+// would track how long each conversation is, so only means per arm and repetition remain.
+function sealedTimingRows(results) {
+  const groups = new Map();
+  for (const result of results) {
+    const key = `${result.arm}:r${String(result.repetition)}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(result);
+  }
+  return [...groups.values()].map((rows) => {
+    const measured = rows.filter((row) => !isFailedUnit(row));
+    return {
+      arm: rows[0].arm,
+      repetition: rows[0].repetition,
+      units: rows.length,
+      failed: rows.length - measured.length,
+      meanInstanceStartMs: meanOf(measured.map((row) => row.instanceStartMs)),
+      meanLearnMs: meanOf(measured.map((row) => row.timing.learnMs)),
+      meanProbeMs: meanOf(measured.map((row) => row.timing.probeMs)),
+    };
+  });
+}
+
+// One row per unit of an open run, with the turn durations and the model calls behind it.
 function timingRows(results, sealed) {
+  if (sealed) return sealedTimingRows(results);
   return results.map((result) => ({
     scenario: result.scenario,
     arm: result.arm,
@@ -362,28 +405,29 @@ function timingRows(results, sealed) {
     learnMs: result.timing.learnMs,
     probeMs: result.timing.probeMs,
     ...(isFailedUnit(result) ? { failed: true } : {}),
-    ...(sealed
-      ? {}
-      : {
-          turnMs: result.turns.map((turn) => turn.elapsedMs),
-          modelCalls: result.requests.filter((request) => request.phase === "run").length,
-          learnerCalls: result.requests.filter(
-            (request) => request.phase === "run" && request.model?.endsWith("learner"),
-          ).length,
-        }),
+    turnMs: result.turns.map((turn) => turn.elapsedMs),
+    modelCalls: result.requests.filter((request) => request.phase === "run").length,
+    learnerCalls: result.requests.filter(
+      (request) => request.phase === "run" && request.model?.endsWith("learner"),
+    ).length,
   }));
 }
 
 function writeEvidence(options, corpus, results, gateway) {
   const manifest = corpus.manifest;
-  const summary = summarizeLabRun(results);
+  const summary = summarizeLabRun(results, { sealed: corpus.sealed });
   const metadata = {
     mode: options.mode,
     productHead: productHead(options.subjectRoot),
+    // The product runs from its built packages, which a git head alone does not pin.
+    productDistDigest: productDistDigest(options.subjectRoot ?? REPO_ROOT),
+    ...labState(),
+    instrumentDigest: instrumentDigest(),
     arms: options.arms,
     repetitions: options.repetitions,
     memoryMode: options.memoryMode,
     ceiling: options.ceiling,
+    budgetTokens: options.budgetTokens,
     answerModelId: options.answerModelId ?? ANSWERER_MODEL_ID,
     learnModelId: options.learnModelId ?? LEARNER_MODEL_ID,
     brokenLearner: options.brokenLearner ?? null,
@@ -400,7 +444,7 @@ function writeEvidence(options, corpus, results, gateway) {
   writeContinuityJson(join(options.out, "manifest.json"), { ...manifest, metadata });
   writeFileSync(
     join(options.out, "scorecard.json"),
-    serializeScorecard(buildLabScorecard(results, options.generatedAt)),
+    serializeScorecard(buildLabScorecard(results, options.generatedAt, corpus.sealed)),
   );
   writeContinuityJson(join(options.out, "summary.json"), summary);
   writeContinuityJson(join(options.out, "timing.json"), timingRows(results, corpus.sealed));

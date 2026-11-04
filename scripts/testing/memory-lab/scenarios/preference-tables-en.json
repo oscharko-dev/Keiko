@@ -11,7 +11,7 @@
       "seed": "I prefer tables when you show me numbers.",
       "must": true,
       "private": true,
-      "terms": [["tables"]]
+      "terms": [["table*"]]
     }
   ],
   "turns": [
@@ -31,7 +31,7 @@
       "question": "How should I show you numbers?",
       "expect": {
         "kind": "answer",
-        "terms": [["tables"]]
+        "terms": [["table*"]]
       }
     },
     {
@@ -39,7 +39,7 @@
       "question": "Summarize the quarterly results for me.",
       "expect": {
         "kind": "answer",
-        "terms": [["tables"]]
+        "terms": [["table*"]]
       }
     },
     {

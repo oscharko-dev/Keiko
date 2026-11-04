@@ -32,9 +32,9 @@ function counters(overrides = {}) {
 
 const clamp = (value) => Math.max(0, Math.min(1, value));
 
-function storeEntry(repetition, precision, recall) {
+function storeEntry(repetition, precision, recall, unit = 0) {
   return {
-    name: `scenario-one:product:r${String(repetition)}:store`,
+    name: `scenario-${String(unit)}:product:r${String(repetition)}:store`,
     passed: precision === 1 && recall === 1,
     evidence: "stored=1",
     metrics: [
@@ -45,9 +45,9 @@ function storeEntry(repetition, precision, recall) {
 }
 
 // One probe entry of a repetition; the evidence starts with the probe's kind, as the report writes it.
-function probeEntry(repetition, passed, kind = "answer", id = "related") {
+function probeEntry(repetition, passed, kind = "answer", id = "related", unit = 0) {
   return {
-    name: `scenario-one:product:r${String(repetition)}:probe:${id}`,
+    name: `scenario-${String(unit)}:product:r${String(repetition)}:probe:${id}`,
     passed,
     evidence: `kind=${kind} suppliedCount=1`,
   };
@@ -62,40 +62,106 @@ const PROVENANCE = {
   learnModelId: "memory-lab-learner",
 };
 
+// The group entry a sealed run writes for one repetition: the same figures as `units` per-unit
+// entries, as sums and counts.
+function groupEntry(repetition, { units, precision, recall, answer, abstain, unrelated }) {
+  const pass = (ok) => (ok ? units : 0);
+  const metricOf = (name, value) => ({ name, value });
+  return {
+    name: `holdout:preference:de:product:r${String(repetition)}:group`,
+    passed: true,
+    evidence: `units=${String(units)} failed=0`,
+    metrics: [
+      metricOf("units", units),
+      metricOf("precisionSum", precision * units),
+      metricOf("precisionCount", units),
+      metricOf("recallSum", recall * units),
+      metricOf("recallCount", units),
+      metricOf("answerPassed", pass(answer)),
+      metricOf("answerTotal", units),
+      metricOf("abstainPassed", pass(abstain)),
+      metricOf("abstainTotal", units),
+      metricOf("noMemoryPassed", pass(unrelated)),
+      metricOf("noMemoryTotal", units),
+    ],
+  };
+}
+
+function unitEntries(repetition, units, { precision, recall, answer, abstain, unrelated }) {
+  return Array.from({ length: units }, (_, unit) => [
+    storeEntry(repetition, precision, recall, unit),
+    probeEntry(repetition, answer, "answer", "related", unit),
+    probeEntry(repetition, abstain, "abstain", "unknown", unit),
+    probeEntry(repetition, unrelated, "no-memory", "unrelated", unit),
+  ]).flat();
+}
+
 // A run with the given product figures; `jitter` spreads repetitions around the mean, `repetitions`
-// is how many there are (three by default: a band needs at least two), `abstainPasses` and
-// `unrelatedPasses` are the pass/fail of the abstention and the no-memory probe per repetition.
-function writeRun(
-  root,
-  name,
-  {
+// is how many there are (three by default: a band needs at least three), `units` how many scenarios
+// each repetition has (twelve, like the curated set; one unit would make every change a one-unit
+// change), `abstainPasses` and `unrelatedPasses` are the pass/fail of the abstention and the
+// no-memory probe per repetition, and `grouped` writes the group entries of a sealed run instead.
+const RUN_DEFAULTS = Object.freeze({
+  jitter: 0,
+  hard: {},
+  corpus: CORPUS,
+  repetitions: 3,
+  units: 12,
+  grouped: false,
+  abstainPasses: [true, true, true],
+  unrelatedPasses: [true, true, true],
+  failedUnits: 0,
+  sealed: false,
+});
+const FIGURE_KEYS = new Set(["precision", "recall", "answer", ...Object.keys(RUN_DEFAULTS)]);
+
+// Splits a run spec into the figures the files are built from and the provenance of its manifest.
+function splitSpec(spec) {
+  const figures = { ...RUN_DEFAULTS };
+  const provenance = {};
+  for (const [key, value] of Object.entries(spec))
+    if (FIGURE_KEYS.has(key)) figures[key] = value;
+    else provenance[key] = value;
+  return { figures, provenance };
+}
+
+function writeRun(root, name, spec) {
+  const { figures: run, provenance } = splitSpec(spec);
+  const {
     precision,
     recall,
     answer,
-    jitter = 0,
-    hard = {},
-    corpus = CORPUS,
-    repetitions = 3,
-    abstainPasses = [true, true, true],
-    unrelatedPasses = [true, true, true],
-    failedUnits = 0,
-    sealed = false,
-    ...provenance
-  },
-) {
+    jitter,
+    hard,
+    corpus,
+    repetitions,
+    units,
+    grouped,
+    abstainPasses,
+    unrelatedPasses,
+    failedUnits,
+    sealed,
+  } = run;
   const directory = join(root, name);
   mkdirSync(directory, { recursive: true });
   const spread = [precision - jitter, precision, precision + jitter].slice(0, repetitions);
+  const figures = (value, index) => ({
+    units,
+    precision: clamp(value),
+    recall: clamp(recall + value - precision),
+    answer: answer >= 0.5,
+    abstain: abstainPasses[index] ?? true,
+    unrelated: unrelatedPasses[index] ?? true,
+  });
   const scorecard = {
     evalSchemaVersion: "1",
     generatedAt: 0,
     totals: { scenarios: 6, passed: 0, failed: 0 },
-    scenarios: spread.flatMap((value, index) => [
-      storeEntry(index, clamp(value), clamp(recall + value - precision)),
-      probeEntry(index, answer >= 0.5),
-      probeEntry(index, abstainPasses[index] ?? true, "abstain", "unknown"),
-      probeEntry(index, unrelatedPasses[index] ?? true, "no-memory", "unrelated"),
-    ]),
+    scenarios: spread.flatMap((value, index) =>
+      grouped
+        ? [groupEntry(index, figures(value, index))]
+        : unitEntries(index, units, figures(value, index)),
+    ),
   };
   const share = (passes) => passes.slice(0, repetitions).filter(Boolean).length / repetitions;
   const summary = {
@@ -239,17 +305,55 @@ describe("memory lab comparison of every judged metric", () => {
     );
   });
 
-  it("needs two repetitions in each run, not only in both together", () => {
+  const precisionOf = (baseline, candidate) =>
+    compareRuns(baseline, candidate).deltas.find((row) => row.metric === "precision");
+
+  it("needs three repetitions in each run, not only in both together", () => {
     const [baseline, candidate] = pair({ repetitions: 3 }, { repetitions: 1, precision: 0.9 });
-    const precision = compareRuns(baseline, candidate).deltas.find(
-      (row) => row.metric === "precision",
-    );
-    expect(precision.beyondNoise).toBeNull();
+    expect(precisionOf(baseline, candidate).beyondNoise).toBeNull();
+    // The failure this pins: two repetitions had a band, and the half range of two values is a coin
+    // flip (under no true change a metric crossed it in about one comparison of seven).
     const [twoBase, twoCandidate] = pair({ repetitions: 2 }, { repetitions: 2, precision: 0.9 });
-    const withBand = compareRuns(twoBase, twoCandidate).deltas.find(
-      (row) => row.metric === "precision",
+    expect(precisionOf(twoBase, twoCandidate).beyondNoise).toBeNull();
+    const [threeBase, threeCandidate] = pair(
+      { repetitions: 3 },
+      { repetitions: 3, precision: 0.9 },
     );
-    expect(withBand.beyondNoise).toBe(true);
+    expect(precisionOf(threeBase, threeCandidate).beyondNoise).toBe(true);
+  });
+
+  it("does not call a change that one unit alone could produce progress", () => {
+    // Twelve units, repetitions that agree exactly: the band pooled over both runs is half the
+    // difference itself, so without a floor every difference would be beyond it; a gain smaller
+    // than one unit in twelve (0.0833) is not progress.
+    const [baseline, candidate] = pair({ jitter: 0 }, { jitter: 0, precision: 0.65 });
+    const small = precisionOf(baseline, candidate);
+    expect(small).toMatchObject({ delta: 0.05, halfRange: 0.025, minimumDetectable: 0.0833 });
+    expect(small.beyondNoise).toBe(false);
+    expect(renderComparison(compareRuns(baseline, candidate), "x")).toContain(
+      "precision 0.6->0.65 (within noise ±0.025, one-unit floor 0.0833)",
+    );
+    const [base, larger] = pair({ jitter: 0 }, { jitter: 0, precision: 0.8 });
+    expect(precisionOf(base, larger).beyondNoise).toBe(true);
+  });
+
+  it("reads the group entries of a sealed run as the same per-repetition values as unit entries", () => {
+    const [unitBase, unitCandidate] = pair(
+      {},
+      { precision: 0.9, abstainPasses: [true, false, true] },
+    );
+    const perUnit = compareRuns(unitBase, unitCandidate);
+    root = mkdtempSync(join(tmpdir(), "memory-lab-compare-"));
+    const groupedBase = writeRun(root, "gbase", { ...base, grouped: true });
+    const groupedCandidate = writeRun(root, "gcand", {
+      ...base,
+      grouped: true,
+      precision: 0.9,
+      abstainPasses: [true, false, true],
+    });
+    const grouped = compareRuns(groupedBase, groupedCandidate);
+    expect(grouped.deltas).toEqual(perUnit.deltas);
+    expect(grouped.deltas.find((row) => row.metric === "abstention").halfRange).toBe(0.5);
   });
 
   it("does not list an unchanged metric as unknown", () => {
@@ -278,18 +382,66 @@ describe("memory lab progress judgement", () => {
   });
 
   // The holdout part is made of sealed runs; `baseline` and `candidate` override either run.
+  // The models come from the manifests, so each label's runs name their own answerer and learner.
   function pairs(spec) {
     root = mkdtempSync(join(tmpdir(), "memory-lab-judge-"));
     return spec.map(({ model, part, baseline = {}, candidate = {} }) => {
       const sealed = part === "holdout";
+      const models = { answerModelId: `${model}-answerer`, learnModelId: `${model}-learner` };
       return {
         model,
         part,
-        baseline: writeRun(root, `${model}-${part}-base`, { ...before, sealed, ...baseline }),
-        candidate: writeRun(root, `${model}-${part}-cand`, { ...before, sealed, ...candidate }),
+        baseline: writeRun(root, `${model}-${part}-base`, {
+          ...before,
+          sealed,
+          ...models,
+          ...baseline,
+        }),
+        candidate: writeRun(root, `${model}-${part}-cand`, {
+          ...before,
+          sealed,
+          ...models,
+          ...candidate,
+        }),
       };
     });
   }
+
+  it("refuses two holdout pairs that measured the same models, whatever their labels say", () => {
+    const same = { answerModelId: "one-answerer", learnModelId: "one-learner" };
+    expect(() =>
+      judgeProgress(
+        pairs([
+          {
+            model: "gemma",
+            part: "holdout",
+            baseline: same,
+            candidate: { ...same, precision: 0.9 },
+          },
+          {
+            model: "qwen",
+            part: "holdout",
+            baseline: same,
+            candidate: { ...same, precision: 0.9 },
+          },
+        ]),
+      ),
+    ).toThrow(/measured the same models by their manifests/u);
+  });
+
+  it("needs the same metric to improve on both models", () => {
+    const judgement = judgeProgress(
+      pairs([
+        { model: "gemma", part: "holdout", candidate: { precision: 0.9 } },
+        { model: "qwen", part: "holdout", candidate: { recall: 0.95 } },
+      ]),
+    );
+    expect(judgement.progress).toBe(false);
+    expect(judgement.improvedOnTwoModels).toEqual([]);
+    expect(judgement.reasons).toContain(
+      "no metric improved on the holdout on two models by their manifests",
+    );
+  });
 
   it("accepts a gain on the holdout on two models with hard counters at zero", () => {
     const judgement = judgeProgress(
@@ -312,7 +464,9 @@ describe("memory lab progress judgement", () => {
       ]),
     );
     expect(judgement.progress).toBe(false);
-    expect(judgement.reasons).toContain("improvement on the holdout on fewer than two models");
+    expect(judgement.reasons).toContain(
+      "no metric improved on the holdout on two models by their manifests",
+    );
   });
 
   it("rejects a change that helps one model and harms another", () => {
@@ -365,10 +519,14 @@ describe("memory lab judgement refusals", () => {
       part: "holdout",
       baseline: writeRun(root, `${model}-base`, {
         ...before,
+        answerModelId: `${model}-answerer`,
+        learnModelId: `${model}-learner`,
         sealed: which === "baseline" ? sealed : true,
       }),
       candidate: writeRun(root, `${model}-cand`, {
         ...before,
+        answerModelId: `${model}-answerer`,
+        learnModelId: `${model}-learner`,
         precision: 0.9,
         sealed: which === "candidate" ? sealed : true,
         ...patch,
@@ -383,6 +541,11 @@ describe("memory lab judgement refusals", () => {
     ["arms", { arms: ["product"] }],
     ["answerModelId", { answerModelId: "another-answerer" }],
     ["learnModelId", { learnModelId: "another-learner" }],
+    ["budgetTokens", { budgetTokens: 2400 }],
+    ["brokenLearner", { brokenLearner: "credential" }],
+    ["configDigest", { configDigest: "b".repeat(64) }],
+    ["foldedKeys", { foldedKeys: ["KEIKO_MEMORY_MODE"] }],
+    ["instrumentDigest", { instrumentDigest: "c".repeat(64) }],
   ])("refuses a pair whose runs differ in %s", (field, patch) => {
     expect(() => judgeProgress(holdoutPairs(patch))).toThrow(
       new RegExp(`refusing to judge gemma holdout: the runs differ in ${field}`, "u"),
@@ -429,19 +592,28 @@ describe("memory lab judgement refusals", () => {
 
   it("does not call a change progress while its noise band is unknown", () => {
     root = mkdtempSync(join(tmpdir(), "memory-lab-refuse-"));
-    const single = (name, patch) =>
-      writeRun(root, name, { ...before, repetitions: 1, sealed: true, ...patch });
+    const single = (name, model, patch) =>
+      writeRun(root, name, {
+        ...before,
+        repetitions: 1,
+        sealed: true,
+        answerModelId: `${model}-answerer`,
+        learnModelId: `${model}-learner`,
+        ...patch,
+      });
     const judgement = judgeProgress(
       ["gemma", "qwen"].map((model) => ({
         model,
         part: "holdout",
-        baseline: single(`${model}-base`, {}),
-        candidate: single(`${model}-cand`, { precision: 0.9 }),
+        baseline: single(`${model}-base`, model, {}),
+        candidate: single(`${model}-cand`, model, { precision: 0.9 }),
       })),
     );
     expect(judgement.progress).toBe(false);
     expect(judgement.reasons).toContain("noise band unknown: precision");
-    expect(judgement.reasons).toContain("improvement on the holdout on fewer than two models");
+    expect(judgement.reasons).toContain(
+      "no metric improved on the holdout on two models by their manifests",
+    );
   });
 
   it("does not call a change progress when a run has units that could not be measured", () => {
@@ -453,17 +625,21 @@ describe("memory lab judgement refusals", () => {
   it("rejects a collapse of abstention beyond the noise band on one model", () => {
     root = mkdtempSync(join(tmpdir(), "memory-lab-refuse-"));
     const judgement = judgeProgress(
-      ["gemma", "qwen"].map((model) => ({
-        model,
-        part: "holdout",
-        baseline: writeRun(root, `${model}-base`, { ...before, sealed: true }),
-        candidate: writeRun(root, `${model}-cand`, {
-          ...before,
-          precision: 0.9,
-          sealed: true,
-          ...(model === "qwen" ? { abstainPasses: [false, false, false] } : {}),
-        }),
-      })),
+      ["gemma", "qwen"].map((model) => {
+        const models = { answerModelId: `${model}-answerer`, learnModelId: `${model}-learner` };
+        return {
+          model,
+          part: "holdout",
+          baseline: writeRun(root, `${model}-base`, { ...before, sealed: true, ...models }),
+          candidate: writeRun(root, `${model}-cand`, {
+            ...before,
+            precision: 0.9,
+            sealed: true,
+            ...models,
+            ...(model === "qwen" ? { abstainPasses: [false, false, false] } : {}),
+          }),
+        };
+      }),
     );
     expect(judgement.progress).toBe(false);
     expect(judgement.reasons.join(" ")).toMatch(/worsened beyond the noise band: abstention/u);

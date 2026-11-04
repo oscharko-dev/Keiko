@@ -86,7 +86,8 @@ describe("corpus build", () => {
     expect(scenarioSetManifest(loaded).setDigest).toBe(manifest.setDigest);
     for (const entry of manifest.entries) {
       expect(entry.file).toBe(`scenarios/${entry.id}.json`);
-      expect(entry.messages).toBe(entry.size);
+      // The size is a floor: a person with more parts than the turns can hold grows past it.
+      expect(entry.messages).toBeGreaterThanOrEqual(entry.size);
       expect(entry.generator).toBe("scripted");
       expect(Object.keys(entry.hardness).toSorted()).toEqual([
         "embedded",

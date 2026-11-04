@@ -540,23 +540,41 @@ describe("a sealed run against the real product", () => {
       for (const row of timing) {
         expect(Object.keys(row).toSorted()).toEqual([
           "arm",
-          "instanceStartMs",
-          "learnMs",
-          "probeMs",
+          "failed",
+          "meanInstanceStartMs",
+          "meanLearnMs",
+          "meanProbeMs",
           "repetition",
-          "scenario",
+          "units",
         ]);
       }
+      // The failure this pins: the scorecard carried one entry per unit and probe under a stable
+      // masked name, so an optimizer could follow single hidden scenarios from candidate to
+      // candidate. A sealed run records groups, and one scenario is fewer than a group needs.
       const card = JSON.parse(readFileSync(join(report, "scorecard.json"), "utf8"));
       const names = card.scenarios.map((entry) => entry.name);
-      expect(names.every((name) => name.startsWith("holdout:preference:de:"))).toBe(true);
-      expect(names.some((name) => name.endsWith(":probe:probe-1"))).toBe(true);
+      expect(names.toSorted()).toEqual([
+        "holdout:other:de:oracle:r0:group",
+        "holdout:other:de:product:r0:group",
+      ]);
+      expect(names.some((name) => /[0-9a-f]{12}/u.test(name))).toBe(false);
+      const group = card.scenarios.find((entry) => entry.name.includes(":product:"));
+      expect(group.metrics.map((entry) => entry.name)).toEqual(
+        expect.arrayContaining([
+          "units",
+          "precisionCount",
+          "recallCount",
+          "answerTotal",
+          "abstainTotal",
+          "noMemoryTotal",
+        ]),
+      );
       const manifest = JSON.parse(readFileSync(join(report, "manifest.json"), "utf8"));
       expect(manifest.metadata.holdout).toBe(true);
       expect(manifest.metadata.sealed).toBe(true);
       expect(manifest.entries[0].id).toMatch(/^holdout:preference:de:[0-9a-f]{12}$/u);
       const markdown = readFileSync(join(report, "summary.md"), "utf8");
-      expect(markdown).toContain("| product/preference |");
+      expect(markdown).toContain("| product/other |");
       expect(sealedStateDirectories(temporary)).toEqual([]);
     },
     RUN_TIMEOUT_MS,
@@ -598,11 +616,8 @@ describe("a sealed run against the real product", () => {
       expect(lines.join("\n").toLowerCase()).not.toContain("zebrafink");
       const card = JSON.parse(readFileSync(join(report, "scorecard.json"), "utf8"));
       expect(card.scenarios).toHaveLength(1);
-      expect(card.scenarios[0].name).toMatch(
-        /^holdout:preference:de:[0-9a-f]{12}:product:r0:store$/u,
-      );
-      expect(card.scenarios[0]).toMatchObject({ passed: false });
-      expect(card.scenarios[0].evidence).toMatch(/^unit-failed:\w+$/u);
+      expect(card.scenarios[0].name).toBe("holdout:other:de:product:r0:group");
+      expect(card.scenarios[0]).toMatchObject({ passed: false, evidence: "units=1 failed=1" });
       const unit = summary.failedUnitList[0];
       expect(unit.scenario).toMatch(/^holdout:preference:de:[0-9a-f]{12}$/u);
       expect(sealedStateDirectories(temporary)).toEqual([]);

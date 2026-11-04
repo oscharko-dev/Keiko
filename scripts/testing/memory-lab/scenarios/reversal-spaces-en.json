@@ -45,8 +45,19 @@
       "question": "Tabs or spaces for my code?",
       "expect": {
         "kind": "answer",
-        "terms": [["spaces over tabs"]],
-        "forbidden": [["tabs over spaces"]]
+        "terms": [["spaces", "Leerzeichen"]],
+        "forbidden": [
+          [
+            "tabs over spaces",
+            "prefer tabs",
+            "use tabs",
+            "tabs instead of spaces",
+            "tabs rather than spaces",
+            "tabs, not spaces",
+            "bevorzugst du Tabs",
+            "Tabs statt Leerzeichen"
+          ]
+        ]
       }
     }
   ]

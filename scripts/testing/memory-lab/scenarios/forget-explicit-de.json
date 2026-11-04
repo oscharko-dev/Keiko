@@ -31,7 +31,7 @@
       "id": "related",
       "question": "Wie soll ich dir Zahlen zeigen?",
       "expect": {
-        "kind": "abstain"
+        "kind": "no-memory"
       }
     }
   ]

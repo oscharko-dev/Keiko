@@ -14,6 +14,11 @@ const UNMEASURED = Object.freeze([
   "Sampling: temperature and seeds are not controlled through the product, so repetitions differ by whatever the model's own sampling does; the noise band measures exactly that.",
 ]);
 const MAX_LISTED_FAILURES = 20;
+// A sealed run reports groups, never units: a per-unit verdict under a stable masked name would let
+// an optimizer follow single hidden scenarios from candidate to candidate, and a group of fewer
+// distinct scenarios than this would be one unit in all but name, so it is folded into "other".
+const MIN_SEALED_GROUP = 5;
+const FOLDED_GROUP = "other";
 
 function storeEvidence(store) {
   const counters = HARD_COUNTERS.map((name) => `${name}=${String(store.counters[name] ?? 0)}`);
@@ -87,9 +92,99 @@ function resultKey(result) {
   return `${result.scenario}:${result.arm}:r${String(result.repetition)}`;
 }
 
-/** The scorecard of a run; `results` carry a `repetition` index set by the runner. */
-export function buildLabScorecard(results, generatedAt) {
+// Distinct scenarios per value of `keyOf`, over every arm and repetition of the run.
+function distinctScenarios(results, keyOf) {
+  const sizes = new Map();
+  for (const result of results) {
+    const key = keyOf(result);
+    if (!sizes.has(key)) sizes.set(key, new Set());
+    sizes.get(key).add(result.scenario);
+  }
+  return sizes;
+}
+
+// The value a sealed run may report for a group field: the value itself when enough distinct
+// scenarios share it, otherwise the folded name. An open run reports every value as it is.
+function groupField(results, sealed, field, withLanguage) {
+  if (!sealed) return (result) => result[field];
+  const keyOf = (result) => (withLanguage ? `${result[field]}/${result.language}` : result[field]);
+  const sizes = distinctScenarios(results, keyOf);
+  return (result) =>
+    (sizes.get(keyOf(result))?.size ?? 0) >= MIN_SEALED_GROUP ? result[field] : FOLDED_GROUP;
+}
+
+function sum(values) {
+  return values
+    .filter((value) => typeof value === "number")
+    .reduce((total, value) => total + value, 0);
+}
+
+function countNumbers(values) {
+  return values.filter((value) => typeof value === "number").length;
+}
+
+// The figures of one sealed group as sums and counts, so that compare.mjs can rebuild the same
+// per-repetition means it takes from per-unit entries of an open run.
+function groupMetrics(rows) {
+  const measured = rows.filter((row) => !isFailedUnit(row));
+  const probes = measured.flatMap((row) => row.probes);
+  const ofKind = (kind) => probes.filter((probe) => probe.kind === kind);
+  const passed = (list) => list.filter((probe) => probe.passed).length;
+  const precision = measured.map((row) => row.store.precision);
+  const recall = measured.map((row) => row.store.recall);
+  const counters = aggregate(measured).counters;
+  return [
+    metric("units", rows.length),
+    metric("failed", rows.length - measured.length),
+    metric("precisionSum", sum(precision)),
+    metric("precisionCount", countNumbers(precision)),
+    metric("recallSum", sum(recall)),
+    metric("recallCount", countNumbers(recall)),
+    metric("answerPassed", passed(ofKind("answer"))),
+    metric("answerTotal", ofKind("answer").length),
+    metric("abstainPassed", passed(ofKind("abstain"))),
+    metric("abstainTotal", ofKind("abstain").length),
+    metric("noMemoryPassed", passed(ofKind("no-memory"))),
+    metric("noMemoryTotal", ofKind("no-memory").length),
+    metric("probeCaptures", sum(measured.map((row) => row.probeCaptures ?? 0))),
+    ...HARD_COUNTERS.map((name) => metric(name, counters[name] ?? 0)),
+  ];
+}
+
+// One entry per class, language, arm and repetition of a sealed run; the entry passes when no unit
+// of the group failed and every hard counter of the group is zero.
+function recordSealedGroups(card, results) {
+  const classOf = groupField(results, true, "class", true);
+  const groups = new Map();
+  for (const result of results) {
+    const name = `holdout:${classOf(result)}:${result.language}:${result.arm}:r${String(result.repetition)}:group`;
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(result);
+  }
+  for (const [name, rows] of [...groups.entries()].toSorted(([left], [right]) =>
+    compareStrings(left, right),
+  )) {
+    const failed = rows.filter((row) => isFailedUnit(row)).length;
+    const counters = aggregate(rows.filter((row) => !isFailedUnit(row))).counters;
+    card.recordResult(
+      name,
+      failed === 0 && !hardCountersViolated(counters),
+      `units=${String(rows.length)} failed=${String(failed)}`,
+      groupMetrics(rows),
+    );
+  }
+}
+
+/**
+ * The scorecard of a run; `results` carry a `repetition` index set by the runner. An open run records
+ * every unit's store, oracle precondition and probes; a sealed run records groups only.
+ */
+export function buildLabScorecard(results, generatedAt, sealed = false) {
   const card = createScorecard();
+  if (sealed) {
+    recordSealedGroups(card, results);
+    return card.build(generatedAt);
+  }
   const ordered = results.toSorted((left, right) =>
     compareStrings(resultKey(left), resultKey(right)),
   );
@@ -188,9 +283,16 @@ function oracleScopes(results) {
   return totals;
 }
 
-/** Group rows per arm, language, class and difficulty, plus the overall hard counters and timing. */
-export function summarizeLabRun(results) {
+/**
+ * Group rows per arm, language, class and difficulty, plus the overall hard counters and timing. A
+ * sealed run folds a class, language or difficulty that fewer than MIN_SEALED_GROUP distinct scenarios
+ * share into "other".
+ */
+export function summarizeLabRun(results, { sealed = false } = {}) {
   const failed = failedUnitList(results);
+  const languageOf = groupField(results, sealed, "language", false);
+  const classOf = groupField(results, sealed, "class", false);
+  const difficultyOf = groupField(results, sealed, "difficulty", false);
   // The headline is the product arm. The oracle store is curated through the explicit route, so its
   // counters show that route's defects (today: project scope) and are reported apart.
   const measured = results.filter((result) => !isFailedUnit(result));
@@ -201,10 +303,11 @@ export function summarizeLabRun(results) {
     runs: results.length,
     failedUnits: failed.length,
     failedUnitList: failed,
+    sealed,
     byArm: groupBy(results, (result) => result.arm),
-    byArmAndLanguage: groupBy(results, (result) => `${result.arm}/${result.language}`),
-    byArmAndClass: groupBy(results, (result) => `${result.arm}/${result.class}`),
-    byArmAndDifficulty: groupBy(results, (result) => `${result.arm}/${result.difficulty}`),
+    byArmAndLanguage: groupBy(results, (result) => `${result.arm}/${languageOf(result)}`),
+    byArmAndClass: groupBy(results, (result) => `${result.arm}/${classOf(result)}`),
+    byArmAndDifficulty: groupBy(results, (result) => `${result.arm}/${difficultyOf(result)}`),
     noise: noiseByArm(results),
     timing: timingByArm(results),
     hardCountersViolated: hardCountersViolated(counters),
@@ -306,7 +409,8 @@ export function renderLabSummary(summary, manifest, metadata) {
   return [
     "# MemoriaViva lab run",
     "",
-    `Mode: ${metadata.mode}. Product head: ${metadata.productHead}. Corpus: ${manifest.count} scenarios, set digest \`${manifest.setDigest}\`. Arms: ${metadata.arms.join(", ")}. Repetitions: ${String(metadata.repetitions)}. Memory mode: ${metadata.memoryMode}, ceiling: ${metadata.ceiling}.`,
+    `Mode: ${metadata.mode}. Product head: ${metadata.productHead}, built packages \`${String(metadata.productDistDigest ?? "unknown")}\`. Corpus: ${manifest.count} scenarios, set digest \`${manifest.setDigest}\`. Arms: ${metadata.arms.join(", ")}. Repetitions: ${String(metadata.repetitions)}. Memory mode: ${metadata.memoryMode}, ceiling: ${metadata.ceiling}, memory budget ${String(metadata.budgetTokens ?? "unknown")} tokens.`,
+    `Instrument: lab digest \`${String(metadata.instrumentDigest ?? "unknown")}\` at lab head ${String(metadata.labHead ?? "unknown")}${metadata.labDirty === true ? " (uncommitted lab changes)" : ""}; gateway configuration \`${String(metadata.configDigest ?? "unknown")}\`. Two runs compare only when their instrument digests and configurations agree.`,
     "",
     ...failureLines(summary),
     `Hard counters in the product arm: ${summary.hardCountersViolated ? "VIOLATED" : "all zero"}. Oracle arm: ${summary.oracleCountersViolated ? "VIOLATED (the explicit route's own doing)" : "all zero"}.`,

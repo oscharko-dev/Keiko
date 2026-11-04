@@ -2,7 +2,7 @@
 // word can be guessed from the words around it, so the blank covers the whole value phrase: every
 // occurrence of the answer terms, the small words that belong to them on their left ("am liebsten",
 // "at", "every") and never fewer than two words.
-import { normalizeText } from "../score.mjs";
+import { literalStem, normalizeText } from "../score.mjs";
 
 const BLANK = "___";
 const MIN_BLANK_WORDS = 2;
@@ -46,8 +46,9 @@ function termSpans(sentence, groups) {
   for (const group of groups) {
     const before = spans.length;
     for (const alternative of group) {
+      // A term with the prefix mark occurs as its stem; the word around it is covered either way.
       const pattern = new RegExp(
-        `[\\p{L}\\p{N}-]*${escapePattern(alternative)}[\\p{L}\\p{N}-]*`,
+        `[\\p{L}\\p{N}-]*${escapePattern(literalStem(alternative))}[\\p{L}\\p{N}-]*`,
         "giu",
       );
       for (const match of sentence.matchAll(pattern))

@@ -11,7 +11,7 @@
       "seed": "Meine Berichte beginnen immer mit einer Zusammenfassung in drei Saetzen.",
       "must": true,
       "private": true,
-      "terms": [["Zusammenfassung"], ["drei Saetzen", "drei Sätzen"]]
+      "terms": [["Zusammenfassung"], ["drei Sätze*", "drei Saetze*", "3 Sätze*", "3 Saetze*"]]
     }
   ],
   "turns": [
@@ -35,7 +35,7 @@
       "question": "Womit beginnen meine Berichte?",
       "expect": {
         "kind": "answer",
-        "terms": [["Zusammenfassung"]]
+        "terms": [["Zusammenfassung"], ["drei Sätze*", "drei Saetze*", "3 Sätze*", "3 Saetze*"]]
       }
     }
   ]

@@ -2,7 +2,7 @@
 // chat-skills lab, started with a private state directory, its own vault key and the lab's models,
 // driven only through public HTTP routes, and torn down with its fixture. Nothing here reads the
 // vault file or imports a memory package; what the lab sees is what a person would get.
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -158,11 +158,17 @@ export async function startLabInstance(options) {
     throw new RangeError(`unknown ceiling ${options.ceiling}`);
   mkdirSync(join(options.dir, "project"), { recursive: true });
   const offline = options.fixture !== undefined;
-  const configPath = offline ? join(options.dir, "gateway.json") : options.configPath;
-  if (offline)
-    writeFileSync(configPath, JSON.stringify(offlineGatewayConfig(options.fixture.baseUrl)), {
-      mode: 0o600,
-    });
+  // The product writes its configuration file back (credentials it persists at start, a context
+  // window it adopts), so every instance gets a private copy and the operator's file is never
+  // written; the runner checks that file's digest before each unit. Paths inside it must be absolute.
+  const configPath = join(options.dir, "gateway.json");
+  writeFileSync(
+    configPath,
+    offline
+      ? JSON.stringify(offlineGatewayConfig(options.fixture.baseUrl))
+      : readFileSync(options.configPath),
+    { mode: 0o600 },
+  );
   const answerModelId = offline ? ANSWERER_MODEL_ID : options.answerModelId;
   const learnModelId = offline ? LEARNER_MODEL_ID : options.learnModelId;
   const prepared = await labEnvironment(options.dir, {
@@ -330,14 +336,11 @@ export async function readCaptures(instance) {
   return [...read.values()];
 }
 
-// Without a pending-work signal (live mode) the learner's call is invisible until its capture
-// lands, so the grace period is always waited through; with the signal, served queues end it early.
-// Two signals end the wait. `openCalls` is the product's own evidence (model calls it started and
-// has not completed) and is never cut short. `pendingLearner` is the lab's expectation (queued
-// scripted replies) and is bounded by the grace period, because a turn the product handles without
-// its learner, an explicit statement or a refused one, would otherwise wait forever.
+// The lab's own expectation: queued scripted replies (`pendingLearner`) end the wait once served and
+// are bounded by the grace period, because a turn the product handles without its learner, an
+// explicit statement or a refused one, would otherwise wait forever. Without the signal (live mode)
+// the grace period is always waited through.
 async function learnerDone(options, startedAt) {
-  if (options.openCalls !== undefined && (await options.openCalls()) > 0) return false;
   if (options.pendingLearner === undefined) return true;
   if ((await options.pendingLearner()) === 0) return true;
   return Date.now() - startedAt >= (options.graceMs ?? DEFAULT_GRACE_MS);
@@ -354,17 +357,21 @@ export async function pendingGatewayCalls(instance) {
   return openCallKeys(await readActivityEvents(instance.logDirectory)).size;
 }
 
-function observeLedger(state, count) {
-  if (count === state.lastCount) return;
+// The quiet period starts over whenever the ledger moved or a model call is still open. A capture is
+// written only after its learner call completed, so a wait that merely saw the call end could return
+// in the gap before the capture lands; the quiet period must outlast the call's end.
+function observeActivity(state, count, openCalls) {
+  const moved = count !== state.lastCount;
   state.lastCount = count;
-  state.quietSince = Date.now();
+  if (moved || openCalls > 0) state.quietSince = Date.now();
 }
 
 /**
- * Waits until learning has settled: the capture ledger stays unchanged for `quietMs`, no model call
- * the product started is still open (`openCalls`, read from the instance's own Activity Log by
- * `pendingGatewayCalls`), and every scripted reply the lab queued was served or the grace period
- * passed (`pendingLearner`). Fails after `maxMs`.
+ * Waits until learning has settled: for `quietMs` the capture ledger stayed unchanged and no model
+ * call the product started was open (`openCalls`, read from the instance's own Activity Log by
+ * `pendingGatewayCalls`; the product's own evidence, never cut short), and every scripted reply the
+ * lab queued was served or the grace period passed (`pendingLearner`). Fails after `maxMs`, naming
+ * the `phase` of the unit when the caller gives one.
  */
 export async function awaitLearning(instance, options = {}) {
   const quietMs = options.quietMs ?? DEFAULT_QUIET_MS;
@@ -373,10 +380,14 @@ export async function awaitLearning(instance, options = {}) {
   const state = { lastCount: -1, quietSince: Date.now() };
   for (;;) {
     const count = await captureTotal(instance);
-    observeLedger(state, count);
+    const open = options.openCalls === undefined ? 0 : await options.openCalls();
+    observeActivity(state, count, open);
     const quiet = Date.now() - state.quietSince >= quietMs;
     if (quiet && (await learnerDone(options, startedAt))) return { captures: count };
-    if (Date.now() - startedAt > maxMs) throw new Error("learning did not settle in time");
+    if (Date.now() - startedAt > maxMs)
+      throw new Error(
+        `learning did not settle in time${options.phase === undefined ? "" : ` (${options.phase})`}`,
+      );
     await delay(POLL_MS);
   }
 }

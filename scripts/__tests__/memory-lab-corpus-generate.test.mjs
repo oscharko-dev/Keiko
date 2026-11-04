@@ -698,8 +698,17 @@ describe("generator settings", () => {
     expect(() => checkGeneratorLabel("x".repeat(81))).toThrow(RangeError);
   });
 
-  it("refuses a size too small for the blueprint", async () => {
-    await expect(generate({ size: 20 })).rejects.toThrow(CorpusError);
+  it("grows a size too small for the blueprint to the smallest conversation that holds every part", async () => {
+    // The failure this pins: a person with more parts than the turns could hold was refused, so a
+    // blueprint with the breadth the corpus needs could not be built at the small sizes at all.
+    const { scenario, meta } = await generate({ size: 20 });
+    expect(meta.size).toBe(20);
+    expect(meta.messages).toBeGreaterThan(20);
+    expect(meta.messages).toBe(scenario.turns.length * 2);
+    const again = await generate({ size: 20 });
+    expect(JSON.stringify(again.scenario)).toBe(JSON.stringify(scenario));
+    // A size that holds every part is kept as requested.
+    expect((await generate({ size: SIZE })).meta.messages).toBe(SIZE);
   });
 });
 
@@ -710,7 +719,8 @@ describe("curated blueprints", () => {
     "%s generates at 100 messages with every hardness kind and a perfect oracle",
     async (_id, blueprint) => {
       const { scenario, meta } = await generate({ writer: createScriptedWriter() }, blueprint);
-      expect(scenario.turns).toHaveLength(50);
+      // At least the requested 100 messages; a person with more parts than 50 turns hold grows.
+      expect(scenario.turns.length).toBeGreaterThanOrEqual(50);
       for (const kind of HARDNESS_KINDS) expect(meta.hardness[kind], kind).toBeGreaterThan(0);
       expect(scenario.probes.length).toBeGreaterThanOrEqual(30);
       expect(scenario.truth).toHaveLength(blueprint.facts.length - blueprint.forgets.length);

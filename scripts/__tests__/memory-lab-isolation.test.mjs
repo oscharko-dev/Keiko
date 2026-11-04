@@ -97,8 +97,27 @@ describe("a gateway configuration that keeps everything on this machine", () => 
     ["no provider", { providers: [] }, /names no provider/u],
     ["no providers field", {}, /names no provider/u],
     ["text that is not JSON", "{not json", /not valid JSON/u],
+    [
+      "an embedding endpoint elsewhere beside loopback providers",
+      { ...config("http://127.0.0.1:4000"), embedding: { baseUrl: "https://api.example.com/v1" } },
+      /1 URL\(s\) outside this machine beyond the providers/u,
+    ],
+    [
+      "a URL elsewhere nested in a list",
+      { ...config("http://localhost:4000"), tools: [{ endpoints: ["http://10.0.0.5/hook"] }] },
+      /URL\(s\) outside this machine/u,
+    ],
   ])("refuses a configuration with %s", (_name, value, pattern) => {
     expect(() => assertLoopbackGatewayConfig(write(value))).toThrow(pattern);
+  });
+
+  it("accepts other loopback URLs anywhere in the configuration", () => {
+    const value = {
+      ...config("http://127.0.0.1:4000"),
+      embedding: { baseUrl: "http://[::1]:4000/v1" },
+      notes: "see http://localhost:1983/docs",
+    };
+    expect(assertLoopbackGatewayConfig(write(value)).digest).toMatch(/^[0-9a-f]{64}$/u);
   });
 
   it("refuses a configuration it cannot read, naming the error code only", () => {

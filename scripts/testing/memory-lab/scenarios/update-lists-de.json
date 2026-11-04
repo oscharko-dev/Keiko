@@ -11,12 +11,12 @@
       "seed": "Ab jetzt bevorzuge ich Listen.",
       "must": true,
       "private": true,
-      "terms": [["Listen"]]
+      "terms": [["Liste*"]]
     }
   ],
   "superseded": [
     {
-      "terms": [["Tabellen"]]
+      "terms": [["Tabelle*"]]
     }
   ],
   "turns": [
@@ -45,8 +45,17 @@
       "question": "Wie soll ich dir Zahlen zeigen?",
       "expect": {
         "kind": "answer",
-        "terms": [["Listen"]],
-        "forbidden": [["Tabellen"]]
+        "terms": [["Liste*"]],
+        "forbidden": [["Tabelle*"]]
+      }
+    },
+    {
+      "id": "related-no-overlap",
+      "question": "Stell mir die Umsatzzahlen des letzten Quartals zusammen.",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Liste*"]],
+        "forbidden": [["Tabelle*"]]
       }
     }
   ]
