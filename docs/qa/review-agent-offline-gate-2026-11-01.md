@@ -166,9 +166,18 @@ The single holdout run started at 17:36 UTC on 2026-11-02 with the product confi
   any model call. The run is continued with `--resume-since 2026-11-02T17:35:00Z` (`c90b64cdf`),
   which reuses the 70 stored reviews that measured something and reviews the 17 refused ones, the
   interrupted one and the remaining pull requests.
-- No finding, match or rate of the holdout was read before the stop. Only settlement counts and
-  the Activity Log entries around the first review were read, to find the cause of the 17
-  refusals.
+- The resumed run started at 14:34 UTC on 2026-11-03 from the same commit. New runs went only to
+  the 17 refused pull requests and the interrupted one; none of the 70 stored reviews was reviewed
+  again. The first resumed review passed its readiness probe.
+- The resumed run was paused at 07:53 UTC on 2026-11-04, right after the review of #3377 settled,
+  for the owner's use of the machine. 129 of the 229 reviews had measured something by then. The
+  pause stopped the gate's shell wrapper first, so the lab went down while the gate process ran on
+  for about two minutes and moved the review of #3380 into its review phase with no model
+  reachable. That review is settled `abandoned/interrupted` on the next start and reviewed again.
+  The run continues with the same `--resume-since` value.
+- No finding, match or rate of the holdout was read before the stops. Only settlement counts and
+  kinds and the Activity Log entries around the first review were read, to find the cause of the
+  17 refusals and to watch progress.
 
 ## Seed gates
 
