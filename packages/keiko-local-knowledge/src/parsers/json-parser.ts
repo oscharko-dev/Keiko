@@ -6,19 +6,39 @@
 // encoded with `~0` for `~` and `~1` for `/`.
 //
 // Character offsets target a normalized line-oriented projection, not the raw JSON bytes:
-//   /json/pointer: <leaf-json>
-// This keeps downstream chunking bounded by the selected leaf instead of multiplying the whole
-// document once per leaf while preserving the JSON Pointer citation.
+//   /json/pointer: key=value | key=value
+// A string scalar reads as its value (`id=FA-1`, not `id="FA-1"`), so an identifier or a sentence
+// stays recognizable for retrieval and for the requirement inventory. This keeps downstream
+// chunking bounded by the selected leaf instead of multiplying the whole document once per leaf
+// while preserving the JSON Pointer citation.
+//
+// The document is read by `json-reader.ts`, which keeps every digit of a large integer, keeps both
+// values of a repeated key and locates a malformed document by line and column.
 
 import {
+  binaryContentRefusal,
   decodeUtf8,
   diagnostic,
   emptyResult,
+  encodingDiagnostic,
   oversizeDiagnostic,
   shouldStop,
+  type DecodedText,
 } from "./_internal.js";
-import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
+import type {
+  DocumentId,
+  ParsedUnit,
+  ParserDiagnostic,
+  ParserResult,
+} from "@oscharko-dev/keiko-contracts";
 import { LOCAL_KNOWLEDGE_JSON_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
+import {
+  readJson,
+  type JsonArray,
+  type JsonObject,
+  type JsonReadResult,
+  type JsonValue,
+} from "./json-reader.js";
 import type {
   InternalParserResult,
   ParserAdapter,
@@ -27,7 +47,7 @@ import type {
 } from "./types.js";
 
 const PARSER_ID = "json";
-const PARSER_VERSION = "1";
+const PARSER_VERSION = "2";
 
 const JSON_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_JSON_FILE_EXTENSIONS);
 
@@ -47,6 +67,8 @@ function joinPointer(parent: string, segment: string): string {
   return `${parent}/${segment}`;
 }
 
+type ReadFailure = Extract<JsonReadResult, { readonly ok: false }>;
+
 interface ScanContext {
   readonly text: string;
   readonly input: ParserSelectionInput;
@@ -56,17 +78,26 @@ interface ScanContext {
   readonly diagnostics: ParserDiagnostic[];
   readonly normalizedParts: string[];
   normalizedLength: number;
-  // Whole-file stop signal: PARSER_TIMEOUT / UNIT_LIMIT_REACHED / PARSER_CANCELLED. Once set
-  // the file-level walk aborts and stays aborted.
+  // Whole-file stop signal: PARSER_TIMEOUT / PARSER_CANCELLED. Once set the file-level walk aborts
+  // and stays aborted.
   stopped: boolean;
+  // Records walked after the unit cap was reached. They are counted, not emitted, so the cap
+  // diagnostic can say how much of the document is missing from the index.
+  omittedRecords: number;
   // Per-record stop signal set by pushNestingLimit only. `walk()` still short-circuits on it,
   // but walkJsonLines clears it between records so a deeply-nested line does not silently
   // discard every valid line that follows (PR-review follow-up on KEIKO-0484).
   nestingStopped: boolean;
 }
 
-function stringifyValue(value: unknown): string {
-  return JSON.stringify(value);
+// A line break inside a string value would split the line-oriented projection (and every unit span
+// is a line), so line breaks read as one space.
+const LINE_BREAKS = new RegExp("[\\r\\n\\u2028\\u2029]+", "gu");
+
+function scalarText(value: Exclude<JsonValue, JsonArray | JsonObject>): string {
+  if (typeof value === "string") return value.replaceAll(LINE_BREAKS, " ");
+  if (value !== null && typeof value === "object") return value.source;
+  return value === null ? "null" : String(value);
 }
 
 function appendNormalizedRecord(
@@ -84,6 +115,10 @@ function appendNormalizedRecord(
 
 function pushRecord(ctx: ScanContext, pointer: string, text: string): void {
   const limit = shouldStop(ctx.startedAt, ctx.options, ctx.units.length);
+  if (limit.stop && limit.code === "UNIT_LIMIT_REACHED") {
+    ctx.omittedRecords += 1;
+    return;
+  }
   if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
     ctx.diagnostics.push(diagnostic(limit.code, limit.message, ctx.input.documentId, "info"));
     ctx.stopped = true;
@@ -99,74 +134,72 @@ function pushRecord(ctx: ScanContext, pointer: string, text: string): void {
   });
 }
 
-function isScalar(value: unknown): boolean {
-  if (value === null) return true;
-  const t = typeof value;
-  return t === "string" || t === "number" || t === "boolean";
+function isContainer(value: JsonValue): value is JsonArray | JsonObject {
+  return value !== null && typeof value === "object" && value.kind !== "exact-number";
 }
 
-function isEmptyContainer(value: unknown): boolean {
-  if (Array.isArray(value)) return value.length === 0;
-  return value !== null && typeof value === "object" && Object.keys(value).length === 0;
+function isEmptyContainer(value: JsonValue): boolean {
+  if (!isContainer(value)) return false;
+  return value.kind === "array" ? value.items.length === 0 : value.entries.length === 0;
 }
 
-function isScalarOrEmpty(value: unknown): boolean {
-  return isScalar(value) || isEmptyContainer(value);
+function isScalarOrEmpty(value: JsonValue): boolean {
+  return !isContainer(value) || isEmptyContainer(value);
 }
 
-function scalarProjection(value: unknown): string {
-  return stringifyValue(value);
+// Scalars read as their value, an empty container as `[]` / `{}`, a flat array as `[a, b]`.
+function projectionOf(value: JsonValue): string {
+  if (!isContainer(value)) return scalarText(value);
+  if (value.kind === "object") return "{}";
+  return value.items.length === 0
+    ? "[]"
+    : `[${value.items.map((item) => projectionOf(item)).join(", ")}]`;
 }
 
-function pushNestingLimit(ctx: ScanContext, pointer: string): void {
-  const displayPointer = pointer.length === 0 ? "/" : pointer;
-  ctx.diagnostics.push(
-    diagnostic(
-      "NESTING_LIMIT_REACHED",
-      `JSON nesting depth exceeds maxNestingDepth=${String(ctx.options.maxNestingDepth)} at ${displayPointer}`,
-      ctx.input.documentId,
-      "error",
-    ),
+// Body-free: a document key or value must never reach a persisted diagnostic.
+function nestingDiagnostic(
+  options: ParserOptions,
+  documentId: DocumentId,
+  severity: ParserDiagnostic["severity"],
+): ParserDiagnostic {
+  return diagnostic(
+    "NESTING_LIMIT_REACHED",
+    `JSON nesting depth exceeds maxNestingDepth=${String(options.maxNestingDepth)}`,
+    documentId,
+    severity,
   );
+}
+
+function pushNestingLimit(ctx: ScanContext): void {
+  ctx.diagnostics.push(nestingDiagnostic(ctx.options, ctx.input.documentId, "error"));
   // Per-record signal: walk()/descendArray()/descendObject() short-circuit on it, but
   // walkJsonLines resets it between records so later valid JSONL lines still parse.
   ctx.nestingStopped = true;
 }
 
-function descendArray(
-  ctx: ScanContext,
-  value: readonly unknown[],
-  pointer: string,
-  depth: number,
-): void {
-  if (value.length === 0) {
+function descendArray(ctx: ScanContext, value: JsonArray, pointer: string, depth: number): void {
+  if (value.items.length === 0) {
     pushRecord(ctx, pointer, "[]");
     return;
   }
-  if (value.every(isScalarOrEmpty)) {
-    pushRecord(ctx, pointer, scalarProjection(value));
+  if (value.items.every((item) => isScalarOrEmpty(item))) {
+    pushRecord(ctx, pointer, projectionOf(value));
     return;
   }
-  for (let i = 0; i < value.length; i += 1) {
+  for (const [index, item] of value.items.entries()) {
     if (ctx.stopped || ctx.nestingStopped) return;
-    walk(ctx, value[i], joinPointer(pointer, String(i)), depth + 1);
+    walk(ctx, item, joinPointer(pointer, String(index)), depth + 1);
   }
 }
 
-function objectScalarFields(value: Record<string, unknown>): readonly string[] {
-  return Object.keys(value)
-    .filter((key) => isScalarOrEmpty(value[key]))
-    .map((key) => `${key}=${scalarProjection(value[key])}`);
+function objectScalarFields(value: JsonObject): readonly string[] {
+  return value.entries
+    .filter(([, child]) => isScalarOrEmpty(child))
+    .map(([key, child]) => `${key}=${projectionOf(child)}`);
 }
 
-function descendObject(
-  ctx: ScanContext,
-  value: Record<string, unknown>,
-  pointer: string,
-  depth: number,
-): void {
-  const keys = Object.keys(value);
-  if (keys.length === 0) {
+function descendObject(ctx: ScanContext, value: JsonObject, pointer: string, depth: number): void {
+  if (value.entries.length === 0) {
     pushRecord(ctx, pointer, "{}");
     return;
   }
@@ -175,46 +208,50 @@ function descendObject(
     pushRecord(ctx, pointer, fields.join(" | "));
     if (ctx.stopped || ctx.nestingStopped) return;
   }
-  for (const key of Object.keys(value)) {
+  for (const [key, child] of value.entries) {
     if (ctx.stopped || ctx.nestingStopped) return;
-    const child = value[key];
     if (isScalarOrEmpty(child)) continue;
     walk(ctx, child, joinPointer(pointer, encodePointerSegment(key)), depth + 1);
   }
 }
 
-function walk(ctx: ScanContext, value: unknown, pointer: string, depth: number): void {
+function walk(ctx: ScanContext, value: JsonValue, pointer: string, depth: number): void {
   if (ctx.stopped || ctx.nestingStopped) return;
   if (isScalarOrEmpty(value)) {
-    pushRecord(ctx, pointer, scalarProjection(value));
+    pushRecord(ctx, pointer, projectionOf(value));
     return;
   }
   if (depth >= ctx.options.maxNestingDepth) {
-    pushNestingLimit(ctx, pointer);
+    pushNestingLimit(ctx);
     return;
   }
-  if (Array.isArray(value)) {
-    descendArray(ctx, value, pointer, depth);
-    return;
-  }
-  descendObject(ctx, value as Record<string, unknown>, pointer, depth);
+  if (!isContainer(value)) return;
+  if (value.kind === "array") descendArray(ctx, value, pointer, depth);
+  else descendObject(ctx, value, pointer, depth);
 }
 
-function parseJsonValue(
-  text: string,
-): { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly error: string } {
-  try {
-    return { ok: true, value: JSON.parse(text) as unknown };
-  } catch (error) {
-    // Return only the error TYPE name, never the raw parser message. Modern Node embeds a
-    // fragment of the surrounding document text in JSON.parse error messages, which would
-    // leak indexed content into the persisted diagnostic surfaced in the capsule detail UI.
-    return { ok: false, error: error instanceof Error ? error.name : "SyntaxError" };
-  }
+// A malformed document is reported by closed reason and position only; the engine's own message
+// embeds a fragment of the text and is never used.
+function failureDiagnostic(
+  failure: ReadFailure,
+  documentId: DocumentId,
+  scope: string,
+  severity: ParserDiagnostic["severity"],
+  // A JSONL record is one line, so only the column locates the failure inside it.
+  locateLine = true,
+): ParserDiagnostic {
+  const column = `column ${String(failure.column)}`;
+  const place = locateLine ? `line ${String(failure.line)}, ${column}` : column;
+  return diagnostic(
+    "MALFORMED_INPUT",
+    `${scope} parse failed: ${failure.reason} at ${place}`,
+    documentId,
+    severity,
+  );
 }
 
 // GRD-011: JSON Lines / NDJSON is a sequence of independent JSON values, one per line — NOT a
-// single JSON document. Whole-document `JSON.parse` always throws on a multi-record file, so
+// single JSON document. Whole-document parsing always fails on a multi-record file, so
 // `.jsonl`/`.ndjson` (advertised as supported) were 100% unparseable. Detect and parse per line.
 const JSONL_EXTENSIONS: ReadonlySet<string> = new Set(
   LOCAL_KNOWLEDGE_JSON_FILE_EXTENSIONS.filter((extension) => extension !== "json"),
@@ -224,58 +261,37 @@ function isJsonLines(input: ParserSelectionInput): boolean {
   return input.mediaType.toLowerCase() === "application/x-ndjson";
 }
 
-// Parse each non-empty line independently and walk it under an `/<lineIndex>` pointer prefix
-// (RFC 6901 array-index style), so a record on file line N cites as `/N/...`. A malformed line
-// is surfaced as a non-fatal `warning` diagnostic and skipped — one bad line never discards the
-// whole file's good records.
-function walkJsonLines(ctx: ScanContext): void {
-  const lines = ctx.text.split("\n");
-  for (let i = 0; i < lines.length; i += 1) {
-    if (ctx.stopped) return;
-    // Clear the per-record nesting bail from any earlier line so a deeply-nested record does
-    // not silently discard every valid record that follows (PR-review follow-up on KEIKO-0484).
-    resetLineNestingBail(ctx);
-    const raw = lines[i];
-    if (raw === undefined || raw.trim().length === 0) continue;
-    const parsed = parseJsonValue(raw);
-    if (!parsed.ok) {
-      ctx.diagnostics.push(
-        diagnostic(
-          "MALFORMED_INPUT",
-          `JSONL line ${String(i)} parse failed: ${parsed.error}`,
-          ctx.input.documentId,
-          "warning",
-        ),
-      );
-      continue;
-    }
-    // PR-review follow-up (Codex thread 3770110882): snapshot the per-record units and
-    // normalized-text position BEFORE walking so a nesting-overflow bail rolls back any
-    // partial output for THIS line. Without the rollback a hostile JSONL row of the shape
-    // `{"visible":"x","deep":<deeply nested>}` would still index the shallow scalar field
-    // even though the record trips NESTING_LIMIT_REACHED — leaving policy-invalid content
-    // in the parse alongside valid records from other lines.
-    const unitsMark = ctx.units.length;
-    const normalizedPartsMark = ctx.normalizedParts.length;
-    const normalizedLengthMark = ctx.normalizedLength;
-    const diagnosticsMark = ctx.diagnostics.length;
-    walk(ctx, parsed.value, joinPointer("", String(i)), 0);
-    if (ctx.nestingStopped) {
-      ctx.units.length = unitsMark;
-      ctx.normalizedParts.length = normalizedPartsMark;
-      ctx.normalizedLength = normalizedLengthMark;
-      downgradeLineNestingDiagnostics(ctx, diagnosticsMark);
-    }
+// Per-line problems ship as `warning`: discovery/extract.ts treats any error-severity diagnostic as
+// fatal for the whole document, which JSONL's per-record independence forbids.
+function lineFailureDiagnostic(
+  ctx: ScanContext,
+  failure: ReadFailure,
+  index: number,
+): ParserDiagnostic {
+  if (failure.reason === "nesting-depth") {
+    return nestingDiagnostic(ctx.options, ctx.input.documentId, "warning");
   }
+  return failureDiagnostic(
+    failure,
+    ctx.input.documentId,
+    `JSONL line ${String(index)}`,
+    "warning",
+    false,
+  );
 }
 
-// PR-review follow-up (Codex thread 3771815015): a per-record JSONL nesting overflow rolls
-// back that line's units, but the "NESTING_LIMIT_REACHED" diagnostic still ships at severity
-// "error". discovery/extract.ts:firstParserFailureDiagnostic treats any error-severity
-// diagnostic as fatal, so the document lands as `failed` and the orchestrator never chunks
-// the units from OTHER valid JSONL lines. Downgrade the line-scoped diagnostic to "warning"
-// to match how per-line MALFORMED_INPUT diagnostics are already emitted; the whole-document
-// JSON path keeps error severity because a single-JSON-document nesting violation IS fatal.
+// Extracted so TS's control-flow analysis does not narrow ctx.nestingStopped to the literal
+// `false` after the reset assignment — the check after walk() would otherwise be flagged as
+// unreachable. walk() mutates the flag through pushNestingLimit, and TS cannot see through
+// the function boundary.
+function resetLineNestingBail(ctx: ScanContext): void {
+  ctx.nestingStopped = false;
+}
+
+// PR-review follow-up (Codex thread 3771815015): a per-record JSONL nesting overflow rolls back that
+// line's units, but its diagnostic would still ship at severity "error", which makes the whole
+// document `failed`. Downgrade the line-scoped diagnostic to "warning"; the whole-document JSON path
+// keeps error severity because a single-JSON-document nesting violation IS fatal.
 function downgradeLineNestingDiagnostics(ctx: ScanContext, mark: number): void {
   for (let j = mark; j < ctx.diagnostics.length; j += 1) {
     const entry = ctx.diagnostics[j];
@@ -285,12 +301,138 @@ function downgradeLineNestingDiagnostics(ctx: ScanContext, mark: number): void {
   }
 }
 
-// Extracted so TS's control-flow analysis does not narrow ctx.nestingStopped to the literal
-// `false` after the reset assignment — the check after walk() would otherwise be flagged as
-// unreachable. walk() mutates the flag through pushNestingLimit, and TS cannot see through
-// the function boundary.
-function resetLineNestingBail(ctx: ScanContext): void {
-  ctx.nestingStopped = false;
+// Snapshot the per-record units and normalized-text position BEFORE walking so a nesting overflow
+// rolls back any partial output for THIS line (a hostile row of the shape
+// `{"visible":"x","deep":<deeply nested>}` must not index its shallow field).
+function walkLineRolledBack(ctx: ScanContext, value: JsonValue, index: number): void {
+  const unitsMark = ctx.units.length;
+  const normalizedPartsMark = ctx.normalizedParts.length;
+  const normalizedLengthMark = ctx.normalizedLength;
+  const diagnosticsMark = ctx.diagnostics.length;
+  const omittedMark = ctx.omittedRecords;
+  walk(ctx, value, joinPointer("", String(index)), 0);
+  if (!ctx.nestingStopped) return;
+  ctx.units.length = unitsMark;
+  ctx.normalizedParts.length = normalizedPartsMark;
+  ctx.normalizedLength = normalizedLengthMark;
+  ctx.omittedRecords = omittedMark;
+  downgradeLineNestingDiagnostics(ctx, diagnosticsMark);
+}
+
+// Parse each non-empty line independently and walk it under an `/<lineIndex>` pointer prefix
+// (RFC 6901 array-index style), so a record on file line N cites as `/N/...`. A malformed line
+// is surfaced as a non-fatal `warning` diagnostic and skipped — one bad line never discards the
+// whole file's good records. Returns the number of repeated object keys seen.
+function walkJsonLines(ctx: ScanContext): number {
+  let duplicateKeys = 0;
+  for (const [index, raw] of ctx.text.split("\n").entries()) {
+    if (ctx.stopped) break;
+    // Clear the per-record nesting bail from any earlier line so a deeply-nested record does
+    // not silently discard every valid record that follows (PR-review follow-up on KEIKO-0484).
+    resetLineNestingBail(ctx);
+    if (raw.trim().length === 0) continue;
+    const parsed = readJson(raw, ctx.options.maxNestingDepth);
+    if (!parsed.ok) {
+      ctx.diagnostics.push(lineFailureDiagnostic(ctx, parsed, index));
+      continue;
+    }
+    duplicateKeys += parsed.duplicateKeyCount;
+    walkLineRolledBack(ctx, parsed.value, index);
+  }
+  return duplicateKeys;
+}
+
+function duplicateKeyDiagnostic(count: number, documentId: DocumentId): ParserDiagnostic {
+  return diagnostic(
+    "JSON_DUPLICATE_KEY",
+    `${String(count)} repeated object key(s); every value is kept in document order`,
+    documentId,
+    "warning",
+  );
+}
+
+// Reaching the unit cap drops records from the index, so it is a warning that says how many.
+function unitCapDiagnostic(ctx: ScanContext): ParserDiagnostic {
+  return diagnostic(
+    "UNIT_LIMIT_REACHED",
+    `reached maxUnitsPerDocument=${String(ctx.options.maxUnitsPerDocument)}; ${String(ctx.omittedRecords)} further record(s) were not indexed`,
+    ctx.input.documentId,
+    "warning",
+  );
+}
+
+function newContext(
+  text: string,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+): ScanContext {
+  return {
+    text,
+    input,
+    options,
+    startedAt: options.now(),
+    units: [],
+    diagnostics: [],
+    normalizedParts: [],
+    normalizedLength: 0,
+    stopped: false,
+    omittedRecords: 0,
+    nestingStopped: false,
+  };
+}
+
+function failedDocument(
+  failure: ReadFailure,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+): ParserResult {
+  const entry =
+    failure.reason === "nesting-depth"
+      ? nestingDiagnostic(options, input.documentId, "error")
+      : failureDiagnostic(failure, input.documentId, "JSON", "error");
+  return emptyResult(jsonParser.capability, input.documentId, options, [entry]);
+}
+
+function resultOf(
+  ctx: ScanContext,
+  decoded: DecodedText,
+  duplicateKeys: number,
+): InternalParserResult {
+  const encoding = encodingDiagnostic(decoded, ctx.input.documentId);
+  const diagnostics = [
+    ...(encoding === undefined ? [] : [encoding]),
+    ...(duplicateKeys > 0 ? [duplicateKeyDiagnostic(duplicateKeys, ctx.input.documentId)] : []),
+    ...ctx.diagnostics,
+    ...(ctx.omittedRecords > 0 ? [unitCapDiagnostic(ctx)] : []),
+  ];
+  return {
+    ...emptyResult(
+      jsonParser.capability,
+      ctx.input.documentId,
+      ctx.options,
+      diagnostics,
+      ctx.units,
+    ),
+    normalizedText: ctx.normalizedParts.join(""),
+  } satisfies InternalParserResult;
+}
+
+// A whole-document nesting violation invalidates a single-JSON-document parse (the top-level value
+// is one thing, and it is malformed). JSONL keeps the units of every other line.
+function parseDocument(
+  decoded: DecodedText,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+): ParserResult {
+  const ctx = newContext(decoded.text, input, options);
+  if (isJsonLines(input)) return resultOf(ctx, decoded, walkJsonLines(ctx));
+  const parsed = readJson(decoded.text, options.maxNestingDepth);
+  if (!parsed.ok) return failedDocument(parsed, input, options);
+  walk(ctx, parsed.value, "", 0);
+  if (ctx.nestingStopped) {
+    return emptyResult(jsonParser.capability, input.documentId, options, ctx.diagnostics);
+  }
+  return resultOf(ctx, decoded, parsed.duplicateKeyCount);
 }
 
 export const jsonParser: ParserAdapter = Object.freeze({
@@ -305,52 +447,8 @@ export const jsonParser: ParserAdapter = Object.freeze({
         oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes),
       ]);
     }
-    const decoded = decodeUtf8(input.bytes);
-    const jsonLines = isJsonLines(input);
-    // Whole-document parse only for true JSON; JSONL is parsed line-by-line below.
-    const parsed = jsonLines ? undefined : parseJsonValue(decoded.text);
-    if (parsed !== undefined && !parsed.ok) {
-      return emptyResult(jsonParser.capability, input.documentId, options, [
-        diagnostic(
-          "MALFORMED_INPUT",
-          `JSON parse failed: ${parsed.error}`,
-          input.documentId,
-          "error",
-        ),
-      ]);
-    }
-    const ctx: ScanContext = {
-      text: decoded.text,
-      input,
-      options,
-      startedAt: options.now(),
-      units: [],
-      diagnostics: [],
-      normalizedParts: [],
-      normalizedLength: 0,
-      stopped: false,
-      nestingStopped: false,
-    };
-    if (jsonLines) {
-      walkJsonLines(ctx);
-    } else if (parsed?.ok === true) {
-      walk(ctx, parsed.value, "", 0);
-    }
-    // KEIKO-0484: a whole-document nesting violation still invalidates a single-JSON-document
-    // parse (that is intentional — the top-level value is one thing, and it is malformed). For
-    // JSONL/NDJSON the file's own header contract (lines 208-210) commits to per-record
-    // independence: one bad line MUST NOT discard the whole file's good records. Preserve
-    // ctx.units/normalizedText on the jsonLines path alongside the error diagnostic, matching
-    // how PARSER_TIMEOUT/UNIT_LIMIT_REACHED/PARSER_CANCELLED already fall through.
-    if (
-      !jsonLines &&
-      ctx.diagnostics.some((diagnostic) => diagnostic.code === "NESTING_LIMIT_REACHED")
-    ) {
-      return emptyResult(jsonParser.capability, input.documentId, options, ctx.diagnostics);
-    }
-    return {
-      ...emptyResult(jsonParser.capability, input.documentId, options, ctx.diagnostics, ctx.units),
-      normalizedText: ctx.normalizedParts.join(""),
-    } satisfies InternalParserResult;
+    const binary = binaryContentRefusal(jsonParser.capability, input, options);
+    if (binary !== undefined) return binary;
+    return parseDocument(decodeUtf8(input.bytes), input, options);
   },
 });

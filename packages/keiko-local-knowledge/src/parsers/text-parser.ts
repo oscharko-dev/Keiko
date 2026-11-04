@@ -12,9 +12,12 @@ import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts
 import { LOCAL_KNOWLEDGE_TEXT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 
 import {
+  binaryContentReason,
+  binaryContentRefusal,
   decodeUtf8,
   diagnostic,
   emptyResult,
+  encodingDiagnostic,
   oversizeDiagnostic,
   shouldStop,
 } from "./_internal.js";
@@ -42,9 +45,21 @@ function isMarkdown(input: ParserSelectionInput): boolean {
   return input.mediaType.toLowerCase() === "text/markdown";
 }
 
+// A file with neither extension nor media type (README, LICENSE, Makefile, .gitignore: the caller
+// derives an empty extension for them) is text exactly when its bytes carry no binary evidence.
+function isExtensionlessText(input: ParserSelectionInput): boolean {
+  return (
+    input.extension === "" &&
+    input.mediaType === "" &&
+    input.bytes.length > 0 &&
+    binaryContentReason(input.bytes) === undefined
+  );
+}
+
 function isTextLike(input: ParserSelectionInput): boolean {
   const ext = input.extension.toLowerCase();
   if (TEXT_EXTENSIONS.has(ext)) return true;
+  if (isExtensionlessText(input)) return true;
   const media = input.mediaType.toLowerCase();
   for (const prefix of TEXT_MEDIA_PREFIXES) {
     if (media.startsWith(prefix)) return true;
@@ -376,8 +391,11 @@ export const textParser: ParserAdapter = Object.freeze({
         oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes),
       ]);
     }
+    const binary = binaryContentRefusal(textParser.capability, input, options);
+    if (binary !== undefined) return binary;
     const startedAt = options.now();
     const decoded = decodeUtf8(input.bytes);
+    const encoding = encodingDiagnostic(decoded, input.documentId);
     const emission = isMarkdown(input)
       ? emitMarkdownSections(decoded.text, input, options, startedAt)
       : emitPlainSection(decoded.text, input, options, startedAt);
@@ -389,7 +407,11 @@ export const textParser: ParserAdapter = Object.freeze({
         textParser.capability,
         input.documentId,
         options,
-        [...emission.diagnostics, ...tableEmission.diagnostics],
+        [
+          ...(encoding === undefined ? [] : [encoding]),
+          ...emission.diagnostics,
+          ...tableEmission.diagnostics,
+        ],
         [...emission.units, ...tableEmission.units],
       ),
       normalizedText: decoded.text,

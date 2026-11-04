@@ -7,7 +7,7 @@
 // open them — zip-bomb protection lives in not-decompressing, not in size caps.
 
 import type { ParserAdapter, ParserOptions, ParserSelectionInput } from "./types.js";
-import { diagnostic, emptyResult } from "./_internal.js";
+import { diagnostic, emptyResult, signatureReason } from "./_internal.js";
 
 const PARSER_ID = "unsupported";
 const PARSER_VERSION = "1";
@@ -49,35 +49,6 @@ const UNSUPPORTED_EXTENSIONS: Readonly<Record<string, string>> = Object.freeze({
   dylib: "binary-not-supported",
 });
 
-// Magic-byte signatures for content sniffing. Each entry is `(bytes prefix) -> reason`.
-// We compare against the first few bytes so we still classify a `.txt`-named PDF as
-// "pdf-not-implemented" rather than misclassifying it as plain text.
-const MAGIC_BYTES: readonly { readonly prefix: readonly number[]; readonly reason: string }[] =
-  Object.freeze([
-    { prefix: [0x25, 0x50, 0x44, 0x46], reason: "pdf-not-implemented" }, // %PDF
-    { prefix: [0x50, 0x4b, 0x03, 0x04], reason: "archive-not-decompressed" }, // PK\3\4 (zip / docx / xlsx)
-    { prefix: [0x1f, 0x8b], reason: "archive-not-decompressed" }, // gzip
-    { prefix: [0x89, 0x50, 0x4e, 0x47], reason: "image-not-supported" }, // PNG
-    { prefix: [0xff, 0xd8, 0xff], reason: "image-not-supported" }, // JPEG
-    { prefix: [0x47, 0x49, 0x46, 0x38], reason: "image-not-supported" }, // GIF8
-    { prefix: [0x42, 0x4d], reason: "image-not-supported" }, // BMP
-  ]);
-
-function magicByteReason(bytes: Uint8Array): string | undefined {
-  for (const entry of MAGIC_BYTES) {
-    if (bytes.length < entry.prefix.length) continue;
-    let match = true;
-    for (let i = 0; i < entry.prefix.length; i += 1) {
-      if (bytes[i] !== entry.prefix[i]) {
-        match = false;
-        break;
-      }
-    }
-    if (match) return entry.reason;
-  }
-  return undefined;
-}
-
 export function classifyUnsupported(input: ParserSelectionInput): string | undefined {
   // Extension table is checked first so that known formats (e.g. .docx, which IS a ZIP) get
   // the specific reason string rather than the generic magic-byte fallback.
@@ -85,8 +56,9 @@ export function classifyUnsupported(input: ParserSelectionInput): string | undef
   if (lower in UNSUPPORTED_EXTENSIONS) {
     return UNSUPPORTED_EXTENSIONS[lower];
   }
-  // Fall back to magic-byte sniffing for files with unknown/absent extensions.
-  return magicByteReason(input.bytes);
+  // Fall back to signature sniffing for files with unknown/absent extensions. A bare two-letter
+  // prefix is not a signature (see `hasImageSignature`).
+  return signatureReason(input.bytes);
 }
 
 export const unsupportedParser: ParserAdapter = Object.freeze({

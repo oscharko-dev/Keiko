@@ -49,7 +49,7 @@ describe("jsonParser", () => {
     expect(pointers(result.units)).toEqual([""]);
     expect(result.diagnostics).toEqual([]);
     expect((result as { readonly normalizedText?: string }).normalizedText).toContain(
-      '/: name="alpha" | count=3 | active=true',
+      "/: name=alpha | count=3 | active=true",
     );
   });
 
@@ -98,7 +98,7 @@ describe("jsonParser", () => {
       buildParserOptions({ now: () => 0 }),
     );
     const normalizedText = (result as { readonly normalizedText?: string }).normalizedText;
-    expect(normalizedText).toBe('/: a="first" | b="second"\n');
+    expect(normalizedText).toBe("/: a=first | b=second\n");
     expect(result.units).toHaveLength(1);
     const first = result.units[0];
     if (first === undefined) throw new Error("expected JSON record");

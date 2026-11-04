@@ -9,9 +9,11 @@
 import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
 
 import {
+  binaryContentRefusal,
   decodeUtf8,
   diagnostic,
   emptyResult,
+  encodingDiagnostic,
   oversizeDiagnostic,
   shouldStop,
 } from "./_internal.js";
@@ -314,6 +316,11 @@ interface SymbolAnchor {
   readonly label: string;
 }
 
+/** Whether the extension (no leading dot) names a source-code language this parser anchors. */
+export function isCodeExtension(extension: string): boolean {
+  return Object.hasOwn(CODE_LANGUAGE_BY_EXTENSION, extension.toLowerCase());
+}
+
 function codeLanguage(input: ParserSelectionInput): string | undefined {
   return CODE_LANGUAGE_BY_EXTENSION[input.extension.toLowerCase()];
 }
@@ -454,8 +461,11 @@ export const codeParser: ParserAdapter = Object.freeze({
         oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes),
       ]);
     }
+    const binary = binaryContentRefusal(codeParser.capability, input, options);
+    if (binary !== undefined) return binary;
     const startedAt = options.now();
     const decoded = decodeUtf8(input.bytes);
+    const encoding = encodingDiagnostic(decoded, input.documentId);
     const language = codeLanguage(input) ?? "code";
     const emission = emitCodeSections(decoded.text, language, input, options, startedAt);
     return {
@@ -463,7 +473,7 @@ export const codeParser: ParserAdapter = Object.freeze({
         codeParser.capability,
         input.documentId,
         options,
-        emission.diagnostics,
+        [...(encoding === undefined ? [] : [encoding]), ...emission.diagnostics],
         emission.units,
       ),
       normalizedText: decoded.text,

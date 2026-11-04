@@ -24,9 +24,11 @@
 // unit span remain markup-free (GRD-003).
 
 import {
+  binaryContentRefusal,
   decodeBytes,
   diagnostic,
   emptyResult,
+  encodingDiagnostic,
   oversizeDiagnostic,
   readAttribute,
   shouldStop,
@@ -934,10 +936,12 @@ function charsetMismatchDiagnostic(
 ): ParserDiagnostic | undefined {
   if (declared === undefined) return undefined;
   const declaredFamily = normalizeCharset(declared);
-  if (declaredFamily === normalizeCharset(usedCodec)) return undefined;
+  // A repaired document is UTF-8 with stray bytes: its codec family is UTF-8.
+  const usedFamily = usedCodec.includes("+") ? "utf-8" : normalizeCharset(usedCodec);
+  if (declaredFamily === usedFamily) return undefined;
   return diagnostic(
     "HTML_CHARSET_MISMATCH",
-    `declared charset '${declaredFamily}' differs from decoded byte shape '${normalizeCharset(usedCodec)}'; decoded using byte-shape detection`,
+    `declared charset '${declaredFamily}' differs from decoded byte shape '${usedFamily}'; decoded using byte-shape detection`,
     documentId,
     "warning",
   );
@@ -1157,6 +1161,8 @@ export const htmlParser: ParserAdapter = Object.freeze({
         oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes),
       ]);
     }
+    const binary = binaryContentRefusal(htmlParser.capability, input, options);
+    if (binary !== undefined) return binary;
     // Cross-check any declared <meta charset> against the byte-shape decode: the declared charset
     // only steers the fallback codec (strict UTF-8/BOM still win), and a genuine disagreement is
     // surfaced as a body-safe HTML_CHARSET_MISMATCH warning rather than silently corrupting text.
@@ -1164,8 +1170,15 @@ export const htmlParser: ParserAdapter = Object.freeze({
     const decoded = decodeBytes(input.bytes, declaredCharset);
     const emission = emitHtml(decoded.text, input, options);
     const charsetDiag = charsetMismatchDiagnostic(declaredCharset, decoded.codec, input.documentId);
-    const diagnostics =
-      charsetDiag === undefined ? emission.diagnostics : [charsetDiag, ...emission.diagnostics];
+    const repairDiag =
+      decoded.repairedBytes === undefined
+        ? undefined
+        : encodingDiagnostic(decoded, input.documentId);
+    const diagnostics = [
+      ...(charsetDiag === undefined ? [] : [charsetDiag]),
+      ...(repairDiag === undefined ? [] : [repairDiag]),
+      ...emission.diagnostics,
+    ];
     const result: InternalParserResult = {
       ...emptyResult(htmlParser.capability, input.documentId, options, diagnostics, emission.units),
       // GRD-003: persist the cleaned, tag/script/style-free projection so extract.ts NEVER
