@@ -346,13 +346,16 @@ export function foldTerm(value: string): string {
     .trim();
 }
 
+const MAX_HEADER_CHARS = 200;
+
 /**
  * A table header folded for role lookup: case, diacritics, decoration and punctuation removed
  * (`Priorität *` and `Prio.` fold to `prioritat` and `prio`), a parenthesized qualifier dropped
  * (`Akzeptanzkriterien (Gegeben/Wenn/Dann)`), words separated by single spaces.
  */
 export function foldHeader(value: string): string {
-  return foldTerm(value.replaceAll(/\([^)]*\)|\[[^\]]*\]/gu, " "))
+  // A header name is short; the bound keeps the qualifier scan linear on a hostile cell.
+  return foldTerm(value.slice(0, MAX_HEADER_CHARS).replaceAll(/\([^)]*\)|\[[^\]]*\]/gu, " "))
     .replaceAll(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
 }

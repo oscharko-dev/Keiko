@@ -64,7 +64,9 @@ function groupRanges(ranges: readonly MergeRange[]): ReadonlyMap<number, readonl
   for (const range of ranges) {
     if (range.lastRow <= range.firstRow) continue;
     if (range.lastColumn - range.firstColumn >= MERGE_MAX_COLUMNS) continue;
-    groups.set(range.firstRow, [...(groups.get(range.firstRow) ?? []), range]);
+    const group = groups.get(range.firstRow);
+    if (group === undefined) groups.set(range.firstRow, [range]);
+    else group.push(range);
   }
   return groups;
 }

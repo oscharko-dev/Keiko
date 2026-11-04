@@ -354,9 +354,14 @@ function formatPlainNumber(value: number, code: string): string {
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
+// Excel limits a format code to 255 characters; a longer one is not a format, and the bracket and
+// quote scans below are only linear for bounded input.
+const MAX_FORMAT_CODE_CHARS = 255;
+
 function resolveCode(input: NumberFormatInput): string | undefined {
   if (input.numFmtId === undefined) return undefined;
-  return input.customNumFmts.get(input.numFmtId) ?? BUILT_IN_FORMATS.get(input.numFmtId);
+  const code = input.customNumFmts.get(input.numFmtId) ?? BUILT_IN_FORMATS.get(input.numFmtId);
+  return code !== undefined && code.length <= MAX_FORMAT_CODE_CHARS ? code : undefined;
 }
 
 function classify(

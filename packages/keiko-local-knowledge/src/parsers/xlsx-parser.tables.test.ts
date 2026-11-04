@@ -6,9 +6,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildWorkbook,
   inlineCell,
+  numberCell,
   parseWorkbook,
   rowXml,
   sheetXml,
+  stylesWith,
   type FixtureSheet,
   type ParsedWorkbook,
 } from "./xlsx-workbook-fixtures.js";
@@ -229,6 +231,38 @@ describe("worksheet unit lineage", () => {
     expect(parsed.units.map((unit) => (unit.kind === "csv-row" ? unit.rowIndex : -1))).toEqual([
       1, 3,
     ]);
+  });
+});
+
+describe("hostile worksheet input", () => {
+  it("reads an oversized number format as General without quadratic work", async () => {
+    // Varied text so the part does not trip the archive's compression-ratio guard.
+    const hostile = Array.from(
+      { length: 40_000 },
+      (_v, n) => `[${((n * 2_654_435_761) % 9_973).toString(36)}`,
+    ).join("");
+    const styles = stylesWith([0, 164], { 164: hostile });
+    const xml = sheetXml(
+      cells(1, ["Name", "Wert"]) + rowXml(2, inlineCell("A2", "x") + numberCell("B2", "12", 1)),
+    );
+    const started = Date.now();
+    const parsed = await parseWorkbook(buildWorkbook({ sheets: [{ name: "S", xml }], styles }));
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(parsed.lines).toEqual(["S!2: Name=x | Wert=12"]);
+  });
+
+  it("applies 16,000 merge ranges that share one anchor row in linear time", async () => {
+    const merges = Array.from({ length: 16_000 }, (_v, n) => {
+      const column = `${String.fromCharCode(65 + (n % 26))}${String.fromCharCode(65 + (Math.floor(n / 26) % 26))}`;
+      return `<mergeCell ref="${column}2:${column}3"/>`;
+    }).join("");
+    const xml = sheetXml(cells(1, ["Name", "Wert"]) + cells(2, ["a", "b"]) + cells(3, ["", "c"]), {
+      after: `<mergeCells>${merges}</mergeCells>`,
+    });
+    const started = Date.now();
+    const parsed = await linesOf({ name: "S", xml });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(parsed.lines.length).toBeGreaterThan(0);
   });
 });
 
