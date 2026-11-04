@@ -274,3 +274,14 @@ script-coverage commands. The four original producers were rerun on that merged 
 missing selectors, editor token fidelity with zero gated differences and all 14 reference captures,
 the seven-mode accessibility proof with zero serious/critical violations and zero unresolved
 incomplete findings, and all 108 running-app captures. No gate, fixture or rule was changed.
+
+## Lint heap ceiling input refresh, 2026-11-04
+
+Raising the root lint heap ceiling to 14336 MiB (#4203, #4202) changes the `lint` script in
+`package.json`, which these producers bind. All four original producers were rerun on the merge of
+this change with the epic branch at `b64e19274`, on macOS arm64 with Node 24.18.0. Component and
+editor fidelity passed with zero gated differences and no missing selectors. All 14 editor
+references and 108 running-app captures completed without errors. The seven-mode accessibility proof
+has zero serious/critical violations and zero unresolved incomplete findings. No producer assertion,
+tolerance, budget or source stylesheet changed. These remain synthetic historical fixtures; they do
+not qualify model behavior.

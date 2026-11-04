@@ -68,7 +68,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "3ee137af8d43327aa66b041f86f11c28acf033d52c7ac53c2d6d3cd9b8e2b8e5"
+      "sha256": "6648f2f3c11f88188a452a1f136352a079ada15ca69484399b93ff8998302b15"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
@@ -139,9 +139,9 @@
     "keiko-nav.css": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b"
   },
   "run": {
-    "startedAt": "2026-11-01T13:54:41.089Z",
-    "generatedAt": "2026-11-01T13:54:44.113Z",
-    "repoHeadSha": "7d53ef5ce3cbe2935c0c8df65295236058967dde"
+    "startedAt": "2026-11-04T01:27:29.865Z",
+    "generatedAt": "2026-11-04T01:27:34.721Z",
+    "repoHeadSha": "c099012be4a5357cf006fbc95b08f1211e2939f7"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "groupR": {
@@ -395,7 +395,7 @@
   "boundedRowSmoke": {
     "ok": true,
     "rowCount": 250,
-    "durationMs": 0.5,
+    "durationMs": 0.10000000149011612,
     "afterScrollTop": 8363,
     "scrollHeight": 8783,
     "clientHeight": 420,
