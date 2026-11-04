@@ -838,6 +838,15 @@ function isStructured(candidate: Candidate): boolean {
   return candidate.section?.characterEnd !== undefined || candidate.kind === "heading";
 }
 
+/** Takes one line into the scan; false for a blank line, which leaves the scan as it is. */
+function scanBodyLine(scan: Scan, raw: string, vocabulary: CompiledVocabulary): boolean {
+  const text = bare(raw);
+  if (text.length === 0) return false;
+  advanceScan(scan, text, vocabulary);
+  if (scan.inCriteria && LIST_MARKER.test(raw)) scan.markedCriteria = true;
+  return true;
+}
+
 function lastBodyLine(context: Context, candidate: Candidate, limit: number): number {
   const structured = isStructured(candidate);
   const scan: Scan = { hasBody: false, inCriteria: false, markedCriteria: false, proseThrough: -1 };
@@ -850,12 +859,7 @@ function lastBodyLine(context: Context, candidate: Candidate, limit: number): nu
     if (leavesBlock(context, candidate, line) || (rule && last > head)) break;
     if (rule) continue;
     if (!structured && endsFlatBlock(context, scan, { index, last, limit })) break;
-    const text = bare(line.text);
-    if (text.length > 0) {
-      advanceScan(scan, text, context.vocabulary);
-      if (scan.inCriteria && LIST_MARKER.test(line.text)) scan.markedCriteria = true;
-      last = index;
-    }
+    if (scanBodyLine(scan, line.text, context.vocabulary)) last = index;
   }
   return structured ? last : withoutTrailingHeadings(context, candidate, last);
 }
@@ -989,6 +993,15 @@ function readCriteria(state: BodyState, criteria: string): void {
   }
 }
 
+function appendCriterion(state: BodyState, text: string, marked: boolean): void {
+  const last = state.criteria.length - 1;
+  if (state.criterionOpen && !marked && last >= 0) {
+    state.criteria[last] = collapse(`${state.criteria[last] ?? ""} ${text}`);
+  } else {
+    state.criteria.push(text);
+  }
+}
+
 /**
  * One extractor line of a criteria list. A PDF reports a wrapped list item as several lines, so an
  * unmarked line continues a marked item that has not closed. A list without markers has no such
@@ -1002,12 +1015,7 @@ function readCriterionLine(state: BodyState, segment: string, marked: boolean): 
   }
   state.criteriaMarked ||= marked;
   const text = stripCriterionNumber(segment);
-  const last = state.criteria.length - 1;
-  if (state.criterionOpen && !marked && last >= 0) {
-    state.criteria[last] = collapse(`${state.criteria[last] ?? ""} ${text}`);
-  } else {
-    state.criteria.push(text);
-  }
+  appendCriterion(state, text, marked);
   state.criterionOpen = (marked || state.criterionOpen) && !CLOSING_MARK.test(text);
 }
 

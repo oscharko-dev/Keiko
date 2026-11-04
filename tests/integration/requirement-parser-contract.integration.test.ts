@@ -57,9 +57,7 @@ function criteriaOf(inventory: RequirementInventory): readonly string[] {
 }
 
 function html(markup: string): string {
-  return normalized(
-    htmlParser.parse(selectionFromText(markup, { extension: "html" }), OPTIONS) as ParserResult,
-  );
+  return normalized(htmlParser.parse(selectionFromText(markup, { extension: "html" }), OPTIONS));
 }
 
 function csv(content: string): string {

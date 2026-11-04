@@ -1574,6 +1574,20 @@ export interface JoinedPages {
   readonly lastEdge: PageEdge | undefined;
 }
 
+/** The separator of one page break a paragraph runs over; a wrap hyphen ahead of it goes. */
+function separatorOverBreak(
+  joined: string[],
+  index: number,
+  closing: ClosingParagraph,
+  opening: TextLine,
+): string {
+  const previous = index === 0 ? undefined : joined[index - 1];
+  const tail = previous ?? closing.last.text;
+  const join = wrapJoinOf(tail.slice(-JOIN_TAIL_CHARS), opening.text, closing.vocabulary);
+  if (join.dropHyphen && previous !== undefined) joined[index - 1] = previous.slice(0, -1);
+  return join.separator;
+}
+
 /**
  * Carries paragraphs over the page breaks of one run. A page without an edge stands for a page that
  * has no layout and stops a paragraph. The page before a run was handed on already, so a wrap hyphen
@@ -1590,11 +1604,7 @@ export function joinAcrossPages(
     const opening = edge?.opening;
     if (closing === undefined || opening === undefined) return undefined;
     if (!goesOnBehindPageBreak(closing, opening)) return undefined;
-    const previous = index === 0 ? undefined : joined[index - 1];
-    const tail = previous ?? closing.last.text;
-    const join = wrapJoinOf(tail.slice(-JOIN_TAIL_CHARS), opening.text, closing.vocabulary);
-    if (join.dropHyphen && previous !== undefined) joined[index - 1] = previous.slice(0, -1);
-    return join.separator;
+    return separatorOverBreak(joined, index, closing, opening);
   });
   return { texts: joined, separators, lastEdge: edges.at(-1) };
 }
