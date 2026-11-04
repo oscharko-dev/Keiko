@@ -364,7 +364,7 @@ function isKeyLine(text: string, vocabulary: CompiledVocabulary): boolean {
   );
 }
 
-function advanceScan(scan: Scan, text: string, vocabulary: CompiledVocabulary): void {
+function advanceScanSegment(scan: Scan, text: string, vocabulary: CompiledVocabulary): void {
   if (vocabulary.criteriaKey.test(text)) scan.inCriteria = true;
   else if (vocabulary.statementKey.test(text)) {
     scan.inCriteria = false;
@@ -372,6 +372,13 @@ function advanceScan(scan: Scan, text: string, vocabulary: CompiledVocabulary): 
   } else if (vocabulary.priorityKey.test(text) || vocabulary.metaKey.test(text))
     scan.inCriteria = false;
   else if (!scan.inCriteria) scan.hasBody = true;
+}
+
+/** The scan reads a line the way the interpreter does, so a field inline in a line counts. */
+function advanceScan(scan: Scan, text: string, vocabulary: CompiledVocabulary): void {
+  for (const segment of segmentsOf(text, vocabulary)) {
+    advanceScanSegment(scan, segment, vocabulary);
+  }
 }
 
 function nextNonBlank(lines: readonly Line[], from: number, limit: number): number {

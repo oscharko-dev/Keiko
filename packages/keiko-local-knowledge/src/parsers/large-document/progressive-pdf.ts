@@ -21,7 +21,13 @@ import type {
 import { LARGE_DOCUMENT_DIAGNOSTIC_CODES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 
 import { buildParserOptions } from "../registry.js";
-import { loadPdfDocumentFromSource, readPageText, type PdfDocumentLike } from "../pdf-parser.js";
+import {
+  loadPdfDocumentFromSource,
+  pageFurnitureDiagnostic,
+  readPageLayout,
+  type PdfDocumentLike,
+} from "../pdf-parser.js";
+import { composePages, type PageLayout } from "../pdf-layout.js";
 import type { OcrPageResult } from "../ocr/types.js";
 import type { ParserOptions, ParserSelectionInput } from "../types.js";
 
@@ -35,7 +41,7 @@ import type {
 import { WindowTextBuilder } from "./window-builder.js";
 
 const PARSER_ID = "progressive-pdf";
-const PARSER_VERSION = "1";
+const PARSER_VERSION = "2";
 const DEPENDENCY_VERSIONS: readonly ParserDependencyVersion[] = Object.freeze([
   Object.freeze({ packageName: "pdfjs-dist", version: "6.0.227" }),
 ]);
@@ -121,6 +127,8 @@ function ocrIndexedDiagnostic(documentId: DocumentId, pageNumber: number): Parse
 }
 
 interface PageReadOutcome {
+  // A page with a text layer carries its layout; a page OCR recovered carries OCR's text.
+  readonly layout?: PageLayout;
   readonly text?: string;
   readonly scannedObjects: number;
   readonly diagnostics: readonly ParserDiagnostic[];
@@ -143,7 +151,7 @@ async function readOrOcrPage(
   scannedObjects: number,
 ): Promise<PageReadOutcome> {
   const page = await doc.getPage(pageNumber);
-  const read = await readPageText(page, {
+  const read = await readPageLayout(page, {
     input: selectionInput(ctx.documentId),
     options: parserOptions,
     startedAt,
@@ -152,8 +160,8 @@ async function readOrOcrPage(
   });
   const diagnostics: ParserDiagnostic[] = [];
   if (read.diagnostic !== undefined) diagnostics.push(read.diagnostic);
-  if (read.text.length > 0) {
-    return { text: read.text, scannedObjects: read.scannedObjects, diagnostics };
+  if (read.layout.rows.length > 0 || read.layout.plain.length > 0) {
+    return { layout: read.layout, scannedObjects: read.scannedObjects, diagnostics };
   }
   const ocr = await ocrTextForPage(ctx, ctx.documentId, pageNumber);
   diagnostics.push(ocr.diagnostic);
@@ -168,6 +176,8 @@ interface PdfDriveState {
   scannedObjects: number;
   emittedUnits: number;
   windowIndex: number;
+  // What earlier windows of this run proved to be repeated page furniture.
+  furniture: ReadonlySet<string>;
 }
 
 async function pageLabelsFor(doc: PdfDocumentLike): Promise<readonly (string | null)[]> {
@@ -192,6 +202,33 @@ interface ExtractPdfWindowOptions {
   readonly pageLabels: readonly (string | null)[];
 }
 
+function addComposedPages(
+  builder: WindowTextBuilder,
+  outcomes: readonly PageReadOutcome[],
+  args: {
+    readonly firstPage: number;
+    readonly state: PdfDriveState;
+    readonly ctx: PdfExtractContext;
+    readonly pageLabels: readonly (string | null)[];
+    readonly diagnostics: ParserDiagnostic[];
+  },
+): void {
+  const composed = composePages(
+    outcomes.flatMap((outcome) => (outcome.layout === undefined ? [] : [outcome.layout])),
+    args.state.furniture,
+  );
+  args.state.furniture = composed.furniture;
+  const furnitureDiagnostic = pageFurnitureDiagnostic(args.ctx.documentId, composed.removedRows);
+  if (furnitureDiagnostic !== undefined) args.diagnostics.push(furnitureDiagnostic);
+  let composedIndex = 0;
+  outcomes.forEach((outcome, index) => {
+    const pageNumber = args.firstPage + index;
+    const text = outcome.layout === undefined ? outcome.text : composed.texts[composedIndex];
+    if (outcome.layout !== undefined) composedIndex += 1;
+    builder.addPage(pageNumber, text ?? "", pageLabelFor(args.pageLabels, pageNumber));
+  });
+}
+
 async function extractPdfWindow(
   doc: PdfDocumentLike,
   options: ExtractPdfWindowOptions,
@@ -199,6 +236,7 @@ async function extractPdfWindow(
   const { firstPage, lastPage, state, ctx, parserOptions, startedAt, pageLabels } = options;
   const builder = new WindowTextBuilder(ctx.documentId, state.cursor, state.anyPageEmitted);
   const diagnostics: ParserDiagnostic[] = [];
+  const outcomes: PageReadOutcome[] = [];
   for (let pageNumber = firstPage; pageNumber <= lastPage; pageNumber += 1) {
     const outcome = await readOrOcrPage(
       doc,
@@ -211,9 +249,10 @@ async function extractPdfWindow(
     );
     state.scannedObjects = outcome.scannedObjects;
     diagnostics.push(...outcome.diagnostics);
-    builder.addPage(pageNumber, outcome.text ?? "", pageLabelFor(pageLabels, pageNumber));
+    outcomes.push(outcome);
     state.emittedUnits += 1;
   }
+  addComposedPages(builder, outcomes, { firstPage, state, ctx, pageLabels, diagnostics });
   state.cursor = builder.nextCursor;
   state.anyPageEmitted = builder.hasEmittedAnyPage;
   const window: ProgressiveExtractionWindow = {
@@ -251,6 +290,7 @@ async function* pdfExtractWindows(
     scannedObjects: options.resumeObjectCursor ?? 0,
     emittedUnits: 0,
     windowIndex: options.resumeWindowIndex ?? 0,
+    furniture: new Set(),
   };
   for (let firstPage = resumeFromPage + 1; firstPage <= doc.numPages; firstPage += windowPages) {
     if (options.signal?.aborted === true) return;

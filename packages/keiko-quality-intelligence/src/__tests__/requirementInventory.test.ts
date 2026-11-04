@@ -854,6 +854,35 @@ describe("a statement label is presentation, not content (#4179 review)", () => 
   });
 });
 
+describe("a field written inline in a line", () => {
+  it("keeps the list behind a paragraph gap when the line ends in the criteria key", () => {
+    const text = [
+      "FA-1 — Anmeldung",
+      "Beschreibung: Das Portal muss anmelden. Priorität: Hoch · Quelle: K1 Akzeptanzkriterien:",
+      "",
+      "- Erstes Kriterium.",
+      "- Zweites Kriterium.",
+    ].join("\n");
+    const entry = deriveRequirementInventory({ text, documentKey: "doc" }).entries[0];
+    expect(entry?.priority).toBe("Hoch");
+    expect(entry?.acceptanceCriteria.map((criterion) => criterion.text)).toEqual([
+      "Erstes Kriterium.",
+      "Zweites Kriterium.",
+    ]);
+  });
+
+  it("still ends the block at the gap when nothing announced a list", () => {
+    const text = [
+      "FA-1 — Anmeldung",
+      "Beschreibung: Das Portal muss anmelden.",
+      "",
+      "- Ein Punkt eines anderen Abschnitts.",
+    ].join("\n");
+    const entry = deriveRequirementInventory({ text, documentKey: "doc" }).entries[0];
+    expect(entry?.acceptanceCriteria).toEqual([]);
+  });
+});
+
 describe("acceptance criteria wrapped by the extractor", () => {
   const criteriaOf = (lines: readonly string[]): readonly string[] =>
     detect([

@@ -422,6 +422,42 @@ describe("requirement inventory across document formats", () => {
     expect(content(wrapped)).toEqual(content(await extract("markdown")));
   });
 
+  it("reads a criterion as one when the page margin wrapped it onto a date", async () => {
+    const criterion =
+      "Angenommen der Antrag ist vollständig, wenn die Sachbearbeitung ihn prüft, dann endet die Frist am";
+    const lines = [
+      "FR-9 Frist überwachen",
+      "Das System muss die Frist für jeden Antrag überwachen und die Sachbearbeitung rechtzeitig informieren,",
+      "bevor die Frist abläuft.",
+      "Akzeptanzkriterien:",
+      `- ${criterion}`,
+      "16. April des Folgejahres.",
+      "- Angenommen die Frist ist abgelaufen, wenn der Antrag offen ist, dann wird er eskaliert.",
+      "Priorität: Muss",
+      "FR-10 Frist melden",
+      "Das System muss eine abgelaufene Frist melden.",
+      "Priorität: Soll",
+    ];
+    const result = extraction(
+      await pdfParser.parseAsync(
+        selectionFromBytes(pdf(lines), { extension: "pdf", mediaType: "application/pdf" }),
+        OPTIONS,
+      ),
+    );
+
+    const entry = deriveRequirementInventory({ ...result, documentKey: "doc" }).entries.find(
+      ({ id }) => id === "FR-9",
+    );
+    expect(entry?.acceptanceCriteria.map(({ text }) => text)).toEqual([
+      `${criterion} 16. April des Folgejahres.`,
+      "Angenommen die Frist ist abgelaufen, wenn der Antrag offen ist, dann wird er eskaliert.",
+    ]);
+    expect(entry?.statement).toBe(
+      "Das System muss die Frist für jeden Antrag überwachen und die Sachbearbeitung rechtzeitig informieren, bevor die Frist abläuft.",
+    );
+    expect(entry?.priority).toBe("Muss");
+  });
+
   it.each([
     ["a sheet name with an equals sign", xlsx("Requirements=v2")],
     ["a sheet name with a pipe", xlsx("Requirements|v2")],
