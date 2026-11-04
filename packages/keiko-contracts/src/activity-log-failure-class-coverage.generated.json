@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 387,
-  "completeClassCount": 387,
+  "supportedClassCount": 388,
+  "completeClassCount": 388,
   "completeness": "complete",
   "classes": [
     {
@@ -20490,6 +20490,87 @@
             "causeChain": false
           },
           "proofIds": ["indexing.document.skipped.reason"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "document-page-read",
+      "requirementContract": "document-page-read",
+      "productSurfaces": ["keiko-local-knowledge"],
+      "lifecycleTransitions": ["failure"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": [],
+        "failure": ["indexing.document.page-read-failed"],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "indexing.document.page-read-failed",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": [],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "indexing.document.page-read-failed",
+          "owner": "keiko-local-knowledge",
+          "category": "indexing",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "capsuleIdDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "documentIdDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "failureKind",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": true
+            },
+            {
+              "name": "pageNumber",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "stage",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "error-kind",
+            "loss-state"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["indexing.document.page-read-failed.stage"],
           "replayReferences": [],
           "missingObligations": []
         }
