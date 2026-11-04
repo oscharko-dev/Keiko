@@ -532,11 +532,13 @@ export function handleCodingRuntimeStatus(ctx: RouteContext, deps: UiHandlerDeps
  */
 function composedProfileReadiness(
   deps: UiHandlerDeps,
-): Pick<CodingWorkbenchRuntimeReadiness, "selectableAgents" | "promptInputs"> {
+): Pick<CodingWorkbenchRuntimeReadiness, "selectableAgents" | "promptInputs" | "toolProfile"> {
   const profile = deps.openCodeGatewayReadinessRegistry?.toolProfile ?? "direct";
   return {
     selectableAgents: openCodeSelectableAgents(profile),
     promptInputs: openCodePromptInputs(profile),
+    // A mapped profile is never labeled native (#4068 W12).
+    toolProfile: profile === "native" ? "native" : "mapped",
   };
 }
 

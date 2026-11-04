@@ -1528,6 +1528,8 @@ describe("coding runtime routes", () => {
         selectableAgents: ["build"],
         // ...and the prompt inputs default to none: no delivery, no references, no commands.
         promptInputs: { delivery: false, references: false, commands: false, mentions: false },
+        // ...and an unthreaded profile is never reported as native (#4068 W12).
+        toolProfile: "mapped",
       },
     });
     const serialized = JSON.stringify(result.body);
@@ -1565,6 +1567,26 @@ describe("coding runtime routes", () => {
     expect(
       selectable({ codingRuntimeHostQualified: true, openCodeGatewayReadinessRegistry: {} }),
     ).toEqual(["build"]);
+  });
+
+  it("reports the composed tool profile and never labels a mapped one native (#4068 W12)", () => {
+    const toolProfile = (overrides: Partial<Record<string, unknown>>): unknown => {
+      const result = handleCodingRuntimeReadiness(
+        context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
+        runtime({ codingRuntimeOrchestrator: undefined, ...overrides }),
+      );
+      return (result.body as { toolProfile?: unknown }).toolProfile;
+    };
+    const registry = (profile: string): Record<string, unknown> => ({
+      openCodeGatewayReadinessRegistry: { toolProfile: profile },
+    });
+    expect(toolProfile({ codingRuntimeHostQualified: true, ...registry("native") })).toBe("native");
+    for (const profile of ["direct", "code-mode"]) {
+      expect(toolProfile({ codingRuntimeHostQualified: true, ...registry(profile) })).toBe(
+        "mapped",
+      );
+    }
+    expect(toolProfile({ codingRuntimeHostQualified: true })).toBe("mapped");
   });
 
   it("computes the prompt inputs from the composed OpenCode tool profile (ADR-0137 D10)", () => {

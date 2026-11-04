@@ -291,6 +291,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.info.runState": "Laufstatus",
   "codingWorkbench.info.model": "Modell",
   "codingWorkbench.info.agent": "Agent",
+  "codingWorkbench.info.toolProfile": "Tool-Profil",
+  "codingWorkbench.info.toolProfile.native": "Native OpenCode-Tools",
+  "codingWorkbench.info.toolProfile.mapped":
+    "Von Keiko abgebildete Tools, keine vollständige native Parität",
   "codingWorkbench.info.modelReadiness": "Modellbereitschaft",
   "codingWorkbench.info.runtime": "Runtime-Verifikation",
   "codingWorkbench.info.runtimeVersion": "OpenCode-Runtime",

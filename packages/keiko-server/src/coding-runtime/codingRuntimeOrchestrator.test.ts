@@ -1030,6 +1030,20 @@ describe("CodingRuntimeOrchestrator", () => {
     );
     expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_ACCEPTED_TASK_CANARY");
   });
+  it("records the started run's agent kind and a model digest, never their names (#4068 W12)", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start({ ...start, modelId: "PRIVATE_MODEL_CANARY", agent: "plan" });
+    const event = requireLoggedEvent(
+      captured.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(event.extra).toMatchObject({
+      primaryAgent: "plan",
+      modelIdDigest: sha256Hex("PRIVATE_MODEL_CANARY"),
+    });
+    expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_MODEL_CANARY");
+  });
   it("records body-free activity log lines for run start and settlement", async () => {
     const captured = captureActivityLog();
     const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
@@ -2799,6 +2813,62 @@ describe("CodingRuntimeOrchestrator", () => {
         }),
       );
       expect(JSON.stringify(captured.records)).not.toContain("d5f5681e");
+    });
+
+    it("states the live run's model and agent on its snapshot across follow-ups (#4068 W12)", async () => {
+      const f = fixture();
+      const started = successfulSnapshot(
+        await f.orchestrator.start({ ...start, modelId: "gemma-4-31b-it", agent: "plan" }),
+      );
+      expect(started).toMatchObject({ modelId: "gemma-4-31b-it", agent: "plan" });
+
+      const switched = successfulSnapshot(
+        await f.orchestrator.submitFollowUp("run-1", {
+          requestId: "follow-up-build",
+          expectedRevision: started.revision,
+          taskIntent: "now implement it",
+          agent: "build",
+        }),
+      );
+      expect(switched).toMatchObject({ modelId: "gemma-4-31b-it", agent: "build" });
+
+      const kept = await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-plain",
+        expectedRevision: switched.revision,
+        taskIntent: "and test it",
+      });
+      expect(successfulSnapshot(kept)).toMatchObject({ agent: "build" });
+    });
+
+    it("keeps the run's agent when its follow-up was refused (#4068 W12)", async () => {
+      const f = fixture();
+      const started = successfulSnapshot(await f.orchestrator.start({ ...start, agent: "plan" }));
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: false, reason: "agent-unsupported" });
+
+      await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-refused",
+        expectedRevision: started.revision,
+        taskIntent: "try another agent",
+        agent: "build",
+      });
+
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({ agent: "plan" });
+    });
+
+    it("states a default start's agent and no model it was not told (#4068 W12)", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      const snapshot = f.orchestrator.getSnapshot("run-1");
+      expect(snapshot).toMatchObject({ agent: "build" });
+      expect(snapshot).not.toHaveProperty("modelId");
+    });
+
+    it("reports no identity for a run this process did not start (#4068 W12)", () => {
+      const f = fixture(undefined, undefined, [settledRow("run-9", "2026-07-13T12:00:00.000Z", 3)]);
+      const snapshot = f.orchestrator.getSnapshot("run-9");
+      expect(snapshot).toBeDefined();
+      expect(snapshot).not.toHaveProperty("agent");
+      expect(snapshot).not.toHaveProperty("modelId");
     });
 
     it("hands a follow-up's agent to the dispatch and omits the key when none was named", async () => {

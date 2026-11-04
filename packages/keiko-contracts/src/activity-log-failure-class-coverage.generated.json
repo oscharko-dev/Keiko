@@ -5560,6 +5560,12 @@
               "required": false
             },
             {
+              "name": "agentReported",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "expanded",
               "type": "boolean",
               "dataClass": "closed-enum",
@@ -5576,6 +5582,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "modelReported",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "notice",
@@ -5609,6 +5621,12 @@
             },
             {
               "name": "surface",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "toolProfile",
               "type": "string",
               "dataClass": "closed-enum",
               "required": false
@@ -14262,6 +14280,12 @@
               "required": true
             },
             {
+              "name": "modelIdDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
               "name": "modelSource",
               "type": "string",
               "dataClass": "closed-enum",
@@ -14278,6 +14302,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "primaryAgent",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "requestedMode",
