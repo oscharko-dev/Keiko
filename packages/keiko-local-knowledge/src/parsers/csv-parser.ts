@@ -53,7 +53,8 @@ function selectDelimiter(input: ParserSelectionInput): DelimiterSelection | null
   const ext = input.extension.toLowerCase();
   if (CSV_EXTENSIONS.has(ext)) return { kind: "detect" };
   if (TSV_EXTENSIONS.has(ext)) return { kind: "fixed", delimiter: "\t" };
-  const media = input.mediaType.toLowerCase();
+  // A real `Content-Type` carries parameters (`text/csv; charset=utf-8`): match the essence.
+  const media = (input.mediaType.toLowerCase().split(";")[0] ?? "").trim();
   if (media === "text/csv") return { kind: "detect" };
   if (media === "text/tab-separated-values") return { kind: "fixed", delimiter: "\t" };
   return null;
