@@ -278,7 +278,7 @@ describe("Gateway bounded tool-schema repair", () => {
   });
 
   it("logs a correction the caller refuses with its actual cause, not the rejected shape", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const fetchImpl: typeof fetch = () => Promise.resolve(invalidArguments("call-actual-1"));
     const failure: unknown = await new Gateway(config(), {
       fetchImpl,
@@ -295,7 +295,8 @@ describe("Gateway bounded tool-schema repair", () => {
     expect(failure).toMatchObject({ code: "GATEWAY_ATTEMPT_ADMISSION_DENIED" });
     const repairStates = events
       .filter((event) => event.op === "gateway.tool-catalog.repair")
-      .map((event) => ({ state: event.extra?.state, reason: event.extra?.reason }));
+      .map((event) => normalFixtureEvent(event).extra)
+      .map((extra) => ({ state: extra?.state, reason: extra?.reason }));
     expect(repairStates).toEqual([
       { state: "scheduled", reason: "invalid-shape" },
       { state: "denied", reason: "attempt-admission-denied" },
