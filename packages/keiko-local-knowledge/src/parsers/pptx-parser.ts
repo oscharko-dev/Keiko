@@ -74,6 +74,7 @@ const MAX_PPTX_ZIP_ENTRIES = 16_384;
 const MAX_TITLE_CHARACTERS = 120;
 const TITLE_PLACEHOLDERS: ReadonlySet<string> = new Set(["title", "ctrTitle"]);
 const CHROME_PLACEHOLDERS: ReadonlySet<string> = new Set(["sldNum", "dt", "ftr", "hdr", "sldImg"]);
+const NOTES_TEXT_PLACEHOLDERS: ReadonlySet<string> = new Set(["body", "obj"]);
 const PPTX_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_PPTX_FILE_EXTENSIONS);
 
 function isPptx(input: ParserSelectionInput): boolean {
@@ -259,10 +260,16 @@ function isChrome(placeholder: string | undefined): boolean {
   return placeholder !== undefined && CHROME_PLACEHOLDERS.has(placeholder);
 }
 
-/** The first note paragraph carries the label; every paragraph stays its own line. */
+/**
+ * The first note paragraph carries the label; every paragraph stays its own line. A placeholder
+ * that names no type is an object placeholder by default (`obj`), which on a notes page holds the
+ * notes text just as `body` does.
+ */
 function noteLines(items: readonly PartItem[]): readonly string[] {
   const paragraphs = items.flatMap((item) =>
-    item.kind === "shape" && item.placeholder === "body" ? item.paragraphs : [],
+    item.kind === "shape" && NOTES_TEXT_PLACEHOLDERS.has(item.placeholder ?? "")
+      ? item.paragraphs
+      : [],
   );
   const [first, ...rest] = paragraphs;
   return first === undefined ? [] : [`Speaker notes: ${first}`, ...rest];

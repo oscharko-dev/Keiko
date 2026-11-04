@@ -201,15 +201,20 @@ function wordLimits(context: ReadContext): Parameters<typeof readWordPart>[1] {
   };
 }
 
+/** The notes of a footnotes or endnotes part; what it excludes is counted with the body's. */
 function readNotes(
   context: ReadContext,
   entry: string,
   xml: string | undefined,
-): WordPartRead["notes"] {
+): Pick<WordPartRead, "notes" | "hiddenCount" | "placeholderCount"> {
   const read = readAuxiliary(context, entry, xml, (part) =>
     readWordPart(part, wordLimits(context)),
   );
-  return read?.notes ?? new Map();
+  return {
+    notes: read?.notes ?? new Map(),
+    hiddenCount: read?.hiddenCount ?? 0,
+    placeholderCount: read?.placeholderCount ?? 0,
+  };
 }
 
 function countComments(context: ReadContext, xml: string | undefined): number {
@@ -288,8 +293,8 @@ function parseParagraphs(
   const projection = {
     styles: catalogs.styles,
     numbering: createNumberingTracker(catalogs.numbering, catalogs.styles),
-    footnotes,
-    endnotes,
+    footnotes: footnotes.notes,
+    endnotes: endnotes.notes,
     placed: new Set<string>(),
   };
   const body = projectBody(main.blocks, projection);
@@ -300,8 +305,9 @@ function parseParagraphs(
       ...context.diagnostics,
       ...readStopDiagnostic(context, main),
       ...exclusionDiagnostics(input, {
-        hidden: main.hiddenCount,
-        placeholders: main.placeholderCount,
+        hidden: main.hiddenCount + footnotes.hiddenCount + endnotes.hiddenCount,
+        placeholders:
+          main.placeholderCount + footnotes.placeholderCount + endnotes.placeholderCount,
         comments,
       }),
     ],

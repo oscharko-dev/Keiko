@@ -95,6 +95,27 @@ function tableSlideCell(text: string): string {
   return `<p:graphicFrame><a:graphic><a:graphicData><a:tbl><a:tblPr/><a:tr><a:tc><a:txBody><a:bodyPr/>${paragraphXml(text)}</a:txBody></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>`;
 }
 
+describe("pptx speaker notes whose placeholder names no type", () => {
+  it("reads the notes text of a placeholder that leaves the type to its default", async () => {
+    const entries = pptxEntries([
+      {
+        file: "slide1.xml",
+        relationshipId: "rId1",
+        xml: slidePartXml(shapeXml("title", paragraphXml("Titel"))),
+        notes: ["Notiz"],
+      },
+    ]).map((entry) =>
+      entry.name.startsWith("ppt/notesSlides/")
+        ? { ...entry, content: entry.content.replace('<p:ph type="body"/>', '<p:ph idx="1"/>') }
+        : entry,
+    );
+    expect(linesOf(await parse(zipTextEntries(entries)))).toEqual([
+      "Slide 1: Titel",
+      "Speaker notes: Notiz",
+    ]);
+  });
+});
+
 describe("pptx unreadable chart and diagram references", () => {
   const C_NS = 'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"';
   const frame = (id: string): string =>

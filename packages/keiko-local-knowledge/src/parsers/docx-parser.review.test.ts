@@ -100,6 +100,21 @@ describe("docx table projection syntax", () => {
   });
 });
 
+describe("docx exclusion counts cover the notes", () => {
+  it("counts hidden text and placeholders in a footnote like those in the body", async () => {
+    const hidden = `<w:r><w:rPr><w:vanish/></w:rPr><w:t>geheim</w:t></w:r>`;
+    const control = `<w:sdt><w:sdtPr><w:showingPlcHdr/></w:sdtPr><w:sdtContent>${textPara("Klicken")}</w:sdtContent></w:sdt>`;
+    const footnotes = `<?xml version="1.0"?><w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:footnote w:id="2"><w:p><w:r><w:t>Quelle</w:t></w:r>${hidden}</w:p>${control}</w:footnote></w:footnotes>`;
+    const reference = `<w:p><w:r><w:t>Satz</w:t></w:r><w:r><w:footnoteReference w:id="2"/></w:r></w:p>`;
+    const result = await parseDocx({ document: documentXml(reference), footnotes });
+    expect(linesOf(result)).toEqual(["Satz", "Footnote 2: Quelle"]);
+    expect(result.diagnostics.map((entry) => entry.message)).toEqual([
+      "excluded 1 hidden text run(s) that a reader cannot see",
+      "excluded 1 content-control placeholder(s)",
+    ]);
+  });
+});
+
 describe("docx lists inside table cells", () => {
   const numbering = numberingXml(
     abstractNumXml("0", [levelXml(0, { format: "decimal", text: "%1." })]),
