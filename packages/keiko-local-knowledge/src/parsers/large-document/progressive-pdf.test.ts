@@ -332,6 +332,134 @@ function resumeBehind(
   };
 }
 
+/** Pages of two lines: each ends at the margin in the given word and the next opens with `opening`. */
+function splitWordPdf(pages: readonly { readonly word: string; readonly opening: string }[]): {
+  readonly doc: PdfDocumentLike;
+  readonly reads: () => readonly number[];
+} {
+  const reads: number[] = [];
+  const doc: PdfDocumentLike = {
+    numPages: pages.length,
+    getPage: (pageNumber: number) => {
+      reads.push(pageNumber);
+      const { word, opening } = pages[pageNumber - 1] ?? { word: "Ende.", opening: "" };
+      return Promise.resolve({
+        streamTextContent: () =>
+          new ReadableStream<PdfTextContentChunk>({
+            start(controller): void {
+              controller.enqueue({
+                items: [
+                  positionedItem(opening, 700),
+                  positionedItem("Die Bank prüft ".padEnd(90 - word.length, "x") + ` ${word}`, 680),
+                ],
+              });
+              controller.close();
+            },
+          }),
+      });
+    },
+  };
+  return { doc, reads: () => reads };
+}
+
+describe("a word over a window boundary (review #4235)", () => {
+  const WORDS = [
+    { word: "Trennstri-", opening: "Anfang des Absatzes." },
+    { word: "E-", opening: "chen bleiben nicht im Text." },
+    { word: "Ein-", opening: "Mail bleibt ein Wort." },
+    { word: "Ende.", opening: "und Ausgaben bleiben getrennt." },
+  ];
+  const fullRead = async (doc: PdfDocumentLike): ReturnType<typeof extractPages> =>
+    extractPages(
+      doc,
+      {
+        documentId: DOC,
+        bytes: new Uint8Array(0),
+        extension: "pdf",
+        mediaType: "application/pdf",
+      },
+      buildParserOptions({ now: () => 0 }),
+      0,
+    );
+  const progressive = async (
+    doc: PdfDocumentLike,
+    windowPages: number,
+    overrides: Partial<ProgressiveExtractionOptions> = {},
+  ): Promise<ReturnType<typeof collectingSink>> => {
+    const extractor = createProgressivePdfExtractor({ loadDocument: () => Promise.resolve(doc) });
+    const sink = collectingSink();
+    await runProgressiveExtraction(extractor, SOURCE, options(windowPages, overrides), sink);
+    return sink;
+  };
+
+  it.each([1, 2, 16])("reads as the full read does with windows of %i", async (windowPages) => {
+    const { doc } = splitWordPdf(WORDS);
+    const full = await fullRead(doc);
+    const sink = await progressive(doc, windowPages);
+
+    expect(full.normalizedText).toContain("Trennstrichen bleiben");
+    expect(full.normalizedText).toContain("E-Mail bleibt");
+    expect(full.normalizedText).toContain("Ein- und Ausgaben");
+    expect(sink.text()).toBe(full.normalizedText);
+    expect(sink.windows.flatMap((window) => window.pages)).toEqual(full.pages);
+  });
+
+  it.each([1, 2])("spells it the same after a resume with windows of %i", async (windowPages) => {
+    const { doc } = splitWordPdf(WORDS);
+    const continuous = await progressive(doc, windowPages);
+    const firstWindows = continuous.windows.slice(0, 1);
+    const resumed = await progressive(doc, windowPages, resumeBehind(firstWindows));
+
+    expect(firstWindows.map((window) => window.text).join("") + resumed.text()).toBe(
+      continuous.text(),
+    );
+    expect(resumed.windows.flatMap((window) => window.pages)).toEqual(
+      continuous.windows.slice(1).flatMap((window) => window.pages),
+    );
+  });
+
+  it("looks no further than one window ahead, and only for an open word", async () => {
+    const closed = splitWordPdf([
+      { word: "Ende.", opening: "Anfang." },
+      { word: "Ende.", opening: "Anfang." },
+      { word: "Ende.", opening: "Anfang." },
+    ]);
+    await progressive(closed.doc, 1);
+    expect(closed.reads()).toEqual([1, 2, 3]);
+
+    const open = splitWordPdf([
+      { word: "Trennstri-", opening: "Anfang." },
+      { word: "Ende.", opening: "chen bleiben nicht im Text." },
+      { word: "Ende.", opening: "Anfang." },
+    ]);
+    await progressive(open.doc, 1);
+    expect(open.reads()).toEqual([1, 2, 2, 3]);
+  });
+
+  it("keeps the word as it stands when the next page cannot be read", async () => {
+    const { doc } = splitWordPdf(WORDS);
+    const events: KnowledgeLogEvent[] = [];
+    const broken: PdfDocumentLike = {
+      numPages: doc.numPages,
+      getPage: (pageNumber) =>
+        pageNumber === 2 ? Promise.reject(new Error("unreadable")) : doc.getPage(pageNumber),
+    };
+    const sink = await progressive(broken, 1, {
+      log: {
+        sink: { write: (event): void => void events.push(event) },
+        context: {
+          jobId: "job-1",
+          capsuleIdDigest: "d".repeat(64),
+          documentIdDigest: "d".repeat(64),
+        },
+      },
+    });
+
+    expect(sink.text()).toContain("Trennstri-");
+    expect(events.length).toBeGreaterThan(0);
+  });
+});
+
 describe("progressive and full-buffer extraction of one document", () => {
   it("carry a paragraph over a page and a window the same way (#4235)", async () => {
     const doc = runningTextPdf(20);

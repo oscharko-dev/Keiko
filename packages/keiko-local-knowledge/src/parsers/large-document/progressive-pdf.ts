@@ -32,8 +32,10 @@ import {
 } from "../pdf-parser.js";
 import {
   composePages,
+  endsInOpenHyphen,
   hasPageContent,
   joinAcrossPages,
+  openingOfRun,
   type PageEdge,
   type PageLayout,
 } from "../pdf-layout.js";
@@ -275,17 +277,21 @@ interface ExtractPdfWindowOptions {
   readonly pageLabels: readonly (string | null)[];
 }
 
-function addComposedPages(
+async function addComposedPages(
   builder: WindowTextBuilder,
   outcomes: readonly PageReadOutcome[],
   args: {
+    readonly doc: PdfDocumentLike;
     readonly firstPage: number;
+    readonly lastPage: number;
     readonly state: PdfDriveState;
     readonly ctx: PdfExtractContext;
+    readonly parserOptions: ParserOptions;
+    readonly startedAt: number;
     readonly pageLabels: readonly (string | null)[];
     readonly diagnostics: ParserDiagnostic[];
   },
-): void {
+): Promise<void> {
   const composed = composePages(
     outcomes.flatMap((outcome) => (outcome.layout === undefined ? [] : [outcome.layout])),
     args.state.furniture,
@@ -300,11 +306,12 @@ function addComposedPages(
     composedIndex += 1;
     return { text: composed.texts[index] ?? "", edge: composed.edges[index] };
   });
-  const joined = joinAcrossPages(
-    placed.map(({ text }) => text),
-    placed.map(({ edge }) => edge),
-    args.state.lastEdge,
-  );
+  const texts = placed.map(({ text }) => text);
+  const edges = placed.map(({ edge }) => edge);
+  const next = endsInOpenHyphen(texts, edges)
+    ? await openingAfterWindow(args.doc, args, composed.furniture)
+    : undefined;
+  const joined = joinAcrossPages(texts, edges, args.state.lastEdge, next);
   args.state.lastEdge = joined.lastEdge;
   outcomes.forEach((_outcome, index) => {
     const pageNumber = args.firstPage + index;
@@ -321,7 +328,7 @@ async function extractPdfWindow(
   doc: PdfDocumentLike,
   options: ExtractPdfWindowOptions,
 ): Promise<ProgressiveExtractionWindow> {
-  const { firstPage, lastPage, state, ctx, parserOptions, startedAt, pageLabels } = options;
+  const { firstPage, lastPage, state, ctx, parserOptions, startedAt } = options;
   const builder = new WindowTextBuilder(ctx.documentId, state.cursor, state.anyPageEmitted);
   const diagnostics: ParserDiagnostic[] = [...state.pendingDiagnostics];
   state.pendingDiagnostics = [];
@@ -341,7 +348,7 @@ async function extractPdfWindow(
     outcomes.push(outcome);
     state.emittedUnits += 1;
   }
-  addComposedPages(builder, outcomes, { firstPage, state, ctx, pageLabels, diagnostics });
+  await addComposedPages(builder, outcomes, { ...options, doc, diagnostics });
   state.cursor = builder.nextCursor;
   state.anyPageEmitted = builder.hasEmittedAnyPage;
   const window: ProgressiveExtractionWindow = {
@@ -362,12 +369,64 @@ async function extractPdfWindow(
 // A checkpoint carries what earlier windows learned, but no page edge: how a page ended is made of
 // its text. The last window is read again, text layer only and emitting nothing, and composed with
 // what it knew, which gives the edge a continuous run would hand on.
+interface LayoutRead {
+  readonly ctx: PdfExtractContext;
+  readonly parserOptions: ParserOptions;
+  readonly startedAt: number;
+}
+
+/** A page's text layer, read outside its own turn: it emits nothing and runs no OCR. */
+async function layoutOutOfTurn(
+  doc: PdfDocumentLike,
+  pageNumber: number,
+  read: LayoutRead,
+): Promise<PageLayout | undefined> {
+  const result = await readPageLayout(await doc.getPage(pageNumber), {
+    input: selectionInput(read.ctx.documentId),
+    options: read.parserOptions,
+    startedAt: read.startedAt,
+    emittedUnits: 0,
+    scannedObjects: 0,
+  });
+  return hasPageContent(result.layout) ? result.layout : undefined;
+}
+
+/**
+ * How the window after this one opens, composed as its own turn will compose it. A window is handed
+ * on as it stands, so it has to know this when its last word may run over: the same word is spelled
+ * the same way wherever a window happens to end. A page that cannot be read reports itself again in
+ * its own turn, where it stops the paragraph, so here it stops the word too.
+ */
+async function openingAfterWindow(
+  doc: PdfDocumentLike,
+  args: LayoutRead & { readonly firstPage: number; readonly lastPage: number },
+  furniture: ReadonlySet<string>,
+): Promise<ReturnType<typeof openingOfRun>> {
+  const windowPages = args.lastPage - args.firstPage + 1;
+  const last = Math.min(args.lastPage + windowPages, doc.numPages);
+  const pageNumbers = Array.from(
+    { length: Math.max(0, last - args.lastPage) },
+    (_, index) => args.lastPage + 1 + index,
+  );
+  const read = async (pageNumber: number): Promise<PageLayout | undefined> => {
+    try {
+      return await layoutOutOfTurn(doc, pageNumber, args);
+    } catch (cause) {
+      recordPageReadFailure(args.ctx, "window", pageNumber, cause);
+      return undefined;
+    }
+  };
+  const layouts = await Promise.all(pageNumbers.map((pageNumber) => read(pageNumber)));
+  if (layouts[0] === undefined) return undefined;
+  return openingOfRun(
+    layouts.filter((layout) => layout !== undefined),
+    furniture,
+  );
+}
+
 async function edgeBeforeResume(
   doc: PdfDocumentLike,
-  args: {
-    readonly ctx: PdfExtractContext;
-    readonly parserOptions: ParserOptions;
-    readonly startedAt: number;
+  args: LayoutRead & {
     readonly resumeFromPage: number;
     readonly windowPages: number;
     readonly furniture: ReadonlySet<string>;
@@ -384,14 +443,7 @@ async function edgeBeforeResume(
   const diagnostics: ParserDiagnostic[] = [];
   const read = async (pageNumber: number): Promise<PageLayout | undefined> => {
     try {
-      const result = await readPageLayout(await doc.getPage(pageNumber), {
-        input: selectionInput(args.ctx.documentId),
-        options: args.parserOptions,
-        startedAt: args.startedAt,
-        emittedUnits: 0,
-        scannedObjects: 0,
-      });
-      return hasPageContent(result.layout) ? result.layout : undefined;
+      return await layoutOutOfTurn(doc, pageNumber, args);
     } catch (cause) {
       recordPageReadFailure(args.ctx, "resume", pageNumber, cause);
       diagnostics.push(unreadableBeforeResumeDiagnostic(args.ctx.documentId, pageNumber));

@@ -1067,16 +1067,21 @@ function finalizeProgressiveSuccess(
   return progressiveResult(params, document, finalSummary);
 }
 
+interface PlannedProgressiveRun {
+  readonly log: ProgressiveExtractionLog | undefined;
+  readonly source: ProgressiveExtractionSource;
+  readonly contentHash: string;
+  readonly extractor: ProgressiveExtractor;
+  readonly plan: ExistingCheckpointPlan;
+}
+
 async function runPlannedProgressiveExtraction(
-  log: ProgressiveExtractionLog | undefined,
   sinkDeps: SinkDeps,
   params: ExtractDocumentParams,
   context: ProgressiveExtractContext,
-  source: ProgressiveExtractionSource,
-  contentHash: string,
-  extractor: ProgressiveExtractor,
-  plan: ExistingCheckpointPlan,
+  run: PlannedProgressiveRun,
 ): Promise<ExtractionResult> {
+  const { log, source, contentHash, extractor, plan } = run;
   persistProgressiveStartup(sinkDeps, params, extractor, contentHash, plan);
   const outcome = await tryRunProgressiveExtraction(
     extractor,
@@ -1129,14 +1134,11 @@ export async function extractDocumentProgressive(
   const start = buildProgressiveStart(deps, params, context, contentHash, extractor);
   if (start.plan.failure !== undefined) return start.plan.failure;
   const sinkDeps = sinkDepsForPlan(deps, params, context, extractor, contentHash, start);
-  return await runPlannedProgressiveExtraction(
-    progressiveLogFor(deps, sinkDeps.documentId),
-    sinkDeps,
-    params,
-    context,
+  return await runPlannedProgressiveExtraction(sinkDeps, params, context, {
+    log: progressiveLogFor(deps, sinkDeps.documentId),
     source,
     contentHash,
     extractor,
-    start.plan,
-  );
+    plan: start.plan,
+  });
 }

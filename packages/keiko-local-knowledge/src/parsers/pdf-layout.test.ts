@@ -949,12 +949,86 @@ describe("a paragraph across a page break (#4235)", () => {
     expect(result.separators[1]).toBe("");
   });
 
-  it("keeps the hyphen where the page before was already handed on, and the sentence whole", () => {
-    const last = fullLineEndingIn("Trennstri-");
-    const result = composeInWindows([bodyPage(last), bodyPage("chen bleiben nicht im Text.")], 1);
+  describe("whatever the size of a run", () => {
+    const spellings = (pages: readonly PageLayout[]): readonly string[] =>
+      [1, 2, 16].map((windowPages) => {
+        const { texts, separators } = composeInWindows(pages, windowPages);
+        return texts.map((text, index) => `${separators[index] ?? "\n\n"}${text}`).join("");
+      });
 
-    expect(result.texts[0]).toBe(last);
-    expect(result.separators[1]).toBe("");
+    it.each([
+      [
+        "drops the hyphen a wrap added",
+        fullLineEndingIn("Trennstri-"),
+        "chen bleiben nicht im Text.",
+        "Trennstrichen",
+      ],
+      [
+        "keeps the hyphen of a name that goes on with a capital",
+        fullLineEndingIn("E-"),
+        "Mail bleibt ein Wort.",
+        "E-Mail",
+      ],
+      [
+        "keeps the hyphen of a shortened word",
+        fullLineEndingIn("Ein-"),
+        "und Ausgaben bleiben getrennt.",
+        "Ein- und",
+      ],
+    ])("%s", (_name, last, next, word) => {
+      const [one, two, sixteen] = spellings([
+        bodyPage(fullLine("Der Absatz beginnt hier."), last),
+        bodyPage(next),
+        bodyPage("Noch eine Seite."),
+      ]);
+
+      expect(one).toContain(word);
+      expect(two).toBe(one);
+      expect(sixteen).toBe(one);
+    });
+
+    it("keeps a hyphen the page itself writes, also where it ends a run", () => {
+      const pages = [
+        bodyPage("Die Selbst-bedienung gilt.", fullLineEndingIn("Selbst-")),
+        bodyPage("bedienung bleibt ein Wort."),
+      ];
+      const [one, two, sixteen] = spellings(pages);
+
+      expect(one).toContain("Selbst-bedienung bleibt");
+      expect(two).toBe(one);
+      expect(sixteen).toBe(one);
+    });
+
+    it("keeps the hyphen before a page without text, which stops the paragraph", () => {
+      const last = fullLineEndingIn("Trennstri-");
+      const [one, two, sixteen] = spellings([
+        bodyPage(last),
+        pageLayoutOf([]),
+        bodyPage("chen bleiben nicht im Text."),
+      ]);
+
+      expect(one).toContain("Trennstri-");
+      expect(two).toBe(one);
+      expect(sixteen).toBe(one);
+    });
+
+    it("keeps the hyphen when the next run opens a new block", () => {
+      const last = fullLineEndingIn("Trennstri-");
+      const [one, two, sixteen] = spellings([bodyPage(last), bodyPage("- Erstens prüfen")]);
+
+      expect(one).toContain("Trennstri-");
+      expect(two).toBe(one);
+      expect(sixteen).toBe(one);
+    });
+
+    it("hands a page that ends the document on as it stands", () => {
+      const last = fullLineEndingIn("Trennstri-");
+      const [one, two, sixteen] = spellings([bodyPage(last)]);
+
+      expect(one).toContain("Trennstri-");
+      expect(two).toBe(one);
+      expect(sixteen).toBe(one);
+    });
   });
 
   it.each([

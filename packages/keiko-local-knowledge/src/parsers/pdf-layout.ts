@@ -1646,14 +1646,49 @@ function separatorOverBreak(
 }
 
 /**
+ * True when the spelling of a run's last word depends on the page after the run: a hyphen a wrap may
+ * have added ends its running text. Only then does that page have to be looked at ahead of its turn.
+ */
+export function endsInOpenHyphen(
+  texts: readonly string[],
+  edges: readonly (PageEdge | undefined)[],
+): boolean {
+  return edges.at(-1)?.closing !== undefined && HYPHENATED_END.test(texts.at(-1) ?? "");
+}
+
+/** How the next run opens, composed the way its own turn will compose it. */
+export function openingOfRun(
+  pages: readonly PageLayout[],
+  furniture: ReadonlySet<string>,
+): TextLine | undefined {
+  const first = pages[0];
+  if (first === undefined || !hasPageContent(first)) return undefined;
+  return composeWindow(pages.filter(hasPageContent), furniture).edges[0]?.opening;
+}
+
+function withoutClosingWrapHyphen(
+  joined: string[],
+  closing: ClosingParagraph | undefined,
+  next: TextLine | undefined,
+): void {
+  const last = joined.at(-1);
+  if (closing === undefined || next === undefined || last === undefined) return;
+  if (!goesOnBehindPageBreak(closing, next)) return;
+  const join = wrapJoinOf(last.slice(-JOIN_TAIL_CHARS), next.text, closing.vocabulary);
+  if (join.dropHyphen) joined[joined.length - 1] = last.slice(0, -1);
+}
+
+/**
  * Carries paragraphs over the page breaks of one run. A page without an edge stands for a page that
- * has no layout and stops a paragraph. The page before a run was handed on already, so a wrap hyphen
- * at the end of it stays; the sentence stays whole all the same.
+ * has no layout and stops a paragraph. `next` is how the next run opens, when a word may run over
+ * into it: a run is handed on as it stands, so its last page has to know that already. The size of
+ * a run never chooses a spelling.
  */
 export function joinAcrossPages(
   texts: readonly string[],
   edges: readonly (PageEdge | undefined)[],
   before: PageEdge | undefined,
+  next?: TextLine,
 ): JoinedPages {
   const joined = [...texts];
   const separators = edges.map((edge, index) => {
@@ -1663,6 +1698,7 @@ export function joinAcrossPages(
     if (!goesOnBehindPageBreak(closing, opening)) return undefined;
     return separatorOverBreak(joined, index, closing, opening);
   });
+  withoutClosingWrapHyphen(joined, edges.at(-1)?.closing, next);
   return { texts: joined, separators, lastEdge: edges.at(-1) };
 }
 
@@ -1791,7 +1827,10 @@ export function composeInWindows(
     const withText = composeWindow(run.filter(hasPageContent), furniture);
     furniture = withText.furniture;
     const placed = spreadOverRun(run, withText);
-    const joined = joinAcrossPages(placed.texts, placed.edges, lastEdge);
+    const next = endsInOpenHyphen(placed.texts, placed.edges)
+      ? openingOfRun(pages.slice(first + step, first + 2 * step), furniture)
+      : undefined;
+    const joined = joinAcrossPages(placed.texts, placed.edges, lastEdge, next);
     lastEdge = joined.lastEdge;
     runs.push({ ...placed, ...joined });
   }
