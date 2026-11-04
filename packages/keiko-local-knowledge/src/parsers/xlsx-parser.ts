@@ -456,7 +456,10 @@ export function parseSharedStrings(
   const diagnostics: ParserDiagnostic[] = [];
   const startedAt = options.now();
   for (const itemXml of iterateXmlElements(xml, "si")) {
-    const limit = shouldStop(startedAt, options, strings.length);
+    // The table is a lookup, not a unit: cells address it by index, so cutting it at the unit limit
+    // blanks every later cell. Only the deadline and the caller's abort stop it, and the object
+    // limit below; the part itself is bounded by its inflated size.
+    const limit = shouldStop(startedAt, options, 0);
     if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
       diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
       break;
@@ -611,7 +614,7 @@ function typedCellValue(
   tag: string,
   context: CellContext,
 ): string {
-  if (type === "b") return raw.trim() === "0" ? "FALSE" : "TRUE";
+  if (type === "b") return /^(?:0|false)$/iu.test(raw.trim()) ? "FALSE" : "TRUE";
   if (type !== undefined && type !== "n") return rawCellValue(type, raw, context.sharedStrings);
   return formatNumericCell({
     raw: decodeText(raw),
