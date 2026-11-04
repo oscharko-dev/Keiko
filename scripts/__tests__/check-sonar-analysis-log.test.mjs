@@ -35,6 +35,16 @@ const scanner81PrUnchangedSourcesLog = readFileSync(
   "utf8",
 );
 
+const scanner81PrUdgReadWithoutDirectoryLog = readFileSync(
+  resolve(
+    import.meta.dirname,
+    "fixtures",
+    "sonar-analysis",
+    "scanner-8.1-pr-udg-read-without-directory.txt",
+  ),
+  "utf8",
+);
+
 function freshJavascriptAnalysis(eligible) {
   return [
     "INFO Sensor JavaScript/TypeScript/CSS analysis [javascript]",
@@ -212,6 +222,32 @@ describe("Sonar scanner warning gate", () => {
     );
     expect(wrongLanguage).not.toBe(current);
     expect(fullAnalysisEvidenceFailures(wrongLanguage)).not.toEqual([]);
+  });
+
+  // A real scanner log from PR #4203, which changed no JS/TS source: Sonar printed no SonarJasmin
+  // plan, so only the sensor-scoped receipts could prove the graph, and its UDG read omits the word
+  // "directory". It checks the synthetic case above against a complete 288 + 2936 receipt set.
+  it("accepts sensor-scoped receipts whose UDG read omits the word directory", () => {
+    expect(fullAnalysisEvidenceFailures(scanner81PrUdgReadWithoutDirectoryLog)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a missing producer read",
+      scanner81PrUdgReadWithoutDirectoryLog.replace(
+        '* Reading SonarArchitecture UDG data from "<redacted>/architecture/js"\n',
+        "",
+      ),
+    ],
+    [
+      "a producer read for the wrong language",
+      scanner81PrUdgReadWithoutDirectoryLog.replace(
+        '* Reading SonarArchitecture UDG data from "<redacted>/architecture/js"',
+        '* Reading SonarArchitecture UDG data from "<redacted>/architecture/ts"',
+      ),
+    ],
+  ])("still rejects the directory-less UDG read log with %s", (_name, contents) => {
+    expect(fullAnalysisEvidenceFailures(contents)).not.toEqual([]);
   });
 
   // Same PR (#3434), a later run: the scanner printed "4856/4856 source files have been analyzed"
