@@ -17,6 +17,12 @@ import {
   type OoxmlZipReadPlan,
 } from "./ooxml-zip.js";
 import { emitProjectedLines, projectTable, type ProjectedLine } from "./tabular.js";
+import {
+  applyMergedCells,
+  type MergeCell,
+  type MergeRange,
+  type MergeRow,
+} from "./xlsx-merged-cells.js";
 import { formatNumericCell } from "./xlsx-number-format.js";
 import type {
   AsyncParserAdapter,
@@ -36,10 +42,6 @@ const XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.
 const MAX_XML_INFLATED_BYTES = 32 * 1024 * 1024;
 const SHEET_ENTRY_PREFIX = "xl/worksheets/";
 const XLSX_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS);
-// Upper bound on cells a vertical merge may project into, so a hostile `mergeCell` list cannot
-// turn a small sheet into unbounded work.
-const MERGE_FILL_BUDGET = 1_000_000;
-const MERGE_MAX_COLUMNS = 256;
 
 interface XlsxEntry {
   readonly name: string;
@@ -601,13 +603,6 @@ function readCell(cellXml: string, context: CellContext): CellRead {
 
 // ─── Merged cells ──────────────────────────────────────────────────────────────
 
-interface MergeRange {
-  readonly firstRow: number;
-  readonly lastRow: number;
-  readonly firstColumn: number;
-  readonly lastColumn: number;
-}
-
 function parseMergeRanges(xml: string): readonly MergeRange[] {
   const ranges: MergeRange[] = [];
   for (const tag of iterateXmlStartTags(xml, "mergecell")) {
@@ -624,65 +619,16 @@ function parseMergeRanges(xml: string): readonly MergeRange[] {
   return ranges;
 }
 
-interface MutableRow {
-  readonly rowNumber: number;
+interface MutableCell extends MergeCell {
+  readonly column: string;
+}
+
+interface MutableRow extends MergeRow<MutableCell> {
   readonly hidden: boolean;
-  cells: CellValue[];
 }
 
-function firstRowAtOrAfter(rows: readonly MutableRow[], target: number): number {
-  let low = 0;
-  let high = rows.length;
-  while (low < high) {
-    const middle = (low + high) >>> 1;
-    if ((rows[middle]?.rowNumber ?? 0) < target) low = middle + 1;
-    else high = middle;
-  }
-  return low;
-}
-
-function fillCoveredCells(row: MutableRow, range: MergeRange, value: string): number {
-  const present = new Set(row.cells.map((cell) => cell.columnIndex));
-  const added: CellValue[] = [];
-  for (let column = range.firstColumn; column <= range.lastColumn; column += 1) {
-    if (!present.has(column)) {
-      added.push({ column: columnLetters(column), columnIndex: column, value });
-    }
-  }
-  if (added.length > 0) {
-    row.cells = [...row.cells, ...added].sort((a, b) => a.columnIndex - b.columnIndex);
-  }
-  return added.length;
-}
-
-// The value a vertical merge spreads: the top-left cell's, when the range is one to project.
-function mergedValue(rows: readonly MutableRow[], range: MergeRange): string | undefined {
-  if (range.lastRow <= range.firstRow) return undefined;
-  if (range.lastColumn - range.firstColumn >= MERGE_MAX_COLUMNS) return undefined;
-  const top = rows[firstRowAtOrAfter(rows, range.firstRow)];
-  if (top?.rowNumber !== range.firstRow) return undefined;
-  return top.cells.find((cell) => cell.columnIndex === range.firstColumn)?.value;
-}
-
-function projectRange(rows: readonly MutableRow[], range: MergeRange, budget: number): number {
-  const value = mergedValue(rows, range);
-  if (value === undefined) return budget;
-  let remaining = budget;
-  for (let i = firstRowAtOrAfter(rows, range.firstRow + 1); i < rows.length; i += 1) {
-    const row = rows[i];
-    if (row === undefined || row.rowNumber > range.lastRow || remaining <= 0) break;
-    remaining -= fillCoveredCells(row, range, value) + 1;
-  }
-  return remaining;
-}
-
-// A merged range holds its value in the top-left cell only. A person reads it in every row it
-// spans, so the value is projected into the covered cells of the rows below (a vertical merge:
-// an ID or title merged over the rows that list its criteria). A horizontal-only merge (a banner
-// over several columns) is one cell, not several, and is left alone.
-function projectMergedCells(rows: readonly MutableRow[], ranges: readonly MergeRange[]): void {
-  let budget = MERGE_FILL_BUDGET;
-  for (const range of ranges) budget = projectRange(rows, range, budget);
+function mutableCell(columnIndex: number, value: string): MutableCell {
+  return { column: columnLetters(columnIndex), columnIndex, value };
 }
 
 // ─── Hidden columns ─────────────────────────────────────────────────────────────
@@ -717,12 +663,12 @@ function countHiddenColumns(
 // ─── Rows ───────────────────────────────────────────────────────────────────────
 
 interface RowRead {
-  readonly cells: CellValue[];
+  readonly cells: MutableCell[];
   readonly uncachedFormulaCount: number;
 }
 
 function readRowCells(rowXml: string, context: CellContext): RowRead {
-  const cells: CellValue[] = [];
+  const cells: MutableCell[] = [];
   let uncachedFormulaCount = 0;
   let fallbackCol = 0;
   for (const cellXml of iterateXmlElements(rowXml, "c")) {
@@ -753,15 +699,18 @@ function readSheet(sheetName: string, xml: string, context: CellContext): SheetR
         rowNumber: number,
         hidden: isTrue(attribute(rowTag, "hidden")),
         cells: read.cells,
+        folded: false,
       });
     }
   }
   rows.sort((a, b) => a.rowNumber - b.rowNumber);
   const hiddenRowCount = rows.filter((row) => row.hidden).length;
   const hiddenColumnCount = countHiddenColumns(rows, hiddenColumnRanges(xml));
-  projectMergedCells(rows, parseMergeRanges(xml));
+  applyMergedCells(rows, parseMergeRanges(xml), mutableCell);
   return {
-    rows: rows.map((row) => ({ sheetName, rowNumber: row.rowNumber, cells: row.cells })),
+    rows: rows
+      .filter((row) => !row.folded)
+      .map((row) => ({ sheetName, rowNumber: row.rowNumber, cells: row.cells })),
     hiddenRowCount,
     hiddenColumnCount,
     uncachedFormulaCount,

@@ -122,7 +122,7 @@ describe("worksheet header evidence", () => {
 });
 
 describe("merged cells", () => {
-  it("projects the top-left value into the rows a vertical merge covers", async () => {
+  it("folds the rows of a merged record into one record with all its criteria", async () => {
     const xml = sheetXml(
       cells(1, HEADER) +
         cells(2, ["FR-1", "Login", "Text", "Muss", "AC eins"]) +
@@ -137,9 +137,28 @@ describe("merged cells", () => {
     const parsed = await linesOf({ name: "S", xml });
     expect(parsed.lines).toEqual([
       "S!2: ID=FR-1 | Titel=Login | Beschreibung=Text | Priorität=Muss | Akzeptanzkriterien=AC eins",
-      "S!3: ID=FR-1 | Titel=Login | Beschreibung=Text | Priorität=Muss | Akzeptanzkriterien=AC zwei",
-      "S!4: ID=FR-1 | Titel=Login | Beschreibung=Text | Priorität=Muss | Akzeptanzkriterien=AC drei",
+      "AC zwei",
+      "AC drei",
       "S!5: ID=FR-2 | Titel=Logout | Beschreibung=Text | Priorität=Soll | Akzeptanzkriterien=AC x",
+    ]);
+    expect(parsed.units.map((unit) => (unit.kind === "csv-row" ? unit.rowIndex : -1))).toEqual([
+      1, 4,
+    ]);
+  });
+
+  it("projects a grouping merge into every row it covers, keeping each row its own record", async () => {
+    const xml = sheetXml(
+      cells(1, ["Kapitel", ...HEADER]) +
+        cells(2, ["Anmeldung", "FR-1", "Login", "Text", "Muss", "a"]) +
+        cells(3, ["", "FR-2", "Logout", "Text", "Soll", "b"]) +
+        cells(4, ["Profil", "FR-3", "Name", "Text", "Kann", "c"]),
+      { after: '<mergeCells count="1"><mergeCell ref="A2:A3"/></mergeCells>' },
+    );
+    const parsed = await linesOf({ name: "S", xml });
+    expect(parsed.lines).toEqual([
+      "S!2: Kapitel=Anmeldung | ID=FR-1 | Titel=Login | Beschreibung=Text | Priorität=Muss | Akzeptanzkriterien=a",
+      "S!3: Kapitel=Anmeldung | ID=FR-2 | Titel=Logout | Beschreibung=Text | Priorität=Soll | Akzeptanzkriterien=b",
+      "S!4: Kapitel=Profil | ID=FR-3 | Titel=Name | Beschreibung=Text | Priorität=Kann | Akzeptanzkriterien=c",
     ]);
   });
 
