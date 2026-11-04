@@ -40,6 +40,7 @@ import { makeFigmaSnapshotLoader, makeFigmaVisionHintProvider } from "./figmaSna
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
 import { tryCreateQiJudgePort, withQiJudgeStageFailure, type QiJudgePort } from "./judgePort.js";
 import { resolveQiModelPolicy } from "./modelSelection.js";
+import { strictRedactor } from "../content-redactor.js";
 
 // Mirrors the stages the model-routed workflow actually emits (descriptors.ts stageNames), so the
 // run plan the UI renders matches the live stage:started/completed events — including the
@@ -371,7 +372,7 @@ function resolveJudgeForModelRun(
 
 function buildWorkflowDeps(args: WorkflowDepsInput): QualityIntelligenceModelRoutedTestDesignDeps {
   const { runId, evidenceDir } = args;
-  const redact = args.deps.redactor;
+  const redact = strictRedactor(args.deps);
   return {
     sink: { emit: args.onEvent },
     evidenceStore: createNodeQualityIntelligenceLocalStore(evidenceDir),

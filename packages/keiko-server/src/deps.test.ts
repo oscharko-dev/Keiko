@@ -121,6 +121,7 @@ import { createCodingSafeActivityProjection } from "./coding-runtime/codingSafeA
 import { resolvePrDescriptionApplicationServiceForContext } from "./gitDelivery/prDescriptionRoutes.js";
 import { createUpdateRemediationManager } from "./update-remediation.js";
 import { createUpdateLocalStateManager } from "./update-local-state.js";
+import { strictRedactor } from "./content-redactor.js";
 
 const tmpDirs: string[] = [];
 
@@ -2263,8 +2264,47 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     deps.memoryVault?.close();
   });
 
+  // Owner decision 2026-11-04. Everything a person reads and the model receives goes through
+  // `deps.redactor`; everything stored as evidence, audit or memory goes through `strictRedactor`.
   it.each([
-    [undefined, "redact", "default", "info"],
+    [undefined, true],
+    ["on", false],
+    ["off", true],
+    ["OFF", false],
+  ] as const)(
+    "with KEIKO_CONTENT_REDACTION=%j the reader's projection keeps standards and dates: %s",
+    async (value, keepsContent) => {
+      const stateDir = tmp("content-threshold-state-");
+      const secret = "synthetic-configured-infrastructure-value";
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: tmp("content-threshold-evidence-"),
+        uiDbPath: join(stateDir, "keiko-ui.db"),
+        env: {
+          KEIKO_DEFAULT_API_KEY: secret,
+          ...(value === undefined ? {} : { KEIKO_CONTENT_REDACTION: value }),
+        },
+      });
+      try {
+        const contents = ["pacs.008.001.08", "camt.053.001.08", "Stand: 12.03.2026 10:15"];
+        for (const content of contents) {
+          expect(deps.redactor(content) === content).toBe(keepsContent);
+          expect(strictRedactor(deps)(content)).not.toBe(content);
+        }
+        const credential = `key ${secret} Authorization: Bearer fixture-token-value`;
+        for (const projected of [deps.redactor(credential), strictRedactor(deps)(credential)]) {
+          expect(projected).not.toContain(secret);
+          expect(projected).not.toContain("fixture-token-value");
+        }
+      } finally {
+        await deps.dispose?.();
+      }
+    },
+  );
+
+  it.each([
+    [undefined, "preserve", "default", "info"],
+    ["on", "redact", "on", "info"],
     ["off", "preserve", "off", "info"],
     ["OFF", "redact", "invalid", "warn"],
   ] as const)(

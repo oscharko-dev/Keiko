@@ -170,6 +170,7 @@ import {
   type EditorAgentRootResolution,
   serverResolvedDocumentText,
 } from "./agentRootBoundary.js";
+import { strictRedactor } from "../content-redactor.js";
 
 type EditorAgentRouteDeps = Pick<
   UiHandlerDeps,
@@ -3495,7 +3496,7 @@ function finishQueryGitCancellation(
   deps: EditorAgentActionRouteDeps,
 ): RouteResult {
   const result = failedResult(action, "The bounded Git context request was cancelled.");
-  auditAction(action, snapshot, decision, result, deps.redactor);
+  auditAction(action, snapshot, decision, result, strictRedactor(deps));
   editorAgentRegistry.reportResult(result);
   return { status: 200, body: { result } };
 }

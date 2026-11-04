@@ -805,7 +805,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     countMessages: (chatId: string): number => sqlCountMessages(db, chatId),
     findMessageById: (id: string): ChatMessage | undefined => sqlFindMessageById(db, id),
     updateChatToolTranscript: (id, update, correlationId): void => {
-      updateChatToolTranscript(db, id, update, options.redactString, correlationId);
+      updateChatToolTranscript(db, id, update, options.redactContentString, correlationId);
     },
     createMessage: (msg: NewChatMessage): ChatMessage => {
       const message = createMessageRecord(db, options, msg);
