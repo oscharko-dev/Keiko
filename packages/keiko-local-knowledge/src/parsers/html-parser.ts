@@ -1228,7 +1228,7 @@ function hasHeaderCells(rows: readonly LaidOutRow[]): boolean {
 function plainTwoColumnLayout(rows: readonly LaidOutRow[]): TableLayout {
   const identifies = (row: LaidOutRow | undefined): boolean =>
     identifiesRow(row?.cells[0]?.text ?? "");
-  if (!rows.slice(1).every(identifies)) return { kind: "rows" };
+  if (!rows.slice(1).every((row) => identifies(row))) return { kind: "rows" };
   return identifies(rows[0]) ? { kind: "none" } : { kind: "columns", headerRows: 1 };
 }
 

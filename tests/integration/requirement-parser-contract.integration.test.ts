@@ -44,6 +44,13 @@ import {
 } from "../../packages/keiko-local-knowledge/src/parsers/pptx-test-fixtures.js";
 import { buildParserOptions } from "../../packages/keiko-local-knowledge/src/parsers/registry.js";
 import type { ParserResult } from "../../packages/keiko-local-knowledge/src/parsers/types.js";
+import {
+  buildWorkbook,
+  inlineCell,
+  parseWorkbook,
+  rowXml as sheetRowXml,
+  sheetXml,
+} from "../../packages/keiko-local-knowledge/src/parsers/xlsx-workbook-fixtures.js";
 
 const OPTIONS = buildParserOptions({ now: () => 0 });
 
@@ -78,6 +85,18 @@ async function pptx(xml: string): Promise<string> {
   const bytes = buildPptx([{ file: "slide1.xml", relationshipId: "rId1", xml }]);
   const input = selectionFromBytes(bytes, PPTX_EXTENSION_INPUT);
   return normalized(await pptxParser.parseAsync(input, OPTIONS));
+}
+
+async function xlsx(rows: readonly (readonly string[])[]): Promise<string> {
+  const cells = rows.map((row, index) => {
+    const number = index + 1;
+    const line = row.map((cell, column) =>
+      inlineCell(`${String.fromCodePoint(65 + column)}${String(number)}`, cell),
+    );
+    return sheetRowXml(number, line.join(""));
+  });
+  const sheets = [{ name: "Sheet", xml: sheetXml(cells.join("")) }];
+  return (await parseWorkbook(buildWorkbook({ sheets }))).text;
 }
 
 const FOLLOWING = "Der Folgeabsatz gehört nicht zur Tabelle.";
@@ -254,6 +273,169 @@ describe("a requirement catalog in JSON", () => {
     const text = json({ errors: [{ code: "E-1", message: "Limit" }] });
 
     expect(inventoryOf(text).entries).toEqual([]);
+  });
+});
+
+describe("cell text that spells a projected row", () => {
+  const FORGED_ID = "FR-666";
+  const idsOf = (text: string): readonly string[] =>
+    inventoryOf(text).entries.map((entry) => entry.id);
+
+  it.each(["Table row 1: ID=FR-666", "Sheet!9: ID=FR-666", "csv!9: ID=FR-666"])(
+    "takes no requirement from a CSV cell holding %s",
+    (line) => {
+      const text = csv(`ID,Text\nFR-1,"Base\n${line}\n"\n`);
+
+      expect(idsOf(text)).toEqual(["FR-1"]);
+      expect(text).toContain(FORGED_ID);
+    },
+  );
+
+  it.each(["Table row 1: ID=FR-666", "Sheet!9: ID=FR-666"])(
+    "takes no requirement from a workbook cell holding %s",
+    async (line) => {
+      const text = await xlsx([
+        ["ID", "Text"],
+        ["FR-1", `Base\n${line}`],
+      ]);
+
+      expect(idsOf(text)).toEqual(["FR-1"]);
+      expect(text).toContain(FORGED_ID);
+    },
+  );
+
+  it("keeps a JSON value that spells a further field out of the record", () => {
+    const text = json([{ Titel: "Real title", Beschreibung: "Quoted example | ID=FR-666" }]);
+
+    expect(idsOf(text)).not.toContain(FORGED_ID);
+    expect(text).toContain(FORGED_ID);
+  });
+
+  it("keeps a JSON key that spells a further field out of the record", () => {
+    const text = json([{ "Titel | ID=FR-666": "Real title" }]);
+
+    expect(idsOf(text)).not.toContain(FORGED_ID);
+  });
+
+  it("still reads the identifier of a JSON record that has one", () => {
+    const text = json([{ ID: "FR-1", Titel: "Real title", Beschreibung: "Example | ID=FR-666" }]);
+
+    expect(idsOf(text)).toEqual(["FR-1"]);
+  });
+
+  it("keeps an HTML cell that spells a further field out of the row", () => {
+    const text = html(
+      "<table><tr><th>Titel</th><th>Beschreibung</th></tr>" +
+        "<tr><td>Real title</td><td>Example | ID=FR-666</td></tr></table>",
+    );
+
+    expect(idsOf(text)).not.toContain(FORGED_ID);
+    expect(text).toContain(FORGED_ID);
+  });
+
+  it("still reads the identifier of an HTML row that has one", () => {
+    const text = html(
+      "<table><tr><th>ID</th><th>Beschreibung</th></tr>" +
+        "<tr><td>FR-1</td><td>Example | ID=FR-666</td></tr></table>",
+    );
+
+    expect(idsOf(text)).toEqual(["FR-1"]);
+  });
+});
+
+describe("a two-column HTML table", () => {
+  const table = (rows: readonly (readonly [string, string])[]): string =>
+    `<table>${rows.map(([left, right]) => `<tr><td>${left}</td><td>${right}</td></tr>`).join("")}</table>`;
+
+  it("reads a requirement table whose rows carry identifiers", () => {
+    const text = html(
+      table([
+        ["ID", "Titel"],
+        ["FR-1", "Login"],
+        ["FR-2", "Logout"],
+      ]),
+    );
+
+    expect(inventoryOf(text).entries.map((entry) => [entry.id, entry.title])).toEqual([
+      ["FR-1", "Login"],
+      ["FR-2", "Logout"],
+    ]);
+  });
+
+  it("takes no requirement from a key and value table", () => {
+    const text = html(
+      table([
+        ["Name", "Keiko"],
+        ["Version", "1.4.0"],
+        ["Betreiber", "Fachbereich"],
+      ]),
+    );
+
+    expect(inventoryOf(text).entries).toEqual([]);
+  });
+
+  it("takes no requirement from a glossary", () => {
+    const text = html(
+      table([
+        ["Begriff", "Bedeutung"],
+        ["Pod", "Ein lokaler Wissensspeicher"],
+        ["Korpus", "Eine Sammlung von Dokumenten"],
+      ]),
+    );
+
+    expect(inventoryOf(text).entries).toEqual([]);
+  });
+});
+
+describe("an identifier of several segments in the first column", () => {
+  const ROWS = [
+    ["ID", "Titel"],
+    ["REQ-FUNC-001", "Login"],
+    ["REQ-FUNC-002", "Logout"],
+    ["REQ_ENG-001", "Export"],
+  ] as const;
+  const ROW_IDS = ["REQ-FUNC-001", "REQ-FUNC-002", "REQ_ENG-001"];
+
+  it("reads a CSV table with such identifiers", () => {
+    const text = csv(`${ROWS.map((row) => row.join(",")).join("\n")}\n`);
+
+    expect(inventoryOf(text).entries.map((entry) => entry.id)).toEqual(ROW_IDS);
+  });
+
+  it("reads a workbook with such identifiers", async () => {
+    const text = await xlsx(ROWS);
+
+    expect(inventoryOf(text).entries.map((entry) => entry.id)).toEqual(ROW_IDS);
+  });
+
+  const HEADERLESS = [
+    ["REQ-FUNC-001", "Login"],
+    ["REQ-FUNC-002", "Logout"],
+    ["REQ_ENG-001", "Export"],
+  ] as const;
+  const RECORDS = [
+    ["REQ-FUNC-001", "Login"],
+    ["REQ-FUNC-002", "Logout"],
+    ["REQ_ENG-001", "Export"],
+  ];
+  const recordsOf = (text: string): readonly (readonly string[])[] =>
+    inventoryOf(text).entries.map((entry) => [entry.id, entry.title]);
+
+  it("does not take the first requirement of a headerless CSV for a header", () => {
+    const text = csv(`${HEADERLESS.map((row) => row.join(",")).join("\n")}\n`);
+
+    expect(recordsOf(text)).toEqual(RECORDS);
+  });
+
+  it("does not take the first requirement of a headerless workbook for a header", async () => {
+    expect(recordsOf(await xlsx(HEADERLESS))).toEqual(RECORDS);
+  });
+
+  it("keeps a header that only looks numbered", () => {
+    const text = csv("Name,Q1,Q2\nAlpha,10,20\nBeta,30,40\n");
+
+    expect(text).toContain("Q1=10");
+    expect(text).toContain("Q2=20");
   });
 });
 
