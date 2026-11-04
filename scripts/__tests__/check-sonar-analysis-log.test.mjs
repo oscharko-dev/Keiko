@@ -196,6 +196,24 @@ describe("Sonar scanner warning gate", () => {
     expect(fullAnalysisEvidenceFailures(scanner81PrUnchangedSourcesLog)).toEqual([]);
   });
 
+  // Scanner 8.1.0.6389 dropped the word "directory" from the UDG read receipt and now prints
+  // `* Reading SonarArchitecture UDG data from "<dir>/architecture/js"` (PR #4168, run
+  // 41156628383). A verifier keyed to the older wording rejected every taint-skipped PR.
+  it("accepts the sensor-scoped receipts when the UDG read line omits the word directory", () => {
+    const current = scanner81PrUnchangedSourcesLog.replaceAll(
+      "Reading SonarArchitecture UDG data from directory ",
+      "Reading SonarArchitecture UDG data from ",
+    );
+    expect(current).not.toContain("UDG data from directory");
+    expect(fullAnalysisEvidenceFailures(current)).toEqual([]);
+    const wrongLanguage = current.replace(
+      'UDG data from "<redacted>/architecture/js"',
+      'UDG data from "<redacted>/architecture/ts"',
+    );
+    expect(wrongLanguage).not.toBe(current);
+    expect(fullAnalysisEvidenceFailures(wrongLanguage)).not.toEqual([]);
+  });
+
   // Same PR (#3434), a later run: the scanner printed "4856/4856 source files have been analyzed"
   // AFTER the JsArchitectureSensor had already started, because those producers interleave. The
   // architecture pipeline itself was complete and correctly ordered. Where a line lands relative to
