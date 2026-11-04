@@ -26,7 +26,8 @@ const RULES_READ_TIMEOUT_MS = 10_000;
  * and operator presets (`review/policy/policy.ts`); absent is the default.
  */
 export interface ReviewRulesSettingsPort {
-  rulesPath(repositoryRoot: string): string | undefined;
+  /** `correlationId` is the run's; an invalid stored setting is reported under it. */
+  rulesPath(repositoryRoot: string, correlationId?: string): string | undefined;
 }
 
 export interface ReviewRulesReadInput {
