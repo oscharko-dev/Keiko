@@ -70,13 +70,11 @@ const GATE_STEPS = [
 // skipping all four and reporting a green required context that checked nothing.
 const GATE_GUARD = "!cancelled() && steps.checkout.outcome != 'failure'";
 
-// The exact trigger condition the standalone `zizmor` job carried before ADR-0159 consolidated it.
-// With that job gone this constant is the only record of the shape outside the workflow itself, and
-// that is the point: a dropped clause silently widens zizmor's surface, an added one silently
-// narrows it, and neither is visible in a green run.
+// Preserve ADR-0159's existing events and add only the accepted #3915 epic.
+// Every tool and failure guard remains pinned; no broad branch wildcard is admitted.
 const ZIZMOR_TRIGGER =
-  "(github.event_name == 'pull_request' && github.base_ref == 'dev') || " +
-  "(github.event_name == 'push' && github.ref == 'refs/heads/dev') || " +
+  "(github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'codex/epic-anti-slop-quality')) || " +
+  "(github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/codex/epic-anti-slop-quality')) || " +
   "github.event_name == 'merge_group'";
 
 // What each tool invocation IS, at the granularity that decides whether the check still checks the
@@ -138,11 +136,11 @@ describe("bundled workflow hygiene job", () => {
     }
   });
 
-  it("runs zizmor on exactly the events the standalone job ran it on", () => {
+  it("preserves zizmor events and adds only the accepted epic", () => {
     const bundled = jobBlock(hygiene, BUNDLED_JOB);
     // The guard composes with the trigger, it does not replace it: a job never skips because a
     // sibling job failed, so this is what makes a step behave like the independent job it came
-    // from. It can only narrow the guard, never widen the trigger.
+    // from. The exact accepted epic extends the trigger without changing that guard.
     expect(bundled).toContain(`if: \${{ ${GATE_GUARD} && (${ZIZMOR_TRIGGER}) }}\n`);
   });
 

@@ -870,7 +870,10 @@ describe("adoption when the configuration cannot be persisted", () => {
       "provider-overflow",
     );
     expect(stored(deps)?.contextWindow).toBe(16_384);
-    expect(holder.generation()).toBeGreaterThan(generation);
+    expect(stored(deps)?.contextWindowAssumed).not.toBe(true);
+    // ADR-0171 D3 (#4175): the fallback replaces the catalog over identical providers, which is a
+    // capability-only refinement, so it keeps the generation exactly like the refine path.
+    expect(holder.generation()).toBe(generation);
     expect(sink.events).toContainEqual(
       expect.objectContaining({
         op: "gateway.context-window.adoption",

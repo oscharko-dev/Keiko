@@ -1,0 +1,252 @@
+.cmpRoot {
+  position: relative;
+  flex: 0 0 auto;
+}
+.cmpTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--fg-muted);
+  background: transparent;
+  cursor: pointer;
+}
+.cmpTrigger:hover,
+.cmpTrigger[aria-expanded="true"] {
+  color: var(--fg);
+  background: var(--surface-accent-subtle);
+}
+.cmpTrigger:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmpCount {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-on-tint);
+}
+.cmpPanel {
+  position: fixed;
+  z-index: 100100;
+  box-sizing: border-box;
+  display: grid;
+  gap: 4px;
+  max-width: calc(100vw - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  color: var(--fg);
+  background: var(--surface-overlay);
+  box-shadow: 0 8px 30px #0003;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.cmpSection {
+  display: grid;
+  gap: 1px;
+}
+.cmpSection + .cmpSection {
+  padding-top: 4px;
+  border-top: 1px solid var(--border-default);
+}
+.cmpSectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px 2px;
+}
+.cmpSectionHead h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--fg-muted);
+}
+.cmpManage {
+  /* A text link with a full 24px touch target (WCAG 2.5.8). */
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin: 0 -6px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-control);
+  font: inherit;
+  font-size: 11px;
+  color: var(--accent-on-tint);
+  background: none;
+  cursor: pointer;
+}
+.cmpManage:hover {
+  text-decoration: underline;
+}
+.cmpManage:focus-visible,
+.cmpRow:focus-visible,
+.cmpMode:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.cmpRow {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto 28px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-control);
+  font: inherit;
+  text-align: start;
+  color: var(--fg);
+  background: transparent;
+  cursor: pointer;
+}
+.cmpRow:hover:not(:disabled) {
+  background: var(--menu-item-surface-hover);
+}
+.cmpRow:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.cmpDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-faint);
+}
+.cmpDot[data-tone="connected"] {
+  background: var(--feedback-success);
+}
+.cmpDot[data-tone="attention"] {
+  background: var(--feedback-warning);
+}
+.cmpLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmpHint {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.cmpSwitch {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--fg-muted) 45%, transparent);
+  transition: background 120ms ease;
+}
+.cmpSwitch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--card);
+  box-shadow: 0 1px 2px #0004;
+  transition: transform 120ms ease;
+}
+.cmpRow[aria-checked="true"] .cmpSwitch {
+  background: var(--accent);
+}
+.cmpRow[aria-checked="true"] .cmpSwitch::after {
+  transform: translateX(12px);
+}
+.cmpEmpty {
+  margin: 0;
+  padding: 4px 8px 8px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.cmpModes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+  margin: 2px 6px 6px;
+  padding: 2px;
+  border-radius: var(--radius-control);
+  background: var(--card);
+}
+.cmpMode {
+  min-height: 28px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-control);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--fg-muted);
+  background: transparent;
+  cursor: pointer;
+}
+.cmpMode[aria-checked="true"] {
+  color: var(--accent-on-tint);
+  background: var(--surface-accent-subtle);
+  font-weight: 600;
+}
+.cmpMode:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.cmpError {
+  margin: 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--feedback-danger);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmpSwitch,
+  .cmpSwitch::after {
+    transition: none;
+  }
+}
+/* Forced Colors drops backgrounds and shadows, so the switch states itself with system colors: an
+   outlined empty track with a text-colored knob at the start is off; a filled Highlight track with
+   a HighlightText knob at the end is on. The mode segments mark the selected one the same way. */
+@media (forced-colors: active) {
+  .cmpSwitch {
+    box-sizing: border-box;
+    border: 1px solid ButtonText;
+    background: Canvas;
+  }
+  .cmpSwitch::after {
+    top: 1px;
+    left: 1px;
+    background: ButtonText;
+    box-shadow: none;
+  }
+  .cmpRow[aria-checked="true"] .cmpSwitch {
+    border-color: Highlight;
+    background: Highlight;
+  }
+  .cmpRow[aria-checked="true"] .cmpSwitch::after {
+    background: HighlightText;
+  }
+  .cmpRow:disabled .cmpSwitch {
+    border-color: GrayText;
+  }
+  .cmpRow:disabled .cmpSwitch::after {
+    background: GrayText;
+  }
+  .cmpMode {
+    border: 1px solid transparent;
+  }
+  .cmpMode[aria-checked="true"] {
+    border-color: Highlight;
+    color: HighlightText;
+    background: Highlight;
+  }
+}

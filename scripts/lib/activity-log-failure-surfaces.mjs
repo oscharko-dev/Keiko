@@ -104,6 +104,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
       "support-report-evidence",
       "chat-activity",
       "chat-scope-update-log",
+      "chat-tool-turn-ending",
       "chat-compaction-model-summary",
       "diagnostics-log",
       "chat-context-log",
@@ -173,6 +174,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
     "memory-knowledge": [
       "grounded-citation-log",
       "knowledge-prompt-window",
+      "requirement-inventory-activity",
       "grounded-entailment-stage",
       "grounded-answer-activity",
       "grounded-orchestrator",

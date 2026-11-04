@@ -1,7 +1,11 @@
+import { mcpChatConfigurationDigest, selectedMcpServers } from "./mcpChatSelection.js";
 import { randomUUID } from "node:crypto";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
-import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/harness";
-import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { chatToolTurnBudget } from "../chat-tool-turn-budget.js";
+import {
+  CHAT_TOOL_DEFAULT_MODE,
+  resolveEffectiveCodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { MCP_CHAT_READ_DISCLOSURE_VERSION } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import type {
   ChatToolAuthorityEnvelope,
@@ -32,6 +36,7 @@ export type McpChatAuthorityDeps = Pick<
   | "agentAuthorityRegistry"
   | "autonomousDeliveryDeploymentCeiling"
   | "atlassianActionApprovalRegistry"
+  | "chatToolTurnBudget"
 >;
 export type McpChatAuthorityEnvelope = ChatToolAuthorityEnvelope & {
   readonly subject: McpChatToolAuthoritySubject;
@@ -56,18 +61,22 @@ function currentSubject(
     chat === undefined ||
     chat.status === "closed" ||
     actorDigest === undefined ||
-    settings?.servers.some(
-      (server) =>
-        server.enabled &&
-        (server.discovery === "automatic" || Object.keys(server.tools).length > 0),
-    ) !== true
+    settings === undefined ||
+    !selectedMcpServers(settings.servers, chat.mcpServers).some(
+      (server) => server.discovery === "automatic" || Object.keys(server.tools).length > 0,
+    )
   )
     return undefined;
-  return { kind: "configured-mcp", actorDigest, chatId, configurationDigest: settings.revision };
+  return {
+    kind: "configured-mcp",
+    actorDigest,
+    chatId,
+    configurationDigest: mcpChatConfigurationDigest(settings.revision, chat.mcpServers),
+  };
 }
 
-function validTurnLifetime(turn: AcceptedJiraChatTurn): boolean {
-  const deadline = turn.startedAtMs + DEFAULT_LIMITS.maxWallTimeMs;
+function validTurnLifetime(deps: McpChatAuthorityDeps, turn: AcceptedJiraChatTurn): boolean {
+  const deadline = turn.startedAtMs + chatToolTurnBudget(deps).maxRuntimeMs;
   return (
     Number.isSafeInteger(turn.startedAtMs) &&
     Number.isSafeInteger(turn.nowMs) &&
@@ -80,7 +89,7 @@ function validTurnLifetime(turn: AcceptedJiraChatTurn): boolean {
 function acceptedTurn(deps: McpChatAuthorityDeps, turn: AcceptedJiraChatTurn): boolean {
   const message = deps.store.findMessageById(turn.userMessageId);
   return (
-    validTurnLifetime(turn) &&
+    validTurnLifetime(deps, turn) &&
     message?.role === "user" &&
     message.chatId === turn.chatId &&
     message.timestamp === turn.startedAtMs &&
@@ -94,7 +103,7 @@ function envelopeFor(
   turn: AcceptedJiraChatTurn,
   subject: McpChatToolAuthoritySubject,
 ): McpChatAuthorityEnvelope {
-  const requestedMode = deps.store.findChatById(turn.chatId)?.toolMode ?? "governed-assist";
+  const requestedMode = deps.store.findChatById(turn.chatId)?.toolMode ?? CHAT_TOOL_DEFAULT_MODE;
   const deploymentCeiling = deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist";
   const runId = `chat-${sha256Hex(canonicalise({ chatId: turn.chatId, userMessageId: turn.userMessageId }))}`;
   return {
@@ -107,13 +116,8 @@ function envelopeFor(
     effectiveMode: resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling),
     actionClasses: ["connector-access", "network-egress"],
     connectorScopes: ["mcp.tools"],
-    budget: {
-      maxRuntimeMs: DEFAULT_LIMITS.maxWallTimeMs,
-      maxToolCalls: DEFAULT_LIMITS.maxToolCalls,
-      maxPromptTokens: 100_000,
-      maxPatchBytes: 0,
-    },
-    expiresAt: new Date(turn.startedAtMs + DEFAULT_LIMITS.maxWallTimeMs).toISOString(),
+    budget: chatToolTurnBudget(deps),
+    expiresAt: new Date(turn.startedAtMs + chatToolTurnBudget(deps).maxRuntimeMs).toISOString(),
     approvalProofDigest: sha256Hex(
       canonicalise({
         runId,
@@ -203,7 +207,7 @@ export function resolveCurrentMcpChatAuthority(
     );
   if (
     current.envelope.requestedMode !==
-    (deps.store.findChatById(chatId)?.toolMode ?? "governed-assist")
+    (deps.store.findChatById(chatId)?.toolMode ?? CHAT_TOOL_DEFAULT_MODE)
   )
     return recordChatAuthorityResult(
       "current-state",

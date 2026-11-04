@@ -1849,3 +1849,26 @@ it("admits MCP consent and write cards without accepting mixed identities or pri
   ])
     expect(write({ ...approval, ...patch })).toBe(false);
 });
+
+it("admits a running tool call as it starts and settles, and nothing else on that event", () => {
+  const call = { id: "call-1", name: "jira_search", arguments: { jql: "project = SYN" } };
+  const exchange = { call };
+  const frame = (data: unknown): unknown => ({ event: "tool-exchange", data });
+  for (const valid of [
+    exchange,
+    { call, result: { status: "completed" } },
+    { call, mutationOutcome: "unknown" },
+  ])
+    expect(isDesktopChatStreamEvent(frame({ messageId: "message-1", exchange: valid }))).toBe(true);
+  for (const hostile of [
+    frame({ exchange }),
+    frame({ messageId: "bad id", exchange }),
+    frame({ messageId: "message-1" }),
+    frame({ messageId: "message-1", exchange, credential: "private" }),
+    frame({ messageId: "message-1", exchange: { ...exchange, approval: {} } }),
+    frame({ messageId: "message-1", exchange: { call: { ...call, id: 1 } } }),
+    frame({ messageId: "message-1", exchange: { call, result: "completed" } }),
+    frame({ messageId: "message-1", exchange: { call, mutationOutcome: 1 } }),
+  ])
+    expect(isDesktopChatStreamEvent(hostile)).toBe(false);
+});

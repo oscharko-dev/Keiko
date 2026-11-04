@@ -203,12 +203,24 @@ lint would reject. "Tests pass" is **not** "the change is green." You must run `
 
 ```bash
 npm run typecheck        # builds packages, checks the package graph, then tsc --noEmit (strict)
-npm run lint             # eslint . --max-warnings=0  AND  the keiko-ui workspace lint
+npm run lint             # eslint --max-warnings=0 per package + root (scripts/lint-repository.mjs) AND keiko-ui lint
 npm run format:check     # prettier --check (CI runs this; format:check failing = red)
 npm test                 # build:packages then vitest run
 npm run arch:check       # dependency-cruiser + import-policy + contract-boundaries
 npm run arch:check:negative
+npm run check:code-quality-policy -- --mode ratchet   # anti-slop ratchet, ~30 s; required in `ci`
 ```
+
+The ratchet fails on any new code-quality finding and on any register entry left larger than the
+code; after removing findings, run `npm run check:code-quality-policy -- --prune-register` and
+commit the smaller `scripts/code-quality-register.json`. The register may only shrink; never add
+an entry or raise a count, and inline `oxlint-disable` directives are rejected
+([`docs/qa/code-quality-policy.md`](docs/qa/code-quality-policy.md), ADR-0167 D6). The one
+exception is an owner-approved raise for a qualified boundary, a boundary awaiting its reviewed
+migration, a test witness or a proof fixture. The change then adds an entry to
+`scripts/code-quality-register-increases.json` that names the exact path, rule, old and new count,
+reason and issue. CI compares the register with the pull request's base and checks that every raised
+count has such an entry. Never add one for ordinary code.
 
 There is a convenience aggregate that chains the core of the above:
 
@@ -294,6 +306,7 @@ evidence.
 | Any file under `.github/workflows/`                             | **`npm run list:workflow-consumers` FIRST** — it names every gate and suite that reads that workflow, so the coupling is a list you work through instead of a series of red CI runs (~33 consumers for `ci.yml`). Then `npm run check:zizmor-anchors` — `.github/zizmor.yml` ignores are LINE numbers, so inserting a line anywhere above one silently drops a reviewed risk acceptance and turns the required `workflow hygiene` context red on an unrelated diff; `npm run check:zizmor-anchors -- --fix` re-pins anchors that only shifted, pairing them with their steps BY ORDER (nearest-line would hand two anchors the same step). A job's `if:` also reaches `check:e2e-suite-wiring`, which reads an unknown term as "does not run" |
 | A dependency version or a pinned GitHub Action                  | `npm run check:dependency-currency` — the closeout document records the reviewed disposition, and this gate fails when it stops describing the lockfile or the workflow pins                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Package versions / release metadata                             | `check:version-consistency`, `check:release-impact`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Code that adds, removes or moves code-quality findings          | `npm run check:code-quality-policy -- --mode ratchet`, then `-- --prune-register` when findings went down; commit the shrunken `scripts/code-quality-register.json`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Coverage-sensitive code                                         | `npm run test:coverage:quality`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | **Any code at all, before every pull request**                  | **`npm run gates:sonar`** — the only local run that sees the SonarJS rules `eslint-plugin-sonarjs` does not ship ([`docs/qa/local-sonar.md`](docs/qa/local-sonar.md))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
@@ -872,7 +885,7 @@ system that exists, never beside it:
   Prompt fitting retains separate model and remaining caller input caps. Mandatory overhead that
   fits the model but exceeds the caller allowance uses the caller refusal; overhead that exceeds
   the model retains context-overflow handling. Best-effort citation repair keeps the completed
-  answer when its remaining input allowance cannot fund the repair.
+  answer when its remaining input allowance or synthesis attempt slots cannot fund the repair.
   Final grounded publication reuses `chat.response.message` after governed memory attachment. Its
   optional `uncitedMemoryContextMarkerCount` counts the final structured marker, and
   `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity
@@ -1127,7 +1140,9 @@ text or paths.
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
 and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal
-responses cannot establish that continuation. Refusals distinguish model or
+responses cannot establish that continuation. A turn call whose admission merely expired is checked
+once more like a new request and proceeds only on a fresh positive observation (a second admission
+line records that decision). Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
@@ -1265,7 +1280,8 @@ from them, never a heuristic secret shape; every other tool's arguments keep the
 `gateway.tool-arguments.redacted` records the tool-call and changed-string counts at `warn`.
 A model answer that exhausted its output budget, or ended after reasoning, without a tool call or a
 final answer gets one steered repair from the gateway on a call that asks for it with the explicit
-`answerRepair: "steered"` (the coding sidecar route alone; #3873, F17, F23), and the log records it
+`answerRepair: "steered"` (the coding sidecar route and every round of a Chat tool turn; #3873, F17,
+F23, S09 of epic #4173), and the log records it
 in closed words only: `gateway.retry.scheduled` names it with `reason=output-exhausted-repair` or
 `reason=empty-answer-repair` (`retryable-error` on every ordinary retry), and
 `coding-sidecar.gateway.outcome` and `coding-sidecar.gateway.turn-failed` record `repairAttempted`

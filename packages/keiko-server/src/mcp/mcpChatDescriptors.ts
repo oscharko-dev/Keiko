@@ -9,6 +9,7 @@ import {
   createToolRef,
 } from "@oscharko-dev/keiko-tool-catalog";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "../atlassian/actionApprovalLimits.js";
 import type { McpChatCatalogTool } from "./mcpChatCatalogConsumer.js";
 
 export type McpChatDeclaration = ManagedMcpToolDeclaration & McpChatCatalogTool;
@@ -46,7 +47,8 @@ export function mcpChatDeclaration(
         maxArgumentBytes: 65536,
         maxResultBytes: 262144,
         maxResultCount: 1,
-        maxDurationMs: 60000,
+        // A write waits in place for the human's decision on top of its own work (ADR-0175).
+        maxDurationMs: risk === "read" ? 60000 : 60000 + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
       },
       idempotency: "server-key-required",
       cancellation: "before-effect",

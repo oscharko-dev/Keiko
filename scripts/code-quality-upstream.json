@@ -1,0 +1,263 @@
+{
+  "commit": "c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b",
+  "version": "0.1.2",
+  "license": "MIT",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "10ed33bf340d6d63dc0633dfc917a346b369b6aa41fe20734aefc6a3fb75ba17"
+    },
+    {
+      "path": "package.json",
+      "sha256": "054f8063cfb47b607fb4793baef1b1c54f557f9491738786c022a4ea551b5800"
+    },
+    {
+      "path": "src/effect/index.ts",
+      "sha256": "da7851d2c89a66b31ece6a36e88a78065d12dff6f92676d119981574bcd3669f"
+    },
+    {
+      "path": "src/effect/rules/no-manual-effect-error-tag.test.ts",
+      "sha256": "a525479b447dd298de6eb9ec8c6ef3cd5dd83fb0085940aca4fd703c97b10e95"
+    },
+    {
+      "path": "src/effect/rules/no-manual-effect-error-tag.ts",
+      "sha256": "41434abb14bdb73760a2dfa4121b9e037f3ca741b0530c4f04d36f3a9e1041fd"
+    },
+    {
+      "path": "src/effect/rules/no-manual-tag-comparison.test.ts",
+      "sha256": "9508049fa5f07a7e6b2e21f08514f2089e49339382d5f32c38cf6b417a76ecc5"
+    },
+    {
+      "path": "src/effect/rules/no-manual-tag-comparison.ts",
+      "sha256": "f1e7c36b878f872b3cd4482e751bede505aafc21dabf93353a16e1c305bdb0bb"
+    },
+    {
+      "path": "src/effect/rules/no-manual-tagged-construction.test.ts",
+      "sha256": "e189b89fc7e18ac74b4070b3852aaffeb2749d6bfb1a45b9c81f0fc6e7899bc7"
+    },
+    {
+      "path": "src/effect/rules/no-manual-tagged-construction.ts",
+      "sha256": "fc264fcbd8b2809f458ac11fd33f242ccc9cfbc4b605cee85ce490c9dd1d8f44"
+    },
+    {
+      "path": "src/effect/rules/no-service-constructor-imports.test.ts",
+      "sha256": "d9f70f735154695d75b81c995884d0fed52bc3ea2c4ab6b947598cf91c9ea918"
+    },
+    {
+      "path": "src/effect/rules/no-service-constructor-imports.ts",
+      "sha256": "c397d1132329fbe82213dda80059c86acb99f0fe243e59615f615a86069c6fb1"
+    },
+    {
+      "path": "src/effect/rules/prefer-effect-match.test.ts",
+      "sha256": "bb6fbc34a2ee094d196555af6150d5f65c9b8b498f0c1d89edfbe631d9a58f97"
+    },
+    {
+      "path": "src/effect/rules/prefer-effect-match.ts",
+      "sha256": "94309ecd136d12b6b5424fccb6fde222adb1c2c278fb8f198c4c115febbfa69c"
+    },
+    {
+      "path": "src/effect/shared/tagged-values.ts",
+      "sha256": "91e65bc7ebba81eda53c049fb3a07e03982a20476546cb9b4f3cbe2e66297d1c"
+    },
+    {
+      "path": "src/index.ts",
+      "sha256": "9deed4cb455b9a6251001dc3a525d5b5e2c6ef989dd1c01e804c2edf0a697415"
+    },
+    {
+      "path": "src/rules/no-array-filter-map.test.ts",
+      "sha256": "0c35d1511fb023632033db1810fb16e7e44cded2fe97f557f6e922ea54cf0629"
+    },
+    {
+      "path": "src/rules/no-array-filter-map.ts",
+      "sha256": "528bba857b84712c038e35e59079cc1e6c78a0421c65bb3c6117c9d412a2f28a"
+    },
+    {
+      "path": "src/rules/no-chained-type-assertions.test.ts",
+      "sha256": "53d18a7bde98b2d9c093cce3f4fc45b10b385cf5723202ed6a32ba877cc928bf"
+    },
+    {
+      "path": "src/rules/no-chained-type-assertions.ts",
+      "sha256": "72f8e981520f94adac0ffbdab8f8e84e5f2a4595f14e4a6471be917a85a20a15"
+    },
+    {
+      "path": "src/rules/no-conditional-empty-object-spread.test.ts",
+      "sha256": "90a9ef53dc175e8d0dc2e2cdf82d3d5b99fd01a60cc0092f5d16b7ebe941fe28"
+    },
+    {
+      "path": "src/rules/no-conditional-empty-object-spread.ts",
+      "sha256": "33f044030d208fcc10be73bb19c8172c275c5229df4b0ca8ec10f069bbe60062"
+    },
+    {
+      "path": "src/rules/no-known-value-widening.test.ts",
+      "sha256": "f5efe3d7c08e90f81683e7b74091c335c9f8453c61c31aa0cfa7aede5ed2b7af"
+    },
+    {
+      "path": "src/rules/no-known-value-widening.ts",
+      "sha256": "321944d20912acc93f65f4b84075916202adfda6b8eaa839d96f0d8b8ec1463b"
+    },
+    {
+      "path": "src/rules/no-module-mocking.test.ts",
+      "sha256": "060aefb314e17ffb371046e6fe162d38d9cb35a055645d0c42deceb0379e9250"
+    },
+    {
+      "path": "src/rules/no-module-mocking.ts",
+      "sha256": "e29ba7d9ba4a5aed971002840bf434beef93393f60a589e55b72c203dde4c8db"
+    },
+    {
+      "path": "src/rules/no-object-parameters.test.ts",
+      "sha256": "a8cc610dc2be00c8b00e99c69005c3be7ff0bd248a5d9793d88c4feab2c0e0d5"
+    },
+    {
+      "path": "src/rules/no-object-parameters.ts",
+      "sha256": "2056e99dcb228604d9b2534952045e8ebf9f90af54add67d07a1211657d32941"
+    },
+    {
+      "path": "src/rules/no-reduce-accumulator-copy.test.ts",
+      "sha256": "5570fe8512bb71dbd5b446454297ec9e234fb1cb06ded87590593a37c4cccccf"
+    },
+    {
+      "path": "src/rules/no-reduce-accumulator-copy.ts",
+      "sha256": "dce4b08ee7ac4bbedfe743f6fa4a3d423cde50b37691130b899cc4573c05d2ae"
+    },
+    {
+      "path": "src/rules/no-reflect-apply.test.ts",
+      "sha256": "33a3f9860703103c28209087afb86eb1a5039cd31187bfb41281c91d94532fe8"
+    },
+    {
+      "path": "src/rules/no-reflect-apply.ts",
+      "sha256": "f7920a332106252d6a24cdc917a2c1a433eb438792996ccceb5a25cd6e591dbb"
+    },
+    {
+      "path": "src/rules/no-reflect-get.test.ts",
+      "sha256": "8b56643be6604702d546c017ca4a010c26dc04c27f92cf4363398cc3e8bbb9f7"
+    },
+    {
+      "path": "src/rules/no-reflect-get.ts",
+      "sha256": "95c5aa0f8e23b10d9345b1776082e08704ec6590298176a8ede8dfdb6e7cb56f"
+    },
+    {
+      "path": "src/rules/no-runtime-typeof.test.ts",
+      "sha256": "5f74cbf5b61746001a69bb0fcefd54e61b42e5ce50afe5619397e2f16f3f636e"
+    },
+    {
+      "path": "src/rules/no-runtime-typeof.ts",
+      "sha256": "c3ff29662f9f5a0cbad527b200aadd486cbe63ee0d9bbf10c409ce9c39ec678c"
+    },
+    {
+      "path": "src/rules/no-shape-in-symbol-names.test.ts",
+      "sha256": "08caeb868927ca7f748209ab8db5226594e9cc662f312d4640917d8480fc6d22"
+    },
+    {
+      "path": "src/rules/no-shape-in-symbol-names.ts",
+      "sha256": "4e5edcb5ed083de77970a2e4f64e4b2090ba6c4588e9fc6bcb1f01900ae905b7"
+    },
+    {
+      "path": "src/rules/no-unknown-parameters.test.ts",
+      "sha256": "6d6b7bdc9531792ca08092969aa79f205a315f3d94609fa01b0d782d8cf66ffe"
+    },
+    {
+      "path": "src/rules/no-unknown-parameters.ts",
+      "sha256": "81df45f83b1bca1bbf0bbc36e9211e10cad1aa2bb0ab604840ed9f1b94eaa2e5"
+    },
+    {
+      "path": "src/rules/no-unknown-returns.test.ts",
+      "sha256": "ce7b53e8c77d29aed36ce373ea15559a1bccccfd87a692a84823b6eff4c5c8e5"
+    },
+    {
+      "path": "src/rules/no-unknown-returns.ts",
+      "sha256": "67f3ac72d9f98ce29426e70be1e0c359599d94b5799f1130b7ec4cc34129f26b"
+    },
+    {
+      "path": "src/rules/no-unknown-type-aliases.test.ts",
+      "sha256": "71a423652a1cac4b01540f091698b93ebfb61ac9f3496f8c67fc90f24f764e14"
+    },
+    {
+      "path": "src/rules/no-unknown-type-aliases.ts",
+      "sha256": "e34000ccdd5c496fadb1418e29b44a1df970ebc9075e89ef2412f7029ec4c15b"
+    },
+    {
+      "path": "src/rules/no-unsafe-dictionary-type.test.ts",
+      "sha256": "daa8de751069d2c9d8b8cd6463d43fab8ea0af97426fa7f4ed3a3d0ba5443eb8"
+    },
+    {
+      "path": "src/rules/no-unsafe-dictionary-type.ts",
+      "sha256": "6ff0b3aafe00bc42300080c514ddbee54a45508d5781cab2fb78156a19756a71"
+    },
+    {
+      "path": "src/rules/no-widen-then-assert.test.ts",
+      "sha256": "02de3e9fffc63e32a742420e9e614a6808f68fdf7f76828474107b4d90033bc5"
+    },
+    {
+      "path": "src/rules/no-widen-then-assert.ts",
+      "sha256": "63f2c07cc42b8ad60a7e868efbd7b29e462b9ba960fbd07bbc8f590ef9e3f879"
+    },
+    {
+      "path": "src/rules/require-readable-spacing-cli.test.ts",
+      "sha256": "629bc6b4ae80485d2ddcf2d2b055c91e57af51f957bb0aaae9a14dbf484abdae"
+    },
+    {
+      "path": "src/rules/require-readable-spacing.test.ts",
+      "sha256": "f96bb783057b23be40d0809bbe565329b2404a49f4d0918e1fbe3746d080039d"
+    },
+    {
+      "path": "src/rules/require-readable-spacing.ts",
+      "sha256": "e63084ad77e215ad25e963c452d8ee819fb1cac3aefe3401e169985a145ac4bc"
+    },
+    {
+      "path": "src/rules/require-safety-comment-for-type-assertion.test.ts",
+      "sha256": "a5af1dd8116a4ebe2b4b283d2294b658c3d2a31acc847d48375dd55654a4269e"
+    },
+    {
+      "path": "src/rules/require-safety-comment-for-type-assertion.ts",
+      "sha256": "c8ed9f50f1c6e3592b77165dd8847d187ee9b0ef955d50f8099498d3139aa27c"
+    },
+    {
+      "path": "src/shared/array-method.ts",
+      "sha256": "e360557253c56ab7c256623f3338415743e5027e9d999f801fb79d98240d217b"
+    },
+    {
+      "path": "src/shared/dictionary-types.ts",
+      "sha256": "0f319a2d2cb34c7b3902fb78301c91e1a750bd663c754e73d669f31dc5026525"
+    },
+    {
+      "path": "src/shared/function-parameters.ts",
+      "sha256": "ad80a650ea14847736ab9ee4c872dc89cc7d527bf60e7de20112bcb8f679545c"
+    },
+    {
+      "path": "src/shared/lexical-type-parameters.ts",
+      "sha256": "1ae0aa3ec245f1dc43c4bbbd8be1e2e4230e5dc389d1ca4e8de8f51b62ceff29"
+    },
+    {
+      "path": "src/shared/reflect-method.ts",
+      "sha256": "d1b7bd13ca714bf20bec15e835ed0526316b7274e06bd9a582cf623c09ac1d40"
+    },
+    {
+      "path": "src/shared/scope.ts",
+      "sha256": "e38d41eeada854dbd02285e84e065d10e69460695e06e53fbe8662c963ae7eb4"
+    },
+    {
+      "path": "src/shared/type-alias-resolution.ts",
+      "sha256": "5520e97b177f0093af2943808ac63cef0f6c03fedd197a36137c66209d78a8e0"
+    },
+    {
+      "path": "src/vendor/eslint-stylistic/LICENSE",
+      "sha256": "a429d52d537b871facb01c086191ec8a56a22bf1a10f4e641daff114bccc4a74"
+    },
+    {
+      "path": "src/vendor/eslint-stylistic/UPSTREAM.md",
+      "sha256": "7080b0f37202f02f44630e7e13182643561a998b328e8044efe89d3f7d6fca74"
+    },
+    {
+      "path": "src/vendor/eslint-stylistic/padding-line-ast.ts",
+      "sha256": "ae3624502620452022691c89a30ed95d669dc961a5802dbe27c44e45a647c3d0"
+    },
+    {
+      "path": "src/vendor/eslint-stylistic/padding-line-between-statements.ts",
+      "sha256": "6974d23a3d2769bfcd5211f1c1fb29c966be122dd37e764c2cf84c5f639a380d"
+    },
+    {
+      "path": "src/vendor/eslint-stylistic/padding-line-options.d.ts",
+      "sha256": "ff3d52f2b1c103bc429e030976641715caec676af4b8a0be802c0009874a0d58"
+    }
+  ]
+}
