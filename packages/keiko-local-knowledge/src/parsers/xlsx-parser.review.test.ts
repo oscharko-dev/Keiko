@@ -95,3 +95,80 @@ describe("elements written with a namespace prefix", () => {
     expect(parsed.text).toBe("S!2: ID=FR-1 | Column C=Login\n");
   });
 });
+
+describe("the shared package controls", () => {
+  const WORKBOOK = prefixedWorkbook("x");
+  const options = (
+    overrides: Parameters<typeof buildParserOptions>[0],
+  ): ReturnType<typeof buildParserOptions> => buildParserOptions({ now: () => 0, ...overrides });
+  const read = async (
+    entries: readonly { readonly name: string; readonly content: string }[],
+    overrides: Parameters<typeof buildParserOptions>[0] = {},
+  ): Promise<{ readonly text: string; readonly codes: readonly string[] }> => {
+    const result = await xlsxParser.parseAsync(
+      selectionFromBytes(zipTextEntries(entries), { extension: "xlsx" }),
+      options(overrides),
+    );
+    return {
+      text: "normalizedText" in result ? (result.normalizedText as string) : "",
+      codes: result.diagnostics.map((entry) => entry.code),
+    };
+  };
+
+  it("reads the workbook when nothing stops it", async () => {
+    const { text, codes } = await read(WORKBOOK);
+    expect(text).toContain("FR-1");
+    expect(codes).toEqual([]);
+  });
+
+  it("refuses a package that lists a sheet twice", async () => {
+    const sheet = WORKBOOK.find((entry) => entry.name.includes("worksheets"));
+    if (sheet === undefined) throw new Error("the fixture has a sheet");
+    const { text, codes } = await read([...WORKBOOK, { ...sheet, content: `${sheet.content} ` }]);
+    expect(codes).toEqual(["MALFORMED_INPUT"]);
+    expect(text).toBe("");
+  });
+
+  it("charges the zip scan and the sheets against one deadline", async () => {
+    const clock = [0, 100];
+    const { text, codes } = await read(WORKBOOK, {
+      now: () => clock.shift() ?? 100,
+      timeoutMs: 10,
+    });
+    expect(codes).toEqual(["PARSER_TIMEOUT"]);
+    expect(text).toBe("");
+  });
+
+  it("reports the deadline when it runs out behind the zip scan", async () => {
+    let asked = 0;
+    const now = (): number => {
+      asked += 1;
+      return asked <= WORKBOOK.length + 2 ? 0 : 100;
+    };
+    const { text, codes } = await read(WORKBOOK, { now, timeoutMs: 10 });
+    expect(codes).toEqual(["PARSER_TIMEOUT"]);
+    expect(text).toBe("");
+  });
+
+  it("stops when the caller aborts during the zip scan", async () => {
+    const controller = new AbortController();
+    let asked = 0;
+    const now = (): number => {
+      asked += 1;
+      if (asked === 2) controller.abort();
+      return 0;
+    };
+    const { codes } = await read(WORKBOOK, { now, signal: controller.signal });
+    expect(codes).toEqual(["PARSER_CANCELLED"]);
+  });
+
+  it("gives up on a package of many irrelevant entries", async () => {
+    const filler = Array.from({ length: 16_400 }, (_, index) => ({
+      name: `docProps/filler${String(index)}.txt`,
+      content: "",
+    }));
+    const { text, codes } = await read([...filler, ...WORKBOOK]);
+    expect(codes).toEqual(["PARSER_TIMEOUT"]);
+    expect(text).toBe("");
+  });
+});

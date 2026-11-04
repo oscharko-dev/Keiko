@@ -544,9 +544,9 @@ export const codeParser: ParserAdapter = Object.freeze({
     matches: (input: ParserSelectionInput): boolean => codeLanguage(input) !== undefined,
   }),
   parse: (input: ParserSelectionInput, options: ParserOptions) => {
+    const startedAt = options.now();
     const refusal = textInputRefusal(codeParser.capability, input, options);
     if (refusal !== undefined) return refusal;
-    const startedAt = options.now();
     const decoded = decodeUtf8(input.bytes);
     const encoding = encodingDiagnostic(decoded, input.documentId);
     const language = codeLanguage(input) ?? "code";

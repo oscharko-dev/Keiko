@@ -241,11 +241,18 @@ describe("the deadline and the cancellation", () => {
   });
 
   it("charges the time spent before the first record against the document", () => {
-    const clock = [0, 100];
-    const now = (): number => clock.shift() ?? 100;
-    const { codes, units } = parseRaw('[{"x":1}]', { now, timeoutMs: 10 });
-    expect(codes).toEqual(["PARSER_TIMEOUT"]);
-    expect(units).toBe(0);
+    let time = 0;
+    const selection = selectionFromText('[{"x":1}]', { extension: "json" });
+    const input = {
+      ...selection,
+      get bytes(): Uint8Array {
+        time = 100;
+        return selection.bytes;
+      },
+    };
+    const result = jsonParser.parse(input, buildParserOptions({ now: () => time, timeoutMs: 10 }));
+    expect(result.diagnostics.map((entry) => entry.code)).toEqual(["PARSER_TIMEOUT"]);
+    expect(result.units).toEqual([]);
   });
 
   it("does not stop a healthy document", () => {

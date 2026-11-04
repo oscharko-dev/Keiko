@@ -18,6 +18,9 @@ import {
   textCell,
   textPara,
 } from "./docx-test-fixtures.js";
+import { docxParser } from "./docx-parser.js";
+import { selectionFromBytes, zipTextEntries } from "./parser-test-fixtures.js";
+import { buildParserOptions } from "./registry.js";
 
 describe("docx table header evidence", () => {
   it("does not take the first row of a key-value table for a header", async () => {
@@ -163,5 +166,20 @@ describe("docx lists inside table cells", () => {
     );
     expect(lines.join("\n")).toContain("Column 1=1. innen");
     expect(lines.at(-1)).toBe("2. außen");
+  });
+});
+
+describe("a package that lists the document twice", () => {
+  it("is refused instead of guessing which one is meant", async () => {
+    const twice = zipTextEntries([
+      { name: "word/document.xml", content: documentXml(textPara("Eins")) },
+      { name: "word/document.xml", content: documentXml(textPara("Zwei")) },
+    ]);
+    const result = await docxParser.parseAsync(
+      selectionFromBytes(twice, { extension: "docx" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    expect(result.diagnostics.map((entry) => entry.code)).toEqual(["MALFORMED_INPUT"]);
+    expect(result.units).toEqual([]);
   });
 });

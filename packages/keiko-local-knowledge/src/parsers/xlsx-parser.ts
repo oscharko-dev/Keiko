@@ -12,6 +12,7 @@ import {
   shouldStop,
 } from "./_internal.js";
 import {
+  classifyOoxmlZipError,
   ooxmlEntryInflatedLimit,
   readOoxmlZipEntries,
   type OoxmlZipReadPlan,
@@ -41,6 +42,7 @@ const DEPENDENCY_VERSIONS = Object.freeze([
 const XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const MAX_XML_INFLATED_BYTES = 32 * 1024 * 1024;
 const MAX_TOTAL_INFLATED_BYTES = 256 * 1024 * 1024;
+const MAX_XLSX_ZIP_ENTRIES = 16_384;
 const SHEET_ENTRY_PREFIX = "xl/worksheets/";
 const XLSX_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS);
 
@@ -83,6 +85,8 @@ interface CellContext {
   readonly sharedStrings: readonly string[];
   readonly styles: XlsxStyles;
   readonly date1904: boolean;
+  /** The deadline and the cancellation, asked between the rows of a sheet. */
+  readonly interrupted?: () => boolean;
 }
 
 interface SheetReadResult {
@@ -140,12 +144,11 @@ function xlsxZipPlan(options: ParserOptions): OoxmlZipReadPlan {
   return {
     format: "xlsx",
     isWanted: isRelevantEntry,
+    maxEntries: MAX_XLSX_ZIP_ENTRIES,
     maxEntryInflatedBytes: ooxmlEntryInflatedLimit(options.maxBytes, MAX_XML_INFLATED_BYTES),
     // Every wanted part is held as text; without a ceiling on all of them a workbook of many sheets
     // each just under the ceiling of one part is read into memory in full.
     maxTotalInflatedBytes: ooxmlEntryInflatedLimit(options.maxBytes, MAX_TOTAL_INFLATED_BYTES),
-    scanBudget: "none",
-    duplicateParts: "replace",
   };
 }
 
@@ -189,8 +192,9 @@ function withoutSpreadsheetPrefix(xml: string): string {
 async function readRelevantEntries(
   bytes: Uint8Array,
   options: ParserOptions,
+  startedAt: number,
 ): Promise<readonly XlsxEntry[]> {
-  const parts = await readOoxmlZipEntries(bytes, options, options.now(), xlsxZipPlan(options));
+  const parts = await readOoxmlZipEntries(bytes, options, startedAt, xlsxZipPlan(options));
   return [...parts].map(([name, xml]) => ({ name, xml: withoutSpreadsheetPrefix(xml) }));
 }
 
@@ -452,13 +456,13 @@ export function parseSharedStrings(
   xml: string,
   input: ParserSelectionInput,
   options: ParserOptions,
+  startedAt = options.now(),
 ): {
   readonly strings: readonly string[];
   readonly diagnostics: readonly ParserDiagnostic[];
 } {
   const strings: string[] = [];
   const diagnostics: ParserDiagnostic[] = [];
-  const startedAt = options.now();
   for (const itemXml of iterateXmlElements(xml, "si")) {
     // The table is a lookup, not a unit: cells address it by index, so cutting it at the unit limit
     // blanks every later cell. Only the deadline and the caller's abort stop it, and the object
@@ -736,11 +740,14 @@ function readRowCells(rowXml: string, context: CellContext): RowRead {
   return { cells, uncachedFormulaCount };
 }
 
+const ROWS_PER_INTERRUPTION_CHECK = 1024;
+
 function readSheet(sheetName: string, xml: string, context: CellContext): SheetReadResult {
   const rows: MutableRow[] = [];
   let fallbackRow = 1;
   let uncachedFormulaCount = 0;
   for (const rowXml of iterateXmlElements(xml, "row")) {
+    if (rows.length % ROWS_PER_INTERRUPTION_CHECK === 0 && context.interrupted?.() === true) break;
     const rowTag = leadingTag(rowXml);
     const number = rowNumber(rowTag, fallbackRow);
     fallbackRow = number + 1;
@@ -861,13 +868,14 @@ function parseWorkbook(
   entries: readonly XlsxEntry[],
   input: ParserSelectionInput,
   options: ParserOptions,
+  startedAt: number,
 ): InternalParserResult {
   const byName = new Map(entries.map((entry) => [entry.name, entry.xml] as const));
   const shared = byName.get("xl/sharedStrings.xml");
   const sharedResult =
     shared === undefined
       ? { strings: [], diagnostics: [] }
-      : parseSharedStrings(shared, input, options);
+      : parseSharedStrings(shared, input, options, startedAt);
   if (sharedResult.diagnostics.some((entry) => entry.severity === "error")) {
     return emptyResult(xlsxParser.capability, input.documentId, options, sharedResult.diagnostics);
   }
@@ -880,6 +888,7 @@ function parseWorkbook(
     sharedStrings: sharedResult.strings,
     styles: parseStyles(byName.get("xl/styles.xml")),
     date1904: workbook.date1904,
+    interrupted: () => shouldStop(startedAt, options, 0).stop,
   };
   const read = readWorkbookSheets(workbook, byName, context, options.maxObjectsPerDocument);
   if (read === undefined) {
@@ -887,7 +896,7 @@ function parseWorkbook(
       objectLimitDiagnostic(input.documentId, options.maxObjectsPerDocument),
     ]);
   }
-  const emitted = emitProjectedLines(read.lines, input, options);
+  const emitted = emitProjectedLines(read.lines, input, options, startedAt);
   return {
     ...emptyResult(
       xlsxParser.capability,
@@ -902,6 +911,23 @@ function parseWorkbook(
     ),
     normalizedText: emitted.normalizedText,
   };
+}
+
+// A stopped scan keeps the code of the shared deadline outcome; everything else is the workbook.
+function workbookFailureDiagnostic(error: unknown, input: ParserSelectionInput): ParserDiagnostic {
+  const failure = classifyOoxmlZipError(error);
+  if (failure === "cancelled") {
+    return diagnostic("PARSER_CANCELLED", "caller aborted parser", input.documentId, "info");
+  }
+  if (failure === "budget") {
+    return diagnostic("PARSER_TIMEOUT", "xlsx zip scan exceeded budget", input.documentId, "info");
+  }
+  return diagnostic(
+    "MALFORMED_INPUT",
+    "xlsx parser rejected malformed or unsupported workbook",
+    input.documentId,
+    "error",
+  );
 }
 
 export const xlsxParser: AsyncParserAdapter = Object.freeze({
@@ -928,17 +954,13 @@ export const xlsxParser: AsyncParserAdapter = Object.freeze({
     }
     const encrypted = encryptedOoxmlRefusal(xlsxParser.capability, input, options, "xlsx");
     if (encrypted !== undefined) return encrypted;
+    const startedAt = options.now();
     try {
-      const entries = await readRelevantEntries(input.bytes, options);
-      return parseWorkbook(entries, input, options);
-    } catch {
+      const entries = await readRelevantEntries(input.bytes, options, startedAt);
+      return parseWorkbook(entries, input, options, startedAt);
+    } catch (error) {
       return emptyResult(xlsxParser.capability, input.documentId, options, [
-        diagnostic(
-          "MALFORMED_INPUT",
-          "xlsx parser rejected malformed or unsupported workbook",
-          input.documentId,
-          "error",
-        ),
+        workbookFailureDiagnostic(error, input),
       ]);
     }
   },

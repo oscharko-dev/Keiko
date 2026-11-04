@@ -98,3 +98,65 @@ describe("a file with far more records than the unit limit", () => {
     expect(parsed.lines).toEqual(["csv!4: ID=FR-1 | Titel=Login"]);
   });
 });
+
+describe("one deadline from the first byte to the last line", () => {
+  const rows = (count: number): string =>
+    `ID,Titel\n${Array.from({ length: count }, (_, index) => `FR-${String(index)},x`).join("\n")}\n`;
+  const read = (
+    text: string,
+    overrides: Parameters<typeof buildParserOptions>[0],
+  ): ReturnType<typeof csvParser.parse> =>
+    csvParser.parse(selectionFromText(text, { extension: "csv" }), buildParserOptions(overrides));
+
+  // The clock moves when the bytes are read: time spent before the first line is spent.
+  const readingBytesTakes = (
+    elapsed: number,
+  ): {
+    readonly input: ReturnType<typeof selectionFromText>;
+    readonly now: () => number;
+  } => {
+    let time = 0;
+    const selection = selectionFromText(rows(1), { extension: "csv" });
+    const input = {
+      ...selection,
+      get bytes(): Uint8Array {
+        time = elapsed;
+        return selection.bytes;
+      },
+    };
+    return { input, now: () => time };
+  };
+
+  it("charges the time spent before the first line against the document", () => {
+    const { input, now } = readingBytesTakes(100);
+    const result = csvParser.parse(input, buildParserOptions({ now, timeoutMs: 10 }));
+    expect(result.diagnostics.map((entry) => entry.code)).toEqual(["PARSER_TIMEOUT"]);
+    expect(result.units).toEqual([]);
+  });
+
+  it("reports the deadline, not a unit limit, when it ends the scan", () => {
+    const clock = [0, 100];
+    const result = read(rows(5000), { now: () => clock.shift() ?? 100, timeoutMs: 10 });
+    expect(result.diagnostics.map((entry) => entry.code)).toEqual(["PARSER_TIMEOUT"]);
+  });
+
+  it("stops scanning when the caller aborts during preparation", () => {
+    const controller = new AbortController();
+    let asked = 0;
+    const now = (): number => {
+      asked += 1;
+      if (asked === 2) controller.abort();
+      return 0;
+    };
+    const result = read(rows(5000), { now, signal: controller.signal });
+    expect(result.diagnostics.map((entry) => entry.code)).toEqual(["PARSER_CANCELLED"]);
+    expect(result.units).toEqual([]);
+  });
+
+  it("does not stop a healthy document", () => {
+    let tick = 0;
+    const result = read(rows(5000), { now: () => (tick += 1), timeoutMs: 1_000_000 });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.units).toHaveLength(5000);
+  });
+});

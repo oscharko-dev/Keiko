@@ -284,21 +284,37 @@ export interface EmittedLines {
   readonly normalizedText: string;
 }
 
-/** One `csv-row` unit per projected line; `rowIndex` is the 0-based source row for every format. */
+function limitDiagnostic(
+  startedAt: number,
+  options: ParserOptions,
+  unitCount: number,
+  input: ParserSelectionInput,
+): ParserDiagnostic | undefined {
+  const limit = shouldStop(startedAt, options, unitCount);
+  return limit.stop && limit.code !== undefined && limit.message !== undefined
+    ? diagnostic(limit.code, limit.message, input.documentId, "info")
+    : undefined;
+}
+
+/**
+ * One `csv-row` unit per projected line; `rowIndex` is the 0-based source row for every format.
+ * `startedAt` is when the document was first touched: decoding and scanning spent the same deadline.
+ */
 export function emitProjectedLines(
   lines: readonly ProjectedLine[],
   input: ParserSelectionInput,
   options: ParserOptions,
+  startedAt: number,
 ): EmittedLines {
   const units: ParsedUnit[] = [];
-  const diagnostics: ParserDiagnostic[] = [];
   const parts: string[] = [];
   let offset = 0;
-  const startedAt = options.now();
+  const expired = lines.length === 0 ? limitDiagnostic(startedAt, options, 0, input) : undefined;
+  const diagnostics: ParserDiagnostic[] = expired === undefined ? [] : [expired];
   for (const line of lines) {
-    const limit = shouldStop(startedAt, options, units.length);
-    if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
-      diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
+    const limit = limitDiagnostic(startedAt, options, units.length, input);
+    if (limit !== undefined) {
+      diagnostics.push(limit);
       break;
     }
     const start = offset;

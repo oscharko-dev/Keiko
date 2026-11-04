@@ -174,3 +174,20 @@ describe("a two-column table without header cells", () => {
     );
   });
 });
+
+describe("the deadline of a document", () => {
+  it("charges the time spent before the first block against the document", () => {
+    let time = 0;
+    const selection = selectionFromText("<p>Eins</p><p>Zwei</p>", { extension: "html" });
+    const input = {
+      ...selection,
+      get bytes(): Uint8Array {
+        time = 100;
+        return selection.bytes;
+      },
+    };
+    const result = htmlParser.parse(input, buildParserOptions({ now: () => time, timeoutMs: 10 }));
+    expect(result.diagnostics.map((entry) => entry.code)).toContain("PARSER_TIMEOUT");
+    expect(result.units).toEqual([]);
+  });
+});

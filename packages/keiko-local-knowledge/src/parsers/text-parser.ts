@@ -335,9 +335,9 @@ export const textParser: ParserAdapter = Object.freeze({
     matches: (input: ParserSelectionInput): boolean => isTextLike(input),
   }),
   parse: (input: ParserSelectionInput, options: ParserOptions) => {
+    const startedAt = options.now();
     const refusal = textInputRefusal(textParser.capability, input, options);
     if (refusal !== undefined) return refusal;
-    const startedAt = options.now();
     const decoded = decodeUtf8(input.bytes);
     const encoding = encodingDiagnostic(decoded, input.documentId);
     const emission = emitStructure(decoded.text, input, options, startedAt);

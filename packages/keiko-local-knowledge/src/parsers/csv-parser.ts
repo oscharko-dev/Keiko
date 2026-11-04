@@ -15,7 +15,7 @@
 // plain lines for titles and header-only files, empty cells dropped, and unit `rowIndex` equal to
 // the 0-based source record.
 
-import { decodeUtf8, diagnostic, emptyResult, oversizeDiagnostic } from "./_internal.js";
+import { decodeUtf8, diagnostic, emptyResult, oversizeDiagnostic, shouldStop } from "./_internal.js";
 import type { ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
 import {
   LOCAL_KNOWLEDGE_CSV_FILE_EXTENSIONS,
@@ -166,10 +166,14 @@ interface Tokenized {
   readonly complete: boolean;
 }
 
+// A record is cheap to read; asking about the deadline for each would cost more than the record.
+const RECORDS_PER_INTERRUPTION_CHECK = 4096;
+
 function tokenize(
   text: string,
   delimiter: string,
   maxRecords = Number.POSITIVE_INFINITY,
+  interrupted?: () => boolean,
 ): Tokenized {
   const scanner: Scanner = {
     text,
@@ -180,6 +184,7 @@ function tokenize(
   const records: CsvRecord[] = [];
   let recordNumber = 0;
   while (scanner.cursor < text.length && records.length < maxRecords) {
+    if (recordNumber % RECORDS_PER_INTERRUPTION_CHECK === 0 && interrupted?.() === true) break;
     recordNumber += 1;
     const fields = readRecordFields(scanner);
     // A blank line keeps its number (a spreadsheet counts it as a row) but holds nothing.
@@ -312,6 +317,12 @@ function rowAllowance(options: ParserOptions): number {
   return 2 * (options.maxUnitsPerDocument + 1) + ROW_HEADROOM;
 }
 
+const CUT_REPORTED: ReadonlySet<string> = new Set([
+  "UNIT_LIMIT_REACHED",
+  "PARSER_TIMEOUT",
+  "PARSER_CANCELLED",
+]);
+
 // The scan stopped at the allowance and the projection did not itself report the limit.
 function cutDiagnostics(
   complete: boolean,
@@ -319,7 +330,8 @@ function cutDiagnostics(
   input: ParserSelectionInput,
   options: ParserOptions,
 ): readonly ParserDiagnostic[] {
-  if (complete || emitted.some((entry) => entry.code === "UNIT_LIMIT_REACHED")) return [];
+  // A deadline or a cancellation ended the scan, not the allowance, and has reported itself.
+  if (complete || emitted.some((entry) => CUT_REPORTED.has(entry.code))) return [];
   return [
     diagnostic(
       "UNIT_LIMIT_REACHED",
@@ -337,6 +349,7 @@ export const csvParser: ParserAdapter = Object.freeze({
     matches: (input: ParserSelectionInput): boolean => selectDelimiter(input) !== null,
   }),
   parse: (input: ParserSelectionInput, options: ParserOptions) => {
+    const startedAt = options.now();
     if (input.bytes.byteLength > options.maxBytes) {
       return emptyResult(csvParser.capability, input.documentId, options, [
         oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes),
@@ -356,13 +369,14 @@ export const csvParser: ParserAdapter = Object.freeze({
     // #2906 KEIKO-0832: label the table from the delimiter actually selected, so `.tab` files and
     // tab-separated documents identified only by media type are `tsv`, not `csv`.
     const tableName = selection.kind === "fixed" ? "tsv" : "csv";
-    const tokenized = tokenize(text, delimiter, rowAllowance(options));
+    const interrupted = (): boolean => shouldStop(startedAt, options, 0).stop;
+    const tokenized = tokenize(text, delimiter, rowAllowance(options), interrupted);
     const lines = projectTable(
       tableName,
       tabularRows(tokenized.records),
       (columnIndex) => `Column ${String(columnIndex + 1)}`,
     );
-    const emitted = emitProjectedLines(lines, input, options);
+    const emitted = emitProjectedLines(lines, input, options, startedAt);
     return {
       ...emptyResult(
         csvParser.capability,

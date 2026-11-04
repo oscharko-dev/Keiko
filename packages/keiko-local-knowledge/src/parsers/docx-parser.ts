@@ -118,7 +118,6 @@ function docxZipPlan(options: ParserOptions): OoxmlZipReadPlan {
       options.maxBytes,
       MAX_DOCUMENT_XML_INFLATED_BYTES,
     ),
-    duplicateParts: "replace",
   };
 }
 

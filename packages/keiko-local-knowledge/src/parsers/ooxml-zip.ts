@@ -1,8 +1,8 @@
 // The one bounded OOXML package reader, shared by the docx, xlsx and pptx parsers. Input stays in
-// memory and every inflated entry is capped by size and compression ratio. Unless a plan opts
-// out, the central-directory walk honours the entry count, the deadline and the caller's abort
-// signal, the inflated total is capped, and an archive that lists the same wanted part twice is
-// rejected instead of guessing which one is authoritative.
+// memory and every inflated entry is capped by size and compression ratio. The central-directory walk
+// honours the entry count, the deadline and the caller's abort signal, the inflated total is capped,
+// and an archive that lists the same wanted part twice is rejected instead of guessing which one is
+// authoritative.
 
 import { Buffer } from "node:buffer";
 
@@ -26,16 +26,6 @@ export interface OoxmlZipReadPlan {
   readonly maxEntryInflatedBytes: number;
   /** Ceiling on all inflated entries together; absent = only the per-entry ceiling applies. */
   readonly maxTotalInflatedBytes?: number;
-  /**
-   * Whether the central-directory walk honours the caller's deadline and abort signal between
-   * entries. Defaults to `enforced`; `none` leaves the walk uncooperative.
-   */
-  readonly scanBudget?: "enforced" | "none";
-  /**
-   * What a second listing of a wanted part does: `reject` fails the read (default), `replace`
-   * lets the later listing win.
-   */
-  readonly duplicateParts?: "reject" | "replace";
 }
 
 // A password-protected Office file is not an OOXML ZIP package: Office wraps the encrypted package
@@ -141,7 +131,6 @@ function assertEntryDeclaredSize(entry: yauzl.Entry, plan: OoxmlZipReadPlan, tot
 
 function scanStop(limits: ScanLimits, entriesSeen: number): Error | undefined {
   const { plan, options, startedAt } = limits;
-  if (plan.scanBudget === "none") return undefined;
   if (options.signal?.aborted === true) {
     return markedError(`${plan.format} zip scan cancelled`, OOXML_SCAN_CANCELLED);
   }
@@ -220,7 +209,7 @@ async function inflateWantedEntry(
   plan: OoxmlZipReadPlan,
   progress: ScanProgress,
 ): Promise<void> {
-  if (plan.duplicateParts !== "replace" && progress.parts.has(entry.fileName)) {
+  if (progress.parts.has(entry.fileName)) {
     throw new Error(`${plan.format} package lists a part twice`);
   }
   assertEntryDeclaredSize(entry, plan, progress.totalInflated);

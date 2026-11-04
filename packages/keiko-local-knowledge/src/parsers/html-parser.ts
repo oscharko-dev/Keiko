@@ -1844,7 +1844,12 @@ function exclusionDiagnostics(state: ScanState): readonly ParserDiagnostic[] {
   ];
 }
 
-function emitHtml(rawText: string, input: ParserSelectionInput, options: ParserOptions): Emission {
+function emitHtml(
+  rawText: string,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+  startedAt: number,
+): Emission {
   // Read the title from the FULL document (before <main> narrowing drops the head) so a manual's
   // name is preserved as a searchable block even when it lives in <head>.
   const documentTitle = readDocumentTitle(rawText);
@@ -1854,7 +1859,7 @@ function emitHtml(rawText: string, input: ParserSelectionInput, options: ParserO
     textLower: text.toLowerCase(),
     input,
     options,
-    startedAt: options.now(),
+    startedAt,
     units: [],
     diagnostics: [],
     heading: { stack: [] },
@@ -1899,6 +1904,7 @@ export const htmlParser: ParserAdapter = Object.freeze({
     matches: (input: ParserSelectionInput): boolean => isHtml(input),
   }),
   parse: (input: ParserSelectionInput, options: ParserOptions) => {
+    const startedAt = options.now();
     const refusal = textInputRefusal(htmlParser.capability, input, options);
     if (refusal !== undefined) return refusal;
     // Cross-check any declared <meta charset> against the byte-shape decode: the declared charset
@@ -1906,7 +1912,7 @@ export const htmlParser: ParserAdapter = Object.freeze({
     // surfaced as a body-safe HTML_CHARSET_MISMATCH warning rather than silently corrupting text.
     const declaredCharset = readMetaCharset(input.bytes);
     const decoded = decodeBytes(input.bytes, declaredCharset);
-    const emission = emitHtml(decoded.text, input, options);
+    const emission = emitHtml(decoded.text, input, options, startedAt);
     const charsetDiag = charsetMismatchDiagnostic(declaredCharset, decoded.codec, input.documentId);
     const repairDiag =
       decoded.repairedBytes === undefined
