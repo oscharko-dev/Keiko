@@ -1699,6 +1699,14 @@
     },
     {
       "path": "packages/keiko-contracts/src/__tests__/support/protocol-observation-mechanics.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 5,
+      "to": 6,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/protocol-observation-mechanics.ts",
       "rule": "anti-slop/no-object-parameters",
       "from": 0,
       "to": 1,
@@ -1723,9 +1731,25 @@
     },
     {
       "path": "packages/keiko-contracts/src/__tests__/support/protocol-observation-mechanics.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 4,
+      "to": 5,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/protocol-observation-mechanics.ts",
       "rule": "anti-slop/no-runtime-typeof",
       "from": 0,
       "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/protocol-observation-mechanics.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 2,
+      "to": 3,
       "reason": "test-witness",
       "issue": 3918
     },
@@ -1742,6 +1766,14 @@
       "rule": "anti-slop/no-unknown-returns",
       "from": 1,
       "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/protocol-observation-mechanics.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 4,
+      "to": 5,
       "reason": "test-witness",
       "issue": 3918
     },
@@ -2682,6 +2714,62 @@
       "issue": 3918
     },
     {
+      "path": "packages/keiko-contracts/src/dap-debug.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 2,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/dap-debug.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/dap-debug.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 1,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/dap-debug.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 14,
+      "to": 16,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/debug-activation.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/debug/debug-lifecycle.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/debug/debug-lifecycle.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 4,
+      "to": 7,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-contracts/src/deep-freeze.test.ts",
       "rule": "anti-slop/no-known-value-widening",
       "from": 1,
@@ -2706,7 +2794,319 @@
       "issue": 3914
     },
     {
+      "path": "packages/keiko-contracts/src/editor-agent-verification.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 12,
+      "to": 14,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-agent-verification.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 11,
+      "to": 16,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-agent-verification.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 11,
+      "to": 14,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-agent.changeset-size.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 5,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-agent.changeset-size.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 1,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-agent.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 17,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-agent.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-agent.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 2,
+      "to": 16,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-agent.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 40,
+      "to": 42,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-agent.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 18,
+      "to": 22,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-agent.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 19,
+      "to": 23,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-contracts/src/editor-builtin-capabilities.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-completion.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 1,
+      "to": 2,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-inline-completion.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 4,
+      "to": 7,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-language-mode-map.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-layout.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-local-history.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 2,
+      "to": 5,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-local-history.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 2,
+      "to": 3,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-m11-settings.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-m11-settings.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-m11-settings.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 1,
+      "to": 3,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-m7.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-m7.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-m7.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-m7.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-m7.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 3,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-patch-apply.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 6,
+      "to": 8,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-patch-apply.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 4,
+      "to": 5,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-request-validation.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-request-validation.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-request-validation.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 6,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-session.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-session.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-session.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-test-generation.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-test-generation.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-test-generation.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 2,
+      "to": 4,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-verification.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-verification.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-verification.ts",
       "rule": "anti-slop/no-known-value-widening",
       "from": 0,
       "to": 1,
@@ -3662,6 +4062,46 @@
       "rule": "anti-slop/no-runtime-typeof",
       "from": 19,
       "to": 20,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/mcp-servers.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 3,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/mcp-servers.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/mcp-servers.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 1,
+      "to": 6,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/mcp-servers.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 3,
+      "to": 7,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/mcp-servers.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 7,
+      "to": 10,
       "reason": "pending-boundary-migration",
       "issue": 3918
     },
@@ -7296,6 +7736,62 @@
       "to": 1,
       "reason": "dev-cutoff-sync",
       "issue": 3914
+    },
+    {
+      "path": "tests/support/editor-request-parser-contract.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 7,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/editor-request-parser-contract.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/editor-request-parser-contract.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/editor-request-parser-contract.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/editor-request-parser-contract.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/editor-request-parser-contract.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 13,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/editor-request-parser-contract.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 9,
+      "reason": "test-witness",
+      "issue": 3918
     },
     {
       "path": "tests/support/jira-managed-remote.ts",
