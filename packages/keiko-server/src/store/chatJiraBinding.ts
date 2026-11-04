@@ -5,21 +5,26 @@ import {
   type UpdateChatPatch,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  CHAT_TOOL_DEFAULT_MODE,
   isCodingWorkbenchMode,
   type CodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { isMcpServerName, MCP_SERVER_MAX } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { UpdateChatOptions } from "./types.js";
 import { invalidRequest } from "./errors.js";
 
 interface JiraChatState {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly generation: number;
   readonly mode: CodingWorkbenchMode;
   readonly binding?: ChatJiraPodBinding | undefined;
+  /** MCP servers the Chat offers its model; absent keeps every enabled server. */
+  readonly mcpServers?: readonly string[] | undefined;
 }
 
-const EMPTY: JiraChatState = { schemaVersion: 1, generation: 0, mode: "governed-assist" };
-const STATE_KEYS = new Set(["schemaVersion", "generation", "mode", "binding"]);
+const EMPTY: JiraChatState = { schemaVersion: 2, generation: 0, mode: CHAT_TOOL_DEFAULT_MODE };
+const STATE_KEYS = new Set(["schemaVersion", "generation", "mode", "binding", "mcpServers"]);
 const BINDING_KEYS = new Set([
   "podId",
   "bindingGeneration",
@@ -47,16 +52,33 @@ function validBinding(value: unknown, generation: number): value is ChatJiraPodB
   );
 }
 
-function validState(value: unknown): value is JiraChatState {
+type StoredJiraChatState = Omit<JiraChatState, "schemaVersion"> & {
+  readonly schemaVersion: 1 | 2;
+};
+
+function validState(value: unknown): value is StoredJiraChatState {
   if (!record(value) || !Object.keys(value).every((key) => STATE_KEYS.has(key))) return false;
   if (
-    value.schemaVersion !== 1 ||
+    (value.schemaVersion !== 1 && value.schemaVersion !== 2) ||
     !Number.isSafeInteger(value.generation) ||
     Number(value.generation) < 0 ||
     !isCodingWorkbenchMode(value.mode)
   )
     return false;
-  return value.binding === undefined || validBinding(value.binding, Number(value.generation));
+  return (
+    validMcpSelection(value.mcpServers) &&
+    (value.binding === undefined || validBinding(value.binding, Number(value.generation)))
+  );
+}
+
+function validMcpSelection(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.length <= MCP_SERVER_MAX &&
+      value.every(isMcpServerName) &&
+      new Set(value).size === value.length)
+  );
 }
 
 /** Corrupt persisted generations must never collapse to a fresh, reusable authority identity. */
@@ -69,16 +91,28 @@ export function decodeJiraChatState(json: string | null): JiraChatState {
     throw new TypeError("Stored Jira Chat state is invalid.");
   }
   if (!validState(value)) throw new TypeError("Stored Jira Chat state is invalid.");
-  return value;
+  return value.schemaVersion === 2 ? { ...value, schemaVersion: 2 } : migratedState(value);
+}
+
+/**
+ * Version 1 wrote Ask for approval both when a person selected it and as the default of a Chat that
+ * only connected a tool source (a Pod binding patch stored `governed-assist` beside the binding), so
+ * the two rows are byte-identical. The stored mode is the person's selection and is kept until they
+ * change it; only a Chat without any row resolves the Full access default. Widening an Ask row would
+ * silently remove the per-action write approval a person may have chosen.
+ */
+function migratedState(value: StoredJiraChatState): JiraChatState {
+  return { ...value, schemaVersion: 2 };
 }
 
 export function jiraChatFields(
   state: JiraChatState,
-): Pick<Chat, "toolMode" | "jiraBindingGeneration" | "jiraPodBinding"> {
+): Pick<Chat, "toolMode" | "jiraBindingGeneration" | "jiraPodBinding" | "mcpServers"> {
   return {
     toolMode: state.mode,
     jiraBindingGeneration: state.generation,
     jiraPodBinding: state.binding,
+    ...(state.mcpServers === undefined ? {} : { mcpServers: state.mcpServers }),
   };
 }
 
@@ -118,7 +152,13 @@ function verifiedTarget(
 function nextMode(existing: Chat, patch: UpdateChatPatch): CodingWorkbenchMode {
   if (patch.toolMode !== undefined && !isCodingWorkbenchMode(patch.toolMode))
     throw invalidRequest("Invalid Chat tool mode.");
-  return patch.toolMode ?? existing.toolMode ?? "governed-assist";
+  return patch.toolMode ?? existing.toolMode ?? CHAT_TOOL_DEFAULT_MODE;
+}
+
+function patchesJiraChatState(patch: UpdateChatPatch): boolean {
+  return (
+    patch.jiraPodId !== undefined || patch.toolMode !== undefined || patch.mcpServers !== undefined
+  );
 }
 
 export function updatedJiraChatState(
@@ -127,20 +167,39 @@ export function updatedJiraChatState(
   options: UpdateChatOptions | undefined,
   now: number,
 ): JiraChatState | undefined {
-  if (patch.jiraPodId === undefined && patch.toolMode === undefined) return undefined;
+  if (!patchesJiraChatState(patch)) return undefined;
   const mode = nextMode(existing, patch);
   const binding = selectedBinding(existing, patch, options, now);
+  const mcpServers = nextMcpServers(existing, patch);
   const changed =
-    binding !== existing.jiraPodBinding || mode !== (existing.toolMode ?? "governed-assist");
+    binding !== existing.jiraPodBinding ||
+    mode !== (existing.toolMode ?? CHAT_TOOL_DEFAULT_MODE) ||
+    !sameMcpSelection(mcpServers, existing.mcpServers);
   const generation = (existing.jiraBindingGeneration ?? 0) + Number(changed);
   if (!Number.isSafeInteger(generation))
     throw invalidRequest("Chat binding generation is exhausted.");
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generation,
     mode,
     ...(binding === undefined ? {} : { binding: { ...binding, bindingGeneration: generation } }),
+    ...(mcpServers === undefined ? {} : { mcpServers }),
   };
+}
+
+function nextMcpServers(existing: Chat, patch: UpdateChatPatch): readonly string[] | undefined {
+  if (patch.mcpServers === undefined) return existing.mcpServers;
+  if (patch.mcpServers === null) return undefined;
+  if (!validMcpSelection(patch.mcpServers)) throw invalidRequest("Invalid MCP server selection.");
+  return [...patch.mcpServers].sort(compareStrings);
+}
+
+function sameMcpSelection(
+  next: readonly string[] | undefined,
+  previous: readonly string[] | undefined,
+): boolean {
+  if (next === undefined || previous === undefined) return next === previous;
+  return next.length === previous.length && next.every((name, index) => previous[index] === name);
 }
 
 /** A revoked credential keeps its visible association; removal disconnects it. */
@@ -161,9 +220,10 @@ export function invalidatedJiraChatState(
   if (!Number.isSafeInteger(generation))
     throw invalidRequest("Chat binding generation is exhausted.");
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generation,
-    mode: existing.toolMode ?? "governed-assist",
+    mode: existing.toolMode ?? CHAT_TOOL_DEFAULT_MODE,
+    ...(existing.mcpServers === undefined ? {} : { mcpServers: existing.mcpServers }),
     ...(authenticationGeneration === null
       ? {}
       : {

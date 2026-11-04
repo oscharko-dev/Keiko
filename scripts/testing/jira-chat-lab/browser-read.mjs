@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import { readPrivateFile } from "./lab-client.mjs";
+import { connectPodFromPanel, readyChip } from "./browser-connections.mjs";
+import { consentCardCount, establishedReadGrant } from "./read-grant.mjs";
 
 function stage(value) {
   console.log(JSON.stringify({ operation: "jira-chat-live-browser", stage: value }));
@@ -53,25 +55,19 @@ export async function createPod(page, session) {
   await form
     .getByLabel("API token", { exact: true })
     .fill(readPrivateFile(join(session.directory, "secrets", "api-token")).trim());
-  await form.getByRole("button", { name: "Save connector", exact: true }).click();
+  await form.getByRole("button", { name: "Create Jira Pod", exact: true }).click();
   const verify = hub.getByTestId("acx-connector").filter({ hasText: "Browser Jira" });
+  // A new Pod is unverified, so its one visible repair action is "Verify connection".
   await verify.getByRole("button", { name: "Verify connection", exact: true }).click();
-  await verify.locator('[data-status="ok"]').waitFor();
+  await readyChip(verify).waitFor();
   stage("pod-verified");
   await page.getByRole("button", { name: "Local Knowledge", exact: true }).click();
 }
-async function connectAndRead(page) {
+async function connectAndSend(page) {
   const chat = page.getByRole("region", {
     name: /Synthetic Jira browser Chat/,
   });
-  await chat.getByText("Tool access", { exact: true }).click();
-  stage("chat-panel-open");
-  await chat.getByRole("combobox", { name: /^Jira Pod/ }).selectOption({ label: "Browser Jira" });
-  stage("pod-selected");
-  await chat.getByRole("button", { name: "Apply tool settings", exact: true }).click();
-  stage("binding-submitted");
-  await chat.getByText("Jira Pod connected by the server", { exact: true }).waitFor();
-  await chat.getByText("Tool access", { exact: true }).click();
+  await connectPodFromPanel(page, chat, "Browser Jira");
   stage("chat-connected");
   await chat
     .getByRole("textbox", { name: "Chat message", exact: true })
@@ -81,20 +77,19 @@ async function connectAndRead(page) {
   stage("prompt-entered");
   await chat.getByRole("button", { name: "Send message", exact: true }).click();
   stage("message-sent");
-  await chat
-    .getByRole("button", { name: "Allow reading", exact: true })
-    .waitFor({ timeout: 120000 });
-  stage("read-consent-visible");
-  await chat.getByRole("button", { name: "Allow reading", exact: true }).click();
   return chat;
 }
 const FAILED_TURNS = new Set(["failed", "cancelled"]);
-async function confirmCompleted(observe) {
+/** The read happens without any card: every poll of the turn finds none, and the grant is the server's. */
+async function confirmCompleted(observe, region) {
   const deadline = Date.now() + 150000;
   while (Date.now() < deadline) {
     const { messages } = await observe();
     const user = messages.find((item) => item.role === "user");
+    assert.equal(await consentCardCount(region), 0);
+    establishedReadGrant(user);
     if (user?.turnState === "completed") {
+      assert.ok(establishedReadGrant(user), "The server establishes the read grant itself");
       const read = user.toolTranscript?.exchanges.find(
         (item) => item.call.name === "jira_projects",
       );
@@ -116,9 +111,8 @@ export async function runBrowserRead({ origin, fragment, chat, session, observe 
     await page.goto(origin + fragment);
     stage("page-open");
     await createPod(page, session);
-    const region = await connectAndRead(page);
-    await confirmCompleted(observe);
-    await region.getByText("Reading allowed", { exact: true }).waitFor();
+    const region = await connectAndSend(page);
+    await confirmCompleted(observe, region);
     await region.getByText("Completed", { exact: true }).waitFor();
     await region.getByText("KEIKO", { exact: true }).waitFor();
     await region.screenshot({ path: join(session.directory, "browser-read.png") });

@@ -223,6 +223,32 @@ Agent request and result handling use exact, deep projections rather than shallo
 response fields are dropped before serialization back to the model, including fields added by a
 hostile or future server implementation.
 
+Nested packages (2026-11-02, Coding Workbench). A repository whose only `package.json` sits below
+the root (a Maven or Gradle multi-module repository with one TypeScript front end) used to end every
+script verifier as "not run". The governed coding tool `keiko_verification` therefore also takes a
+`packageDir`, a contained, deny-listed workspace-relative folder holding the `package.json` (the
+empty string is the wire sentinel for "find it"; every declared V2 tool argument is required). The
+runner resolves the package in one order: the explicit folder; the nearest `package.json` above
+`targetPath`, the most specific answer for the file being verified; the workspace root when it has a
+`package.json` (unchanged behaviour, npm, no folder); a bounded search of the workspace (depth,
+directory, entry and candidate counts, skipping `node_modules`, `target`, `build`, `dist`, `.git` and symbolic links) that must find exactly one.
+Several candidates answer `NO_RUNNABLE_STEPS` with the relative folders, so the model can name one;
+no candidate keeps the root outcome. Script detection and test-framework detection then use that
+folder. The package manager is named by the nearest folder from the package up to the root that
+answers, by its `packageManager` field or lockfile (`package-lock.json` included), because a Yarn or
+pnpm workspace keeps its lockfile at the root; a dependency tree (`node_modules`, `.pnp.cjs`) in any
+of those folders counts as installed, as Node resolves upward. A targeted test the package cannot
+plan (its framework declared only at the root) falls back to the root planner, which finds the
+nested Vitest project. The command policy admits only `run` for Yarn and pnpm. Every process still starts at the workspace root, which stays
+the execution-root sandbox, and selects the package with the manager's own folder flag
+(`npm --prefix=<dir> run <script>`, `yarn --cwd=<dir> run <script>`, `pnpm --dir=<dir> run
+<script>`; Vitest targeted tests use `--root <dir>`). A monorepo package therefore still reads the
+dependencies hoisted to the root; the folder is checked contained and real before anything runs.
+Only targeted Jest runs, which have no generated root form, start in the package folder. The
+dependency install stays npm-only (`--ignore-scripts`), so a Yarn or pnpm package without its own
+installed tree up to the root is reported `native-shell-required` instead of a misleading missing
+script.
+
 An agent verification authority is bound to both the workspace and the live editor session. The
 admission sequence is classify, compose, reserve, append a content-free admission-audit record, then
 dispatch. The audit append is mandatory and fail-closed: execution does not start if visibility

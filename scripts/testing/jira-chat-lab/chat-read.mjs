@@ -5,6 +5,8 @@ import { fileURLToPath, URL } from "node:url";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
+import { request as httpRequest } from "node:http";
+import { Buffer } from "node:buffer";
 import {
   buildUiHandlerDeps,
   createUiServer,
@@ -30,6 +32,7 @@ import {
 } from "../../../packages/keiko-server/dist/coding-app-session/launcherSessionPairingPort.js";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
 import { actorDetails, loadSession, readPrivateFile, requireLicense } from "./lab-client.mjs";
+import { establishedReadGrant } from "./read-grant.mjs";
 import { drainLiveChatTurns } from "./chat-lifecycle.mjs";
 
 process.on("warning", (warning) => {
@@ -39,6 +42,9 @@ process.on("warning", (warning) => {
   );
   process.exitCode = 1;
 });
+
+/** Where the lab's live Keiko writes its Activity Log; a lane's state directory holds none. */
+export const chatReadLogDirectory = (session) => join(session.directory, "chat-read-logs");
 
 async function unusedPort() {
   const probe = createServer();
@@ -69,14 +75,87 @@ export async function request(origin, cookie, name, path, body, method = "POST",
         stage: name,
         status: response.status,
         code: failure.error?.code,
+        message:
+          typeof failure.error?.message === "string"
+            ? failure.error.message.slice(0, 240)
+            : undefined,
       }),
     );
     throw new TypeError("Live Chat HTTP stage failed");
   }
   return response;
 }
-export async function jsonRequest(origin, cookie, name, path, body, method, signal) {
-  return (await request(origin, cookie, name, path, body, method, signal)).json();
+function failedStage(name, status, failure) {
+  console.log(
+    JSON.stringify({
+      operation: "jira-chat-live-http",
+      stage: name,
+      status,
+      code: failure.error?.code,
+      message:
+        typeof failure.error?.message === "string"
+          ? failure.error.message.slice(0, 240)
+          : undefined,
+    }),
+  );
+  return new TypeError("Live Chat HTTP stage failed");
+}
+// A buffered Chat turn sends its response headers only when the turn ends. Global fetch gives up
+// on headers after five minutes, which is shorter than an accepted turn's Authority Envelope
+// (#4175), so loopback JSON requests use node:http without a response timeout. A global fetch the
+// caller replaced (instrumentation or a test transport) is honoured as given.
+const NATIVE_FETCH = globalThis.fetch;
+function loopbackJson(origin, cookie, path, body, method, signal) {
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  return new Promise((resolve, reject) => {
+    const outgoing = httpRequest(
+      new URL(path, origin),
+      {
+        method,
+        signal,
+        headers: {
+          Origin: origin,
+          "X-Keiko-CSRF": "1",
+          "Content-Type": "application/json",
+          ...(cookie ? { Cookie: cookie } : {}),
+          ...(payload === undefined ? {} : { "Content-Length": Buffer.byteLength(payload) }),
+        },
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("error", reject);
+        response.on("end", () =>
+          resolve({
+            status: response.statusCode ?? 0,
+            text: Buffer.concat(chunks).toString("utf8"),
+          }),
+        );
+      },
+    );
+    outgoing.on("error", reject);
+    outgoing.end(payload);
+  });
+}
+export async function jsonRequest(origin, cookie, name, path, body, method = "POST", signal) {
+  if (!origin.startsWith("http:") || globalThis.fetch !== NATIVE_FETCH) {
+    const response = await request(origin, cookie, name, path, body, method, signal);
+    return response.status === 204 ? null : response.json();
+  }
+  const { status, text } = await loopbackJson(origin, cookie, path, body, method, signal);
+  const ok = status >= 200 && status < 300;
+  // A successful mutation without a body (204) has nothing to parse.
+  if (status === 204) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    // An error status still names its stage; a successful body must be JSON like request().json().
+    if (ok) throw new TypeError(`${name} returned an unparsable body`, { cause: error });
+    parsed = {};
+  }
+  if (!ok) throw failedStage(name, status, parsed);
+  return parsed;
 }
 function assertLiveModelOptions(modelId, modelRetries, embeddingModelId) {
   if (modelRetries !== 0 && modelRetries !== 1)
@@ -109,7 +188,32 @@ function selectedGatewayProvider(modelId) {
   if (typeof apiKey !== "string" || apiKey.length === 0)
     throw new TypeError("Configured laboratory model credential is unavailable");
   const token = modelId.replace(/[^A-Za-z0-9]/gu, "_").toUpperCase();
-  return { provider, env: { [`KEIKO_MODEL_${token}_API_KEY`]: apiKey } };
+  // The configured capability (window, output bound) is the model's own; the laboratory must not
+  // shrink it, or every long Jira turn fails on a limit the product never chose (#4175).
+  const capability = config.capabilities?.find((entry) => entry.id === modelId);
+  return { provider, capability, env: { [`KEIKO_MODEL_${token}_API_KEY`]: apiKey } };
+}
+// The gateway takes whole output limits only, and 0 means the model declared none.
+function simulatedOutputLimit(base, simulated) {
+  if (base.maxOutputTokens === 0) return 0;
+  return Math.min(base.maxOutputTokens, Math.max(1, Math.floor(simulated / 8)));
+}
+// KEIKO_JIRA_LAB_CONTEXT_WINDOW deliberately simulates a smaller model on the same endpoint.
+function chatCapability(modelId, configured) {
+  const simulated = Number(process.env.KEIKO_JIRA_LAB_CONTEXT_WINDOW ?? "");
+  const base = {
+    ...createDefaultChatCapability(modelId),
+    contextWindow: configured?.contextWindow ?? 32768,
+    maxOutputTokens: configured?.maxOutputTokens ?? 2048,
+  };
+  return {
+    ...base,
+    ...(Number.isSafeInteger(simulated) && simulated > 0
+      ? { contextWindow: simulated, maxOutputTokens: simulatedOutputLimit(base, simulated) }
+      : {}),
+    streaming: true,
+    toolCalling: true,
+  };
 }
 function liveModelProviders(modelId, { modelRetries = 0, embeddingModelId } = {}) {
   assertLiveModelOptions(modelId, modelRetries, embeddingModelId);
@@ -117,6 +221,7 @@ function liveModelProviders(modelId, { modelRetries = 0, embeddingModelId } = {}
     (id) => {
       const selected = selectedGatewayProvider(id);
       return {
+        capability: selected?.capability,
         provider: {
           ...(selected?.provider ?? {
             modelId: id,
@@ -133,10 +238,13 @@ function liveModelProviders(modelId, { modelRetries = 0, embeddingModelId } = {}
   );
   return {
     provider: sources[0].provider,
+    capability: chatCapability(modelId, sources[0].capability),
     env: Object.assign({}, ...sources.map((source) => source.env)),
     additionalProviders: sources.slice(1).map((source) => source.provider),
     embeddingCapabilities:
-      embeddingModelId === undefined ? [] : [createDefaultEmbeddingCapability(embeddingModelId)],
+      embeddingModelId === undefined
+        ? []
+        : [sources[1].capability ?? createDefaultEmbeddingCapability(embeddingModelId)],
   };
 }
 function prepareLiveModel(root, session, modelId, options) {
@@ -148,15 +256,8 @@ function prepareLiveModel(root, session, modelId, options) {
   };
 }
 export async function configureModel(deps, modelId, session, configPath, options, prepared) {
-  const { provider, additionalProviders, embeddingCapabilities, env } =
+  const { provider, capability, additionalProviders, embeddingCapabilities, env } =
     prepared ?? liveModelProviders(modelId, options);
-  const capability = {
-    ...createDefaultChatCapability(modelId),
-    contextWindow: 32768,
-    maxOutputTokens: 2048,
-    streaming: true,
-    toolCalling: true,
-  };
   const raw = {
     providers: [provider, ...additionalProviders],
     capabilities: [capability, ...embeddingCapabilities],
@@ -189,7 +290,7 @@ export async function configureModel(deps, modelId, session, configPath, options
   );
   console.log(JSON.stringify({ operation: "jira-chat-live-model", verified: true }));
 }
-export async function prepareChat(origin, cookie, session, projectPath, modelId, actor = "api") {
+async function createVerifiedPod(origin, cookie, session, actor) {
   actorDetails(actor);
   if (actor === "admin") throw new TypeError("The laboratory administrator has no synthetic PAT");
   const credential = await jsonRequest(
@@ -216,6 +317,22 @@ export async function prepareChat(origin, cookie, session, projectPath, modelId,
     {},
   );
   assert.equal(verification.status, "ok");
+  return credential;
+}
+/**
+ * A new Chat's tool mode is Full access (owner decision 2026-11-02). A scenario that proves a write
+ * approval passes its own mode, so the Chat asks exactly as the scenario expects.
+ */
+export async function prepareChat(
+  origin,
+  cookie,
+  session,
+  projectPath,
+  modelId,
+  actor = "api",
+  toolMode = undefined,
+) {
+  const credential = await createVerifiedPod(origin, cookie, session, actor);
   const created = await jsonRequest(origin, cookie, "chat-create", "/api/chats", {
     projectPath,
     title: "Synthetic Jira live Chat",
@@ -228,11 +345,13 @@ export async function prepareChat(origin, cookie, session, projectPath, modelId,
     `/api/chats?id=${encodeURIComponent(created.chat.id)}`,
     {
       jiraPodId: credential.livePod.podId,
+      ...(toolMode === undefined ? {} : { toolMode }),
       expectedGroundingScopeIdentity: created.chat.groundingScopeIdentity,
     },
     "PATCH",
   );
   assert.equal(bound.chat.jiraPodBinding.podId, credential.livePod.podId);
+  if (toolMode !== undefined) assert.equal(bound.chat.toolMode, toolMode);
   console.log(JSON.stringify({ operation: "jira-chat-live-binding", verified: true }));
   return bound.chat;
 }
@@ -256,7 +375,11 @@ function startReadTurn(origin, cookie, chat, projectPath, modelId, signal) {
     signal,
   );
 }
-async function observeConsent(origin, cookie, chat, projectPath, signal, settled) {
+/**
+ * A read never waits for a person: the route that decided it is gone and the server establishes
+ * the grant itself. Observing the turn therefore only proves that no grant is ever pending.
+ */
+async function observeNoConsent(origin, cookie, chat, projectPath, signal, settled) {
   while (!settled() && !signal.aborted) {
     const messages = await jsonRequest(
       origin,
@@ -267,29 +390,14 @@ async function observeConsent(origin, cookie, chat, projectPath, signal, settled
       "GET",
       signal,
     );
-    const consent = messages.messages.find(
-      (message) => message.toolTranscript?.readGrant?.state === "pending",
-    );
-    if (consent !== undefined) {
-      assert.equal(consent.toolTranscript.exchanges[0].result, undefined);
-      const grant = consent.toolTranscript.readGrant;
-      const decided = await jsonRequest(
-        origin,
-        cookie,
-        "read-consent",
-        `/api/atlassian-connectors/action-approvals/${encodeURIComponent(grant.grantId)}/chat-read-consent`,
-        { decision: "approve", disclosureVersion: grant.disclosureVersion },
-      );
-      assert.equal(decided.approval.state, "granted");
-      return true;
-    }
+    for (const message of messages.messages) establishedReadGrant(message);
     await new Promise((resolve) => globalThis.setTimeout(resolve, 500));
   }
-  return false;
 }
 function assertCompletedRead(completed) {
   const user = completed.messages.find((message) => message.role === "user");
   assert.equal(user.turnState, "completed");
+  assert.ok(establishedReadGrant(user), "The server establishes the read grant itself");
   const read = user.toolTranscript.exchanges.find(
     (exchange) => exchange.call.name === "jira_projects",
   );
@@ -323,16 +431,8 @@ async function readTurn(origin, cookie, chat, projectPath, modelId) {
     },
   );
   try {
-    const granted = await observeConsent(
-      origin,
-      cookie,
-      chat,
-      projectPath,
-      controller.signal,
-      () => settled,
-    );
+    await observeNoConsent(origin, cookie, chat, projectPath, controller.signal, () => settled);
     const completed = await pending;
-    assert.equal(granted, true);
     assertCompletedRead(completed);
   } finally {
     globalThis.clearTimeout(timeout);
@@ -345,7 +445,7 @@ function createLiveDeps(root, session, secret, retainState, restoring = false, m
     : randomBytes(32).toString("base64");
   if (retainState && !restoring)
     writeFileSync(join(root, "credential-key"), credentialKey, { mode: 0o600, flag: "wx" });
-  const activityLog = createFileServerLogSink(join(session.directory, "chat-read-logs"), {
+  const activityLog = createFileServerLogSink(chatReadLogDirectory(session), {
     level: "debug",
   });
   setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
@@ -452,7 +552,8 @@ export async function withLiveChat({
   session,
   modelId,
   run,
-  retainState = false,
+  // KEIKO_JIRA_LAB_RETAIN_STATE=1 keeps a journey's Chat database in the private session to diagnose it.
+  retainState = process.env.KEIKO_JIRA_LAB_RETAIN_STATE === "1",
   stateReady,
   browser = false,
   restoreState,

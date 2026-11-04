@@ -11,24 +11,25 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.live.saveToken": "Token speichern",
   "atlassianConnectors.live.saving": "Änderungen werden gespeichert…",
   "atlassianConnectors.live.rotateHint":
-    "Der Pod und seine Chat-Verbindungen bleiben erhalten. Der Tokenwechsel stoppt den aktuellen Zugriff und ausstehende Aktionen. Prüfe die Verbindung erneut und erteile eine neue Lesefreigabe im Chat.",
+    "Der Pod und seine Chat-Verbindungen bleiben erhalten. Der Tokenwechsel stoppt den aktuellen Zugriff und ausstehende Aktionen; prüfe die Verbindung danach erneut.",
   "atlassianConnectors.live.operationFailed":
     "Die Aktion konnte nicht bestätigt werden. Aktualisiere den Pod-Status, bevor du weitere Änderungen vornimmst.",
   "atlassianConnectors.live.refresh": "Status aktualisieren",
+  "atlassianConnectors.live.more": "Weitere Aktionen: {name}",
+  "atlassianConnectors.live.state.unknown": "Status unbekannt",
+  "atlassianConnectors.live.state.ready": "Bereit",
   "atlassianConnectors.live.refreshRequired":
-    "Der aktuelle Verbindungsstatus ist unbekannt. Aktualisiere ihn, bevor du diesen Pod verwendest.",
+    "Aktualisiere den Status, bevor du diesen Pod verwendest.",
   "atlassianConnectors.live.verifyRequired":
-    "Prüfe diese Verbindung, bevor du sie im Chat verwendest.",
+    "Prüfe die Verbindung, bevor du diesen Pod verwendest.",
   "atlassianConnectors.live.remove": "Pod entfernen",
   "atlassianConnectors.live.keep": "Pod behalten",
   "atlassianConnectors.live.removeConfirm":
-    "Diesen Jira-Pod und sein gespeichertes Token entfernen? Alle verbundenen Chats werden getrennt und ihre ausstehenden Freigaben aufgehoben.",
-  "atlassianConnectors.live.capabilities":
-    "Im Chat kannst du Jira-Vorgänge und Metadaten suchen und lesen sowie Vorgänge erstellen, bearbeiten, zuweisen, kommentieren oder ihren Status ändern. Jira-Berechtigungen und Chat-Freigaben gelten für jede Aktion.",
-  "atlassianConnectors.live.readCapabilities":
-    "Nach deiner Lesefreigabe kann der Chat Jira-Vorgänge und Metadaten suchen und lesen. Der Zugriff hängt weiterhin von den Jira-Berechtigungen ab.",
+    "Diesen Jira-Pod und sein Token entfernen? Verbundene Chats werden getrennt.",
   "atlassianConnectors.live.patHint":
-    "Erstelle ein persönliches Zugriffstoken in deinem Jira-Profil. Keiko speichert es für den Jira-Zugriff. Gespeicherte Tokens werden nicht erneut angezeigt.",
+    "Erstelle ein persönliches Zugriffstoken in deinem Jira-Profil. Es wird nie wieder angezeigt.",
+  "atlassianConnectors.live.displayNamePlaceholder": "z. B. Jira Data Center",
+  "atlassianConnectors.live.baseUrlPlaceholder": "https://jira.example.com",
 
   "chat.jira.writeApproval.unavailable": "Aktionsfreigabe derzeit nicht verfügbar",
   "chat.jira.writeApproval.title": "Jira-Aktion prüfen",
@@ -38,8 +39,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.writeApproval.rejected": "Aktion abgelehnt",
   "chat.jira.writeApproval.expired": "Aktionsfreigabe abgelaufen",
   "chat.jira.writeApproval.revoked": "Aktionsfreigabe widerrufen",
-  "chat.jira.writeApproval.disclosure":
-    "Prüfe die vorgeschlagene Aktion und ihre genauen Details unten. Die Freigabe gilt nur für diese Aktion. Sie bestätigt keine Änderung in Jira.",
   "chat.jira.writeApproval.preview": "Details der vorgeschlagenen Aktion",
   "chat.jira.writeApproval.working": "Aktion wird geprüft…",
   "chat.jira.writeApproval.failed":
@@ -47,9 +46,46 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.writeApproval.allow": "Diese Aktion genehmigen",
   "chat.jira.writeApproval.deny": "Diese Aktion ablehnen",
   "chat.jira.writeApproval.refresh": "Aktionsstatus aktualisieren",
+  "chat.jira.draft.operation": "Jira-Vorgänge anlegen",
+  "chat.jira.attach.operation": "Datei an Jira-Vorgang anhängen",
+  "chat.jira.link.operation": "Jira-Vorgänge verknüpfen",
+  "chat.jira.draft.legend": "Anzulegende Vorgänge ({selected} von {total} ausgewählt)",
+  "chat.jira.draft.dependent": "Ausgelassen, weil ein Vorgang, von dem er abhängt, ausgelassen ist",
+  "chat.jira.draft.parent": "Übergeordnet ({fieldId}): {target}",
+  "chat.jira.draft.target": "Projekt {projectId} · Vorgangstyp {issueTypeId}",
+  "chat.jira.draft.linkOutward": "{type} → {target}",
+  "chat.jira.draft.linkInward": "{target} → {type} diesen Vorgang",
+  "chat.jira.draft.showMore": "Mehr anzeigen",
+  "chat.jira.draft.showLess": "Weniger anzeigen",
+  "chat.jira.draft.empty": "(leer)",
+  "chat.jira.draft.cleared": "Geleert",
+  "chat.jira.draft.requirements": "Anforderungen: {ids}",
+  "chat.jira.draft.unreadable":
+    "Dieser Entwurf lässt sich nicht als Vorgangsliste darstellen; seine Details werden Feld für Feld angezeigt.",
+  "chat.jira.draft.loading":
+    "Der Entwurf wird geladen, damit du jeden Vorgang vor der Freigabe prüfen kannst…",
+  "chat.jira.draft.unavailable":
+    "Dieser Entwurf ist nicht mehr verfügbar und kann deshalb nicht freigegeben werden. Bitte Keiko, ihn erneut vorzubereiten.",
+  "chat.jira.fact.issue": "Vorgang",
+  "chat.jira.fact.project": "Projekt",
+  "chat.jira.fact.issueType": "Vorgangstyp",
+  "chat.jira.fact.transition": "Statusübergang",
+  "chat.jira.fact.comment": "Kommentar",
+  "chat.jira.fact.assignee": "Bearbeiter",
+  "chat.jira.fact.assigneeCleared": "Geleert (nicht zugewiesen)",
+  "chat.jira.fact.file": "Datei",
+  "chat.jira.fact.fileName": "Dateiname",
+  "chat.jira.fact.requirements": "Anforderungen",
+  "chat.jira.fact.links": "Verknüpfungen",
+  "chat.jira.fact.updates": "Änderungen",
+  "chat.jira.fact.updateAdd": "Zu {fieldId} hinzufügen: {value}",
+  "chat.jira.fact.updateRemove": "Aus {fieldId} entfernen: {value}",
 
   "chat.jira.resultUnavailable": "Ergebnis nicht verfügbar",
   "chat.jira.partial": "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
+  "chat.requirements.tool": "Anforderungen",
+  "chat.requirements.details": "Anforderungen ansehen",
+  "chat.requirements.partial": "Teilliste. Nicht alle Anforderungen sind enthalten.",
   "chat.jira.write.notDispatched": "Nicht an Jira gesendet",
   "chat.jira.write.rejected": "Jira-Aktion abgelehnt",
   "chat.jira.write.succeeded": "Jira-Änderung bestätigt",
@@ -63,11 +99,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.write.pendingHelp":
     "Es liegt kein abschließendes Ergebnis vor. Das bestätigt keine laufende Ausführung. Die Aktion wird nicht automatisch wiederholt.",
 
-  "atlassianConnectors.live.empty":
-    "Noch keine Jira-Pods. Erstelle einen Pod, um Jira mit einem Chat zu verbinden.",
-  "chat.jira.connection": "Jira-Verbindung",
-  "chat.jira.podLabel": "Jira-Pod",
-  "chat.jira.noPod": "Kein Jira-Pod",
+  "atlassianConnectors.live.empty": "Noch keine Jira-Pods.",
   "chat.jira.podUnavailable": "Aktueller Pod nicht verfügbar",
   "chat.jira.verifyRequired": "Verifikation erforderlich",
   "chat.jira.addToWorkspace": "Zum Workspace hinzufügen",
@@ -77,33 +109,21 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.liveReady": "Verifizierter Jira-Pod",
   "chat.jira.liveUnavailable":
     "Jira-Pod nicht verfügbar; öffne Knowledge Pods, um ihn zu prüfen oder neu zu verbinden.",
-  "chat.jira.effectiveMode": "Wirksamer Modus: {mode}",
-  "chat.jira.modeLabel": "Autonomiemodus des Chats",
-  "chat.jira.modeHelp":
-    "Der erste Jira-Lesezugriff benötigt immer eine Freigabe. Installationsgrenzen und die aktuellen Chat-Berechtigungen gelten weiterhin.",
-  "chat.jira.replaceConfirm":
-    "Den bisherigen Jira-Pod ersetzen und seine ausstehenden Freigaben widerrufen.",
-  "chat.jira.apply": "Jira-Einstellungen übernehmen",
-  "chat.jira.connectionFailed":
-    "Jira-Einstellungen konnten nicht geladen oder gespeichert werden. Für eine erneute Prüfung und Wiederholung dieses Menü neu öffnen.",
-  "chat.jira.bound": "Jira-Pod vom Server verbunden",
-  "chat.jira.unbound": "Kein Jira-Pod verbunden",
+  "chat.connectors.title": "Konnektoren",
+  "chat.connectors.active": "Konnektoren: {count} aktiv",
+  "chat.connectors.mcp": "MCP-Server",
+  "chat.connectors.jira": "Jira-Pods",
+  "chat.connectors.manage": "Verwalten",
+  "chat.connectors.noServers": "Keine MCP-Server eingerichtet",
+  "chat.connectors.noPods": "Noch keine Jira-Pods",
+  "chat.connectors.attention": "Prüfen",
+  "chat.connectors.access": "Zugriff",
+  "chat.connectors.failed": "Nicht gespeichert. Bitte erneut versuchen.",
   "atlassianConnectors.live.title": "Jira Live-Pods",
-  "atlassianConnectors.live.subtitle":
-    "Aktuelle Jira-Daten im verbundenen Chat nach ausdrücklicher Lesefreigabe lesen. Der Live-Zugriff erstellt keinen Index und keine Dokumentensammlung.",
   "atlassianConnectors.live.add": "Jira-Pod erstellen",
-  "chat.tools.connection": "Tool-Zugriff",
-  "chat.tools.modeHelp":
-    "Der gewählte Modus gilt für Tools in diesem Chat. Lesen über MCP oder Jira erfordert eine Freigabe; Schreibzugriffe folgen dem Modus und den Bereitstellungsgrenzen. MCP-Server konfigurierst du in den Einstellungen.",
-  "chat.tools.apply": "Tool-Einstellungen anwenden",
-  "chat.mcp.title": "MCP-Daten in diesem Chat lesen",
-  "chat.mcp.disclosure":
-    "Über konfigurierte MCP-Server abgerufene Inhalte werden an das ausgewählte Modell gesendet und in diesem Gespräch gespeichert. Die Freigabe gilt für diesen Chat bis zum Ablauf oder bis sich Konfiguration oder Berechtigung ändern. Sie erlaubt keine Schreibzugriffe.",
   "chat.mcp.tool": "MCP-Aktion",
   "chat.mcp.details": "MCP-Ergebnis anzeigen",
   "chat.mcp.writeApproval.title": "MCP-Aktion freigeben",
-  "chat.mcp.writeApproval.disclosure":
-    "Prüfe das Tool und seine Argumente. Die Freigabe erlaubt diese Aktion einmal innerhalb der aktuellen Verbindung und Berechtigung.",
   "chat.mcp.write.notDispatched": "Nicht an den MCP-Server gesendet",
   "chat.mcp.write.rejected": "MCP-Aktion abgelehnt",
   "chat.mcp.write.succeeded": "Aktion bestätigt",
@@ -116,18 +136,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Änderung wurde möglicherweise ausgeführt. Sie wird nicht automatisch wiederholt. Prüfe den entfernten Zustand vor einem weiteren Schreibzugriff.",
   "chat.mcp.write.pendingHelp":
     "Die Aktion hat begonnen. Warte auf ihr Ergebnis, bevor du einen weiteren Schreibzugriff startest.",
-  "chat.jira.title": "Jira in diesem Chat lesen",
-  "chat.jira.disclosure":
-    "Jira-Inhalte werden an das ausgewählte Modell übermittelt und in diesem Gespräch gespeichert. Die Freigabe gilt für diesen Chat bis zum Ablauf oder einer Änderung der Verbindung oder Berechtigungen. Sie erlaubt keine Schreibaktionen.",
-  "chat.jira.approve": "Lesen erlauben",
-  "chat.jira.reject": "Nicht erlauben",
-  "chat.jira.working": "Entscheidung wird gespeichert…",
-  "chat.jira.failed": "Die Entscheidung konnte nicht gespeichert werden. Bitte erneut versuchen.",
-  "chat.jira.pending": "Wartet auf deine Freigabe",
-  "chat.jira.granted": "Lesen erlaubt",
-  "chat.jira.rejected": "Lesen abgelehnt",
-  "chat.jira.expired": "Freigabe abgelaufen",
-  "chat.jira.revoked": "Freigabe widerrufen",
   "chat.jira.tool": "Jira-Aktion",
   "chat.jira.complete": "Abgeschlossen",
   "chat.jira.running": "Wird ausgeführt",
@@ -246,6 +254,45 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.author.draft": "Skill-Entwurf (Markdown)",
   "chat.skills.author.save": "Geprüften Skill speichern",
 
+  "chat.skills.jira.title": "Jira-Vorlagen",
+  "chat.skills.jira.description":
+    "Eine Vorlage ist ein Skill mit Jira-Front-Matter. Keiko prüft jedes Anlegen, Bearbeiten und gewählte Workflow-Übergänge dagegen, bevor etwas an Jira gesendet wird, in jedem Modus.",
+  "chat.skills.jira.pod": "Jira-Pod",
+  "chat.skills.jira.podRequired":
+    "Verbinde einen bereiten Jira-Pod, um eine Vorlage zu prüfen oder vorzuschlagen.",
+  "chat.skills.jira.empty":
+    "Noch keine Jira-Vorlagen. Lade einen Markdown-Skill mit Jira-Vorlagen-Front-Matter hoch oder schlage unten eine aus einem Projekt vor.",
+  "chat.skills.jira.invalid": "Muss korrigiert werden",
+  "chat.skills.jira.validate": "Gegen Jira prüfen",
+  "chat.skills.jira.validating": "Wird geprüft…",
+  "chat.skills.jira.valid": "Die Vorlage passt zur Jira-Instanz.",
+  "chat.skills.jira.partial":
+    "Nicht vollständig geprüft: Jira hat {checks} nicht geliefert, daher wurde die Vorlage nicht damit abgeglichen. Schreibaktionen, die sie steuert, können trotzdem abgelehnt werden.",
+  "chat.skills.jira.check.project": "Projektangaben",
+  "chat.skills.jira.check.fields": "Felder",
+  "chat.skills.jira.check.linkTypes": "Verknüpfungstypen",
+  "chat.skills.jira.check.transitions": "Workflow-Status",
+  "chat.skills.jira.syntax":
+    "Die Vorlage ist fehlerhaft ({codes}). Korrigiere sie und lade sie erneut hoch.",
+  "chat.skills.jira.finding.unknown-project":
+    "Das Projekt {subject} existiert nicht oder ist nicht sichtbar.",
+  "chat.skills.jira.finding.unknown-issue-type":
+    "Der Vorgangstyp {subject} existiert im Projekt nicht.",
+  "chat.skills.jira.finding.unknown-field":
+    "Das Feld {subject} existiert nicht. Davon betroffene Schreibvorgänge werden abgelehnt.",
+  "chat.skills.jira.finding.ambiguous-field":
+    "Mehrere Felder heißen {subject}. Verwende die Feld-ID, um eindeutig zu sein.",
+  "chat.skills.jira.finding.unknown-link-type": "Der Verknüpfungstyp {subject} existiert nicht.",
+  "chat.skills.jira.finding.unknown-transition-target":
+    "{subject} ist kein Status des Projekts. Ein Übergangsname oder eine ID lässt sich hier nicht prüfen.",
+  "chat.skills.jira.projectKey": "Projektschlüssel",
+  "chat.skills.jira.propose": "Aus Projekt vorschlagen",
+  "chat.skills.jira.proposing": "Projekt wird gelesen…",
+  "chat.skills.jira.proposalNone": "Aus diesem Projekt ließ sich keine Vorlage ableiten.",
+  "chat.skills.jira.proposalTitle": "Vorschlag für {issueType} ({count} Vorgänge geprüft)",
+  "chat.skills.jira.save": "Als Skill speichern",
+  "chat.skills.jira.error":
+    "Jira oder die Vorlagenbibliothek konnte nicht gelesen werden, die Einhaltung wurde nicht geprüft. Prüfe den Pod und versuche es erneut.",
   "chat.skills.title": "Skills",
   "chat.skills.sessionRequired":
     "Öffne Keiko über den Launcher, um private Skills zu verwalten. Chat bleibt ohne Skill verfügbar.",
@@ -1585,6 +1632,14 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.total": "{used} von {usable} nutzbaren Eingabe-Tokens · Kontextfenster {window}",
   "chat.context.breakdown": "Aufteilung des Kontextfensters",
   "chat.context.segment.skill": "Skill-Anweisungen",
+  "chat.context.segment.tools": "Werkzeugdefinitionen",
+  "chat.context.connectors": "Konnektoren",
+  "chat.context.connector.mcp": "MCP-Server",
+  "chat.context.connector.jira": "Jira-Pod",
+  "chat.context.connector.idle": "Nicht verbunden",
+  "chat.context.connector.tools": "{count} Werkzeuge",
+  "chat.context.connector.tools.one": "1 Werkzeug",
+  "chat.context.connector.tokens": "~{tokens}",
   "chat.context.notCompacted": "Wird nicht kompaktiert",
   "chat.context.segment.system": "Systemanweisungen",
   "chat.context.segment.summary": "Zusammenfassung früherer Nachrichten",
@@ -1976,6 +2031,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.send.cancel": "Antwort abbrechen",
   "chat.send.statusQueued": "Nachricht wird gesendet…",
   "chat.send.statusContacting": "Antwort wird vorbereitet…",
+  "chat.send.statusAwaitingDecision": "Deine Entscheidung steht aus",
   "chat.send.statusStreaming": "Antwort wird empfangen…",
   "chat.send.statusCancelled": "Antwort abgebrochen.",
   "chat.voice.pendingTurn":
@@ -2909,6 +2965,39 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.action.jira.comments": "Jira-Kommentare lesen",
   "atlassianConnectors.action.jira.transitions": "Jira-Statusübergänge lesen",
   "atlassianConnectors.action.jira.assignable-users": "Zuweisbare Jira-Benutzer suchen",
+  "atlassianConnectors.action.jira.report":
+    "Jira-Fortschritts-, Konformitäts- und Abdeckungsbericht berechnen",
+  "atlassianConnectors.action.jira.draft-stage": "Teil eines Jira-Backlog-Entwurfs vorbereiten",
+  "chat.jira.report.figures":
+    "Die Zahlen berechnet Keiko aus den gelesenen Jira-Daten, nicht das Modell.",
+  "chat.jira.report.reading": "Jira wird gelesen: {read} von {total} Vorgängen",
+  "chat.jira.report.readingUnknown": "Jira wird gelesen: {read} Vorgänge",
+  "chat.jira.report.complete": "Vollständig: {read} Vorgänge gelesen",
+  "chat.jira.report.incomplete":
+    "Unvollständig ({reason}): {read} von {total} Vorgängen gelesen. Die Zahlen beschreiben nur die gelesenen Vorgänge.",
+  "chat.jira.report.reason.read-failed": "Jira konnte nicht weiter gelesen werden",
+  "chat.jira.report.reason.scope-changed": "die Vorgänge haben sich während des Lesens geändert",
+  "chat.jira.report.reason.memory-budget": "Speichergrenze erreicht",
+  "chat.jira.report.reason.template-unreadable":
+    "die Vorlagenbibliothek konnte nicht gelesen werden",
+  "chat.jira.report.reason.issue-too-large": "ein Vorgang ist zu groß zum Lesen",
+  "chat.jira.report.issues": "Vorgänge",
+  "chat.jira.report.todo": "Offen",
+  "chat.jira.report.inProgress": "In Arbeit",
+  "chat.jira.report.done": "Erledigt",
+  "chat.jira.report.donePercent": "{percent} % erledigt",
+  "chat.jira.report.compliance":
+    "{issues} von {checked} Vorgängen weichen ab ({count} Abweichungen)",
+  "chat.jira.report.coverage":
+    "{epics} Epics ohne Inhalt, {orphans} Vorgänge ohne Epic oder übergeordneten Vorgang",
+  "chat.jira.report.coverageUnobserved":
+    "Epics ohne Inhalt lassen sich für diesen Umfang nicht bestimmen, {orphans} Vorgänge ohne Epic oder übergeordneten Vorgang",
+  "chat.jira.report.parentUnverified":
+    "Die Epic-Zugehörigkeit stammt aus einem benutzerdefinierten Feld, dessen Rolle Jira nicht angibt.",
+  "chat.jira.report.exportMarkdown": "Markdown exportieren",
+  "chat.jira.report.exportCsv": "CSV exportieren",
+  "chat.jira.report.exportFailed":
+    "Der Bericht konnte nicht exportiert werden. Führe ihn erneut aus, um ihn zu exportieren.",
   "atlassianConnectors.action.assign-issue": "Jira-Vorgang zuweisen",
   "atlassianConnectors.action.sync-project": "Jira-Projekt synchronisieren",
   "atlassianConnectors.action.search-issues-live": "Jira-Livesuche",

@@ -323,6 +323,12 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "Pure metadata validation refuses an unreadable attachment; raw metadata is preserved for the physical writer's registered rejection diagnostic.",
     "packages/keiko-contracts/src/observability.ts:rejectedActivityLogEventKind":
       "An unreadable error kind becomes the closed registration-mismatch refusal carried by the rejection sentinel to the physical writer.",
+    "packages/keiko-local-knowledge/src/bounded-ooxml-package.ts:readBoundedOoxmlPackage":
+      "The catch returns the closed classifyOoxmlZipError reason (cancelled, budget or malformed) as the read result; the Jira attachment owner refuses the file as unscannable and records it on jira.attachment.source with refusal=unscannable (#4176).",
+    "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts:inflateBounded":
+      "zlib rejects data that is not one bounded zlib stream; the catch returns undefined, the content policy refuses the file as unscannable, and jira.attachment.source records refusal=unscannable under the request correlation (#4176).",
+    "packages/keiko-local-knowledge/src/parsers/pptx-parser.ts:asyncParse":
+      "The catch returns the closed classifyOoxmlZipError parser diagnostic (cancelled, budget, inflate bound or malformed archive) as the parser result; the indexing owner records it on indexing.document.extraction-failed with its failureKind. This is the same parser boundary docx and xlsx hold in the legacy register (#4180).",
   }),
 );
 

@@ -333,10 +333,13 @@ way, because the tool then retries the effect or hands the model its refusal.
 
 Such a decision is deliberately NOT an Authority Envelope approval and does not enter the
 `awaiting-approval` plane. The first member, `workspace-script-trust`, is the ADR-0147 D3
-package-script grant: a hard, mode-independent boundary recorded as a durable workspace record, not
-a one-use action authority. Routing it through the approval plane would mint the wrong artifact and,
-in `governed-assist`, collapse that mode's separate per-command approval into a workspace trust
-grant. The wait a governed tool may hold for such a decision is bounded by the governed tool
+package-script grant: a durable workspace record, not a one-use action authority, asked in Ask for
+approval and Supervised workspace only. In Full access (`autonomous-delivery`) the validated
+Authority Envelope already covers file and command work inside the run's own workspace, so the
+verification runner admits the run's own root under the `autonomous-envelope` basis and the tool
+never waits (owner decision, 2026-11-02; ADR-0147 D3). Routing the decision through the approval
+plane would mint the wrong artifact and, in `governed-assist`, collapse that mode's separate
+per-command approval into a workspace trust grant. The wait a governed tool may hold for such a decision is bounded by the governed tool
 invocation's own lifetime, so the tool always answers with its own closed refusal rather than an
 opaque expiry; a decision that outlives a single tool call leaves the run to report a truthful
 failure rather than a silent success.
