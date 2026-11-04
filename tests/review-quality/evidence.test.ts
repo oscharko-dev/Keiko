@@ -7,8 +7,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseGateArguments } from "./cli.js";
 import {
   BUDGET_SETTING_KEYS,
-  COMPOSITION_PATHS,
+  composedPackagePaths,
+  compositionPaths,
   CONFIGURATION_PATHS,
+  FIXED_COMPOSITION_PATHS,
   gateConfiguration,
   renderGateCost,
   renderReplayCoverage,
@@ -28,19 +30,35 @@ const IDENTITY = {
 const FILES = [
   "packages/keiko-server/src/review/runtime/reviewPrompt.ts",
   "packages/keiko-server/src/review/counter-check/prompt.ts",
+  "packages/keiko-server/src/coding-sidecar-gateway.ts",
   "packages/keiko-contracts/src/pull-request-review.ts",
   "packages/keiko-contracts/src/pull-request-review-rules.ts",
-  "packages/keiko-contracts/src/index.ts",
   "packages/keiko-evaluations/src/index.ts",
-  "packages/keiko-git/src/index.ts",
-  "packages/keiko-harness/src/index.ts",
-  "packages/keiko-model-gateway/src/gateway.ts",
-  "packages/keiko-security/src/index.ts",
-  "packages/keiko-server/src/coding-sidecar-gateway.ts",
-  "packages/keiko-tool-catalog/src/index.ts",
-  "packages/keiko-tools/src/index.ts",
-  "package-lock.json",
+  "packages/keiko-workspace/src/read.ts",
+  "packages/keiko-ui/src/page.tsx",
+  "tests/review-quality/gate.ts",
+  "tests/review-quality/gate.test.ts",
+  ...FIXED_COMPOSITION_PATHS,
 ];
+
+/** Workspace manifests: the server reaches the workspace only through the harness. */
+const MANIFESTS: Readonly<Record<string, readonly string[]>> = {
+  "keiko-server": ["keiko-contracts", "keiko-harness"],
+  "keiko-evaluations": ["keiko-contracts"],
+  "keiko-harness": ["keiko-workspace"],
+  "keiko-contracts": [],
+  "keiko-workspace": [],
+  "keiko-ui": ["keiko-contracts"],
+};
+
+function writeManifest(dir: string, dependencies: readonly string[]): void {
+  const deps = Object.fromEntries(dependencies.map((name) => [`@oscharko-dev/${name}`, "*"]));
+  mkdirSync(join(checkout, "packages", dir), { recursive: true });
+  writeFileSync(
+    join(checkout, "packages", dir, "package.json"),
+    `${JSON.stringify({ name: `@oscharko-dev/${dir}`, dependencies: { ...deps, vitest: "*" } })}\n`,
+  );
+}
 
 function commitChange(path: string, content: string): void {
   writeFileSync(join(checkout, path), content);
@@ -85,6 +103,7 @@ beforeEach(() => {
     mkdirSync(dirname(join(checkout, path)), { recursive: true });
     writeFileSync(join(checkout, path), `// ${path}\n`);
   }
+  for (const [dir, dependencies] of Object.entries(MANIFESTS)) writeManifest(dir, dependencies);
   git(checkout, ["add", "-A"]);
   git(checkout, ["commit", "-q", "-m", "configuration"], { env: IDENTITY });
 });
@@ -121,12 +140,36 @@ describe("gateConfiguration", () => {
     expect(() => gateConfiguration(checkout, args("product"), {})).toThrow(/uncommitted changes/u);
   });
 
+  it("derives the composed packages from the committed workspace dependency closure", () => {
+    expect(composedPackagePaths(checkout)).toEqual([
+      "packages/keiko-contracts",
+      "packages/keiko-evaluations",
+      "packages/keiko-harness",
+      "packages/keiko-server",
+      "packages/keiko-workspace",
+    ]);
+    expect(compositionPaths(checkout)).toEqual([
+      ...composedPackagePaths(checkout),
+      "tests/review-quality/gate.ts",
+      ...FIXED_COMPOSITION_PATHS,
+    ]);
+    writeManifest("keiko-server", ["keiko-contracts", "keiko-harness", "keiko-ui"]);
+    git(checkout, ["commit", "-q", "-am", "depend on the ui"], { env: IDENTITY });
+    expect(composedPackagePaths(checkout)).toContain("packages/keiko-ui");
+  });
+
+  it("refuses a composition that names a package the workspace lacks", () => {
+    writeManifest("keiko-harness", ["keiko-workspace", "keiko-missing"]);
+    git(checkout, ["commit", "-q", "-am", "missing dependency"], { env: IDENTITY });
+    expect(() => composedPackagePaths(checkout)).toThrow(/unknown package/u);
+  });
+
   it("digests the composed packages apart from the review configuration", () => {
     const before = gateConfiguration(checkout, args("product"), {});
-    expect(Object.keys(before.compositionObjects)).toEqual([...COMPOSITION_PATHS]);
+    expect(Object.keys(before.compositionObjects)).toEqual([...compositionPaths(checkout)]);
     expect(before.reuseKey).toMatch(/^[0-9a-f]{12}$/u);
     expect(before.reuseKey).toBe(reuseKeyOf(before.configurationDigest, before.compositionDigest));
-    commitChange("packages/keiko-model-gateway/src/gateway.ts", "// repaired\n");
+    commitChange("packages/keiko-workspace/src/read.ts", "// a new denial\n");
     const after = gateConfiguration(checkout, args("product"), {});
     expect(after.configurationDigest).toBe(before.configurationDigest);
     expect(after.compositionDigest).not.toBe(before.compositionDigest);
@@ -137,8 +180,17 @@ describe("gateConfiguration", () => {
   });
 
   it("refuses to run on uncommitted changes in a composed package", () => {
-    writeFileSync(join(checkout, "packages/keiko-server/src/coding-sidecar-gateway.ts"), "// x\n");
+    writeFileSync(join(checkout, "packages/keiko-workspace/src/read.ts"), "// x\n");
     expect(() => gateConfiguration(checkout, args("product"), {})).toThrow(/uncommitted changes/u);
+  });
+
+  it("ignores packages outside the closure and the gate's own tests", () => {
+    const before = gateConfiguration(checkout, args("product"), {});
+    commitChange("packages/keiko-ui/src/page.tsx", "// restyled\n");
+    commitChange("tests/review-quality/gate.test.ts", "// another case\n");
+    expect(gateConfiguration(checkout, args("product"), {}).reuseKey).toBe(before.reuseKey);
+    commitChange("tests/review-quality/gate.ts", "// changed selection\n");
+    expect(gateConfiguration(checkout, args("product"), {}).reuseKey).not.toBe(before.reuseKey);
   });
 });
 

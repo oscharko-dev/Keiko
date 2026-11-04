@@ -1,10 +1,12 @@
 // The evidence of one offline gate run (Issue #4138): what was run, on which configuration, with
 // which result and at what cost, body-free. The configuration digest covers the committed review
 // code, the counter-check and presentation limits, the run-budget settings, the variant and the model
-// pair. The composition digest covers every other package the composed pipeline runs, and the
-// dependency lockfile, so two runs with the same pair of digests ran the same code. A run refuses to
-// start when any of those paths has uncommitted changes, because `build:packages` would measure code
-// nobody can check out. The reuse key joins both digests; a resumed run reuses only the stored
+// pair. The composition digest covers everything else the composed pipeline runs: every workspace
+// package in the dependency closure of the server and the evaluation family, read from the committed
+// `package.json` files, the gate's own non-test sources, the base TypeScript configuration, the
+// runtime staging script and the lockfile. Two runs with the same pair of digests therefore ran the
+// same code. A run refuses to start when any of those paths has uncommitted changes, because
+// `build:packages` would measure code nobody can check out. The reuse key joins both digests; a resumed run reuses only the stored
 // reviews whose client request id carries it (resume.ts).
 
 import { createHash } from "node:crypto";
@@ -20,19 +22,21 @@ export const CONFIGURATION_PATHS = [
   "packages/keiko-contracts/src/pull-request-review-rules.ts",
 ] as const;
 
-/** The other committed paths the composed review pipeline runs, outside the review code itself. */
-export const COMPOSITION_PATHS = [
-  "packages/keiko-contracts",
-  "packages/keiko-evaluations",
-  "packages/keiko-git",
-  "packages/keiko-harness",
-  "packages/keiko-model-gateway",
-  "packages/keiko-security",
-  "packages/keiko-server",
-  "packages/keiko-tool-catalog",
-  "packages/keiko-tools",
-  "package-lock.json",
+/** The workspace packages whose dependency closure the composed pipeline runs. */
+export const COMPOSITION_ROOTS = [
+  "@oscharko-dev/keiko-server",
+  "@oscharko-dev/keiko-evaluations",
 ] as const;
+
+/** Committed files outside the packages that decide what the gate builds and runs. */
+export const FIXED_COMPOSITION_PATHS = [
+  "package-lock.json",
+  "tsconfig.base.json",
+  "scripts/stage-dev-coding-runtime.mjs",
+] as const;
+
+const HARNESS_DIR = "tests/review-quality";
+const WORKSPACE_SCOPE = "@oscharko-dev/";
 
 const PROMPT_PATHS = [
   "packages/keiko-server/src/review/runtime/reviewPrompt.ts",
@@ -64,18 +68,70 @@ function sha256(value: string): string {
   return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
 }
 
+interface WorkspacePackage {
+  readonly path: string;
+  readonly dependencies: readonly string[];
+}
+
+/** Reads every committed workspace package by name, with its workspace dependencies. */
+function workspacePackages(checkout: string): ReadonlyMap<string, WorkspacePackage> {
+  const packages = new Map<string, WorkspacePackage>();
+  for (const dir of git(checkout, ["ls-tree", "--name-only", "-d", "HEAD", "packages/"]).split(
+    "\n",
+  )) {
+    if (dir === "") continue;
+    const manifest = JSON.parse(git(checkout, ["show", `HEAD:${dir}/package.json`])) as {
+      readonly name?: string;
+      readonly dependencies?: Readonly<Record<string, string>>;
+      readonly peerDependencies?: Readonly<Record<string, string>>;
+    };
+    if (manifest.name === undefined) continue;
+    const names = Object.keys({ ...manifest.dependencies, ...manifest.peerDependencies });
+    packages.set(manifest.name, {
+      path: dir,
+      dependencies: names.filter((name) => name.startsWith(WORKSPACE_SCOPE)),
+    });
+  }
+  return packages;
+}
+
+/** The package directories in the workspace dependency closure of the composition roots. */
+export function composedPackagePaths(checkout: string): readonly string[] {
+  const packages = workspacePackages(checkout);
+  const pending: string[] = [...COMPOSITION_ROOTS];
+  const seen = new Set<string>();
+  while (pending.length > 0) {
+    const name = pending.pop() ?? "";
+    if (seen.has(name)) continue;
+    const found = packages.get(name);
+    if (found === undefined) throw new Error(`the composition names an unknown package: ${name}`);
+    seen.add(name);
+    pending.push(...found.dependencies);
+  }
+  return [...seen].map((name) => packages.get(name)?.path ?? "").sort();
+}
+
+/** Every committed path whose content the composition digest covers. */
+export function compositionPaths(checkout: string): readonly string[] {
+  const harness = git(checkout, ["ls-tree", "-r", "--name-only", "HEAD", `${HARNESS_DIR}/`])
+    .split("\n")
+    .filter((path) => path !== "" && !path.endsWith(".test.ts"));
+  return [...composedPackagePaths(checkout), ...harness, ...FIXED_COMPOSITION_PATHS];
+}
+
 /** Reads the configuration identity of the checkout the gate runs from. */
 export function gateConfiguration(
   checkout: string,
   args: GateArguments,
   env: Readonly<Record<string, string | undefined>>,
 ): GateConfiguration {
+  const composition = compositionPaths(checkout);
   const dirty = git(checkout, [
     "status",
     "--porcelain",
     "--",
     ...CONFIGURATION_PATHS,
-    ...COMPOSITION_PATHS,
+    ...composition,
   ]);
   if (dirty !== "") {
     throw new Error("the review pipeline has uncommitted changes; commit them before a run");
@@ -86,7 +142,7 @@ export function gateConfiguration(
     objects[path] = git(checkout, ["rev-parse", `HEAD:${path}`]);
   }
   const compositionObjects: Record<string, string> = {};
-  for (const path of COMPOSITION_PATHS) {
+  for (const path of composition) {
     compositionObjects[path] = git(checkout, ["rev-parse", `HEAD:${path}`]);
   }
   const budgetSettings: Record<string, string | null> = {};
@@ -99,9 +155,7 @@ export function gateConfiguration(
     counterCheckerModelId: args.counterCheckerModelId,
   };
   const configurationDigest = sha256(JSON.stringify(identity));
-  const compositionDigest = sha256(
-    JSON.stringify(COMPOSITION_PATHS.map((path) => compositionObjects[path])),
-  );
+  const compositionDigest = sha256(JSON.stringify(Object.entries(compositionObjects)));
   return {
     checkoutCommit,
     configurationDigest,
