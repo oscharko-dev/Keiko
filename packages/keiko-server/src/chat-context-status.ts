@@ -1,4 +1,5 @@
 import { markdownSkillInstructionTokens } from "./markdown-skill-prompt.js";
+import { chatConnectorTools, type ChatConnectorTools } from "./chat-context-connectors.js";
 import type {
   ChatContextStatusWire,
   GroundedPromptContextWire,
@@ -192,9 +193,9 @@ function pendingCompaction(
   counted: CountedHistory,
   correlationId: string | undefined,
   loaded: LoadedHistoryCheckpoint,
-  protectedSkillTokens = 0,
+  fixedRequestTokens = 0,
 ): PendingProjection | undefined {
-  const scaffold = currentRequestScaffoldTokens(profile.tokenAccounting) + protectedSkillTokens;
+  const scaffold = currentRequestScaffoldTokens(profile.tokenAccounting) + fixedRequestTokens;
   if (counted.tokens + scaffold < profile.effectiveInputBudget * AUTOMATIC_COMPACTION_THRESHOLD)
     return undefined;
   const target = Math.floor(profile.effectiveInputBudget * AUTOMATIC_COMPACTION_TARGET) - scaffold;
@@ -362,6 +363,42 @@ function protectedSkillStatus(
   };
 }
 
+function connectorToolsStatus(
+  deps: UiHandlerDeps,
+  chatId: string,
+  profile: ContextProfile,
+  correlationId: string | undefined,
+): ChatConnectorTools {
+  return chatConnectorTools(
+    deps,
+    deps.store.findChatById(chatId),
+    profile.tokenAccounting,
+    correlationId,
+  );
+}
+
+function connectorToolCount(tools: ChatConnectorTools): number {
+  return tools.connectors.reduce((sum, connector) => sum + (connector.toolCount ?? 0), 0);
+}
+
+function windowFields(
+  deps: UiHandlerDeps,
+  modelId: string,
+  profile: ContextProfile,
+): Omit<
+  ChatContextStatusWire,
+  "modelId" | "estimatedInputTokens" | "canCompact" | "segments" | "autoCompactionAtTokens"
+> {
+  return {
+    contextWindowTokens: profile.maxInputTokens,
+    ...(profile.inputTokenLimit === undefined ? {} : { inputLimitTokens: profile.inputTokenLimit }),
+    ...assumedWindowField(deps, modelId),
+    inputBudgetTokens: profile.effectiveInputBudget,
+    reservedOutputTokens: profile.reservedOutputTokens,
+    safetyMarginTokens: profile.safetyMarginTokens,
+  };
+}
+
 function contextStatusWithCheckpoint(
   deps: UiHandlerDeps,
   chatId: string,
@@ -373,6 +410,8 @@ function contextStatusWithCheckpoint(
   const { conversationProfile, checkpoint, counted, currentPrompt, grounded } =
     inspectConversationContext(deps, chatId, modelId, profile, loaded);
   const protectedSkill = protectedSkillStatus(deps, chatId, profile);
+  const tools = connectorToolsStatus(deps, chatId, profile, correlationId);
+  const fixedRequestTokens = grounded === undefined ? protectedSkill.tokens + tools.tokens : 0;
   const pending = pendingCompaction(
     deps,
     chatId,
@@ -380,27 +419,24 @@ function contextStatusWithCheckpoint(
     counted,
     correlationId,
     loaded,
-    grounded === undefined ? protectedSkill.tokens : 0,
+    fixedRequestTokens,
   );
   const breakdown = contextBreakdown({
     profile,
     protectedSkillTokens: protectedSkill.tokens,
+    toolDefinitions: { tokens: tools.tokens, count: connectorToolCount(tools) },
     conversation: pending?.conversation ?? storedConversation(counted, checkpoint),
     grounded,
   });
   return {
     modelId,
     ...protectedSkill.wire,
-    contextWindowTokens: profile.maxInputTokens,
-    ...(profile.inputTokenLimit === undefined ? {} : { inputLimitTokens: profile.inputTokenLimit }),
-    ...assumedWindowField(deps, modelId),
-    inputBudgetTokens: profile.effectiveInputBudget,
-    reservedOutputTokens: profile.reservedOutputTokens,
-    safetyMarginTokens: profile.safetyMarginTokens,
+    ...(tools.connectors.length === 0 ? {} : { connectors: tools.connectors }),
+    ...windowFields(deps, modelId, profile),
     estimatedInputTokens: breakdown.usedTokens,
     canCompact:
       counted.messages >= 2 &&
-      counted.tokens + (grounded === undefined ? protectedSkill.tokens : 0) >=
+      counted.tokens + fixedRequestTokens >=
         conversationProfile.effectiveInputBudget * MANUAL_COMPACTION_THRESHOLD,
     ...checkpointSavings(checkpoint, counted),
     ...(pending === undefined ? {} : { pendingCompaction: pending.wire }),
@@ -452,15 +488,19 @@ function manualCompactionBudget(
   deps: UiHandlerDeps,
   chatId: string,
   modelId: string,
+  correlationId: string,
 ): { readonly profile: ContextProfile; readonly budget: number } {
   const modelProfile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
   const grounded = groundedShare(deps, chatId, modelProfile) !== undefined;
   const profile = grounded ? groundedConversationLaneProfile(modelProfile) : modelProfile;
-  const skillTokens = grounded ? 0 : protectedSkillStatus(deps, chatId, modelProfile).tokens;
+  const fixedTokens = grounded
+    ? 0
+    : protectedSkillStatus(deps, chatId, modelProfile).tokens +
+      connectorToolsStatus(deps, chatId, modelProfile, correlationId).tokens;
   return {
     profile,
     budget: Math.floor(
-      Math.max(0, profile.effectiveInputBudget - skillTokens) * AUTOMATIC_COMPACTION_TARGET,
+      Math.max(0, profile.effectiveInputBudget - fixedTokens) * AUTOMATIC_COMPACTION_TARGET,
     ),
   };
 }
@@ -473,7 +513,7 @@ function manualCompactionCandidate(
   loadedCheckpoint: LoadedHistoryCheckpoint,
   enabled: boolean,
 ): ContextCompactionRecord | undefined {
-  const { profile, budget } = manualCompactionBudget(deps, chatId, modelId);
+  const { profile, budget } = manualCompactionBudget(deps, chatId, modelId, correlationId);
   const snapshot = captureChatHistoryWithCheckpoint({
     store: deps.store,
     evidenceStore: deps.evidenceStore,

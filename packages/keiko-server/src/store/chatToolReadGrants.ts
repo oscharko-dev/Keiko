@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { ChatToolReadGrant } from "@oscharko-dev/keiko-contracts";
 import { canonicalise } from "@oscharko-dev/keiko-security";
 import {
   parseChatReadGrantEntry,
@@ -95,13 +96,29 @@ function saveGrant(
   });
 }
 
+/** A granted read may restart its time, forward only; nothing else about it changes. */
+function isRenewal(prior: ChatToolReadGrant, next: ChatToolReadGrant): boolean {
+  return (
+    prior.state === "granted" &&
+    next.state === "granted" &&
+    next.requestedAt >= prior.requestedAt &&
+    next.expiresAt > prior.expiresAt
+  );
+}
 function validTransition(previous: ChatReadGrantEntry, next: ChatReadGrantEntry): boolean {
   const prior = previous.grant;
+  const renewal = isRenewal(prior, next.grant);
   const pinned = {
     ...next,
-    grant: { ...next.grant, state: prior.state, consentProofDigest: prior.consentProofDigest },
+    grant: {
+      ...next.grant,
+      state: prior.state,
+      consentProofDigest: prior.consentProofDigest,
+      ...(renewal ? { requestedAt: prior.requestedAt, expiresAt: prior.expiresAt } : {}),
+    },
   };
   if (canonicalise(previous) !== canonicalise(pinned)) return false;
+  if (renewal) return next.grant.consentProofDigest === prior.consentProofDigest;
   if (prior.state === "pending") return next.grant.state !== "pending";
   return (
     prior.state === "granted" &&

@@ -121,6 +121,19 @@ export const VERIFICATION_COMMAND_RULES: readonly CommandRule[] = Object.freeze(
     allowedSubcommands: Object.freeze(["test", "run"]),
     denyFlags: Object.freeze(["-c", "--call"]),
   },
+  // A nested package may be run with the manager its own manifest or lockfile names. Only the same
+  // two subcommands as npm: `run <script>` and the dedicated test command, never `exec`/`dlx`/
+  // `install`/`add`, which would fetch or execute code the repository did not declare.
+  {
+    executable: "yarn",
+    allowedSubcommands: Object.freeze(["run"]),
+    denyFlags: Object.freeze(["-c", "--call"]),
+  },
+  {
+    executable: "pnpm",
+    allowedSubcommands: Object.freeze(["run"]),
+    denyFlags: Object.freeze(["-c", "--call"]),
+  },
   {
     executable: "npx",
     allowedSubcommands: Object.freeze(["vitest", "jest"]),
@@ -257,12 +270,14 @@ function deniedResult(
   };
 }
 
+const PACKAGE_MANAGER_COMMANDS: ReadonlySet<string> = new Set(["npm", "yarn", "pnpm"]);
+
 function isGeneratedSkipShape(step: VerificationStep): boolean {
   return (
     step.kind !== "targeted-test" &&
     step.skipReason !== undefined &&
     step.scriptName === undefined &&
-    step.command === "npm" &&
+    PACKAGE_MANAGER_COMMANDS.has(step.command) &&
     step.args.length === 2 &&
     step.args[0] === "run" &&
     step.args[1] === step.kind
@@ -323,7 +338,7 @@ function isValidNpxTargetedArgs(args: readonly string[]): boolean {
 
 function isValidTestStep(step: VerificationStep): boolean {
   if (step.kind === "test") {
-    if (step.scriptName === "test") {
+    if (step.scriptName === "test" && step.command === "npm") {
       return step.args.length === 1 && step.args[0] === "test";
     }
     return (
@@ -337,7 +352,7 @@ function isValidTestStep(step: VerificationStep): boolean {
 }
 
 function isValidScriptStep(step: VerificationStep): boolean {
-  if (step.command !== "npm") {
+  if (!PACKAGE_MANAGER_COMMANDS.has(step.command)) {
     return false;
   }
   if (step.kind === "test") {
@@ -349,7 +364,16 @@ function isValidScriptStep(step: VerificationStep): boolean {
   return step.args.length === 2 && step.args[0] === "run" && step.args[1] === step.scriptName;
 }
 
+// A step's package folder is a workspace-relative path the planner derived; anything else (absolute,
+// parent segments, option-like) is not a generated shape.
+function isValidStepCwd(step: VerificationStep): boolean {
+  return step.cwd === undefined || isGeneratedTargetPath(step.cwd);
+}
+
 function isValidVerificationStep(step: VerificationStep): boolean {
+  if (!isValidStepCwd(step)) {
+    return false;
+  }
   if (isGeneratedSkipShape(step)) {
     return true;
   }
@@ -387,11 +411,12 @@ async function runStep(
   };
   try {
     assertTargetedProjectRoot(step, deps);
+    const invocation = stepInvocation(step, deps);
     const result = await runCommand(
       {
         command: step.command,
-        args: step.args,
-        cwd: undefined,
+        args: invocation.args,
+        cwd: invocation.cwd,
         timeoutMs: step.limits.wallTimeMs,
         signal: ac.signal,
       },
@@ -406,15 +431,45 @@ async function runStep(
   }
 }
 
+// The folder flag each package manager runs a script in. The process itself starts at the
+// workspace root, so the execution-root sandbox keeps the whole workspace readable: a nested
+// package of a monorepo still resolves the dependencies hoisted to the root.
+const PACKAGE_DIR_FLAGS: Readonly<Record<string, string>> = Object.freeze({
+  npm: "--prefix",
+  yarn: "--cwd",
+  pnpm: "--dir",
+});
+
+function stepInvocation(
+  step: VerificationStep,
+  deps: VerificationDeps,
+): { readonly args: readonly string[]; readonly cwd: string | undefined } {
+  const flag = PACKAGE_DIR_FLAGS[step.command];
+  if (step.cwd === undefined || flag === undefined) return { args: step.args, cwd: step.cwd };
+  const fs = deps.fs ?? nodeWorkspaceFs;
+  const path = assertContainedRealPath(
+    fs,
+    deps.workspace.root,
+    resolveWithinWorkspace(deps.workspace.root, step.cwd),
+    "verification package",
+  );
+  if (!fs.stat(path).isDirectory) throw new TypeError("Verification package is unavailable.");
+  return { args: [`${flag}=${step.cwd}`, ...step.args], cwd: undefined };
+}
+
+function selectsNestedVitestRoot(step: VerificationStep): boolean {
+  return step.kind === "targeted-test" && step.command === "npx" && step.args[2] === "--root";
+}
+
 function assertTargetedProjectRoot(step: VerificationStep, deps: VerificationDeps): void {
-  if (step.kind !== "targeted-test" || step.command !== "npx" || step.args[2] !== "--root") return;
+  if (!selectsNestedVitestRoot(step)) return;
   try {
     const directory = step.args[3];
     if (directory === undefined) throw new TypeError("Targeted test project is unavailable.");
     const path = assertContainedRealPath(
       deps.fs ?? nodeWorkspaceFs,
       deps.workspace.root,
-      resolveWithinWorkspace(deps.workspace.root, directory),
+      resolveWithinWorkspace(deps.workspace.root, join(step.cwd ?? "", directory)),
       "targeted test project",
     );
     if (!(deps.fs ?? nodeWorkspaceFs).stat(path).isDirectory) {
@@ -647,15 +702,30 @@ async function bootstrapDependencies(
   baseSpawn: SpawnFn,
 ): Promise<DependencyBootstrapOutcome | undefined> {
   if (plan.steps.every((step) => step.skipReason !== undefined)) return undefined;
+  // The bootstrap installs with npm only. A package that names Yarn or pnpm is never installed by
+  // it: its steps are already skipped as `native shell required` while its tree is missing.
+  if (plan.packageManager !== undefined && plan.packageManager !== "npm") return undefined;
   const fs = deps.fs ?? nodeWorkspaceFs;
-  const bootstrap = bootstrapDeps(deps, fs, baseSpawn);
-  const bootstrapPlan = planDependencyBootstrap(deps.workspace, fs, bootstrap.onFailure);
+  const bootstrap = bootstrapDeps(bootstrapScope(plan, deps), fs, baseSpawn);
+  const bootstrapPlan = planDependencyBootstrap(bootstrap.workspace, fs, bootstrap.onFailure);
   if (bootstrapPlan.kind === "none") return undefined;
   const outcome = await runDependencyBootstrap(bootstrapPlan, bootstrap);
   if (outcome.excerpt !== undefined) {
     deps.onStepOutput?.({ step: "dependencies", scriptName: undefined, excerpt: outcome.excerpt });
   }
   return outcome;
+}
+
+// A nested npm package installs into its own folder, still behind the same workspace boundary.
+function bootstrapScope(plan: VerificationPlan, deps: VerificationDeps): VerificationDeps {
+  if (plan.packageDir === undefined || !isGeneratedTargetPath(plan.packageDir)) return deps;
+  return {
+    ...deps,
+    workspace: {
+      ...deps.workspace,
+      root: resolveWithinWorkspace(deps.workspace.root, plan.packageDir),
+    },
+  };
 }
 
 function bootstrapDeps(

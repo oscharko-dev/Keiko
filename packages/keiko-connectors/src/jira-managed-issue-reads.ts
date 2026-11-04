@@ -21,6 +21,9 @@ export const JIRA_MANAGED_SEARCH_FIELDS =
 // Reserve the complete catalog envelope (fixed Jira reference, bounded invocation/digest,
 // metrics and a cursor-free page). The unchanged catalog cap still validates the final envelope.
 const ISSUE_DATA_MAX_BYTES = TOOL_CATALOG_LIMITS.maxResultBytes - 4096;
+// Each search result carries its own requested fields; a page of them stays a bounded fraction of
+// the result, and the page boundary (`nextStartAt`) still resumes at the first unreturned issue.
+const SEARCH_FIELD_VALUES_MAX_BYTES = 16384;
 function text(value: unknown, max: number): value is string {
   return typeof value === "string" && value.length <= max;
 }
@@ -117,6 +120,22 @@ function comment(value: unknown): CatalogJsonObject | undefined {
     ...(author === undefined ? {} : { author }),
   };
 }
+/** A search result with the fields the caller asked for, typed by the instance's own names/schema. */
+function searchIssue(
+  value: unknown,
+  body: Record<string, unknown>,
+  selected: readonly string[],
+  baseUrl: string,
+): CatalogJsonObject | undefined {
+  const summary = issue(value, false, baseUrl);
+  if (summary === undefined || selected.length === 0) return summary;
+  const fields = jiraSelectedFieldValues(
+    { fields: asRecord(value)?.fields, names: body.names, schema: body.schema },
+    selected,
+    SEARCH_FIELD_VALUES_MAX_BYTES,
+  );
+  return fields === undefined ? undefined : { ...summary, fieldValues: fields };
+}
 function items(
   value: unknown,
   project: (value: unknown) => CatalogJsonObject | undefined,
@@ -182,7 +201,7 @@ export function jiraIssueReadResult(
   return name === "jira.search"
     ? page(
         body,
-        items(body.issues, (value) => issue(value, false, baseUrl)),
+        items(body.issues, (value) => searchIssue(value, body, selectedFields, baseUrl)),
         startAt,
         maxResults,
       )

@@ -78,6 +78,19 @@ were inspected again. All 25 source hashes and four harness hashes match the rev
 The unchanged freshness gate, 23 updater/editor evidence contract tests and both Linux Editor
 bundle gates pass; no baseline or numerical ceiling changed. This remains updater fixture evidence.
 
+The Jira backlog-draft review (#4178, PR #4182) adds draft-tree strings to both optional message
+catalogs, so the unchanged freshness gate rejected their previous digests. The complete original
+nine-case producer ran again on 2026-10-31 (UTC) on macOS arm64 with Node 24.22.0 and passed in
+1.1 minutes, including real BFF stop/restart. All 14 captures were rewritten by this host's
+renderer; the three records again bind every declared source and harness digest. No updater
+behavior, baseline or numerical ceiling changed. This remains updater fixture evidence.
+
+The partly refused draft guidance (#4178, PR #4182) changed the optional German message catalog
+again. The complete original nine-case producer ran on 2026-11-01 (UTC) on macOS arm64 with Node
+24.22.0 and passed in 1.4 minutes, including real BFF stop/restart; this host's renderer rewrote two
+captures and the three records rebind every declared digest. No updater behavior, baseline or
+numerical ceiling changed. This remains updater fixture evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
@@ -218,3 +231,38 @@ and four harness inputs; only the outage harness digest changed. A first run in 
 without `fonts-liberation` rendered every capture in DejaVu Sans and was discarded: reproduce this
 set with the Liberation fonts installed. This remains updater presentation and declared BFF recovery
 evidence; it does not prove native installation, replacement or restart.
+
+The Jira Pod create form's Data Center placeholders (PR #4182) changed both optional message
+catalogs. The complete original nine-case producer ran on 2026-11-02 (UTC) on macOS arm64 with
+Node 24.22.0 and passed in 1.1 minutes, including the real-BFF outage journey; only
+`11-progress-state.png` changed bytes and was inspected, and the three records rebind every
+declared digest. No updater behavior, baseline or numerical ceiling changed. This remains updater
+fixture evidence.
+
+The connector selection, Jira Pod card and read-grant changes of the same pull request changed the
+optional message catalogs again. The complete original nine-case producer ran on 2026-11-02 (UTC)
+on macOS arm64 with Node 26.13.0, npm 11.19.1 and Playwright 1.64.1 and passed in 48.0 seconds,
+including the real-BFF outage journey; only `11-progress-state.png` changed bytes (the progress
+bar's captured position) and was inspected, and the three records rebind every declared digest.
+The evidence freshness gate passed. No updater behavior, baseline or numerical ceiling changed.
+
+The Jira report card's two new messages (PR #4182, review repairs) changed the optional catalogs, so
+the original producer ran again on 2026-11-02 with Node 24.18.0. All cases passed, including the
+real-BFF outage journey, and the three records rebind every declared digest. The evidence freshness
+gate passed. No updater behavior, baseline or numerical ceiling changed.
+
+The requirements read's Chat row label and partial-list note (PR #4182) changed the optional catalogs
+again, so the original producer ran on 2026-11-02 with Node 24.18.0. All cases passed, including the
+real-BFF outage journey; only `11-progress-state.png` changed bytes (the progress bar's captured
+position), and the three records rebind every declared digest. The evidence freshness gate passed.
+No updater behavior, baseline or numerical ceiling changed.
+
+The Chat's waiting status and the attachment and requirements labels (PR #4182) changed the core and
+optional catalogs, so the original producer ran on 2026-11-02 with Node 24.18.0. All nine cases
+passed, including the real-BFF outage journey, and the three records rebind every declared digest. The
+evidence freshness gate passed. No updater behavior, baseline or numerical ceiling changed.
+
+The approval card's link label (PR #4182) changed the optional catalogs again, so the original
+producer ran on 2026-11-02 with Node 24.18.0. All nine cases passed, and the three records rebind
+every declared digest. The evidence freshness gate passed. No updater behavior, baseline or
+numerical ceiling changed.

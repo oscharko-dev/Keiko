@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/harness";
-import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { chatToolTurnBudget } from "../chat-tool-turn-budget.js";
+import {
+  CHAT_TOOL_DEFAULT_MODE,
+  resolveEffectiveCodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { CHAT_TOOL_READ_DISCLOSURE_VERSION } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import {
@@ -43,7 +46,13 @@ import {
 } from "./jiraPodAccess.js";
 
 export type JiraChatAuthorityDeps = JiraPodAccessDeps &
-  Pick<UiHandlerDeps, "store" | "agentAuthorityRegistry" | "autonomousDeliveryDeploymentCeiling">;
+  Pick<
+    UiHandlerDeps,
+    | "store"
+    | "agentAuthorityRegistry"
+    | "autonomousDeliveryDeploymentCeiling"
+    | "chatToolTurnBudget"
+  >;
 
 export type JiraChatAuthorityEnvelope = ChatToolAuthorityEnvelope & {
   readonly subject: JiraChatToolAuthoritySubject;
@@ -92,8 +101,9 @@ function acceptedTurnEnvelope(
   facts: CurrentFacts,
   turn: AcceptedJiraChatTurn,
   deploymentCeiling: CodingWorkbenchMode,
+  budget: ChatToolAuthorityEnvelope["budget"],
 ): JiraChatAuthorityEnvelope {
-  const requestedMode = facts.chat.toolMode ?? "governed-assist";
+  const requestedMode = facts.chat.toolMode ?? CHAT_TOOL_DEFAULT_MODE;
   const runId = `chat-${sha256Hex(canonicalise({ chatId: turn.chatId, userMessageId: turn.userMessageId }))}`;
   return {
     schemaVersion: "1",
@@ -105,13 +115,8 @@ function acceptedTurnEnvelope(
     effectiveMode: resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling),
     actionClasses: ["connector-access", "network-egress"],
     connectorScopes: ["issue-tracker.read", "issue-tracker.write"],
-    budget: {
-      maxRuntimeMs: DEFAULT_LIMITS.maxWallTimeMs,
-      maxToolCalls: DEFAULT_LIMITS.maxToolCalls,
-      maxPromptTokens: 100_000,
-      maxPatchBytes: 0,
-    },
-    expiresAt: new Date(turn.startedAtMs + DEFAULT_LIMITS.maxWallTimeMs).toISOString(),
+    budget,
+    expiresAt: new Date(turn.startedAtMs + budget.maxRuntimeMs).toISOString(),
     approvalProofDigest: sha256Hex(
       canonicalise({
         runId,
@@ -141,7 +146,7 @@ function isCurrentAcceptedMessage(
 
 /** Retain the same canonical admission and deadline across duplicate calls and every phase. */
 function validAcceptedTurn(deps: JiraChatAuthorityDeps, turn: AcceptedJiraChatTurn): boolean {
-  const deadline = turn.startedAtMs + DEFAULT_LIMITS.maxWallTimeMs;
+  const deadline = turn.startedAtMs + chatToolTurnBudget(deps).maxRuntimeMs;
   return (
     isCurrentAcceptedMessage(deps, turn) &&
     Number.isSafeInteger(turn.startedAtMs) &&
@@ -169,7 +174,10 @@ export function prepareAcceptedJiraChatAuthority(
       turn.correlationId,
     );
   const ceiling = deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist";
-  return { ok: true, envelope: acceptedTurnEnvelope(facts, turn, ceiling) };
+  return {
+    ok: true,
+    envelope: acceptedTurnEnvelope(facts, turn, ceiling, chatToolTurnBudget(deps)),
+  };
 }
 
 /** Normal turn settlement does not revoke this issuer; expiry/lifecycle retain that ownership. */
@@ -254,7 +262,7 @@ export function resolveCurrentJiraChatAuthority(
       correlationId,
     );
   if (!isJiraEnvelope(resolution.envelope)) return { ok: false, reason: "invalid" };
-  if (resolution.envelope.requestedMode !== (facts.chat.toolMode ?? "governed-assist")) {
+  if (resolution.envelope.requestedMode !== (facts.chat.toolMode ?? CHAT_TOOL_DEFAULT_MODE)) {
     return recordChatAuthorityResult(
       "current-state",
       { ok: false, reason: "invalid" },

@@ -62,6 +62,7 @@ import {
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
 import { CODING_TOOL_MAX_READ_BYTES, CODING_TOOL_READ_MAX_WINDOW_LINES } from "./codingToolIpc.js";
 import {
+  PackageSelectionRequiredError,
   VerificationRunnerError,
   WorkspaceTrustRequiredError,
 } from "../editor/verificationRunnerErrors.js";
@@ -2043,6 +2044,134 @@ describe("production managed worktree tools", () => {
     ).resolves.toMatchObject({ status: "failed", reasonCode: "VERIFICATION_NOT_RUN" });
     expect(completeVerification).not.toHaveBeenCalled();
     expect(observeVerification).toHaveBeenCalledExactlyOnceWith(notRun);
+  });
+
+  // Owner decision (2026-11-02): script trust is a mode-dependent disposition. The tool hands the
+  // runner the run's LIVE effective mode (never a frozen one) and the optional package folder; the
+  // runner alone decides, so the two narrower modes keep their operator decision.
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "hands the runner the run's effective mode %s and the requested package folder",
+    async (effectiveMode) => {
+      const runToReport = vi.fn((_input: VerificationRunInput, _signal: AbortSignal) =>
+        Promise.resolve(verificationReport("passed")),
+      );
+      const facade = verificationFacade({ runToReport, records: [], effectiveMode });
+
+      await facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-mode",
+          idempotencyKey: "verification-mode-key",
+          verifierId: "test",
+          targetPath: "",
+          packageDir: "web/app",
+        }),
+      });
+
+      expect(runToReport).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ autonomyMode: effectiveMode, packageDir: "web/app" }),
+        expect.any(AbortSignal),
+      );
+    },
+  );
+
+  it("does not pause a Full access run for a script-trust decision the runner already admitted", async () => {
+    const requestOperatorDecision = vi.fn();
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve(verificationReport("passed")),
+      records: [],
+      requestOperatorDecision,
+      scriptTrustFor: () => ({ trusted: false, refusal: "root-not-trusted" }),
+    });
+
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-no-pause",
+          idempotencyKey: "verification-no-pause-key",
+          verifierId: "test",
+        }),
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(requestOperatorDecision).not.toHaveBeenCalled();
+  });
+
+  it("names the package folders to choose between and records no blocker for them", async () => {
+    const verificationBlocked = vi.fn();
+    const facade = verificationFacade({
+      runToReport: () => Promise.reject(new PackageSelectionRequiredError(["api/web", "tools"])),
+      records: [],
+      verificationBlocked,
+    });
+
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-package",
+          idempotencyKey: "verification-package-key",
+          verifierId: "test",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      status: "failed",
+      reasonCode: "NO_RUNNABLE_STEPS",
+      detail: "Several packages were found. Pass one as packageDir: api/web, tools.",
+    });
+    expect(verificationBlocked).not.toHaveBeenCalled();
+  });
+
+  it("reports a yarn or pnpm package without an installed tree as native-shell-required", async () => {
+    const log: ServerLogEvent[] = [];
+    const [template] = failedVerificationReport().results;
+    if (template === undefined) throw new TypeError("fixture result missing");
+    const facade = verificationFacade({
+      runToReport: () =>
+        Promise.resolve({
+          ...verificationReport("skipped"),
+          results: [
+            {
+              ...template,
+              kind: "test",
+              status: "skipped",
+              exitCode: null,
+              durationMs: 0,
+              outputSummary: "",
+              locations: undefined,
+              detail: "native shell required: yarn dependencies are not installed",
+            },
+          ],
+          counts: { ...verificationReport("skipped").counts, skipped: 1 },
+        }),
+      records: [],
+      log,
+    });
+
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-native-shell",
+          idempotencyKey: "verification-native-shell-key",
+          verifierId: "test",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      status: "failed",
+      reasonCode: "VERIFICATION_NOT_RUN",
+      detail: expect.stringContaining("run this check in your own shell") as unknown,
+    });
+    expect(log).toContainEqual(
+      expect.objectContaining({
+        op: "coding-runtime.verification",
+        extra: expect.objectContaining({ steps: ["test:native-shell-required"] }) as unknown,
+      }),
+    );
   });
 
   // F74 (Coding Workbench run 24): a skipped run names the step it did not run and why, to the model
@@ -5013,6 +5142,12 @@ function deliveryFacts(delivery: boolean): Pick<typeof FACTS, "actionClasses" | 
     : { actionClasses: [...base], connectorScopes: FACTS.connectorScopes };
 }
 
+function verificationFacadeMode(options: {
+  readonly effectiveMode?: ProductionManagedWorktreeToolInput["effectiveMode"];
+}): ProductionManagedWorktreeToolInput["effectiveMode"] {
+  return options.effectiveMode ?? "autonomous-delivery";
+}
+
 function verificationFacade(options: {
   readonly verificationBlocked?: ProductionManagedWorktreeToolInput["verificationBlocked"];
   readonly verificationAdmitted?: ProductionManagedWorktreeToolInput["verificationAdmitted"];
@@ -5036,6 +5171,7 @@ function verificationFacade(options: {
   readonly failureOutput?: readonly VerificationStepOutput[];
   readonly workspaceRoot?: string;
   readonly toolProfile?: ProductionManagedWorktreeToolInput["toolProfile"];
+  readonly effectiveMode?: ProductionManagedWorktreeToolInput["effectiveMode"];
   readonly records: ServerDiagnosticRecord[];
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
   return createProductionManagedWorktreeToolFacade({
@@ -5082,7 +5218,7 @@ function verificationFacade(options: {
             repositoryRoot: options.workspaceRoot ?? "/managed/worktree",
           }),
     authorityExpiresAt: "2099-01-01T00:00:00.000Z",
-    effectiveMode: "autonomous-delivery",
+    effectiveMode: verificationFacadeMode(options),
     deploymentCeiling: "autonomous-delivery",
     liveFacts: () => ({
       ...FACTS,

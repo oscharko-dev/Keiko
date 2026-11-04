@@ -13,6 +13,13 @@ export const CODING_WORKBENCH_MODES: readonly CodingWorkbenchMode[] = Object.fre
   "autonomous-delivery",
 ] as const satisfies readonly CodingWorkbenchMode[]);
 
+/**
+ * The tool mode of an ordinary Chat that has no selection of its own (owner decision 2026-11-02):
+ * Full access. A Chat reads and acts through its connected MCP servers and Jira Pod without asking
+ * per call; a narrower selection or deployment ceiling still applies.
+ */
+export const CHAT_TOOL_DEFAULT_MODE: CodingWorkbenchMode = "autonomous-delivery";
+
 export type CodingWorkbenchRuntimeSource =
   "keiko-sidecar" | "codex-cli-adapter" | "delivery-runner";
 

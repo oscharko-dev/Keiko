@@ -8,11 +8,13 @@
 export const LOCAL_KNOWLEDGE_PDF_FILE_EXTENSIONS = Object.freeze(["pdf"] as const);
 export const LOCAL_KNOWLEDGE_DOCX_FILE_EXTENSIONS = Object.freeze(["docx"] as const);
 export const LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS = Object.freeze(["xlsx"] as const);
+export const LOCAL_KNOWLEDGE_PPTX_FILE_EXTENSIONS = Object.freeze(["pptx"] as const);
 
 export const LOCAL_KNOWLEDGE_DOCUMENT_FILE_EXTENSIONS = Object.freeze([
   ...LOCAL_KNOWLEDGE_PDF_FILE_EXTENSIONS,
   ...LOCAL_KNOWLEDGE_DOCX_FILE_EXTENSIONS,
   ...LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS,
+  ...LOCAL_KNOWLEDGE_PPTX_FILE_EXTENSIONS,
 ] as const);
 
 export const LOCAL_KNOWLEDGE_JSON_FILE_EXTENSIONS = Object.freeze([

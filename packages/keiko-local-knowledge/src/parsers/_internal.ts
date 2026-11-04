@@ -12,7 +12,13 @@ import type {
 import { decodeXmlEntities } from "@oscharko-dev/keiko-workspace";
 export { decodeXmlEntities } from "@oscharko-dev/keiko-workspace";
 
-import type { ParserCapability, ParserErrorCode, ParserOptions } from "./types.js";
+import { isEncryptedOoxmlContainer } from "./ooxml-zip.js";
+import type {
+  ParserCapability,
+  ParserErrorCode,
+  ParserOptions,
+  ParserSelectionInput,
+} from "./types.js";
 
 export function emptyResult(
   capability: ParserCapability,
@@ -95,6 +101,28 @@ export function oversizeDiagnostic(
     documentId,
     "info",
   );
+}
+
+/**
+ * Refuses a password-protected Office file with the closed `ENCRYPTED_DOCUMENT` code and
+ * format-level, content-free guidance; undefined when the bytes are not such a container. No text
+ * is extracted from the file, and the message never carries a name, path or byte.
+ */
+export function encryptedOoxmlRefusal(
+  capability: ParserCapability,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+  format: "docx" | "xlsx" | "pptx",
+): ParserResult | undefined {
+  if (!isEncryptedOoxmlContainer(input.bytes)) return undefined;
+  return emptyResult(capability, input.documentId, options, [
+    diagnostic(
+      "ENCRYPTED_DOCUMENT",
+      `${format} is password-protected; remove the password and reindex`,
+      input.documentId,
+      "error",
+    ),
+  ]);
 }
 
 export function objectLimitDiagnostic(

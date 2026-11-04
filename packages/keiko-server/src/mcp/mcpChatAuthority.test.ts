@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import type {
   McpServerDefinition,
@@ -19,7 +19,8 @@ import {
   isCurrentMcpChatWriteApproval,
   requestMcpChatWriteApproval,
 } from "./mcpChatWriteApproval.js";
-import { handleDecideChatReadConsent } from "../atlassian/chatReadConsentRoutes.js";
+import { acceptChatToolReadGrant } from "../chat-tool-approvals.js";
+import { CHAT_TOOL_DEFAULT_MODE } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { handleDecideChatWriteApproval } from "../atlassian/chatWriteApprovalRoutes.js";
 import { mockRequest, mockResponse } from "../_support.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -35,6 +36,10 @@ interface Fixture {
   readonly deps: McpChatAuthorityDeps;
   readonly registry: AtlassianActionApprovalRegistry;
   readonly chat: ReturnType<McpChatAuthorityDeps["store"]["createChat"]>;
+  readonly message: Extract<
+    ReturnType<McpChatAuthorityDeps["store"]["admitChatTurn"]>,
+    { kind: "admitted" }
+  >["userMessage"];
   readonly now: number;
   readonly turn: Parameters<typeof mintAcceptedMcpChatAuthority>[1];
   readonly accepted: Extract<ReturnType<typeof mintAcceptedMcpChatAuthority>, { ok: true }>;
@@ -43,7 +48,7 @@ interface Fixture {
   readonly disconnect: () => void;
 }
 function fixture(
-  mode: CodingWorkbenchMode = "governed-assist",
+  mode: CodingWorkbenchMode | "unselected" = "governed-assist",
   ceiling: CodingWorkbenchMode = "autonomous-delivery",
   discovery?: "automatic",
 ): Fixture {
@@ -51,7 +56,7 @@ function fixture(
   stores.push(store);
   const project = store.createProject(process.cwd());
   const created = store.createChat(project.path, "Synthetic MCP", "synthetic-model");
-  const chat = store.updateChat(created.id, { toolMode: mode });
+  const chat = mode === "unselected" ? created : store.updateChat(created.id, { toolMode: mode });
   const now = Date.now();
   const admitted = store.admitChatTurn("mcp-authority-turn", {
     chatId: chat.id,
@@ -104,6 +109,7 @@ function fixture(
     deps,
     registry,
     chat,
+    message: admitted.userMessage,
     now,
     turn,
     accepted,
@@ -117,6 +123,12 @@ function fixture(
       settings = { ...settings, servers: [] };
     },
   };
+}
+function acceptance(
+  f: ReturnType<typeof fixture>,
+  publish: () => Promise<void> = () => Promise.resolve(),
+): Parameters<typeof acceptChatToolReadGrant>[0] {
+  return { deps: f.deps, message: f.message, correlationId: CORRELATION, publish };
 }
 function nowIso(f: ReturnType<typeof fixture>): string {
   return new Date(f.now).toISOString();
@@ -342,7 +354,47 @@ describe("configured MCP ordinary Chat authority", () => {
     f.changeSettings();
     expect(isCurrentMcpChatReadGrant(f.deps, entry, nowIso(f), CORRELATION)).toBe(false);
   });
-  it("retains and rechecks the new subject through the same approval routes", async () => {
+  it("accepts a requested read grant itself, with a binding proof and no human decision", async () => {
+    const f = fixture();
+    const requested = read(f);
+    if (requested.kind !== "review-required") throw new Error("Expected a requested grant");
+    expect(requested.grant.state).toBe("pending");
+    const publish = vi.fn(() => Promise.resolve());
+    await acceptChatToolReadGrant(acceptance(f, publish), requested.grant);
+    const accepted = f.registry.getChatReadGrant(requested.grant.grantId)?.grant;
+    expect(accepted).toMatchObject({ kind: "mcp-chat-read-grant", state: "granted" });
+    expect(accepted?.consentProofDigest).toMatch(/^[a-f0-9]{64}$/);
+    // The granted grant is the turn's evidence, published with its transcript.
+    expect(f.deps.store.findMessageById(f.message.id)?.toolTranscript?.readGrant).toMatchObject({
+      grantId: requested.grant.grantId,
+      state: "granted",
+    });
+    expect(publish).toHaveBeenCalledTimes(1);
+    // A second read reuses the granted grant instead of requesting another.
+    expect(read(f).kind).toBe("granted");
+    await expect(
+      acceptChatToolReadGrant(acceptance(f), {
+        ...requested.grant,
+        grantId: "00000000-0000-4000-8000-000000000000",
+      }),
+    ).rejects.toThrow();
+  });
+  it("resolves Full access for a Chat without a selection and needs no write approval", () => {
+    const f = fixture("unselected");
+    expect(f.chat.toolMode).toBe(CHAT_TOOL_DEFAULT_MODE);
+    expect(f.accepted.envelope.requestedMode).toBe("autonomous-delivery");
+    expect(f.accepted.envelope.effectiveMode).toBe("autonomous-delivery");
+    consent(f);
+    expect(write(f).kind).toBe("allowed");
+  });
+  it("keeps a Full access default under a narrower deployment ceiling", () => {
+    const f = fixture("unselected", "governed-assist");
+    expect(f.accepted.envelope.requestedMode).toBe("autonomous-delivery");
+    expect(f.accepted.envelope.effectiveMode).toBe("governed-assist");
+    consent(f);
+    expect(write(f).kind).toBe("review-required");
+  });
+  it("retains and rechecks the new subject through the same write approval route", async () => {
     const f = fixture();
     const requested = read(f);
     if (requested.kind !== "review-required") throw new Error("Expected disclosure");
@@ -354,28 +406,7 @@ describe("configured MCP ordinary Chat authority", () => {
       correlationId: CORRELATION,
     });
     const deps = f.deps as UiHandlerDeps;
-    expect(
-      (
-        await handleDecideChatReadConsent(
-          context(requested.grant.grantId, {
-            decision: "approve",
-            disclosureVersion: "jira-chat-read-v1",
-          }),
-          deps,
-        )
-      ).status,
-    ).toBe(409);
-    expect(
-      (
-        await handleDecideChatReadConsent(
-          context(requested.grant.grantId, {
-            decision: "approve",
-            disclosureVersion: "mcp-chat-read-v1",
-          }),
-          deps,
-        )
-      ).status,
-    ).toBe(200);
+    await acceptChatToolReadGrant(acceptance(f), requested.grant);
     const action = write(f);
     if (action.kind !== "review-required") throw new Error("Expected write");
     expect(

@@ -1348,8 +1348,8 @@
     "de": "Speichern"
   },
   "settings.mcp.availability": {
-    "en": "Each conversation and coding task keeps its own permissions.",
-    "de": "Für jedes Gespräch und jede Coding-Aufgabe gelten die jeweiligen Berechtigungen."
+    "en": "Choose in each Chat and coding task which servers it uses.",
+    "de": "In jedem Chat und jeder Coding-Aufgabe wählst du, welche Server genutzt werden."
   },
   "settings.mcp.configured": {
     "en": "Your servers",

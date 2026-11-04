@@ -184,6 +184,81 @@ describe("runGroundedAnswer — happy path", () => {
     expect(result.citations.map((citation) => citation.index)).toEqual([1]);
   });
 
+  it("keeps the completed answer when the generator has no call left for a repair (#4179)", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-no-repair-slot" });
+    const calls: AnswerGeneratorInput[] = [];
+    const generator: AnswerGenerator = {
+      generate: (input) => {
+        calls.push(input);
+        return calls.length === 1
+          ? Promise.resolve("Every requirement, read with a tool, without a marker.")
+          : Promise.reject(new Error("synthesis attempt grant is exhausted"));
+      },
+      repairAvailable: () => false,
+    };
+
+    const result = await runGroundedAnswer(
+      {
+        retrieval: { store, embeddingAdapter: scriptedAdapter() },
+        answerGenerator: generator,
+      },
+      { conversationId: "conv-no-repair-slot", capsuleId: seeded.capsuleId, text: "alpha" },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(result.answer).toBe("Every requirement, read with a tool, without a marker.");
+    expect(result.citations).toHaveLength(0);
+    expect(result.citationRepair).toBe("skipped-budget");
+  });
+
+  it("keeps the completed answer when the repair is refused at admission (S11 of #4173)", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-repair-refused" });
+    const refusal = new Error("input grant exhausted");
+    const calls: AnswerGeneratorInput[] = [];
+    const generator: AnswerGenerator = {
+      generate: (input): Promise<string> => {
+        calls.push(input);
+        return calls.length === 1
+          ? Promise.resolve("A finished answer without a marker.")
+          : Promise.reject(refusal);
+      },
+      repairRefused: (error) => error === refusal,
+    };
+
+    const result = await runGroundedAnswer(
+      { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: generator },
+      { conversationId: "conv-repair-refused", capsuleId: seeded.capsuleId, text: "alpha" },
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(result.answer).toBe("A finished answer without a marker.");
+    expect(result.citationRepair).toBe("skipped-budget");
+  });
+
+  it("still fails the turn on a repair error that is no refusal", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-repair-broken" });
+    let calls = 0;
+    const generator: AnswerGenerator = {
+      generate: (): Promise<string> => {
+        calls += 1;
+        return calls === 1
+          ? Promise.resolve("A finished answer without a marker.")
+          : Promise.reject(new Error("provider failed"));
+      },
+      repairRefused: () => false,
+    };
+
+    await expect(
+      runGroundedAnswer(
+        { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: generator },
+        { conversationId: "conv-repair-broken", capsuleId: seeded.capsuleId, text: "alpha" },
+      ),
+    ).rejects.toThrow("provider failed");
+  });
+
   it("retries once with citationRepair when the model omits markers", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-repair" });
@@ -213,6 +288,72 @@ describe("runGroundedAnswer — happy path", () => {
     expect(calls[1]?.citationRepair).toBe(true);
     expect(result.answer).toBe("Found the detail [1].");
     expect(result.citations.length).toBeGreaterThan(0);
+    expect(result.citationRepair).toBe("applied");
+  });
+
+  it("keeps the complete answer when the citation repair is cut at its output limit (S12 of #4173)", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-repair-cut" });
+    const answers = [
+      "The complete coverage matrix, all rows, without a marker.",
+      "Rows 1 to 3 [1]",
+    ];
+    const complete = [true, false];
+    let calls = 0;
+    const generator: AnswerGenerator = {
+      generate: () => Promise.resolve(answers[calls++] ?? ""),
+      lastAnswerComplete: () => complete[calls - 1] ?? true,
+    };
+
+    const result = await runGroundedAnswer(
+      { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: generator },
+      { conversationId: "conv-repair-cut", capsuleId: seeded.capsuleId, text: "alpha" },
+    );
+
+    expect(calls).toBe(2);
+    expect(result.answer).toBe("The complete coverage matrix, all rows, without a marker.");
+    expect(result.citations).toHaveLength(0);
+    expect(result.citationRepair).toBe("rejected-truncated");
+  });
+
+  it("keeps the complete answer when the citation repair still cites nothing (S12 of #4173)", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-repair-uncited" });
+    const answers = ["The complete answer without a marker.", "A shorter answer, still unmarked."];
+    let calls = 0;
+    const generator: AnswerGenerator = {
+      generate: () => Promise.resolve(answers[calls++] ?? ""),
+      lastAnswerComplete: () => true,
+    };
+
+    const result = await runGroundedAnswer(
+      { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: generator },
+      { conversationId: "conv-repair-uncited", capsuleId: seeded.capsuleId, text: "alpha" },
+    );
+
+    expect(calls).toBe(2);
+    expect(result.answer).toBe("The complete answer without a marker.");
+    expect(result.citationRepair).toBe("rejected-uncited");
+  });
+
+  it("applies a cited repair of a first answer that was itself cut at its limit (S12 of #4173)", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-repair-after-cut" });
+    const answers = ["The first answer, cut before", "The repaired answer [1]."];
+    const complete = [false, true];
+    let calls = 0;
+    const generator: AnswerGenerator = {
+      generate: () => Promise.resolve(answers[calls++] ?? ""),
+      lastAnswerComplete: () => complete[calls - 1] ?? true,
+    };
+
+    const result = await runGroundedAnswer(
+      { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: generator },
+      { conversationId: "conv-repair-after-cut", capsuleId: seeded.capsuleId, text: "alpha" },
+    );
+
+    expect(result.answer).toBe("The repaired answer [1].");
+    expect(result.citationRepair).toBe("applied");
   });
 
   it("forces citation repair for a long no-evidence refusal that would otherwise match a skip pattern (KEIKO-0275)", async () => {

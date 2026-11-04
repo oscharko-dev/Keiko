@@ -38,6 +38,73 @@ export {
   REQUIREMENT_EXCERPT_MAX_CHARS,
 } from "./domain/requirementExcerpt.js";
 
+export {
+  REQUIREMENT_DIGEST_SHORT_LENGTH,
+  REQUIREMENT_DOCUMENT_SCOPE_LENGTH,
+  REQUIREMENT_INVENTORY_ENTRIES_MAX,
+  deriveRequirementInventory,
+  derivedRequirementId,
+  documentScopeOf,
+  requirementContentDigest,
+} from "./domain/requirementInventory.js";
+export type {
+  RequirementCriterion,
+  RequirementIdOrigin,
+  RequirementInventory,
+  RequirementInventoryEntry,
+  RequirementInventoryInput,
+  RequirementInventorySection,
+  RequirementUnitKind,
+} from "./domain/requirementInventory.js";
+export {
+  DEFAULT_REQUIREMENT_VOCABULARY,
+  compileRequirementVocabulary,
+  mergeRequirementVocabulary,
+} from "./domain/requirementVocabulary.js";
+export type { RequirementVocabulary, TableColumnRole } from "./domain/requirementVocabulary.js";
+
+export {
+  MISSING_ACCEPTANCE_CRITERIA,
+  assessRequirementInventoryQuality,
+} from "./domain/requirementInventoryQuality.js";
+export type { RequirementInventoryFinding } from "./domain/requirementInventoryQuality.js";
+
+export {
+  REQUIREMENT_DOCUMENT_LABEL_PREFIX,
+  REQUIREMENT_LABEL_PREFIX,
+  REQUIREMENT_REFERENCES_MAX,
+  REQUIREMENT_REVISION_LABEL_PREFIX,
+  REQUIREMENT_TRACE_FOOTER_END,
+  REQUIREMENT_TRACE_FOOTER_START,
+  REQUIREMENT_TRACE_MARKER_LABEL,
+  documentLabel,
+  requirementChangeQueries,
+  requirementLabel,
+  requirementReference,
+  requirementTrace,
+  resolveRequirementReferences,
+  revisionLabel,
+  shortRequirementDigest,
+} from "./domain/requirementTrace.js";
+export type {
+  RequirementChangeQuery,
+  RequirementReferenceProblem,
+  RequirementReferenceResolution,
+  RequirementTrace,
+  RequirementTraceSource,
+  RequirementTraceUnit,
+  ResolvedRequirementReference,
+} from "./domain/requirementTrace.js";
+
+export { compareRequirementsWithTrace } from "./domain/requirementChanges.js";
+export type {
+  ComparableRequirement,
+  RequirementChange,
+  RequirementChangeStatus,
+  RequirementChanges,
+  RequirementTracedIssue,
+} from "./domain/requirementChanges.js";
+
 export { analyzeRequirementQuality } from "./domain/requirementQuality.js";
 export type {
   AnalyzeRequirementQualityInput,
