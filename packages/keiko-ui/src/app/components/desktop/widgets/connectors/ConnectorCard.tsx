@@ -18,7 +18,7 @@ import { ConnectorSyncPanel } from "./ConnectorSyncPanel";
 import { VerifyConnectionStatus } from "./VerifyConnectionStatus";
 import { useConnectorCard, type CardController } from "./useConnectorCard";
 import { ConnectorUpdateForm } from "./ConnectorUpdateForm";
-import { JiraPodWorkspaceAction } from "../cards/JiraPodWorkspaceAction";
+import { LivePodActions, LivePodHeader, livePodState } from "./LivePodCard";
 
 export interface ConnectorCardProps {
   readonly connector: AtlassianConnectorMetadata;
@@ -119,13 +119,9 @@ function DeleteConfirm({
 function CardActions({
   ctrl,
   canSync,
-  live,
-  connector,
 }: {
-  readonly connector: AtlassianConnectorMetadata;
   readonly ctrl: CardController;
   readonly canSync: boolean;
-  readonly live: boolean;
 }): ReactNode {
   const t = useTranslate();
   return (
@@ -146,91 +142,28 @@ function CardActions({
           {t("atlassianConnectors.list.manage")}
         </button>
       ) : null}
-      {live ? <LivePodActions ctrl={ctrl} connector={connector} /> : null}
       <button
         type="button"
         className="lk-btn lk-btn-danger"
         disabled={ctrl.busy}
         onClick={ctrl.askDelete}
       >
-        {t(live ? "atlassianConnectors.live.remove" : "atlassianConnectors.list.delete")}
+        {t("atlassianConnectors.list.delete")}
       </button>
     </div>
   );
 }
 
-function LivePodActions({
-  ctrl,
-  connector,
-}: {
-  readonly ctrl: CardController;
-  readonly connector: AtlassianConnectorMetadata;
-}): ReactNode {
-  const t = useTranslate();
-  return (
-    <>
-      <JiraPodWorkspaceAction connector={connector} disabled={ctrl.busy} />
-      <button
-        type="button"
-        className="lk-btn"
-        disabled={ctrl.busy}
-        onClick={() => ctrl.edit("rename")}
-      >
-        {t("atlassianConnectors.live.rename")}
-      </button>
-      <button
-        type="button"
-        className="lk-btn"
-        disabled={ctrl.busy}
-        onClick={() => ctrl.edit("rotate")}
-      >
-        {t("atlassianConnectors.live.replaceToken")}
-      </button>
-      <button type="button" className="lk-btn" disabled={ctrl.busy} onClick={ctrl.refresh}>
-        {t("atlassianConnectors.live.refresh")}
-      </button>
-    </>
-  );
-}
-function LivePodStatus({
-  connector,
-  ctrl,
-}: {
-  readonly connector: AtlassianConnectorMetadata;
-  readonly ctrl: CardController;
-}): ReactNode {
-  const t = useTranslate();
-  if (connector.deployment !== "data-center" || connector.livePod === undefined) return null;
-  return (
-    <>
-      <p className="acx-hint">
-        {t(
-          connector.livePod.capabilities.includes("live-write")
-            ? "atlassianConnectors.live.capabilities"
-            : "atlassianConnectors.live.readCapabilities",
-        )}
-      </p>
-      {connector.livePod.verificationStatus === "unverified" && !ctrl.busy ? (
-        <output className="acx-notice" data-tone="warning">
-          {t("atlassianConnectors.live.verifyRequired")}
-        </output>
-      ) : null}
-      {ctrl.unconfirmed && !ctrl.busy ? (
-        <output className="acx-notice" data-tone="warning">
-          {t("atlassianConnectors.live.refreshRequired")}
-        </output>
-      ) : null}
-    </>
-  );
-}
 function CardManagement({
   connector,
   ctrl,
+  actions,
 }: {
   readonly connector: AtlassianConnectorMetadata;
   readonly ctrl: CardController;
+  readonly actions: ReactNode;
 }): ReactNode {
-  const live = connector.deployment === "data-center" && connector.livePod !== undefined;
+  const live = isLivePod(connector);
   if (ctrl.confirming)
     return (
       <DeleteConfirm
@@ -253,14 +186,11 @@ function CardManagement({
         unconfirmed={ctrl.unconfirmed}
       />
     );
-  return (
-    <CardActions
-      ctrl={ctrl}
-      canSync={connector.deployment !== "data-center"}
-      live={live}
-      connector={connector}
-    />
-  );
+  return actions;
+}
+
+function isLivePod(connector: AtlassianConnectorMetadata): boolean {
+  return connector.deployment === "data-center" && connector.livePod !== undefined;
 }
 
 function currentVerifyStatus(
@@ -274,6 +204,57 @@ function currentVerifyStatus(
     : pod.verificationStatus;
 }
 
+function cardVerification(
+  connector: AtlassianConnectorMetadata,
+  ctrl: CardController,
+): { status: AtlassianConnectorVerifyStatus | undefined; verifying: boolean } {
+  return {
+    status: ctrl.unconfirmed ? undefined : currentVerifyStatus(connector, ctrl.verifyStatus),
+    verifying:
+      ctrl.operation === "verify" ||
+      (connector.deployment === "data-center" &&
+        connector.livePod?.verificationInProgress === true),
+  };
+}
+
+function CardError({ error }: { readonly error: string | undefined }): ReactNode {
+  if (error === undefined) return null;
+  return (
+    <p className="acx-error" role="alert">
+      {error}
+    </p>
+  );
+}
+
+function LiveConnectorCard({
+  connector,
+  ctrl,
+}: {
+  readonly connector: AtlassianConnectorMetadata;
+  readonly ctrl: CardController;
+}): ReactNode {
+  const verification = cardVerification(connector, ctrl);
+  const state = livePodState(
+    verification.verifying,
+    ctrl.unconfirmed && !ctrl.busy,
+    verification.status,
+  );
+  const managing = ctrl.confirming || ctrl.editing !== undefined;
+  return (
+    <li className="acx-card" data-testid="acx-connector" data-auth-ref={connector.authRef}>
+      <LivePodHeader
+        connector={connector}
+        state={state}
+        actions={
+          managing ? null : <LivePodActions connector={connector} ctrl={ctrl} state={state} />
+        }
+      />
+      <CardError error={ctrl.error} />
+      {managing ? <CardManagement connector={connector} ctrl={ctrl} actions={null} /> : null}
+    </li>
+  );
+}
+
 export function ConnectorCard({
   connector,
   client,
@@ -282,25 +263,20 @@ export function ConnectorCard({
   pollIntervalMs,
 }: ConnectorCardProps): ReactNode {
   const ctrl = useConnectorCard(client, connector, onDeleted, onUpdated);
+  if (isLivePod(connector)) return <LiveConnectorCard connector={connector} ctrl={ctrl} />;
   const canSync = connector.deployment !== "data-center";
-  const verifyStatus = ctrl.unconfirmed
-    ? undefined
-    : currentVerifyStatus(connector, ctrl.verifyStatus);
-  const verifying =
-    ctrl.operation === "verify" ||
-    (connector.deployment === "data-center" && connector.livePod?.verificationInProgress === true);
+  const { status, verifying } = cardVerification(connector, ctrl);
   const syncPollProps = pollIntervalMs === undefined ? {} : { pollIntervalMs };
   return (
     <li className="acx-card" data-testid="acx-connector" data-auth-ref={connector.authRef}>
-      <CardHeader connector={connector} verifyStatus={verifyStatus} verifying={verifying} />
-      {ctrl.error !== undefined ? (
-        <p className="acx-error" role="alert">
-          {ctrl.error}
-        </p>
-      ) : null}
-      {verifyStatus !== undefined ? <VerifyConnectionStatus status={verifyStatus} /> : null}
-      <LivePodStatus connector={connector} ctrl={ctrl} />
-      <CardManagement connector={connector} ctrl={ctrl} />
+      <CardHeader connector={connector} verifyStatus={status} verifying={verifying} />
+      <CardError error={ctrl.error} />
+      {status !== undefined ? <VerifyConnectionStatus status={status} /> : null}
+      <CardManagement
+        connector={connector}
+        ctrl={ctrl}
+        actions={<CardActions ctrl={ctrl} canSync={canSync} />}
+      />
       {ctrl.expanded && canSync ? (
         <ConnectorSyncPanel
           client={client}

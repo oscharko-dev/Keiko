@@ -553,6 +553,7 @@ function printRegisterReview(review) {
   for (const entry of review.stale) console.log(`stale increase: ${ledgerEntry(entry)}`);
   for (const entry of review.rewritten ?? [])
     console.log(`rewritten increase: ${ledgerEntry(entry)}`);
+  for (const entry of review.closed ?? []) console.log(`closed increase: ${ledgerEntry(entry)}`);
 }
 
 export async function codeQualityPolicyMain(args = process.argv.slice(2), repositoryRoot = root) {

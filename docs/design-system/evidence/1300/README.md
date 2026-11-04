@@ -207,18 +207,6 @@ bundle-size gate pass. No producer assertions, tolerances or budgets changed.
 These are synthetic visual fixtures; real MCP/Jira effects and model behavior are
 qualified separately.
 
-## Anti-slop ratchet dependencies (#4145) — 2026-10-30
-
-PR #4165 adds `oxlint` and `oxlint-plugin-anti-slop` as root devDependencies, which changes
-`package.json` and `package-lock.json`, both bound by these producers. The same four original
-producers were rerun on the PR tree (dev `18648cad9` merged) on Node 24.18.0 (macOS arm64), and all
-passed: component fidelity with 427 probes and zero gated or recorded differences, editor token
-fidelity with zero gated differences and all 14 reference captures, the seven-mode accessibility
-proof with zero serious/critical violations and zero unresolved incomplete findings, and all 108
-running-app captures with zero page errors, unexpected API requests, missing selectors, crashed
-windows or unavailable workspace-trust states. A regenerated capture was visually inspected. No
-gate, fixture or rule was changed.
-
 ## minimatch and glob advisory overrides — 2026-10-31
 
 GHSA-g3hv-75wg-m249 and GHSA-3g3m-2fjr-6pw4 moved the root overrides to minimatch 11.0.3 and glob
@@ -230,16 +218,6 @@ accessibility proof with zero serious/critical violations and zero unresolved in
 and all 108 running-app captures with zero page errors, unexpected API requests, missing selectors,
 crashed windows or unavailable workspace-trust states. No gate, fixture or rule was changed.
 
-## Anti-slop ratchet on the overridden tree (#4145) — 2026-10-31
-
-After `dev` `d273b65c6` (including the minimatch and glob overrides) was merged into PR #4165, its
-`package.json` and `package-lock.json` differ from `dev`'s by the `oxlint` devDependencies and the
-sharded script-coverage commands. The four original producers were rerun on that merged tree on
-Node 24.18.0 (macOS arm64), and all passed: component fidelity with zero gated differences and no
-missing selectors, editor token fidelity with zero gated differences and all 14 reference
-captures, the seven-mode accessibility proof with zero serious/critical violations and zero
-unresolved incomplete findings, and all 108 running-app captures. No gate, fixture or rule was
-changed.
 
 ## Release 1.3.4 input refresh — 2026-10-31
 
@@ -265,6 +243,39 @@ proof has zero serious/critical violations and zero unresolved incomplete findin
 assertion, tolerance, budget or source stylesheet changed. These remain synthetic historical
 fixtures; they do not qualify model behavior.
 
+## PR #4182 Jira requirements integration input refresh — 2026-11-02
+
+The per-package repository lint changes `package.json`, a declared producer input. The four original
+producers were rerun on macOS arm64, Node 24.18.0, as for releases 1.3.4 and 1.3.5. The first browser
+run rejected one previously unstubbed `GET /api/mcp/servers`, read by the new Chat Connectors menu,
+in all 18 chat-quality captures. The fixture now answers only that path with an empty MCP settings
+snapshot (`{ revision, servers: [] }`); other paths and methods still fail closed. All four producers
+were then rerun, so the declared source fingerprints also bind the updated harness. Component
+fidelity passed with zero gated differences and no missing selectors; editor fidelity passed with
+zero gated differences and all 14 reference captures; the seven-mode accessibility proof has zero
+serious/critical violations and zero unresolved incomplete findings; all 108 running-app captures
+have zero page errors, unexpected API requests, missing selectors, crashed windows or unavailable
+workspace-trust states. No producer assertion, tolerance, budget or source stylesheet changed.
+
+## PR #4182 composer wrap input refresh — 2026-11-02
+
+The composer's controls now wrap below a 400 px container instead of overlapping, which changes
+`globals.css`, a declared producer input. The four original producers were rerun on macOS arm64, Node
+24.18.0. Component fidelity passed with zero gated differences and no missing selectors; editor
+fidelity passed with zero gated differences and all 14 reference captures; the seven-mode
+accessibility proof has zero serious/critical violations and zero unresolved incomplete findings; all
+108 running-app captures passed. No producer assertion, tolerance or budget changed.
+
+## Release 1.4.0 input refresh — 2026-11-03
+
+The canonical version cut changes the root/workspace manifests and lockfile, which are declared
+producer inputs. All four original producers were rerun against the 1.4.0 source on macOS arm64,
+Node 24.18.0. Component and editor fidelity passed with zero gated differences and no missing
+selectors; all 14 editor references and 108 running-app captures completed without errors. The
+seven-mode accessibility proof has zero serious/critical violations and zero unresolved incomplete
+findings. No producer assertion, tolerance, budget or source stylesheet changed. These remain
+synthetic historical fixtures; they do not qualify model behavior.
+
 ## Anti-slop ratchet on the 1.3.5 tree (#4145), 2026-11-01
 
 After `dev` `7bbca2e34` (release 1.3.5) was merged into PR #4165, its `package.json` and
@@ -275,13 +286,12 @@ missing selectors, editor token fidelity with zero gated differences and all 14 
 the seven-mode accessibility proof with zero serious/critical violations and zero unresolved
 incomplete findings, and all 108 running-app captures. No gate, fixture or rule was changed.
 
-## Lint heap ceiling input refresh, 2026-11-04
+## Dev 1.4.0 cutoff sync input refresh, 2026-11-04
 
-Raising the root lint heap ceiling to 14336 MiB (#4203, #4202) changes the `lint` script in
-`package.json`, which these producers bind. All four original producers were rerun on the merge of
-this change with the epic branch at `b64e19274`, on macOS arm64 with Node 24.18.0. Component and
-editor fidelity passed with zero gated differences and no missing selectors. All 14 editor
-references and 108 running-app captures completed without errors. The seven-mode accessibility proof
-has zero serious/critical violations and zero unresolved incomplete findings. No producer assertion,
-tolerance, budget or source stylesheet changed. These remain synthetic historical fixtures; they do
-not qualify model behavior.
+The last `dev` sync (release 1.4.0, owner decision 2026-11-04) combines the epic branch's
+`package.json` and `package-lock.json` with dev's. These producers bind both files. The four
+original producers were rerun on the merged tree on macOS arm64 with Node 24.18.0, and all passed.
+Component and editor fidelity passed with zero gated differences and no missing selectors. All 14
+editor references and 108 running-app captures completed without errors. The seven-mode
+accessibility proof has zero serious/critical violations and zero unresolved incomplete findings. No
+producer assertion, tolerance, budget or source stylesheet changed.

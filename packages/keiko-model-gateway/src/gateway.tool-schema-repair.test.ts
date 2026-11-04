@@ -7,12 +7,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { describe, expect, it, vi } from "vitest";
 import { openCodeGatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
-import {
-  Gateway,
-  schemaMismatchGuidance,
-  type GatewayCallRequest,
-  type GatewaySpendReservation,
-} from "./gateway.js";
+import { schemaMismatchGuidance } from "./toolSchemaCorrection.js";
+import { Gateway, type GatewayCallRequest, type GatewaySpendReservation } from "./gateway.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
@@ -259,6 +255,50 @@ describe("Gateway bounded tool-schema repair", () => {
       toolCallId: "call-actual-1",
       offeredAlias: "keiko_changeset_edit",
     });
+  });
+
+  it("announces the schema correction to the caller admission on the corrected attempt only", async () => {
+    const announced: (true | undefined)[] = [];
+    let providerCalls = 0;
+    const fetchImpl: typeof fetch = () => {
+      providerCalls += 1;
+      return Promise.resolve(
+        providerCalls === 1 ? invalidArguments("call-actual-1") : successfulResponse(),
+      );
+    };
+    await new Gateway(config(), { fetchImpl, clock: clock(), random: (): number => 1 }).chat({
+      ...request(),
+      attemptAdmission: (input) => {
+        announced.push(input.correctsUnusableAttempt);
+        return { settle: (): void => undefined };
+      },
+    });
+    expect(announced).toEqual([undefined, true]);
+  });
+
+  it("logs a correction the caller refuses with its actual cause, not the rejected shape", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const fetchImpl: typeof fetch = () => Promise.resolve(invalidArguments("call-actual-1"));
+    const failure: unknown = await new Gateway(config(), {
+      fetchImpl,
+      clock: clock(),
+      random: (): number => 1,
+      log: { write: (event): void => void events.push(event) },
+    })
+      .chat({
+        ...request(),
+        attemptAdmission: (input) =>
+          input.correctsUnusableAttempt === true ? undefined : { settle: (): void => undefined },
+      })
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "GATEWAY_ATTEMPT_ADMISSION_DENIED" });
+    const repairStates = events
+      .filter((event) => event.op === "gateway.tool-catalog.repair")
+      .map((event) => ({ state: event.extra?.state, reason: event.extra?.reason }));
+    expect(repairStates).toEqual([
+      { state: "scheduled", reason: "invalid-shape" },
+      { state: "denied", reason: "attempt-admission-denied" },
+    ]);
   });
 
   it("hashes an oversized provider tool-call id before writing bounded repair evidence", async () => {

@@ -2908,6 +2908,17 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
     flex: 0 0 auto;
   }
 }
+/* Too narrow for one row: every control stays reachable on its own line instead of overlapping. */
+@container (max-width: 400px) {
+  .cmp-bar,
+  .cmp-bar-compact,
+  .cmp-bar-model {
+    flex-wrap: wrap;
+  }
+  .cmp-bar-model {
+    flex-basis: 100%;
+  }
+}
 
 /* ---------- REPOSITORY FILE REFERENCES ---------- */
 .repo-focus {

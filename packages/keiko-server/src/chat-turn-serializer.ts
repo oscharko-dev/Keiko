@@ -12,7 +12,8 @@ export interface ChatTurnSerializer {
     operation: () => T | Promise<T>,
     generation?: AbortController,
   ) => Promise<T | typeof CHAT_TURN_WAIT_CANCELLED>;
-  readonly interruptGenerations: (chatId: string) => number;
+  /** `keepRunning` spares the Chat's running turn, which has taken the interruption itself. */
+  readonly interruptGenerations: (chatId: string, keepRunning?: boolean) => number;
   readonly hasGenerations: (chatId: string) => boolean;
 }
 
@@ -60,7 +61,7 @@ export function createChatTurnSerializer(): ChatTurnSerializer {
     operation: () => T | Promise<T>,
     generation?: AbortController,
   ): Promise<T | typeof CHAT_TURN_WAIT_CANCELLED> => {
-    const unregister = registerGeneration(generations, chatId, signal, generation);
+    const { entry, unregister } = registerGeneration(generations, chatId, signal, generation);
     const predecessor = tails.get(chatId) ?? Promise.resolve();
     let releaseGate!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -80,6 +81,7 @@ export function createChatTurnSerializer(): ChatTurnSerializer {
       releaseTurn(tails, chatId, gate, releaseGate);
       return CHAT_TURN_WAIT_CANCELLED;
     }
+    if (entry !== undefined) entry.running = true;
     const work = Promise.resolve().then(operation);
     // Cancellation may settle the HTTP-facing result before an external port cooperates. Keep the
     // per-chat gate owned by the underlying mutation until that work actually settles; otherwise a
@@ -96,7 +98,8 @@ export function createChatTurnSerializer(): ChatTurnSerializer {
   };
   return {
     runExclusive,
-    interruptGenerations: (chatId): number => interruptGenerations(generations.get(chatId)),
+    interruptGenerations: (chatId, keepRunning = false): number =>
+      interruptGenerations(generations.get(chatId), keepRunning),
     hasGenerations: (chatId): boolean => activeGenerations(generations.get(chatId)).length > 0,
   };
 }
@@ -116,6 +119,8 @@ async function settleTurn<T>(
 interface PendingChatGeneration {
   readonly controller: AbortController;
   readonly signal: AbortSignal;
+  /** The predecessors settled. A running turn may hold no entry: buffered routes register none. */
+  running: boolean;
 }
 
 function activeGenerations(
@@ -124,10 +129,15 @@ function activeGenerations(
   return [...(generations ?? [])].filter(({ signal }) => !signal.aborted);
 }
 
-function interruptGenerations(generations: ReadonlySet<PendingChatGeneration> | undefined): number {
-  const pending = activeGenerations(generations);
-  for (const { controller } of pending) controller.abort("connected sources changed");
-  return pending.length;
+function interruptGenerations(
+  generations: ReadonlySet<PendingChatGeneration> | undefined,
+  keepRunning: boolean,
+): number {
+  const interrupted = activeGenerations(generations).filter(
+    ({ running }) => !(keepRunning && running),
+  );
+  for (const { controller } of interrupted) controller.abort("connected sources changed");
+  return interrupted.length;
 }
 
 function registerGeneration(
@@ -135,15 +145,18 @@ function registerGeneration(
   chatId: string,
   signal: AbortSignal,
   controller: AbortController | undefined,
-): () => void {
-  if (controller === undefined) return (): void => undefined;
+): { readonly entry?: PendingChatGeneration; readonly unregister: () => void } {
+  if (controller === undefined) return { unregister: (): void => undefined };
   const entries = generations.get(chatId) ?? new Set<PendingChatGeneration>();
-  const entry = { controller, signal };
+  const entry = { controller, signal, running: false };
   entries.add(entry);
   generations.set(chatId, entries);
-  return (): void => {
-    entries.delete(entry);
-    if (entries.size === 0) generations.delete(chatId);
+  return {
+    entry,
+    unregister: (): void => {
+      entries.delete(entry);
+      if (entries.size === 0) generations.delete(chatId);
+    },
   };
 }
 
@@ -176,6 +189,27 @@ export function interruptChatGenerations(deps: ChatTurnSerializationDeps, chatId
   return (deps.chatTurnSerializer ?? serializerForStore(deps.store)).interruptGenerations(chatId);
 }
 
+type ChatTurnInterruption = () => boolean;
+const turnInterruptions = new WeakMap<UiStore, Map<string, ChatTurnInterruption>>();
+
+/**
+ * Lets the Chat's running tool turn take a change of the Chat's scope itself: the handler returns
+ * true when the turn ends with its own answer. Returns the release for when the turn stops listening.
+ */
+export function onChatScopeInterruption(
+  deps: Pick<ChatTurnSerializationDeps, "store">,
+  chatId: string,
+  interruption: ChatTurnInterruption,
+): () => void {
+  const interruptions =
+    turnInterruptions.get(deps.store) ?? new Map<string, ChatTurnInterruption>();
+  turnInterruptions.set(deps.store, interruptions);
+  interruptions.set(chatId, interruption);
+  return (): void => {
+    if (interruptions.get(chatId) === interruption) interruptions.delete(chatId);
+  };
+}
+
 export function hasChatGenerations(deps: ChatTurnSerializationDeps, chatId: string): boolean {
   return (deps.chatTurnSerializer ?? serializerForStore(deps.store)).hasGenerations(chatId);
 }
@@ -192,7 +226,11 @@ export function interruptChangedChatGenerations(
     deriveChatGroundingScopeIdentity(previous) === deriveChatGroundingScopeIdentity(current)
   )
     return;
-  const count = interruptChatGenerations(deps, current.id);
+  const keepRunning = turnInterruptions.get(deps.store)?.get(current.id)?.() === true;
+  const count = (deps.chatTurnSerializer ?? serializerForStore(deps.store)).interruptGenerations(
+    current.id,
+    keepRunning,
+  );
   if (count > 0)
     logChatScopeUpdate("cancellation-requested", previous, current, patch, correlationId, count);
 }

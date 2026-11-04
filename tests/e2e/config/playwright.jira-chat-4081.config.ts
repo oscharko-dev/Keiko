@@ -8,13 +8,15 @@ const root = process.cwd();
 // E2E default, all three stay below 32768: Linux hands out outbound ports from 32768 upwards, so a
 // fixed port there can already be held by an unrelated connection (EADDRINUSE on 33582, PR #4150).
 const port = Number(process.env.KEIKO_E2E_UI_PORT ?? "32381");
+// The draft layout harness (#4182) is a fourth loopback listener; it serves no Keiko, model or Jira.
+const draftPort = (process.env.KEIKO_E2E_DRAFT_PORT ??= String(port + 3));
 const directory = process.env.KEIKO_E2E_JIRA_STATE ?? e2eStateDir(`jira-chat-4081-${randomUUID()}`);
 process.env.KEIKO_E2E_JIRA_STATE = directory;
 process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_DIR = join(directory, "logs");
 
 export default defineConfig({
   testDir: join(root, "tests/e2e"),
-  testMatch: "jira-chat-4081.spec.ts",
+  testMatch: ["jira-chat-4081.spec.ts", "jira-draft-layout-4182.spec.ts"],
   workers: 1,
   fullyParallel: false,
   timeout: 90_000,
@@ -32,13 +34,22 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 1100 } },
     },
   ],
-  webServer: {
-    cwd: root,
-    command:
-      "npm run build:packages && npm run build:ui && node tests/e2e/support/jira-chat-4081-server.mjs",
-    url: `http://127.0.0.1:${String(port)}`,
-    reuseExistingServer: false,
-    timeout: 240_000,
-    env: { KEIKO_E2E_JIRA_STATE: directory, KEIKO_E2E_UI_PORT: String(port) },
-  },
+  webServer: [
+    {
+      cwd: root,
+      command:
+        "npm run build:packages && npm run build:ui && node tests/e2e/support/jira-chat-4081-server.mjs",
+      url: `http://127.0.0.1:${String(port)}`,
+      reuseExistingServer: false,
+      timeout: 240_000,
+      env: { KEIKO_E2E_JIRA_STATE: directory, KEIKO_E2E_UI_PORT: String(port) },
+    },
+    {
+      cwd: root,
+      command: "node tests/e2e/support/jira-draft-layout/server.mjs",
+      url: `http://127.0.0.1:${draftPort}/`,
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+  ],
 });

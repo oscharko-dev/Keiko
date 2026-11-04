@@ -48,6 +48,8 @@ export interface CodingWorkbenchStartOptions {
   readonly fork?: CodingWorkbenchRuntimeForkRequest | undefined;
   /** The Jira Pod the person picked for this run; the server checks it is theirs and ready. */
   readonly jiraPodId?: string | undefined;
+  /** The MCP servers the person selected for this run; absent offers every enabled server. */
+  readonly mcpServers?: readonly string[] | undefined;
 }
 
 export interface CodingWorkbenchRuntimeActions {

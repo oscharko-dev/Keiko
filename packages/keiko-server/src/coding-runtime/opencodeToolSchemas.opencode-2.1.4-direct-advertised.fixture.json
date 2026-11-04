@@ -414,9 +414,16 @@
           "maxLength": 4096,
           "pattern": "^(?:$|(?![\\\\/])(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*\\\\).+)$",
           "description": "Use an empty string for ordinary gates; targeted-test requires one workspace-relative test path."
+        },
+        "packageDir": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 4096,
+          "pattern": "^(?:$|(?![\\\\/])(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*\\\\).+)$",
+          "description": "Workspace-relative folder of a nested package.json; an empty string finds it."
         }
       },
-      "required": ["verifierId", "targetPath"],
+      "required": ["verifierId", "targetPath", "packageDir"],
       "additionalProperties": false
     }
   },

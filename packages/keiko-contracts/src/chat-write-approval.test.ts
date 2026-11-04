@@ -59,3 +59,81 @@ describe("concrete Jira Chat write approval", () => {
     expect(validateChatToolWriteApprovalDecision({ ...value, actor: "caller" }).ok).toBe(false);
   });
 });
+
+describe("backlog draft deselection (#4178)", () => {
+  const draft = { ...approval(), operation: "jira.draft" as const };
+  it("carries the deselected draft items on a draft approval only", () => {
+    const value = { ...draft, state: "approved" as const, excludedItemRefs: ["task-2", "bug_1"] };
+    expect(validateChatToolWriteApprovalView(value)).toEqual({ ok: true, value });
+    expect(validateChatToolWriteApprovalView({ ...value, operation: "jira.create" }).ok).toBe(
+      false,
+    );
+  });
+  it.each([
+    ["not an array", "task"],
+    ["an invalid reference", ["1task"]],
+    ["a duplicate", ["a", "a"]],
+  ])("refuses a deselection that is %s", (_name, excludedItemRefs) => {
+    expect(validateChatToolWriteApprovalView({ ...draft, excludedItemRefs }).ok).toBe(false);
+    expect(
+      validateChatToolWriteApprovalDecision({
+        decision: "approve",
+        actionDigest: "b".repeat(64),
+        excludedItemRefs,
+      }).ok,
+    ).toBe(false);
+  });
+  it("has no count limit: a deselection of 1,200 items of a large draft is valid", () => {
+    const excludedItemRefs = Array.from({ length: 1200 }, (_, index) => `r${String(index)}`);
+    expect(validateChatToolWriteApprovalView({ ...draft, excludedItemRefs }).ok).toBe(true);
+    expect(
+      validateChatToolWriteApprovalDecision({
+        decision: "approve",
+        actionDigest: "b".repeat(64),
+        excludedItemRefs,
+      }).ok,
+    ).toBe(true);
+  });
+  it("accepts a deselection only with an approval decision", () => {
+    const value = { decision: "approve", actionDigest: "b".repeat(64), excludedItemRefs: ["a"] };
+    expect(validateChatToolWriteApprovalDecision(value)).toEqual({ ok: true, value });
+    expect(validateChatToolWriteApprovalDecision({ ...value, decision: "reject" }).ok).toBe(false);
+  });
+  it("never accepts a deselection on a configured MCP approval", () => {
+    const mcp = {
+      kind: "mcp-chat-write",
+      approvalId: "approval-1",
+      chatId: "chat-1",
+      configurationDigest: "c".repeat(64),
+      invocationId: "action-1",
+      operation: "tool",
+      actionDigest: "a".repeat(64),
+      requestedAt: 1700000000000,
+      expiresAt: 1700000600000,
+      state: "pending",
+    };
+    expect(validateChatToolWriteApprovalView(mcp).ok).toBe(true);
+    expect(validateChatToolWriteApprovalView({ ...mcp, excludedItemRefs: [] }).ok).toBe(false);
+  });
+});
+
+describe("the reviewed file of an attachment approval (#4176)", () => {
+  const attach = { ...approval(), operation: "jira.attach" as const };
+  const preview = { name: "report.txt", sizeBytes: 1024, sha256: "a".repeat(64) };
+  it("carries the file's name, size and digest on an attachment approval only", () => {
+    const value = { ...attach, attachment: preview };
+    expect(validateChatToolWriteApprovalView(value)).toEqual({ ok: true, value });
+    expect(validateChatToolWriteApprovalView({ ...value, operation: "jira.edit" }).ok).toBe(false);
+  });
+  it.each([
+    ["a path as the name", { ...preview, name: "docs/report.txt" }],
+    ["an empty file", { ...preview, sizeBytes: 0 }],
+    ["a file past the ceiling", { ...preview, sizeBytes: 20 * 1024 * 1024 + 1 }],
+    ["a malformed digest", { ...preview, sha256: "XYZ" }],
+    ["file content", { ...preview, content: "body" }],
+    ["a missing digest", { name: preview.name, sizeBytes: preview.sizeBytes }],
+    ["not an object", "report.txt"],
+  ])("refuses a preview with %s", (_label, attachment) => {
+    expect(validateChatToolWriteApprovalView({ ...attach, attachment }).ok).toBe(false);
+  });
+});

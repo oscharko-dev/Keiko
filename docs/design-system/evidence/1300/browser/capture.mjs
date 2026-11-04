@@ -553,6 +553,8 @@ const STATIC_API_BODIES = {
   },
   // Live Jira pods share the existing connector metadata owner; this fixture has no credentials.
   "/api/atlassian-connectors/credentials": { credentials: [] },
+  // The Chat Connectors menu reads the central MCP owner's servers; this fixture configures none.
+  "/api/mcp/servers": { revision: "static-evidence", servers: [] },
   "/api/local-knowledge/capsules": { capsules: [] },
   "/api/local-knowledge/capsule-sets": { capsuleSets: [] },
   "/api/editor/language/capabilities": {

@@ -182,6 +182,44 @@ describe("chat turn serializer", () => {
     expect(serializer.interruptGenerations("chat-a")).toBe(0);
   });
 
+  it("spares only a turn that is running when it takes a scope change itself", async () => {
+    const serializer = createChatTurnSerializer();
+    const running = heldGeneration(serializer, "chat-a");
+    await running.started;
+    const queued = heldGeneration(serializer, "chat-a");
+    expect(serializer.interruptGenerations("chat-a", true)).toBe(1);
+    expect(running.controller.signal.aborted).toBe(false);
+    expect(queued.controller.signal.aborted).toBe(true);
+    expect(await queued.result).toBe(CHAT_TURN_WAIT_CANCELLED);
+    expect(serializer.interruptGenerations("chat-a", true)).toBe(0);
+    running.release.resolve("answer");
+    expect(await running.result).toBe("answer");
+  });
+
+  it("does not take a queued turn for the running one when that registered no generation", async () => {
+    const serializer = createChatTurnSerializer();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let bufferedStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      bufferedStarted = resolve;
+    });
+    const buffered = serializer.runExclusive("chat-a", new AbortController().signal, async () => {
+      bufferedStarted();
+      await held;
+      return "buffered";
+    });
+    await started;
+    const queued = heldGeneration(serializer, "chat-a");
+    expect(serializer.interruptGenerations("chat-a", true)).toBe(1);
+    expect(queued.controller.signal.aborted).toBe(true);
+    expect(await queued.result).toBe(CHAT_TURN_WAIT_CANCELLED);
+    release();
+    expect(await buffered).toBe("buffered");
+  });
+
   it("keeps other chats and serializer instances running", async () => {
     const serializer = createChatTurnSerializer();
     const first = heldGeneration(serializer, "chat-a");
