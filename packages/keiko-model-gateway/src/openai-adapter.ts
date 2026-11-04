@@ -790,7 +790,14 @@ interface ToolCallDeltaEntry {
   readonly name: string;
   readonly argumentsText: string;
 }
-type ToolCallAccumulator = Map<number, ToolCallDeltaEntry>;
+// Tracks its largest index as entries arrive, so placing a fragment never rescans every key.
+class ToolCallAccumulator extends Map<number, ToolCallDeltaEntry> {
+  maxIndex = Number.NEGATIVE_INFINITY;
+  override set(key: number, value: ToolCallDeltaEntry): this {
+    if (key > this.maxIndex) this.maxIndex = key;
+    return super.set(key, value);
+  }
+}
 
 // Standard OpenAI-compatible streaming shape: `delta.tool_calls` carries one fragment per call,
 // indexed by `index`, with `id`/`function.name` arriving once and `function.arguments` arriving as
@@ -863,7 +870,7 @@ function positionalToolCallIndex(
   ) {
     return position;
   }
-  return Math.max(...accumulator.keys()) + 1;
+  return accumulator.maxIndex + 1;
 }
 
 function applyToolCallDelta(
@@ -1544,7 +1551,7 @@ function newStreamAccumulator(): StreamAccumulator {
     prompt: 0,
     completion: 0,
     usage: undefined,
-    toolCalls: new Map(),
+    toolCalls: new ToolCallAccumulator(),
   };
 }
 
