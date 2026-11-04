@@ -801,7 +801,7 @@ describe("review run service: fault injection", () => {
     await h.service.whenSettled(first.runId);
     expect(h.store.get(first.runId)?.phase).toBe("settling");
     failing.settle = false;
-    const cancelled = await handleReviewRunCancel(
+    const cancelled = handleReviewRunCancel(
       h.ctx(`/api/git-review/runs/${first.runId}/cancel`, { params: { runId: first.runId } }),
       h.deps(),
     );
