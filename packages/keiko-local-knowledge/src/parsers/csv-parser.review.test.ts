@@ -48,6 +48,33 @@ describe("Excel's sep= directive", () => {
   });
 });
 
+describe("delimiter detection between a delimiter and a decimal comma", () => {
+  it("keeps 1.234,50 whole in a German file without a header", () => {
+    const parsed = parse("Miete;1.234,50\nStrom;89,90\nWasser;45,5\nInternet;39,99\n");
+    expect(parsed.lines).toEqual([
+      "csv!1: Column 1=Miete | Column 2=1.234,50",
+      "csv!2: Column 1=Strom | Column 2=89,90",
+      "csv!3: Column 1=Wasser | Column 2=45,5",
+      "csv!4: Column 1=Internet | Column 2=39,99",
+    ]);
+  });
+
+  it("keeps 1,5 whole when every record has exactly one", () => {
+    const parsed = parse("Kunde A;1,5\nKunde B;3,5\nKunde C;10,5\n");
+    expect(parsed.lines[0]).toBe("csv!1: Column 1=Kunde A | Column 2=1,5");
+  });
+
+  it("still splits a comma file of numbers at the commas", () => {
+    const parsed = parse("1,2,3\n4,5,6\n7,8,9\n");
+    expect(parsed.lines[0]).toBe("csv!1: Column 1=1 | Column 2=2 | Column 3=3");
+  });
+
+  it("still prefers the delimiter that gives more fields when no number is cut", () => {
+    const parsed = parse("ID,Text,Prio\nFR-1,Der Nutzer; der Admin,Muss\nFR-2,x; y,Soll\n");
+    expect(parsed.lines[0]).toBe("csv!2: ID=FR-1 | Text=Der Nutzer; der Admin | Prio=Muss");
+  });
+});
+
 describe("a file with far more records than the unit limit", () => {
   it("stops reading records once the limit is certain to be overrun, and says so", () => {
     const records = "FR-1;Titel;Wert\n".repeat(3_000_000);
