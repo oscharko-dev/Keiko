@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+
 import type { KeyboardEvent, ReactNode } from "react";
 import { useEffect, useId, useRef } from "react";
 import { Icons } from "../../Icons";
@@ -30,6 +32,7 @@ export function AgentGateCard({
   onApprove,
   onReject,
 }: AgentGateCardProps): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   const titleId = useId();
   const detailId = useId();
   const rejectRef = useRef<HTMLButtonElement | null>(null);
@@ -61,7 +64,7 @@ export function AgentGateCard({
         </span>
         <div>
           <div className="tt">{escalated ? "Keiko escalated to you" : "Approval required"}</div>
-          <div className="ts">Grant applies only to this queued action.</div>
+          <div className="ts">{tUi("agentGate.ui.grantAppliesOnlyToThis")}</div>
         </div>
       </div>
       <div className="arun-gate-t" id={titleId}>
@@ -70,24 +73,24 @@ export function AgentGateCard({
       <div className="arun-gate-d mono" id={detailId}>
         {gate.detail}
       </div>
-      <div className="ai-permit-scope" aria-label="Permission scope">
+      <div className="ai-permit-scope" aria-label={tUi("agentGate.ui.permissionScope")}>
         <div className="row">
           <span className="gr" aria-hidden="true">
             ✓
           </span>
-          {`Allow ${gate.kind} action after review`}
+          {tUi("agentGate.ui.allowAfterReview", { kind: gate.kind })}
         </div>
         <div className="row">
           <span aria-hidden="true">✗</span>
-          {"No extra BFF authority or autonomous follow-up"}
+          {tUi("agentGate.ui.noExtraAuthority")}
         </div>
       </div>
       <div className="arun-gate-btns ai-permit-act">
         <button type="button" className="arun-btn ghost" onClick={onReject} ref={rejectRef}>
-          Reject
+          {tUi("agentGate.ui.reject")}
         </button>
         <button type="button" className="arun-btn primary" onClick={onApprove}>
-          Approve
+          {tUi("agentGate.ui.approve")}
         </button>
       </div>
     </div>

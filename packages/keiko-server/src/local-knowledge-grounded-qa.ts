@@ -1,3 +1,4 @@
+import { withToolResultsAsSource } from "./chat-tool-turn-ending.js";
 import {
   type GatewayCallRequest,
   CancelledError,
@@ -12,6 +13,7 @@ import {
   type OpenAIEmbeddingRequest,
   type RerankResult,
 } from "@oscharko-dev/keiko-model-gateway";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { createGroundedSynthesisCallBudget } from "./grounded-answer.js";
 import { callPluralGroundedSynthesis } from "./grounded-plural-synthesis.js";
 import { currentContentRedactor, withChatContentPolicy } from "./content-redactor.js";
@@ -137,6 +139,7 @@ import {
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
+import { gatewayErrorStatus, isGatewayAdmissionRefusal } from "./grounded-gateway-error-status.js";
 import {
   assertConversationReadinessAdmission,
   captureConversationReadinessAdmission,
@@ -144,6 +147,8 @@ import {
   withConversationReadinessAdmission,
   type ConversationReadinessAdmission,
 } from "./conversation-readiness-admission.js";
+import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
+import { requirementCoverage } from "./requirement-coverage-note.js";
 
 export const DEFAULT_REFERENCE_BUDGET = DEFAULT_GROUNDING_LIMITS.referenceBudget;
 export const MAX_EXCERPT_CHARS = DEFAULT_GROUNDING_LIMITS.maxExcerptChars;
@@ -730,6 +735,7 @@ function buildLocalKnowledgeMessages(
 }
 
 interface AnswerGeneratorContext {
+  readonly chatId?: string | undefined;
   readonly userMessageId?: string | undefined;
   readonly deps: UiHandlerDeps;
   readonly correlationId: string | undefined;
@@ -746,6 +752,8 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
   private sent: SentKnowledgePrompt | undefined;
   private measuredPromptTokens = 0;
   private readonly synthesis = createGroundedSynthesisCallBudget();
+  private lastComplete = true;
+  private lastInput: AnswerGeneratorInput | undefined;
 
   public constructor(
     private readonly model: ModelPort,
@@ -758,13 +766,8 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
   ) {}
 
   public async generate(input: AnswerGeneratorInput): Promise<string> {
-    // Re-planned per attempt: when the provider's overflow answer taught Keiko the model's real
-    // window, the retry fits the references into it (gateway-context-window.ts).
-    const response = await withAdoptedContextWindowRetry(
-      this.context.deps,
-      { modelId: this.modelId, surface: "grounded", correlationId: this.context.correlationId },
-      () => this.callWithinWindow(input),
-    );
+    this.lastInput = input;
+    const response = await this.answerResponse(input);
     const occurredAt = Date.now();
     for (const usage of summariseReferenceUsage(this.sentReferences)) {
       if (!capsuleAllowsEvidencePersistence(getCapsule(this.store, usage.capsuleId))) continue;
@@ -780,9 +783,37 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       });
     }
     this.measuredPromptTokens = response.usage.promptTokens;
+    // Only a natural stop is complete: a length cut, a content filter, an error or a cancellation is not.
+    this.lastComplete = response.finishReason === "stop";
     const content = response.content.trim();
     assertUsableAssistantContent(content, this.modelId);
     return content;
+  }
+
+  private async answerResponse(input: AnswerGeneratorInput): Promise<NormalizedResponse> {
+    const { renderedNumericEvidence, sentReferences, sent, measuredPromptTokens } = this;
+    try {
+      // Re-planned per attempt: when the provider's overflow answer taught Keiko the model's real
+      // window, the retry fits the references into it (gateway-context-window.ts).
+      return await withAdoptedContextWindowRetry(
+        this.context.deps,
+        { modelId: this.modelId, surface: "grounded", correlationId: this.context.correlationId },
+        () => this.callWithinWindow(input),
+      );
+    } catch (error) {
+      // The answer that stands was built from the prompt before this refused repair.
+      if (input.citationRepair === true && this.repairRefused(error)) {
+        this.renderedNumericEvidence = renderedNumericEvidence;
+        this.sentReferences = sentReferences;
+        this.sent = sent;
+        this.measuredPromptTokens = measuredPromptTokens;
+      }
+      throw error;
+    }
+  }
+
+  public repairRefused(error: unknown): boolean {
+    return isGatewayAdmissionRefusal(error);
   }
 
   public numericEntailmentEvidence(): readonly NumericEntailmentEvidence[] {
@@ -792,6 +823,44 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
   /** The references the last prompt carried; a window-fitted prompt may carry fewer. */
   public promptReferences(): readonly RetrievalReference[] {
     return this.sentReferences;
+  }
+
+  /**
+   * An optional citation repair needs a free synthesis attempt slot (#4179), a turn that has not
+   * ended, and the grant its prompt costs: refused at admission it would fail the finished turn.
+   */
+  public repairAvailable(): boolean {
+    if (this.synthesis.remaining() <= 0) return false;
+    const toolTurn = this.context.deps.chatToolTurn;
+    if (toolTurn === undefined) return true;
+    return !toolTurn.endedEarly && this.repairFitsGrant();
+  }
+
+  private repairFitsGrant(): boolean {
+    const limits = this.sent?.profile ?? DEFAULT_CONTEXT_PROFILE;
+    const pending = this.synthesis.pendingUsage();
+    if (limits.reservedOutputTokens <= pending.completionTokens) return false;
+    const input = this.lastInput;
+    if (input === undefined) return true;
+    const messages = buildLocalKnowledgeMessages(
+      input.query.answerQuestion ?? input.query.text,
+      { ...input, citationRepair: true, references: this.sentReferences },
+      this.store,
+      this.redactExcerpt,
+      this.limits,
+      this.selectedSkill(),
+    ).messages;
+    // A repair sends the tool results again, which only the last measured prompt counts (S11).
+    const promptTokens = Math.max(
+      countGatewayPromptTokens({ messages }, limits.tokenAccounting),
+      this.measuredPromptTokens,
+    );
+    return promptTokens <= limits.effectiveInputBudget - pending.promptTokens;
+  }
+
+  /** Whether the last answer ended on its own rather than being interrupted (S12 of #4173). */
+  public lastAnswerComplete(): boolean {
+    return this.lastComplete;
   }
 
   /** Counts of the last request this generator sent; undefined before the first call. */
@@ -870,6 +939,14 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       model: this.model,
       deps: this.context.deps,
       evidenceCount: this.sentReferences.length,
+      coverage: requirementCoverage({
+        deps: this.context.deps,
+        store: this.store,
+        chatId: this.context.chatId,
+        userMessageId: this.context.userMessageId,
+        correlationId: this.context.correlationId,
+        sentText: promptText(request.messages),
+      }),
       signal,
       budget: this.synthesis,
       accounting: limits.tokenAccounting,
@@ -885,6 +962,12 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       },
     });
   }
+}
+
+function promptText(messages: GatewayCallRequest["messages"]): string {
+  return messages
+    .map((message) => (typeof message.content === "string" ? message.content : ""))
+    .join("\n");
 }
 
 function queryTransformSignal(signal: AbortSignal | undefined): AbortSignal {
@@ -1358,7 +1441,10 @@ function citationsAndActivityForAnswer(
   noEvidenceReason: string | undefined,
   sourceLookup: LocalKnowledgeCitationSourceLookup | undefined,
   redactLabel: LabelRedactor | undefined,
-  diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: {
+    readonly diagnostics: ServerDiagnosticSink | undefined;
+    readonly correlationId: string | undefined;
+  },
 ): {
   readonly citations: LocalKnowledgeGroundedAnswer["citations"];
   readonly retrievalActivity: ReturnType<typeof tryBuildKnowledgePodRetrievalActivity>;
@@ -1375,7 +1461,8 @@ function citationsAndActivityForAnswer(
     sources: [
       { selected, result: retrievalActivityResultFromScoped(result, citations, noEvidenceReason) },
     ],
-    diagnostics,
+    diagnostics: activityLog.diagnostics,
+    correlationId: activityLog.correlationId,
   });
   return { citations, retrievalActivity };
 }
@@ -1402,6 +1489,7 @@ interface LocalKnowledgeAnswerInput {
   readonly sourceLookup?: LocalKnowledgeCitationSourceLookup | undefined;
   readonly redactLabel?: LabelRedactor | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 function buildLocalKnowledgeAnswer(input: LocalKnowledgeAnswerInput): LocalKnowledgeGroundedAnswer {
@@ -1421,7 +1509,7 @@ function buildLocalKnowledgeAnswer(input: LocalKnowledgeAnswerInput): LocalKnowl
     noEvidenceReason,
     input.sourceLookup,
     redactLabel,
-    input.diagnostics,
+    { diagnostics: input.diagnostics, correlationId: input.correlationId },
   );
   return {
     groundingKind: "local-knowledge",
@@ -1455,6 +1543,7 @@ function buildStateFailureAnswer(input: {
   readonly redactLabel: LabelRedactor;
   readonly limits: ReturnType<typeof currentGroundingLimits>;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly correlationId?: string | undefined;
 }): GroundedAnswer {
   const { selected, stateFailure } = input;
   const [user, assistant] = input.persisted;
@@ -1476,6 +1565,7 @@ function buildStateFailureAnswer(input: {
     sources: [],
     skipped: [{ selected, reason: stateFailure.reason }],
     diagnostics: input.diagnostics,
+    correlationId: input.correlationId,
   });
   return {
     ...answer,
@@ -1509,6 +1599,7 @@ function resolveModel(
     modelId,
     readinessAdmission,
     deps,
+    (id, correlationId) => awaitInitializedConversationReadiness(deps, id, correlationId),
   );
 }
 
@@ -1911,9 +2002,21 @@ function countCitationsByCapsule(
   return counts;
 }
 
+// The replacement for an unsafe id is itself validated by the same PII scan, which reads any run of
+// eight or more digits as a phone number. A bare hash prefix carries such a run in roughly one case
+// in eleven, so a turn with dozens of UUID-identified Pods and sources lost its whole activity
+// (#4179). Every other nibble is therefore forced to a hex letter, which caps a digit run at one
+// and keeps the `prefix-<16 hex>` shape.
+const OPAQUE_ID_LETTERS = "abcdef";
+
 function activityOpaqueId(prefix: "pod" | "source", value: string): string {
   const digest = createHash("sha256").update(value).digest("hex").slice(0, 16);
-  return `${prefix}-${digest}`;
+  const safeDigest = Array.from(digest, (char, index) =>
+    index % 2 === 1 && char >= "0" && char <= "9"
+      ? (OPAQUE_ID_LETTERS[Number(char) % OPAQUE_ID_LETTERS.length] ?? "a")
+      : char,
+  ).join("");
+  return `${prefix}-${safeDigest}`;
 }
 
 function activityPodId(value: string): KnowledgePodRetrievalActivityPod["podId"] {
@@ -2274,14 +2377,14 @@ function isRetrievalActivityProjectionError(error: unknown): boolean {
 // logging, no diagnostic record, and no correlation id — a future regression in the assembly
 // contract would silently and permanently disable Knowledge Pod transparency with zero operator-
 // visible signal. Route the (already redacted, static) failure message through the server's own
-// diagnostic sink before degrading. There is no per-request correlation id available at this seam
-// (an internal projection helper, not a route handler), so this record carries none, matching the
-// existing "unknown" fallback used elsewhere when no id is threaded through.
+// diagnostic sink before degrading. This is an internal projection helper, not a route handler, so
+// the caller threads the request's correlation id when it has one.
 export function tryBuildKnowledgePodRetrievalActivity(input: {
   readonly store: KnowledgeStore;
   readonly sources: readonly KnowledgePodRetrievalActivitySourceInput[];
   readonly skipped?: readonly KnowledgePodRetrievalActivitySkippedInput[] | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly correlationId?: string | undefined;
 }): KnowledgePodRetrievalActivity | undefined {
   try {
     return buildKnowledgePodRetrievalActivity(input);
@@ -2290,10 +2393,11 @@ export function tryBuildKnowledgePodRetrievalActivity(input: {
     emitServerDiagnostic(
       input.diagnostics,
       serverDiagnosticFromError({
-        // No request id is in scope here; a fixed label that satisfies the canonical correlation-id
-        // shape keeps the record joinable by its operation instead of being replaced by the sink's
-        // content-free marker (`"unknown"` is shorter than the shape's minimum).
-        correlationId: "retrieval-activity-uncorrelated",
+        // A caller that has the request's correlation id passes it. Otherwise a fixed label that
+        // satisfies the canonical correlation-id shape keeps the record joinable by its operation
+        // instead of being replaced by the sink's content-free marker (`"unknown"` is shorter than
+        // the shape's minimum).
+        correlationId: input.correlationId ?? "retrieval-activity-uncorrelated",
         operation: "retrieval-activity.tryBuild",
         source: "retrieval-activity.tryBuild",
         error,
@@ -2558,6 +2662,7 @@ function buildPersistedScopedAnswer(input: {
   readonly limits: ReturnType<typeof currentGroundingLimits>;
   readonly sourceLookup: LocalKnowledgeCitationSourceLookup;
   readonly deps: UiHandlerDeps;
+  readonly correlationId: string | undefined;
 }): GroundedAnswer {
   return buildLocalKnowledgeAnswer({
     liveToolSourceAvailable: input.deps.chatToolTurn !== undefined,
@@ -2572,6 +2677,7 @@ function buildPersistedScopedAnswer(input: {
     sourceLookup: input.sourceLookup,
     redactLabel: (value: string): string => redactText(input.deps, value),
     diagnostics: input.deps.diagnostics,
+    correlationId: input.correlationId,
   });
 }
 
@@ -2616,6 +2722,7 @@ function logScopedCitationReconciliation(
       refusal: enforcedNoEvidenceReason(result) !== undefined,
     },
     correlationId,
+    result.citationRepair === undefined ? {} : { citationRepairDisposition: result.citationRepair },
   );
 }
 
@@ -2630,6 +2737,13 @@ interface PersistScopedGroundedAnswerInput {
   readonly context: ScopedGroundedAnswerContext & { readonly modelId: string };
   readonly numericEvidence: readonly NumericEntailmentEvidence[];
   readonly promptContext?: GroundedPromptContextWire | undefined;
+}
+
+function withScopedPromptContext(
+  answer: GroundedAnswer,
+  promptContext: GroundedPromptContextWire | undefined,
+): GroundedAnswer {
+  return promptContext === undefined ? answer : { ...answer, promptContext };
 }
 
 async function persistScopedGroundedAnswer(
@@ -2658,6 +2772,7 @@ async function persistScopedGroundedAnswer(
     limits,
     sourceLookup,
     deps,
+    correlationId: context.correlationId,
   });
   const entailed = await settleScopedCitationSupport(
     answer,
@@ -2667,8 +2782,10 @@ async function persistScopedGroundedAnswer(
     context,
     deps,
   );
-  const { promptContext } = persistedInput;
-  const finalAnswer = promptContext === undefined ? entailed : { ...entailed, promptContext };
+  const finalAnswer = withToolResultsAsSource(
+    withScopedPromptContext(entailed, persistedInput.promptContext),
+    deps.store,
+  );
   attachGroundedAnswerWithPreviewCitations(
     deps,
     env,
@@ -2687,7 +2804,7 @@ function createScopedAnswerGenerator(
   limits: ReturnType<typeof currentGroundingLimits>,
   context: AnswerGeneratorContext,
 ): StoreBackedAnswerGenerator {
-  const { deps, correlationId, userMessageId } = context;
+  const { deps, userMessageId } = context;
   return new StoreBackedAnswerGenerator(
     withMarkdownSkillAdmission(
       model,
@@ -2700,7 +2817,7 @@ function createScopedAnswerGenerator(
     createSqliteAuditSink(env.store),
     (value: string): string => redactText(deps, value),
     limits,
-    { deps, correlationId, userMessageId },
+    context,
   );
 }
 
@@ -2734,6 +2851,15 @@ function scopedCitationFaithfulness(
   };
 }
 
+function generatorContext(
+  chat: Chat,
+  input: AskInput,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): AnswerGeneratorContext {
+  return { deps, correlationId, chatId: chat.id, userMessageId: input.userMessage?.id };
+}
+
 async function runScopedGroundedAnswer(
   chat: Chat,
   input: AskInput,
@@ -2749,7 +2875,7 @@ async function runScopedGroundedAnswer(
   const model = resolveModel(deps, modelId, readinessAdmission);
   if ("status" in model) return model;
   const limits = currentGroundingLimits(deps);
-  const generation = { deps, correlationId, userMessageId: input.userMessage?.id };
+  const generation = generatorContext(chat, input, deps, correlationId);
   const generator = createScopedAnswerGenerator(model, modelId, env, limits, generation);
   const startedAt = Date.now();
   const result = await runGroundedAnswer(
@@ -2792,6 +2918,7 @@ function stateFailureRoute(
   env: { readonly store: KnowledgeStore },
   selected: SelectedLocalKnowledgeScope,
   stateFailure: { readonly reason: string; readonly message: string },
+  correlationId: string | undefined,
 ): RouteResult {
   const redactedMessage = redactText(deps, stateFailure.message);
   const persisted = persistGroundedExchange(
@@ -2810,16 +2937,13 @@ function stateFailureRoute(
     redactLabel: (value: string): string => redactText(deps, value),
     limits: currentGroundingLimits(deps),
     diagnostics: deps.diagnostics,
+    correlationId,
   });
   deps.store.attachGroundedAnswer(persisted[1].id, answer);
   return { status: 200, body: answer };
 }
 
-export function gatewayErrorStatus(error: GatewayError): number {
-  if (error.code === "GATEWAY_AUTHENTICATION") return 401;
-  if (error.retryable) return 503;
-  return 502;
-}
+export { gatewayErrorStatus };
 
 export function mapGroundedAskError(
   error: unknown,
@@ -2878,7 +3002,7 @@ export async function handleLocalKnowledgeGroundedAsk(
     const stateFailure = scopeStateFailure(selected);
     if (stateFailure !== undefined) {
       if (signal.aborted) throw new CancelledError("grounded request cancelled");
-      return stateFailureRoute(chat, input, deps, env, selected, stateFailure);
+      return stateFailureRoute(chat, input, deps, env, selected, stateFailure, correlationId);
     }
     const answer = await runScopedGroundedAnswer(chat, input, deps, env, selected, {
       signal,

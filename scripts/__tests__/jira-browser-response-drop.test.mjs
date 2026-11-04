@@ -12,7 +12,11 @@ afterEach(async () => {
 });
 const frame = (event, data) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 
-async function fixture(turnState = "completed", path = "/api/desktop/chat/stream") {
+async function fixture(
+  turnState = "completed",
+  path = "/api/desktop/chat/stream",
+  readStates = ["granted"],
+) {
   const messages = [
     { id: "human", chatId: "chat", role: "user", turnState, content: "Synthetic request" },
     {
@@ -31,7 +35,7 @@ async function fixture(turnState = "completed", path = "/api/desktop/chat/stream
   const fault = dropCommittedBrowserCompletion(() => "chat", committed);
   const server = createServer(async (_request, response) => {
     response.writeHead(200, { "Content-Type": "text/event-stream" });
-    for (const state of ["pending", "granted"])
+    for (const state of readStates)
       response.write(
         frame("tool-read-consent", { messageId: "human", grant: { chatId: "chat", state } }),
       );
@@ -72,7 +76,8 @@ it("physically interrupts the real HTTP stream after delivered approvals and dur
     drops: 1,
     grants: 1,
     approvals: 1,
-    readStateFrames: 2,
+    readStateFrames: 1,
+    pendingReadFrames: 0,
     approvalStateFrames: 3,
     witnessFailures: 0,
   });
@@ -95,4 +100,13 @@ it("does not interrupt a different endpoint", async () => {
   expect((await f.reader.read()).done).toBe(true);
   expect(f.committed).not.toHaveBeenCalled();
   expect(f.fault.snapshot().drops).toBe(0);
+});
+
+it("refuses a read grant that waited for a person: the server grants reads itself", async () => {
+  const f = await fixture("completed", "/api/desktop/chat/stream", ["pending", "granted"]);
+  f.release();
+  await expect(f.reader.read()).rejects.toThrow();
+  expect(f.committed).not.toHaveBeenCalled();
+  expect(() => f.fault.assertDropped()).toThrow();
+  expect(f.fault.snapshot()).toMatchObject({ pendingReadFrames: 1, drops: 0, witnessFailures: 1 });
 });

@@ -21,6 +21,7 @@ export type {
   ConversationCitationReference,
   ConversationGroundedAnswer,
   ConversationGroundedQuery,
+  GroundedCitationRepair,
   ReferenceReranker,
   ReferenceRerankerInput,
   ReferenceRerankerResult,

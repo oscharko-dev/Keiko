@@ -36,6 +36,7 @@ import {
   type RuntimeProcessBackend,
   type RuntimeProcessTree,
   type RuntimeSupervisorLaunchRequest,
+  type RuntimeSupervisorSpawnResult,
 } from "./runtimeProcessSupervisor.js";
 
 const IDENTITY = { platform: "darwin", arch: "arm64", backend: "macos-app-sandbox" } as const;
@@ -245,9 +246,11 @@ describe("dev-lane runtime process backend", () => {
   });
 
   // #3897 lab (T7): the agent's shell answered "command not found: npm" because the child saw only
-  // the attested Git directory. The native profile keeps the launcher's allowlisted PATH behind
-  // that directory; the gateway profile still sees Git alone.
-  it("gives a native-profile child the launcher's PATH behind the attested Git directory", () => {
+  // the attested Git directory. Customer 1.3.4: a managed Mac whose only Git is Xcode's, under the
+  // admin-writable /Applications, refused every native run at Git attestation. The native profile
+  // has no exec allowlist, so it attests no Git and keeps the launcher's PATH; the gateway profile
+  // still sees the attested Git alone and fails closed without one.
+  it("starts a native-profile child with the launcher's PATH and no Git attestation", () => {
     const fixture = stageFixture();
     const privateStateRoot = join(dirname(fixture.cwd), "state", "run-2475");
     mkdirSync(privateStateRoot, { recursive: true, mode: 0o700 });
@@ -270,7 +273,17 @@ describe("dev-lane runtime process backend", () => {
       ...launchRequest(fixture),
       env: { PATH: "/opt/toolchain/bin:/usr/bin", OPENCODE_DISABLE_PROJECT_CONFIG: "true" },
     };
-    const spawnWith = (policy: ReturnType<typeof gatewayConfinement>): string => {
+    const unattestable = vi.fn((): typeof TEST_GIT => {
+      throw new Error("darwin-git-ancestor-writable");
+    });
+    const launch = (
+      policy: ReturnType<typeof gatewayConfinement>,
+      resolveGitExecutable: () => typeof TEST_GIT,
+    ): {
+      readonly spawn: ReturnType<typeof vi.fn<DevLaneRuntimeSpawn>>;
+      readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
+      readonly result: RuntimeSupervisorSpawnResult;
+    } => {
       const spawn = vi.fn<DevLaneRuntimeSpawn>(() => fakeChild(4711));
       const activityLog = createBufferedServerLogSink();
       const supervisor = createRuntimeProcessSupervisor({
@@ -280,6 +293,7 @@ describe("dev-lane runtime process backend", () => {
           gatewayConfinement: policy,
           activityLog,
           spawnRuntime: spawn,
+          resolveGitExecutable,
         }),
         qualifications: [request.qualification],
         planSandbox: (sandboxRequest): ReturnType<typeof planLongLivedRuntimeSandbox> =>
@@ -289,17 +303,34 @@ describe("dev-lane runtime process backend", () => {
             "darwin",
           ),
       });
-      expect(supervisor.spawnOwnedTree(request)).toMatchObject({ ok: true });
-      expect(
-        activityLog.events.filter((event) => event.op === "runtime.confinement.failed"),
-      ).toEqual([]);
-      return spawn.mock.calls[0]?.[2].env.PATH ?? "";
+      return { spawn, activityLog, result: supervisor.spawnOwnedTree(request) };
     };
-    const nativePath = spawnWith(nativePolicy).split(":");
-    expect(nativePath.slice(1)).toEqual(["/opt/toolchain/bin", "/usr/bin"]);
-    expect(nativePath[0]?.startsWith("/")).toBe(true);
-    const gatewayPath = spawnWith(gatewayConfinement()).split(":");
-    expect(gatewayPath).toEqual([nativePath[0]]);
+
+    const native = launch(nativePolicy, unattestable);
+    expect(native.result).toMatchObject({ ok: true });
+    expect(unattestable).not.toHaveBeenCalled();
+    expect(native.spawn.mock.calls[0]?.[2].env.PATH).toBe("/opt/toolchain/bin:/usr/bin");
+    expect(
+      native.activityLog.events.filter((event) => event.op === "runtime.confinement.failed"),
+    ).toEqual([]);
+    expect(
+      native.activityLog.events.find((event) => event.op === "runtime.confinement.spawned")?.extra,
+    ).toMatchObject({ profile: "keiko-native", childExecutablePolicy: "toolchain-inherited" });
+
+    const gateway = launch(gatewayConfinement(), () => TEST_GIT);
+    expect(gateway.result).toMatchObject({ ok: true });
+    expect(gateway.spawn.mock.calls[0]?.[2].env.PATH).toBe(dirname(TEST_GIT.path));
+
+    const refused = launch(gatewayConfinement(), unattestable);
+    expect(refused.result).toMatchObject({ ok: false });
+    expect(unattestable).toHaveBeenCalledOnce();
+    expect(refused.spawn).not.toHaveBeenCalled();
+    expect(refused.activityLog.events).toContainEqual(
+      expect.objectContaining({
+        op: "runtime.confinement.failed",
+        extra: expect.objectContaining({ launchPhase: "git-attestation" }) as unknown,
+      }),
+    );
   });
 
   it("does not mistake a live child's error event for a completed process tree", async () => {

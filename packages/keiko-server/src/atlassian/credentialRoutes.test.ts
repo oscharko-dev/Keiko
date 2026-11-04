@@ -27,6 +27,7 @@ import { realpathSync } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Chat } from "../store/index.js";
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
+import { isCurrentJiraChatReadGrant } from "./jiraChatAuthority.js";
 import { invalidateJiraPodChats } from "./jiraPodLifecycle.js";
 import { runSerializedChatTurn } from "../chat-turn-serializer.js";
 import {
@@ -1419,10 +1420,10 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
     const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
     const firstAuthority = retainedChatAuthority(bound);
     const firstGrant = retainedChatReadGrant(bound);
-    const noOp = await updatedJiraChat(bound, { toolMode: "governed-assist" });
+    const noOp = await updatedJiraChat(bound, { toolMode: "autonomous-delivery" });
     expect(firstAuthority().ok).toBe(true);
     expect(firstGrant()).toBe("granted");
-    const changed = await updatedJiraChat(noOp, { toolMode: "autonomous-delivery" });
+    const changed = await updatedJiraChat(noOp, { toolMode: "governed-assist" });
     expect(firstAuthority()).toEqual({ ok: false, reason: "revoked" });
     expect(firstGrant()).toBe("revoked");
     const changedAuthority = retainedChatAuthority(changed);
@@ -1604,7 +1605,7 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
     const first = await readyJiraPod();
     const second = await readyJiraPod();
     const initial = jiraChat();
-    expect(initial.toolMode).toBe("governed-assist");
+    expect(initial.toolMode).toBe("autonomous-delivery");
     const connected = await updatedJiraChat(initial, { jiraPodId: first });
     expect(connected.jiraPodBinding).toMatchObject({
       podId: first,
@@ -1936,18 +1937,7 @@ function chatReadConsentUrl(grantId: string): string {
   return `${baseUrl()}/api/atlassian-connectors/action-approvals/${grantId}/chat-read-consent`;
 }
 
-function decideChatReadConsent(
-  grantId: string,
-  body: Record<string, unknown> = { decision: "approve", disclosureVersion: "jira-chat-read-v1" },
-): Promise<Response> {
-  return fetch(chatReadConsentUrl(grantId), {
-    method: "POST",
-    headers: csrfHeaders(),
-    body: JSON.stringify(body),
-  });
-}
-
-async function pendingChatReadConsent(): Promise<{
+async function pendingChatReadGrant(): Promise<{
   chat: Chat;
   grantId: string;
   state: () => ChatToolReadGrant["state"] | undefined;
@@ -1958,87 +1948,32 @@ async function pendingChatReadConsent(): Promise<{
   return { chat, grantId, state: retainedChatReadGrant(chat, false, grantId) };
 }
 
-it("projects a Chat read consent without private authority or evidence", async () => {
-  const pending = await pendingChatReadConsent();
-  const response = await fetch(chatReadConsentUrl(pending.grantId));
-  expect(response.status).toBe(200);
-  const body: unknown = await response.json();
-  expect(body).toMatchObject({
-    approval: {
-      kind: "jira-chat-read",
-      grantId: pending.grantId,
-      chatId: pending.chat.id,
-      state: "pending",
-      disclosureVersion: "jira-chat-read-v1",
-    },
-  });
-  expect(JSON.stringify(body)).not.toMatch(
-    /actorDigest|consentProofDigest|authority|authRef|baseUrl/,
+function isCurrentRetainedReadGrant(grantId: string): boolean {
+  const entry = fixtureApprovalRegistry.getChatReadGrant(grantId);
+  return (
+    entry !== undefined &&
+    isCurrentJiraChatReadGrant(baseDeps(wiring), entry, new Date().toISOString(), "read-current")
   );
+}
+
+it("mounts no human read-consent route: a Chat read grant is never decided over HTTP", async () => {
+  const pending = await pendingChatReadGrant();
+  expect((await fetch(chatReadConsentUrl(pending.grantId))).status).toBe(404);
+  const decision = JSON.stringify({ decision: "approve", disclosureVersion: "jira-chat-read-v1" });
+  expect(
+    (
+      await fetch(chatReadConsentUrl(pending.grantId), {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: decision,
+      })
+    ).status,
+  ).toBe(404);
   expect(pending.state()).toBe("pending");
 });
 
-it("accepts explicit Chat read consent once without extending its proof or expiry", async () => {
-  const pending = await pendingChatReadConsent();
-  expect((await decideChatReadConsent(pending.grantId)).status).toBe(200);
-  expect(pending.state()).toBe("granted");
-  const first = fixtureApprovalRegistry.getChatReadGrant(pending.grantId)?.grant;
-  expect(first?.consentProofDigest).toMatch(/^[a-f0-9]{64}$/);
-  expect((await decideChatReadConsent(pending.grantId)).status).toBe(200);
-  expect(fixtureApprovalRegistry.getChatReadGrant(pending.grantId)?.grant).toEqual(first);
-});
-
-it("rejects Chat read consent without granting access", async () => {
-  const pending = await pendingChatReadConsent();
-  const rejected = await decideChatReadConsent(pending.grantId, {
-    decision: "reject",
-    disclosureVersion: "jira-chat-read-v1",
-  });
-  expect(rejected.status).toBe(200);
-  expect(pending.state()).toBe("rejected");
-  expect((await decideChatReadConsent(pending.grantId)).status).toBe(409);
-  expect(pending.state()).toBe("rejected");
-});
-
-it.each([
-  { authority: { runId: "injected" } },
-  { consentProofDigest: "a".repeat(64) },
-  { chatId: "another-chat" },
-  { disclosureVersion: "old-disclosure" },
-  { decision: "allow-all" },
-])("rejects a changed or widened Chat consent request %j", async (patch) => {
-  const pending = await pendingChatReadConsent();
-  const response = await decideChatReadConsent(pending.grantId, {
-    decision: "approve",
-    disclosureVersion: "jira-chat-read-v1",
-    ...patch,
-  });
-  expect(response.status).toBe(400);
-  expect(pending.state()).toBe("pending");
-});
-
-it.each(["actor", "mode", "disconnect", "authority", "verification"] as const)(
-  "revalidates Chat consent after %s changes",
-  async (change) => {
-    const pending = await pendingChatReadConsent();
-    expect((await fetch(chatReadConsentUrl(pending.grantId))).status).toBe(200);
-    if (change === "actor") activePrincipal = "another-operator";
-    if (change === "mode")
-      fixtureStore.updateChat(pending.chat.id, { toolMode: "autonomous-delivery" });
-    if (change === "disconnect") fixtureStore.updateChat(pending.chat.id, { jiraPodId: null });
-    if (change === "authority") fixtureAuthorityRegistry.revokeChatAuthorities(pending.chat.id);
-    if (change === "verification") {
-      const credential = wiring.custody.list()[0];
-      if (credential === undefined) throw new Error("Expected credential");
-      wiring.custody.beginVerification(credential.authRef);
-    }
-    expect((await decideChatReadConsent(pending.grantId)).status).toBe(404);
-    expect(pending.state()).toBe("pending");
-  },
-);
-
-it("keeps Chat consent isolated from legacy approval routes and requires CSRF", async () => {
-  const pending = await pendingChatReadConsent();
+it("keeps Chat read grants isolated from the legacy approval routes", async () => {
+  const pending = await pendingChatReadGrant();
   const legacy = `${baseUrl()}/api/atlassian-connectors/action-approvals/${pending.grantId}`;
   expect((await fetch(legacy)).status).toBe(404);
   expect(
@@ -2050,63 +1985,39 @@ it("keeps Chat consent isolated from legacy approval routes and requires CSRF", 
       })
     ).status,
   ).toBe(404);
-  expect(
-    (
-      await fetch(chatReadConsentUrl(pending.grantId), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision: "approve", disclosureVersion: "jira-chat-read-v1" }),
-      })
-    ).status,
-  ).toBe(403);
   expect(pending.state()).toBe("pending");
 });
 
-it("logs the actual HTTP consent and response correlation without private payloads", async () => {
-  const pending = await pendingChatReadConsent();
-  const requests = fakePortRequests.length;
-  expect(requests).toBeGreaterThan(0);
-  const sink = createFileServerLogSink(configDir, { level: "debug" });
-  setServerLogger(createServerLogger({ sink, level: "debug" }));
-  try {
-    const response = await decideChatReadConsent(pending.grantId);
-    expect(response.status).toBe(200);
-    const lines = persistedActivityLogLines(
-      readPersistedActivityLog(configDir),
-      "chat.tool-authority.operation",
-    );
-    const records = lines.map((line) =>
-      expectActivityLogProof("chat.tool-authority.operation.read-consent-route", line),
-    );
-    const grants = records.filter((line) => line.grantState === "granted");
-    expect(grants).toHaveLength(1);
-    expect(grants[0]).toMatchObject({
-      correlationId: response.headers.get("x-keiko-correlation-id"),
-      affectedCount: 1,
-      consentProofDigest: fixtureApprovalRegistry.getChatReadGrant(pending.grantId)?.grant
-        .consentProofDigest,
-    });
-    for (const value of [
-      pending.grantId,
-      pending.chat.id,
-      pending.chat.jiraPodBinding?.podId,
-      SYNTHETIC_TOKEN,
-    ])
-      if (value !== undefined) expect(lines.join("\n")).not.toContain(value);
-    expect(fakePortRequests).toHaveLength(requests);
-  } finally {
-    sink.close?.();
-    resetServerLogger();
-  }
-});
+it.each(["actor", "mode", "disconnect", "authority", "verification"] as const)(
+  "stops treating a granted Chat read grant as current after %s changes",
+  async (change) => {
+    const podId = await readyJiraPod();
+    const chat = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const grantId = randomUUID();
+    const state = retainedChatReadGrant(chat, true, grantId);
+    expect(state()).toBe("granted");
+    expect(isCurrentRetainedReadGrant(grantId)).toBe(true);
+    if (change === "actor") activePrincipal = "another-operator";
+    if (change === "mode") fixtureStore.updateChat(chat.id, { toolMode: "governed-assist" });
+    if (change === "disconnect") fixtureStore.updateChat(chat.id, { jiraPodId: null });
+    if (change === "authority") fixtureAuthorityRegistry.revokeChatAuthorities(chat.id);
+    if (change === "verification") {
+      const credential = wiring.custody.list()[0];
+      if (credential === undefined) throw new Error("Expected credential");
+      wiring.custody.beginVerification(credential.authRef);
+    }
+    expect(isCurrentRetainedReadGrant(grantId)).toBe(change === "authority");
+  },
+);
 
 it.each(["scope", "lifetime", "subject"] as const)(
-  "refuses a retained grant exceeding its current %s",
+  "refuses a retained pending grant exceeding its current %s",
   async (mismatch) => {
-    const pending = await pendingChatReadConsent();
+    const pending = await pendingChatReadGrant();
     const entry = fixtureApprovalRegistry.getChatReadGrant(pending.grantId);
     if (entry === undefined || entry.grant.subject.kind === "configured-mcp")
       throw new Error("Expected pending Jira grant");
+    expect(isCurrentRetainedReadGrant(pending.grantId)).toBe(true);
     const grantId = randomUUID();
     const envelope = chatAuthorityFixture({
       runId: `limited-${grantId}`,
@@ -2135,53 +2046,34 @@ it.each(["scope", "lifetime", "subject"] as const)(
     expect(
       fixtureApprovalRegistry.createChatReadGrant({ grant, authority: registered.authorityRef }).ok,
     ).toBe(true);
-    expect((await decideChatReadConsent(grantId)).status).toBe(404);
     expect(fixtureApprovalRegistry.getChatReadGrant(grantId)?.grant.state).toBe("pending");
+    expect(isCurrentRetainedReadGrant(grantId)).toBe(false);
   },
 );
 
-it("does not restore an expired read grant through the consent endpoint", async () => {
-  const pending = await pendingChatReadConsent();
+it("does not accept or restore an expired read grant", async () => {
+  const pending = await pendingChatReadGrant();
   const entry = fixtureApprovalRegistry.getChatReadGrant(pending.grantId);
   if (entry === undefined || entry.grant.subject.kind === "configured-mcp")
     throw new Error("Expected pending Jira grant");
   let now = Date.now();
-  fixtureApprovalRegistry = new AtlassianActionApprovalRegistry(() => now);
+  const expiring = new AtlassianActionApprovalRegistry(() => now);
   expect(
-    fixtureApprovalRegistry.createChatReadGrant({
+    expiring.createChatReadGrant({
       ...entry,
       grant: { ...entry.grant, requestedAt: now, expiresAt: now + 1 },
     }).ok,
   ).toBe(true);
-  await rebuild(wiring);
   now += 2;
-  expect((await decideChatReadConsent(pending.grantId)).status).toBe(404);
-  expect(fixtureApprovalRegistry.getChatReadGrant(pending.grantId)).toBeUndefined();
-});
-
-it.each(["{", "null", "[]", "{}"])(
-  "rejects malformed or incomplete consent JSON %s",
-  async (body) => {
-    const pending = await pendingChatReadConsent();
-    const response = await fetch(chatReadConsentUrl(pending.grantId), {
-      method: "POST",
-      headers: csrfHeaders(),
-      body,
-    });
-    expect(response.status).toBe(400);
-    expect(pending.state()).toBe("pending");
-  },
-);
-
-it("bounds the Chat consent request body before accepting anything", async () => {
-  const pending = await pendingChatReadConsent();
-  const response = await decideChatReadConsent(pending.grantId, {
-    decision: "approve",
-    disclosureVersion: "jira-chat-read-v1",
-    extra: "ü".repeat(4096),
-  });
-  expect(response.status).toBe(413);
-  expect(pending.state()).toBe("pending");
+  expect(
+    expiring.acceptChatReadGrant(
+      pending.grantId,
+      entry.grant.subject,
+      entry.authority,
+      "b".repeat(64),
+    ),
+  ).toEqual({ ok: false, reason: "invalid" });
+  expect(expiring.getChatReadGrant(pending.grantId)).toBeUndefined();
 });
 
 describe("public Live Pod projection", () => {

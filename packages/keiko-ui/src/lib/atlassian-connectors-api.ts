@@ -14,13 +14,9 @@
 
 import { bffFetchJson } from "./http";
 import { ApiError } from "./api";
-import {
-  isChatToolReadGrantView,
-  isChatToolWriteApprovalView,
-} from "@oscharko-dev/keiko-contracts/bff-wire";
+import { isChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   AtlassianConnectionVerificationStatus,
-  ChatToolReadGrantView,
   ChatToolWriteApprovalView,
   AtlassianCredentialPublicMetadata,
   AtlassianCredentialCreateRequest,
@@ -315,53 +311,6 @@ export const defaultAtlassianConnectorsClient: AtlassianConnectorsClient = {
   rejectAction: rejectAtlassianConnectorAction,
 };
 
-function sameReadGrantSource(
-  grant: ChatToolReadGrantView,
-  expected: ChatToolReadGrantView,
-): boolean {
-  if (grant.kind === "mcp-chat-read")
-    return (
-      expected.kind === "mcp-chat-read" &&
-      grant.configurationDigest === expected.configurationDigest
-    );
-  return (
-    expected.kind === "jira-chat-read" &&
-    grant.podId === expected.podId &&
-    grant.bindingGeneration === expected.bindingGeneration &&
-    grant.authenticationGeneration === expected.authenticationGeneration
-  );
-}
-function checkedReadGrant(value: unknown, expected: ChatToolReadGrantView): ChatToolReadGrantView {
-  const grant =
-    typeof value === "object" && value !== null && "approval" in value ? value.approval : undefined;
-  const identity = ["grantId", "chatId", "disclosureVersion", "requestedAt", "expiresAt"] as const;
-  if (
-    !isChatToolReadGrantView(grant) ||
-    !sameReadGrantSource(grant, expected) ||
-    !identity.every((key) => grant[key] === expected[key])
-  )
-    throw new ApiError("CONTRACT_VALIDATION_FAILED", "Chat read consent response is invalid.", 502);
-  return grant;
-}
-
-export async function decideJiraChatReadConsent(
-  grant: ChatToolReadGrantView,
-  decision: "approve" | "reject",
-): Promise<ChatToolReadGrantView> {
-  return bffFetchJson(
-    approvalPath(grant.grantId, "/chat-read-consent"),
-    {
-      method: "POST",
-      cache: "no-store",
-      body: JSON.stringify({ decision, disclosureVersion: grant.disclosureVersion }),
-    },
-    {
-      parseFailureMessage: friendlyParseFailureMessage,
-      validator: (_path, value) => checkedReadGrant(value, grant),
-    },
-  );
-}
-
 function checkedWriteApproval(value: unknown, approvalId: string): ChatToolWriteApprovalView {
   const approval =
     typeof value === "object" && value !== null && "approval" in value ? value.approval : undefined;
@@ -394,9 +343,46 @@ export async function getJiraChatWriteApproval(
 export async function decideJiraChatWriteApproval(
   approval: ChatToolWriteApprovalView,
   decision: "approve" | "reject",
+  excludedItemRefs: readonly string[] = [],
 ): Promise<ChatToolWriteApprovalView> {
+  // Only an approved backlog draft carries the items the human left out (#4178).
+  const deselection =
+    decision === "approve" && excludedItemRefs.length > 0 ? { excludedItemRefs } : {};
   return writeApprovalRequest(approval.approvalId, {
     method: "POST",
-    body: JSON.stringify({ decision, actionDigest: approval.actionDigest }),
+    body: JSON.stringify({ decision, actionDigest: approval.actionDigest, ...deselection }),
   });
+}
+
+/** The staged items a backlog draft approval covers, as the server holds them now (#4178). */
+export interface JiraStagedDraft {
+  readonly draftDigest: string;
+  readonly items: readonly unknown[];
+}
+function checkedStagedDraft(value: unknown, digest: string): JiraStagedDraft {
+  const body: Record<string, unknown> =
+    typeof value === "object" && value !== null ? Object.fromEntries(Object.entries(value)) : {};
+  if (body.draftDigest !== digest || !Array.isArray(body.items))
+    throw new ApiError("CONTRACT_VALIDATION_FAILED", "Jira draft response is invalid.", 502);
+  return { draftDigest: digest, items: body.items as readonly unknown[] };
+}
+/**
+ * Reads the staged draft a `jira.draft` approval names. The server serves it only to the Chat that
+ * staged it and only for the digest the approval commits to, so a stale or foreign draft is a
+ * failure here, never different items.
+ */
+export async function getJiraStagedDraft(
+  draftId: string,
+  chatId: string,
+  digest: string,
+): Promise<JiraStagedDraft> {
+  const query = new URLSearchParams({ chatId, digest });
+  return bffFetchJson(
+    `/api/atlassian-connectors/jira-drafts/${encodeURIComponent(draftId)}?${query.toString()}`,
+    { cache: "no-store" },
+    {
+      parseFailureMessage: friendlyParseFailureMessage,
+      validator: (_path, value) => checkedStagedDraft(value, digest),
+    },
+  );
 }

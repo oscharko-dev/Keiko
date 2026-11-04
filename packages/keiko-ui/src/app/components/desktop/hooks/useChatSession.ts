@@ -1,6 +1,10 @@
 "use client";
 
-import { applyChatReadConsent, applyChatWriteApproval } from "@/lib/chat-tool-events";
+import {
+  applyChatReadConsent,
+  applyChatToolExchange,
+  applyChatWriteApproval,
+} from "@/lib/chat-tool-events";
 import { watchChatToolConsent } from "@/lib/chat-tool-consent";
 import { useChatDraft, useChatDraftUnloadGuard, type ChatDraftPersistence } from "./useChatDraft";
 import type { ChatCreationModelChoice } from "./chatCreationModelChoice";
@@ -77,6 +81,7 @@ import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
+  gatewayModelCatalogCheckRequested,
   notifyGatewayModelCatalogUpdated,
 } from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
@@ -430,7 +435,14 @@ function raceUiAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 // Engineering note: NO fake progress percentage. The status string is the
 // only progress signal — UI copy must reflect that.
 export type SendStatus =
-  "idle" | "queued" | "contacting" | "streaming" | "completed" | "failed" | "cancelled";
+  | "idle"
+  | "queued"
+  | "contacting"
+  | "awaiting-decision"
+  | "streaming"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 const TERMINAL_SEND_STATUSES: readonly SendStatus[] = ["completed", "failed", "cancelled"] as const;
 
@@ -1952,7 +1964,10 @@ function publishGatewayModelRefresh(result: GatewayModelRefreshResult): void {
   for (const subscriber of gatewayModelRefreshSubscribers) subscriber(result);
 }
 
-function refreshGatewayModels(): void {
+// A person's own step (the Workbench or a model picker opened) also checks again the models that
+// are not ready; every other refresh only rereads the catalog (customer 1.3.4).
+function refreshGatewayModels(event?: Event): void {
+  const check = event !== undefined && gatewayModelCatalogCheckRequested(event);
   const generation = gatewayModelRefreshGeneration + 1;
   gatewayModelRefreshGeneration = generation;
   invalidateSharedBootstrap();
@@ -1963,7 +1978,7 @@ function refreshGatewayModels(): void {
   publishGatewayModelRefresh({ kind: "pending" });
   const correlationId = newClientCorrelationId();
   const startedAt = performance.now();
-  void fetchModels(correlationId).then(
+  void fetchModels(correlationId, check).then(
     ({ models }): void => {
       if (generation === gatewayModelRefreshGeneration) {
         recordCatalogAdoption(
@@ -3075,6 +3090,13 @@ function synchronizeRenderedIdentity(
   renderedRef.current = next;
 }
 
+function awaitsToolDecision(message: ChatMessage): boolean {
+  return (
+    message.toolTranscript?.exchanges.some(
+      ({ approval, result }) => approval?.state === "pending" && result === undefined,
+    ) === true
+  );
+}
 function applyStreamWriteApproval(
   previous: SessionState,
   event: Parameters<typeof applyChatWriteApproval>[1],
@@ -3085,6 +3107,20 @@ function applyStreamWriteApproval(
     messages: previous.messages.map((message) =>
       message.id === optimisticId || message.id === event.messageId
         ? applyChatWriteApproval(message, event)
+        : message,
+    ),
+  };
+}
+function applyStreamToolExchange(
+  previous: SessionState,
+  event: Parameters<typeof applyChatToolExchange>[1],
+  optimisticId: string,
+): SessionState {
+  return {
+    ...previous,
+    messages: previous.messages.map((message) =>
+      message.id === optimisticId || message.id === event.messageId
+        ? applyChatToolExchange(message, event)
         : message,
     ),
   };
@@ -4149,6 +4185,14 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         onWriteApproval: (event): void => {
           if (isSupersededOrAborted(chatId, signal) || event.approval.chatId !== chatId) return;
           setState((previous) => applyStreamWriteApproval(previous, event, optimisticId));
+          updateOwnedSendStatus(
+            signal,
+            event.approval.state === "pending" ? "awaiting-decision" : "contacting",
+          );
+        },
+        onToolExchange: (event): void => {
+          if (isSupersededOrAborted(chatId, signal)) return;
+          setState((previous) => applyStreamToolExchange(previous, event, optimisticId));
         },
         onReadConsent: ({ messageId, grant }): void => {
           if (isSupersededOrAborted(chatId, signal) || grant.chatId !== chatId) return;
@@ -4342,10 +4386,14 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
               [message],
             ),
           }));
+          updateOwnedSendStatus(
+            request.signal,
+            awaitsToolDecision(message) ? "awaiting-decision" : "contacting",
+          );
         },
       );
     },
-    [],
+    [updateOwnedSendStatus],
   );
   const sendUngroundedBuffered = useCallback(
     async (request: UngroundedSendRequest): Promise<SendAttemptOutcome> => {

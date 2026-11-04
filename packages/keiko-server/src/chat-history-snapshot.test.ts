@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
+  countContextTokens,
   deriveContextProfile,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { createInMemoryUiStore, type ChatMessage, type UiStore } from "./store/index.js";
@@ -287,6 +288,114 @@ describe("paged conversation continuity", () => {
     expect(result).toContain(correction.id);
     expect(result).toContain("60000");
     expect(result?.indexOf("75000")).toBeLessThan(result?.indexOf("60000") ?? -1);
+  });
+
+  it.each([
+    ["Q7-42?", "Q7-42"],
+    ["Q7‑42?", "Q7-42"],
+    ["A7?", "A7"],
+    ["MCP?", "MCP"],
+    ["mcp?", "MCP"],
+    ["Which mcp?", "MCP"],
+    ["Was bedeutet mcp?", "MCP"],
+    ["47?", "47"],
+    ["v1.2?", "v1.2"],
+  ])("rehydrates a literal short identifier without answer hints: %s", (query, identifier) => {
+    const { store, chatId, add } = fixture();
+    const source = add("user", `Reference ${identifier}: the agreed inspection color is ochre.`);
+    add("assistant", "Acknowledged.");
+    const result = rehydrateChatHistory(store, chatId, query, new Set(), []);
+    expect(result).toContain(source.id);
+    expect(result).toContain("ochre");
+  });
+
+  it("does not match identifier substrings or treat their punctuation as regex syntax", () => {
+    const { store, chatId, add } = fixture();
+    const source = add(
+      "user",
+      "Reference Q7-42: agreed color ochre. Version v1.2 uses offline mode.",
+    );
+    add("assistant", "Acknowledged.");
+    add("user", "Reference XQ7-42 and Q7-420 are unrelated. Version v1x2 uses remote mode.");
+    add("assistant", "Acknowledged.");
+    const identifier = rehydrateChatHistory(store, chatId, "Q7-42?", new Set(), []);
+    const version = rehydrateChatHistory(store, chatId, "v1.2?", new Set(), []);
+    expect(identifier).toContain(source.id);
+    expect(identifier).not.toContain("unrelated");
+    expect(version).toContain("offline mode");
+    expect(version).not.toContain("remote mode");
+  });
+
+  it.each([
+    ["module.Q7-42", "Q7-42"],
+    ["tenant:Q7-42", "Q7-42"],
+    ["v1.2", "2"],
+  ])("does not retrieve a suffix of the composite identifier %s", (composite, identifier) => {
+    const { store, chatId, add } = fixture();
+    const source = add("user", `Reference ${identifier}: agreed color ochre.`);
+    add("assistant", "Acknowledged.");
+    add("user", `Reference ${composite}: wrong fixture value.`);
+    add("assistant", "Acknowledged.");
+    const result = rehydrateChatHistory(store, chatId, `${identifier}?`, new Set(), []);
+    expect(result).toContain(source.id);
+    expect(result).not.toContain("wrong fixture value");
+  });
+
+  it("does not admit ordinary short words from multiword questions as identifiers", () => {
+    const { store, chatId, add } = fixture();
+    add("user", "Wie ist das zu sehen?");
+    add("assistant", "Acknowledged.");
+    expect(rehydrateChatHistory(store, chatId, "Wie ist das?", new Set(), [])).toBeUndefined();
+  });
+
+  it("keeps identifier recall inside exclusions and the current credential floor", () => {
+    const { store, chatId, add } = fixture();
+    const source = add("user", "Reference A7: the agreed color is ochre.");
+    add("assistant", "Acknowledged.");
+    add("user", "Reference fixture-key-73: synthetic private value.");
+    expect(rehydrateChatHistory(store, chatId, "A7?", new Set([source.id]), [])).toBeUndefined();
+    expect(
+      rehydrateChatHistory(store, chatId, "fixture-key-73?", new Set(), ["fixture-key-73"]),
+    ).toBeUndefined();
+  });
+
+  it("keeps German word-prefix recall for ordinary hyphenated phrases", () => {
+    const { store, chatId, add } = fixture();
+    const source = add("user", "Die vereinbarte Schnittstelle lautet B4.");
+    add("assistant", "Acknowledged.");
+    const result = rehydrateChatHistory(
+      store,
+      chatId,
+      "Welche Daten-Schnittstelle nutzen wir?",
+      new Set(),
+      [],
+    );
+    expect(result).toContain(source.id);
+    expect(result).toContain("B4");
+  });
+
+  it("records identifier matching counts without the query or source body", () => {
+    const { store, chatId, add } = fixture();
+    add("user", "Reference Q7-42: private fixture phrase.");
+    add("assistant", "Acknowledged.");
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    expect(rehydrateChatHistory(store, chatId, "Q7-42?", new Set(), [])).toContain(
+      "private fixture phrase",
+    );
+    const event = sink.events.find((entry) => entry.op === "chat.continuity.rehydration");
+    expect(event?.extra).toMatchObject({
+      queryTermCount: 1,
+      identifierTermCount: 1,
+      matchingPolicy: "word-prefix-and-identifiers-v2",
+      excerptCount: 1,
+    });
+    expectActivityLogProof(
+      "chat.continuity.rehydration.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain("Q7-42");
+    expect(JSON.stringify(sink.events)).not.toContain("private fixture phrase");
   });
 
   it("keeps corrections reachable after repeated follow-up questions and duplicate answers", () => {
@@ -635,3 +744,77 @@ it("keeps multi-section recall within the original privacy and scope boundaries"
   expect(result).not.toContain("hostile instruction");
   expect(result).not.toContain("/private/synthetic");
 });
+
+it.each([1, 3, 8])(
+  "budgets the complete rendered recall block for %i candidate messages",
+  (count) => {
+    const { store, chatId, add } = fixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    for (let index = 0; index < count; index++) {
+      add(
+        "user",
+        (`Checkpoint ${String(index)}. ` + "Reviewed ordinary planning details. ".repeat(20)).slice(
+          0,
+          360,
+        ),
+      );
+      add("assistant", "Acknowledged.");
+    }
+    const result = rehydrateChatHistory(store, chatId, "checkpoint", new Set(), []);
+    if (result === undefined) throw new TypeError("Missing recall fixture result");
+    expect(result).toContain("Checkpoint");
+    expect(countContextTokens(result)).toBeLessThanOrEqual(800);
+    const event = sink.events.find((entry) => entry.op === "chat.continuity.rehydration");
+    const excerptCount = result.split("\n").length - 1;
+    expect(event?.extra).toMatchObject({
+      tokenBudget: 800,
+      tokenCounterSource: "local-estimate",
+      rehydratedTokens: countContextTokens(result),
+      excerptCount,
+      budgetDroppedExcerpts: count - excerptCount,
+    });
+    expectActivityLogProof(
+      "chat.continuity.rehydration.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+  },
+);
+
+it.each([0, 20])(
+  "finds an original fact at position %i beyond the recent scan window",
+  (position) => {
+    const { store, chatId, add } = fixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    for (let index = 0; index < 50; index++) {
+      if (index === position) {
+        add("user", "Die Lagerfachfarbe ist ockergelb. Die Freigabekennung lautet Q7-42.");
+        add("assistant", "Acknowledged.");
+      }
+      add("user", "Unverbindlicher Zwischenstand ohne neue Sachangaben. ".repeat(1000));
+      add("assistant", "Acknowledged.");
+    }
+    const result = rehydrateChatHistory(
+      store,
+      chatId,
+      "Welche Farbe hat das Lagerfach?",
+      new Set(),
+      [],
+    );
+    expect(result).toContain("ockergelb");
+    expect(store.countMessages(chatId)).toBe(102);
+    const event = sink.events.find((entry) => entry.op === "chat.continuity.rehydration");
+    const extra = event?.extra ?? {};
+    expect(extra.discoveryPolicy).toBe("indexed-candidates-and-bounded-tail-v1");
+    expect(Number(extra.indexedCandidateRows)).toBeGreaterThan(0);
+    expect(Number(extra.indexedCandidateRows)).toBeLessThanOrEqual(128);
+    expect(Number(extra.indexedUnitsVisited)).toBeGreaterThan(0);
+    expect(Number(extra.scannedChars)).toBeLessThanOrEqual(1_048_576);
+    expect(JSON.stringify(sink.events)).not.toContain("ockergelb");
+    expectActivityLogProof(
+      "chat.continuity.rehydration.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+  },
+);
