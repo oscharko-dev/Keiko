@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { readJson, type JsonValue } from "./json-reader.js";
+import { readJson, type JsonReadLimits, type JsonValue } from "./json-reader.js";
+
+function limits(maxDepth: number): JsonReadLimits {
+  return { maxDepth, maxValues: Number.MAX_SAFE_INTEGER };
+}
 
 function value(text: string): JsonValue {
-  const result = readJson(text, 128);
+  const result = readJson(text, limits(128));
   if (!result.ok) throw new Error(`unexpected failure: ${result.reason}`);
   return result.value;
 }
@@ -13,7 +17,9 @@ describe("readJson", () => {
     expect(value("null")).toBeNull();
     expect(value(" true ")).toBe(true);
     expect(value("false")).toBe(false);
-    expect(value("-0.5e2")).toBe(-50);
+    expect(value("-50")).toBe(-50);
+    expect(value("-0.5")).toBe(-0.5);
+    expect(value("-0.5e2")).toEqual({ kind: "exact-number", source: "-0.5e2" });
     expect(value('"a\\u00e4\\n\\"b"')).toBe('aä\n"b');
     expect(value("[1, [2], {}]")).toEqual({
       kind: "array",
@@ -34,12 +40,12 @@ describe("readJson", () => {
   });
 
   it("counts repeated keys per object, not across objects", () => {
-    const result = readJson('[{"a":1,"a":2,"a":3},{"a":1}]', 128);
+    const result = readJson('[{"a":1,"a":2,"a":3},{"a":1}]', limits(128));
     expect(result).toMatchObject({ ok: true, duplicateKeyCount: 2 });
   });
 
   it("locates a failure by line and column across line breaks", () => {
-    expect(readJson('{\n  "a": 1,\n  "b": ]\n}', 128)).toEqual({
+    expect(readJson('{\n  "a": 1,\n  "b": ]\n}', limits(128))).toEqual({
       ok: false,
       reason: "unexpected-token",
       line: 3,
@@ -48,16 +54,16 @@ describe("readJson", () => {
   });
 
   it("reports truncation at the end of the text", () => {
-    expect(readJson('{"a":', 128)).toMatchObject({ ok: false, reason: "unexpected-end" });
-    expect(readJson('"abc', 128)).toMatchObject({ ok: false, reason: "unexpected-end" });
-    expect(readJson("[1,", 128)).toMatchObject({ ok: false, reason: "unexpected-end" });
-    expect(readJson("tru", 128)).toMatchObject({ ok: false });
+    expect(readJson('{"a":', limits(128))).toMatchObject({ ok: false, reason: "unexpected-end" });
+    expect(readJson('"abc', limits(128))).toMatchObject({ ok: false, reason: "unexpected-end" });
+    expect(readJson("[1,", limits(128))).toMatchObject({ ok: false, reason: "unexpected-end" });
+    expect(readJson("tru", limits(128))).toMatchObject({ ok: false });
   });
 
   it("refuses containers deeper than the limit and never recurses past the hard ceiling", () => {
-    expect(readJson("[[[1]]]", 1)).toMatchObject({ ok: false, reason: "nesting-depth" });
-    expect(readJson("[[[1]]]", 3)).toMatchObject({ ok: true });
-    expect(readJson("[".repeat(500_000), 1_000_000)).toMatchObject({
+    expect(readJson("[[[1]]]", limits(1))).toMatchObject({ ok: false, reason: "nesting-depth" });
+    expect(readJson("[[[1]]]", limits(3))).toMatchObject({ ok: true });
+    expect(readJson("[".repeat(500_000), limits(1_000_000))).toMatchObject({
       ok: false,
       reason: "nesting-depth",
     });
@@ -65,7 +71,7 @@ describe("readJson", () => {
 
   it("rejects what JSON.parse rejects", () => {
     for (const bad of ["{'a':1}", "[1 2]", '{"a" 1}', "{,}", "NaN", "+1", ".5", "1e", '"\\x"']) {
-      expect(readJson(bad, 128).ok, bad).toBe(false);
+      expect(readJson(bad, limits(128)).ok, bad).toBe(false);
     }
   });
 });

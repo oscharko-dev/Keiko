@@ -7,7 +7,8 @@
 
 export interface JsonExactNumber {
   readonly kind: "exact-number";
-  // The literal as written: an integer beyond the safe range or a number outside double range.
+  // The literal as written, whenever the double would read differently: `9007199254740993.0`,
+  // `1e-400`, `-0`, `1.10`.
   readonly source: string;
 }
 
@@ -34,8 +35,26 @@ export type JsonFailureReason =
   | "trailing-content"
   | "nesting-depth";
 
+/** Why a read ended before the end of the document: the value is what was read until then. */
+export type JsonReadStop = "value-limit" | "interrupted";
+
+export interface JsonReadLimits {
+  /** A container nested deeper (root = depth 0) is refused as `nesting-depth`. */
+  readonly maxDepth: number;
+  /** The most values the tree may hold; the root is always admitted. */
+  readonly maxValues: number;
+  /** Asked at the first value and then at regular intervals: the deadline and the cancellation. */
+  readonly interrupted?: () => boolean;
+}
+
 export type JsonReadResult =
-  | { readonly ok: true; readonly value: JsonValue; readonly duplicateKeyCount: number }
+  | {
+      readonly ok: true;
+      readonly value: JsonValue;
+      readonly duplicateKeyCount: number;
+      readonly valueCount: number;
+      readonly stop?: JsonReadStop;
+    }
   | {
       readonly ok: false;
       readonly reason: JsonFailureReason;
@@ -47,6 +66,7 @@ export type JsonReadResult =
 // stack even when a very large `maxNestingDepth` is configured.
 const HARD_DEPTH_CEILING = 1000;
 const SMALL_OBJECT_ENTRIES = 8;
+const VALUES_PER_INTERRUPTION_CHECK = 4096;
 
 class JsonReadError extends Error {
   public constructor(
@@ -61,8 +81,27 @@ class JsonReadError extends Error {
 interface Cursor {
   readonly text: string;
   readonly maxDepth: number;
+  readonly maxValues: number;
+  readonly interrupted: (() => boolean) | undefined;
   position: number;
   duplicateKeyCount: number;
+  valueCount: number;
+  stop: JsonReadStop | undefined;
+}
+
+/** Whether one more value may enter the tree. Refused once, the read ends where it stands. */
+function admitsValue(cursor: Cursor): boolean {
+  if (cursor.stop !== undefined) return false;
+  if (cursor.valueCount >= cursor.maxValues) {
+    cursor.stop = "value-limit";
+    return false;
+  }
+  if (cursor.valueCount % VALUES_PER_INTERRUPTION_CHECK === 0 && cursor.interrupted?.() === true) {
+    cursor.stop = "interrupted";
+    return false;
+  }
+  cursor.valueCount += 1;
+  return true;
 }
 
 function code(cursor: Cursor): number {
@@ -133,32 +172,29 @@ function skipIntegerPart(cursor: Cursor): void {
   if (skipDigits(cursor) === 0) fail(cursor, "invalid-number");
 }
 
-function skipFraction(cursor: Cursor): boolean {
-  if (code(cursor) !== 0x2e) return false;
+function skipFraction(cursor: Cursor): void {
+  if (code(cursor) !== 0x2e) return;
   cursor.position += 1;
   if (skipDigits(cursor) === 0) fail(cursor, "invalid-number");
-  return true;
 }
 
-function skipExponent(cursor: Cursor): boolean {
-  if (code(cursor) !== 0x65 && code(cursor) !== 0x45) return false;
+function skipExponent(cursor: Cursor): void {
+  if (code(cursor) !== 0x65 && code(cursor) !== 0x45) return;
   cursor.position += 1;
   if (code(cursor) === 0x2b || code(cursor) === 0x2d) cursor.position += 1;
   if (skipDigits(cursor) === 0) fail(cursor, "invalid-number");
-  return true;
 }
 
 function readNumber(cursor: Cursor): number | JsonExactNumber {
   const start = cursor.position;
   if (code(cursor) === 0x2d) cursor.position += 1;
   skipIntegerPart(cursor);
-  const fractional = skipFraction(cursor);
-  const exponential = skipExponent(cursor);
+  skipFraction(cursor);
+  skipExponent(cursor);
   const source = cursor.text.slice(start, cursor.position);
   const value = Number(source);
-  const isInteger = !fractional && !exponential;
-  const lossy = isInteger ? !Number.isSafeInteger(value) : !Number.isFinite(value);
-  return lossy ? { kind: "exact-number", source } : value;
+  // Only a number the double writes back to the same token is the same number to a reader.
+  return String(value) === source ? value : { kind: "exact-number", source };
 }
 
 function readLiteral(cursor: Cursor, word: string, value: boolean | null): boolean | null {
@@ -190,11 +226,13 @@ function readObject(cursor: Cursor, depth: number): JsonObject {
     const key = readString(cursor);
     skipWhitespace(cursor);
     expectCode(cursor, 0x3a);
+    if (!admitsValue(cursor)) break;
     if (hasKey(entries, seen, key)) cursor.duplicateKeyCount += 1;
     entries.push([key, readValue(cursor, depth + 1)]);
     if (seen !== undefined) seen.add(key);
     else if (entries.length > SMALL_OBJECT_ENTRIES)
       seen = new Set(entries.map((entry) => entry[0]));
+    if (cursor.stop !== undefined) break;
     skipWhitespace(cursor);
     if (code(cursor) === 0x7d) break;
     expectCode(cursor, 0x2c);
@@ -212,7 +250,9 @@ function readArray(cursor: Cursor, depth: number): JsonArray {
     return { kind: "array", items };
   }
   for (;;) {
+    if (!admitsValue(cursor)) break;
     items.push(readValue(cursor, depth + 1));
+    if (cursor.stop !== undefined) break;
     skipWhitespace(cursor);
     if (code(cursor) === 0x5d) break;
     expectCode(cursor, 0x2c);
@@ -251,23 +291,40 @@ function lineAndColumn(text: string, offset: number): { line: number; column: nu
 }
 
 /**
- * Reads one JSON document. A container nested deeper than `maxDepth` (root = depth 0) is refused as
- * `nesting-depth`, so the reader never recurses further than the caller is willing to walk.
+ * Reads one JSON document, without recursing deeper than the caller is willing to walk and without
+ * allocating past its allowance: a read stopped by the allowance or by an interruption returns what
+ * it has read, says so, and has not looked at the rest of the document.
  */
-export function readJson(text: string, maxDepth: number): JsonReadResult {
+export function readJson(text: string, limits: JsonReadLimits): JsonReadResult {
   const cursor: Cursor = {
     text,
-    maxDepth: Math.min(maxDepth, HARD_DEPTH_CEILING),
+    maxDepth: Math.min(limits.maxDepth, HARD_DEPTH_CEILING),
+    maxValues: Math.max(1, limits.maxValues),
+    interrupted: limits.interrupted,
     position: 0,
     duplicateKeyCount: 0,
+    valueCount: 0,
+    stop: undefined,
   };
   try {
-    const value = readValue(cursor, 0);
-    skipWhitespace(cursor);
-    if (cursor.position < text.length) fail(cursor, "trailing-content");
-    return { ok: true, value, duplicateKeyCount: cursor.duplicateKeyCount };
+    admitsValue(cursor);
+    const value = cursor.stop === undefined ? readValue(cursor, 0) : null;
+    return finishedRead(cursor, value);
   } catch (error) {
     if (!(error instanceof JsonReadError)) throw error;
     return { ok: false, reason: error.reason, ...lineAndColumn(text, error.offset) };
   }
+}
+
+function finishedRead(cursor: Cursor, value: JsonValue): JsonReadResult {
+  const read = {
+    ok: true as const,
+    value,
+    duplicateKeyCount: cursor.duplicateKeyCount,
+    valueCount: cursor.valueCount,
+  };
+  if (cursor.stop !== undefined) return { ...read, stop: cursor.stop };
+  skipWhitespace(cursor);
+  if (cursor.position < cursor.text.length) fail(cursor, "trailing-content");
+  return read;
 }

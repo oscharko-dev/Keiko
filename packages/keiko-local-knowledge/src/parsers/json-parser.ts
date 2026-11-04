@@ -21,6 +21,7 @@ import {
   diagnostic,
   emptyResult,
   encodingDiagnostic,
+  objectLimitDiagnostic,
   oversizeDiagnostic,
   shouldStop,
   textByteLimit,
@@ -36,6 +37,8 @@ import { LOCAL_KNOWLEDGE_JSON_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contra
 import { cleanHeaderLabel, neutraliseFieldSeparator } from "./tabular.js";
 import {
   readJson,
+  type JsonReadLimits,
+  type JsonReadStop,
   type JsonArray,
   type JsonObject,
   type JsonReadResult,
@@ -424,21 +427,58 @@ function walkLineRolledBack(ctx: ScanContext, value: JsonValue, index: number): 
 // whole file's good records. Returns the number of repeated object keys seen.
 function walkJsonLines(ctx: ScanContext): number {
   let duplicateKeys = 0;
+  let valuesRead = 0;
   for (const [index, raw] of ctx.text.split("\n").entries()) {
     if (ctx.stopped) break;
     // Clear the per-record nesting bail from any earlier line so a deeply-nested record does
     // not silently discard every valid record that follows (PR-review follow-up on KEIKO-0484).
     resetLineNestingBail(ctx);
     if (raw.trim().length === 0) continue;
-    const parsed = readJson(raw, ctx.options.maxNestingDepth);
+    const allowance = ctx.options.maxObjectsPerDocument - valuesRead;
+    if (allowance <= 0) {
+      stopAtRead(ctx, "value-limit");
+      break;
+    }
+    const parsed = readJson(raw, readLimits(ctx, allowance));
     if (!parsed.ok) {
       ctx.diagnostics.push(lineFailureDiagnostic(ctx, parsed, index));
       continue;
     }
+    valuesRead += parsed.valueCount;
     duplicateKeys += parsed.duplicateKeyCount;
-    walkLineRolledBack(ctx, parsed.value, index);
+    // A line the read did not finish is no record of the document: it is not indexed in part.
+    if (parsed.stop === undefined) walkLineRolledBack(ctx, parsed.value, index);
+    else stopAtRead(ctx, parsed.stop);
   }
   return duplicateKeys;
+}
+
+function readLimits(ctx: ScanContext, maxValues: number): JsonReadLimits {
+  return {
+    maxDepth: ctx.options.maxNestingDepth,
+    maxValues,
+    interrupted: () => shouldStopReading(ctx),
+  };
+}
+
+function shouldStopReading(ctx: ScanContext): boolean {
+  const limit = shouldStop(ctx.startedAt, ctx.options, 0);
+  return limit.stop && limit.code !== "UNIT_LIMIT_REACHED";
+}
+
+/** The diagnostic of a read that ended early; a deadline or a cancellation also ends the walk. */
+function stopAtRead(ctx: ScanContext, stop: JsonReadStop): void {
+  ctx.stopped = true;
+  if (stop === "value-limit") {
+    ctx.diagnostics.push(
+      objectLimitDiagnostic(ctx.input.documentId, ctx.options.maxObjectsPerDocument),
+    );
+    return;
+  }
+  const limit = shouldStop(ctx.startedAt, ctx.options, 0);
+  if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
+    ctx.diagnostics.push(diagnostic(limit.code, limit.message, ctx.input.documentId, "info"));
+  }
 }
 
 function duplicateKeyDiagnostic(count: number, documentId: DocumentId): ParserDiagnostic {
@@ -464,12 +504,13 @@ function newContext(
   text: string,
   input: ParserSelectionInput,
   options: ParserOptions,
+  startedAt: number,
 ): ScanContext {
   return {
     text,
     input,
     options,
-    startedAt: options.now(),
+    startedAt,
     units: [],
     diagnostics: [],
     normalizedParts: [],
@@ -522,12 +563,15 @@ function parseDocument(
   decoded: DecodedText,
   input: ParserSelectionInput,
   options: ParserOptions,
+  startedAt: number,
 ): ParserResult {
-  const ctx = newContext(decoded.text, input, options);
+  const ctx = newContext(decoded.text, input, options, startedAt);
   if (isJsonLines(input)) return resultOf(ctx, decoded, walkJsonLines(ctx));
-  const parsed = readJson(decoded.text, options.maxNestingDepth);
+  const parsed = readJson(decoded.text, readLimits(ctx, options.maxObjectsPerDocument));
   if (!parsed.ok) return failedDocument(parsed, input, options);
-  walk(ctx, parsed.value, "", 0);
+  if (parsed.stop === "interrupted") stopAtRead(ctx, parsed.stop);
+  else walk(ctx, parsed.value, "", 0);
+  if (parsed.stop === "value-limit") stopAtRead(ctx, parsed.stop);
   if (ctx.nestingStopped) {
     return emptyResult(jsonParser.capability, input.documentId, options, ctx.diagnostics);
   }
@@ -541,6 +585,7 @@ export const jsonParser: ParserAdapter = Object.freeze({
     matches: (input: ParserSelectionInput): boolean => isJson(input),
   }),
   parse: (input: ParserSelectionInput, options: ParserOptions) => {
+    const startedAt = options.now();
     const byteLimit = textByteLimit(options, JSON_MAX_BYTES);
     if (input.bytes.byteLength > byteLimit) {
       return emptyResult(jsonParser.capability, input.documentId, options, [
@@ -549,6 +594,6 @@ export const jsonParser: ParserAdapter = Object.freeze({
     }
     const binary = binaryContentRefusal(jsonParser.capability, input, options);
     if (binary !== undefined) return binary;
-    return parseDocument(decodeUtf8(input.bytes), input, options);
+    return parseDocument(decodeUtf8(input.bytes), input, options, startedAt);
   },
 });
