@@ -205,7 +205,7 @@ export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {
       {props.visible ? (
         <div className={styles.outlineBody}>
           {hasSymbols ? (
-            <div className={styles.outlineTree} role="tree" aria-label="Current file symbols">
+            <div className={styles.outlineTree} role="tree" aria-label={t("editor.ui.fileSymbols")}>
               {visibleNodes.map((node) => {
                 const expandable = node.children.length > 0;
                 const rowKind = kindLabel(node.symbol.kind);

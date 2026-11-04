@@ -971,6 +971,15 @@ export const EN_MESSAGES = {
     "Retrieval embedding: passed (model identity unavailable in this report)",
   "settings.models.retrievalEmbeddingIdentity": "Retrieval embedding model: {modelId}{shape}",
   "settings.models.retrievalEmbeddingDimensions": " ({dimensions} dimensions)",
+  "permControl.keikoMode": "Keiko-Mode",
+  "permControl.zeroStandingRights": "Zero standing rights · Keiko governs",
+  "permControl.legacyAccessMode": "Legacy access mode",
+  "permControl.askEveryAction": "Ask every action",
+  "permControl.fullAccess": "Full access",
+  "permControl.noteKeiko":
+    "No rights by default. You approve while manual; Keiko governs per policy when autonomous.",
+  "permControl.noteLegacyFull": "Legacy: agent acts without prompts.",
+  "permControl.noteLegacyAsk": "Legacy: you approve each privileged action.",
 } as const;
 
 export type MessageKey = keyof typeof EN_MESSAGES;

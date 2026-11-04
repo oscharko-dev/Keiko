@@ -1,7 +1,7 @@
 {
   "issue": 3405,
   "epic": 3403,
-  "generatedAt": "2026-11-02T19:27:55.536Z",
+  "generatedAt": "2026-11-04T08:17:45.805Z",
   "command": "npm run test:e2e:update-ui-1696",
   "requiredCiCommand": "npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage",
   "artifacts": [
@@ -113,19 +113,19 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.de.ts",
-      "sha256": "e4b9029bffe25896be92d77bbd28d9acd96535f46e96e9d13a2d282064a4951b"
+      "sha256": "e279816b756888bebc08ef2d6aa6e6c7f1fc4981ddacc9866050d884991bd521"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.en.ts",
-      "sha256": "042480b654c698acc64a41a7be9f67e53fd7d8294989a0be03ba3256df439006"
+      "sha256": "925686e43ea8a5a4f295e7bdf871d7f58778aa6c419c07f0f61df869d7cbc17a"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
-      "sha256": "39999035c67e8e4cb08fbd1fa6375e14a1447abe8289b80a6dce1bf2fe5cf2ac"
+      "sha256": "04ba09f7c857ac0debe170dc419b6e495773c346c6139b9cc92c8ad994cf3525"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
-      "sha256": "34c321ea2a070fb08f2a585a643f14434334ce22821c33f8a987b98f45fd613a"
+      "sha256": "11da7c61746fbefc6e7d140fda1f77c98e8f26c75de0392983ed5f3c8ed267a7"
     },
     {
       "path": "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
