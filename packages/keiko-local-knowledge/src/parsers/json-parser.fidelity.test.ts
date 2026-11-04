@@ -157,7 +157,7 @@ describe("jsonParser diagnostics (#4235)", () => {
   it("locates a malformed JSONL line by position and keeps the rest", () => {
     const result = run('{"a":1}\n{"b":}\n{"c":3}\n', "jsonl");
     const entry = result.diagnostics.find((d) => d.code === "MALFORMED_INPUT");
-    expect(entry?.message).toContain("line 1");
+    expect(entry?.message).toContain("line 2");
     expect(entry?.message).toContain("column 6");
     expect(textOf(result)).toContain("/!3: c=3");
   });

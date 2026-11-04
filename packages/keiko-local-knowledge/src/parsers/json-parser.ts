@@ -100,10 +100,14 @@ interface ScanContext {
 // A line break inside a string value would split the line-oriented projection (and every unit span
 // is a line), so line breaks read as one space.
 const LINE_BREAKS = /[\r\n\u2028\u2029]+/gu;
+// `\u0000` and its kin are legal in a JSON string and mean nothing in a text.
+const CONTROL_CHARACTER = /(?!\t)\p{Cc}/gu;
 
 function scalarText(value: Exclude<JsonValue, JsonArray | JsonObject>): string {
-  if (typeof value === "string")
-    return neutraliseFieldSeparator(value.replaceAll(LINE_BREAKS, " "));
+  if (typeof value === "string") {
+    const text = value.replaceAll(LINE_BREAKS, " ").replaceAll(CONTROL_CHARACTER, "");
+    return neutraliseFieldSeparator(text);
+  }
   if (value !== null && typeof value === "object") return value.source;
   return value === null ? "null" : String(value);
 }
@@ -242,13 +246,47 @@ function staysInRow(child: JsonValue, row: RowRef | undefined): boolean {
   return isScalarOrEmpty(child) || (row !== undefined && isValueList(child));
 }
 
-/** The fields of a record; a list of values in a row repeats its label, one field per value. */
-function objectScalarFields(value: JsonObject, row: RowRef | undefined): readonly string[] {
+function isNonEmptyObject(value: JsonValue): value is JsonObject {
+  return isContainer(value) && value.kind === "object" && !isEmptyContainer(value);
+}
+
+/**
+ * The fields of a record. In a row, a list of values repeats its label, one field per value, and the
+ * fields of an object stay in the row under a dotted label, so they stay with the row's identifier.
+ */
+function objectScalarFields(
+  value: JsonObject,
+  row: RowRef | undefined,
+  prefix = "",
+): readonly string[] {
   return value.entries.flatMap(([key, child]) => {
+    const label = `${prefix}${cleanHeaderLabel(key)}`;
+    if (row !== undefined && isNonEmptyObject(child)) {
+      return objectScalarFields(child, row, `${label}.`);
+    }
     if (!staysInRow(child, row)) return [];
     const values = isValueList(child) ? child.items : [child];
-    return values.map((item) => `${cleanHeaderLabel(key)}=${projectionOf(item)}`);
+    return values.map((item) => `${label}=${projectionOf(item)}`);
   });
+}
+
+/** Walks what the fields of the record leave out: its nested records. */
+function walkNestedRecords(
+  ctx: ScanContext,
+  value: JsonObject,
+  pointer: string,
+  depth: number,
+  row: RowRef | undefined,
+): void {
+  for (const [key, child] of value.entries) {
+    if (ctx.stopped || ctx.nestingStopped) return;
+    const childPointer = joinPointer(pointer, encodePointerSegment(key));
+    if (row !== undefined && isNonEmptyObject(child)) {
+      walkNestedRecords(ctx, child, childPointer, depth + 1, row);
+    } else if (!staysInRow(child, row)) {
+      walk(ctx, child, childPointer, depth + 1);
+    }
+  }
 }
 
 function descendObject(
@@ -267,11 +305,7 @@ function descendObject(
     pushRecord(ctx, pointer, fields.join(" | "), row);
     if (ctx.stopped || ctx.nestingStopped) return;
   }
-  for (const [key, child] of value.entries) {
-    if (ctx.stopped || ctx.nestingStopped) return;
-    if (staysInRow(child, row)) continue;
-    walk(ctx, child, joinPointer(pointer, encodePointerSegment(key)), depth + 1);
-  }
+  walkNestedRecords(ctx, value, pointer, depth, row);
 }
 
 function walk(
@@ -339,7 +373,7 @@ function lineFailureDiagnostic(
   return failureDiagnostic(
     failure,
     ctx.input.documentId,
-    `JSONL line ${String(index)}`,
+    `JSONL line ${String(index + 1)}`,
     "warning",
     false,
   );

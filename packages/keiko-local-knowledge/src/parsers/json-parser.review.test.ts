@@ -1,4 +1,4 @@
-// Findings of the fourth independent review of the JSON projection (#4235): a key or a value of the
+// Findings of the independent review of the JSON projection (#4235): a key or a value of the
 // document cannot forge a field or a record of the projection. Synthetic data only.
 
 import { describe, expect, it } from "vitest";
@@ -60,5 +60,59 @@ describe("a value with the field separator", () => {
     expect(parse({ r: [{ id: "FR-1", tags: ["a | id=X"] }] }).text).toBe(
       "/r!1: id=FR-1 | tags=a ¦ id=X\n",
     );
+  });
+});
+
+describe("what a JSON value holds", () => {
+  it("does not carry a control character into the text", () => {
+    const { text } = parse({ a: "x\u0000y", b: "z\u0007w", c: "t\tu" });
+    expect(text).toBe("/: a=xy | b=zw | c=t\tu\n");
+  });
+});
+
+describe("a malformed JSON Lines record", () => {
+  it("names the line a person counts", () => {
+    const result = jsonParser.parse(
+      selectionFromText('{"a":1}\n{"b":}\n{"c":3}\n', { extension: "jsonl" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const entry = (result as { readonly diagnostics: readonly { readonly message: string }[] })
+      .diagnostics[0];
+    expect(entry?.message).toContain("line 2");
+  });
+});
+
+describe("an object inside a row", () => {
+  it("keeps its fields in the row, so they stay with the row's identifier", () => {
+    const { text } = parse({
+      requirements: [
+        {
+          id: "FR-1",
+          detail: { text: "Das System muss exportieren.", owner: { name: "Team A" } },
+          priority: "Hoch",
+        },
+      ],
+    });
+    expect(text).toBe(
+      "/requirements!1: id=FR-1 | detail.text=Das System muss exportieren. | detail.owner.name=Team A | priority=Hoch\n",
+    );
+  });
+
+  it("keeps a list of objects in the row out of the row, as records of their own", () => {
+    const { text } = parse({
+      requirements: [{ id: "FR-1", checks: [{ text: "a" }, { text: "b" }] }],
+    });
+    expect(text).toBe(
+      [
+        "/requirements!1: id=FR-1",
+        "/requirements/0/checks!1: text=a",
+        "/requirements/0/checks!2: text=b\n",
+      ].join("\n"),
+    );
+  });
+
+  it("leaves an object outside any row as a record of its own", () => {
+    const { text } = parse({ project: { name: "A", owner: { name: "B" } } });
+    expect(text).toBe("/project: name=A\n/project/owner: name=B\n");
   });
 });
