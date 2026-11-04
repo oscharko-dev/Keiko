@@ -59,6 +59,8 @@ interface TextFieldConfig {
   readonly placeholderKey: MessageKey;
   readonly type?: "text" | "password" | "email";
   readonly hintKey?: MessageKey;
+  /** The placeholder a Jira Pod (Jira Data Center) shows instead of the Atlassian Cloud example. */
+  readonly livePlaceholderKey?: MessageKey;
 }
 
 const DEFAULT_FIELDS: EntryFields = {
@@ -78,11 +80,13 @@ const TEXT_FIELDS: readonly TextFieldConfig[] = [
     name: "displayName",
     labelKey: "atlassianConnectors.add.displayName",
     placeholderKey: "atlassianConnectors.add.displayNamePlaceholder",
+    livePlaceholderKey: "atlassianConnectors.live.displayNamePlaceholder",
   },
   {
     name: "baseUrl",
     labelKey: "atlassianConnectors.add.baseUrl",
     placeholderKey: "atlassianConnectors.add.baseUrlPlaceholder",
+    livePlaceholderKey: "atlassianConnectors.live.baseUrlPlaceholder",
   },
   {
     name: "email",
@@ -239,6 +243,12 @@ function ProviderSelect({
   );
 }
 
+/** A Jira Pod's token field carries the one PAT hint; no second paragraph repeats it. */
+function fieldHint(cfg: TextFieldConfig, jiraLive: boolean): { hintKey?: MessageKey } {
+  if (jiraLive && cfg.name === "token") return { hintKey: "atlassianConnectors.live.patHint" };
+  return cfg.hintKey === undefined ? {} : { hintKey: cfg.hintKey };
+}
+
 function EntryFieldsView({
   controller,
   prefix,
@@ -246,7 +256,6 @@ function EntryFieldsView({
   readonly controller: EntryController;
   readonly prefix: string;
 }): ReactNode {
-  const t = useTranslate();
   const { fields, errors, busy } = controller;
   return (
     <>
@@ -258,26 +267,32 @@ function EntryFieldsView({
           onChange={controller.setProvider}
         />
       ) : null}
-      {controller.jiraLive ? (
-        <p className="acx-hint">{t("atlassianConnectors.live.patHint")}</p>
-      ) : null}
       {TEXT_FIELDS.filter((cfg) => !controller.jiraLive || cfg.name !== "email").map((cfg) => (
         <TextField
           key={cfg.name}
           id={`${prefix}-${cfg.name}`}
           labelKey={cfg.labelKey}
-          placeholderKey={cfg.placeholderKey}
+          placeholderKey={
+            controller.jiraLive
+              ? (cfg.livePlaceholderKey ?? cfg.placeholderKey)
+              : cfg.placeholderKey
+          }
           value={fields[cfg.name]}
           onChange={(value) => controller.setText(cfg.name, value)}
           errorKey={errors[cfg.name]}
           autoComplete="off"
           disabled={busy}
           {...(cfg.type === undefined ? {} : { type: cfg.type })}
-          {...(cfg.hintKey === undefined ? {} : { hintKey: cfg.hintKey })}
+          {...fieldHint(cfg, controller.jiraLive)}
         />
       ))}
     </>
   );
+}
+
+function submitLabelKey(busy: boolean, jiraLive: boolean): MessageKey {
+  if (busy) return "atlassianConnectors.add.saving";
+  return jiraLive ? "atlassianConnectors.live.add" : "atlassianConnectors.add.submit";
 }
 
 function EntryForm({
@@ -300,7 +315,7 @@ function EntryForm({
       ) : null}
       <div className="acx-actions">
         <button type="submit" className="lk-btn lk-btn-primary" disabled={busy}>
-          {busy ? t("atlassianConnectors.add.saving") : t("atlassianConnectors.add.submit")}
+          {t(submitLabelKey(busy, controller.jiraLive))}
         </button>
         <button type="button" className="lk-btn" onClick={onClose} disabled={busy}>
           {t("atlassianConnectors.add.cancel")}

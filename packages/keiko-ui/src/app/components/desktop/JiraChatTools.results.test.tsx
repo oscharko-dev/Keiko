@@ -147,6 +147,23 @@ describe("Jira Chat mutation outcomes", () => {
     expect(screen.getByText("Jira outcome unknown")).toBeVisible();
     expect(screen.getByText(/may have been applied/)).toBeVisible();
   });
+  it("explains an open outcome only after the turn, not while it still runs", () => {
+    const { rerender } = render(
+      <JiraChatTools
+        transcript={{ schemaVersion: 1, exchanges: [{ call: exchange("unknown").call }] }}
+        turnState="pending"
+      />,
+    );
+    expect(screen.getByText("Awaiting a confirmed Jira outcome")).toBeVisible();
+    expect(screen.queryByText(/No final outcome is available/)).toBeNull();
+    rerender(
+      <JiraChatTools
+        transcript={{ schemaVersion: 1, exchanges: [{ call: exchange("unknown").call }] }}
+        turnState="failed"
+      />,
+    );
+    expect(screen.getByText(/may have been applied/)).toBeVisible();
+  });
   it("does not show an interrupted read as still running", () => {
     render(
       <JiraChatTools

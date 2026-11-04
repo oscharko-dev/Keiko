@@ -3,6 +3,7 @@ import {
   isCodingWorkbenchMode,
   type CodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { isMcpServerName, MCP_SERVER_MAX } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   invalidRequest,
@@ -25,6 +26,18 @@ function requestedMode(value: unknown): CodingWorkbenchMode | undefined {
   return value;
 }
 
+function requestedMcpServers(value: unknown): readonly string[] | null | undefined {
+  if (value === undefined || value === null) return value;
+  if (
+    !Array.isArray(value) ||
+    value.length > MCP_SERVER_MAX ||
+    !value.every(isMcpServerName) ||
+    new Set(value).size !== value.length
+  )
+    throw invalidRequest("The MCP server selection is invalid.");
+  return value;
+}
+
 function parseJiraChatPatchFields(
   body: Record<string, unknown>,
   expectedIdentity: string | undefined,
@@ -33,12 +46,14 @@ function parseJiraChatPatchFields(
     throw invalidRequest("Jira binding generations are server-owned.");
   const podId = requestedPod(body.jiraPodId);
   const mode = requestedMode(body.toolMode);
-  if (podId === undefined && mode === undefined) return {};
+  const mcpServers = requestedMcpServers(body.mcpServers);
+  if (podId === undefined && mode === undefined && mcpServers === undefined) return {};
   if (expectedIdentity === undefined)
     throw invalidRequest("A current chat scope identity is required.");
   return {
     ...(podId === undefined ? {} : { jiraPodId: podId }),
     ...(mode === undefined ? {} : { toolMode: mode }),
+    ...(mcpServers === undefined ? {} : { mcpServers }),
   };
 }
 

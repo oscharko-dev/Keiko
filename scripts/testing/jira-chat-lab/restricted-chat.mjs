@@ -135,6 +135,7 @@ async function runCase(context, group, fixture, testCase, observer, authenticati
     context.projectPath,
     context.modelId,
     testCase.actor,
+    "governed-assist",
   );
   privateIntent(group, testCase, before, chat);
   observer.arm(testCase);

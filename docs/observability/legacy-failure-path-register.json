@@ -1418,18 +1418,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-local-knowledge/src/parsers/docx-parser.ts",
-      "owner": "closeZipQuietly",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-local-knowledge/src/parsers/docx-parser.ts",
-      "owner": "handleEntry",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-local-knowledge/src/parsers/json-parser.ts",
       "owner": "parseJsonValue",
       "kind": "unregistered-catch",
@@ -1486,18 +1474,6 @@
     {
       "path": "packages/keiko-local-knowledge/src/parsers/xlsx-parser.ts",
       "owner": "<anonymous>",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-local-knowledge/src/parsers/xlsx-parser.ts",
-      "owner": "closeZipQuietly",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-local-knowledge/src/parsers/xlsx-parser.ts",
-      "owner": "handleEntry",
       "kind": "unregistered-catch",
       "count": 1
     },

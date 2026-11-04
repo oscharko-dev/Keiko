@@ -1,10 +1,13 @@
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import type {
-  AtlassianCredentialMetadata,
-  AtlassianHttpBodyPort,
-  AtlassianHttpBodyRequest,
-  AtlassianHttpRequest,
-  JiraManagedConnection,
+import { JIRA_TOOL_GUIDANCE } from "../atlassian/jiraToolGuidance.js";
+import {
+  createJiraReportStore,
+  type AtlassianCredentialMetadata,
+  type AtlassianHttpBodyPort,
+  type AtlassianHttpBodyRequest,
+  type AtlassianHttpRequest,
+  type JiraManagedConnection,
+  type JiraReportStore,
 } from "@oscharko-dev/keiko-connectors";
 import type {
   JiraMutationAttempt,
@@ -27,11 +30,18 @@ import {
 
 import type { AtlassianConnectorCredentialDeps } from "../atlassian/credentialRoutes.js";
 import { createJiraProviderForCatalog } from "../atlassian/jiraManagedProvider.js";
+import { recordJiraReportActivity } from "../atlassian/jiraReportActivity.js";
 import {
   jiraAttemptToolResult,
+  jiraLinkCountsOfResult,
   validJiraMutationAttempt,
 } from "../atlassian/jiraMutationResult.js";
+import {
+  jiraIssueTemplateSource,
+  recordJiraTemplateAttempt,
+} from "../atlassian/jiraTemplateLog.js";
 import type { JiraPodAccessDeps, JiraLivePodCredential } from "../atlassian/jiraPodAccess.js";
+import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
 
@@ -60,6 +70,11 @@ import {
  */
 
 export interface CodingJiraPodDeps extends JiraPodAccessDeps {
+  /**
+   * The skill library holds the customer-defined issue templates every Jira write is checked by.
+   * Required: a Pod wired without it would write unchecked, so that cannot be expressed.
+   */
+  readonly store: Pick<UiHandlerDeps["store"], "markdownSkills">;
   readonly atlassianConnectorCredentials?:
     Pick<AtlassianConnectorCredentialDeps, "custody" | "httpBodyPortFactory"> | undefined;
 }
@@ -125,6 +140,20 @@ function toolOf(name: string): CodingJiraTool | undefined {
 
 type CallLine = Pick<CodingJiraPodLine, "action" | "tool" | "risk">;
 
+/** Link counts of a Jira write result, for its one body-free decision line (#4176). */
+function linkLineCounts(
+  data: CatalogJsonObject | undefined,
+): Pick<CodingJiraPodLine, "linkRequestedCount" | "linkCreatedCount" | "linkFailedCount"> {
+  const counts = jiraLinkCountsOfResult(data);
+  return counts === undefined
+    ? {}
+    : {
+        linkRequestedCount: counts.requested,
+        linkCreatedCount: counts.created,
+        linkFailedCount: counts.failed,
+      };
+}
+
 /** The result a provider reported with its failure; absent for any other kind of failure. */
 function providerResult(error: unknown): CatalogJsonObject | undefined {
   return error instanceof ManagedMcpError ? error.structuredResult : undefined;
@@ -133,6 +162,8 @@ function providerResult(error: unknown): CatalogJsonObject | undefined {
 class CodingJiraPodService implements CodingJiraPods {
   readonly #entries = new Map<string, PodEntry>();
   readonly #disposed = new WeakSet<PodEntry>();
+  /** Reports of Coding runs; each belongs to the Pod binding that started it. */
+  readonly #reports: JiraReportStore = createJiraReportStore();
   #deps: CodingJiraPodDeps | undefined;
   #closed = false;
 
@@ -272,6 +303,13 @@ class CodingJiraPodService implements CodingJiraPods {
           (context) => this.connection(binding, context),
           Object.keys(CODING_JIRA_TOOL_RISKS) as CodingJiraTool[],
           (operation, _args, context, execute) => this.mutate(binding, operation, context, execute),
+          {
+            store: this.#reports,
+            owner: () => this.key(binding),
+            activity: (activity, context) => {
+              recordJiraReportActivity(this.log, context.correlationId, activity);
+            },
+          },
         ),
       ],
       log: this.log ?? { write: (): void => undefined },
@@ -320,14 +358,18 @@ class CodingJiraPodService implements CodingJiraPods {
     context: ManagedMcpInvocationContext,
   ): JiraManagedConnection {
     const credential = this.current(binding);
-    const factory = this.#deps?.atlassianConnectorCredentials?.httpBodyPortFactory;
-    if (credential === undefined || factory === undefined) throw NOT_ADMITTED();
+    const deps = this.#deps;
+    const factory = deps?.atlassianConnectorCredentials?.httpBodyPortFactory;
+    if (credential === undefined || factory === undefined || deps === undefined)
+      throw NOT_ADMITTED();
     return {
       baseUrl: credential.baseUrl,
       deployment: credential.deployment,
+      identity: `${credential.authRef}:${String(credential.generation)}`,
       http: factory(credential, context.correlationId, {
         beforeDispatch: () => this.admit(binding, context),
       }),
+      issueTemplates: jiraIssueTemplateSource(deps.store),
     };
   }
 
@@ -350,6 +392,7 @@ class CodingJiraPodService implements CodingJiraPods {
     let attempt: JiraMutationAttempt;
     try {
       attempt = validJiraMutationAttempt(await execute(http), operation);
+      recordJiraTemplateAttempt(context.correlationId, operation, attempt);
     } catch (error) {
       recordCodingJiraPod(this.log, context.correlationId, {
         action: "call",
@@ -391,6 +434,7 @@ class CodingJiraPodService implements CodingJiraPods {
   ): ExternalMcpConnection {
     return {
       signal,
+      instructions: JIRA_TOOL_GUIDANCE,
       tools: host.catalog().map(({ name, descriptor }) => ({
         name,
         description: descriptor.description,
@@ -423,6 +467,7 @@ class CodingJiraPodService implements CodingJiraPods {
       recordCodingJiraPod(this.log, context.correlationId, {
         ...line,
         outcome: "completed",
+        ...linkLineCounts(data),
         durationMs: Date.now() - started,
       });
       return callToolResult(data, false);
@@ -432,6 +477,7 @@ class CodingJiraPodService implements CodingJiraPods {
         ...line,
         outcome: "failed",
         reason: provider === undefined ? "internal" : "tool-failed",
+        ...linkLineCounts(provider),
         durationMs: Date.now() - started,
         ...(provider === undefined ? { error } : {}),
       });

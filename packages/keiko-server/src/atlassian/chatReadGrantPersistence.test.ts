@@ -101,6 +101,45 @@ it("retains accepted private consent after closing and reopening its actual SQLi
   });
 });
 
+it("persists a granted read's restarted time, forward only and with its proof", () => {
+  const f = fixture();
+  const subject = f.entry.grant.subject;
+  const registry = accepted(f);
+  const later = NOW + 30_000;
+  expect(registry.renewChatReadGrant(subject, NOW, NOW + 1_000)).toBeUndefined();
+  expect(registry.renewChatReadGrant(subject, NOW, NOW + 600_001)).toBeUndefined();
+  const renewed = registry.renewChatReadGrant(subject, NOW, later + 60_000);
+  expect(renewed).toMatchObject({
+    state: "granted",
+    expiresAt: later + 60_000,
+    consentProofDigest: "c".repeat(64),
+  });
+  const restored = new AtlassianActionApprovalRegistry(() => later, persistence(f.store));
+  expect(restored.findGrantedChatReadGrant(subject)?.expiresAt).toBe(later + 60_000);
+  const store = persistence(f.store);
+  const current = store.list()[0];
+  if (current === undefined) throw new Error("Missing retained grant");
+  expect(
+    store.save(
+      { ...current, grant: { ...current.grant, expiresAt: current.grant.expiresAt - 1 } },
+      current,
+    ),
+  ).toBe(false);
+  expect(
+    store.save(
+      {
+        ...current,
+        grant: {
+          ...current.grant,
+          expiresAt: current.grant.expiresAt + 1,
+          consentProofDigest: "d".repeat(64),
+        },
+      } as ChatReadGrantEntry,
+      current,
+    ),
+  ).toBe(false);
+});
+
 it("preserves granted consent but revokes pending decisions during clean shutdown", () => {
   const f = fixture();
   const first = accepted(f);

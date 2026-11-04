@@ -3,6 +3,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { Chat, UpdateChatPatch } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { CHAT_TOOL_DEFAULT_MODE } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import {
@@ -39,6 +40,7 @@ const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
       values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
     },
     cancelledGenerationCount: { type: "integer", dataClass: "count", required: false },
+    mcpServerSelectionCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -79,6 +81,9 @@ export function logChatScopeUpdate(
         resultScopeDigest: deriveChatGroundingScopeIdentity(result).slice("gsi-v1:".length),
         ...chatGroundingSourceCounts(result),
         ...jiraStateEvidence(result),
+        ...(result.mcpServers === undefined
+          ? {}
+          : { mcpServerSelectionCount: result.mcpServers.length }),
         completeness: "complete",
         loss: "none",
       },
@@ -95,6 +100,6 @@ function jiraStateEvidence(chat: Chat): {
   return {
     jiraSourceCount: Number(chat.jiraPodBinding !== undefined),
     jiraBindingGeneration: chat.jiraBindingGeneration ?? 0,
-    toolMode: chat.toolMode ?? "governed-assist",
+    toolMode: chat.toolMode ?? CHAT_TOOL_DEFAULT_MODE,
   };
 }
