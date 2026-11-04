@@ -312,6 +312,17 @@ describe("html entities and images (#4235 F14)", () => {
 });
 
 describe("html stays linear on hostile markup (#4235)", () => {
+  it.each([
+    ["nested hint wrappers", '<div class="cookie">'.repeat(20_000) + "x" + "</div>".repeat(20_000)],
+    ["nested hidden wrappers", "<div hidden>".repeat(20_000) + "x" + "</div>".repeat(20_000)],
+    ["unclosed hint wrappers", '<div class="sidebar">'.repeat(20_000) + "x"],
+  ])("measures %s within a linear budget", (_name, html) => {
+    const started = Date.now();
+    const result = parse(html);
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(result.text.length).toBeGreaterThanOrEqual(0);
+  });
+
   it("handles a very long single line and many unclosed tags", () => {
     const started = Date.now();
     const long = `<p>${"wort ".repeat(1_000_000)}</p>`;

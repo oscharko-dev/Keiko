@@ -19,6 +19,7 @@ import {
   diagnostic,
   emptyResult,
   encodingDiagnostic,
+  limitSeverity,
   oversizeDiagnostic,
   textByteLimit,
   shouldStop,
@@ -165,7 +166,9 @@ function emitPlainSection(
   if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
     return {
       units: [],
-      diagnostics: [diagnostic(limit.code, limit.message, input.documentId, "info")],
+      diagnostics: [
+        diagnostic(limit.code, limit.message, input.documentId, limitSeverity(limit.code)),
+      ],
     };
   }
   return { units: [sectionUnit(input, [], 0, text.length)], diagnostics: [] };
@@ -187,7 +190,9 @@ function emitHeadingSections(
   for (const [index, current] of headings.entries()) {
     const limit = shouldStop(startedAt, options, units.length);
     if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
-      diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
+      diagnostics.push(
+        diagnostic(limit.code, limit.message, input.documentId, limitSeverity(limit.code)),
+      );
       break;
     }
     units.push(pushHeading(stack, current, headings[index + 1], text, input));
@@ -236,7 +241,12 @@ function scanTableRows(
     const limit = shouldStop(startedAt, options, baseUnitCount + units.length);
     if (row === undefined) break;
     if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
-      const stop = diagnostic(limit.code, limit.message, input.documentId, "info");
+      const stop = diagnostic(
+        limit.code,
+        limit.message,
+        input.documentId,
+        limitSeverity(limit.code),
+      );
       return { units, diagnostics: [stop], nextIndex: index, stopped: true };
     }
     units.push({

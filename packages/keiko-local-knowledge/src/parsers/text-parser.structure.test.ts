@@ -122,3 +122,18 @@ describe("reStructuredText and AsciiDoc headings (#4235 F10)", () => {
     expect(sectionPaths(parse("# kein Titel\ntext\n", "txt"))).toEqual([[]]);
   });
 });
+
+describe("markup scans stay linear and never overflow (#4235)", () => {
+  it.each([
+    ["rst", "=".repeat(6_000_000)],
+    ["md", "=".repeat(6_000_000)],
+    ["md", "-".repeat(6_000_000)],
+    ["adoc", "-".repeat(6_000_000)],
+    ["rst", `Titel\n${"=".repeat(6_000_000)}\n`],
+    ["md", "`".repeat(6_000_000)],
+  ])("a %s document of one long marker line", (extension, text) => {
+    const started = Date.now();
+    expect(parse(text, extension).units.length).toBeGreaterThan(0);
+    expect(Date.now() - started).toBeLessThan(3_000);
+  });
+});

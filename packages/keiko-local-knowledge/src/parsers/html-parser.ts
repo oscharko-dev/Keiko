@@ -29,6 +29,7 @@ import {
   diagnostic,
   emptyResult,
   encodingDiagnostic,
+  limitSeverity,
   oversizeDiagnostic,
   readAttribute,
   shouldStop,
@@ -124,6 +125,8 @@ const HEADER_BOILERPLATE_HINTS: ReadonlySet<string> = new Set([
 ]);
 // A hint-named subtree larger than this share of the document is not removed.
 const MAX_REMOVABLE_SHARE = 0.5;
+// Measuring candidate subtrees may cost this many times the document length in total.
+const EXCLUSION_BUDGET_FACTOR = 4;
 
 // Elements that end the text flow around them: every one of them (opening, closing or void) starts
 // a new block, so adjacent paragraphs, list items and lines never fuse into one word. Inline
@@ -585,6 +588,9 @@ interface ScanState {
   // Subtrees left out of the text because a reader does not see them as document content.
   excludedBoilerplate: number;
   excludedHidden: number;
+  // Characters the scan may still spend measuring subtrees it might exclude. A kept wrapper is
+  // measured again by every wrapper nested in it, so the total is bounded to stay linear.
+  exclusionBudget: number;
   // Tables rendered so far (names the next table's rows) and whether the next block must be set off
   // from a table's last row by an empty line, which is what ends a projected row.
   tableCount: number;
@@ -620,7 +626,9 @@ function recordScanLimit(state: ScanState): boolean {
   if (state.stopped) return true;
   const limit = shouldStop(state.startedAt, state.options, state.units.length);
   if (!limit.stop || limit.code === undefined || limit.message === undefined) return false;
-  state.diagnostics.push(diagnostic(limit.code, limit.message, state.input.documentId, "info"));
+  state.diagnostics.push(
+    diagnostic(limit.code, limit.message, state.input.documentId, limitSeverity(limit.code)),
+  );
   state.stopped = true;
   return true;
 }
@@ -1460,8 +1468,10 @@ function handleStructuralTag(state: ScanState, tag: Tag): number | undefined {
 function handleExcludedSubtree(state: ScanState, tag: Tag): number | undefined {
   const verdict = classifySubtree(tag);
   if (verdict === "none") return undefined;
-  const bounds = findNestableElementEnd(state.text, state.textLower, tag.name, tag.end);
   const unconditional = verdict === "boilerplate-tag";
+  if (!unconditional && state.exclusionBudget <= 0) return undefined;
+  const bounds = findNestableElementEnd(state.text, state.textLower, tag.name, tag.end);
+  state.exclusionBudget -= bounds.elementEnd - tag.start;
   const closed = bounds.contentEnd < state.text.length;
   const small = (bounds.elementEnd - tag.start) / state.text.length <= MAX_REMOVABLE_SHARE;
   if (!unconditional && !(closed && small)) return undefined;
@@ -1605,6 +1615,7 @@ function emitHtml(rawText: string, input: ParserSelectionInput, options: ParserO
     pendingMarker: undefined,
     excludedBoilerplate: 0,
     excludedHidden: 0,
+    exclusionBudget: text.length * EXCLUSION_BUDGET_FACTOR,
     tableCount: 0,
     blankBeforeNext: false,
     blockText: "",

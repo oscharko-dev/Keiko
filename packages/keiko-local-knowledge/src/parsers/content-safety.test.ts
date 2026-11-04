@@ -270,3 +270,22 @@ describe("input too large for one string is refused, not thrown (#4235)", () => 
     ).not.toContain("OVERSIZED_FILE");
   });
 });
+
+describe("a unit cap that drops content is a warning (#4235)", () => {
+  const capped = buildParserOptions({ now: () => 0, maxUnitsPerDocument: 2 });
+
+  it.each([
+    ["html", htmlParser, "html", "<p>a</p><p>b</p><p>c</p><p>d</p>"],
+    ["markdown", textParser, "md", "# a\n\n# b\n\n# c\n\n# d\n"],
+    [
+      "code",
+      codeParser,
+      "ts",
+      "function a(): void {}\nfunction b(): void {}\nfunction c(): void {}\n",
+    ],
+  ])("the %s parser reports UNIT_LIMIT_REACHED as a warning", (_name, adapter, extension, text) => {
+    const result = adapter.parse(selectionFromText(text, { extension }), capped);
+    const entry = result.diagnostics.find((item) => item.code === "UNIT_LIMIT_REACHED");
+    expect(entry?.severity).toBe("warning");
+  });
+});

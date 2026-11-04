@@ -14,6 +14,7 @@ import {
   diagnostic,
   emptyResult,
   encodingDiagnostic,
+  limitSeverity,
   oversizeDiagnostic,
   textByteLimit,
   shouldStop,
@@ -508,7 +509,7 @@ function stopDiagnostic(
 ): ParserDiagnostic | undefined {
   const limit = shouldStop(startedAt, options, emittedUnits);
   if (!limit.stop || limit.code === undefined || limit.message === undefined) return undefined;
-  return diagnostic(limit.code, limit.message, input.documentId, "info");
+  return diagnostic(limit.code, limit.message, input.documentId, limitSeverity(limit.code));
 }
 
 function unitAnchors(

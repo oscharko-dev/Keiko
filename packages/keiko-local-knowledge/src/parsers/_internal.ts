@@ -98,6 +98,12 @@ export function shouldStop(
   return { stop: false };
 }
 
+// Reaching the unit cap drops the rest of the document from the index, which a reader must be able
+// to see: it is a warning. A deadline or a cancellation is the caller's own decision and stays info.
+export function limitSeverity(code: ParserErrorCode): ParserDiagnostic["severity"] {
+  return code === "UNIT_LIMIT_REACHED" ? "warning" : "info";
+}
+
 export function oversizeDiagnostic(
   documentId: DocumentId,
   byteLength: number,

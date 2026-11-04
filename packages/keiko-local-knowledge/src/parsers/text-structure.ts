@@ -128,7 +128,18 @@ function markdownLiveness(lines: readonly SourceLine[]): boolean[] {
   return live;
 }
 
-const ASCIIDOC_DELIMITER = /^(?:-{4,}|\.{4,}|\+{4,}|\/{4,})$/u;
+const ASCIIDOC_DELIMITER_CHARS = "-.+/";
+
+// A block delimiter is four or more of one of `- . + /`; a loop, because a pattern with a counted
+// repetition overflows the regular-expression stack on a multi-megabyte line.
+function isAsciidocDelimiter(trimmed: string): boolean {
+  const first = trimmed[0] ?? "";
+  if (trimmed.length < 4 || !ASCIIDOC_DELIMITER_CHARS.includes(first)) return false;
+  for (let i = 1; i < trimmed.length; i += 1) {
+    if (trimmed[i] !== first) return false;
+  }
+  return true;
+}
 
 // Listing, literal, passthrough and comment blocks end at their own delimiter line; a line comment
 // (`// …`) is not structure either.
@@ -140,7 +151,7 @@ function asciidocLiveness(lines: readonly SourceLine[]): boolean[] {
       if (trimmed === open) open = undefined;
       return false;
     }
-    if (ASCIIDOC_DELIMITER.test(trimmed)) {
+    if (isAsciidocDelimiter(trimmed)) {
       open = trimmed;
       return false;
     }
@@ -276,13 +287,29 @@ export function scanAsciiDocHeadings(
 
 // ─── reStructuredText ────────────────────────────────────────────────────────
 
-const RST_ADORNMENT = /^([!-/:-@[-`{-~])\1+$/u;
 const RST_MIN_ADORNMENT = 3;
+
+// An RST adornment is one punctuation character repeated. Checked with a loop: a back-reference
+// pattern over a multi-megabyte line overflows the regular-expression stack.
+function isAdornmentChar(code: number): boolean {
+  return (
+    (code >= 0x21 && code <= 0x2f) ||
+    (code >= 0x3a && code <= 0x40) ||
+    (code >= 0x5b && code <= 0x60) ||
+    (code >= 0x7b && code <= 0x7e)
+  );
+}
 
 function adornment(line: string | undefined): string | undefined {
   if (line === undefined) return undefined;
   const trimmed = line.trimEnd();
-  return RST_ADORNMENT.test(trimmed) && trimmed.length >= RST_MIN_ADORNMENT ? trimmed : undefined;
+  if (trimmed.length < RST_MIN_ADORNMENT || !isAdornmentChar(trimmed.codePointAt(0) ?? 0)) {
+    return undefined;
+  }
+  for (let i = 1; i < trimmed.length; i += 1) {
+    if (trimmed[i] !== trimmed[0]) return undefined;
+  }
+  return trimmed;
 }
 
 function isRstTitle(line: string | undefined): line is string {
