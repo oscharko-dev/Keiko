@@ -582,14 +582,22 @@ function rawCellValue(
   return Number.isFinite(index) ? (sharedStrings[index] ?? "") : "";
 }
 
-function parseStyles(xml: string | undefined): XlsxStyles {
-  if (xml === undefined) return { cellFormatNumFmtIds: [], customNumFmts: new Map() };
+// Only the workbook's own list: a differential style (`<dxf>`, conditional formatting) carries
+// number formats whose ids may repeat the workbook's, and the cell styles do not refer to them.
+function parseCustomNumFmts(xml: string): ReadonlyMap<number, string> {
   const customNumFmts = new Map<number, string>();
-  for (const tag of iterateXmlStartTags(xml, "numfmt")) {
+  const numFmtsXml = firstXmlElementContent(xml, "numfmts") ?? "";
+  for (const tag of iterateXmlStartTags(numFmtsXml, "numfmt")) {
     const id = Number.parseInt(attribute(tag, "numFmtId") ?? "", 10);
     const format = attribute(tag, "formatCode");
     if (Number.isFinite(id) && format !== undefined) customNumFmts.set(id, format);
   }
+  return customNumFmts;
+}
+
+function parseStyles(xml: string | undefined): XlsxStyles {
+  if (xml === undefined) return { cellFormatNumFmtIds: [], customNumFmts: new Map() };
+  const customNumFmts = parseCustomNumFmts(xml);
   const cellXfsXml = firstXmlElementContent(xml, "cellxfs") ?? "";
   const cellFormatNumFmtIds: number[] = [];
   for (const tag of iterateXmlStartTags(cellXfsXml, "xf")) {

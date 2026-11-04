@@ -89,6 +89,25 @@ describe("a package of many large parts", () => {
   });
 });
 
+describe("number formats of conditional formatting", () => {
+  it("do not replace the number format a cell style refers to", async () => {
+    // A differential style (conditional formatting) carries a number format of its own, with an id
+    // that may equal one of the workbook's: the cell style's id means the workbook's format.
+    const styles =
+      '<styleSheet><numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy\\-mm\\-dd"/></numFmts>' +
+      '<cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="164"/></cellXfs>' +
+      '<dxfs count="1"><dxf><numFmt numFmtId="164" formatCode="0.0%"/></dxf></dxfs></styleSheet>';
+    const sheet = sheetXml(
+      rowXml(1, inlineCell("A1", "Name") + inlineCell("B1", "Datum")) +
+        rowXml(2, inlineCell("A2", "x") + '<c r="B2" s="1"><v>45292</v></c>'),
+    );
+    const parsed = await parseWorkbook(
+      buildWorkbook({ sheets: [{ name: "S", xml: sheet }], styles }),
+    );
+    expect(parsed.lines).toEqual(["S!2: Name=x | Datum=2024-01-01"]);
+  });
+});
+
 describe("boolean cells", () => {
   it.each([
     ["1", "TRUE"],
