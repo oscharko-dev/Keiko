@@ -6,6 +6,7 @@
 // table whose first row looks like any other row keeps neutral `Column N` labels.
 
 import type { RawBlock, RawCell, RawRow, RawTable } from "./docx-xml.js";
+import { cleanHeaderLabel, neutraliseValue } from "./tabular.js";
 
 const MAX_HEADER_CHARACTERS = 60;
 const MAX_HEADER_WORDS = 6;
@@ -127,13 +128,21 @@ function dataShapes(rows: readonly GridRow[]): ReadonlyMap<number, ReadonlySet<s
   return shapes;
 }
 
-/** Some column holds one uniform data shape that the first row's label does not share. */
+// A shape that repeats over fewer rows than this is a coincidence, not evidence of a column.
+const MIN_EVIDENCE_ROWS = 2;
+
+/**
+ * The leading column holds one uniform data shape that the first row's label does not share. A
+ * header describes columns, so the first column must set it apart from the data under it; a table
+ * whose first column reads the same in every row (a key-value list: `Autor | Max Mustermann`,
+ * `Datum | 12.03.2024`) has a data row on top, and calling it a header would label the values
+ * with the wrong keys.
+ */
 function labelsDifferInShape(first: GridRow, rest: readonly GridRow[]): boolean {
-  const shapes = dataShapes(rest);
-  return first.cells.some((cell) => {
-    const column = cell.span === 1 ? shapes.get(cell.col) : undefined;
-    return column?.size === 1 && !column.has(shapeOf(cell.text));
-  });
+  const lead = first.cells[0];
+  if (lead?.span !== 1 || rest.length < MIN_EVIDENCE_ROWS) return false;
+  const column = dataShapes(rest).get(lead.col);
+  return column?.size === 1 && !column.has(shapeOf(lead.text));
 }
 
 function firstRowIsBolder(first: GridRow, rest: readonly GridRow[]): boolean {
@@ -162,7 +171,9 @@ function headerLabels(header: GridRow | undefined): readonly string[] {
   for (const cell of header.cells) {
     for (let col = cell.col; col < cell.col + cell.span; col += 1) raw[col] = cell.text;
   }
-  return normalizeHeaders(Array.from({ length: raw.length }, (_, index) => raw[index] ?? ""));
+  return normalizeHeaders(
+    Array.from({ length: raw.length }, (_, index) => cleanHeaderLabel(raw[index] ?? "")),
+  );
 }
 
 // ─── Lines ───────────────────────────────────────────────────────────────────
@@ -178,7 +189,7 @@ function rowLine(
   labels: readonly string[],
 ): string {
   const projected = cells
-    .map(({ col, text }) => `${labels[col] ?? columnLabel(col)}=${text}`)
+    .map(({ col, text }) => `${labels[col] ?? columnLabel(col)}=${neutraliseValue(text)}`)
     .join(" | ");
   return `Table row ${String(rowNumber)}: ${projected}`;
 }
