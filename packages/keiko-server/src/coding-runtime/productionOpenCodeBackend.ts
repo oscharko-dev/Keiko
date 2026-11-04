@@ -1,6 +1,6 @@
 import type { NativeMcpMutationJournal } from "./opencodeNativeMcpMutationJournal.js";
 import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
-import { codingRunMcpServers } from "./codingJiraPodBinding.js";
+import { codingRunMcpServers, selectedRunMcpServers } from "./codingJiraPodBinding.js";
 import type { CodingJiraPods } from "./codingJiraPodMcp.js";
 import type { NativeWebSearch } from "./nativeWebSearch.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
@@ -537,12 +537,13 @@ function boundJira(input: LaunchInput, run: ProductionRuntimeBackendInput): Boun
   return { pods: input.codingJiraPods, binding };
 }
 
-// The registry's servers, plus the Pod's tools for a bound run; the human's choice grants their reads.
+// The registry's servers the human selected, plus the Pod's tools for a bound run.
 function mcpServersFor(
   input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
   jira: BoundJira | undefined,
 ): Pick<OpenCodeRuntimeCompositionInput, "mcpServers" | "mcpGrantedServers"> {
-  return codingRunMcpServers(input.mcpServers, jira?.binding);
+  return codingRunMcpServers(input.mcpServers, jira?.binding, run.request.mcpServers);
 }
 
 // What only a native run reads from the repository and the operator: its Markdown items (#3903)
@@ -581,7 +582,7 @@ function nativeRunInputs(
       : { operatorPlugins: operatorPluginsFor(input, run, input.operatorPluginRegistry) }),
     repositoryInstructions: repositoryInstructionsFor(input, run, contextGeometry),
     mcpMutations: input.mcpMutations,
-    ...mcpServersFor(input, jira),
+    ...mcpServersFor(input, run, jira),
     ...(input.mcpOAuthIssuer === undefined ? {} : { mcpOAuthIssuer: input.mcpOAuthIssuer }),
     ...(input.mcpCredentials === undefined ? {} : { mcpCredentials: input.mcpCredentials }),
     ...mcpRelayFor(input, jira),
@@ -1429,7 +1430,11 @@ function nativeSupportReadRoots(
   run: ProductionRuntimeBackendInput,
 ): readonly string[] {
   const path = ripgrepNativePath(process.env.PATH, input.ripgrep) ?? process.env.PATH;
-  const mcpServers = input.mcpServers?.(run.minted.authorityRef.runId) ?? [];
+  const mcpServers =
+    selectedRunMcpServers(
+      input.mcpServers,
+      run.request.mcpServers,
+    )?.(run.minted.authorityRef.runId) ?? [];
   return [
     ...nativeToolchainReadRoots(withMcpExecutableDirectories(path, mcpServers), homedir()),
     ...nativeOpenSslReadRoots(input.processEnv ?? process.env, homedir()),

@@ -1,3 +1,4 @@
+import { withToolResultsAsSource } from "./chat-tool-turn-ending.js";
 import { deploymentContentPolicy, currentContentRedactor } from "./content-redactor.js";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import {
@@ -1902,7 +1903,10 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
     assistant.modelInvoked ?? (!abstained || ctx.answerOnlyContextAvailable === true),
   );
   ensureNotCancelled(ctx.signal);
-  const completedAnswer = withAnswerDuration(answer, startedAtMs);
+  const completedAnswer = withToolResultsAsSource(
+    withAnswerDuration(answer, startedAtMs),
+    ctx.deps.store,
+  );
   recordMultiSourceAnswer(ctx, retrieved, completedAnswer, persisted.assistantMessageId, abstained);
   return { status: 200, body: completedAnswer };
 }

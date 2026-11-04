@@ -26,6 +26,10 @@ import { modelWindowAwareBudget } from "./grounded-qa.js";
 import { buildUiHandlerDeps as createUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { gatewaySetupTargetClass } from "./gateway-setup.js";
+import {
+  captureConversationReadinessAdmission,
+  validateConversationReadinessAdmission,
+} from "./conversation-readiness-admission.js";
 import { openProviderCredentialVault, providerSecretRef } from "./credentialVault.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
@@ -535,6 +539,75 @@ describe("handleGatewaySetup", () => {
     expect(observation).toMatchObject({ fields: { conversationReady: true } });
     expect(observation?.fields.toolCalling).toBeUndefined();
     expect(observation?.generation).toBe(gatewayConfig.generation());
+    deps.store.close();
+  });
+
+  it("keeps an admitted conversation generation across a capability-only update (#4175)", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-generation-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-generation-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig?.replaceCatalog === undefined) throw new Error("expected catalog owner");
+    const rawConfig = {
+      providers: [
+        {
+          modelId: "model/turn",
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "example-secret-token",
+          capability: { kind: "chat", contextWindow: 8_192, toolCalling: false },
+        },
+      ],
+    };
+    gatewayConfig.set(parseGatewayConfig(rawConfig), true);
+    writeFileSync(gatewayConfig.storagePath, JSON.stringify(rawConfig), "utf8");
+    const admitted = gatewayConfig.generation();
+    gatewayConfig.recordVerifiedCapability(
+      "model/turn",
+      { conversationReady: true, toolCalling: true },
+      new Date().toISOString(),
+      admitted,
+    );
+    const admission = captureConversationReadinessAdmission(deps, "model/turn");
+    if ("status" in admission) throw new Error("expected an admitted conversation");
+
+    const result = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { toolCalling: true } }), params: { modelId: "model%2Fturn" } },
+      deps,
+    );
+
+    // A readiness probe that only refines capability metadata of an unchanged connection must not
+    // invalidate a conversation turn admitted against that same connection.
+    expect(result.status).toBe(200);
+    expect(requiredCapability(requiredGatewayConfig(deps), "model/turn").toolCalling).toBe(true);
+    expect(gatewayConfig.generation()).toBe(admitted);
+    expect(gatewayConfig.verifiedCapability("model/turn")).toMatchObject({
+      fields: { conversationReady: true },
+      generation: admitted,
+    });
+    // The 2026-10-31 refusal: this catalog refresh during an admitted turn ended it as not ready.
+    expect(validateConversationReadinessAdmission(deps, admission, "model/turn")).toBeUndefined();
+    const current = requiredGatewayConfig(deps);
+    expect(
+      gatewayConfig.replaceCatalog(
+        {
+          ...current,
+          providers: current.providers.map((provider) => ({
+            ...provider,
+            baseUrl: "https://replacement.example.invalid/v1",
+          })),
+        },
+        admitted,
+      ),
+    ).toBe(true);
+    expect(gatewayConfig.generation()).toBe(admitted + 1);
+    expect(gatewayConfig.verifiedCapability("model/turn")).toBeUndefined();
+    expect(validateConversationReadinessAdmission(deps, admission, "model/turn")).toMatchObject({
+      status: 400,
+    });
     deps.store.close();
   });
 

@@ -88,10 +88,10 @@ outcome which the server maps to a `CandidateOmissionReason`:
 Whenever at least one connected document is skipped, a `scope-incomplete` uncertainty marker is added
 so the grounded answer discloses that Repository Search reads text, code, and small documents only.
 
-Encryption detection is limited to OOXML documents wrapped in a Compound File Binary (OLE2) container
-(the common password-protected Word/Excel case, signature `D0 CF 11 E0 A1 B1 1A E1`). An encrypted PDF
-that the parser cannot open degrades gracefully to `malformed-document`; OCR and PDF `/Encrypt`
-sniffing are out of scope.
+Encryption detection covers OOXML documents wrapped in a Compound File Binary (OLE2) container (the
+common password-protected Word/Excel/PowerPoint case, signature `D0 CF 11 E0 A1 B1 1A E1`), which the
+parsers report as `ENCRYPTED_DOCUMENT`, and PDFs that pdfjs refuses without a password, which the PDF
+parser reports as `ENCRYPTED_PDF`. Both map to the `encrypted` outcome. OCR is out of scope.
 
 ## Evidence semantics
 

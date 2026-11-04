@@ -744,13 +744,29 @@ function toolTranscriptEvents(message: ChatMessage): readonly DesktopChatStreamE
       event: "tool-read-consent",
       data: { messageId: message.id, grant: transcript.readGrant },
     });
-  for (const exchange of transcript?.exchanges ?? [])
-    if (exchange.approval !== undefined)
+  for (const { approval, ...exchange } of transcript?.exchanges ?? []) {
+    events.push({ event: "tool-exchange", data: { messageId: message.id, exchange } });
+    if (approval !== undefined)
       events.push({
         event: "tool-write-approval",
-        data: { messageId: message.id, call: exchange.call, approval: exchange.approval },
+        data: { messageId: message.id, call: exchange.call, approval },
       });
+  }
   return events;
+}
+function toolEventIdentity(event: DesktopChatStreamEvent): string | undefined {
+  switch (event.event) {
+    case "tool-read-consent":
+      return `read:${event.data.grant.grantId}:${event.data.grant.state}`;
+    case "tool-write-approval":
+      return `write:${event.data.approval.approvalId}:${event.data.approval.state}`;
+    case "tool-exchange": {
+      const { call, result, mutationOutcome } = event.data.exchange;
+      return `exchange:${call.id}:${result?.status ?? "started"}:${mutationOutcome ?? ""}`;
+    }
+    default:
+      return undefined;
+  }
 }
 
 function registerReadConsentStream(
@@ -762,11 +778,7 @@ function registerReadConsentStream(
   turn.toolTurn?.onTranscript((message): void => {
     if (controller.signal.aborted) return;
     for (const event of toolTranscriptEvents(message)) {
-      let identity: string | undefined;
-      if (event.event === "tool-read-consent")
-        identity = `read:${event.data.grant.grantId}:${event.data.grant.state}`;
-      else if (event.event === "tool-write-approval")
-        identity = `write:${event.data.approval.approvalId}:${event.data.approval.state}`;
+      const identity = toolEventIdentity(event);
       if (identity === undefined || sent.has(identity)) continue;
       sent.add(identity);
       writeSseFrame(ctx.res, sseMessage(event), controller, undefined, ctx.correlationId);

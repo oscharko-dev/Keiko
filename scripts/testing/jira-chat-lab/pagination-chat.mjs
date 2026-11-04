@@ -75,11 +75,12 @@ function pageIntent(group, startAt) {
     mode: "governed-assist",
     transport: group.transport,
     expectedReadGrants: group.results.length === 0 ? 1 : 0,
-    ...(group.readGrantId === undefined ? {} : { reusedReadGrantId: group.readGrantId }),
+    ...(group.readGrant === undefined ? {} : { reusedReadGrant: group.readGrant }),
   };
 }
 
-function pageGrantId(transcript, intent) {
+/** The server-established grant of the page: a fresh one on the first turn, the reused one after. */
+function pageReadGrant(transcript, intent) {
   const grant = transcript.readGrant;
   if (grant !== undefined) {
     assert.equal(grant.kind, "jira-chat-read");
@@ -88,11 +89,11 @@ function pageGrantId(transcript, intent) {
   }
   if (intent.expectedReadGrants === 1) {
     assert.ok(grant);
-    return grant.grantId;
+    return grant;
   }
-  assert.equal(typeof intent.reusedReadGrantId, "string");
-  if (grant !== undefined) assert.equal(grant.grantId, intent.reusedReadGrantId);
-  return intent.reusedReadGrantId;
+  assert.equal(typeof intent.reusedReadGrant?.grantId, "string");
+  if (grant !== undefined) assert.equal(grant.grantId, intent.reusedReadGrant.grantId);
+  return intent.reusedReadGrant;
 }
 
 export function observedPaginationPage(observed, intent) {
@@ -105,7 +106,7 @@ export function observedPaginationPage(observed, intent) {
   assert.deepEqual(exchange.call.arguments, intent.arguments);
   assert.equal(exchange.result.status, "completed");
   assert.equal(exchange.mutationOutcome, undefined);
-  const grantId = pageGrantId(user.toolTranscript, intent);
+  const grant = pageReadGrant(user.toolTranscript, intent);
   if (intent.transport === "stream") {
     assert.equal(observed.events.has("tool-read-consent"), intent.expectedReadGrants === 1);
     assert.equal(observed.events.has("tool-write-approval"), false);
@@ -113,7 +114,8 @@ export function observedPaginationPage(observed, intent) {
   return {
     userId: user.id,
     invocationId: exchange.result.invocationId,
-    grantId,
+    grantId: grant.grantId,
+    grant,
     data: exchange.result.data,
   };
 }
@@ -138,8 +140,8 @@ async function runPage(context, group, observer, chat, reference, seen, startAt)
     seen,
   });
   assert.deepEqual(await projectState(context.session), reference);
-  group.readGrantId ??= page.grantId;
-  assert.equal(page.grantId, group.readGrantId);
+  group.readGrant ??= page.grant;
+  assert.equal(page.grantId, group.readGrant.grantId);
   group.results.push({
     startAt,
     count: verified.keys.length,
@@ -162,6 +164,8 @@ async function qualify(context, group, observer) {
     context.session,
     context.projectPath,
     context.modelId,
+    "api",
+    "governed-assist",
   );
   group.chatId = chat.id;
   const seen = [];
