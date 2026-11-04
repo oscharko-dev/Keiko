@@ -4653,7 +4653,7 @@ function EditorRuntimeWidget({
           <SourcePreviewReopenButton
             available={previewTarget !== null}
             onClick={() => setClosedSourcePreviewKey(null)}
-            label={commonT("filePreview.showSource")}
+            label={optionalT("filePreview.showSource")}
           />
           {loadRetryable ? (
             <>

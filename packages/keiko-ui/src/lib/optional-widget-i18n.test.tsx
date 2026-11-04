@@ -45,6 +45,9 @@ describe("optional widget catalog ownership", () => {
     "atlassianConnectors.title",
     "managedLanguage.title",
     "context.details.title",
+    "filePreview.showSource",
+    "filePreview.deniedMessage",
+    "filePreview.revealedPartialRange",
   ])("keeps the lazy-only %s copy out of both core catalogs", (key) => {
     expect(EN_MESSAGES).not.toHaveProperty(key);
     expect(DE_MESSAGES).not.toHaveProperty(key);

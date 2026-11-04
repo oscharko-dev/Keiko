@@ -880,59 +880,6 @@ export const DE_MESSAGES = {
   // records the required German-copy review.
   // Neue i18n-Schlüssel für das Quality-Widgets-Retrofit: AgentRunWidget, FilePreview,
   // FilesWidget, PdfCitationPreviewWindow, ReviewWidget, FigmaSnapshotWindow.
-  "filePreview.showSource": "Quellenvorschau anzeigen",
-  "filePreview.linesAdded": "{count} Zeilen hinzugefügt.",
-  "filePreview.revealedLine": "Quellenzeile {line}.",
-  "filePreview.revealedPartialRange":
-    "Quellenzeilen {start}–{end} angezeigt. Weitere referenzierte Zeilen liegen außerhalb dieses Ausschnitts.",
-  "filePreview.revealedRange": "Quellenzeilen {start}–{end}.",
-  "filePreview.revealOutsideContent":
-    "Die referenzierte Zeile {line} liegt außerhalb dieser Datei ({count} Zeilen).",
-  "filePreview.deniedMessage":
-    "Diese Datei ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen (entspricht einem Sperrmuster wie .env, *.pem, node_modules, .git, …).",
-  "filePreview.searchableDocument":
-    "{format}-Dateien bis 2 MB sind in der Repository-Suche über eine begrenzte Textextraktion durchsuchbar, wenn sie explizit mit einem Chat verbunden sind. Verschlüsselte, gescannte oder größere Dokumente werden nicht extrahiert – nutzen Sie dafür Local Knowledge. Für dieses Format ist hier keine Inline-Vorschau verfügbar.",
-  "filePreview.error.loadFailed": "Die Datei konnte nicht geladen werden. Versuchen Sie es erneut.",
-  "filePreview.error.unreadable": "Diese Datei kann nicht gelesen werden.",
-  "filePreview.binary.tooLarge": "Vorschau deaktiviert, da diese Datei {maxBytes} überschreitet.",
-  "filePreview.binary.unsupported":
-    "Für diesen Dateityp ist keine sichere Text- oder Bildvorschau verfügbar.",
-  "filePreview.metadata.type": "Typ",
-  "filePreview.metadata.size": "Größe",
-  "filePreview.metadata.modified": "Geändert",
-  "filePreview.metadata.extension": "Erweiterung",
-  "filePreview.metadata.extensionNone": "keine",
-  "filePreview.backToFiles": "Zurück zu den Dateien",
-  "filePreview.copyFileName": "Dateiname kopieren",
-  "filePreview.copyFilePath": "Dateipfad kopieren",
-  "filePreview.copyStatus.nameCopied": "Dateiname kopiert",
-  "filePreview.copyStatus.pathCopied": "Dateipfad kopiert",
-  "filePreview.copyStatus.clipboardFailed": "Zugriff auf die Zwischenablage fehlgeschlagen.",
-  "filePreview.refresh": "Vorschau aktualisieren",
-  "filePreview.refreshing": "Vorschau wird aktualisiert",
-  "filePreview.refreshStatus.refreshing": "Wird aktualisiert …",
-  "filePreview.refreshStatus.reloaded": "Neu geladen",
-  "filePreview.refreshStatus.failed": "Aktualisierung fehlgeschlagen",
-  "filePreview.openInEditor": "Im Editor öffnen",
-  "filePreview.closePreview": "Vorschau schließen",
-  "filePreview.loadingState": "Vorschau wird geladen…",
-  "filePreview.retry": "Erneut versuchen",
-  "filePreview.truncatedBanner":
-    "Vorschau bei {maxBytes} abgeschnitten. Größere Dateien können hier nicht vollständig angezeigt werden.",
-  "filePreview.syntaxHighlightDisabled": "Syntaxhervorhebung für große Vorschauen deaktiviert.",
-  "filePreview.previewRegionLabel": "Dateivorschau: {name}",
-  "filePreview.showMoreLines": "{count} weitere Zeilen anzeigen",
-  "filePreview.showPreviousLines": "{count} vorherige Zeilen anzeigen",
-  "filePreview.readOnlyBanner":
-    "Schreibgeschützte Quellenvorschau. Diese Datei kann hier nicht bearbeitet werden.",
-  "filePreview.hiddenFile": "Verborgene Datei",
-  "filePreview.previewUnavailable": "Vorschau nicht verfügbar",
-  "filePreview.headerLoading": "Vorschau wird geladen",
-  "filePreview.lang.denied": "verweigert",
-  "filePreview.lang.error": "fehler",
-  "filePreview.lang.loading": "lädt",
-  "filePreview.lang.text": "text",
-  "filePreview.lang.binary": "binär",
 
   // Abgeschlossene Fetch-/Pull- und Push-Ergebnisse. Satzfragmente: Sie werden als {status} in
   // "gitClientWindow.sync.operationStatus" eingesetzt. Ein fehlgeschlagenes Ergebnis wird zusätzlich

@@ -856,58 +856,6 @@ export const EN_MESSAGES = {
   // records the required English-copy review.
   // New i18n keys for the quality-widgets retrofit: AgentRunWidget, FilePreview,
   // FilesWidget, PdfCitationPreviewWindow, ReviewWidget, FigmaSnapshotWindow.
-  "filePreview.showSource": "Show source preview",
-  "filePreview.linesAdded": "{count} lines added.",
-  "filePreview.revealedLine": "Source line {line}.",
-  "filePreview.revealedPartialRange":
-    "Source lines {start}–{end} shown. More referenced lines are outside this view.",
-  "filePreview.revealedRange": "Source lines {start}–{end}.",
-  "filePreview.revealOutsideContent":
-    "The referenced line {line} is outside this file ({count} lines).",
-  "filePreview.deniedMessage":
-    "This file is excluded from the read surface for safety (matches a deny pattern such as .env, *.pem, node_modules, .git, …).",
-  "filePreview.searchableDocument":
-    "{format} files up to 2 MB are searchable in Repository Search via bounded text extraction when explicitly connected to a chat. Encrypted, scanned, or larger documents are not extracted — use Local Knowledge for those. No inline preview is available for this format here.",
-  "filePreview.error.loadFailed": "The file could not be loaded. Try again.",
-  "filePreview.error.unreadable": "Unable to read this file.",
-  "filePreview.binary.tooLarge": "Preview disabled because this file exceeds {maxBytes}.",
-  "filePreview.binary.unsupported":
-    "No safe text or image preview is available for this file type.",
-  "filePreview.metadata.type": "Type",
-  "filePreview.metadata.size": "Size",
-  "filePreview.metadata.modified": "Modified",
-  "filePreview.metadata.extension": "Extension",
-  "filePreview.metadata.extensionNone": "none",
-  "filePreview.backToFiles": "Back to files",
-  "filePreview.copyFileName": "Copy file name",
-  "filePreview.copyFilePath": "Copy file path",
-  "filePreview.copyStatus.nameCopied": "File name copied",
-  "filePreview.copyStatus.pathCopied": "File path copied",
-  "filePreview.copyStatus.clipboardFailed": "Clipboard access failed.",
-  "filePreview.refresh": "Refresh preview",
-  "filePreview.refreshing": "Refreshing preview",
-  "filePreview.refreshStatus.refreshing": "Refreshing...",
-  "filePreview.refreshStatus.reloaded": "Reloaded",
-  "filePreview.refreshStatus.failed": "Refresh failed",
-  "filePreview.openInEditor": "Open in editor",
-  "filePreview.closePreview": "Close preview",
-  "filePreview.loadingState": "Loading preview…",
-  "filePreview.retry": "Retry",
-  "filePreview.truncatedBanner":
-    "Preview truncated at {maxBytes}. Larger files can't be shown in full here.",
-  "filePreview.syntaxHighlightDisabled": "Syntax highlighting disabled for large previews.",
-  "filePreview.previewRegionLabel": "File preview: {name}",
-  "filePreview.showMoreLines": "Show {count} more lines",
-  "filePreview.showPreviousLines": "Show {count} previous lines",
-  "filePreview.readOnlyBanner": "Read-only source preview. This file cannot be edited here.",
-  "filePreview.hiddenFile": "Hidden file",
-  "filePreview.previewUnavailable": "Preview unavailable",
-  "filePreview.headerLoading": "Loading preview",
-  "filePreview.lang.denied": "denied",
-  "filePreview.lang.error": "error",
-  "filePreview.lang.loading": "loading",
-  "filePreview.lang.text": "text",
-  "filePreview.lang.binary": "binary",
 
   // Settled fetch/pull and push results. Sentence fragments: they are substituted into
   // "gitClientWindow.sync.operationStatus" as {status}. A failed result is ALSO styled and announced
