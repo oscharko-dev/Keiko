@@ -2166,3 +2166,307 @@ describe("VerificationRunnerManager — targeted project evidence", () => {
     }
   });
 });
+
+// Owner decision (2026-11-02): in Full access the validated Authority Envelope already allows file
+// and command work inside the run's workspace, so package-script trust is a mode-dependent
+// disposition, not a hard denial. Ask for approval and Supervised workspace keep asking, exactly as
+// before; the basis is recorded on the existing selection line.
+describe("decideScriptTrust — autonomous envelope basis", () => {
+  const root = mkdtempSync(join(tmpdir(), "keiko-envelope-"));
+  const repository = mkdtempSync(join(tmpdir(), "keiko-envelope-repo-"));
+  writeFileSync(join(root, "package.json"), PACKAGE_JSON, "utf8");
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(repository, { recursive: true, force: true });
+  });
+  const ordinary: WorkspaceRootAccess = {
+    kind: "ordinary",
+    canonicalRoot: root,
+    fs: nodeWorkspaceFs,
+  };
+  const worktree: WorkspaceRootAccess = {
+    kind: "managed-task",
+    canonicalRoot: root,
+    fs: nodeWorkspaceFs,
+    repositoryRoot: repository,
+  };
+  function decide(
+    access: WorkspaceRootAccess,
+    autonomyMode: Parameters<typeof decideScriptTrust>[0]["autonomyMode"],
+    standing = false,
+  ): ReturnType<typeof decideScriptTrust> {
+    return decideScriptTrust({
+      access,
+      autonomyMode,
+      repositoryFs: nodeWorkspaceFs,
+      standingTrust: (): boolean => standing,
+      worktreeHumanGrant: (): boolean => false,
+      runAdmittedManifest: (): boolean => false,
+    });
+  }
+
+  it("admits the run's own root in autonomous-delivery without an operator decision", () => {
+    const decision = decide(ordinary, "autonomous-delivery");
+    expect(decision).toMatchObject({ trusted: true, basis: "autonomous-envelope" });
+    expect(decision.trusted && decision.manifestDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(decide(worktree, "autonomous-delivery")).toMatchObject({
+      trusted: true,
+      basis: "autonomous-envelope",
+    });
+  });
+
+  it.each([["governed-assist"], ["supervised-coding"], [undefined]] as const)(
+    "keeps asking in %s (an ordinary root and a managed worktree)",
+    (mode) => {
+      expect(decide(ordinary, mode)).toEqual({ trusted: false, refusal: "root-not-trusted" });
+      expect(decide(worktree, mode)).toEqual({
+        trusted: false,
+        refusal: "repository-not-trusted",
+      });
+    },
+  );
+
+  it("prefers an established basis over the envelope", () => {
+    expect(decide(ordinary, "autonomous-delivery", true)).toEqual({
+      trusted: true,
+      basis: "own-root",
+    });
+  });
+
+  it("admits a root without a manifest, but never one whose manifest basis is unknown", () => {
+    const empty = mkdtempSync(join(tmpdir(), "keiko-envelope-empty-"));
+    const broken = mkdtempSync(join(tmpdir(), "keiko-envelope-broken-"));
+    try {
+      writeFileSync(join(broken, "package.json"), "{ not json", "utf8");
+      expect(
+        decide(
+          { kind: "ordinary", canonicalRoot: empty, fs: nodeWorkspaceFs },
+          "autonomous-delivery",
+        ),
+      ).toEqual({ trusted: true, basis: "autonomous-envelope" });
+      expect(
+        decide(
+          { kind: "ordinary", canonicalRoot: broken, fs: nodeWorkspaceFs },
+          "autonomous-delivery",
+        ),
+      ).toEqual({ trusted: false, refusal: "root-not-trusted" });
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+      rmSync(broken, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("VerificationRunnerManager — script trust by autonomy mode and plan content", () => {
+  function recording(): {
+    readonly manager: VerificationRunnerManager;
+    readonly events: ServerLogEvent[];
+  } {
+    const events: ServerLogEvent[] = [];
+    const manager = makeManager({
+      execute: fakePort(report(["typecheck"])).port,
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+    return { manager, events };
+  }
+
+  it("verifies without a trust pause in Full access and names the basis on the selection line", async () => {
+    const { manager, events } = recording();
+    await manager.runToReport(
+      { ...input({ correlationId: "envelope-run" }), autonomyMode: "autonomous-delivery" },
+      new AbortController().signal,
+    );
+    const selected = events.find((event) => event.extra?.state === "selected");
+    expect(selected?.extra).toMatchObject({ trustBasis: "autonomous-envelope" });
+    expect(selected?.extra?.trustManifestDigest).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  it.each([["governed-assist"], ["supervised-coding"], [undefined]] as const)(
+    "still refuses package scripts in %s until the operator allows them",
+    async (autonomyMode) => {
+      const { manager } = recording();
+      await expect(
+        manager.runToReport(
+          { ...input(), ...(autonomyMode === undefined ? {} : { autonomyMode }) },
+          new AbortController().signal,
+        ),
+      ).rejects.toMatchObject({ code: "WORKSPACE_TRUST_REQUIRED" });
+    },
+  );
+
+  it("answers the wait probe with the run's mode", () => {
+    const manager = makeManager();
+    expect(manager.scriptTrustFor(workspaceRoot)).toMatchObject({ trusted: false });
+    expect(manager.scriptTrustFor(workspaceRoot, "governed-assist")).toMatchObject({
+      trusted: false,
+    });
+    expect(manager.scriptTrustFor(workspaceRoot, "autonomous-delivery")).toMatchObject({
+      trusted: true,
+      basis: "autonomous-envelope",
+    });
+  });
+
+  it("never asks for trust when the plan holds no script that would run", async () => {
+    writeFileSync(join(workspaceRoot, "package.json"), JSON.stringify({ name: "no-scripts" }));
+    const { manager } = recording();
+    const outcome = await manager.runToReport(
+      input({ kinds: ["lint"] }),
+      new AbortController().signal,
+    );
+    expect(outcome.report.overallStatus).toBeDefined();
+    rmSync(join(workspaceRoot, "package.json"));
+    await expect(
+      manager.runToReport(input({ kinds: ["test"] }), new AbortController().signal),
+    ).resolves.toBeDefined();
+  });
+});
+
+describe("VerificationRunnerManager — nested packages in a repository without a root package.json", () => {
+  const NESTED = "web/src/main/typescript/app";
+  let mavenRoot: string;
+  let mavenStore: UiStore;
+
+  beforeEach(() => {
+    mavenRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-maven-")));
+    writeFileSync(join(mavenRoot, "pom.xml"), "<project/>", "utf8");
+    mkdirSync(join(mavenRoot, NESTED, "src"), { recursive: true });
+    writeFileSync(
+      join(mavenRoot, NESTED, "package.json"),
+      JSON.stringify({
+        name: "app",
+        scripts: { test: "vitest run" },
+        devDependencies: { vitest: "4.1.11" },
+      }),
+    );
+    writeFileSync(join(mavenRoot, NESTED, "yarn.lock"), "# yarn lockfile v1\n");
+    writeFileSync(join(mavenRoot, NESTED, "src", "widget.test.ts"), "");
+    mavenStore = createInMemoryUiStore();
+    mavenStore.createProject(mavenRoot, "maven");
+  });
+  afterEach(() => {
+    mavenStore.close();
+    rmSync(mavenRoot, { recursive: true, force: true });
+  });
+
+  function planner(): {
+    readonly manager: VerificationRunnerManager;
+    readonly plans: Parameters<VerificationExecutePort>[0]["plan"][];
+  } {
+    const plans: Parameters<VerificationExecutePort>[0]["plan"][] = [];
+    const manager = createVerificationRunnerManager({
+      store: mavenStore,
+      evidenceStore,
+      isWorkspaceTrustedForPackageScripts: () => true,
+      execute: (args) => {
+        plans.push(args.plan);
+        return Promise.resolve({
+          report: report(["test"]),
+          probe: { available: true, backend: "test-backend" },
+        });
+      },
+    });
+    return { manager, plans };
+  }
+  const run = (
+    manager: VerificationRunnerManager,
+    over: Partial<VerificationRunInput>,
+  ): Promise<unknown> =>
+    manager.runToReport(
+      { projectId: mavenRoot, kinds: ["test"], ...over },
+      new AbortController().signal,
+    );
+
+  it("finds the single nested package and plans its yarn script, skipped until installed", async () => {
+    const { manager, plans } = planner();
+    await run(manager, {});
+    expect(plans[0]).toMatchObject({ packageDir: NESTED, packageManager: "yarn" });
+    expect(plans[0]?.steps[0]).toMatchObject({
+      command: "yarn",
+      args: ["run", "test"],
+      cwd: NESTED,
+      skipReason: "native shell required: yarn dependencies are not installed",
+    });
+  });
+
+  it("runs the yarn script once the package's own tree is installed", async () => {
+    mkdirSync(join(mavenRoot, NESTED, "node_modules"));
+    const { manager, plans } = planner();
+    await run(manager, {});
+    expect(plans[0]?.steps[0]?.skipReason).toBeUndefined();
+  });
+
+  it("verifies a targeted test through the package that holds it", async () => {
+    mkdirSync(join(mavenRoot, NESTED, "node_modules"));
+    const { manager, plans } = planner();
+    await run(manager, { kinds: ["targeted-test"], targetPath: `${NESTED}/src/widget.test.ts` });
+    expect(plans[0]?.steps).toEqual([
+      expect.objectContaining({
+        kind: "targeted-test",
+        command: "npx",
+        args: ["vitest", "run", "--root", NESTED, "src/widget.test.ts"],
+      }),
+    ]);
+    expect(plans[0]?.steps[0]?.cwd).toBeUndefined();
+  });
+
+  it("honours an explicit packageDir", async () => {
+    writeFileSync(join(mavenRoot, "other.txt"), "");
+    mkdirSync(join(mavenRoot, "tools"));
+    writeFileSync(
+      join(mavenRoot, "tools", "package.json"),
+      JSON.stringify({ scripts: { test: "x" } }),
+    );
+    const { manager, plans } = planner();
+    await run(manager, { packageDir: "tools" });
+    expect(plans[0]).toMatchObject({ packageDir: "tools", packageManager: "npm" });
+  });
+
+  it("refuses an ambiguous workspace with the candidate folders, without asking for trust", async () => {
+    mkdirSync(join(mavenRoot, "tools"));
+    writeFileSync(join(mavenRoot, "tools", "package.json"), "{}");
+    const manager = createVerificationRunnerManager({
+      store: mavenStore,
+      evidenceStore,
+      execute: fakePort(report(["test"])).port,
+    });
+    await expect(run(manager, {})).rejects.toMatchObject({
+      code: "NO_RUNNABLE_STEPS",
+      candidates: ["tools", NESTED],
+    });
+  });
+
+  it.each(["../escape", "/etc", "nothing-here"])(
+    "refuses the packageDir %j",
+    async (packageDir) => {
+      const { manager, plans } = planner();
+      await expect(run(manager, { packageDir })).rejects.toMatchObject({
+        code: "NO_RUNNABLE_STEPS",
+      });
+      expect(plans).toHaveLength(0);
+    },
+  );
+
+  it("leaves a root package.json untouched: the root plan, npm, no package folder", async () => {
+    writeFileSync(
+      join(mavenRoot, "package.json"),
+      JSON.stringify({ name: "root", scripts: { test: "vitest run" } }),
+    );
+    writeFileSync(join(mavenRoot, "README.md"), "");
+    const { manager, plans } = planner();
+    await run(manager, { targetPath: "README.md", kinds: ["test"] });
+    expect(plans[0]?.packageDir).toBeUndefined();
+    expect(plans[0]?.steps[0]).toMatchObject({ command: "npm", args: ["test"] });
+    expect(plans[0]?.steps[0]?.cwd).toBeUndefined();
+  });
+
+  it("runs the scripts of the package that holds the target, also below a root package.json", async () => {
+    writeFileSync(
+      join(mavenRoot, "package.json"),
+      JSON.stringify({ name: "root", scripts: { test: "vitest run" } }),
+    );
+    const { manager, plans } = planner();
+    await run(manager, { targetPath: `${NESTED}/src/widget.test.ts`, kinds: ["test"] });
+    expect(plans[0]).toMatchObject({ packageDir: NESTED, packageManager: "yarn" });
+    expect(plans[0]?.steps[0]).toMatchObject({ command: "yarn", cwd: NESTED });
+  });
+});

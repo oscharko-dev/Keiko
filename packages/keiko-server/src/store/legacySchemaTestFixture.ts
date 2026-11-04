@@ -22,18 +22,33 @@ interface VersionRollback {
 // both compose from this ONE list — neither restates a migration's DDL of its own, and a future
 // migration is covered the moment its own rollback fragment is appended here.
 //
-// V48 only conservatively repairs mutation outcomes; no structural rollback applies.
+// V48 only conservatively repairs mutation outcomes; no structural rollback applies. V57 only
+// widens the journal operation CHECK (no column added), so a rewind keeps the wider table.
 // V20/V30/V33/V37/V40 have no fragments: they only widen a `failure_code` CHECK on
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
-  { version: 57, sql: "ALTER TABLE review_coverage DROP COLUMN previous_path;" },
-  { version: 56, sql: "ALTER TABLE review_runs DROP COLUMN runtime_cleanup;" },
+  { version: 61, sql: "ALTER TABLE review_coverage DROP COLUMN previous_path;" },
+  { version: 60, sql: "ALTER TABLE review_runs DROP COLUMN runtime_cleanup;" },
   {
-    version: 55,
+    version: 59,
     sql: `DROP TABLE review_findings;
     DROP TABLE review_coverage;
     DROP TABLE review_runs;`,
+  },
+  {
+    version: 56,
+    sql: `DROP TRIGGER chat_history_search_insert;
+    DROP TRIGGER chat_history_search_delete;
+    DROP TRIGGER chat_history_search_update;
+    DROP TABLE chat_history_words;
+    DROP TABLE chat_history_fragments;`,
+  },
+  {
+    version: 55,
+    sql: `DROP TRIGGER chat_history_revision_late_completion;
+    DROP TRIGGER chat_continuity_revision_invalidated;
+    DROP TABLE chat_continuity_checkpoints;`,
   },
   {
     version: 54,

@@ -460,6 +460,7 @@ describe("sendStatusLabel (Issue #152 — no fake progress percentages)", () => 
   it("returns a stable, human label for every in-flight lifecycle state", () => {
     expect(sendStatusLabel("queued")).toBe("Submitting your message…");
     expect(sendStatusLabel("contacting")).toBe("Preparing response…");
+    expect(sendStatusLabel("awaiting-decision")).toBe("Waiting for your decision");
     expect(sendStatusLabel("streaming")).toBe("Receiving response…");
     expect(sendStatusLabel("cancelled")).toBe("Response cancelled.");
   });
@@ -1382,6 +1383,65 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
       status: "completed",
       assistantMessageId: "stream-assistant-exact",
     });
+  });
+
+  it("shows a running tool call at once and says when the turn waits for the human", async () => {
+    let capturedHandlers: StreamHandlers | undefined;
+    vi.spyOn(api, "sendDesktopChatStream").mockImplementation(
+      (_input, _signal, handlers): Promise<void> => {
+        capturedHandlers = handlers;
+        return new Promise<void>(() => undefined);
+      },
+    );
+    const view = await bootStreamingHook();
+    act(() => view.result.current.setDraft("create a Jira issue"));
+    act(() => {
+      void view.result.current.sendMessage();
+    });
+    await waitFor(() => {
+      expect(capturedHandlers).toBeDefined();
+    });
+    const chatId = view.result.current.activeChat?.id ?? "";
+    const call = { id: "call-1", name: "jira_create", arguments: {} };
+    const approval = {
+      kind: "jira-chat-write",
+      approvalId: "approval-1",
+      chatId,
+      podId: "11111111-1111-4111-8111-111111111111",
+      bindingGeneration: 1,
+      authenticationGeneration: 1,
+      invocationId: "action-1",
+      operation: "jira.create",
+      actionDigest: "a".repeat(64),
+      requestedAt: 1000,
+      expiresAt: Date.now() + 60_000,
+      state: "pending",
+    } as const;
+    act(() => {
+      capturedHandlers?.onToolExchange?.({ messageId: "server-message", exchange: { call } });
+    });
+    await waitFor(() => {
+      expect(
+        view.result.current.messages.flatMap((m) => m.toolTranscript?.exchanges ?? []),
+      ).toEqual([{ call }]);
+    });
+    act(() => {
+      capturedHandlers?.onWriteApproval?.({ messageId: "server-message", call, approval });
+    });
+    await waitFor(() => {
+      expect(view.result.current.sendStatus).toBe("awaiting-decision");
+    });
+    act(() => {
+      capturedHandlers?.onWriteApproval?.({
+        messageId: "server-message",
+        call,
+        approval: { ...approval, state: "approved" },
+      });
+    });
+    await waitFor(() => {
+      expect(view.result.current.sendStatus).toBe("contacting");
+    });
+    act(() => view.result.current.cancelSend());
   });
 
   // ST-L3-2 — cancel mid-stream: no partial assistant message kept (AC#3).

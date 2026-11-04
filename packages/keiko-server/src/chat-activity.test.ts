@@ -418,6 +418,24 @@ describe("chat rejection readiness evidence (#3557)", () => {
   });
 });
 
+it("records the requirement coverage a grounded tool round was told, as counts only (#4179)", () => {
+  const sink = captureServerLog();
+  logGroundedToolRound("coverage-proof", 1, 2, { unitCount: 41, shownCount: 13 });
+  logGroundedToolRound("coverage-proof", 0, 1);
+  const lines = sink.events.map((entry) => formatActivityLogProofLine(entry));
+  const told = expectActivityLogProof(
+    "chat.grounded-tool-round.completed.schedule",
+    lines[0] ?? "",
+  );
+  const plain = expectActivityLogProof(
+    "chat.grounded-tool-round.completed.schedule",
+    lines[1] ?? "",
+  );
+  expect(told).toMatchObject({ requirementUnitCount: 41, excerptRequirementCount: 13 });
+  expect(plain).not.toHaveProperty("requirementUnitCount");
+  expect(plain).not.toHaveProperty("excerptRequirementCount");
+});
+
 it("reconstructs mixed tool rounds and the shared remaining synthesis ceiling without payloads", () => {
   const sink = captureServerLog();
   logGroundedToolRound("mixed-schedule-proof", 1, 2);

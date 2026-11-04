@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+
 import type { ReactNode } from "react";
 import { useTranslate } from "@/lib/i18n";
 import { Icons } from "../../Icons";
@@ -73,11 +75,12 @@ function PlugIcon({ img, icon, glyph }: PlugIconProps): ReactNode {
 }
 
 export function PluginsPanel(): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   const t = useTranslate();
   return (
     <div className="plg">
       <div className="plg-sec">
-        <span className="plg-sec-t">MCP Servers</span>
+        <span className="plg-sec-t">{tUi("pluginsPanel.ui.mcpServers")}</span>
         <span className="plg-sec-c mono">{t("plugins.mcp.previewHeader")}</span>
       </div>
       {MCP_SERVERS.map((m) => (
@@ -99,7 +102,7 @@ export function PluginsPanel(): ReactNode {
         </div>
       ))}
       <div className="plg-sec plg-sec2">
-        <span className="plg-sec-t">Connectors</span>
+        <span className="plg-sec-t">{tUi("pluginsPanel.ui.connectors")}</span>
       </div>
       {CONNECTORS.map((c) => (
         // GEN-UI-INTERACTION-001: these connectors are placeholders (not wired to

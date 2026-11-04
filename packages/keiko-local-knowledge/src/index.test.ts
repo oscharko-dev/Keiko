@@ -54,6 +54,7 @@ const PUBLIC_EXPORTS = [
   "htmlParser",
   "jsonParser",
   "pdfParser",
+  "pptxParser",
   "registerParser",
   "resolveParser",
   "textParser",

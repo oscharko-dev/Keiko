@@ -233,6 +233,39 @@ describe("production coding runtime resolver", () => {
     });
   });
 
+  // Auditor blocker (customer 1.3.4): a start after an idle while was refused because nothing checked
+  // its model. Every managed start now checks the model it launches with before admission; a
+  // subscription start has no gateway model to check.
+  it("checks the managed model of a start before admission, never a subscription start's", async () => {
+    const fixture = workspaceFixture();
+    const prepareManagedModel = vi.fn(() => Promise.resolve());
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(
+        fixture,
+        vi.fn((input: ProductionRuntimeBackendInput) => backendRun(input.request.runId)),
+        confirmationFixture().consumer,
+        undefined,
+        { workspaceAuthority: { ...fixture.authority, prepareManagedModel } },
+      ),
+    );
+    if (host === undefined) throw new Error("expected qualified composition");
+    if (host.launchResolver.prepare === undefined) throw new Error("expected start preparation");
+    const request = {
+      ...launchRequest(fixture.workspace),
+      modelId: "chosen-model",
+      correlationId: "start-correlation",
+    };
+
+    await host.launchResolver.prepare(request);
+    expect(prepareManagedModel).toHaveBeenCalledExactlyOnceWith(
+      "chosen-model",
+      "start-correlation",
+    );
+
+    await host.launchResolver.prepare({ ...request, runtimePreference: "codex-subscription" });
+    expect(prepareManagedModel).toHaveBeenCalledOnce();
+  });
+
   it("carries the admitted issue through the production context and start confirmation", () => {
     const fixture = workspaceFixture();
     const confirmations = confirmationFixture();

@@ -33,6 +33,10 @@ describe("lint heap ceiling", () => {
     const stepCeilings = heapCeilings(steps[0]?.step.env?.NODE_OPTIONS);
 
     expect(script).toMatch(/^npm run build:packages && /u);
+    // #4182 (2026-11-02): one `eslint .` outgrew this ceiling (heap out of memory at 11.9 GiB). The
+    // ceiling now applies to each partition of scripts/lint-repository.mjs, never to the whole tree.
+    expect(script).toMatch(/ node --max-old-space-size=\d+ scripts\/lint-repository\.mjs && /u);
+    expect(script).not.toContain("eslint.js .");
     expect(otherScriptCeilings).toStrictEqual([]);
     expect(stepCeilings).toStrictEqual([scriptCeiling]);
     expect(scriptCeiling).toBeLessThanOrEqual(RUNNER_HEAP_LIMIT_MIB);

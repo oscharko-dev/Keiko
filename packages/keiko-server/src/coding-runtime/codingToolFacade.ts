@@ -26,6 +26,7 @@ import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-contex
 import { WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS } from "@oscharko-dev/keiko-contracts/runtime/workspace";
 import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
+import { isContainedAgentPath } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 import type {
@@ -832,6 +833,7 @@ function projectGovernedFailure(
     ...projected("failed", reasonCode, true),
     ...governedFailureCoaching(request, reasonCode),
     ...verificationNotRunDetail(request, reasonCode, value.notRun),
+    ...verificationPackageDetail(request, reasonCode, value.packageCandidates),
   };
   const verificationFailure =
     request.action === "verification" && reasonCode === "VERIFICATION_FAILED"
@@ -951,6 +953,28 @@ function verificationNotRunDetail(
   if (steps.length === 0) return {};
   const named = steps.map((step) => `${step.kind} (${NOT_RUN_WORDS[step.reason]})`);
   return { detail: `These verification steps did not run: ${named.join(", ")}.` };
+}
+
+// A workspace with several packages: the runner names the workspace-relative folders so the model can
+// pass one as `packageDir`. Each is a bounded path the tool schema would accept itself; anything else
+// is withheld, like every value the facade forwards to the model.
+const PACKAGE_CANDIDATE_LIMIT = 10;
+
+function verificationPackageDetail(
+  request: CodingToolActionRequest,
+  reasonCode: string,
+  candidates: unknown,
+): { readonly detail?: string } {
+  if (request.action !== "verification" || reasonCode !== "NO_RUNNABLE_STEPS") return {};
+  const folders = (Array.isArray(candidates) ? (candidates as readonly unknown[]) : [])
+    .filter(
+      (entry): entry is string =>
+        typeof entry === "string" && isContainedAgentPath(entry) && !isDenied(entry),
+    )
+    .slice(0, PACKAGE_CANDIDATE_LIMIT);
+  return folders.length === 0
+    ? {}
+    : { detail: `Several packages were found. Pass one as packageDir: ${folders.join(", ")}.` };
 }
 
 // A stage proposal the runtime Git service blocks at admission is a complete Git result, not a

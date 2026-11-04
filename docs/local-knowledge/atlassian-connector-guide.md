@@ -54,36 +54,40 @@ Cloud connectors retain their existing sync and action workflows. See
 ### Create and connect a Pod
 
 In the Knowledge Pods hub, select **Create Jira Pod**, enter a name, the HTTPS Jira base URL
-(including any context path), and a PAT, then save and **Verify connection**. Verification checks
+(including any context path), and a PAT, then select **Create Jira Pod** in the form and
+**Verify connection**. Verification checks
 bounded REST-v2 `serverInfo` and `myself` responses and the active identity. A successful check is
 required before Chat can use the Pod. For a private Jira address, the operator must configure
 exact target admission and the trusted CA through the existing network configuration; the token
 form cannot grant private-network access. See [ADR-0128 D3](../adr/ADR-0128-atlassian-connector-authority-and-security-design.md#d3--governed-egress-single-host-allowlist-shared-transport-fail-closed-redirects).
 
-Open **Jira connection** in the Chat header, choose the verified Pod and **Apply Jira settings**.
-Alternatively, drag the Hub's **Add to workspace** control to the workspace, or activate it with
-the keyboard, then connect the Pod and Chat using the existing window ports. The connection becomes
-active only after the same server-confirmed settings request. One Chat can bind at most one Jira
-Pod; replacing it requires explicit confirmation. The closed header shows the bound Pod's current
-name. A workspace edge is a view of that binding and does not grant access by itself.
+Open **Connectors** in the Chat composer and switch the verified Pod on. The same menu lists every
+centrally configured MCP server; switch off what this Chat should not use. A switched-off server or
+Pod gives the model no tools and no context. Alternatively, drag the Hub's **Add to workspace**
+control to the workspace, or activate it with the keyboard, then connect the Pod and Chat using the
+existing window ports. The connection becomes active only after the same server-confirmed settings
+request. One Chat can bind at most one Jira Pod; switching another Pod on replaces it. A workspace
+edge is a view of that binding and does not grant access by itself. The Coding Workbench composer
+has the same **Connectors** menu for the next run; a run uses no Jira Pod unless one is switched on.
 
 ### Modes and permissions
 
-The Chat saves its selected mode, initially **Ask for approval**, and shows the effective mode
-allowed by the deployment ceiling. A narrower operator setting always wins.
+The Chat's mode is chosen under **Access** in the same Connectors menu. A Chat starts in **Full
+access**; the menu shows the effective mode allowed by the deployment ceiling, and a narrower
+operator setting always wins.
 
-| Mode                 | First Chat access to Jira | Later reads under the same grant | Writes                                          |
-| -------------------- | ------------------------- | -------------------------------- | ----------------------------------------------- |
-| Ask for approval     | Explicit read consent     | Allowed within current authority | Approve the concrete action                     |
-| Supervised workspace | Explicit read consent     | Allowed within current authority | Approve the concrete action                     |
-| Full access          | Explicit read consent     | Allowed within current authority | No per-action approval within current authority |
+| Mode                 | Reads                            | Writes                                          |
+| -------------------- | -------------------------------- | ----------------------------------------------- |
+| Ask for approval     | Allowed within current authority | Approve the concrete action                     |
+| Supervised workspace | Allowed within current authority | Approve the concrete action                     |
+| Full access          | Allowed within current authority | No per-action approval within current authority |
 
-Read consent explains that Jira content is sent to the selected model and retained in the
-conversation. It belongs to this actor, Chat, binding and credential generation and expires; it
-never approves a write. A write approval shows the proposed action and exact arguments and can be
+Reads never ask. The server establishes a read grant when the first read is admitted; Jira content
+is sent to the selected model and retained in the conversation. The grant belongs to this actor,
+Chat, binding and credential generation and expires; it never approves a write. A write approval shows the proposed action and exact arguments and can be
 used once for that action. Approval alone is not confirmation that Jira changed. Jira permissions,
 current authority and shared budgets remain mandatory in every mode. A model without verified tool
-calling cannot use these tools. Changing a Pod, token, mode or authority may require fresh consent.
+calling cannot use these tools. Changing a Pod, token, mode or authority starts a new read grant.
 
 The tools can list projects, issue types and create fields; read edit fields, issues, comments,
 transitions and assignable users; search with JQL; and create, edit, assign, comment on and transition
@@ -117,10 +121,12 @@ citations and retrieval limits; Jira results and issue links remain separately a
 results. Jira text is not presented as a local grounding citation. Tool orchestration and final
 answering share the turn's existing time, token and tool budgets.
 
-Use the Hub card to **Rename Pod**, **Replace token**, **Verify connection**, **Refresh status** or
-**Remove Pod**. Rename preserves the connection. Replacing a token preserves the Pod identity and
+Each Pod card shows its status (**Ready**, **Not verified yet**, **Status unknown** or the failure)
+and **Add to workspace**. When the Pod needs attention, the card shows the one action that resolves
+it. The **⋯** menu holds **Verify connection**, **Refresh status**, **Rename Pod**, **Replace token**
+and **Remove Pod**. Rename preserves the connection. Replacing a token preserves the Pod identity and
 Chat association, advances the credential generation and revokes current access and pending
-permissions. Verify again and grant new Chat consent before continuing. Removal deletes the saved
+permissions. Verify again before continuing. Removal deletes the saved
 credential and disconnects its Chats; other Pods remain unchanged. Direct credential-management
 routes use the same invalidation. The UI refetches current server metadata after changes and on
 window focus. An unconfirmed lifecycle response requires **Refresh status**; it is not permission
@@ -279,10 +285,10 @@ issues assigned to the token identity, most recently updated first. You can also
 JQL.
 
 A live read is bounded: at most 100 results per call, a 15-second budget, and a fixed page ceiling.
-Because it is a Jira read, its disposition follows the read row of the mode matrix below: it is
+For the Cloud action surface, its disposition follows the read row of the mode matrix below: it is
 `review-required` in **Ask for approval** and **Supervised workspace** (the query is parked for
 approval, then executed on approve) and `allowed` in **Full access** when the Authority Envelope
-carries the `issue-tracker.read` scope. The raw JQL is never stored in evidence; only a SHA-256 digest of
+carries the `issue-tracker.read` scope. Jira Live Pod reads in Chat never ask (see above). The raw JQL is never stored in evidence; only a SHA-256 digest of
 the query may be recorded for correlation (ADR-0128 D6).
 
 ## 6. How write actions behave in each mode
@@ -307,10 +313,10 @@ restated:
 
 How to read this per mode:
 
-- **Ask for approval** — Cloud sync/actions are `review-required`. A Jira Live Pod in Chat uses
-  the bounded standing read consent described above; each write still needs concrete approval.
-- **Supervised workspace** — Cloud sync/actions remain `review-required`. The same standing read
-  consent and per-write approval rules apply to Jira Live Pods in Chat.
+- **Ask for approval** — Cloud sync/actions are `review-required`. A Jira Live Pod in Chat reads
+  under the server-established read grant described above; each write still needs concrete approval.
+- **Supervised workspace** — Cloud sync/actions remain `review-required`. The same read grant and
+  per-write approval rules apply to Jira Live Pods in Chat.
 - **Full access** — every row is `allowed` **provided the required connector scope is present in
   the Authority Envelope**. Full access removes per-action approval; it does not remove the scope
   requirement.
@@ -342,7 +348,7 @@ what the token could read at sync time until the next re-sync.
 **Jira permissions are not replicated into a local ACL.** Keiko does not copy Confluence space
 permissions or Jira project/issue-level security schemes into synced content. Treat a synced pod as
 a local export of what that token could read at sync time. Live Chat calls additionally require
-Keiko's current actor-owned binding, authority, read consent and any concrete write approval;
+Keiko's current actor-owned binding, authority, read grant and any concrete write approval;
 these checks cannot widen the Jira identity's permissions.
 
 **Single-user scope; no multi-user ACL replication.** The connector is scoped to a single local
@@ -377,7 +383,7 @@ encryption at rest as described above.
 - **Re-sync after permission changes.** Because a pod is a point-in-time snapshot, re-sync on your
   organization's cadence after any permission change so the pod reflects the current access posture.
   Live-Pod token replacement retains the same Pod identity but advances credential/binding
-  generations and requires new verification and Chat consent.
+  generations and requires new verification.
 - **Govern local retention and distribution** of a synced pod as you would any local export of the
   underlying Atlassian content.
 

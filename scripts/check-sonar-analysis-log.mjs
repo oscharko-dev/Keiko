@@ -215,15 +215,19 @@ function receiptEntries(lines) {
   });
 }
 
+// The scanner names the UDG directory it reads as `from directory <path>` (8.0), `from directory
+// "<path>"` (8.1) or `from "<path>"` (the analyzer of 2026-11-03 dropped the word, which alone
+// failed PR #4230's complete, ordered pipeline); the language is the last path segment under an
+// `architecture` parent either way.
+const UDG_READ_MARKER = "Reading SonarArchitecture UDG data from";
+
 function architectureUdgReadLanguage(line) {
-  const marker = "Reading SonarArchitecture UDG data from directory";
-  const markerAt = line.indexOf(marker);
+  const markerAt = line.indexOf(UDG_READ_MARKER);
   if (markerAt < 0) return undefined;
-  // Scanner 8.1 quotes the directory it reads ("…/architecture/js"); the language is the last
-  // path segment either way.
   const segments = line
-    .slice(markerAt + marker.length)
+    .slice(markerAt + UDG_READ_MARKER.length)
     .trim()
+    .replace(/^directory\s+/u, "")
     .replaceAll('"', "")
     .replaceAll("\\", "/")
     .split("/")
@@ -246,7 +250,7 @@ function architectureSensorEvidence(lines, specification) {
     body,
     `Found 1 potential Udg file location(s) for "${specification.language}"`,
   );
-  const reads = indexesIncluding(body, "Reading SonarArchitecture UDG data from directory");
+  const reads = indexesIncluding(body, UDG_READ_MARKER);
   const matchingReads = body.flatMap((line, index) =>
     architectureUdgReadLanguage(line) === specification.language ? [index] : [],
   );

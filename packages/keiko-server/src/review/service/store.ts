@@ -1,5 +1,5 @@
 // The Keiko for Quality review run records (ADR-0182 D6, Issue #4136), over the server's SQLite
-// store (schema migrations 55 and 56): one row per run, its coverage entries and its candidate
+// store (schema migrations 59, 60 and 61): one row per run, its coverage entries and its candidate
 // findings. All SQL is module-scope constants with bound parameters. Paths and finding text are local
 // product data for the UI; this module never logs. One unsettled run per repository is enforced by
 // the `review_runs_active` unique index, so two concurrent starts can never both succeed.
@@ -42,7 +42,7 @@ export interface ReviewRunRow {
   readonly candidateCount: number;
   readonly reviewer: ReviewRoleTotals;
   readonly counterChecker: ReviewRoleTotals;
-  /** The Reviewer runtime's cleanup (migration 56); null when no Reviewer run started. */
+  /** The Reviewer runtime's cleanup (migration 60); null when no Reviewer run started. */
   readonly runtimeCleanup: ReviewRuntimeCleanup | null;
 }
 

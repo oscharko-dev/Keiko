@@ -386,10 +386,6 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.model.selected": "Coding model: {model}",
   "codingWorkbench.composer.model.menu": "Choose coding model",
   "codingWorkbench.composer.model.none": "No coding model available",
-  "codingWorkbench.composer.jira.label": "Jira Pod for this run",
-  "codingWorkbench.composer.jira.menu": "Choose Jira Pod",
-  "codingWorkbench.composer.jira.none": "Jira: none",
-  "codingWorkbench.composer.jira.pod": "Jira: {name}",
   "codingWorkbench.composer.source.label": "Model source",
   "codingWorkbench.composer.source.menu": "Choose model source",
   "codingWorkbench.composer.effort.label": "Reasoning effort",
@@ -739,9 +735,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.model-verification-pending":
     "Keiko is still checking this model with the gateway. The Workbench updates by itself when the check is done.",
   "codingWorkbench.source.unavailableReason.conversation-not-ready":
-    "The latest automatic chat check could not use this model. Keiko continues checking in the background; choose another ready model or wait for recovery.",
+    "The latest chat check could not use this model. Open the Workbench or the model list again to check it once more, or choose another ready model.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
-    "The coding model's automatic tool-calling check did not complete successfully. Review the latest readiness result in Settings → Models.",
+    "The gateway has not confirmed yet that this model can call tools. Open the Workbench or the model list again in a minute to check it once more, or choose another ready model.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI through Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex subscription",
@@ -1318,7 +1314,6 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.skills.retry": "Try again",
   "codingWorkbench.skills.reason.budgetExhausted": "Budget exhausted",
   "codingWorkbench.mcp.summary": "MCP servers ({count})",
-  "codingWorkbench.mcp.manage": "Manage MCP servers",
   "codingWorkbench.mcp.status.connected": "Connected",
   "codingWorkbench.mcp.status.needsAuthorization": "Needs authorization",
   "codingWorkbench.mcp.status.failed": "Not connected",

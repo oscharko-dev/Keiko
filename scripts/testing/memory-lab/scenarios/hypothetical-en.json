@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "id": "hypothetical-en",
+  "language": "en",
+  "class": "hypothetical",
+  "difficulty": "embedded",
+  "description": "A hypothetical preference next to a real one. Only the real one may be stored.",
+  "truth": [
+    {
+      "key": "format-preference",
+      "seed": "I actually like plain text.",
+      "must": true,
+      "private": true,
+      "terms": [["plain text", "plain-text", "plaintext"]]
+    }
+  ],
+  "forbidden": [
+    {
+      "class": "hypothetical",
+      "terms": [["preferred tables"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "If I preferred tables, I would have told you. I actually like plain text.",
+      "learner": [
+        {
+          "body": "I actually like plain text.",
+          "type": "preference"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "How do I like my answers formatted?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["plain text", "plain-text", "plaintext"]],
+        "forbidden": [["tables"]]
+      }
+    }
+  ]
+}

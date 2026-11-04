@@ -232,6 +232,31 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
     act(() => window.dispatchEvent(new Event("keiko:gateway-model-catalog-updated")));
     expect(refreshSource).not.toHaveBeenCalled();
   });
+  // Customer 1.3.4: the source describes the model chosen in the picker, so choosing another model
+  // reads its profile again (the server then checks exactly that model).
+  it("re-reads the source when the picker selects another model", () => {
+    const refreshSource = vi.fn(async () => undefined);
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    const { rerender } = renderHook(
+      ({ state }: { readonly state: CodingWorkbenchRuntimeState }) => {
+        useCodingWorkbenchRuntimeRefreshEffects({
+          state,
+          refreshSource,
+          refreshRuntime: vi.fn(async () => undefined),
+          refreshRun: vi.fn(async () => undefined),
+        });
+      },
+      { initialProps: { state: initial } },
+    );
+    expect(refreshSource).toHaveBeenCalledOnce();
+    rerender({ state: { ...initial, selectedModelId: "gpt-coding" } });
+    expect(refreshSource).toHaveBeenCalledTimes(2);
+    rerender({ state: { ...initial, selectedModelId: "gpt-coding", reasoningEffort: "high" } });
+    expect(refreshSource).toHaveBeenCalledTimes(2);
+    rerender({ state: { ...initial, selectedModelId: "sonnet-coding" } });
+    expect(refreshSource).toHaveBeenCalledTimes(3);
+  });
+
   // Settings replaces the gateway configuration and records readiness verdicts without this
   // window knowing; the source stayed "unavailable" after tool calling had just been verified
   // until a reload (workbench end-to-end run, 2026-09-03).

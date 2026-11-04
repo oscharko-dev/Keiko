@@ -253,7 +253,7 @@ release failure after a proven reap and every other recovery keep `incomplete/mo
 runtime stays recovery-required and quarantined exactly as before. The cleanup is a warning beside
 the settlement, never a settlement reason: the closed `runtimeCleanup` (`proven`, `unproven`; absent
 when no Reviewer run started) on `review.run.settled`, which is written at `warn` whenever it is
-`unproven`, on the run record (migration 56, `review_runs.runtime_cleanup`) and as the optional
+`unproven`, on the run record (migration 60, `review_runs.runtime_cleanup`) and as the optional
 `runtimeCleanup` of `ReviewRunView` for the review UI. An instance whose orchestrator still holds
 such a run would refuse the next start, so the next review of the repository does not reuse it: the
 instance is set aside untouched (no early release, acknowledgement or shutdown; it stays quarantined
@@ -278,10 +278,10 @@ startup sweep removes its worktree. The stale flag compares the reviewed head wi
 request's current head from the read-only detail (cached 30 seconds), at settlement and on every
 read; it never changes the settlement.
 
-The run records live in the server store (migrations 55, 56 and 57): `review_runs` (one row per
+The run records live in the server store (migrations 59, 60 and 61): `review_runs` (one row per
 run; a partial unique index allows one unsettled run per repository, and the repository id and
 client request id are unique, so a repeated start returns the same run), `review_coverage` (path,
-list, closed reason, and since migration 57 the nullable `previous_path` of a renamed or copied
+list, closed reason, and since migration 61 the nullable `previous_path` of a renamed or copied
 file) and `review_findings` (fingerprint, report, verdict, verdict evidence, head anchoring, presented
 flag and rank). The routes are `POST /api/git-review/runs` (with `dryRun`), `GET
 /api/git-review/runs/{runId}`, `GET /api/git-review/runs?repositoryId=…&pullRequestNumber=…`, `GET
