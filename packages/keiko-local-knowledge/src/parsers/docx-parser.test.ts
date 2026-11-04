@@ -3,7 +3,12 @@ import { Buffer } from "node:buffer";
 import { deflateRawSync } from "node:zlib";
 
 import { buildParserOptions } from "./registry.js";
-import { DOCX_SIMPLE, DOCX_WITH_PREAMBLE, selectionFromBytes } from "./parser-test-fixtures.js";
+import {
+  DOCX_SIMPLE,
+  DOCX_WITH_PREAMBLE,
+  oleEncryptedPackage,
+  selectionFromBytes,
+} from "./parser-test-fixtures.js";
 import { docxParser } from "./docx-parser.js";
 
 function crc32(bytes: Uint8Array): number {
@@ -224,6 +229,20 @@ describe("docxParser", () => {
       buildParserOptions(),
     );
     expect(result.diagnostics[0]?.code).toBe("MALFORMED_INPUT");
+  });
+
+  it("refuses a password-protected DOCX with the closed encrypted code and no text", async () => {
+    const result = await docxParser.parseAsync(
+      selectionFromBytes(oleEncryptedPackage(), { extension: "docx" }),
+      buildParserOptions(),
+    );
+    expect(result.diagnostics.map((entry) => [entry.code, entry.severity])).toEqual([
+      ["ENCRYPTED_DOCUMENT", "error"],
+    ]);
+    expect(result.diagnostics[0]?.message).toBe(
+      "docx is password-protected; remove the password and reindex",
+    );
+    expect(result.units).toEqual([]);
   });
 
   it("projects DOCX table rows with header/cell semantics and marks list items", async () => {

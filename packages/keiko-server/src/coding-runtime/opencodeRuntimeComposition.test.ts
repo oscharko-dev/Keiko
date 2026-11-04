@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 
 import { type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -105,6 +106,15 @@ import type {
 } from "./opencodeRuntimeComposition.js";
 import { createMcpCredentialRelay } from "../mcp/mcpCredentialRelay.js";
 import { createCodingJiraPods, type CodingJiraPodDeps } from "./codingJiraPodMcp.js";
+import { buildUiStoreOverDatabase } from "../store/index.js";
+import { runMigrations } from "../store/schema.js";
+
+/** A skill library with no templates: the Pod's writes are governed by none. */
+function templateFreeStore(): CodingJiraPodDeps["store"] {
+  const db = new DatabaseSync(":memory:");
+  runMigrations(db);
+  return buildUiStoreOverDatabase(db);
+}
 import type { AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
 import { withCodingJiraServer } from "./codingJiraPodBinding.js";
 
@@ -4112,6 +4122,7 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     };
     const pods = createCodingJiraPods(undefined);
     pods.attach({
+      store: templateFreeStore(),
       serverPrincipal: () => "operator-principal",
       atlassianConnectorCredentials: {
         custody: {

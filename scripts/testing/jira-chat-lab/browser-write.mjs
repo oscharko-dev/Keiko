@@ -5,7 +5,12 @@ import { URL } from "node:url";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
 import { mintLauncherPairingAttestation } from "../../../packages/keiko-server/dist/coding-app-session/launcherSessionPairingPort.js";
 import { qualifyBrowserLifecycle } from "./browser-lifecycle.mjs";
-import { requestWorkspaceJiraConnection } from "./browser-connections.mjs";
+import {
+  connectPodFromPanel,
+  requestWorkspaceJiraConnection,
+  selectAccessMode,
+} from "./browser-connections.mjs";
+import { consentCardCount, establishedReadGrant } from "./read-grant.mjs";
 import { openBrowser, createPod } from "./browser-read.mjs";
 
 const OUTCOME_LABELS = new Map([
@@ -20,22 +25,10 @@ function stage(value) {
 async function connectChat(page, mode, connection = "dropdown") {
   const chat = page.getByRole("region", { name: /Synthetic Jira browser Chat/ });
   let confirmEdge;
-  if (connection === "dropdown") {
-    await chat.getByText("Tool access", { exact: true }).click();
-    await chat.getByRole("combobox", { name: /^Jira Pod/ }).selectOption({ label: "Browser Jira" });
-  } else {
-    confirmEdge = await requestWorkspaceJiraConnection(page, chat, connection);
-  }
-  const labels = {
-    "governed-assist": "Ask for approval",
-    "supervised-coding": "Supervised workspace",
-    "autonomous-delivery": "Full access",
-  };
-  await chat.getByRole("combobox", { name: "Chat autonomy mode", exact: true }).click();
-  await page.getByRole("option", { name: labels[mode], exact: true }).click();
-  await chat.getByRole("button", { name: "Apply tool settings", exact: true }).click();
-  await chat.getByText("Jira Pod connected by the server", { exact: true }).waitFor();
-  await chat.getByText("Tool access", { exact: true }).click();
+  if (connection === "dropdown") await connectPodFromPanel(page, chat, "Browser Jira");
+  else confirmEdge = await requestWorkspaceJiraConnection(page, chat, connection);
+  // A Chat's default is Full access; the scenario's own mode is always selected explicitly.
+  await selectAccessMode(page, chat, mode);
   await confirmEdge?.();
   stage("bound");
   return chat;
@@ -59,31 +52,29 @@ async function sendPrompt(page, chat, prompt, onIntent) {
   stage("sent");
 }
 
-async function decideRead(chat, beforeDecision) {
-  const allow = chat.getByRole("button", { name: "Allow reading", exact: true });
-  await allow.waitFor({ timeout: 120000 });
-  await beforeDecision();
-  await allow.click();
-  stage("read-approved");
-}
-
 async function decideWrite(chat, intent, beforeDecision) {
   if (intent.mode === "autonomous-delivery") return 0;
   const review = chat.getByRole("region", { name: "Review Jira action", exact: true });
   await review.waitFor({ timeout: 120000 });
-  const preview = await review.getByLabel("Proposed action details", { exact: true }).inputValue();
-  assert.deepEqual(JSON.parse(preview), { issueKey: intent.key, body: intent.marker });
+  const preview = await review
+    .getByRole("group", { name: "Proposed action details", exact: true })
+    .innerText();
+  assert.ok(preview.includes(intent.key) && preview.includes(intent.marker));
+  assert.doesNotMatch(preview, /[{}]/u);
   await beforeDecision();
   await review.getByRole("button", { name: "Approve this action", exact: true }).click();
   stage("write-approved");
   return 1;
 }
 
-async function completedTurn(observe) {
+/** A read never waits for a person: no card is shown at any poll and the server holds the grant. */
+async function completedTurn(observe, region) {
   const deadline = Date.now() + 120000;
   while (Date.now() < deadline) {
     const completed = await observe();
     const user = completed.messages.find((message) => message.role === "user");
+    assert.equal(await consentCardCount(region), 0);
+    establishedReadGrant(user);
     if (user?.turnState === "completed") return completed;
     if (user?.turnState === "failed" || user?.turnState === "cancelled")
       throw new TypeError("Browser mutation did not complete");
@@ -150,9 +141,10 @@ export async function runBrowserWrite({
     await createPod(page, context.session);
     const region = await connectChat(page, intent.mode, intent.connection);
     await sendPrompt(page, region, prompt, onIntent);
-    await decideRead(region, beforeDecision);
     const approvals = await decideWrite(region, intent, beforeDecision);
-    const completed = await completedTurn(observe);
+    const completed = await completedTurn(observe, region);
+    const grant = establishedReadGrant(completed.messages.find((item) => item.role === "user"));
+    assert.ok(grant, "The server establishes the read grant itself");
     await beforeOutcome?.({ page, region, completed });
     await region.getByText(outcomeLabel, { exact: true }).waitFor();
     assert.equal(

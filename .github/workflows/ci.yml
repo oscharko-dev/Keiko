@@ -360,10 +360,10 @@ jobs:
     needs: verified-tree
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
-    # Bounded per .coderabbit.yaml's workflow policy. The job has run 11m50s-12m10s across recent
-    # dev runs, so 30 minutes is ~2.5x headroom: generous against runner variance, still a bound
-    # that turns a hung step into a failure instead of the platform-default six hours.
-    timeout-minutes: 30
+    # Bounded per .coderabbit.yaml's workflow policy. Since lint runs its partitions one after
+    # another the job takes 26m-31m (lint alone ~16m), so 45 minutes is ~1.5x headroom: generous
+    # against runner variance, still a bound that turns a hung step into a failure.
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:

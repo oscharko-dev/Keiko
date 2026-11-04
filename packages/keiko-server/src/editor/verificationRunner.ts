@@ -13,6 +13,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import type {
+  CodingWorkbenchMode,
   EditorVerificationCatalog,
   EditorVerificationCatalogEntry,
   EditorVerificationEvent,
@@ -34,6 +35,9 @@ import {
   buildVerificationPlan,
   detectScripts,
   planDirectTargetedTests,
+  planPackageTargetedTests,
+  resolveVerificationPackage,
+  type VerificationPackage,
   type VerificationStepOutput,
 } from "@oscharko-dev/keiko-verification";
 import {
@@ -61,6 +65,7 @@ import {
   verificationCompletionLogFields,
 } from "./verificationExecutionLog.js";
 import {
+  PackageSelectionRequiredError,
   VerificationRunnerError,
   WorkspaceTrustRequiredError,
   type VerificationRunnerErrorCode,
@@ -122,7 +127,22 @@ const EDITOR_VERIFICATION_EXECUTE_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["own-root", "repository", "worktree-human-grant", "run-manifest"],
+      values: [
+        "own-root",
+        "repository",
+        "worktree-human-grant",
+        "run-manifest",
+        "autonomous-envelope",
+      ],
+    },
+    // The package.json digest an `autonomous-envelope` admission was bound to (absent when the
+    // workspace has no root manifest). Only that basis records it: it is the fact the admission
+    // answers for, and a manifest changed afterwards is a different digest on the next run's line.
+    trustManifestDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
     },
     verificationStatus: {
       type: "string",
@@ -258,6 +278,12 @@ function isScriptBackedKind(kind: VerificationKind): boolean {
   return kind !== "targeted-test";
 }
 
+// A step that would execute repository-authored package scripts: a script-backed kind the planner did
+// not pre-mark as skipped (no such script, or a package this verifier cannot install for).
+function runsPackageScript(step: VerificationPlan["steps"][number]): boolean {
+  return isScriptBackedKind(step.kind) && step.skipReason === undefined;
+}
+
 // ─── Public types ─────────────────────────────────────────────────────────────────
 
 export interface VerificationRunInput {
@@ -269,6 +295,15 @@ export interface VerificationRunInput {
   readonly correlationId?: string | undefined;
   // Server-owned: the native coding runtime's platform when it shares the workspace's dependencies.
   readonly sharedHostPlatform?: ExecuteVerificationArgs["sharedHostPlatform"];
+  // Workspace-relative folder of the nested package to verify (a monorepo member whose package.json
+  // is not the workspace root's). Absent: the nearest package above `targetPath`, else a bounded
+  // search of the workspace. Only the governed coding tool supplies it, after its own path checks.
+  readonly packageDir?: string | undefined;
+  // Server-owned: the coding run's effective autonomy mode. `autonomous-delivery` admits the run's
+  // own package scripts under its validated Authority Envelope (`autonomous-envelope`); the two
+  // narrower modes, and every caller that supplies none, keep the operator's explicit decision.
+  // Never accepted from a parsed client payload.
+  readonly autonomyMode?: CodingWorkbenchMode | undefined;
 }
 
 export interface VerificationRunStart {
@@ -325,7 +360,10 @@ export interface VerificationRunnerManager {
    * "decided against" are different answers, and a caller waiting for a human must not read an
    * unreadable workspace as a pending decision that could still arrive.
    */
-  readonly scriptTrustFor: (projectId: string) => ScriptTrustDecision | undefined;
+  readonly scriptTrustFor: (
+    projectId: string,
+    autonomyMode?: CodingWorkbenchMode,
+  ) => ScriptTrustDecision | undefined;
   readonly subscribe: (listener: VerificationRunnerEventEmitter) => () => void;
   readonly inFlightCount: () => number;
 }
@@ -434,6 +472,8 @@ interface ResolvedVerificationWorkspace {
 interface PreparedVerificationRun {
   readonly resolved: ResolvedVerificationWorkspace;
   readonly plan: VerificationPlan;
+  // The workspace whose test framework the run reports: the nested package's when it has one.
+  readonly runnerWorkspace: WorkspaceInfo;
 }
 
 interface AgentExecution {
@@ -538,8 +578,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     input: VerificationRunInput,
     signal: AbortSignal,
   ): Promise<VerificationRunOutcome> => {
-    const { resolved, plan } = this.prepare(input);
-    const { workspace } = resolved;
+    const { resolved, plan, runnerWorkspace: workspace } = this.prepare(input);
     const runId = randomUUID();
     const controller = new AbortController();
     const forwardAbort = (): void => {
@@ -570,7 +609,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       // Awaited path (the agent's HTTP request awaits this promise): an evidence-write failure is
       // surfaced both as the terminal SSE event AND a thrown error, so the caller receives a real
       // failure instead of a redacted report the ledger has no record of.
-      this.persistAndEmitTerminalOrThrow(runId, workspace.root, report, startedAtMs, entry);
+      // Evidence stays filed under the workspace root, also for a run in a nested package.
+      const { root } = resolved.workspace;
+      this.persistAndEmitTerminalOrThrow(runId, root, report, startedAtMs, entry);
       this.recordRunnerCompletion(workspace, entry.correlationId, execution);
       return { report, failureOutput };
     } catch (error) {
@@ -636,11 +677,12 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     try {
       const resolved = this.resolveWorkspace(input.projectId, input.correlationId);
       workspace = resolved.workspace;
-      const { plan, trustBasis } = this.buildPlan(resolved, input);
-      this.recordRunnerSelection(workspace, input.correlationId, plan, trustBasis);
+      const { plan, trust, runnerWorkspace } = this.buildPlan(resolved, input);
+      workspace = runnerWorkspace;
+      this.recordRunnerSelection(runnerWorkspace, input.correlationId, plan, trust);
       this.assertRunnable(plan);
-      this.assertWorkspaceTrustAtEffect(resolved, input);
-      return { resolved, plan };
+      this.assertWorkspaceTrustAtEffect(resolved, plan, input.autonomyMode);
+      return { resolved, plan, runnerWorkspace };
     } catch (error) {
       this.recordRunnerFailure(workspace, input.correlationId, error);
       throw error;
@@ -678,37 +720,89 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.emitTerminalOnce(runId, entry, report);
   }
 
-  // Returns the trust basis the script steps run under next to the plan, so the selection line can
-  // say which basis admitted the scripts (repository, worktree grant, or the run's own manifest).
+  // Returns the trust decision the script steps run under next to the plan, so the selection line
+  // can say which basis admitted the scripts (repository, worktree grant, the run's own manifest or
+  // its autonomous envelope). Trust is asked only once the plan holds a script step that would
+  // actually run: a repository that defines no script for the kind, or whose package cannot be run
+  // by this verifier, has nothing to allow and must not pause a run for a decision.
   private buildPlan(
     resolved: ResolvedVerificationWorkspace,
     input: VerificationRunInput,
-  ): { readonly plan: VerificationPlan; readonly trustBasis: ScriptTrustBasis | undefined } {
+  ): {
+    readonly plan: VerificationPlan;
+    readonly trust: ScriptTrustAdmission | undefined;
+    readonly runnerWorkspace: WorkspaceInfo;
+  } {
     const { workspace } = resolved;
     const fs = resolved.access.fs;
+    const pkg = this.resolvePackage(workspace, input, fs);
     const scriptKinds = input.kinds.filter(isScriptBackedKind);
-    const trustBasis = this.assertWorkspaceTrustForScriptKinds(resolved, scriptKinds);
-    const steps = [
-      ...this.scriptSteps(workspace, scriptKinds, fs),
-      ...this.targetedSteps(workspace, input, fs),
-    ];
-    return { plan: { workspaceRoot: workspace.root, steps }, trustBasis };
+    const scriptSteps = this.scriptSteps(workspace, scriptKinds, fs, pkg);
+    const trust = this.assertWorkspaceTrustForSteps(resolved, scriptSteps, input.autonomyMode);
+    const steps = [...scriptSteps, ...this.targetedSteps(workspace, input, fs, pkg)];
+    return {
+      plan: {
+        workspaceRoot: workspace.root,
+        steps,
+        ...(pkg === undefined ? {} : { packageDir: pkg.dir, packageManager: pkg.manager }),
+      },
+      trust,
+      runnerWorkspace: pkg?.workspace ?? workspace,
+    };
+  }
+
+  // The nested package the run verifies, or undefined for the workspace root (the unchanged path).
+  // An ambiguous workspace and an unusable explicit folder are closed refusals the model can act on.
+  private resolvePackage(
+    workspace: WorkspaceInfo,
+    input: VerificationRunInput,
+    fs: WorkspaceFs,
+  ): VerificationPackage | undefined {
+    const resolution = resolveVerificationPackage(workspace, fs, {
+      packageDir: input.packageDir,
+      targetPath: input.targetPath,
+      onProbeFailure: (error) => {
+        this.recordPackageProbeFailure(input.correlationId, error);
+      },
+    });
+    switch (resolution.kind) {
+      case "root":
+        return undefined;
+      case "package":
+        return resolution.package;
+      case "ambiguous":
+        throw new PackageSelectionRequiredError(resolution.candidates);
+      case "refused":
+        throw new VerificationRunnerError(
+          "NO_RUNNABLE_STEPS",
+          "The requested package folder is not a package of this workspace.",
+        );
+    }
   }
 
   private assertWorkspaceTrustAtEffect(
     resolved: ResolvedVerificationWorkspace,
-    input: VerificationRunInput,
+    plan: VerificationPlan,
+    autonomyMode: CodingWorkbenchMode | undefined,
   ): void {
-    this.assertWorkspaceTrustForScriptKinds(resolved, input.kinds.filter(isScriptBackedKind));
+    this.assertWorkspaceTrustForSteps(resolved, plan.steps, autonomyMode);
   }
 
-  private assertWorkspaceTrustForScriptKinds(
+  private assertWorkspaceTrustForSteps(
     resolved: ResolvedVerificationWorkspace,
-    scriptKinds: readonly VerificationKind[],
-  ): ScriptTrustBasis | undefined {
-    if (scriptKinds.length === 0) return undefined;
-    const decision = this.scriptTrust(resolved);
-    if (decision.trusted) return decision.basis;
+    steps: VerificationPlan["steps"],
+    autonomyMode: CodingWorkbenchMode | undefined,
+  ): ScriptTrustAdmission | undefined {
+    if (!steps.some(runsPackageScript)) return undefined;
+    const decision = this.scriptTrust(resolved, autonomyMode);
+    if (decision.trusted) {
+      return {
+        basis: decision.basis,
+        ...(decision.manifestDigest === undefined
+          ? {}
+          : { manifestDigest: decision.manifestDigest }),
+      };
+    }
     throw new WorkspaceTrustRequiredError(decision.refusal);
   }
 
@@ -716,19 +810,32 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     workspace: WorkspaceInfo,
     scriptKinds: readonly VerificationKind[],
     fs: WorkspaceFs,
+    pkg: VerificationPackage | undefined,
   ): VerificationPlan["steps"] {
     if (scriptKinds.length === 0) return [];
-    const catalog = detectScripts(workspace, fs);
-    return buildVerificationPlan(workspace, catalog, { only: scriptKinds }, fs).steps;
+    const catalog = detectScripts(workspace, fs, pkg?.dir);
+    return buildVerificationPlan(
+      workspace,
+      catalog,
+      { only: scriptKinds, ...(pkg === undefined ? {} : { package: pkg }) },
+      fs,
+    ).steps;
   }
 
   private targetedSteps(
     workspace: WorkspaceInfo,
     input: VerificationRunInput,
     fs: WorkspaceFs,
+    pkg: VerificationPackage | undefined,
   ): VerificationPlan["steps"] {
     if (!input.kinds.includes("targeted-test") || input.targetPath === undefined) return [];
-    return planDirectTargetedTests(workspace, [input.targetPath], fs);
+    const packageSteps =
+      pkg === undefined ? [] : planPackageTargetedTests(pkg, [input.targetPath], fs);
+    // A monorepo often declares its test framework only at the root: the package then plans
+    // nothing and the root planner, which finds the nested Vitest project, answers instead.
+    return packageSteps.length > 0
+      ? packageSteps
+      : planDirectTargetedTests(workspace, [input.targetPath], fs);
   }
 
   private async runPlan(
@@ -808,7 +915,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     workspace: WorkspaceInfo,
     correlationId: string | undefined,
     plan: VerificationPlan,
-    trustBasis: ScriptTrustBasis | undefined,
+    trust: ScriptTrustAdmission | undefined,
   ): void {
     this.activityLog.write(
       activityLogEvent(
@@ -820,7 +927,10 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
           stepCount: plan.steps.length,
           metadataOnly: true,
           ...targetedProjectSelectionFields(plan),
-          ...(trustBasis === undefined ? {} : { trustBasis }),
+          ...(trust === undefined ? {} : { trustBasis: trust.basis }),
+          ...(trust?.manifestDigest === undefined
+            ? {}
+            : { trustManifestDigest: trust.manifestDigest }),
         },
       ),
     );
@@ -1110,9 +1220,12 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
 
   // Re-derived from the filesystem on EVERY ask — plan time, at-effect, and catalog projection —
   // never cached on the resolved workspace (see `ResolvedVerificationWorkspace`).
-  scriptTrustFor = (projectId: string): ScriptTrustDecision | undefined => {
+  scriptTrustFor = (
+    projectId: string,
+    autonomyMode?: CodingWorkbenchMode,
+  ): ScriptTrustDecision | undefined => {
     try {
-      return this.scriptTrust(this.resolveWorkspace(projectId));
+      return this.scriptTrust(this.resolveWorkspace(projectId), autonomyMode);
     } catch {
       // Resolution failing closed is not a trust verdict. Swallowing it here is deliberate and
       // narrow: `prepare` still surfaces the same failure through the runner's structured error
@@ -1121,9 +1234,13 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     }
   };
 
-  private scriptTrust(resolved: ResolvedVerificationWorkspace): ScriptTrustDecision {
+  private scriptTrust(
+    resolved: ResolvedVerificationWorkspace,
+    autonomyMode?: CodingWorkbenchMode,
+  ): ScriptTrustDecision {
     return decideScriptTrust({
       access: resolved.access,
+      autonomyMode,
       repositoryFs: this.fs,
       standingTrust: (): boolean =>
         this.isTrusted(resolved.trustProjectId, resolved.trustWorkspace),
@@ -1217,6 +1334,19 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     });
   }
 
+  // A folder or manifest the package resolver could not read counts as no package; the run goes on
+  // with what it found, and this line explains a package missing from its choice.
+  private recordPackageProbeFailure(correlationId: string | undefined, error: unknown): void {
+    emitServerDiagnostic(this.diagnostics, {
+      correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+      timestamp: new Date(this.now()).toISOString(),
+      operation: "editor.verification.package-probe",
+      source: "editor.verification-runner",
+      errorClass: error instanceof Error ? error.name : "NonErrorThrow",
+      message: "A verification package folder could not be read.",
+    });
+  }
+
   private recordSubscriberFailure(runId: string): void {
     emitServerDiagnostic(this.diagnostics, {
       correlationId: this.runs.get(runId)?.correlationId ?? runId,
@@ -1255,14 +1385,31 @@ export function worktreeSharesRepositoryTrustBasis(
   }
 }
 
-export type ScriptTrustBasis = "own-root" | "repository" | "worktree-human-grant" | "run-manifest";
+export type ScriptTrustBasis =
+  "own-root" | "repository" | "worktree-human-grant" | "run-manifest" | "autonomous-envelope";
 
 export type ScriptTrustDecision =
-  | { readonly trusted: true; readonly basis: ScriptTrustBasis }
+  | {
+      readonly trusted: true;
+      readonly basis: ScriptTrustBasis;
+      // The package.json digest an `autonomous-envelope` admission answered for (absent when the
+      // root has no manifest). No other basis carries one: they are bound by their own records.
+      readonly manifestDigest?: string | undefined;
+    }
   | { readonly trusted: false; readonly refusal: ScriptTrustRefusal };
+
+/** What a plan that runs package scripts was admitted under, for the selection line. */
+interface ScriptTrustAdmission {
+  readonly basis: ScriptTrustBasis;
+  readonly manifestDigest?: string | undefined;
+}
 
 export interface ScriptTrustDecisionInput {
   readonly access: WorkspaceRootAccess;
+  // The coding run's effective autonomy mode, when a governed run asks. `autonomous-delivery` admits
+  // the run's own workspace root under its validated Authority Envelope when no operator decision
+  // covers it. Absent (the command runner, the editor routes) or either narrower mode: no admission.
+  readonly autonomyMode?: CodingWorkbenchMode | undefined;
   // The port the REPOSITORY's manifest is read through (the worktree's is read through `access.fs`).
   readonly repositoryFs: WorkspaceFs;
   // The standing grant of the root that owns the decision: the root itself, or for a managed
@@ -1302,31 +1449,57 @@ export interface ScriptTrustDecisionInput {
  */
 export function decideScriptTrust(input: ScriptTrustDecisionInput): ScriptTrustDecision {
   try {
-    const standing = input.standingTrust();
-    if (input.access.kind !== "managed-task") {
-      return standing
-        ? { trusted: true, basis: "own-root" }
-        : { trusted: false, refusal: "root-not-trusted" };
-    }
-    if (
-      standing &&
-      worktreeSharesRepositoryTrustBasis(
-        input.access,
-        input.access.repositoryRoot,
-        input.repositoryFs,
-      )
-    ) {
-      return { trusted: true, basis: "repository" };
-    }
-    if (input.worktreeHumanGrant()) return { trusted: true, basis: "worktree-human-grant" };
-    if (standing && input.runAdmittedManifest()) return { trusted: true, basis: "run-manifest" };
-    return {
-      trusted: false,
-      refusal: standing ? "worktree-manifest-drift" : "repository-not-trusted",
-    };
+    const decision = decideEstablishedScriptTrust(input);
+    return decision.trusted ? decision : (admitAutonomousEnvelope(input) ?? decision);
   } catch {
     return { trusted: false, refusal: "decision-failed" };
   }
+}
+
+function decideEstablishedScriptTrust(input: ScriptTrustDecisionInput): ScriptTrustDecision {
+  const standing = input.standingTrust();
+  if (input.access.kind !== "managed-task") {
+    return standing
+      ? { trusted: true, basis: "own-root" }
+      : { trusted: false, refusal: "root-not-trusted" };
+  }
+  if (
+    standing &&
+    worktreeSharesRepositoryTrustBasis(
+      input.access,
+      input.access.repositoryRoot,
+      input.repositoryFs,
+    )
+  ) {
+    return { trusted: true, basis: "repository" };
+  }
+  if (input.worktreeHumanGrant()) return { trusted: true, basis: "worktree-human-grant" };
+  if (standing && input.runAdmittedManifest()) return { trusted: true, basis: "run-manifest" };
+  return {
+    trusted: false,
+    refusal: standing ? "worktree-manifest-drift" : "repository-not-trusted",
+  };
+}
+
+// Owner decision (2026-11-02): in `autonomous-delivery` the operator selected a validated Authority
+// Envelope that allows file and command work inside the run's own workspace without per-action
+// approval, and package-script trust is not one of the hard, mode-independent denials (invalid or
+// expired authority, workspace escape, denied paths, secret exfiltration, unsupported actions,
+// exhausted budgets, platform restrictions). The run's own root (an ordinary checkout or its managed
+// worktree) is therefore admitted without an operator decision, bound to the same manifest fact every
+// other basis answers for: an unreadable or oversized package.json is an unknown basis and stays
+// refused. The scripts still run only under the verification runner's enforced egress isolation
+// (ADR-0043) and its sandbox, and the dependency install keeps `--ignore-scripts`. Ask for approval
+// and Supervised workspace keep the operator's explicit decision, exactly as before.
+function admitAutonomousEnvelope(input: ScriptTrustDecisionInput): ScriptTrustDecision | undefined {
+  if (input.autonomyMode !== "autonomous-delivery") return undefined;
+  const fact = resolveTrustBasisFact(input.access.fs, input.access.canonicalRoot);
+  if (fact.outcome === "unavailable") return undefined;
+  return {
+    trusted: true,
+    basis: "autonomous-envelope",
+    ...(fact.outcome === "known" ? { manifestDigest: fact.value } : {}),
+  };
 }
 
 function isRunnableTestFramework(workspace: WorkspaceInfo): boolean {
