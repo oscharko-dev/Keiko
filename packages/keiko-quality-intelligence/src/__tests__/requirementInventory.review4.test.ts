@@ -57,3 +57,23 @@ describe("invisible characters in a requirement", () => {
     expect(inventory.entries[0]?.title).toBe("Das System muss X tun.");
   });
 });
+
+describe("numbered clauses of a specification typed one per line", () => {
+  it("keeps each multi-level clause a statement of its own", () => {
+    const inventory = derive(
+      "3.1.2 Das System muss X tun.\n3.1.3 Das System muss Y tun.\n3.1.4 Das System muss Z tun.",
+    );
+    expect(inventory.entries.map((entry) => entry.statement)).toEqual([
+      "3.1.2 Das System muss X tun.",
+      "3.1.3 Das System muss Y tun.",
+      "3.1.4 Das System muss Z tun.",
+    ]);
+  });
+
+  it("does not split a wrapped line that starts with a decimal quantity", () => {
+    const inventory = derive(
+      "Das System muss mindestens\n2.5 Sekunden warten, bevor es antwortet.",
+    );
+    expect(inventory.entries).toHaveLength(1);
+  });
+});

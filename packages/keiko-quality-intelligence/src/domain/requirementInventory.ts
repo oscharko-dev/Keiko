@@ -208,6 +208,8 @@ const LOWER_CASE_START = /^\p{Ll}/u;
 const HEADING_START = /^[\p{Lu}\d]/u;
 const HEADING_MAX_CHARS = 80;
 const NUMBERED_ITEM = /^\s*\d+[.)]\s+/u;
+/** A clause number of a specification (`3.1.2 Das System muss…`): several levels, then a capital. */
+const NUMBERED_CLAUSE = /^\s*\d+(?:\.\d+)+\.?\s+\p{Lu}/u;
 
 interface Context {
   readonly lines: readonly Line[];
@@ -1373,9 +1375,9 @@ interface Paragraph {
   readonly end: number;
 }
 
-/** A list item, or the result line a calculation closes with. */
+/** A list item, a numbered clause, or the result line a calculation closes with. */
 function startsParagraph(raw: string): boolean {
-  return LIST_MARKER.test(raw) || RESULT_LINE.test(raw);
+  return LIST_MARKER.test(raw) || RESULT_LINE.test(raw) || NUMBERED_CLAUSE.test(raw);
 }
 
 /** Wrapped lines of one paragraph, merged; list items, headings and blank lines break it. */
