@@ -76,6 +76,8 @@ export type GovernedCodingToolResult =
       readonly verificationFailure?: CodingToolVerificationFailure | undefined;
       /** The steps of a verification that never executed, each with its closed reason (F74). */
       readonly notRun?: readonly VerificationNotRunStep[] | undefined;
+      /** The package folders a verification could not choose between (`packageDir`). */
+      readonly packageCandidates?: readonly string[] | undefined;
     };
 
 export interface CodingToolGovernedPorts {
@@ -218,6 +220,13 @@ function governedFailureOutcome(
   }
   if (action === "verification" && result.notRun !== undefined) {
     return { outcome: "failed", reasonCode: result.reasonCode, notRun: result.notRun };
+  }
+  if (action === "verification" && result.packageCandidates !== undefined) {
+    return {
+      outcome: "failed",
+      reasonCode: result.reasonCode,
+      packageCandidates: result.packageCandidates,
+    };
   }
   return action === "edit"
     ? editFailureOutcome(result)

@@ -199,6 +199,9 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
 - **Markers resolve only against the evidence the model was shown.** A window-fitted prompt keeps the
   highest-ranked references under their original numbers. The generator reports the references it
   sent (`AnswerGenerator.promptReferences`), and a marker beyond them is out of range, never attached.
+- **A settled tool result is a visible source.** An answer of a turn with a completed Chat tool result
+  does not carry `uncited-answer`: its rows show what it rests on. Every other kind stays, including
+  a marker that cites nothing valid (#4173).
 - **`uncited-answer` is a third additive kind.** An answer with source-backed claims and no supported
   marker used to reuse `unsupported-citation`, which the UI reads as "references sources that were not
   in the retrieved evidence" — false for a merely uncited answer. A refusal (one shared detector,

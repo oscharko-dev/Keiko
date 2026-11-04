@@ -1,4 +1,6 @@
 import type {
+  AtlassianConnectorWriteFailureReason,
+  JiraFieldValidationFailure,
   JiraMutationOperation,
   JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -23,6 +25,11 @@ interface ChatToolMutationIdentity {
   readonly authorityDigest: string;
   readonly actionDigest: string;
   readonly correlationId: string;
+  /**
+   * Set on the items of one approved backlog draft (#4178): the digest of the approved draft
+   * action. The items are bounded by their batch, not by the per-turn bound on single writes.
+   */
+  readonly batchDigest?: string;
 }
 export interface JiraChatToolMutationIntent extends ChatToolMutationIdentity {
   readonly sourceKind?: "jira";
@@ -60,6 +67,31 @@ export type ChatToolMutationRecord = MutationObservation &
 export type ChatToolMutationPreparation =
   | { readonly kind: "prepared" | "replayed"; readonly record: ChatToolMutationRecord }
   | { readonly kind: "blocked"; readonly reason: "unknown-effect" | "in-flight" | "capacity" };
+/**
+ * Body-free counts of the issue links one write asked for (#4176): requested, present afterwards,
+ * and not present. They describe the settled write on the Activity Log and are never persisted.
+ */
+export interface ChatToolMutationLinkCounts {
+  readonly requested: number;
+  readonly created: number;
+  readonly failed: number;
+}
+/**
+ * What a caller proves when it settles a dispatched write as `rejected` (#4176): Jira answered with
+ * a client error and its own parsable error document. Without it a response never proves that no
+ * effect occurred.
+ */
+export interface ChatToolMutationSettleEvidence {
+  readonly jiraErrorDocument: true;
+}
+/**
+ * Keiko's own closed reason for a write it refused before dispatch, so the settled line explains a
+ * local refusal without its arguments. Activity Log only; never persisted.
+ */
+export interface ChatToolMutationLocalRefusal {
+  readonly reason: AtlassianConnectorWriteFailureReason;
+  readonly validation?: JiraFieldValidationFailure | undefined;
+}
 /** Persistence only. The composing consumer still owns authority, approvals and HTTP dispatch. */
 export interface ChatToolMutationStore {
   readonly find: (invocationId: string) => ChatToolMutationRecord | undefined;
@@ -67,7 +99,13 @@ export interface ChatToolMutationStore {
   readonly beginDispatch: (invocationId: string, guard: () => boolean) => boolean;
   readonly acknowledge: (invocationId: string, httpStatus: number) => ChatToolMutationRecord;
   readonly acknowledgeMcp: (invocationId: string, success: boolean) => ChatToolMutationRecord;
-  readonly settle: (invocationId: string, outcome: JiraMutationOutcome) => ChatToolMutationRecord;
+  readonly settle: (
+    invocationId: string,
+    outcome: JiraMutationOutcome,
+    links?: ChatToolMutationLinkCounts,
+    evidence?: ChatToolMutationSettleEvidence,
+    refusal?: ChatToolMutationLocalRefusal,
+  ) => ChatToolMutationRecord;
   /** Finds one admitted call; an ambiguous dispatch is refused, never guessed. */
   readonly preparedNative?: (input: {
     readonly runId: string;

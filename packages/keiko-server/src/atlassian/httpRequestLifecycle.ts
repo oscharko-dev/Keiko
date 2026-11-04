@@ -43,6 +43,15 @@ function reportObservationFailure(correlationId: string, error: unknown): void {
   );
 }
 
+/** A JSON body is declared as such; a governed upload also carries Jira's XSRF opt-out (#4176). */
+function requestBodyHeaders(request: RequestSnapshot): Record<string, string> {
+  if ("upload" in request && request.upload !== undefined)
+    return { "content-type": request.upload.contentType, "x-atlassian-token": "no-check" };
+  return "bodyJson" in request && request.bodyJson !== undefined
+    ? { "content-type": "application/json" }
+    : {};
+}
+
 export function atlassianHttpRequestLifecycle(
   options: AtlassianHttpLifecycleOptions & {
     readonly credentials: AtlassianCredentialExecutionResolver;
@@ -69,9 +78,7 @@ export function atlassianHttpRequestLifecycle(
         return new Headers({
           authorization: atlassianAuthorizationHeaderValue(credential),
           accept: "application/json",
-          ...("bodyJson" in request && request.bodyJson !== undefined
-            ? { "content-type": "application/json" }
-            : {}),
+          ...requestBodyHeaders(request),
         });
       }),
     observe: async (response: Response): Promise<void> => {

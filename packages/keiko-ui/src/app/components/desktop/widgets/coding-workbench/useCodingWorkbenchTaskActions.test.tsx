@@ -114,6 +114,25 @@ describe("starting a task", () => {
     expect(vi.mocked(bare.actions.start).mock.calls[0]?.[1]).not.toHaveProperty("jiraPodId");
   });
 
+  it("sends the MCP servers selected in the composer with the start, and no key when none was", async () => {
+    const narrowed = setup({ mcpServers: ["alpha", "wiki"] });
+    const none = setup({ mcpServers: [] });
+    const all = setup();
+
+    act(() => narrowed.result.current.composer.onStart("implement the ticket"));
+    act(() => none.result.current.composer.onStart("implement the ticket"));
+    act(() => all.result.current.composer.onStart("implement the ticket"));
+
+    await waitFor(() => expect(narrowed.actions.start).toHaveBeenCalledOnce());
+    await waitFor(() => expect(none.actions.start).toHaveBeenCalledOnce());
+    await waitFor(() => expect(all.actions.start).toHaveBeenCalledOnce());
+    expect(vi.mocked(narrowed.actions.start).mock.calls[0]?.[1]).toMatchObject({
+      mcpServers: ["alpha", "wiki"],
+    });
+    expect(vi.mocked(none.actions.start).mock.calls[0]?.[1]).toMatchObject({ mcpServers: [] });
+    expect(vi.mocked(all.actions.start).mock.calls[0]?.[1]).not.toHaveProperty("mcpServers");
+  });
+
   it("sends the first prompt's referenced files with the start", async () => {
     const { result, actions } = setup();
 

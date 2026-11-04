@@ -20,7 +20,7 @@ function completedPage(grant) {
   const intent = {
     arguments: { jql: "project = SYNTHETIC", startAt: 2, maxResults: 2 },
     expectedReadGrants: 0,
-    reusedReadGrantId: "existing-grant",
+    reusedReadGrant: { kind: "jira-chat-read", state: "granted", grantId: "existing-grant" },
     transport: "stream",
   };
   const observed = {
@@ -48,7 +48,7 @@ function completedPage(grant) {
   return { observed, intent };
 }
 
-it("accepts the actual repeated-turn transcript after its exact existing grant was verified", () => {
+it("accepts the actual repeated-turn transcript carrying its exact existing grant", () => {
   const { observed, intent } = completedPage();
   expect(observedPaginationPage(observed, intent)).toMatchObject({
     userId: "new-turn",
@@ -69,7 +69,7 @@ it.each([
 
 it("requires a first-turn grant and refuses reuse without its exact reference", () => {
   const { observed, intent } = completedPage();
-  delete intent.reusedReadGrantId;
+  delete intent.reusedReadGrant;
   expect(() => observedPaginationPage(observed, intent)).toThrow();
   intent.expectedReadGrants = 1;
   observed.decisions.grants = 1;

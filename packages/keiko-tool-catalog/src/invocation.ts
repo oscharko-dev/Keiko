@@ -9,7 +9,7 @@ import type {
   BoundToolInvocation,
   OfferedToolSet,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
-import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
+import { deepFreeze, isDeepFrozen } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import { compileToolProjection } from "./projection.js";
 import { lookupCatalogTool, verifyToolCatalogSnapshot } from "./catalog.js";
@@ -99,14 +99,52 @@ function captureOffer(value: unknown, projection: CompiledToolProjection): Offer
   instant(offer.expiresAt);
   return deepFreeze({ ...offer, toolRefs: refs }) as unknown as OfferedToolSet;
 }
+// Catalog and projection objects already captured, keyed by the supplied objects. Only deeply frozen
+// inputs are remembered: the same frozen object cannot have changed, so a later binding over it needs
+// no copy, re-verification and recompilation of the whole catalog. A Chat tool turn binds every round
+// to the same catalog and projection with a fresh offer, and that capture made each round re-hash
+// every descriptor. The offer itself is always captured anew.
+const CAPTURED = new WeakMap<object, WeakMap<object, CapturedCatalog>>();
+type CapturedCatalog = Pick<ToolInvocationBinding, "catalog" | "projection">;
+
+function dataValue(object: object, key: string): unknown {
+  const property = Object.getOwnPropertyDescriptor(object, key);
+  return property !== undefined && "value" in property ? property.value : undefined;
+}
+function remembered(input: unknown): CapturedCatalog | undefined {
+  if (typeof input !== "object" || input === null || Reflect.ownKeys(input).length !== 3)
+    return undefined;
+  const catalog = dataValue(input, "catalog");
+  const projection = dataValue(input, "projection");
+  if (typeof catalog !== "object" || catalog === null) return undefined;
+  if (typeof projection !== "object" || projection === null) return undefined;
+  return CAPTURED.get(catalog)?.get(projection);
+}
+function remember(input: ToolInvocationBinding, captured: CapturedCatalog): void {
+  if (!isDeepFrozen(input.catalog) || !isDeepFrozen(input.projection)) return;
+  const projections = CAPTURED.get(input.catalog) ?? new WeakMap<object, CapturedCatalog>();
+  projections.set(input.projection, captured);
+  CAPTURED.set(input.catalog, projections);
+}
 function captureBinding(input: ToolInvocationBinding): ToolInvocationBinding {
+  const known = remembered(input);
+  if (known !== undefined) {
+    const offered = captureOffer(dataValue(input, "offered"), known.projection);
+    return deepFreeze({ ...known, offered });
+  }
   const object = catalogObject(copyCatalogEnvelope(input));
   exactCatalogKeys(object, ["catalog", "projection", "offered"]);
   const catalog = verifyToolCatalogSnapshot(object.catalog);
   const supplied = catalogObject(object.projection);
   const projection = compileToolProjection(catalog, versionRefFrom(supplied.profile));
   requireCatalog(same(supplied, projection), "invalid-identity");
-  return deepFreeze({ catalog, projection, offered: captureOffer(object.offered, projection) });
+  const binding = deepFreeze({
+    catalog,
+    projection,
+    offered: captureOffer(object.offered, projection),
+  });
+  remember(input, binding);
+  return binding;
 }
 function assertLive(binding: ToolInvocationBinding, now: number): void {
   requireCatalog(Number.isSafeInteger(now) && now >= 0, "invalid-compatibility");

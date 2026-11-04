@@ -307,8 +307,15 @@ const VERIFICATION_SCHEMA = {
       description:
         "Use an empty string for ordinary gates; targeted-test requires one workspace-relative test path.",
     },
+    packageDir: {
+      type: "string",
+      minLength: 0,
+      maxLength: EDITOR_AGENT_TARGET_PATH_MAX_BYTES,
+      pattern: String.raw`^(?:$|(?![\\/])(?!.*(?:^|/)\.\.?(?:/|$))(?!.*\\).+)$`,
+      description: "Workspace-relative folder of a nested package.json; an empty string finds it.",
+    },
   },
-  required: ["targetPath", "verifierId"],
+  required: ["packageDir", "targetPath", "verifierId"],
 } as const;
 
 /** OpenCode v1.17.17 removes this unsupported JSON Schema keyword before forwarding a tool. */
@@ -320,8 +327,9 @@ const VERIFICATION_PROJECTED_SCHEMA = {
       enum: OPENCODE_VERIFICATION_IDS,
     },
     targetPath: VERIFICATION_SCHEMA.properties.targetPath,
+    packageDir: VERIFICATION_SCHEMA.properties.packageDir,
   },
-  required: ["verifierId", "targetPath"],
+  required: ["verifierId", "targetPath", "packageDir"],
 } as const;
 
 // #2387 read-only public research: one exact https URL per call. The server side enforces the real
@@ -581,6 +589,7 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
     arguments: {
       verifierId: VERIFICATION_SCHEMA.properties.verifierId,
       targetPath: VERIFICATION_SCHEMA.properties.targetPath,
+      packageDir: VERIFICATION_SCHEMA.properties.packageDir,
     },
   },
   {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { URL, URLSearchParams } from "node:url";
 import { basicAuth, checked } from "./lab-client.mjs";
+import { establishedReadGrant } from "./read-grant.mjs";
 
 const WRITES = new Set([
   "jira.create",
@@ -165,6 +166,8 @@ export function verifyRestrictedTurn(observed, testCase, transport, dispatch) {
   const user = observed.completed.messages.find((message) => message.role === "user");
   assert.equal(user?.turnState, "completed");
   assert.equal(typeof user.id, "string");
+  // The read grant is the server's own; a person never decides it (owner decision 2026-11-02).
+  assert.ok(establishedReadGrant(user), "The server must establish the read grant itself");
   assert.equal(observed.decisions.grants, 1);
   const mutation = WRITES.has(testCase.operation);
   const exchanges = user.toolTranscript.exchanges;
