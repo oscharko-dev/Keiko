@@ -12,14 +12,21 @@ export function splitLines(text: string): readonly Line[] {
   const lines: Line[] = [];
   let start = 0;
   while (start <= text.length) {
-    const newline = text.indexOf("\n", start);
-    const rawEnd = newline === -1 ? text.length : newline;
-    const end = rawEnd > start && text[rawEnd - 1] === "\r" ? rawEnd - 1 : rawEnd;
+    const end = lineEndAt(text, start);
     lines.push({ text: text.slice(start, end), start, end });
-    if (newline === -1) break;
-    start = newline + 1;
+    if (end === text.length) break;
+    start = text[end] === "\r" && text[end + 1] === "\n" ? end + 2 : end + 1;
   }
   return lines;
+}
+
+/** Where the line that starts at `start` ends: before `\n`, `\r\n` or a lone `\r`. */
+function lineEndAt(text: string, start: number): number {
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "\n" || char === "\r") return index;
+  }
+  return text.length;
 }
 
 export function lineAt(lines: readonly Line[], index: number): Line {
