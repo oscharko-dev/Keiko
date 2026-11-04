@@ -285,3 +285,13 @@ script-coverage commands. The four original producers were rerun on that merged 
 missing selectors, editor token fidelity with zero gated differences and all 14 reference captures,
 the seven-mode accessibility proof with zero serious/critical violations and zero unresolved
 incomplete findings, and all 108 running-app captures. No gate, fixture or rule was changed.
+
+## Dev 1.4.0 cutoff sync input refresh, 2026-11-04
+
+The last `dev` sync (release 1.4.0, owner decision 2026-11-04) combines the epic branch's
+`package.json` and `package-lock.json` with dev's. These producers bind both files. The four
+original producers were rerun on the merged tree on macOS arm64 with Node 24.18.0, and all passed.
+Component and editor fidelity passed with zero gated differences and no missing selectors. All 14
+editor references and 108 running-app captures completed without errors. The seven-mode
+accessibility proof has zero serious/critical violations and zero unresolved incomplete findings. No
+producer assertion, tolerance, budget or source stylesheet changed.
