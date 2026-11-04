@@ -1,6 +1,5 @@
 "use client";
 
-import { requestJiraChatConnection } from "./jira-chat-connection-request";
 import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   adoptableGitChat,
@@ -120,7 +119,6 @@ import {
   releaseObsoleteFailedChatScopeTransitions,
   releaseDetachedFailedChatScopeTransitions,
 } from "./windows/chatWindowActivity";
-import { registerSw } from "./install/registerSw";
 import { workspaceInteractionLocked } from "./interactionGuards";
 import styles from "./AppShell.module.css";
 
@@ -2488,6 +2486,21 @@ function AppShellInner(): ReactNode {
       t,
     ],
   );
+  const replaceJiraChat = session.replaceChat;
+  // A lasso from a Jira Pod binds it to the Chat at once (owner decision 2026-11-02): the person's
+  // gesture is the selection, the server re-checks pod ownership and readiness on the PATCH.
+  const bindJiraChat = useCallback(
+    async (chat: Chat, podId: string, target: ChatBindingTarget | undefined): Promise<boolean> => {
+      if (chat.jiraPodBinding?.podId === podId) return true;
+      const updated = await updateGroundingScopes(chat, { jiraPodId: podId }, replaceJiraChat);
+      rememberGroundingChat(updated);
+      if (target !== undefined && !target.isCurrent()) return false;
+      replaceJiraChat(updated);
+      setSourceConnectionNotice(null);
+      return updated.jiraPodBinding?.podId === podId;
+    },
+    [rememberGroundingChat, replaceJiraChat],
+  );
   const handleConnectorBind = useCallback(
     async (
       chatWindowId: string,
@@ -2497,11 +2510,10 @@ function AppShellInner(): ReactNode {
       if (scope.kind === "jira-live") {
         const chat = await resolveChatForWindow(chatWindowId, target);
         if (chat === undefined || (target !== undefined && !target.isCurrent())) return false;
-        return requestJiraChatConnection(
-          chatWindowId,
-          chat.id,
-          scope.podId,
-          () => target?.isCurrent() ?? true,
+        return bindJiraChat(chat, scope.podId, target).catch((error: unknown) =>
+          rejectForConnectionFailure(
+            t(groundingMutationFailureKey(error, "chat.grounding.connectKnowledgeFailed")),
+          ),
         );
       }
       try {
@@ -2522,6 +2534,7 @@ function AppShellInner(): ReactNode {
       }
     },
     [
+      bindJiraChat,
       groundingMutationKey,
       handleConnectorBindNow,
       rejectForConnectionFailure,
@@ -2529,7 +2542,6 @@ function AppShellInner(): ReactNode {
       t,
     ],
   );
-  const replaceJiraChat = session.replaceChat;
   const unbindJiraChat = useCallback(
     async (
       chat: Chat,
@@ -3321,7 +3333,18 @@ export function AppShell(): ReactNode {
   // app shell no longer advertises a browser install manifest, so this is cache/update plumbing,
   // not a browser-managed product installation path.
   useEffect(() => {
-    registerSw();
+    void import("./install/registerSw")
+      .then(({ registerSw }) => {
+        registerSw();
+      })
+      .catch((error: unknown) => {
+        reportClientDiagnostic("Service worker module could not load.", {
+          kind: "other",
+          errorKind: "unavailable",
+          correlationId: newClientCorrelationId(),
+          errorEvidence: clientErrorEvidence(error),
+        });
+      });
   }, []);
   // GEN-STAB-WINDOW-002 — unhandled promise rejections are surfaced once for every route by the
   // root layout's `ClientDiagnosticsRoot` (#3532); a second listener here reported each twice.

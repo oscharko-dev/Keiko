@@ -5,6 +5,7 @@ import { jsonRequest } from "./chat-read.mjs";
 import { chatToolRequest, privateJson, runObservedChatTurn } from "./chat-write.mjs";
 import { credential, currentChat } from "./consent-lifecycle.mjs";
 import { restrictedRemoteState } from "./restricted-cases.mjs";
+import { establishedReadGrant } from "./read-grant.mjs";
 
 const CHAT_PATHS = new Set(["/api/desktop/chat", "/api/desktop/chat/stream"]);
 const AUTHENTICATION_CASES = new Set(["jira.assignable-users", "jira.assign"]);
@@ -25,7 +26,7 @@ export function restrictedAuthenticationObserver() {
   return {
     arm(enabled) {
       active = enabled
-        ? { nativeStatuses: [], responses: [], cancelledFrames: 0, grants: 0, approvals: 0 }
+        ? { nativeStatuses: [], responses: [], cancelledFrames: 0, approvals: 0 }
         : undefined;
     },
     snapshot: () => structuredClone(active),
@@ -35,11 +36,9 @@ export function restrictedAuthenticationObserver() {
         if (!state || request.method !== "POST") return;
         const path = new URL(request.url, "http://127.0.0.1").pathname;
         if (CHAT_PATHS.has(path)) observeChatResponse(response, state);
-        else if (path.endsWith("/chat-read-consent") || path.endsWith("/chat-write-approval"))
+        else if (path.endsWith("/chat-write-approval"))
           response.once("finish", () => {
-            if (response.statusCode !== 200) return;
-            if (path.endsWith("/chat-read-consent")) state.grants += 1;
-            else state.approvals += 1;
+            if (response.statusCode === 200) state.approvals += 1;
           });
       });
     },
@@ -92,7 +91,6 @@ export function verifyAuthenticationInvalidation({
   assert.ok(AUTHENTICATION_CASES.has(intent.operation));
   const mutation = intent.operation === "jira.assign";
   assert.deepEqual(witness.nativeStatuses, [401]);
-  assert.equal(witness.grants, 1);
   assert.equal(witness.approvals, mutation ? 1 : 0);
   assert.deepEqual(witness.responses, [intent.transport === "stream" ? 200 : 499]);
   assert.equal(witness.cancelledFrames, intent.transport === "stream" ? 1 : 0);
@@ -102,6 +100,8 @@ export function verifyAuthenticationInvalidation({
   assert.equal(users.length, 1);
   const user = users[0];
   assert.equal(user.turnState, "cancelled");
+  // The read ran on a grant the server established itself; no person was ever asked.
+  assert.equal(establishedReadGrant(user)?.state, "granted");
   assert.equal(user.toolTranscript.exchanges.length, 1);
   const exchange = user.toolTranscript.exchanges[0];
   assert.equal(exchange.call.name, intent.operation.replace(/[.-]/gu, "_"));

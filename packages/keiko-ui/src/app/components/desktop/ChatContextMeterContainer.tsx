@@ -75,6 +75,13 @@ function legacyScopeGeometry(session: ContextSession): readonly unknown[] {
   ];
 }
 
+// The connectors a Chat offers add their tool definitions to every request, so a changed server
+// selection or Pod binding changes what the meter reports.
+function connectorGeometry(session: ContextSession): readonly unknown[] {
+  const chat = session.activeChat;
+  return [chat?.mcpServers, chat?.jiraPodBinding?.podId, chat?.jiraBindingGeneration];
+}
+
 function contextAuthorityKey(session: ContextSession): string {
   const chat = session.activeChat;
   return JSON.stringify([
@@ -83,6 +90,7 @@ function contextAuthorityKey(session: ContextSession): string {
     session.selectedModel,
     chat?.groundingScopeIdentity ?? legacyScopeGeometry(session),
     session.markdownSkill?.view?.selection,
+    connectorGeometry(session),
   ]);
 }
 

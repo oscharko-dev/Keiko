@@ -86,6 +86,32 @@ function validObservation(
   return mutationIntentError({ ...record, userMessageId: message.id }) === undefined;
 }
 
+/** The journal commits before any dispatch, so a reviewed call it never saw cannot have been sent. */
+function neverDispatched(
+  message: ChatMessage,
+  exchange: ChatToolExchange,
+  records: readonly ChatToolMutationRecord[],
+): boolean {
+  const invocationId = exchange.approval?.invocationId;
+  return (
+    invocationId !== undefined &&
+    exchange.result === undefined &&
+    message.turnState !== undefined &&
+    message.turnState !== "pending" &&
+    !records.some((record) => record.invocationId === invocationId)
+  );
+}
+
+function observedOutcome(
+  message: ChatMessage,
+  exchange: ChatToolExchange,
+  record: ChatToolMutationRecord | undefined,
+  records: readonly ChatToolMutationRecord[],
+): ChatToolExchange["mutationOutcome"] {
+  if (record !== undefined) return observedChatToolMutationOutcome(record);
+  return neverDispatched(message, exchange, records) ? "not-dispatched" : undefined;
+}
+
 /** Historical effects remain visible after authority expires or the connection closes.
  * The journal is authoritative; projection neither grants authority nor executes an action. */
 export function projectChatToolMutationHistory(db: DatabaseSync, input: ChatMessage): ChatMessage {
@@ -98,22 +124,23 @@ export function projectChatToolMutationHistory(db: DatabaseSync, input: ChatMess
   let correlationId: string | undefined;
   const exchanges = transcript.exchanges.map((exchange) => {
     const record = records.find((candidate) => validObservation(message, exchange, candidate));
-    if (record === undefined) return exchange;
-    const mutationOutcome = observedChatToolMutationOutcome(record);
+    const mutationOutcome = observedOutcome(message, exchange, record, records);
     if (mutationOutcome === undefined || mutationOutcome === exchange.mutationOutcome)
       return exchange;
     observationCount++;
-    correlationId ??= record.correlationId;
+    correlationId ??= record?.correlationId;
     return { ...exchange, mutationOutcome };
   });
   if (observationCount === 0) return message;
-  processServerLogSink().write(
-    activityLogEvent(
-      PROJECTED,
-      { correlationId: correlationId ?? sha256Hex(message.id), level: "info" },
-      { messageDigest: sha256Hex(message.id), observationCount },
-    ),
-  );
+  const observed = exchanges.map((exchange) => exchange.mutationOutcome ?? "").join("\u0000");
+  if (firstHistoryObservation(db, `mutation\u0000${message.id}\u0000${observed}`))
+    processServerLogSink().write(
+      activityLogEvent(
+        PROJECTED,
+        { correlationId: correlationId ?? sha256Hex(message.id), level: "info" },
+        { messageDigest: sha256Hex(message.id), observationCount },
+      ),
+    );
   return { ...message, toolTranscript: { ...transcript, exchanges } };
 }
 
@@ -157,6 +184,25 @@ function observedReadGrant(
   return grant;
 }
 
+/** The projections are never persisted, so every history read re-derives the same observation
+ * and would log it again (a polling client wrote hundreds of identical lines). The first sight of
+ * each observation is recorded; repeats are not. Memory is process-local and per database, not a
+ * write from a read path, and bounded by insertion-ordered eviction: at worst an evicted
+ * observation is recorded once more, it is never withheld on first sight. */
+const RECORDED_HISTORY_OBSERVATIONS_MAX = 1024;
+const recordedHistoryObservations = new WeakMap<DatabaseSync, Set<string>>();
+function firstHistoryObservation(db: DatabaseSync, key: string): boolean {
+  const recorded = recordedHistoryObservations.get(db) ?? new Set<string>();
+  recordedHistoryObservations.set(db, recorded);
+  if (recorded.has(key)) return false;
+  recorded.add(key);
+  if (recorded.size > RECORDED_HISTORY_OBSERVATIONS_MAX) {
+    const oldest = recorded.values().next();
+    if (oldest.done !== true) recorded.delete(oldest.value);
+  }
+  return true;
+}
+
 /** Recover only the original human decision; observation does not resume its interrupted turn. */
 function projectChatReadConsentHistory(db: DatabaseSync, message: ChatMessage): ChatMessage {
   const candidate = historicalConsent(message);
@@ -166,6 +212,7 @@ function projectChatReadConsentHistory(db: DatabaseSync, message: ChatMessage): 
   if (entry === undefined || !matchesReadConsent(message, view, entry)) return message;
   const grant = observedReadGrant(entry.grant, view.state, Date.now());
   if (grant === undefined) return message;
-  recordReadGrant(snapshotReadGrant({ ...entry, grant }, sha256Hex(message.id)), 0);
+  if (firstHistoryObservation(db, `read-grant\u0000${grant.grantId}\u0000${grant.state}`))
+    recordReadGrant(snapshotReadGrant({ ...entry, grant }, sha256Hex(message.id)), 0);
   return { ...message, toolTranscript: { ...transcript, readGrant: projectChatReadGrant(grant) } };
 }

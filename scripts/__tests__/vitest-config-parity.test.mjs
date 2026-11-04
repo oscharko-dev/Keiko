@@ -234,3 +234,34 @@ describe("package coverage gate-script partition (KEIKO-0540)", () => {
     }
   });
 });
+
+// #4145: the anti-slop engine suites test only scripts/lib/code-quality-*.mjs. The scripts coverage
+// run measures those modules, so it must collect every engine suite. The package coverage run
+// measures packages, src and the gate scripts, so it collects none and keeps its 30-minute shards.
+// The root suite still runs them for `npm test`.
+describe("anti-slop engine suites run in the scripts coverage lane (#4145)", () => {
+  function collected(config) {
+    return new Set(
+      config.test.include
+        .flatMap((pattern) => globSync(pattern, { cwd: repoRoot, exclude: config.test.exclude }))
+        .map((path) => path.replaceAll("\\", "/")),
+    );
+  }
+
+  it("collects every engine suite in the root and scripts runs and none in the package run", async () => {
+    const engineSuites = globSync("scripts/__tests__/code-quality-*.test.mjs", { cwd: repoRoot })
+      .map((path) => path.replaceAll("\\", "/"))
+      .sort();
+    expect(engineSuites.length).toBeGreaterThanOrEqual(12);
+    const [root, pkg, scr] = await Promise.all(
+      ["vitest.config.ts", JUDGING_COVERAGE_CONFIG, "vitest.coverage.scripts.config.ts"].map(
+        loadConfig,
+      ),
+    );
+    const [rootFiles, packageFiles, scriptFiles] = [root, pkg, scr].map(collected);
+    expect(engineSuites.filter((path) => !rootFiles.has(path))).toEqual([]);
+    expect(engineSuites.filter((path) => !scriptFiles.has(path))).toEqual([]);
+    expect(engineSuites.filter((path) => packageFiles.has(path))).toEqual([]);
+    expect(packageFiles.has("scripts/__tests__/sonar-analysis-scope.test.mjs")).toBe(true);
+  });
+});

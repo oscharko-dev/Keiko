@@ -120,6 +120,20 @@ export function jiraChatWritePermission(
     : DENIED;
 }
 
+/**
+ * An attachment is approved only with the file the human can see: its name, size and digest as
+ * read now. A file that cannot be reviewed gets no approval at all (#4176).
+ */
+async function reviewedIdentity(
+  options: JiraChatAdmissionOptions,
+  action: JiraChatCatalogAction,
+  identity: JiraChatWriteActionIdentity,
+): Promise<JiraChatWriteActionIdentity | undefined> {
+  if (identity.operation !== "jira.attach") return identity;
+  const attachment = await options.attachmentPreview?.(action);
+  return attachment === undefined ? undefined : { ...identity, attachment };
+}
+
 export async function requestCatalogWriteApproval(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
@@ -127,13 +141,16 @@ export async function requestCatalogWriteApproval(
   const context = options.context();
   const identity = jiraChatWriteAction(action);
   if (identity === undefined || options.reviewableWrite?.(action) !== true) return;
+  const reviewed = await reviewedIdentity(options, action, identity);
+  if (reviewed === undefined) return;
   const result = requestJiraChatWriteApproval(
     options.deps,
     context.chatId,
     context.authorityReference,
-    identity,
+    reviewed,
     new Date(options.now()).toISOString(),
     context.correlationId,
+    identity.operation === "jira.draft" ? options.draftItemRefs?.(action) : undefined,
   );
   if (result.kind === "review-required")
     await options.requestWriteConsent?.(result.approval, context.signal);

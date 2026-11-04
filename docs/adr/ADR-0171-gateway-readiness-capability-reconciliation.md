@@ -45,10 +45,12 @@ mutated merely because readiness ran.
 ### D2 — Observations bind to one live configuration generation
 
 Every readiness run captures the runtime configuration generation before asynchronous work begins.
-Late results for a superseded generation are dropped. Replacing configuration clears all field
-observations and the coarse verification state. Observations intentionally survive separate HTTP
-requests in the current process, but not a configuration replacement or process restart; after
-either event basic-chat verification starts during configuration initialization. Successful
+Late results for a superseded generation are dropped. Replacing configuration resets the coarse
+verification state and clears the field observations of every provider that was changed or removed;
+an unchanged provider keeps its observations under the new generation, including when the list was
+only reordered (D3). Observations intentionally survive separate HTTP requests in the current
+process, but not a process restart; because a replacement resets the coarse verification state,
+basic-chat verification starts during configuration initialization after a restart or a replacement. Successful
 credential-setup chat checks populate the same generation-bound ledger and are reused. A Chat
 create, send, streaming send, regeneration, or grounded question may join an already running
 initialization. A fresh successful observation adds no per-question readiness request. A success
@@ -145,6 +147,14 @@ cannot, even when the model promise resolves or the stream emits `done`. A strea
 requires full iterator exhaustion. Failed or unfinished streams create no witness. This does not
 update the shared observation ledger, admit another turn, extend a deadline or grant attempts or
 tokens. The existing caller's original bounds still govern every continuation.
+When neither the observation nor a witness is fresh because the turn's calls merely outlasted the
+interval (for example a Chat tool turn whose rejected calls served nothing), the grounded answer
+wrappers check the model once more through the same conversation-request check a new request uses
+and then decide again. Only `expired` is checked again; a failed probe, a cleared or malformed
+observation, a replaced model or configuration and cancellation still refuse at once, and the call
+proceeds only on a fresh positive observation of the admitted generation, so no provider work runs
+on unconfirmed readiness. Refusing instead ended a working Jira turn while the very next check of the
+same model answered ready (2026-11-01, #4173).
 `gateway.conversation.admission` records the closed decision and admitted/current generations under
 the request correlation. A known refusal before the model port is invoked incurs no physical
 synthesis attempt or uncertain output reservation.
@@ -268,8 +278,15 @@ write and runtime replacement. Missing, stale, invented, mismatched, or concurre
 values fail closed. The `json_schema` observation reconciles both `structuredOutput` and the
 provider-facing `supportsResponseFormat` flag because both describe the same verified request shape.
 The observation is consumed only after the credential-safe atomic writer succeeds, so a storage
-failure remains retryable without another provider call. A successful write replaces the runtime
-generation and clears every remaining observation.
+failure remains retryable without another provider call. A successful write that only refines the
+`capability` metadata of the same ordered connections (same model ids, endpoints, credentials and
+every other connection field) keeps the runtime generation, the coarse verification state and the
+remaining observations, then consumes the applied fields; a conversation turn admitted against those
+connections stays admitted (#4175: a readiness proof landing mid-turn refused the turn as
+`generation-changed`). A write that changes any connection field, the model list or its order
+replaces the runtime generation and resets the coarse verification state. It clears the remaining
+observations only of providers that were changed or removed; an unchanged provider keeps its
+observations under the new generation, including when the list was only reordered.
 
 ### D4 — Whole-gateway verification remains independent
 

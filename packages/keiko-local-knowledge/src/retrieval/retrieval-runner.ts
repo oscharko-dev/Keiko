@@ -93,6 +93,25 @@ export async function runLocalKnowledgeRetrieval(
   return finaliseWithGrounding(search, policy);
 }
 
+// ─── Complete-enumeration seam (#4179) ───────────────────────────────────────
+// A caller that reads a scope's documents whole instead of ranking excerpts resolves the scope and
+// the answer-grounding floor exactly like a query would, so it can neither widen the scope nor
+// bypass the policy.
+export type EnumerationScope =
+  | {
+      readonly ok: true;
+      readonly scope: RetrievalScopeInput;
+      readonly policy: CapsuleAnswerGroundingPolicy;
+    }
+  | { readonly ok: false; readonly reason: RetrievalNoEvidenceReason };
+
+export function resolveEnumerationScope(
+  store: KnowledgeStore,
+  query: Pick<RetrievalQuery, "capsuleId" | "capsuleSetId">,
+): EnumerationScope {
+  return resolveScope(store, { text: "", ...query });
+}
+
 // ─── Scope + policy resolution ───────────────────────────────────────────────
 interface ResolvedScopeOk {
   readonly ok: true;

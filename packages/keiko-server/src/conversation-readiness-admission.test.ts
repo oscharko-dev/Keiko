@@ -562,3 +562,117 @@ describe("bounded readiness continuation after successful completion", () => {
     expect(port.bufferedCalls).toBe(2);
   });
 });
+
+describe("an expired turn call is checked once more when the caller can check (#4173)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(TURN_STARTED_AT);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    resetServerLogger();
+  });
+
+  function rechecked(
+    port: ContinuationPort,
+    recheck: (state: MutableReadiness) => Promise<void>,
+  ): { readonly state: MutableReadiness; readonly wrapped: ModelPort; readonly calls: string[] } {
+    const fixture = continuationFixture(port);
+    const calls: string[] = [];
+    const wrapped = withConversationReadinessAdmission(
+      port,
+      ADMITTED_MODEL,
+      fixture.admission,
+      fixture.deps,
+      async (modelId) => {
+        calls.push(modelId);
+        await recheck(fixture.state);
+      },
+    );
+    return { state: fixture.state, wrapped, calls };
+  }
+  function freshObservation(state: MutableReadiness): void {
+    state.observation = {
+      modelId: ADMITTED_MODEL,
+      generation: state.generation,
+      checkedAt: new Date().toISOString(),
+      fields: { conversationReady: true },
+    };
+  }
+
+  it("continues a turn whose failed calls outlasted freshness once the check answers ready", async () => {
+    // The 2026-11-01 S08 sequence: the model's calls failed, so no completion witness exists, and the
+    // next call of the same turn arrives after the freshness interval.
+    const port = new ContinuationPort(() => {
+      expiredClock();
+      return Promise.reject(new Error("Fixture provider failure"));
+    });
+    const { wrapped, calls } = rechecked(port, (state) => {
+      freshObservation(state);
+      return Promise.resolve();
+    });
+    await expect(callBuffered(wrapped)).rejects.toThrow("Fixture provider failure");
+    await expect(callBuffered(wrapped)).rejects.toThrow("Fixture provider failure");
+    expect(calls).toEqual([ADMITTED_MODEL]);
+    expect(port.bufferedCalls).toBe(2);
+  });
+
+  it("still refuses before any provider work when the check leaves the model unconfirmed", async () => {
+    const port = new ContinuationPort();
+    const { wrapped, calls } = rechecked(port, () => Promise.resolve());
+    expiredClock();
+    await expect(callBuffered(wrapped)).rejects.toBeInstanceOf(ConversationModelNotReadyError);
+    expect(calls).toEqual([ADMITTED_MODEL]);
+    expect(port.bufferedCalls).toBe(0);
+  });
+
+  it("still refuses when the check answers not ready", async () => {
+    const port = new ContinuationPort();
+    const { wrapped } = rechecked(port, (state) => {
+      freshObservation(state);
+      const observation = state.observation;
+      if (observation !== undefined)
+        state.observation = { ...observation, fields: { conversationReady: false } };
+      return Promise.resolve();
+    });
+    expiredClock();
+    await expect(callBuffered(wrapped)).rejects.toBeInstanceOf(ConversationModelNotReadyError);
+    expect(port.bufferedCalls).toBe(0);
+  });
+
+  it.each(["failed-probe", "generation", "model"] as const)(
+    "never checks again for %s, which is no mere expiry",
+    async (change) => {
+      const port = new ContinuationPort();
+      const { state, wrapped, calls } = rechecked(port, (current) => {
+        freshObservation(current);
+        return Promise.resolve();
+      });
+      const prior = state.observation;
+      if (prior === undefined) throw new TypeError("Expected positive observation");
+      if (change === "failed-probe")
+        state.observation = { ...prior, fields: { conversationReady: false } };
+      if (change === "generation") state.generation += 1;
+      const request =
+        change === "model" ? { ...ADMITTED_REQUEST, modelId: "other-model" } : ADMITTED_REQUEST;
+      await expect(callBuffered(wrapped, undefined, request)).rejects.toBeInstanceOf(
+        ConversationModelNotReadyError,
+      );
+      expect(calls).toEqual([]);
+      expect(port.bufferedCalls).toBe(0);
+    },
+  );
+
+  it("checks a streamed call the same way", async () => {
+    const port = new ContinuationPort();
+    const { wrapped, calls } = rechecked(port, (state) => {
+      freshObservation(state);
+      return Promise.resolve();
+    });
+    expiredClock();
+    const stream = requiredStream(wrapped);
+    await expect(stream.next()).resolves.toMatchObject({ value: { type: "delta" } });
+    expect(calls).toEqual([ADMITTED_MODEL]);
+    expect(port.streamedCalls).toBe(1);
+  });
+});

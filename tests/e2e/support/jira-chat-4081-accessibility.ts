@@ -5,21 +5,21 @@ import { expect, type CDPSession, type Locator, type Page, type TestInfo } from 
 import { formatViolations, runAxe } from "./axe.js";
 import { evidenceArtifactPath, evidenceScreenshotPath } from "./evidence.js";
 import {
+  closeConnectors,
+  connectorsPanel,
+  connectorsTrigger,
   counts,
   createAndConnect,
   fixture,
   JIRA_BROWSER_COPY,
   messages,
   openJiraChat,
+  selectAskForApproval,
   type JiraBrowserLocale,
 } from "./jira-chat-4081.js";
 
 const COPY = {
   en: {
-    read: "Read Jira in this chat",
-    allow: "Allow reading",
-    deny: "Do not allow",
-    readPending: "Waiting for your permission",
     approval: "Review Jira action",
     preview: "Proposed action details",
     approve: "Approve this action",
@@ -30,10 +30,6 @@ const COPY = {
     succeeded: "Jira change confirmed",
   },
   de: {
-    read: "Jira in diesem Chat lesen",
-    allow: "Lesen erlauben",
-    deny: "Nicht erlauben",
-    readPending: "Wartet auf deine Freigabe",
     approval: "Jira-Aktion prüfen",
     preview: "Details der vorgeschlagenen Aktion",
     approve: "Diese Aktion genehmigen",
@@ -274,14 +270,26 @@ async function screenshotEvidence(
   return { screenshotScope: "viewport", ...(await captureZoomControls(session, surface, file)) };
 }
 
+/**
+ * A surface that lives outside the Chat window (the portaled connector panel) names the window
+ * that carries the presentation mode, and re-establishes itself after the mode change: moving
+ * focus to the window chrome dismisses a disclosure.
+ */
+interface CaptureScope {
+  readonly window?: Locator;
+  readonly prepare?: () => Promise<void>;
+}
+
 async function capture(
   session: EvidenceSession,
   surface: Locator,
   stage: string,
   mode: Presentation,
+  scope: CaptureScope = {},
 ): Promise<Record<string, unknown>> {
   const { page, locale, captures, info } = session;
-  await presentation(session, surface, mode);
+  await presentation(session, scope.window ?? surface, mode);
+  await scope.prepare?.();
   const violations = await runAxe(page, "html");
   const geometry = await measuredPresentation(page, surface);
   const contrast = await summaryContrast(page);
@@ -317,9 +325,10 @@ async function captureMatrix(
   session: EvidenceSession,
   surface: Locator,
   stage: string,
+  scope: CaptureScope = {},
 ): Promise<void> {
-  for (const mode of PRESENTATIONS) await capture(session, surface, stage, mode);
-  await presentation(session, surface, { name: "reset", theme: "dark" });
+  for (const mode of PRESENTATIONS) await capture(session, surface, stage, mode, scope);
+  await presentation(session, scope.window ?? surface, { name: "reset", theme: "dark" });
 }
 
 async function formEvidence(session: EvidenceSession, form: Locator, hub: Locator): Promise<void> {
@@ -339,7 +348,7 @@ async function formEvidence(session: EvidenceSession, form: Locator, hub: Locato
     .scrollIntoViewIfNeeded();
   await capture(session, hub, "hub-create-context", { name: "dark", theme: "dark" });
   await captureMatrix(session, form, "hub-create-form");
-  await expect(hub.getByRole("button", { name: copy.save, exact: true })).toBeVisible();
+  await expect(form.getByRole("button", { name: copy.create, exact: true })).toBeVisible();
 }
 
 async function keyboardDecision(page: Page, allow: Locator, deny: Locator): Promise<void> {
@@ -367,19 +376,30 @@ async function sendWithKeyboard(
   await keyboardActivate(region.getByRole("button", { name: copy.send, exact: true }));
 }
 
+/** The server-confirmed binding, shown by the connector menu's Jira Pod switch. */
+async function connectorsEvidence(
+  session: EvidenceSession,
+  region: Locator,
+  pod: string,
+): Promise<void> {
+  const { page, locale } = session;
+  const trigger = connectorsTrigger(region, locale);
+  const panel = connectorsPanel(page, locale);
+  const prepare = async (): Promise<void> => {
+    if ((await trigger.getAttribute("aria-expanded")) !== "true") await keyboardActivate(trigger);
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await expect(panel.getByRole("switch", { name: pod, exact: true })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  };
+  await captureMatrix(session, panel, "confirmed-chat-binding", { window: region, prepare });
+  await closeConnectors(region, locale);
+}
+
 async function readEvidence(session: EvidenceSession, region: Locator): Promise<void> {
-  const copy = COPY[session.locale];
   const before = counts();
   await sendWithKeyboard(session, region, "JIRA_E2E_READ: inspect the synthetic projects.");
-  const consent = region.getByRole("region", { name: copy.read, exact: true });
-  await expect(consent.locator('output[aria-live="polite"]')).toHaveText(copy.readPending);
-  await captureMatrix(session, consent, "pending-read-consent");
-  expect(counts().projects).toBe(before.projects);
-  await keyboardDecision(
-    session.page,
-    consent.getByRole("button", { name: copy.allow, exact: true }),
-    consent.getByRole("button", { name: copy.deny, exact: true }),
-  );
   await expect.poll(() => counts().projects).toBe(before.projects + 1);
   await expect(region.getByText("JIRA_E2E_DONE", { exact: true })).toBeVisible();
 }
@@ -393,20 +413,15 @@ async function writeEvidence(session: EvidenceSession, region: Locator): Promise
     "JIRA_E2E_COMMENT: add the synthetic approval fixture comment.",
   );
   const approval = region.getByRole("region", { name: copy.approval, exact: true });
-  const preview = approval.getByRole("textbox", { name: copy.preview, exact: true });
+  const preview = approval.getByRole("group", { name: copy.preview, exact: true });
   await expect(preview).toBeVisible();
-  expect(JSON.parse(await preview.inputValue()) as unknown).toEqual({
-    issueKey: "KEIKO-1",
-    body: "Synthetic browser approval fixture",
-  });
-  await expect(preview).toHaveAttribute("readonly", "");
+  await expect(preview).toContainText("KEIKO-1");
+  await expect(preview).toContainText("Synthetic browser approval fixture");
+  await expect(preview).not.toContainText(/[{}]/u);
   await expect(approval.locator('output[aria-live="polite"]')).toHaveText(copy.pending);
   await captureMatrix(session, approval, "pending-exact-write-approval");
   expect(counts().writes).toBe(before.writes);
-  await preview.focus();
-  await session.page.keyboard.press("Tab");
   const allow = approval.getByRole("button", { name: copy.approve, exact: true });
-  await expect(allow).toBeFocused();
   await keyboardDecision(
     session.page,
     allow,
@@ -490,8 +505,10 @@ const EVIDENCE_SOURCES = [
   "packages/keiko-ui/src/app/components/desktop/JiraChatTools.tsx",
   "packages/keiko-ui/src/app/components/desktop/JiraChatTools.module.css",
   "packages/keiko-ui/src/app/components/desktop/JiraWriteApproval.tsx",
-  "packages/keiko-ui/src/app/components/desktop/JiraChatConnection.tsx",
-  "packages/keiko-ui/src/app/components/desktop/JiraChatConnection.module.css",
+  "packages/keiko-ui/src/app/components/desktop/ConnectorsMenu.tsx",
+  "packages/keiko-ui/src/app/components/desktop/ConnectorsMenu.module.css",
+  "packages/keiko-ui/src/app/components/desktop/ChatConnectorsControl.tsx",
+  "packages/keiko-ui/src/app/components/desktop/useMcpServerChoices.ts",
   "packages/keiko-ui/src/app/globals.css",
   "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
   "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
@@ -555,14 +572,8 @@ export async function jiraAccessibilityJourney(
       activate: keyboardActivate,
       inspectForm: (form, hub) => formEvidence(session, form, hub),
     });
-    const copy = JIRA_BROWSER_COPY[locale];
-    const connection = region.getByTestId("jira-chat-connection");
-    await keyboardActivate(connection.locator("summary"));
-    await expect(connection.getByRole("status").filter({ hasText: copy.connected })).toHaveText(
-      copy.connected,
-    );
-    await captureMatrix(session, connection, "confirmed-chat-binding");
-    await keyboardActivate(connection.locator("summary"));
+    await connectorsEvidence(session, region, `Jira accessibility ${locale}`);
+    await selectAskForApproval(page, region, locale, keyboardActivate);
     await readEvidence(session, region);
     await writeEvidence(session, region);
     if (locale === "en") await questionNavigationEvidence(session, region);
@@ -573,7 +584,7 @@ export async function jiraAccessibilityJourney(
     expect(write?.approval?.state).toBe("claimed");
     expect(write?.mutationOutcome).toBe("succeeded");
     expect(counts().leaks).toBe(0);
-    expect(session.captures).toHaveLength(PRESENTATIONS.length * 5 + (locale === "en" ? 2 : 1));
+    expect(session.captures).toHaveLength(PRESENTATIONS.length * 4 + (locale === "en" ? 2 : 1));
   } finally {
     await info.attach(`${locale}-body-free-accessibility-receipt`, {
       path: saveReceipt(session),

@@ -155,7 +155,9 @@ while another mutation is pending. Closed values and one duration only.
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
 and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal
-responses cannot establish that continuation. Refusals distinguish model or
+responses cannot establish that continuation. A turn call whose admission merely expired is checked
+once more like a new request and proceeds only on a fresh positive observation (a second admission
+line records that decision). Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
@@ -515,7 +517,7 @@ refusals from `GATEWAY_CONTEXT_OVERFLOW` without asserting exact unknown output 
 Prompt fitting retains separate model and remaining caller input caps. Mandatory overhead that
 fits the model but exceeds the caller allowance uses the caller refusal; overhead that exceeds
 the model retains context-overflow handling. Best-effort citation repair keeps the completed
-answer when its remaining input allowance cannot fund the repair.
+answer when its remaining input allowance or synthesis attempt slots cannot fund the repair.
 Unrelated gateway retries and separately bounded entailment/embedding stages retain their existing
 contracts without supplying another synthesis attempt. Normalized output is buffered before
 publication; rejected declarations cannot escape through streamed chunks. The existing allocator's
@@ -636,7 +638,8 @@ from them, never a heuristic secret shape; every other tool's arguments keep the
 `gateway.tool-arguments.redacted` records the tool-call and changed-string counts at `warn`.
 A model answer that exhausted its output budget, or ended after reasoning, without a tool call or a
 final answer gets one steered repair from the gateway on a call that asks for it with the explicit
-`answerRepair: "steered"` (the coding sidecar route alone; #3873, F17, F23), and the log records it
+`answerRepair: "steered"` (the coding sidecar route and every round of a Chat tool turn; #3873, F17,
+F23, S09 of epic #4173), and the log records it
 in closed words only: `gateway.retry.scheduled` names it with `reason=output-exhausted-repair` or
 `reason=empty-answer-repair` (`retryable-error` on every ordinary retry), and
 `coding-sidecar.gateway.outcome` and `coding-sidecar.gateway.turn-failed` record `repairAttempted`
@@ -793,6 +796,24 @@ must update both `packages/keiko-ui/src/lib/i18n-messages.en.ts` and
 `npm run check:ui-i18n` to enforce this guard before review and merge.
 
 Published release notes live in GitHub Releases. This repository intentionally does not maintain a root `CHANGELOG.md`.
+
+### Code-quality ratchet
+
+The required `ci` context runs `npm run check:code-quality-policy -- --mode ratchet`. It scans the
+whole repository with the anti-slop oxlint rules and compares per-file, per-rule finding counts with
+the committed register `scripts/code-quality-register.json` (ADR-0167 D6). A new finding, or a new
+file with findings, fails with its file, rule and line. A count that went down also fails until you
+run `npm run check:code-quality-policy -- --prune-register` and commit the smaller register; entries
+for deleted or renamed files fail as stale. The register may only shrink: the prune command refuses
+to widen it, and inline `oxlint-disable` directives are rejected. Run the ratchet locally before you
+push (about 30 seconds). Details: [`docs/qa/code-quality-policy.md`](docs/qa/code-quality-policy.md).
+
+The owner allows one exception. A qualified boundary, a boundary awaiting its reviewed migration, a
+test witness or a proof fixture may raise a count when the same change adds a reviewed entry to
+`scripts/code-quality-register-increases.json`. The entry names the path, rule, old count, new
+count, reason and issue. The prune command then raises that count to exactly the new count. In CI
+the ratchet compares the register with the pull request's base. It fails a raised count without a
+new entry, a new entry that matches no raise, and a removed or changed older entry.
 
 ## Troubleshooting documentation
 

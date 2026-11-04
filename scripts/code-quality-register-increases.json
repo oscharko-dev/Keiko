@@ -1,0 +1,6365 @@
+{
+  "version": 1,
+  "increases": [
+    {
+      "path": "packages/keiko-connectors/src/atlassian-write-http.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 2,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-attachments.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-attachments.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-attachments.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-attachments.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft-stage-tool.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft-stage-tool.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft-stage-tool.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft-stage-tool.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft-stage-tool.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft-stage-tool.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft-stage-tool.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 23,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft-stage-tool.ts",
+      "rule": "anti-slop/no-array-filter-map",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft-stage-tool.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft-stage-tool.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft-stage-tool.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft-stage-tool.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 7,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft-store.ts",
+      "rule": "anti-slop/no-array-filter-map",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft-store.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft-store.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 9,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft.ts",
+      "rule": "anti-slop/no-array-filter-map",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 15,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 15,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 16,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-draft.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-cascading.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-cascading.test.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-cascading.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-cascading.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-cascading.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-metadata.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-metadata.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-metadata.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-metadata.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 2,
+      "to": 10,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-metadata.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-metadata.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-metadata.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 4,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-metadata.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 9,
+      "to": 18,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-metadata.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 21,
+      "to": 29,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-metadata.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 9,
+      "to": 14,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-field-metadata.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-issue-links.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-issue-links.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-issue-links.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-issue-links.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-issue-template-check.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-issue-template-check.ts",
+      "rule": "anti-slop/no-array-filter-map",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-issue-template-check.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 10,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-issue-template-check.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-issue-template-check.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-issue-template-check.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-issue-template-instance.ts",
+      "rule": "anti-slop/no-array-filter-map",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-issue-template-instance.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-issue-template-instance.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 9,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-issue-template-instance.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-field-reads.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-field-reads.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 1,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-field-reads.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 1,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-field-reads.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-field-reads.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 4,
+      "to": 8,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-field-reads.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 5,
+      "to": 12,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-field-reads.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-field-reads.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 3,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 5,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 5,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-metadata.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 8,
+      "to": 11,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-mutation-metadata.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-mutation-metadata.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 1,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-mutations.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-mutations.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-mutations.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 1,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-mutations.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 1,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-mutations.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 2,
+      "to": 11,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-mutations.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 4,
+      "to": 7,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-mutations.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 1,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-mutations.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 3,
+      "to": 12,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-template-gate.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 10,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-template-gate.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-tools.reads.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-tools.reads.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-tools.reads.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-tools.reads.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-managed-tools.reads.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 2,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-mutation-confirmation.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 4,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-mutation-confirmation.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 3,
+      "to": 11,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-mutation-confirmation.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 4,
+      "to": 8,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-mutation-failure.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-aggregate.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-args.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-args.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 8,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-args.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 11,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-export.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-figures.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-http.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-http.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-issue.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-issue.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 10,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-issue.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 7,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-issue.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 13,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-issue.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-jql.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-metadata.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-metadata.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 7,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-metadata.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-metadata.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-page.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-page.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-page.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-page.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-read.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-read.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-read.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-requirements.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-requirements.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-result.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-result.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-session.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-store.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-template-checker.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-template-checker.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-template.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-template.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-template.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-template.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-template.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-template.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-template.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 8,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-tool.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 8,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-tool.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-tool.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report-types.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.evidence.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.evidence.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.evidence.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.fixture.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.fixture.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.fixture.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.fixture.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.fixture.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.harness.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.harness.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.harness.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.harness.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.review.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.review.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.test.ts",
+      "rule": "anti-slop/no-array-filter-map",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-report.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 8,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.put.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.put.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.put.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.put.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 8,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/jira-requirement-trace.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/code-task-record-admission.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/code-task-record-admission.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/execution-task-admission.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/execution-task-admission.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/execution-task-admission.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 5,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/field-read-observations.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/identity-header-observations.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/identity-header-observations.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/library-parser-type-facts.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 2,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/observed-indexed-members.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/observed-indexed-members.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/physical-task-catalog-contract.ts",
+      "rule": "anti-slop-effect/prefer-effect-match",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/physical-task-catalog-contract.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/physical-task-catalog-contract.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/physical-task-catalog-contract.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/physical-task-catalog-contract.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/physical-task-catalog-contract.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/protocol-observation-mechanics.ts",
+      "rule": "anti-slop-effect/prefer-effect-match",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/protocol-observation-mechanics.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/protocol-observation-mechanics.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/protocol-observation-mechanics.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/protocol-observation-mechanics.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/protocol-observation-mechanics.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/tagged-fact-observations.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/tagged-fact-observations.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/__tests__/support/tagged-fact-observations.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-field-contracts.test.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-field-contracts.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 12,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/atlassian-connectors.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 2,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/atlassian-connectors.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/atlassian-connectors.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 1,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/atlassian-connectors.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 1,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/atlassian-connectors.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 2,
+      "to": 3,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/bff-wire.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/bff-wire.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 2,
+      "to": 3,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/bff-wire.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 2,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/bff-wire.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/bff-wire.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 22,
+      "to": 24,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/bff-wire.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 7,
+      "to": 10,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/chat-tool-authority.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 7,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/chat-tool-authority.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/chat-tool-authority.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 6,
+      "to": 7,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 11,
+      "to": 17,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 2,
+      "to": 17,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 4,
+      "to": 13,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-acceptance.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 18,
+      "to": 23,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-acceptance.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 19,
+      "to": 27,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-acceptance.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 32,
+      "to": 42,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-auxiliary.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 2,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-auxiliary.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 7,
+      "to": 8,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 8,
+      "to": 9,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 5,
+      "to": 7,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 5,
+      "to": 9,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 5,
+      "to": 7,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-governance.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 10,
+      "to": 11,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-record-validation.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-record-validation.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-record-validation.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 4,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-run-control.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 6,
+      "to": 7,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-target-validation.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 6,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/code-task-target-validation.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 2,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-app-session.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 2,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-repository-search.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-safe-activity.test.ts",
+      "rule": "anti-slop-effect/prefer-effect-match",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-safe-activity.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 3,
+      "to": 11,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-safe-activity.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-safe-activity.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-safe-activity.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 5,
+      "to": 6,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-safe-activity.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 3,
+      "to": 16,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-safe-activity.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 1,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-safe-activity.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 13,
+      "to": 16,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-safe-activity.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 9,
+      "to": 12,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-skill-discovery.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 1,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-skill-discovery.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 2,
+      "to": 6,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-codex-auth.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-codex-auth.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-codex-auth.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-issue-binding.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 3,
+      "to": 4,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-issue-binding.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 3,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-api-validation.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+      "rule": "anti-slop-effect/prefer-effect-match",
+      "from": 0,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 3,
+      "to": 14,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 1,
+      "to": 8,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 12,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 4,
+      "to": 8,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 19,
+      "to": 24,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 63,
+      "to": 64,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-api.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 21,
+      "to": 63,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-approval-review.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 4,
+      "to": 7,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+      "rule": "anti-slop-effect/prefer-effect-match",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 6,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 2,
+      "to": 3,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-questions.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 7,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-research.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-research.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime-research.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 3,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime.test.ts",
+      "rule": "anti-slop-effect/prefer-effect-match",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 2,
+      "to": 6,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 2,
+      "to": 9,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 8,
+      "to": 11,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 13,
+      "to": 15,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 7,
+      "to": 9,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-validation.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-validation.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 6,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-validation.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-validation.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-validation.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 1,
+      "to": 9,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-validation.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 1,
+      "to": 8,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench-validation.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 17,
+      "to": 18,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-workbench.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 1,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/command-runner.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 5,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/command-runner.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/command-runner.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 4,
+      "to": 12,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/container-runtime.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/container-runtime.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/container-runtime.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 9,
+      "to": 10,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/container-runtime.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 8,
+      "to": 24,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/contract-validation-primitives.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 1,
+      "to": 2,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/contract-validation-primitives.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 2,
+      "to": 3,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/contract-validation-primitives.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 4,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/contract-validation-primitives.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 2,
+      "to": 4,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/deep-freeze.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/deep-freeze.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 1,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/deep-freeze.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 1,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/editor-builtin-capabilities.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/error-classification.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/error-classification.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/external-json-schema.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 15,
+      "to": 16,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/external-json-schema.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 4,
+      "to": 9,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/git-change-snapshot.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 11,
+      "to": 12,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/git-change-snapshot.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 25,
+      "to": 28,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/governed-tool-bridge.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 1,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/governed-tool-bridge.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/governed-tool-lifecycle.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/governed-tool-lifecycle.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 8,
+      "to": 10,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/jira-issue-template.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 7,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/jira-issue-template.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/jira-template-pattern.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/jira-tool-execution.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/jira-tool-execution.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/jira-tool-execution.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 17,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/jira-tool-execution.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 15,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/jira-tool-execution.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 7,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/jira-tool-execution.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-activation.test.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-activation.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-activation.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 5,
+      "to": 6,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-capabilities.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-capabilities.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-capabilities.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-capabilities.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 10,
+      "to": 13,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-evidence.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-evidence.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-evidence.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-parse-safely.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 9,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-parse-safely.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-parse-safely.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 10,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-parse-safely.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 10,
+      "to": 12,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-route.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-runtime.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-runtime.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-runtime.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/managed-lsp-runtime.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 19,
+      "to": 20,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 2,
+      "to": 10,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.test.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 5,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.test.ts",
+      "rule": "anti-slop/no-reflect-apply",
+      "from": 0,
+      "to": 8,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 3,
+      "to": 12,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 1,
+      "to": 14,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 1,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 12,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 9,
+      "to": 19,
+      "reason": "qualified-boundary",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 24,
+      "to": 35,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 9,
+      "to": 20,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/run-result-validation.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 9,
+      "to": 10,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/run-result-validation.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 7,
+      "to": 20,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/runtime-capabilities.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/runtime-capabilities.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/runtime-capabilities.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 5,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/runtime-capabilities.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 7,
+      "to": 9,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/support-incident.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 8,
+      "to": 9,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/support-report-json.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/support-report-json.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/support-report-json.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/workbench-description-status.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 11,
+      "to": 13,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/workspace-contract-primitives.test.ts",
+      "rule": "anti-slop-effect/prefer-effect-match",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/workspace-contract-primitives.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/workspace-contract-primitives.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/workspace-contract-primitives.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 3,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/workspace-contract-primitives.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/workspace-contract-primitives.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 7,
+      "to": 8,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/bounded-ooxml-package.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/conversation/grounded-answer-runner.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 21,
+      "to": 22,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/conversation/types.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/discovery/extract.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 3,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/discovery/extract.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 25,
+      "to": 28,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/parsers/ooxml-zip.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/parsers/ooxml-zip.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/parsers/ooxml-zip.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/parsers/ooxml-zip.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/parsers/ooxml-zip.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/parsers/pdf-parser.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/parsers/pptx-parser.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/parsers/pptx-parser.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/parsers/pptx-parser.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/parsers/pptx-xml.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/qualityIntelligence/__tests__/scopeDocuments.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/qualityIntelligence/scopeDocuments.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/qualityIntelligence/scopeDocuments.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/qualityIntelligence/scopeDocuments.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/qualityIntelligence/scopeDocuments.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 17,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-mcp/src/host.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 2,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-mcp/src/host.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 4,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-mcp/src/relay-endpoint.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-mcp/src/relay-endpoint.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 1,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/__fixtures__/speech-routing-contract.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/gateway.output-repair.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/gateway.output-repair.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 14,
+      "to": 15,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/gateway.tool-schema-repair.test.ts",
+      "rule": "anti-slop/no-array-filter-map",
+      "from": 3,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/gateway.tool-schema-repair.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 2,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/gateway.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 12,
+      "to": 13,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/gateway.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 11,
+      "to": 12,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/speech-to-text-adapter.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/text-to-speech-adapter.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/toolCatalogBridge.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 2,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/toolCatalogBridge.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 6,
+      "to": 8,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/toolCatalogBridge.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 2,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/toolCatalogBridge.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 8,
+      "to": 10,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-quality-intelligence/src/domain/requirementChanges.ts",
+      "rule": "anti-slop/no-array-filter-map",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-quality-intelligence/src/domain/requirementChanges.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-quality-intelligence/src/domain/requirementInventory.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-quality-intelligence/src/domain/requirementInventory.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-quality-intelligence/src/domain/requirementTable.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-quality-intelligence/src/domain/requirementVocabulary.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-security/src/log-port.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-server/src/_requirementSupport.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/_requirementSupport.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/_requirementSupport.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/_requirementSupport.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/actionApprovals.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/chatReadGrantPersistence.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/chatWriteApprovalRoutes.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/chatWriteApprovalState.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/chatWriteApprovalState.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 1,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/httpPort.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 3,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/httpPort.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 13,
+      "to": 15,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/httpPort.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/httpRequestLifecycle.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraAttachmentPdfSyntax.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatAttachment.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatAuthority.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatAuthority.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatBindingPatch.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 2,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatBindingPatch.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 2,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatCatalogConsumer.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 1,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatCatalogRuntime.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatCatalogRuntime.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatCatalogRuntime.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraft.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 16,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraft.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraft.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraft.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraft.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraft.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 42,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraft.ts",
+      "rule": "anti-slop/no-array-filter-map",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraft.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraft.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 11,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraft.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraft.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraft.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraft.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraftArguments.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraftArguments.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatDraftArguments.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatMutation.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatMutation.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatMutation.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatTemplatePreflight.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatTemplatePreflight.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatTemplatePreflight.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatTemplatePreflight.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatTemplatePreflight.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatTemplatePreflight.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatToolTurn.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 2,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatToolTurn.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 2,
+      "to": 13,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatToolTurn.test.ts",
+      "rule": "anti-slop/no-module-mocking",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatToolTurn.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 1,
+      "to": 9,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatToolTurn.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatToolTurn.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 2,
+      "to": 11,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatToolTurn.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatToolTurn.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatTracedMutation.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraChatWriteApproval.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraDraftDescriptor.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraDraftRoutes.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraDraftRoutes.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraDraftRoutes.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraDraftRoutes.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraManagedMutationDescriptors.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraManagedMutationDescriptors.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraManagedMutationDescriptors.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraManagedMutationDescriptors.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraManagedMutationDescriptors.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 3,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 1,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraManagedProvider.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 2,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraMutationResult.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraMutationResult.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 3,
+      "to": 16,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraMutationResult.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraMutationResult.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraMutationResult.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraReportActivity.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 9,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraReportActivity.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraReportRoutes.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraReportRoutes.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts",
+      "rule": "anti-slop/no-module-mocking",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 7,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-activity.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 5,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-context-connectors.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-context-connectors.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-context-connectors.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-context-connectors.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-context-connectors.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-context-log.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 4,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-context-status.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 4,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-scope-update-log.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 2,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-continuation-fit.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-continuation-fit.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-continuation-fit.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-continuation-fit.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-continuation-fit.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-continuation-fit.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-continuation-fit.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-continuation-fit.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-receipts.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-receipts.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-receipts.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-receipts.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-receipts.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-receipts.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-receipts.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-receipts.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-report-coverage.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-report-coverage.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-report-coverage.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-report-coverage.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 8,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-report-coverage.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-report-coverage.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-report-coverage.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-report-coverage.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-runtime-signal.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-runtime.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-runtime.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-turn-ending.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-turn-ending.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-turn-ending.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-turn-ending.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-tool-turn.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/chat-turn-serializer.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/codingToolFacade.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 13,
+      "to": 14,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/codingToolFacade.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 16,
+      "to": 17,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/codingToolFacade.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 11,
+      "to": 12,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/codingToolFacade.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 2,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 11,
+      "to": 12,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/codingToolIpc.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 17,
+      "to": 19,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/codingToolIpc.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 13,
+      "to": 14,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 33,
+      "to": 35,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 34,
+      "to": 35,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/conversation-readiness-admission.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/editor/verificationRunner.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/editor/verificationRunner.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 2,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/editor/verificationRunner.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/editor/verificationRunner.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 16,
+      "to": 21,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/editor/verificationRunner.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 3,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-gateway-error-status.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-jira-mixed.public-handler.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 2,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-jira-mixed.public-handler.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 24,
+      "to": 38,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-plural-synthesis.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-plural-synthesis.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 10,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/local-knowledge-grounded-qa.rescue.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/local-knowledge-grounded-qa.rescue.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 49,
+      "to": 52,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/local-knowledge-grounded-qa.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 3,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/local-knowledge-grounded-qa.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 3,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/markdown-skill-jira-template-routes.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/markdown-skill-jira-template-routes.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/markdown-skill-jira-template-routes.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/markdown-skill-jira-template-routes.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/markdown-skill-jira-template-routes.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/markdown-skill-jira-template-routes.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/markdown-skill-jira-template-routes.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/mcp/mcpChatCatalogRuntime.ts",
+      "rule": "anti-slop/no-array-filter-map",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/mcp/mcpChatDescriptors.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/mcp/mcpChatDescriptors.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirement-changes.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirement-changes.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirement-coverage-note.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirement-inventory.ts",
+      "rule": "anti-slop/no-array-filter-map",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirement-inventory.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirement-inventory.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirement-inventory.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirement-trace.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirement-trace.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirement-trace.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirement-trace.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirementsTool.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirementsTool.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirementsTool.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirementsTool.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirementsTool.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 9,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirementsTool.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 7,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirementsTool.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirementsTool.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirementsToolReport.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/requirementsToolReport.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/chat-grounding-scope-identity.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/chat-grounding-scope-identity.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/chatJiraBinding.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 2,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/chatJiraBinding.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/chatToolMutationActivity.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 1,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/chatToolMutationActivity.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/chatToolMutations.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 2,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/chatToolReadGrants.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/chatToolTranscript.test.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/chatToolTranscript.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/chatToolTranscript.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/chatToolTranscript.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 1,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/chatToolTranscript.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 3,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/markdownSkills.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 1,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/markdownSkills.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 5,
+      "to": 7,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-tool-catalog/src/descriptor.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-tool-catalog/src/descriptor.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 1,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-tool-catalog/src/invocation.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-tool-catalog/src/invocation.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 2,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-tool-catalog/src/invocation.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 12,
+      "to": 13,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-tool-catalog/src/invocation.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/AppShell.tsx",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 9,
+      "to": 11,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/ChatConnectorsControl.test.tsx",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/ChatConnectorsControl.test.tsx",
+      "rule": "anti-slop/no-module-mocking",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/ChatConnectorsControl.test.tsx",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/ChatConnectorsControl.test.tsx",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/ChatConnectorsControl.test.tsx",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/ChatConnectorsControl.tsx",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/ChatConnectorsControl.tsx",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/ChatContextMeter.connectors.test.tsx",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/ChatContextMeter.connectors.test.tsx",
+      "rule": "anti-slop/no-module-mocking",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/ChatContextMeter.connectors.test.tsx",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/ConnectorsMenu.test.tsx",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraChatTools.requirements.test.tsx",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraChatTools.requirements.test.tsx",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraChatTools.test.tsx",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraChatTools.test.tsx",
+      "rule": "anti-slop/no-module-mocking",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraReportCard.test.tsx",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraReportCard.test.tsx",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraReportCard.test.tsx",
+      "rule": "anti-slop/no-module-mocking",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraReportCard.test.tsx",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraReportCard.test.tsx",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraReportCard.test.tsx",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraWriteApproval.readable.test.tsx",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraWriteApproval.readable.test.tsx",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraWriteApproval.staged.test.tsx",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraWriteApproval.staged.test.tsx",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraWriteApproval.test.tsx",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraWriteApproval.tsx",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraWriteApproval.tsx",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraWriteApproval.tsx",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraWriteApproval.tsx",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/JiraWriteApproval.tsx",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/hooks/useChatSession.test.tsx",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 8,
+      "to": 9,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/hooks/useChatSession.test.tsx",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 3,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/hooks/useChatSession.test.tsx",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 28,
+      "to": 30,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jira-report-view.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jira-report-view.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jira-report-view.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jira-report-view.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jira-tool-presentation.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jira-tool-presentation.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 1,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jira-tool-presentation.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jira-tool-presentation.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jira-tool-presentation.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraActionFacts.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraActionFacts.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 8,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraActionFacts.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 10,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraActionFacts.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraActionFacts.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraDraftTree.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraDraftTree.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraDraftTree.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraDraftTree.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraDraftTree.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraDraftTree.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraDraftTree.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 8,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraDraftTree.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 16,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraDraftTree.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraDraftTree.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraNames.test.tsx",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraNames.test.tsx",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraNames.test.tsx",
+      "rule": "anti-slop/no-module-mocking",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraNames.test.tsx",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraNames.tsx",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraNames.tsx",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/jiraNames.tsx",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/skills/JiraTemplateTools.test.tsx",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/skills/JiraTemplateTools.test.tsx",
+      "rule": "anti-slop/no-module-mocking",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/skills/JiraTemplateTools.test.tsx",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/skills/JiraTemplateTools.tsx",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/useMcpServerChoices.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/useMcpServerChoices.test.ts",
+      "rule": "anti-slop/no-module-mocking",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/useMcpServerChoices.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/useStagedJiraDraft.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/useStagedJiraDraft.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/useStagedJiraDraft.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/useStagedJiraDraft.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.test.tsx",
+      "rule": "anti-slop/no-module-mocking",
+      "from": 19,
+      "to": 20,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/useCodingWorkbenchConnectors.test.tsx",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/useCodingWorkbenchConnectors.test.tsx",
+      "rule": "anti-slop/no-module-mocking",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/useCodingWorkbenchConnectors.test.tsx",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/useCodingWorkbenchConnectors.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/useCodingWorkbenchTaskActions.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 9,
+      "to": 10,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/connectors/AddConnectorForm.tsx",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/connectors/ConnectorCard.tsx",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/app/local-knowledge/local-knowledge-i18n.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/api.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 103,
+      "to": 104,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/atlassian-connectors-api.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 9,
+      "to": 10,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/atlassian-connectors-api.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/atlassian-connectors-api.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/coding-workbench-runtime-mutations.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 11,
+      "to": 12,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/commands-api.module-load.test.ts",
+      "rule": "anti-slop/no-module-mocking",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/commands-api.test.ts",
+      "rule": "anti-slop-effect/prefer-effect-match",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/commands-api.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/commands-api.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/commands-api.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/commands-api.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/http.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 2,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/jira-report-api.test.ts",
+      "rule": "anti-slop/no-module-mocking",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/jira-report-api.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/jira-report-api.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/jira-report-api.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/jira-report-api.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/jira-report-api.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/jira-report-api.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/jira-templates-api.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/jira-templates-api.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-verification/src/orchestrator.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-verification/src/package-dir.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-verification/src/package-dir.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-verification/src/plan.ts",
+      "rule": "anti-slop/no-array-filter-map",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "packages/keiko-verification/src/plan.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/__tests__/jira-lab-requirements-journeys-creation.test.mjs",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/__tests__/jira-lab-requirements-journeys.test.mjs",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/__tests__/jira-lab-requirements-scorecard.test.mjs",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/__tests__/semantic-duplication.test.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "scripts/check-semantic-duplication.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 1,
+      "to": 3,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/chat-read.mjs",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 2,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/chat-read.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 2,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/change-impact.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/coverage-matrix.mjs",
+      "rule": "anti-slop/no-array-filter-map",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/coverage-matrix.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/coverage.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/deviation-report.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/estimate-field.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/field-correction.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/field-writes.mjs",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/field-writes.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/formats.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/hierarchy.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/journeys.mjs",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/large-project.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/modes.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/oracles.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/progress-report.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/report-export.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 5,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/seed-projects.mjs",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 3,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "scripts/testing/jira-chat-lab/requirements/templates.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 4,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "tests/integration/requirement-inventory-formats.integration.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "tests/support/jira-managed-remote.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 2,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "tests/support/jira-managed-remote.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 5,
+      "to": 13,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "tests/support/jira-managed-remote.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 3,
+      "to": 8,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "tests/support/jira-synthetic-draft-remote.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "tests/support/jira-synthetic-draft-remote.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "tests/support/jira-synthetic-draft-remote.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "tests/support/jira-synthetic-draft-remote.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 8,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "tests/support/jira-synthetic-draft-remote.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 6,
+      "reason": "dev-cutoff-sync",
+      "issue": 3914
+    },
+    {
+      "path": "tests/support/log-classifier-observations.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/log-classifier-observations.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/recording-log-sink.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "proof-fixture",
+      "issue": 3918
+    }
+  ]
+}
