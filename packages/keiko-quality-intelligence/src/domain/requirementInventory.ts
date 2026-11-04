@@ -146,6 +146,8 @@ interface Candidate extends Definition {
   readonly headingLine: boolean;
   /** Set when the recorded section, not the line, defines the unit. */
   readonly section?: RequirementInventorySection;
+  /** Lines after the first that continue a title the text hard-wrapped; they are not body. */
+  readonly titleLines?: number;
   readonly row?: RowFields;
 }
 interface RowFields {
@@ -281,13 +283,64 @@ function projectedCandidates(context: Context): readonly Candidate[] {
   return found;
 }
 
+const TITLE_CONTINUATION_LINES_MAX = 3;
+const TITLE_MAX_CHARS = 240;
+
+/** Whether the line is plain wrapped text: no marker, heading, section start, key or table row. */
+function isPlainContinuation(
+  context: Context,
+  index: number,
+  tableLines: ReadonlySet<number>,
+): boolean {
+  const line = context.lines[index];
+  if (line === undefined || tableLines.has(index)) return false;
+  const text = bare(line.text);
+  return (
+    LOWER_CASE_START.test(text) &&
+    !LIST_MARKER.test(line.text) &&
+    !MARKDOWN_HEADING.test(line.text) &&
+    !startsSection(context.starts, line) &&
+    !isKeyLine(text, context.vocabulary)
+  );
+}
+
+/**
+ * A title the text hard-wrapped: plain text has no layout, so the evidence is the text itself. A title
+ * without a closing mark whose next line (no blank line between) goes on in lower case is one title
+ * around a line break, not a title and a body that happens to start in lower case.
+ */
+function wrappedTitle(
+  context: Context,
+  index: number,
+  title: string,
+  tableLines: ReadonlySet<number>,
+): { readonly title: string; readonly titleLines: number } | undefined {
+  let joined = title;
+  let extra = 0;
+  while (
+    extra < TITLE_CONTINUATION_LINES_MAX &&
+    joined.length > 0 &&
+    joined.length < TITLE_MAX_CHARS &&
+    !CLOSING_MARK.test(joined) &&
+    isPlainContinuation(context, index + extra + 1, tableLines)
+  ) {
+    joined = collapse(`${joined} ${bare(lineAt(context.lines, index + extra + 1).text)}`);
+    extra += 1;
+  }
+  return extra === 0 ? undefined : { title: joined, titleLines: extra };
+}
+
 function lineCandidates(context: Context, tableLines: ReadonlySet<number>): readonly Candidate[] {
   const found: Candidate[] = [];
   context.lines.forEach((line, index) => {
     if (tableLines.has(index)) return;
     const heading = MARKDOWN_HEADING.test(line.text) || startsSection(context.starts, line);
     const definition = classifyText(bare(line.text), heading, context.vocabulary);
-    if (definition !== undefined) found.push({ ...definition, line: index, headingLine: true });
+    if (definition === undefined) return;
+    const wrapped = heading
+      ? undefined
+      : wrappedTitle(context, index, definition.title, tableLines);
+    found.push({ ...definition, ...wrapped, line: index, headingLine: true });
   });
   return found;
 }
@@ -470,12 +523,17 @@ function endsFlatBlock(
     : startsChapter(context, scan, raw, last);
 }
 
+/** The last line of the unit's head: its first line plus the lines a wrapped title runs over. */
+function headLastLine(candidate: Candidate): number {
+  return candidate.line + (candidate.titleLines ?? 0);
+}
+
 function lastLineOf(context: Context, candidate: Candidate, limit: number): number {
   if (candidate.kind === "row") return candidate.line;
   const structured = candidate.section?.characterEnd !== undefined || candidate.kind === "heading";
   const scan: Scan = { hasBody: false, inCriteria: false };
-  let last = candidate.line;
-  for (let index = candidate.line + 1; index <= limit; index += 1) {
+  let last = headLastLine(candidate);
+  for (let index = last + 1; index <= limit; index += 1) {
     const line = lineAt(context.lines, index);
     if (leavesBlock(context, candidate, line)) break;
     if (!structured && endsFlatBlock(context, scan, { index, last, limit })) break;
@@ -498,7 +556,7 @@ function buildBlocks(context: Context, candidates: readonly Candidate[]): readon
       : (candidate.section?.characterStart ?? head.start);
     return {
       candidate,
-      first: candidate.line + (candidate.headingLine ? 1 : 0),
+      first: headLastLine(candidate) + (candidate.headingLine ? 1 : 0),
       last,
       start,
       end: lineAt(context.lines, last).end,

@@ -920,3 +920,56 @@ describe("acceptance criteria wrapped by the extractor", () => {
     ]);
   });
 });
+
+describe("an identifier title that plain text hard-wrapped (#4235)", () => {
+  function entry(lines: readonly string[]): { title: string; statement: string } | undefined {
+    const found = detect(lines).entries.find((item) => item.id === "REQ-1");
+    return found === undefined ? undefined : { title: found.title, statement: found.statement };
+  }
+
+  it("joins a title line without a closing mark to its lower-case continuation", () => {
+    expect(
+      entry(["REQ-1: Der Nutzer muss sich", "anmelden können.", "", "Das System prüft die Daten."]),
+    ).toEqual({
+      title: "Der Nutzer muss sich anmelden können.",
+      statement: "Das System prüft die Daten.",
+    });
+  });
+
+  it("joins a title wrapped over several lines", () => {
+    expect(
+      entry([
+        "REQ-1: Der Nutzer muss sich",
+        "mit seiner Kundennummer und",
+        "dem Passwort anmelden.",
+      ])?.title,
+    ).toBe("Der Nutzer muss sich mit seiner Kundennummer und dem Passwort anmelden.");
+  });
+
+  it("keeps a finished title and an upper-case body line apart", () => {
+    expect(entry(["REQ-1: Anmeldung", "Der Nutzer meldet sich an."])).toEqual({
+      title: "Anmeldung",
+      statement: "Der Nutzer meldet sich an.",
+    });
+    expect(entry(["REQ-1: Anmeldung.", "und weiter geht es"])?.title).toBe("Anmeldung.");
+  });
+
+  it("does not join a key line, a list item or the next identifier", () => {
+    expect(entry(["REQ-1: Anmeldung", "priorität: hoch"])?.title).toBe("Anmeldung");
+    expect(entry(["REQ-1: Anmeldung", "- eins"])?.title).toBe("Anmeldung");
+    expect(
+      detect(["REQ-1: Anmeldung", "REQ-2: Abmeldung"]).entries.map((item) => item.title),
+    ).toEqual(["Anmeldung", "Abmeldung"]);
+  });
+
+  it("does not join across a blank line", () => {
+    expect(entry(["REQ-1: Anmeldung", "", "muss möglich sein."])?.title).toBe("Anmeldung");
+  });
+
+  it("leaves a heading title alone", () => {
+    const found = detect(["## REQ-1 Anmeldung", "der Text beginnt klein."]).entries.find(
+      (item) => item.id === "REQ-1",
+    );
+    expect(found?.title).toBe("Anmeldung");
+  });
+});

@@ -25,7 +25,7 @@ function run(
 describe("jsonParser projection (#4235)", () => {
   it("projects a string scalar as its value, so an identifier is readable", () => {
     const result = run('[{"id":"FA-KRED-001","titel":"Antrag erfassen","muss":true,"n":2}]');
-    expect(textOf(result)).toBe("/0: id=FA-KRED-001 | titel=Antrag erfassen | muss=true | n=2\n");
+    expect(textOf(result)).toBe("/!1: id=FA-KRED-001 | titel=Antrag erfassen | muss=true | n=2\n");
   });
 
   it("keeps a string array readable and null distinguishable from an empty string", () => {
@@ -66,6 +66,28 @@ describe("jsonParser projection (#4235)", () => {
 
   it("does not report duplicates for the same key in different objects", () => {
     expect(run('[{"id":1},{"id":2}]').diagnostics).toEqual([]);
+  });
+});
+
+describe("jsonParser rows (#4235)", () => {
+  it("labels an object that is an array element like a spreadsheet row and keeps the pointer unit", () => {
+    const result = run(
+      '{"requirements":[{"id":"FA-1","titel":"A"},{"id":"FA-2","titel":"B"}],"meta":{"v":1}}',
+    );
+    expect(textOf(result)).toBe(
+      "/requirements!1: id=FA-1 | titel=A\n/requirements!2: id=FA-2 | titel=B\n/meta: v=1\n",
+    );
+    expect(result.units.map((unit) => (unit.kind === "json-path" ? unit.jsonPointer : ""))).toEqual(
+      ["/requirements/0", "/requirements/1", "/meta"],
+    );
+  });
+
+  it("labels the elements of a root array against the root", () => {
+    expect(textOf(run('[{"a":1},{"a":2}]'))).toBe("/!1: a=1\n/!2: a=2\n");
+  });
+
+  it("does not label a scalar array element or a keyed object as a row", () => {
+    expect(textOf(run('{"x":{"0":{"a":1}}}'))).toBe("/x/0: a=1\n");
   });
 });
 
@@ -137,7 +159,7 @@ describe("jsonParser diagnostics (#4235)", () => {
     const entry = result.diagnostics.find((d) => d.code === "MALFORMED_INPUT");
     expect(entry?.message).toContain("line 1");
     expect(entry?.message).toContain("column 6");
-    expect(textOf(result)).toContain("/2: c=3");
+    expect(textOf(result)).toContain("/!3: c=3");
   });
 
   it("refuses a very deep document without exhausting the stack", () => {

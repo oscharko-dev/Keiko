@@ -106,12 +106,29 @@ function scalarText(value: Exclude<JsonValue, JsonArray | JsonObject>): string {
   return value === null ? "null" : String(value);
 }
 
+// The position of an object among the elements of an array (or among the lines of a JSONL file).
+interface RowRef {
+  readonly parent: string;
+  readonly number: number;
+}
+
+// An object that is an element of an array is a row of that array, labelled like a spreadsheet row
+// (`/requirements!3:`, parent pointer plus a 1-based row number): the requirement inventory reads
+// exactly that shape for workbooks. Every other record keeps its JSON Pointer as label. The label is
+// presentation only; the unit's `jsonPointer` stays the citation.
+function recordLabel(pointer: string, row: RowRef | undefined): string {
+  if (row !== undefined)
+    return `${row.parent.length === 0 ? "/" : row.parent}!${String(row.number)}`;
+  return pointer.length === 0 ? "/" : pointer;
+}
+
 function appendNormalizedRecord(
   ctx: ScanContext,
   pointer: string,
   text: string,
+  row: RowRef | undefined,
 ): { readonly start: number; readonly end: number } {
-  const label = pointer.length === 0 ? "/" : pointer;
+  const label = recordLabel(pointer, row);
   const line = `${label}: ${text}\n`;
   const start = ctx.normalizedLength;
   ctx.normalizedParts.push(line);
@@ -119,7 +136,7 @@ function appendNormalizedRecord(
   return { start, end: ctx.normalizedLength };
 }
 
-function pushRecord(ctx: ScanContext, pointer: string, text: string): void {
+function pushRecord(ctx: ScanContext, pointer: string, text: string, row?: RowRef): void {
   const limit = shouldStop(ctx.startedAt, ctx.options, ctx.units.length);
   if (limit.stop && limit.code === "UNIT_LIMIT_REACHED") {
     ctx.omittedRecords += 1;
@@ -130,7 +147,7 @@ function pushRecord(ctx: ScanContext, pointer: string, text: string): void {
     ctx.stopped = true;
     return;
   }
-  const span = appendNormalizedRecord(ctx, pointer, text);
+  const span = appendNormalizedRecord(ctx, pointer, text, row);
   ctx.units.push({
     kind: "json-path",
     documentId: ctx.input.documentId,
@@ -194,7 +211,10 @@ function descendArray(ctx: ScanContext, value: JsonArray, pointer: string, depth
   }
   for (const [index, item] of value.items.entries()) {
     if (ctx.stopped || ctx.nestingStopped) return;
-    walk(ctx, item, joinPointer(pointer, String(index)), depth + 1);
+    walk(ctx, item, joinPointer(pointer, String(index)), depth + 1, {
+      parent: pointer,
+      number: index + 1,
+    });
   }
 }
 
@@ -204,14 +224,20 @@ function objectScalarFields(value: JsonObject): readonly string[] {
     .map(([key, child]) => `${key}=${projectionOf(child)}`);
 }
 
-function descendObject(ctx: ScanContext, value: JsonObject, pointer: string, depth: number): void {
+function descendObject(
+  ctx: ScanContext,
+  value: JsonObject,
+  pointer: string,
+  depth: number,
+  row: RowRef | undefined,
+): void {
   if (value.entries.length === 0) {
     pushRecord(ctx, pointer, "{}");
     return;
   }
   const fields = objectScalarFields(value);
   if (fields.length > 0) {
-    pushRecord(ctx, pointer, fields.join(" | "));
+    pushRecord(ctx, pointer, fields.join(" | "), row);
     if (ctx.stopped || ctx.nestingStopped) return;
   }
   for (const [key, child] of value.entries) {
@@ -221,7 +247,13 @@ function descendObject(ctx: ScanContext, value: JsonObject, pointer: string, dep
   }
 }
 
-function walk(ctx: ScanContext, value: JsonValue, pointer: string, depth: number): void {
+function walk(
+  ctx: ScanContext,
+  value: JsonValue,
+  pointer: string,
+  depth: number,
+  row?: RowRef,
+): void {
   if (ctx.stopped || ctx.nestingStopped) return;
   if (isScalarOrEmpty(value)) {
     pushRecord(ctx, pointer, projectionOf(value));
@@ -233,7 +265,7 @@ function walk(ctx: ScanContext, value: JsonValue, pointer: string, depth: number
   }
   if (!isContainer(value)) return;
   if (value.kind === "array") descendArray(ctx, value, pointer, depth);
-  else descendObject(ctx, value, pointer, depth);
+  else descendObject(ctx, value, pointer, depth, row);
 }
 
 // A malformed document is reported by closed reason and position only; the engine's own message
@@ -316,7 +348,7 @@ function walkLineRolledBack(ctx: ScanContext, value: JsonValue, index: number): 
   const normalizedLengthMark = ctx.normalizedLength;
   const diagnosticsMark = ctx.diagnostics.length;
   const omittedMark = ctx.omittedRecords;
-  walk(ctx, value, joinPointer("", String(index)), 0);
+  walk(ctx, value, joinPointer("", String(index)), 0, { parent: "", number: index + 1 });
   if (!ctx.nestingStopped) return;
   ctx.units.length = unitsMark;
   ctx.normalizedParts.length = normalizedPartsMark;

@@ -201,8 +201,8 @@ describe("jsonParser — JSON Lines / NDJSON (GRD-011)", () => {
     expect(pointers).toContain("/0");
     expect(pointers).toContain("/1");
     const text = ("normalizedText" in result ? result.normalizedText : undefined) ?? "";
-    expect(text).toContain("/0: a=1");
-    expect(text).toContain("/1: b=2");
+    expect(text).toContain("/!1: a=1");
+    expect(text).toContain("/!2: b=2");
   });
 
   it("preserves already-collected units when a later JSONL line exceeds maxNestingDepth (KEIKO-0484)", () => {
