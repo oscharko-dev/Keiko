@@ -226,7 +226,7 @@ describe("generated field construction preservation", () => {
     const parts = [
       ...source.matchAll(/^const (activityLogOperationPart\d+) = \/\*#__PURE__\*\/ \(\(\) =>/gmu),
     ];
-    expect(parts.length).toBe(
+    expect(parts).toHaveLength(
       Math.ceil(catalog.typedRegistry.operations.length / OPERATIONS_PER_PART),
     );
     expect(source.split("activityLogOperationPart").length - 1).toBe(parts.length * 3);
