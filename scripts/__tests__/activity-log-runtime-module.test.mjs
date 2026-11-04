@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import * as registered from "../../packages/keiko-contracts/dist/activity-log-registry.generated.js";
 import {
   generateOpCatalog,
+  OPERATIONS_PER_PART,
   runtimeOperationsModule,
   runtimeRegistryModule,
   runtimeIdentityModule,
@@ -214,11 +215,59 @@ describe("generated field construction preservation", () => {
     // The first-load UI chunk imports observability without reading the registry. Without this
     // marker the constructor calls kept the whole registry in that chunk, over its gzip ceiling.
     const source = runtimeOperationsModule(catalog.typedRegistry);
-    const start = "export const ACTIVITY_LOG_OPERATION_REGISTRY = /*#__PURE__*/ (() => [";
+    const start = "export const ACTIVITY_LOG_OPERATION_REGISTRY: readonly [";
+    const call = "] = /*#__PURE__*/ (() => [";
     expect(source.split(start).length - 1).toBe(1);
+    expect(source.split(call).length - 1).toBe(1);
+    expect(source.indexOf(call)).toBeGreaterThan(source.indexOf(start));
     expect(source.trimEnd().endsWith("] as const)();")).toBe(true);
     expect(source.slice(0, source.indexOf(start))).not.toContain("ACTIVITY_LOG_OPERATION_REGISTRY");
+    // The part factories are only declared above the export; the pure call is their one caller.
+    const parts = [...source.matchAll(/^const (activityLogOperationPart\d+) = \(\) =>/gmu)];
+    expect(parts.length).toBe(
+      Math.ceil(catalog.typedRegistry.operations.length / OPERATIONS_PER_PART),
+    );
+    for (const [, name] of parts) {
+      expect(source.split(`${name}()`).length - 1).toBe(1);
+      expect(source.indexOf(`...${name}()`)).toBeGreaterThan(source.indexOf(call));
+    }
   });
+
+  it("emits declarations for the whole registry without exceeding TypeScript's type limit", () => {
+    // TS7056: with dev 1.4.0's operations, one inferred registry type outgrew what TypeScript
+    // writes into a declaration file, and build:packages failed in keiko-contracts.
+    const root = mkdtempSync(join(tmpdir(), "activity-log-runtime-declarations-"));
+    try {
+      writeFileSync(join(root, "package.json"), '{"type":"module"}\n');
+      const generated = join(root, "activity-log-operations.generated.ts");
+      writeFileSync(generated, runtimeOperationsModule(catalog.typedRegistry));
+      copyFileSync(
+        new URL(
+          "../../packages/keiko-contracts/src/activity-log-field-contracts.ts",
+          import.meta.url,
+        ),
+        join(root, "activity-log-field-contracts.ts"),
+      );
+      const program = ts.createProgram([generated], {
+        strict: true,
+        declaration: true,
+        emitDeclarationOnly: true,
+        module: ts.ModuleKind.NodeNext,
+        moduleResolution: ts.ModuleResolutionKind.NodeNext,
+        target: ts.ScriptTarget.ES2022,
+        skipLibCheck: true,
+        outDir: join(root, "dist"),
+      });
+      const emitted = program.emit();
+      const codes = [...ts.getPreEmitDiagnostics(program), ...emitted.diagnostics].map(
+        (diagnostic) => diagnostic.code,
+      );
+      expect(codes).toEqual([]);
+      expect(emitted.emitSkipped).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 120_000);
 
   it("retains independent descriptor and enum occurrences with ordinary mutable properties", () => {
     withGeneratedRuntime(
