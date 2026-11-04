@@ -781,12 +781,13 @@ const renderItem = (content: readonly IngestedBlock[], marker: string): readonly
 const itemContent = (item: IngestedBlock): readonly IngestedBlock[] =>
   "content" in item ? item.content : [item];
 
+// A pipe in a cell is escaped so it cannot read as the boundary of another cell.
 const renderCell = (block: IngestedBlock): string =>
   flatten(
     block.kind === "tableCell"
       ? renderContent(block.content).join(" ")
       : renderBlock(block).join(" "),
-  );
+  ).replaceAll("|", String.raw`\|`);
 
 const cellsOf = (row: IngestedBlock): readonly IngestedBlock[] =>
   row.kind === "tableRow" ? row.cells : [row];

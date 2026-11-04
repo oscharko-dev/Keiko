@@ -139,6 +139,24 @@ describe("ADF block structure", () => {
     expect(rendered).toBe("| ID | Rule |\n| --- | --- |\n| FR-1 | must hold |");
   });
 
+  it("keeps a pipe inside a cell from forging a column", () => {
+    const rendered = render(
+      doc({
+        type: "table",
+        content: [
+          {
+            type: "tableRow",
+            content: [
+              { type: "tableCell", content: [para(text("a | b"))] },
+              { type: "tableCell", content: [para(text("c"))] },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(rendered).toBe("| a \\| b | c |");
+  });
+
   it("renders blockquote, rule, expand and media", () => {
     const rendered = render(
       doc(
