@@ -19,7 +19,10 @@
 
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
-import { GROUNDED_SYSTEM_PROMPT } from "../../../packages/keiko-server/dist/grounded-prompt.js";
+import {
+  GROUNDED_SYSTEM_PROMPT,
+  GROUNDED_SYSTEM_PROMPT_PRESERVING,
+} from "../../../packages/keiko-server/dist/grounded-prompt.js";
 import { groundingAccountingWitness } from "./grounding-accounting-witness.mjs";
 
 const PORT = Number(process.env.KEIKO_E2E_MODEL_PORT ?? "32186");
@@ -31,7 +34,11 @@ const HOST = "127.0.0.1";
 const REPLY_MARKER = "KEIKO_E2E_STREAM_OK";
 const JOURNAL_CAPTURE_MARKER = "KEIKO_E2E_JOURNAL_CAPTURE";
 const SALIENCE_PROMPT_MARKER = "You extract durable memories from a chat turn";
-const GROUNDED_PROMPT_MARKER = JSON.stringify(GROUNDED_SYSTEM_PROMPT).slice(1, -1);
+// Which of the two the server sends follows KEIKO_CONTENT_REDACTION; either is a grounded request.
+const GROUNDED_PROMPT_MARKERS = [GROUNDED_SYSTEM_PROMPT, GROUNDED_SYSTEM_PROMPT_PRESERVING].map(
+  (prompt) => JSON.stringify(prompt).slice(1, -1),
+);
+const isGroundedRequest = (raw) => GROUNDED_PROMPT_MARKERS.some((marker) => raw.includes(marker));
 const PR_DESCRIPTION_PROMPT_MARKER = "Write a factual pull-request description";
 const GROUNDING_PARITY_EVIDENCE_MARKER = "KEIKO_E2E_GROUNDING_PARITY";
 const GROUNDING_PARITY_REPLY =
@@ -61,8 +68,7 @@ function completionUsage(content) {
 }
 
 function observeGroundingAccounting(raw) {
-  if (!raw.includes(GROUNDED_PROMPT_MARKER) || !raw.includes(GROUNDING_PARITY_EVIDENCE_MARKER))
-    return;
+  if (!isGroundedRequest(raw) || !raw.includes(GROUNDING_PARITY_EVIDENCE_MARKER)) return;
   groundingCallCount += 1;
   groundingAccounting.push(
     groundingAccountingWitness(raw, completionUsage(completionContent(raw))),
@@ -144,10 +150,7 @@ function completionContent(rawRequest) {
   if (skill !== undefined) return skill;
   const description = prDescriptionCandidate(rawRequest);
   if (description !== undefined) return description;
-  if (
-    rawRequest.includes(GROUNDED_PROMPT_MARKER) &&
-    rawRequest.includes(GROUNDING_PARITY_EVIDENCE_MARKER)
-  ) {
+  if (isGroundedRequest(rawRequest) && rawRequest.includes(GROUNDING_PARITY_EVIDENCE_MARKER)) {
     return GROUNDING_PARITY_REPLY;
   }
   // This witness exists only in the real source excerpt, never in the user's fixture question.
