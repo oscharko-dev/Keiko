@@ -1133,6 +1133,7 @@ describe("MCP tools under the operator's registry (#3903)", () => {
     ],
     mode: "autonomous-delivery",
     home: "/tmp/keiko-native-policy/home",
+    platform: "linux",
   });
   const mcpEffect = (mode: string, permission: string, resources: readonly string[]): string => {
     const decision = decideOpenCodeNativePolicy({
@@ -1307,6 +1308,7 @@ it("asks before managed MCP effects in either restricted mode while retaining di
     ],
     mode: "governed-assist",
     home: "/synthetic/home",
+    platform: "linux",
     managed: true,
     relays: new Map([
       ["managed", { url: "http://127.0.0.1:1983/relay", capability: "synthetic-capability" }],
@@ -1374,6 +1376,7 @@ describe("a Jira Pod the human chose for the run (owner decision 2026-10-30)", (
       servers: [definition],
       mode: "governed-assist",
       home: "/synthetic/home",
+      platform: "linux",
       managed: true,
       relays: new Map([
         ["jira", { url: "http://127.0.0.1:1983/relay", capability: "synthetic-capability" }],
@@ -1436,6 +1439,7 @@ describe("a Jira Pod the human chose for the run (owner decision 2026-10-30)", (
       servers: [],
       mode: "autonomous-delivery",
       home: "/synthetic/home",
+      platform: "linux",
       managed: true,
       relays: new Map(),
       grantedServers: new Set(["jira"]),

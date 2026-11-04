@@ -390,6 +390,31 @@ const NATIVE_FORMATTER_BOUND_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const NATIVE_MCP_LOCAL_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.native-mcp-local.refused",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordNativeMcpLocalRefused",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["no-env-scrubbing-launcher"],
+    },
+    refusedServerCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-native-policy"],
+  proofIds: ["coding-runtime.native-mcp-local.refused.emitted-line"],
+  releaseImpact: "patch",
+});
+
 const PROVIDER_POLICY_BOUND_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -600,6 +625,8 @@ export interface OpenCodeRuntimeCompositionInput {
    * is the grant of their read tools, in every mode. Absent, the run grants nothing.
    */
   readonly mcpGrantedServers?: ReadonlySet<string> | undefined;
+  /** The platform deciding whether a local MCP server has an env-scrubbing launcher; default this process's. */
+  readonly mcpPlatform?: NodeJS.Platform | undefined;
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
   readonly contextGeometry: OpenCodeContextGeometry;
@@ -2010,6 +2037,7 @@ function runLaunchProfile(
   readonly mcp: OpenCodeNativeMcpAdmission | undefined;
 } {
   const mcp = nativeMcpAdmission(input, request, runRoot, mcpChecks);
+  recordNativeMcpLocalRefused(input.activityLog, request, mcp);
   const profile = buildOpenCodeLaunchProfile({
     executable: request.executablePath,
     stateRoot: runRoot,
@@ -2049,6 +2077,7 @@ function nativeMcpAdmission(
     relays: checks.relays,
     managed: input.mcpRelay?.managed !== undefined,
     grantedServers: input.mcpGrantedServers,
+    platform: input.mcpPlatform,
   });
 }
 
@@ -2353,6 +2382,26 @@ function recordNativeFormatterBound(
         ...(entries === undefined
           ? {}
           : { configuredEntryCount: entries.admitted, refusedEntryCount: entries.refused }),
+      },
+    ),
+  );
+}
+
+/** A native run left local MCP servers out for want of an env-scrubbing launcher: a count only. */
+function recordNativeMcpLocalRefused(
+  activityLog: ServerLogSink | undefined,
+  request: OpenCodeLifecyclePrepareRequest,
+  mcp: OpenCodeNativeMcpAdmission | undefined,
+): void {
+  if (mcp === undefined || mcp.refusedLocalServerCount === 0) return;
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      NATIVE_MCP_LOCAL_REFUSED_OPERATION,
+      { correlationId: request.runId },
+      {
+        runId: request.runId,
+        reason: "no-env-scrubbing-launcher",
+        refusedServerCount: mcp.refusedLocalServerCount,
       },
     ),
   );

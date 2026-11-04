@@ -11414,6 +11414,7 @@
         "state": [
           "coding-runtime.native-external-roots.resolved",
           "coding-runtime.native-formatter.bound",
+          "coding-runtime.native-mcp-local.refused",
           "coding-runtime.native-narrowing.refused",
           "coding-runtime.native-policy.decided",
           "coding-runtime.native-step.changed",
@@ -11430,6 +11431,10 @@
         },
         {
           "op": "coding-runtime.native-formatter.bound",
+          "mode": "correlation"
+        },
+        {
+          "op": "coding-runtime.native-mcp-local.refused",
           "mode": "correlation"
         },
         {
@@ -11453,6 +11458,7 @@
       "resourceSignals": [
         "coding-runtime.native-external-roots.resolved",
         "coding-runtime.native-formatter.bound",
+        "coding-runtime.native-mcp-local.refused",
         "coding-runtime.native-narrowing.refused",
         "coding-runtime.native-policy.decided",
         "coding-runtime.native-step.changed",
@@ -11559,6 +11565,48 @@
             "causeChain": false
           },
           "proofIds": ["coding-runtime.native-formatter.bound.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "coding-runtime.native-mcp-local.refused",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "refusedServerCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "runId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-runtime.native-mcp-local.refused.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         },
