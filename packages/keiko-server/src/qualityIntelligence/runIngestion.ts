@@ -428,6 +428,27 @@ function adfNoticesFor(stats: {
   ];
 }
 
+// A limit the tree reached is a size problem the person can act on (shorten or split the
+// requirement), not malformed content: the parser reports the two with different codes, so the
+// source error keeps that difference.
+const ADF_LIMIT_CODES: ReadonlySet<string> = new Set([
+  "DOCUMENT_TOO_LARGE",
+  "MAX_NODES_EXCEEDED",
+  "MAX_DEPTH_EXCEEDED",
+]);
+
+function adfSourceError(label: string, parserCode: string): QiIngestionError {
+  return ADF_LIMIT_CODES.has(parserCode)
+    ? new QiIngestionError(
+        "QI_SOURCE_TOO_LARGE",
+        `Source "${label}" exceeds the Atlassian Document Format size limit; shorten or split it.`,
+      )
+    : new QiIngestionError(
+        "QI_BAD_SOURCE",
+        `Source "${label}" contains invalid Atlassian Document Format content.`,
+      );
+}
+
 // eslint-disable-next-line max-lines-per-function
 function ingestRequirements(
   source: Extract<QualityIntelligenceInlineSource, { kind: "requirements" }>,
@@ -445,10 +466,7 @@ function ingestRequirements(
       adfNotice = adfNoticesFor(parsed.stats);
     } catch (error) {
       if (!(error instanceof QualityIntelligenceIngestion.AdfParserError)) throw error;
-      throw new QiIngestionError(
-        "QI_BAD_SOURCE",
-        `Source "${label}" contains invalid Atlassian Document Format content.`,
-      );
+      throw adfSourceError(label, error.code);
     }
   }
   const bounded = truncateToUtf8BytesDetailed(text, byteBudget);

@@ -821,6 +821,29 @@ describe("ingestInlineSources — happy path", () => {
     ]);
   });
 
+  it("reports an ADF tree over a size limit as too large, not as invalid", () => {
+    const paragraphs = Array.from({ length: 5_001 }, () => ({
+      type: "paragraph",
+      content: [{ type: "text", text: "REQ-1: The system shall log in." }],
+    }));
+    const run = (adf: Record<string, unknown>): QiIngestionError | undefined => {
+      try {
+        ingestInlineSources(
+          input([{ kind: "requirements", label: "Jira ADF", text: "", adf: adf as never }]),
+        );
+      } catch (err) {
+        return err instanceof QiIngestionError ? err : undefined;
+      }
+      return undefined;
+    };
+    const tooLarge = run({ type: "doc", version: 1, content: paragraphs });
+    expect(tooLarge?.code).toBe("QI_SOURCE_TOO_LARGE");
+    expect(tooLarge?.message).toContain("size limit");
+    const malformed = run({ type: "paragraph", content: [] });
+    expect(malformed?.code).toBe("QI_BAD_SOURCE");
+    expect(malformed?.message).toContain("invalid Atlassian Document Format");
+  });
+
   it("keeps the requirements envelope id stable when the requirement text changes in-place", () => {
     const before = ingestInlineSources(
       input([requirementsSource("Spec", "REQ-1: Login must work\nREQ-2: MFA must work")]),
