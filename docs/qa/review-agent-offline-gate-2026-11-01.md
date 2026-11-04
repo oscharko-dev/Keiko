@@ -180,7 +180,7 @@ The single holdout run started at 17:36 UTC on 2026-11-02 with the product confi
   measured something by then. The review of #3419 had just started; it is settled
   `abandoned/interrupted` on the next start and reviewed again.
 - Independent review finding R4130-002 showed that a resume matched stored reviews only on the pair
-  and the commits. From `bf12b6c30`'s successor on, every review's client request id carries a reuse
+  and the commits. From `28156040a` on, every review's client request id carries a reuse
   key over the configuration and composition digests, and a resume reuses only reviews with the
   current key. Reviews stored earlier carry no key. A resume reuses them only with
   `--resume-legacy-digest`, which must equal the run's configuration digest. The holdout resumes
