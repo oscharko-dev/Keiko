@@ -236,11 +236,19 @@ export interface ProjectedRow {
 }
 
 // A worksheet name may hold `=`, `|` and `!` but never `:` (Excel forbids `\ / ? * [ ] :`), so the
-// first colon ends the `Sheet!Row:` prefix.
-const PROJECTION_PREFIX =
-  /^(?:Table row (?<rowInDocument>\d{1,9})|(?<table>[^\n:]{1,120})!(?<rowInTable>\d{1,9})):[ \t]+(?=[^=|\n]{1,80}=)/u;
-const PROJECTED_CELL_BREAK = / \| (?=[^=|\n]{1,80}=)/u;
-const NEUTRAL_LABEL = /^Column \d+$/u;
+// first colon ends the `Sheet!Row:` prefix. A header label is at most 120 characters in the
+// projection (plus the ` 2` of a repeated one); the bound here stays above that, so no header the
+// projection labels a cell with is too long to be read as a label.
+const MAX_LABEL_CHARS = 160;
+const LABEL_AHEAD = String.raw`(?=[^=|\n]{1,${String(MAX_LABEL_CHARS)}}=)`;
+const PROJECTION_PREFIX = new RegExp(
+  String.raw`^(?:Table row (?<rowInDocument>\d{1,9})|(?<table>[^\n:]{1,120})!(?<rowInTable>\d{1,9})):[ \t]+${LABEL_AHEAD}`,
+  "u",
+);
+const PROJECTED_CELL_BREAK = new RegExp(String.raw` \| ${LABEL_AHEAD}`, "u");
+// A projected line that holds no labelled cell (a title, a note, a header-only table).
+const PLAIN_PROJECTION = /^[^\n:]{1,120}!\d{1,9}:(?:[ \t]|$)/u;
+const NEUTRAL_LABEL = /^Column (?:\d+|[A-Z]{1,3})$/u;
 /** The line of a JSON record: a row of a JSON document never continues on another line. */
 const POINTER_RECORD = /^\/[^\n:]{0,120}: /u;
 
@@ -260,7 +268,11 @@ function appendProjectedCells(
   return true;
 }
 
-/** The row a projected line starts, or undefined when the line is not one. */
+/**
+ * The row a projected line starts, or undefined when the line is not one. A projected line with no
+ * labelled cell is a row without cells: it ends the row before it (the title of the next sheet is
+ * no further criterion of the last requirement) and defines nothing.
+ */
 export function openProjectedRow(
   raw: string,
   vocabulary: CompiledVocabulary,
@@ -290,6 +302,11 @@ export function continuesProjectedTable(last: ProjectedRow, next: ProjectedRow):
 /** A line that ends the row above it because it is a record of its own. */
 export function isPointerRecord(raw: string): boolean {
   return POINTER_RECORD.test(raw);
+}
+
+/** A projected line with no labelled cell: a title or note of a sheet, never part of the last cell. */
+export function isPlainProjection(raw: string): boolean {
+  return PLAIN_PROJECTION.test(raw);
 }
 
 /**
@@ -322,8 +339,8 @@ export function continueProjectedRow(
   raw: string,
   vocabulary: CompiledVocabulary,
 ): void {
-  const [first = "", ...rest] = raw.split(PROJECTED_CELL_BREAK);
   const last = row.cells.length - 1;
+  const [first = "", ...rest] = raw.split(PROJECTED_CELL_BREAK);
   row.cells[last] = `${row.cells[last] ?? ""}\n${first}`;
   appendProjectedCells(row, rest, vocabulary);
 }

@@ -46,6 +46,13 @@ const TIME_FORMAT_IDS: ReadonlySet<number> = new Set([18, 19, 20, 21, 32, 33, 34
 const ELAPSED_FORMAT_IDS: ReadonlySet<number> = new Set([46]);
 const SECONDS_FORMAT_IDS: ReadonlySet<number> = new Set([19, 21, 33, 35, 45, 46, 47]);
 
+// Excel caps a format code at 255 characters and shows at most 30 decimals; a layout with more
+// digit placeholders than this is no real format and renders as General, so a hostile format code
+// can never make the number rendering throw or allocate without bound.
+const MAX_LAYOUT_DIGITS = 40;
+// Excel keeps 15 significant digits of a double; whatever follows is zero.
+const SIGNIFICANT_DIGITS = 15;
+
 const MS_PER_DAY = 86_400_000;
 const SECONDS_PER_DAY = 86_400;
 const MAX_SERIAL = 2_958_465;
@@ -57,10 +64,13 @@ export interface NumberFormatInput {
   readonly date1904: boolean;
 }
 
+// The unit of an elapsed-time bracket (`[h]`, `[m]`, `[s]`): the count that leads the rendering.
+type ElapsedUnit = "h" | "m" | "s";
+
 interface DateTimeShape {
   readonly kind: "date" | "time" | "date-time";
   readonly seconds: boolean;
-  readonly elapsed: boolean;
+  readonly elapsed: ElapsedUnit | undefined;
 }
 
 function pad2(value: number): string {
@@ -114,8 +124,16 @@ function bareFormat(section: string): string {
     .replaceAll(/\[[^\]]*\]/gu, "");
 }
 
-function hasElapsedBracket(section: string): boolean {
-  return /\[(?:h+|m+|s+)\]/iu.test(section.replaceAll(/"[^"]*"/gu, ""));
+const ELAPSED_BRACKETS = /\[(h+|m+|s+)\]/giu;
+const FIRST_ELAPSED_BRACKET = /\[(h+|m+|s+)\]/iu;
+
+// The unit of the first elapsed bracket outside quotes: `[h]:mm` counts hours, `[mm]:ss` minutes.
+function elapsedUnitOf(section: string): ElapsedUnit | undefined {
+  const unquoted = section.replaceAll(/"[^"]*"/gu, "");
+  const token = FIRST_ELAPSED_BRACKET.exec(unquoted)?.[1]?.toLowerCase();
+  if (token === undefined) return undefined;
+  if (token.startsWith("h")) return "h";
+  return token.startsWith("m") ? "m" : "s";
 }
 
 // `m` is a minute only next to an hour or a second token; otherwise it is a month.
@@ -124,27 +142,28 @@ function hasMinuteToken(bare: string): boolean {
 }
 
 function dateTimeShape(section: string): DateTimeShape | undefined {
-  const bare = bareFormat(section).replaceAll(/AM\/PM|A\/P/giu, "");
-  const elapsed = hasElapsedBracket(section);
+  // An elapsed bracket is an hour, minute or second token like any other: `[h]:mm` ends in minutes.
+  const tokens = section.replaceAll(ELAPSED_BRACKETS, "$1");
+  const bare = bareFormat(tokens).replaceAll(/AM\/PM|A\/P/giu, "");
+  const elapsed = elapsedUnitOf(section);
   const minute = hasMinuteToken(bare);
-  const hasDate = /[yd]/iu.test(bare) || (/m/iu.test(bare) && !minute);
-  const hasTime = elapsed || minute || /[hs]/iu.test(bare);
+  const hasDate = /[yd]/iu.test(bare) || (elapsed === undefined && /m/iu.test(bare) && !minute);
+  const hasTime = elapsed !== undefined || minute || /[hs]/iu.test(bare);
   if (!hasDate && !hasTime) return undefined;
-  if (!hasTime) return { kind: "date", seconds: false, elapsed: false };
-  const seconds = /s/iu.test(bare) || /\[s+\]/iu.test(section);
-  return { kind: hasDate ? "date-time" : "time", seconds, elapsed };
+  if (!hasTime) return { kind: "date", seconds: false, elapsed: undefined };
+  return { kind: hasDate ? "date-time" : "time", seconds: /s/iu.test(bare), elapsed };
 }
 
 function builtInShape(numFmtId: number): DateTimeShape | undefined {
-  if (DATE_FORMAT_IDS.has(numFmtId)) return { kind: "date", seconds: false, elapsed: false };
+  if (DATE_FORMAT_IDS.has(numFmtId)) return { kind: "date", seconds: false, elapsed: undefined };
   if (DATE_TIME_FORMAT_IDS.has(numFmtId)) {
-    return { kind: "date-time", seconds: false, elapsed: false };
+    return { kind: "date-time", seconds: false, elapsed: undefined };
   }
   if (!TIME_FORMAT_IDS.has(numFmtId)) return undefined;
   return {
     kind: "time",
     seconds: SECONDS_FORMAT_IDS.has(numFmtId),
-    elapsed: ELAPSED_FORMAT_IDS.has(numFmtId),
+    elapsed: ELAPSED_FORMAT_IDS.has(numFmtId) ? "h" : undefined,
   };
 }
 
@@ -167,6 +186,17 @@ function clock(secondOfDay: number, hours: number, seconds: boolean): string {
   return seconds ? `${base}:${pad2(secondOfDay % 60)}` : base;
 }
 
+// The elapsed time since midnight of day 0 in the unit its leading bracket counts: `[h]:mm` is
+// 36:00 for a day and a half, `[mm]:ss` 720:00 for half a day, `[s]` 43200.
+function elapsedClock(total: number, shape: DateTimeShape): string {
+  if (shape.elapsed === "s") return String(total);
+  if (shape.elapsed === "m") {
+    const minutes = String(Math.floor(total / 60));
+    return shape.seconds ? `${minutes}:${pad2(total % 60)}` : minutes;
+  }
+  return clock(total % 3600, Math.floor(total / 3600), shape.seconds);
+}
+
 function renderDateTime(
   serial: number,
   shape: DateTimeShape,
@@ -178,8 +208,10 @@ function renderDateTime(
   const days = Math.floor(total / SECONDS_PER_DAY);
   const secondOfDay = total - days * SECONDS_PER_DAY;
   if (shape.kind === "date") return isoDate(Math.floor(serial), date1904);
-  const hours = shape.elapsed ? Math.floor(total / 3600) : Math.floor(secondOfDay / 3600);
-  const time = clock(shape.elapsed ? total % 3600 : secondOfDay, hours, shape.seconds);
+  const time =
+    shape.elapsed === undefined
+      ? clock(secondOfDay, Math.floor(secondOfDay / 3600), shape.seconds)
+      : elapsedClock(total, shape);
   return shape.kind === "time" ? time : `${isoDate(days, date1904)} ${time}`;
 }
 
@@ -198,7 +230,11 @@ interface NumberLayout {
   readonly minDecimals: number;
   readonly maxDecimals: number;
   readonly percent: number;
+  // Commas right after the last digit placeholder: each divides the value by 1000.
+  readonly thousands: number;
   readonly scientific: number | undefined;
+  // The section holds text only (`"n/a"`, `"-"`): it shows `prefix` whatever the value.
+  readonly literalOnly: boolean;
 }
 
 interface LayoutScan {
@@ -208,6 +244,7 @@ interface LayoutScan {
   minDecimals: number;
   maxDecimals: number;
   percent: number;
+  thousands: number;
   scientific: number | undefined;
   seenPlaceholder: boolean;
   afterPoint: boolean;
@@ -228,11 +265,15 @@ function appendLiteral(scan: LayoutScan, text: string): void {
 
 function scanPlaceholder(scan: LayoutScan, ch: string): void {
   scan.seenPlaceholder = true;
+  scan.thousands = 0;
   if (scan.afterPoint) {
     scan.maxDecimals += 1;
     if (ch === "0") scan.minDecimals = scan.maxDecimals;
   } else if (ch === "0") {
     scan.integerDigits += 1;
+  }
+  if (scan.maxDecimals > MAX_LAYOUT_DIGITS || scan.integerDigits > MAX_LAYOUT_DIGITS) {
+    scan.unsupported = true;
   }
 }
 
@@ -258,97 +299,239 @@ function scanQuoted(section: string, index: number): { text: string; next: numbe
   return { text: section.slice(index + 1, end), next: end };
 }
 
-// eslint-disable-next-line complexity
-function scanSection(section: string): NumberLayout | undefined {
-  const scan: LayoutScan = {
+function newScan(): LayoutScan {
+  return {
     prefix: "",
     suffix: "",
     integerDigits: 0,
     minDecimals: 0,
     maxDecimals: 0,
     percent: 0,
+    thousands: 0,
     scientific: undefined,
     seenPlaceholder: false,
     afterPoint: false,
     unsupported: false,
   };
+}
+
+// Quoted text, an escaped character, a skip/fill marker or a bracket; the index of the last
+// character it used, or undefined when the character is none of these.
+function scanQuotedOrEscaped(scan: LayoutScan, section: string, index: number): number | undefined {
+  const ch = section.charAt(index);
+  if (ch === '"') {
+    const quoted = scanQuoted(section, index);
+    appendLiteral(scan, quoted.text);
+    return quoted.next;
+  }
+  if (ch === "\\") {
+    appendLiteral(scan, section.charAt(index + 1));
+    return index + 1;
+  }
+  if (ch === "_" || ch === "*") return index + 1;
+  if (ch !== "[") return undefined;
+  const close = section.indexOf("]", index);
+  const end = close < 0 ? section.length : close;
+  appendLiteral(scan, currencyLiteral(section.slice(index, end + 1)));
+  return end;
+}
+
+function scanSymbol(scan: LayoutScan, section: string, index: number): number {
+  const ch = section.charAt(index);
+  if ("0#?".includes(ch)) {
+    scanPlaceholder(scan, ch);
+  } else if (ch === ".") {
+    scan.thousands = 0;
+    if (scan.seenPlaceholder) scan.afterPoint = true;
+    else appendLiteral(scan, ch);
+  } else if (ch === "%") {
+    scan.percent += 1;
+    appendLiteral(scan, ch);
+  } else if ("Ee".includes(ch)) {
+    return scanExponent(scan, section, index);
+  } else if ("/@".includes(ch)) {
+    scan.unsupported = true;
+  } else if (ch !== ",") {
+    appendLiteral(scan, ch);
+  } else if (scan.seenPlaceholder) {
+    // A comma after the last digit placeholder divides by 1000; one between placeholders is only
+    // the thousands separator, which the next placeholder resets.
+    scan.thousands += 1;
+  }
+  return index;
+}
+
+function scanSection(section: string): NumberLayout | undefined {
+  const scan = newScan();
   for (let index = 0; index < section.length; index += 1) {
-    const ch = section.charAt(index);
-    if (ch === '"') {
-      const quoted = scanQuoted(section, index);
-      appendLiteral(scan, quoted.text);
-      index = quoted.next;
-    } else if (ch === "\\") {
-      appendLiteral(scan, section.charAt(index + 1));
-      index += 1;
-    } else if (ch === "_" || ch === "*") {
-      index += 1;
-    } else if (ch === "[") {
-      const close = section.indexOf("]", index);
-      const end = close < 0 ? section.length : close;
-      appendLiteral(scan, currencyLiteral(section.slice(index, end + 1)));
-      index = end;
-    } else if (ch === "0" || ch === "#" || ch === "?") {
-      scanPlaceholder(scan, ch);
-    } else if (ch === ".") {
-      if (scan.seenPlaceholder) scan.afterPoint = true;
-      else appendLiteral(scan, ch);
-    } else if (ch === "%") {
-      scan.percent += 1;
-      appendLiteral(scan, ch);
-    } else if (ch === "E" || ch === "e") {
-      index = scanExponent(scan, section, index);
-    } else if (ch === "/" || ch === "@") {
-      scan.unsupported = true;
-    } else if (ch !== ",") {
-      appendLiteral(scan, ch);
-    }
+    index = scanQuotedOrEscaped(scan, section, index) ?? scanSymbol(scan, section, index);
   }
-  if (scan.unsupported || !scan.seenPlaceholder) return undefined;
-  return scan;
+  if (scan.unsupported) return undefined;
+  if (scan.seenPlaceholder) return { ...scan, literalOnly: false };
+  // `"n/a"`, `"-"`: a section of text only shows that text, whatever the number is.
+  return scan.prefix.length > 0 ? { ...scan, literalOnly: true } : undefined;
 }
 
-function roundedDecimal(value: number, maxDecimals: number, minDecimals: number): string {
-  const factor = 10 ** maxDecimals;
-  const rounded = Math.round(Number((value * factor).toPrecision(15))) / factor;
-  let text = rounded.toFixed(maxDecimals);
-  if (maxDecimals > minDecimals) {
-    const [whole = "0", fraction = ""] = text.split(".");
-    const kept = fraction.replace(/0+$/u, "").padEnd(minDecimals, "0");
-    text = kept.length > 0 ? `${whole}.${kept}` : whole;
-  }
-  return text;
+// ─── Digits ───────────────────────────────────────────────────────────────────
+
+// A magnitude as the 15 significant digits Excel keeps: `digits × 10^scale`. Everything below is
+// integer arithmetic on that decimal, so no binary floating-point noise reaches the text and no
+// number of requested decimals or magnitude can leave the range `toFixed` accepts.
+interface Decimal {
+  readonly digits: bigint;
+  readonly scale: number;
 }
 
-function scientificText(value: number, layout: NumberLayout, exponentDigits: number): string {
-  const [mantissa = "0", exponent = "0"] = value.toExponential(layout.maxDecimals).split("e");
-  const exp = Number.parseInt(exponent, 10);
-  const sign = exp < 0 ? "-" : "+";
-  return `${mantissa}E${sign}${Math.abs(exp).toString().padStart(exponentDigits, "0")}`;
+function toDecimal(magnitude: number): Decimal {
+  if (magnitude === 0) return { digits: BigInt(0), scale: 0 };
+  const [mantissa = "0", exponent = "0"] = magnitude
+    .toExponential(SIGNIFICANT_DIGITS - 1)
+    .split("e");
+  return {
+    digits: BigInt(mantissa.replace(".", "")),
+    scale: Number.parseInt(exponent, 10) - (SIGNIFICANT_DIGITS - 1),
+  };
+}
+
+const TEN = BigInt(10);
+const TWO = BigInt(2);
+
+// The digits of `value × 10^shift` rounded half away from zero to `decimals` places, as an integer.
+function scaledInteger(value: Decimal, shift: number, decimals: number): bigint {
+  const places = value.scale + shift + decimals;
+  if (places >= 0) return value.digits * TEN ** BigInt(places);
+  const drop = -places;
+  if (drop > SIGNIFICANT_DIGITS) return BigInt(0);
+  const divisor = TEN ** BigInt(drop);
+  return (value.digits + divisor / TWO) / divisor;
+}
+
+function fixedText(value: Decimal, shift: number, layout: NumberLayout): string {
+  const { minDecimals, maxDecimals, integerDigits } = layout;
+  const integer = scaledInteger(value, shift, maxDecimals)
+    .toString()
+    .padStart(maxDecimals + 1, "0");
+  const whole = integer.slice(0, integer.length - maxDecimals).padStart(integerDigits, "0");
+  const fraction = integer.slice(integer.length - maxDecimals);
+  const kept =
+    maxDecimals > minDecimals ? fraction.replace(/0+$/u, "").padEnd(minDecimals, "0") : fraction;
+  return kept.length > 0 ? `${whole}.${kept}` : whole;
+}
+
+// The `significant` leading digits of the value, rounded half up, and whether rounding carried
+// into a new leading digit (`9.99` to two digits is `10`).
+function leadingDigits(digits: bigint, significant: number): { text: string; carried: boolean } {
+  if (significant >= SIGNIFICANT_DIGITS) {
+    const widened = digits * TEN ** BigInt(significant - SIGNIFICANT_DIGITS);
+    return { text: widened.toString(), carried: false };
+  }
+  const divisor = TEN ** BigInt(SIGNIFICANT_DIGITS - significant);
+  const text = ((digits + divisor / TWO) / divisor).toString();
+  return text.length > significant
+    ? { text: text.slice(0, significant), carried: true }
+    : { text, carried: false };
+}
+
+function scientificText(
+  value: Decimal,
+  shift: number,
+  layout: NumberLayout,
+  exponentDigits: number,
+): string {
+  const significant = layout.maxDecimals + 1;
+  const isZero = value.digits === BigInt(0);
+  const leading = isZero
+    ? { text: "0".repeat(significant), carried: false }
+    : leadingDigits(value.digits, significant);
+  const exponent = isZero
+    ? 0
+    : value.scale + SIGNIFICANT_DIGITS - 1 + shift + (leading.carried ? 1 : 0);
+  const mantissa =
+    layout.maxDecimals > 0 ? `${leading.text.slice(0, 1)}.${leading.text.slice(1)}` : leading.text;
+  const sign = exponent < 0 ? "-" : "+";
+  return `${mantissa}E${sign}${Math.abs(exponent).toString().padStart(exponentDigits, "0")}`;
 }
 
 function layoutNumber(magnitude: number, layout: NumberLayout): string {
-  const scaled = magnitude * 100 ** layout.percent;
-  if (layout.scientific !== undefined) return scientificText(scaled, layout, layout.scientific);
-  const text = roundedDecimal(scaled, layout.maxDecimals, layout.minDecimals);
-  const [whole = "0", fraction] = text.split(".");
-  const padded = whole.padStart(layout.integerDigits, "0");
-  return fraction === undefined ? padded : `${padded}.${fraction}`;
+  const value = toDecimal(magnitude);
+  // Percent multiplies by 100 and each trailing comma divides by 1000, in the exponent.
+  const shift = 2 * layout.percent - 3 * layout.thousands;
+  return layout.scientific === undefined
+    ? fixedText(value, shift, layout)
+    : scientificText(value, shift, layout, layout.scientific);
 }
 
-function chooseSection(sections: readonly string[], value: number): string {
-  if (value < 0 && sections.length > 1) return sections[1] ?? "";
-  if (value === 0 && sections.length > 2) return sections[2] ?? "";
-  return sections[0] ?? "";
+// ─── Sections ─────────────────────────────────────────────────────────────────
+
+interface Condition {
+  readonly operator: string;
+  readonly operand: number;
+}
+
+interface ChosenSection {
+  readonly section: string;
+  // The section writes the sign of a negative number itself (`(0)`, `-0`), so none is added.
+  readonly ownsSign: boolean;
+}
+
+const CONDITION = /\[\s*(<=|>=|<>|<|>|=)\s*(-?\d+(?:\.\d+)?(?:E[+-]?\d+)?)\s*\]/iu;
+const COMPARATORS: ReadonlyMap<string, (left: number, right: number) => boolean> = new Map([
+  ["<", (left: number, right: number): boolean => left < right],
+  ["<=", (left: number, right: number): boolean => left <= right],
+  [">", (left: number, right: number): boolean => left > right],
+  [">=", (left: number, right: number): boolean => left >= right],
+  ["=", (left: number, right: number): boolean => left === right],
+  ["<>", (left: number, right: number): boolean => left !== right],
+]);
+
+function conditionOf(section: string): Condition | undefined {
+  const match = CONDITION.exec(section.replaceAll(/"[^"]*"/gu, ""));
+  const operator = match?.[1];
+  const operand = Number(match?.[2]);
+  return operator === undefined || !Number.isFinite(operand) ? undefined : { operator, operand };
+}
+
+function holds(condition: Condition, value: number): boolean {
+  return COMPARATORS.get(condition.operator)?.(value, condition.operand) === true;
+}
+
+function implicitSection(sections: readonly string[], value: number): ChosenSection {
+  if (value < 0 && sections.length > 1) return { section: sections[1] ?? "", ownsSign: true };
+  if (value === 0 && sections.length > 2) return { section: sections[2] ?? "", ownsSign: false };
+  return { section: sections[0] ?? "", ownsSign: false };
+}
+
+// The first section whose condition holds; otherwise the first without a condition (the "all
+// other numbers" section), otherwise the last.
+function conditionalSection(
+  sections: readonly string[],
+  conditions: readonly (Condition | undefined)[],
+  value: number,
+): ChosenSection {
+  let index = conditions.findIndex(
+    (condition) => condition !== undefined && holds(condition, value),
+  );
+  if (index < 0) index = conditions.findIndex((condition) => condition === undefined);
+  if (index < 0) index = conditions.length - 1;
+  const condition = conditions[index];
+  const negativeRange =
+    condition !== undefined && condition.operand <= 0 && condition.operator.startsWith("<");
+  return { section: sections[index] ?? "", ownsSign: value < 0 && negativeRange };
+}
+
+function chooseSection(sections: readonly string[], value: number): ChosenSection {
+  const conditions = sections.slice(0, 3).map((section) => conditionOf(section));
+  return conditions.some((condition) => condition !== undefined)
+    ? conditionalSection(sections, conditions, value)
+    : implicitSection(sections, value);
 }
 
 function formatPlainNumber(value: number, code: string): string {
-  const sections = splitSections(code);
-  const section = chooseSection(sections, value);
-  const layout = scanSection(section);
+  const chosen = chooseSection(splitSections(code), value);
+  const layout = scanSection(chosen.section);
   if (layout === undefined) return generalNumber(value);
-  const ownsSign = value < 0 && sections.length > 1;
-  const sign = value < 0 && !ownsSign ? "-" : "";
+  if (layout.literalOnly) return layout.prefix;
+  const sign = value < 0 && !chosen.ownsSign ? "-" : "";
   return `${sign}${layout.prefix}${layoutNumber(Math.abs(value), layout)}${layout.suffix}`;
 }
 

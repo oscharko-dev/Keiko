@@ -40,6 +40,7 @@ const DEPENDENCY_VERSIONS = Object.freeze([
 ]);
 const XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const MAX_XML_INFLATED_BYTES = 32 * 1024 * 1024;
+const MAX_TOTAL_INFLATED_BYTES = 256 * 1024 * 1024;
 const SHEET_ENTRY_PREFIX = "xl/worksheets/";
 const XLSX_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS);
 
@@ -140,9 +141,49 @@ function xlsxZipPlan(options: ParserOptions): OoxmlZipReadPlan {
     format: "xlsx",
     isWanted: isRelevantEntry,
     maxEntryInflatedBytes: ooxmlEntryInflatedLimit(options.maxBytes, MAX_XML_INFLATED_BYTES),
+    // Every wanted part is held as text; without a ceiling on all of them a workbook of many sheets
+    // each just under the ceiling of one part is read into memory in full.
+    maxTotalInflatedBytes: ooxmlEntryInflatedLimit(options.maxBytes, MAX_TOTAL_INFLATED_BYTES),
     scanBudget: "none",
     duplicateParts: "replace",
   };
+}
+
+const SPREADSHEET_NAMESPACES: ReadonlySet<string> = new Set([
+  "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+  "http://purl.oclc.org/ooxml/spreadsheetml/main",
+  "http://schemas.openxmlformats.org/package/2006/relationships",
+]);
+const NAMESPACE_DECLARATION = /xmlns:([A-Za-z_][\w.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/gu;
+
+// The start tag of the root element: the first tag that is no declaration, comment or doctype.
+function rootStartTag(xml: string): string {
+  let cursor = 0;
+  for (;;) {
+    const open = xml.indexOf("<", cursor);
+    if (open === -1) return "";
+    const next = xml.charAt(open + 1);
+    if (next !== "?" && next !== "!") {
+      const end = findTagEnd(xml, open + 1);
+      return end === -1 ? "" : xml.slice(open, end + 1);
+    }
+    cursor = open + 1;
+  }
+}
+
+// Writers such as the Open XML SDK samples bind the spreadsheet namespace to a prefix
+// (`<x:row><x:c>`). The scanners below match element names as the default namespace writes them,
+// so the prefix is removed once, here; elements of other namespaces keep theirs.
+function withoutSpreadsheetPrefix(xml: string): string {
+  let out = xml;
+  for (const declaration of rootStartTag(xml).matchAll(NAMESPACE_DECLARATION)) {
+    const [, prefix, doubleQuoted, singleQuoted] = declaration;
+    const namespace = doubleQuoted ?? singleQuoted;
+    if (prefix === undefined || namespace === undefined) continue;
+    if (!SPREADSHEET_NAMESPACES.has(namespace)) continue;
+    out = out.replaceAll(`<${prefix}:`, "<").replaceAll(`</${prefix}:`, "</");
+  }
+  return out;
 }
 
 async function readRelevantEntries(
@@ -150,7 +191,7 @@ async function readRelevantEntries(
   options: ParserOptions,
 ): Promise<readonly XlsxEntry[]> {
   const parts = await readOoxmlZipEntries(bytes, options, options.now(), xlsxZipPlan(options));
-  return [...parts].map(([name, xml]) => ({ name, xml }));
+  return [...parts].map(([name, xml]) => ({ name, xml: withoutSpreadsheetPrefix(xml) }));
 }
 
 // GRD-027: delegate to the shared decoder so cell text resolves numeric character references
@@ -419,7 +460,10 @@ export function parseSharedStrings(
   const diagnostics: ParserDiagnostic[] = [];
   const startedAt = options.now();
   for (const itemXml of iterateXmlElements(xml, "si")) {
-    const limit = shouldStop(startedAt, options, strings.length);
+    // The table is a lookup, not a unit: cells address it by index, so cutting it at the unit limit
+    // blanks every later cell. Only the deadline and the caller's abort stop it, and the object
+    // limit below; the part itself is bounded by its inflated size.
+    const limit = shouldStop(startedAt, options, 0);
     if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
       diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
       break;
@@ -538,14 +582,22 @@ function rawCellValue(
   return Number.isFinite(index) ? (sharedStrings[index] ?? "") : "";
 }
 
-function parseStyles(xml: string | undefined): XlsxStyles {
-  if (xml === undefined) return { cellFormatNumFmtIds: [], customNumFmts: new Map() };
+// Only the workbook's own list: a differential style (`<dxf>`, conditional formatting) carries
+// number formats whose ids may repeat the workbook's, and the cell styles do not refer to them.
+function parseCustomNumFmts(xml: string): ReadonlyMap<number, string> {
   const customNumFmts = new Map<number, string>();
-  for (const tag of iterateXmlStartTags(xml, "numfmt")) {
+  const numFmtsXml = firstXmlElementContent(xml, "numfmts") ?? "";
+  for (const tag of iterateXmlStartTags(numFmtsXml, "numfmt")) {
     const id = Number.parseInt(attribute(tag, "numFmtId") ?? "", 10);
     const format = attribute(tag, "formatCode");
     if (Number.isFinite(id) && format !== undefined) customNumFmts.set(id, format);
   }
+  return customNumFmts;
+}
+
+function parseStyles(xml: string | undefined): XlsxStyles {
+  if (xml === undefined) return { cellFormatNumFmtIds: [], customNumFmts: new Map() };
+  const customNumFmts = parseCustomNumFmts(xml);
   const cellXfsXml = firstXmlElementContent(xml, "cellxfs") ?? "";
   const cellFormatNumFmtIds: number[] = [];
   for (const tag of iterateXmlStartTags(cellXfsXml, "xf")) {
@@ -574,7 +626,7 @@ function typedCellValue(
   tag: string,
   context: CellContext,
 ): string {
-  if (type === "b") return raw.trim() === "0" ? "FALSE" : "TRUE";
+  if (type === "b") return /^(?:0|false)$/iu.test(raw.trim()) ? "FALSE" : "TRUE";
   if (type !== undefined && type !== "n") return rawCellValue(type, raw, context.sharedStrings);
   return formatNumericCell({
     raw: decodeText(raw),
@@ -791,13 +843,15 @@ function readWorkbookSheets(
     totals.hiddenRows += read.hiddenRowCount;
     totals.hiddenColumns += read.hiddenColumnCount;
     totals.uncachedFormulas += read.uncachedFormulaCount;
-    lines.push(
-      ...projectTable(
-        sheet.name,
-        read.rows,
-        (columnIndex) => `Column ${columnLetters(columnIndex)}`,
-      ),
-    );
+    // One push per line: spreading a sheet's lines into one call overflows the argument limit at a
+    // few hundred thousand rows and failed the whole workbook as malformed.
+    for (const line of projectTable(
+      sheet.name,
+      read.rows,
+      (columnIndex) => `Column ${columnLetters(columnIndex)}`,
+    )) {
+      lines.push(line);
+    }
     if (lines.length > maxLines) return undefined;
   }
   return { lines, totals };

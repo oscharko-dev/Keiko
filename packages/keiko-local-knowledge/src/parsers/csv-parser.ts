@@ -159,8 +159,11 @@ function readRecordFields(scanner: Scanner): readonly string[] {
 }
 
 interface Tokenized {
+  // The records that hold at least one non-empty field, in file order.
   readonly records: readonly CsvRecord[];
   readonly unterminatedQuotes: number;
+  // False when `maxRecords` stopped the scan before the end of the text.
+  readonly complete: boolean;
 }
 
 function tokenize(
@@ -175,10 +178,18 @@ function tokenize(
     unterminatedQuotes: 0,
   };
   const records: CsvRecord[] = [];
+  let recordNumber = 0;
   while (scanner.cursor < text.length && records.length < maxRecords) {
-    records.push({ recordNumber: records.length + 1, fields: readRecordFields(scanner) });
+    recordNumber += 1;
+    const fields = readRecordFields(scanner);
+    // A blank line keeps its number (a spreadsheet counts it as a row) but holds nothing.
+    if (fields.some((field) => field.length > 0)) records.push({ recordNumber, fields });
   }
-  return { records, unterminatedQuotes: scanner.unterminatedQuotes };
+  return {
+    records,
+    unterminatedQuotes: scanner.unterminatedQuotes,
+    complete: scanner.cursor >= text.length,
+  };
 }
 
 // ─── Delimiter detection ─────────────────────────────────────────────────────
@@ -186,12 +197,12 @@ function tokenize(
 interface DelimiterScore {
   readonly consistency: number;
   readonly columns: number;
+  // The share of cuts that fall between two digits (`1,5` cut at the comma). A delimiter that
+  // mostly cuts numbers apart is the decimal separator of another delimiter's fields.
+  readonly numberCuts: number;
 }
 
-function scoreDelimiter(sample: string, delimiter: string): DelimiterScore {
-  const records = tokenize(sample, delimiter, PROBE_RECORDS).records.filter((record) =>
-    record.fields.some((field) => field.length > 0),
-  );
+function modalColumns(records: readonly CsvRecord[]): { columns: number; frequency: number } {
   const counts = new Map<number, number>();
   for (const record of records) {
     counts.set(record.fields.length, (counts.get(record.fields.length) ?? 0) + 1);
@@ -204,22 +215,48 @@ function scoreDelimiter(sample: string, delimiter: string): DelimiterScore {
       frequency = seen;
     }
   }
-  return { consistency: columns < 2 ? 0 : frequency / records.length, columns };
+  return { columns, frequency };
+}
+
+function numberCutShare(records: readonly CsvRecord[]): number {
+  let cuts = 0;
+  let numberCuts = 0;
+  for (const { fields } of records) {
+    for (let index = 1; index < fields.length; index += 1) {
+      cuts += 1;
+      if (/\d$/u.test(fields[index - 1] ?? "") && /^\d/u.test(fields[index] ?? "")) numberCuts += 1;
+    }
+  }
+  return cuts === 0 ? 0 : numberCuts / cuts;
+}
+
+function scoreDelimiter(sample: string, delimiter: string): DelimiterScore {
+  const { records } = tokenize(sample, delimiter, PROBE_RECORDS);
+  const { columns, frequency } = modalColumns(records);
+  return {
+    consistency: columns < 2 ? 0 : frequency / records.length,
+    columns,
+    numberCuts: numberCutShare(records),
+  };
+}
+
+// Consistency first. Between delimiters that split equally well, the one that cuts fewer numbers
+// apart (`Miete;1.234,50` is two fields, not `Miete;1.234` and `50`), then the one with more fields.
+function beats(score: DelimiterScore, best: DelimiterScore): boolean {
+  if (score.consistency !== best.consistency) return score.consistency > best.consistency;
+  if (score.consistency === 0) return false;
+  if (score.numberCuts !== best.numberCuts) return score.numberCuts < best.numberCuts;
+  return score.columns > best.columns;
 }
 
 /** The candidate that splits the first records into the same number of fields; `,` by default. */
 export function detectDelimiter(text: string): string {
   const sample = text.slice(0, PROBE_CHARS);
   let best = ",";
-  let bestScore: DelimiterScore = { consistency: 0, columns: 0 };
+  let bestScore: DelimiterScore = { consistency: 0, columns: 0, numberCuts: 0 };
   for (const candidate of CANDIDATE_DELIMITERS) {
     const score = scoreDelimiter(sample, candidate);
-    const better =
-      score.consistency > bestScore.consistency ||
-      (score.consistency === bestScore.consistency &&
-        score.consistency > 0 &&
-        score.columns > bestScore.columns);
-    if (better) {
+    if (beats(score, bestScore)) {
       best = candidate;
       bestScore = score;
     }
@@ -252,6 +289,47 @@ function quoteDiagnostics(count: number, input: ParserSelectionInput): readonly 
   ];
 }
 
+// Excel's first-line directive `sep=;` names the delimiter and is no data. Its text is dropped and
+// its line break stays, so every record keeps its position in the file (the unit `rowIndex`).
+const SEPARATOR_DIRECTIVE = /^sep=([^\r\n"\p{L}\p{N}])(?=\r\n|\r|\n)/u;
+
+function withoutSeparatorDirective(text: string): {
+  readonly text: string;
+  readonly declared: string | undefined;
+} {
+  const match = SEPARATOR_DIRECTIVE.exec(text);
+  if (match === null) return { text, declared: undefined };
+  return { text: text.slice(match[0].length), declared: match[1] };
+}
+
+// Every row projects to at most one line, and a later table's header to none: a header needs a
+// blank row before it, so at least every second non-empty row is a line. Reading twice the unit
+// limit therefore still overruns the limit when the file does, and a file of millions of records
+// is not held in memory to emit the first fifty thousand lines.
+const ROW_HEADROOM = 32;
+
+function rowAllowance(options: ParserOptions): number {
+  return 2 * (options.maxUnitsPerDocument + 1) + ROW_HEADROOM;
+}
+
+// The scan stopped at the allowance and the projection did not itself report the limit.
+function cutDiagnostics(
+  complete: boolean,
+  emitted: readonly ParserDiagnostic[],
+  input: ParserSelectionInput,
+  options: ParserOptions,
+): readonly ParserDiagnostic[] {
+  if (complete || emitted.some((entry) => entry.code === "UNIT_LIMIT_REACHED")) return [];
+  return [
+    diagnostic(
+      "UNIT_LIMIT_REACHED",
+      `reached maxUnitsPerDocument=${String(options.maxUnitsPerDocument)}`,
+      input.documentId,
+      "info",
+    ),
+  ];
+}
+
 export const csvParser: ParserAdapter = Object.freeze({
   capability: Object.freeze({
     parserId: PARSER_ID,
@@ -272,13 +350,13 @@ export const csvParser: ParserAdapter = Object.freeze({
         diagnostic("UNSUPPORTED_FORMAT", "no delimiter selected", input.documentId, "error"),
       ]);
     }
-    const decoded = decodeUtf8(input.bytes);
+    const { text, declared } = withoutSeparatorDirective(decodeUtf8(input.bytes).text);
     const delimiter =
-      selection.kind === "fixed" ? selection.delimiter : detectDelimiter(decoded.text);
+      selection.kind === "fixed" ? selection.delimiter : (declared ?? detectDelimiter(text));
     // #2906 KEIKO-0832: label the table from the delimiter actually selected, so `.tab` files and
     // tab-separated documents identified only by media type are `tsv`, not `csv`.
     const tableName = selection.kind === "fixed" ? "tsv" : "csv";
-    const tokenized = tokenize(decoded.text, delimiter);
+    const tokenized = tokenize(text, delimiter, rowAllowance(options));
     const lines = projectTable(
       tableName,
       tabularRows(tokenized.records),
@@ -290,7 +368,11 @@ export const csvParser: ParserAdapter = Object.freeze({
         csvParser.capability,
         input.documentId,
         options,
-        [...quoteDiagnostics(tokenized.unterminatedQuotes, input), ...emitted.diagnostics],
+        [
+          ...quoteDiagnostics(tokenized.unterminatedQuotes, input),
+          ...emitted.diagnostics,
+          ...cutDiagnostics(tokenized.complete, emitted.diagnostics, input, options),
+        ],
         emitted.units,
       ),
       normalizedText: emitted.normalizedText,

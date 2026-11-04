@@ -45,6 +45,7 @@ import {
   continuesProjectedTable,
   endsInParagraphCell,
   extendedRow,
+  isPlainProjection,
   isPointerRecord,
   isSameRequirement,
   isSeparatorRow,
@@ -425,10 +426,14 @@ function readProjectedTable(context: Context, scan: TableScan, rows: readonly Op
 type RowLineEffect = "goes-on" | "ends-row" | "ends-table";
 
 /** What a line that opens no row does to the row above it; a line of its cell extends that cell. */
+function endsProjectedRow(raw: string): boolean {
+  return isPointerRecord(raw) || isPlainProjection(raw);
+}
+
 function afterRowLine(open: OpenRow, line: Line, index: number, context: Context): RowLineEffect {
   const blank = collapse(line.text).length === 0;
   if (blank && open.row.inDocument) return "ends-table";
-  if (blank ? !endsInParagraphCell(open.row) : isPointerRecord(line.text)) return "ends-row";
+  if (blank ? !endsInParagraphCell(open.row) : endsProjectedRow(line.text)) return "ends-row";
   continueProjectedRow(open.row, line.text, context.vocabulary);
   if (!blank) open.lastLine = index;
   return "goes-on";
