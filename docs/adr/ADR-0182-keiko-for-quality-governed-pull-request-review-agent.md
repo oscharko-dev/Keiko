@@ -170,7 +170,12 @@ in the line's `duplicateCount` (R4130-025). The rules reader (`rulesFile.ts`) re
 `<baseSha>:<path>` through the hardened review runner (`readGitReviewPathObject`): a missing file is
 `absent`, more than 16 KiB `too-large`, undecodable or NUL-bearing content `not-utf8`, and a configured
 path that cannot name a file in the tree `path-invalid` (each logged as `review.run.rules-file`; all
-but `loaded` and `absent` settle `skipped/rules-file-invalid`).
+but `loaded` and `absent` settle `skipped/rules-file-invalid`). A base commit that cannot be read
+settles `rules-read-failed`; its line carries a closed `failureClass` (`cancelled`, `timeout`,
+`spawn-refused`, `git-failed`), the matching `errorKind`, frames and cause chain. Every rules-file
+line carries the review run's correlation id (R4130-022). The head-file reader caches successful
+reads and deterministic refusals for the run; a Git read that was aborted, timed out or failed to
+run is not cached, so the next report or verdict that cites the file reads it again (R4130-013).
 
 ### D5 — Two independent passes
 
@@ -263,13 +268,20 @@ until its own idle stop, and `release` does not end it) and a fresh instance is 
 recorded as `placement: beside-quarantined` on `review.run.runtime-started`. One review per
 repository at a time still holds. At most one quarantined instance per repository: a review that
 would need a second one is refused as `runtime-unavailable` and settles `skipped/model-unavailable`.
+Every instance that cannot be started is logged as `review.run.runtime-stopped` with trigger
+`start-failed` under the review's correlation and a closed `startFailure`: the coding runtime's
+activation reason, `host-unavailable`, or `quarantine-limit` (R4130-019). An out-of-range
+`KEIKO_REVIEW_RUN_MAX_*` value leaves the review runtime and the review run service uncomposed
+with one `review.runtime.budget` diagnostic; it never fails server start (R4130-018).
 The
 Reviewer's diff budget is sized so the task always fits the 64 KiB first-prompt bound beside the
 largest admitted rules file (the gateway estimator counts at least one token per 3.5 bytes); a
 larger task is refused, never truncated. A record that cannot be written (a full disk) settles the
 run `abandoned/interrupted` with nothing presented; every run a stopped server left unsettled is
 settled `abandoned/interrupted` when the review service is composed at the next start, and child 3's
-startup sweep removes its worktree. The stale flag compares the reviewed head with the pull
+startup sweep removes its worktree. That sweep never removes a worktree a review is creating, and a
+directory it cannot delete is reported and counted without stopping the startup ref sweep or the
+daily retention timer (R4130-016, R4130-021). The stale flag compares the reviewed head with the pull
 request's current head from the read-only detail (cached 30 seconds), at settlement and on every
 read; it never changes the settlement.
 

@@ -426,7 +426,11 @@ describe("lifecycle and cleanup (AC5)", () => {
         };
       },
     });
-    const creating = review.worktrees.create({ runId: "racing", repositoryRoot: repo, headSha: head });
+    const creating = review.worktrees.create({
+      runId: "racing",
+      repositoryRoot: repo,
+      headSha: head,
+    });
     await reached;
     const swept = await review.worktrees.sweepOrphans();
     release();

@@ -102,22 +102,34 @@ describe("review runtime Activity Log proofs", () => {
     });
   });
 
+  // Not through `onlyLine`: this line carries the Keiko code frames of its error, which are
+  // repository-relative source locations, the sanctioned body-free stack (AGENTS.md section 8).
   it("proves review.run.rules-file for a failed read with its cause (R4130-022)", () => {
-    const line = onlyLine((sink) => {
-      logReviewRulesFile(sink, {
-        correlationId: CORRELATION,
-        runId: RUN_ID,
-        outcome: "read-failed",
-        byteCount: 0,
-        failure: { failureClass: "timeout", error: new Error("rules read timed out") },
-      });
+    const capture = captureActivityLog();
+    logReviewRulesFile(capture.sink, {
+      correlationId: CORRELATION,
+      runId: RUN_ID,
+      outcome: "read-failed",
+      byteCount: 0,
+      failure: {
+        failureClass: "timeout",
+        error: new Error("rules read timed out", { cause: new TypeError("inner") }),
+      },
     });
+    expect(capture.events).toHaveLength(1);
+    const [event] = capture.events;
+    if (event === undefined) throw new TypeError("expected one event");
+    const line = formatActivityLogProofLine(event);
     expect(expectActivityLogProof("review.run.rules-file.line", line)).toMatchObject({
       outcome: "read-failed",
       failureClass: "timeout",
+      causeChain: expect.any(Array),
+      frames: expect.any(Array),
     });
-    expect(line).toContain('"errorKind":"timeout"');
-    expect(line).not.toContain("rules read timed out");
+    expect(event).toMatchObject({ correlationId: CORRELATION, errorKind: "timeout" });
+    for (const forbidden of ["rules read timed out", "inner", RUN_ID]) {
+      expect(line).not.toContain(forbidden);
+    }
   });
 
   it("proves review.run.profile-refused with its closed reason", () => {

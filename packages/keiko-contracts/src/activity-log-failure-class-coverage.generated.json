@@ -39457,6 +39457,12 @@
               "required": false
             },
             {
+              "name": "duplicateCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "evidenceCount",
               "type": "integer",
               "dataClass": "count",
@@ -40279,6 +40285,24 @@
               "required": true
             },
             {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "failureClass",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
               "name": "outcome",
               "type": "string",
               "dataClass": "closed-enum",
@@ -40291,10 +40315,18 @@
               "required": true
             }
           ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
           "frameCauseEvidence": {
-            "frames": false,
-            "causeChain": false
+            "frames": true,
+            "causeChain": true
           },
           "proofIds": ["review.run.rules-file.line"],
           "replayReferences": [],
@@ -40786,6 +40818,12 @@
               "type": "string",
               "dataClass": "opaque-id",
               "required": true
+            },
+            {
+              "name": "startFailure",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "trigger",

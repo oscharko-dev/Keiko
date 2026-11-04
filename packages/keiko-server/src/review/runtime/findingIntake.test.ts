@@ -284,7 +284,9 @@ describe("createReviewFindingIntake", () => {
     await expect(intake.submit(at(2))).resolves.toMatchObject({ status: "accepted" });
     await expect(intake.submit(at(5))).resolves.toMatchObject({ status: "accepted", accepted: 2 });
     const [first, second] = intake.candidates();
-    expect(first?.fingerprint).toBe(computeReviewFindingFingerprint(at(2), "  return JSON.parse(body);"));
+    expect(first?.fingerprint).toBe(
+      computeReviewFindingFingerprint(at(2), "  return JSON.parse(body);"),
+    );
     expect(second?.fingerprint).toBe(
       computeReviewFindingFingerprint(at(5), "  return JSON.parse(body);", 1),
     );

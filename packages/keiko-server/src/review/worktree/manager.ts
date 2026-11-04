@@ -571,7 +571,9 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
     for (const entry of entries) {
       if (!entry.isDirectory() || !REVIEW_RUN_LEAF_PATTERN.test(entry.name)) continue;
       if (this.owned(entry.name)) continue;
-      results.push(await this.deleteOrReport(join(this.deps.reviewRoot, entry.name), correlationId));
+      results.push(
+        await this.deleteOrReport(join(this.deps.reviewRoot, entry.name), correlationId),
+      );
     }
     return results;
   }

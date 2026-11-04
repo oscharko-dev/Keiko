@@ -19,6 +19,7 @@ import type {
 import type { CodingWorkbenchRuntimeUnavailableReason } from "@oscharko-dev/keiko-contracts";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import type { CodingToolAction } from "../../coding-runtime/codingToolIpc.js";
+import type { ReviewRulesReadFailure } from "./rulesFile.js";
 import type { ServerLogSink } from "../../observability/index.js";
 import { correlationIdOrUnknown } from "../../correlation.js";
 import { reviewEvidenceDigest } from "../activity-log.js";
@@ -386,18 +387,18 @@ export interface ReviewRulesFileLine {
   readonly outcome: ReviewRulesFileOutcome | "read-failed";
   readonly byteCount: number;
   /** Only with `read-failed`: the read's closed failure and the error behind it. */
-  readonly failure?: { readonly failureClass: ReviewRulesReadFailureClass; readonly error: unknown };
+  readonly failure?: {
+    readonly failureClass: ReviewRulesReadFailure;
+    readonly error: unknown;
+  };
 }
 
-type ReviewRulesReadFailureClass = "cancelled" | "timeout" | "spawn-refused" | "git-failed";
-
-const RULES_READ_ERROR_KINDS: Readonly<Record<ReviewRulesReadFailureClass, ActivityLogErrorKind>> =
-  {
-    cancelled: "cancelled",
-    timeout: "timeout",
-    "spawn-refused": "unavailable",
-    "git-failed": "read-failed",
-  };
+const RULES_READ_ERROR_KINDS: Readonly<Record<ReviewRulesReadFailure, ActivityLogErrorKind>> = {
+  cancelled: "cancelled",
+  timeout: "timeout",
+  "spawn-refused": "unavailable",
+  "git-failed": "read-failed",
+};
 
 export function logReviewRulesFile(log: ServerLogSink, line: ReviewRulesFileLine): void {
   const { outcome, failure } = line;
@@ -408,7 +409,9 @@ export function logReviewRulesFile(log: ServerLogSink, line: ReviewRulesFileLine
       {
         level,
         correlationId: correlationIdOrUnknown(line.correlationId),
-        ...(failure === undefined ? {} : { errorKind: RULES_READ_ERROR_KINDS[failure.failureClass] }),
+        ...(failure === undefined
+          ? {}
+          : { errorKind: RULES_READ_ERROR_KINDS[failure.failureClass] }),
       },
       {
         runDigest: reviewEvidenceDigest("run", line.runId),

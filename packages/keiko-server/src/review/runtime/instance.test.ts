@@ -383,9 +383,7 @@ describe("createReviewRuntimeService", () => {
     const { subject, log } = service({ reports: [] });
 
     await expect(
-      subject.run(
-        request(repo, "a".repeat(40), head, { correlationId: "corr-review-rules" }),
-      ),
+      subject.run(request(repo, "a".repeat(40), head, { correlationId: "corr-review-rules" })),
     ).resolves.toEqual({ ok: false, reason: "rules-read-failed" });
     const rules = log.events.filter((event) => event.op === "review.run.rules-file");
     expect(rules).toHaveLength(1);

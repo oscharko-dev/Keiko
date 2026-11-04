@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2793639bac3909ac20858c5c280a1df739049783a0a1d86f68d5b443f5f8d0a0",
+    "catalogDigest": "78e53c356ef2a4f6d642daf31b5c4bfb2b6377e9a1e2dc60db3b524d81e7aa29",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -33953,10 +33953,16 @@
               "path-outside-worktree",
               "range-invalid",
               "evidence-mismatch",
-              "limit-reached"
+              "limit-reached",
+              "duplicate"
             ]
           },
           "acceptedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "duplicateCount": {
             "type": "integer",
             "dataClass": "count",
             "required": false
@@ -34000,8 +34006,8 @@
         "failureClasses": ["review-finding-intake"],
         "proofIds": ["review.finding.reported.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/runtime/activity-log.ts:190",
-        "emitterSites": ["packages/keiko-server/src/review/runtime/activity-log.ts:358"]
+        "registrationSite": "packages/keiko-server/src/review/runtime/activity-log.ts:252",
+        "emitterSites": ["packages/keiko-server/src/review/runtime/activity-log.ts:465"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34779,8 +34785,8 @@
         "failureClasses": ["review-runtime-profile"],
         "proofIds": ["review.run.action-refused.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/runtime/activity-log.ts:142",
-        "emitterSites": ["packages/keiko-server/src/review/runtime/activity-log.ts:338"]
+        "registrationSite": "packages/keiko-server/src/review/runtime/activity-log.ts:204",
+        "emitterSites": ["packages/keiko-server/src/review/runtime/activity-log.ts:439"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34909,8 +34915,8 @@
         "failureClasses": ["review-runtime-profile"],
         "proofIds": ["review.run.profile-refused.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/runtime/activity-log.ts:88",
-        "emitterSites": ["packages/keiko-server/src/review/runtime/activity-log.ts:303"]
+        "registrationSite": "packages/keiko-server/src/review/runtime/activity-log.ts:129",
+        "emitterSites": ["packages/keiko-server/src/review/runtime/activity-log.ts:371"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34990,6 +34996,26 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "failureClass": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["cancelled", "timeout", "spawn-refused", "git-failed"]
+          },
+          "frames": {
+            "type": "string-array",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 512,
+            "maxItems": 8
+          },
+          "causeChain": {
+            "type": "string-array",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 128,
+            "maxItems": 5
           }
         },
         "causal": "correlation",
@@ -34998,8 +35024,8 @@
         "failureClasses": ["review-rules-file"],
         "proofIds": ["review.run.rules-file.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/runtime/activity-log.ts:117",
-        "emitterSites": ["packages/keiko-server/src/review/runtime/activity-log.ts:323"]
+        "registrationSite": "packages/keiko-server/src/review/runtime/activity-log.ts:158",
+        "emitterSites": ["packages/keiko-server/src/review/runtime/activity-log.ts:407"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35044,8 +35070,8 @@
         "failureClasses": ["review-runtime-lifecycle"],
         "proofIds": ["review.run.runtime-started.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/runtime/activity-log.ts:35",
-        "emitterSites": ["packages/keiko-server/src/review/runtime/activity-log.ts:253"]
+        "registrationSite": "packages/keiko-server/src/review/runtime/activity-log.ts:69",
+        "emitterSites": ["packages/keiko-server/src/review/runtime/activity-log.ts:318"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35086,6 +35112,24 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "startFailure": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "runtime-disabled",
+              "platform-unqualified",
+              "dev-lane-refused",
+              "payload-missing",
+              "payload-unapproved",
+              "payload-tampered",
+              "secure-read-unavailable",
+              "loopback-unavailable",
+              "runtime-unqualified",
+              "host-unavailable",
+              "quarantine-limit"
+            ]
           }
         },
         "causal": "correlation",
@@ -35094,8 +35138,8 @@
         "failureClasses": ["review-runtime-lifecycle"],
         "proofIds": ["review.run.runtime-stopped.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/review/runtime/activity-log.ts:62",
-        "emitterSites": ["packages/keiko-server/src/review/runtime/activity-log.ts:278"]
+        "registrationSite": "packages/keiko-server/src/review/runtime/activity-log.ts:96",
+        "emitterSites": ["packages/keiko-server/src/review/runtime/activity-log.ts:345"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -56645,10 +56689,12 @@
           "completeness-state",
           "count",
           "digest",
-          "loss-state"
+          "error-kind",
+          "loss-state",
+          "opaque-id"
         ],
-        "requiredFrameOperations": [],
-        "requiredCauseOperations": []
+        "requiredFrameOperations": ["review.run.rules-file"],
+        "requiredCauseOperations": ["review.run.rules-file"]
       },
       {
         "contractKind": "activity-log-failure-class",
@@ -96644,6 +96690,12 @@
                   "required": false
                 },
                 {
+                  "name": "duplicateCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "evidenceCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -97496,6 +97548,24 @@
                   "required": true
                 },
                 {
+                  "name": "causeChain",
+                  "type": "string-array",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
+                  "name": "failureClass",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "frames",
+                  "type": "string-array",
+                  "dataClass": "opaque-id",
+                  "required": false
+                },
+                {
                   "name": "outcome",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -97513,11 +97583,13 @@
                 "completeness-state",
                 "count",
                 "digest",
-                "loss-state"
+                "error-kind",
+                "loss-state",
+                "opaque-id"
               ],
               "frameCauseEvidence": {
-                "frames": false,
-                "causeChain": false
+                "frames": true,
+                "causeChain": true
               },
               "proofIds": ["review.run.rules-file.line"],
               "replayReferences": [],
@@ -98009,6 +98081,12 @@
                   "type": "string",
                   "dataClass": "opaque-id",
                   "required": true
+                },
+                {
+                  "name": "startFailure",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 },
                 {
                   "name": "trigger",
@@ -111364,7 +111442,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1682",
+      "site": "packages/keiko-server/src/deps.ts:1683",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -112173,7 +112251,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2449",
+      "site": "packages/keiko-server/src/deps.ts:2450",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -112527,7 +112605,7 @@
     {
       "op": "review.finding.reported",
       "category": "process",
-      "site": "packages/keiko-server/src/review/runtime/activity-log.ts:193",
+      "site": "packages/keiko-server/src/review/runtime/activity-log.ts:255",
       "package": "keiko-server"
     },
     {
@@ -112575,14 +112653,14 @@
     {
       "op": "review.pair-qualification.startup-sweep",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:5287",
+      "site": "packages/keiko-server/src/deps.ts:5321",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "review.run.action-refused",
       "category": "security",
-      "site": "packages/keiko-server/src/review/runtime/activity-log.ts:145",
+      "site": "packages/keiko-server/src/review/runtime/activity-log.ts:207",
       "package": "keiko-server"
     },
     {
@@ -112594,7 +112672,7 @@
     {
       "op": "review.run.profile-refused",
       "category": "security",
-      "site": "packages/keiko-server/src/review/runtime/activity-log.ts:91",
+      "site": "packages/keiko-server/src/review/runtime/activity-log.ts:132",
       "package": "keiko-server"
     },
     {
@@ -112606,19 +112684,19 @@
     {
       "op": "review.run.rules-file",
       "category": "process",
-      "site": "packages/keiko-server/src/review/runtime/activity-log.ts:120",
+      "site": "packages/keiko-server/src/review/runtime/activity-log.ts:161",
       "package": "keiko-server"
     },
     {
       "op": "review.run.runtime-started",
       "category": "process",
-      "site": "packages/keiko-server/src/review/runtime/activity-log.ts:38",
+      "site": "packages/keiko-server/src/review/runtime/activity-log.ts:72",
       "package": "keiko-server"
     },
     {
       "op": "review.run.runtime-stopped",
       "category": "process",
-      "site": "packages/keiko-server/src/review/runtime/activity-log.ts:65",
+      "site": "packages/keiko-server/src/review/runtime/activity-log.ts:99",
       "package": "keiko-server"
     },
     {
@@ -112634,16 +112712,23 @@
       "package": "keiko-server"
     },
     {
+      "op": "review.runtime.budget",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/deps.ts:5135",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "review.runtime.compose",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:5343",
+      "site": "packages/keiko-server/src/deps.ts:5376",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "review.services.compose",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:5135",
+      "site": "packages/keiko-server/src/deps.ts:5170",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -112680,7 +112765,7 @@
     {
       "op": "review.worktree.refs-sweep",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/review/services.ts:322",
+      "site": "packages/keiko-server/src/review/services.ts:333",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -112705,7 +112790,7 @@
     {
       "op": "review.worktree.startup-sweep",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:5164",
+      "site": "packages/keiko-server/src/deps.ts:5199",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -112887,7 +112972,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4748",
+      "site": "packages/keiko-server/src/deps.ts:4749",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -113047,7 +113132,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3325",
+      "site": "packages/keiko-server/src/deps.ts:3326",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -114136,6 +114221,7 @@
     "review.run.runtime-stopped",
     "review.run.settled",
     "review.run.started",
+    "review.runtime.budget",
     "review.runtime.compose",
     "review.services.compose",
     "review.target.listed",
