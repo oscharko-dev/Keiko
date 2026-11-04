@@ -637,11 +637,11 @@ describe("repeated page furniture", () => {
     );
 
   it.each([
-    ["a requirement identifier", (page: number) => `FR-${String(page)}`],
-    ["a numbered chapter", (page: number) => `Kapitel ${String(page)}`],
-    ["a numbered section title", (page: number) => `${String(page)}. Schnittstellen`],
-    ["an identifier with a title", (page: number) => `REQ-${String(page)} Export`],
-    ["a stamp with a number", (page: number) => `Version ${String(page)}`],
+    ["a requirement identifier", (page: number): string => `FR-${String(page)}`],
+    ["a numbered chapter", (page: number): string => `Kapitel ${String(page)}`],
+    ["a numbered section title", (page: number): string => `${String(page)}. Schnittstellen`],
+    ["an identifier with a title", (page: number): string => `REQ-${String(page)} Export`],
+    ["a stamp with a number", (page: number): string => `Version ${String(page)}`],
   ])("keeps %s that changes from page to page", (_name, line) => {
     const composed = atTheTopOfThreePages(line);
     expect(composed.removedRows).toBe(0);
@@ -651,16 +651,19 @@ describe("repeated page furniture", () => {
   });
 
   it.each([
-    ["a bare number", (page: number) => String(page)],
-    ["a number between dashes", (page: number) => `- ${String(page)} -`],
-    ["a count of pages", (page: number) => `${String(page)} / 3`],
-    ["a German page word", (page: number) => `Seite ${String(page)} von 3`],
-    ["an abbreviated German page word", (page: number) => `S. ${String(page)}`],
-    ["an English page word", (page: number) => `Page ${String(page)} of 3`],
-    ["an abbreviated English page word", (page: number) => `p. ${String(page)}`],
-    ["a title in front of the counter", (page: number) => `Lastenheft 2.0 - Seite ${String(page)}`],
-    ["an Italian page word", (page: number) => `Pagina ${String(page)}`],
-    ["a Spanish page word", (page: number) => `Página ${String(page)}`],
+    ["a bare number", (page: number): string => String(page)],
+    ["a number between dashes", (page: number): string => `- ${String(page)} -`],
+    ["a count of pages", (page: number): string => `${String(page)} / 3`],
+    ["a German page word", (page: number): string => `Seite ${String(page)} von 3`],
+    ["an abbreviated German page word", (page: number): string => `S. ${String(page)}`],
+    ["an English page word", (page: number): string => `Page ${String(page)} of 3`],
+    ["an abbreviated English page word", (page: number): string => `p. ${String(page)}`],
+    [
+      "a title in front of the counter",
+      (page: number): string => `Lastenheft 2.0 - Seite ${String(page)}`,
+    ],
+    ["an Italian page word", (page: number): string => `Pagina ${String(page)}`],
+    ["a Spanish page word", (page: number): string => `Página ${String(page)}`],
   ])("removes %s, which only counts the pages", (_name, line) => {
     expect(atTheTopOfThreePages(line).removedRows).toBe(3);
   });

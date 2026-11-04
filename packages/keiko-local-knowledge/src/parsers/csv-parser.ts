@@ -15,7 +15,13 @@
 // plain lines for titles and header-only files, empty cells dropped, and unit `rowIndex` equal to
 // the 0-based source record.
 
-import { decodeUtf8, diagnostic, emptyResult, oversizeDiagnostic, shouldStop } from "./_internal.js";
+import {
+  decodeUtf8,
+  diagnostic,
+  emptyResult,
+  oversizeDiagnostic,
+  shouldStop,
+} from "./_internal.js";
 import type { ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
 import {
   LOCAL_KNOWLEDGE_CSV_FILE_EXTENSIONS,

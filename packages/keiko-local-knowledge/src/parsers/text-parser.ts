@@ -20,7 +20,7 @@ import {
   encodingDiagnostic,
   limitSeverity,
   shouldStop,
-  textInputRefusal,
+  textParserAdapter,
 } from "./_internal.js";
 import {
   isMarkdownTableSeparator,
@@ -328,22 +328,19 @@ function emitStructure(
   };
 }
 
-export const textParser: ParserAdapter = Object.freeze({
-  capability: Object.freeze({
+export const textParser: ParserAdapter = textParserAdapter(
+  {
     parserId: PARSER_ID,
     parserVersion: PARSER_VERSION,
     matches: (input: ParserSelectionInput): boolean => isTextLike(input),
-  }),
-  parse: (input: ParserSelectionInput, options: ParserOptions) => {
-    const startedAt = options.now();
-    const refusal = textInputRefusal(textParser.capability, input, options);
-    if (refusal !== undefined) return refusal;
+  },
+  ({ capability, input, options, startedAt }) => {
     const decoded = decodeUtf8(input.bytes);
     const encoding = encodingDiagnostic(decoded, input.documentId);
     const emission = emitStructure(decoded.text, input, options, startedAt);
     return {
       ...emptyResult(
-        textParser.capability,
+        capability,
         input.documentId,
         options,
         [...(encoding === undefined ? [] : [encoding]), ...emission.diagnostics],
@@ -352,4 +349,4 @@ export const textParser: ParserAdapter = Object.freeze({
       normalizedText: decoded.text,
     } satisfies InternalParserResult;
   },
-});
+);

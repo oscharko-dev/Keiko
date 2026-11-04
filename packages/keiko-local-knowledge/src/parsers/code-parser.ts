@@ -15,7 +15,7 @@ import {
   encodingDiagnostic,
   limitSeverity,
   shouldStop,
-  textInputRefusal,
+  textParserAdapter,
 } from "./_internal.js";
 import { sourceLines } from "./text-structure.js";
 import type {
@@ -537,23 +537,20 @@ function emitCodeSections(
   return { units, diagnostics: [] };
 }
 
-export const codeParser: ParserAdapter = Object.freeze({
-  capability: Object.freeze({
+export const codeParser: ParserAdapter = textParserAdapter(
+  {
     parserId: CODE_PARSER_ID,
     parserVersion: CODE_PARSER_VERSION,
     matches: (input: ParserSelectionInput): boolean => codeLanguage(input) !== undefined,
-  }),
-  parse: (input: ParserSelectionInput, options: ParserOptions) => {
-    const startedAt = options.now();
-    const refusal = textInputRefusal(codeParser.capability, input, options);
-    if (refusal !== undefined) return refusal;
+  },
+  ({ capability, input, options, startedAt }) => {
     const decoded = decodeUtf8(input.bytes);
     const encoding = encodingDiagnostic(decoded, input.documentId);
     const language = codeLanguage(input) ?? "code";
     const emission = emitCodeSections(decoded.text, language, input, options, startedAt);
     return {
       ...emptyResult(
-        codeParser.capability,
+        capability,
         input.documentId,
         options,
         [...(encoding === undefined ? [] : [encoding]), ...emission.diagnostics],
@@ -562,4 +559,4 @@ export const codeParser: ParserAdapter = Object.freeze({
       normalizedText: decoded.text,
     } satisfies InternalParserResult;
   },
-});
+);

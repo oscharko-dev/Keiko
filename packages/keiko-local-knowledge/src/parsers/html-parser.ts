@@ -30,7 +30,7 @@ import {
   encodingDiagnostic,
   limitSeverity,
   shouldStop,
-  textInputRefusal,
+  textParserAdapter,
 } from "./_internal.js";
 import { LIST_GROUP, breakBetween, joinedLines } from "./block-text.js";
 import { cleanHeaderLabel, identifiesRow, neutraliseValue } from "./tabular.js";
@@ -1897,16 +1897,13 @@ function emitHtml(
   };
 }
 
-export const htmlParser: ParserAdapter = Object.freeze({
-  capability: Object.freeze({
+export const htmlParser: ParserAdapter = textParserAdapter(
+  {
     parserId: PARSER_ID,
     parserVersion: PARSER_VERSION,
     matches: (input: ParserSelectionInput): boolean => isHtml(input),
-  }),
-  parse: (input: ParserSelectionInput, options: ParserOptions) => {
-    const startedAt = options.now();
-    const refusal = textInputRefusal(htmlParser.capability, input, options);
-    if (refusal !== undefined) return refusal;
+  },
+  ({ capability, input, options, startedAt }) => {
     // Cross-check any declared <meta charset> against the byte-shape decode: the declared charset
     // only steers the fallback codec (strict UTF-8/BOM still win), and a genuine disagreement is
     // surfaced as a body-safe HTML_CHARSET_MISMATCH warning rather than silently corrupting text.
@@ -1924,11 +1921,11 @@ export const htmlParser: ParserAdapter = Object.freeze({
       ...emission.diagnostics,
     ];
     const result: InternalParserResult = {
-      ...emptyResult(htmlParser.capability, input.documentId, options, diagnostics, emission.units),
+      ...emptyResult(capability, input.documentId, options, diagnostics, emission.units),
       // GRD-003: persist the cleaned, tag/script/style-free projection so extract.ts NEVER
       // falls back to raw bytes (which carried <script> bodies + embedded secrets).
       normalizedText: emission.normalizedText,
     };
     return result;
   },
-});
+);

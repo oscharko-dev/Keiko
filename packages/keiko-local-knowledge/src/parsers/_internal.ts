@@ -22,6 +22,7 @@ import {
 
 import { isEncryptedOoxmlContainer } from "./ooxml-zip.js";
 import type {
+  ParserAdapter,
   ParserCapability,
   ParserErrorCode,
   ParserOptions,
@@ -628,6 +629,30 @@ export function textInputRefusal(
     ]);
   }
   return binaryContentRefusal(capability, input, options);
+}
+
+/** An admitted text input, and the one clock its whole document is read on. */
+export interface AdmittedTextInput {
+  readonly capability: ParserCapability;
+  readonly input: ParserSelectionInput;
+  readonly options: ParserOptions;
+  readonly startedAt: number;
+}
+
+/** A parser of text formats: the clock starts first, then the size and binary refusals apply. */
+export function textParserAdapter(
+  capability: ParserCapability,
+  read: (admitted: AdmittedTextInput) => ParserResult,
+): ParserAdapter {
+  const frozen = Object.freeze(capability);
+  return Object.freeze({
+    capability: frozen,
+    parse: (input: ParserSelectionInput, options: ParserOptions): ParserResult => {
+      const startedAt = options.now();
+      const refusal = textInputRefusal(frozen, input, options);
+      return refusal ?? read({ capability: frozen, input, options, startedAt });
+    },
+  });
 }
 
 export function readAttribute(tagRaw: string, name: string): string | undefined {
