@@ -515,12 +515,14 @@
       "class": "third-party",
       "text": "Meine Kollegin Frau Ostermann geht jeden Freitag mit ihrer Lerngruppe in den Wald.",
       "terms": [["Ostermann"]],
+      "nameless": [["Kollegin", "Kolleginnen", "geht"], ["Wald"]],
       "question": "Wohin geht Frau Ostermann freitags?"
     },
     {
       "class": "third-party",
       "text": "Mein Kollege Herr Rosenbaum mag stilles Lesen, ich lese Klassenlektüren am liebsten laut mit verteilten Rollen.",
       "terms": [["Rosenbaum"]],
+      "nameless": [["Kollege", "Kollegen", "mag"], ["stilles Lesen"]],
       "question": "Was mag Herr Rosenbaum?",
       "teaches": "reading-aloud"
     },
@@ -600,18 +602,21 @@
       "class": "third-party",
       "text": "Mein Kollege Herr Tillmannsen leitet seit Jahren die Theater-AG.",
       "terms": [["Tillmannsen"]],
+      "nameless": [["Kollege", "Kollegen", "leitet"], ["Theater-AG"]],
       "question": "Was leitet Herr Tillmannsen?"
     },
     {
       "class": "third-party",
       "text": "Meine Kollegin Frau Rabenhorst fährt mit ihrem Kurs im Frühjahr nach Rom.",
       "terms": [["Rabenhorst"]],
+      "nameless": [["Kollegin", "Kolleginnen", "fährt"], ["Rom"]],
       "question": "Wohin fährt Frau Rabenhorst im Frühjahr?"
     },
     {
       "class": "third-party",
       "text": "Unser Fachleiter Herr Oberhollenzer hat in Wien Physik auf Lehramt studiert.",
       "terms": [["Oberhollenzer"]],
+      "nameless": [["Fachleiter", "Fachleiterin", "studiert"], ["Wien"]],
       "question": "Wo hat Herr Oberhollenzer studiert?"
     },
     {
@@ -690,12 +695,14 @@
       "class": "third-party",
       "text": "Der Hausmeister Herr Schwiebert schließt das Schulgebäude jeden Abend um achtzehn Uhr ab.",
       "terms": [["Schwiebert"]],
+      "nameless": [["Hausmeister", "Hausmeisterin", "schließt"], ["achtzehn Uhr"]],
       "question": "Wann schließt Herr Schwiebert ab?"
     },
     {
       "class": "third-party",
       "text": "Tafelbilder fotografiere ich am Ende jeder Stunde ab, Herr Mettelsiefen wischt seine dagegen sofort sauber.",
       "terms": [["sofort sauber"]],
+      "nameless": [["wischt"], ["sofort sauber"]],
       "question": "Was macht Herr Mettelsiefen nach der Unterrichtseinheit mit den Kreideresten?",
       "teaches": "board-habit"
     },
@@ -703,6 +710,7 @@
       "class": "third-party",
       "text": "Zum Korrigieren nehme ich einen grünen Stift, Frau Vogelsänger greift dagegen zum Rotstift.",
       "terms": [["Rotstift"]],
+      "nameless": [["greift"], ["Rotstift*"]],
       "question": "Mit welcher Farbe versieht Frau Vogelsänger ihre Anmerkungen?",
       "teaches": "pen-color"
     },
@@ -710,6 +718,7 @@
       "class": "third-party",
       "text": "Jede Stunde beginne ich mit einer kurzen Wiederholungsfrage, Herr Langhammer steigt dagegen direkt mit dem neuen Stoff ein.",
       "terms": [["neuen Stoff"]],
+      "nameless": [["steigt"], ["neuen Stoff"]],
       "question": "Wie steigt Herr Langhammer in den Unterricht ein?",
       "teaches": "lesson-start"
     },
@@ -717,6 +726,7 @@
       "class": "third-party",
       "text": "Frau Pfisterer verlangt völlige Stille im Raum, beim eigenständigen Arbeiten darf leise Musik im Hintergrund laufen.",
       "terms": [["völlige Stille"]],
+      "nameless": [["verlangt"], ["völlige Stille"]],
       "question": "Welche Geräuschkulisse duldet Frau Pfisterer im Raum nicht?",
       "teaches": "music-class"
     },

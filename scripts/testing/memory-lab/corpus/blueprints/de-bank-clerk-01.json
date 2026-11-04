@@ -515,12 +515,14 @@
       "class": "third-party",
       "text": "Meine Kollegin Frau Falkenroth ist im Kreditbereich seit zehn Jahren tätig.",
       "terms": [["Falkenroth"]],
+      "nameless": [["Kollegin", "Kolleginnen", "tätig"], ["Kreditbereich*"]],
       "question": "Seit wann ist Frau Falkenroth bei uns tätig?"
     },
     {
       "class": "third-party",
       "text": "Mein Kollege Herr Tannhagen trinkt gern Tee, ich bevorzuge Kaffee am Morgen.",
       "terms": [["Tannhagen"]],
+      "nameless": [["Kollege", "Kollegen", "trinkt"], ["Tee"]],
       "question": "Welches Getränk mag Herr Tannhagen?",
       "teaches": "morning-drink"
     },
@@ -600,18 +602,21 @@
       "class": "third-party",
       "text": "Mein Kollege Herr Wendelkamp macht jedes Jahr im Herbst eine mehrwöchige Radreise.",
       "terms": [["Wendelkamp"]],
+      "nameless": [["Kollege", "Kollegen", "macht"], ["Radreise*"]],
       "question": "Was unternimmt Herr Wendelkamp im Herbst?"
     },
     {
       "class": "third-party",
       "text": "Meine Abteilungsleiterin Frau Hasselbrink ist seit drei Jahren für die Baufinanzierung zuständig.",
       "terms": [["Hasselbrink"]],
+      "nameless": [["Abteilungsleiterin", "Abteilungsleiter", "zuständig"], ["Baufinanzierung*"]],
       "question": "Wofür ist Frau Hasselbrink zuständig?"
     },
     {
       "class": "third-party",
       "text": "Mein Kollege Herr Quendelmann erklärt gern jeden Fachbegriff, Kundengespräche führe ich auf Wunsch in einfacher Sprache.",
       "terms": [["Quendelmann"]],
+      "nameless": [["Kollege", "Kollegen", "erklärt"], ["Fachbegriff*"]],
       "question": "Was erklärt Herr Quendelmann gern?",
       "teaches": "advice-language"
     },
@@ -691,18 +696,24 @@
       "class": "third-party",
       "text": "Unsere Filialleiterin Frau Schmeißer fährt jedes Jahr im Mai zu einem Seminar nach Wiesbaden.",
       "terms": [["Schmeißer"]],
+      "nameless": [
+        ["Filialleiterin", "Filialleiter", "fährt"],
+        ["Seminar*", "Wiesbaden"]
+      ],
       "question": "Wohin fährt Frau Schmeißer im Mai?"
     },
     {
       "class": "third-party",
       "text": "Herr Dörrenbacher aus der Revision sieht sich unsere Kreditakten zweimal im Jahr stichprobenartig an.",
       "terms": [["Dörrenbacher"]],
+      "nameless": [["Revision", "sieht"], ["Kreditakten"]],
       "question": "Wie oft kommt Herr Dörrenbacher zu uns?"
     },
     {
       "class": "third-party",
       "text": "Monatsberichte reiche ich immer am ersten Werktag des Folgemonats ein, mein Kollege Herr Ellerbrock gibt seine dagegen gern erst kurz vor knapp ab.",
       "terms": [["kurz vor knapp"]],
+      "nameless": [["Kollege", "Kollegen", "gibt"], ["kurz vor knapp"]],
       "question": "Wann gibt Herr Ellerbrock seine Zahlen ab?",
       "teaches": "report-habit"
     },
@@ -710,6 +721,7 @@
       "class": "third-party",
       "text": "Meine Kollegin Frau Dollinger ruft Menschen am liebsten schon vor acht Uhr zurück, ich erledige Rückrufe am liebsten gleich nach der Mittagspause.",
       "terms": [["vor acht Uhr"]],
+      "nameless": [["Kollegin", "Kolleginnen", "ruft"], ["vor acht Uhr"]],
       "question": "Zu welcher Stunde greift Frau Dollinger zum Hörer?",
       "teaches": "callback-time"
     },
@@ -717,6 +729,7 @@
       "class": "third-party",
       "text": "Herr Wolfertsberg stapelt seine Papiere gern bis an den Rand der Ablage, ich räume meinen Schreibtisch jeden Abend vollständig leer.",
       "terms": [["bis an den Rand"]],
+      "nameless": [["stapelt"], ["bis an den Rand"]],
       "question": "Wie sieht der Platz von Herrn Wolfertsberg aus?",
       "teaches": "desk-order"
     },

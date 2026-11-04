@@ -724,7 +724,9 @@ describe("curated blueprints", () => {
       for (const kind of HARDNESS_KINDS) expect(meta.hardness[kind], kind).toBeGreaterThan(0);
       expect(scenario.probes.length).toBeGreaterThanOrEqual(30);
       expect(scenario.truth).toHaveLength(blueprint.facts.length - blueprint.forgets.length);
-      expect(scenario.forbidden).toHaveLength(blueprint.traps.length);
+      const thirdParty = blueprint.traps.filter((trap) => trap.class === "third-party");
+      expect(thirdParty.length).toBeGreaterThan(0);
+      expect(scenario.forbidden).toHaveLength(blueprint.traps.length + thirdParty.length);
       expect(scenario.superseded).toHaveLength(blueprint.changes.length);
       expect(scenario.forgotten).toHaveLength(blueprint.forgets.length);
     },
@@ -777,8 +779,14 @@ describe("oracle derived from a blueprint", () => {
       "credential",
       "third-party",
       "third-party",
+      "third-party",
+      "third-party",
       "instruction",
     ]);
+    expect(oracle.forbidden[2]).toEqual({
+      class: "third-party",
+      terms: [["manager", "starts"], ["six in the morning"]],
+    });
   });
 
   it("speaks German and English forget commands", () => {

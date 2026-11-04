@@ -529,12 +529,14 @@
       "class": "third-party",
       "text": "My shift lead Ms. Okonkwo takes the bus to work every day.",
       "terms": [["Okonkwo"]],
+      "nameless": [["lead", "leads", "takes"], ["bus"]],
       "question": "How does Ms. Okonkwo get to work?"
     },
     {
       "class": "third-party",
       "text": "My colleague Mr. Dunmore runs a small depot, I manage a distribution centre with about sixty warehouse staff.",
       "terms": [["Dunmore"]],
+      "nameless": [["colleague", "colleagues", "runs"], ["depot"]],
       "question": "What does Mr. Dunmore run?",
       "teaches": "ops-role"
     },
@@ -614,18 +616,24 @@
       "class": "third-party",
       "text": "My night supervisor Mr. Brackenmoor always wears a yellow jacket.",
       "terms": [["Brackenmoor"]],
+      "nameless": [["supervisor", "supervisors", "wears"], ["yellow jacket"]],
       "question": "What colour jacket does Mr. Brackenmoor wear?"
     },
     {
       "class": "third-party",
       "text": "Our forklift trainer Ms. Hollowell has been with the company for twenty years.",
       "terms": [["Hollowell"]],
+      "nameless": [["trainer", "trainers"], ["twenty years"]],
       "question": "How long has Ms. Hollowell been with the company?"
     },
     {
       "class": "third-party",
       "text": "The haulier's dispatcher Mr. Wrenfield calls every driver by a nickname.",
       "terms": [["Wrenfield"]],
+      "nameless": [
+        ["dispatcher", "dispatchers", "calls"],
+        ["nickname", "nicknames"]
+      ],
       "question": "How does Mr. Wrenfield greet the drivers?"
     },
     {
@@ -704,12 +712,17 @@
       "class": "third-party",
       "text": "The yard marshal Ms. Tolliver keeps bees on her allotment.",
       "terms": [["Tolliver"]],
+      "nameless": [
+        ["marshal", "marshals", "keeps"],
+        ["bees", "allotment"]
+      ],
       "question": "What does Ms. Tolliver keep on her allotment?"
     },
     {
       "class": "third-party",
       "text": "Our night planner Mr. Hartnoll turns the heating up to twenty-six degrees, but I keep the control room at nineteen degrees.",
       "terms": [["twenty-six degrees"]],
+      "nameless": [["planner", "planners", "turns"], ["twenty-six degrees"]],
       "question": "How warm does Mr. Hartnoll like his surroundings?",
       "teaches": "control-room-temp"
     },
@@ -717,6 +730,7 @@
       "class": "third-party",
       "text": "Ms. Kellerby, our planner, only does one-to-ones at her desk, but I hold my one-to-one talks while we walk the aisles.",
       "terms": [["at her desk"]],
+      "nameless": [["planner", "planners", "does"], ["at her desk"]],
       "question": "Where does Ms. Kellerby speak with her team members?",
       "teaches": "walking-talks"
     },
@@ -724,6 +738,7 @@
       "class": "third-party",
       "text": "The haulier's loader Mr. Pendlebury wears a pink vest by choice, while I prefer yellow high-visibility vests to orange ones.",
       "terms": [["pink vest"]],
+      "nameless": [["loader", "loaders", "wears"], ["pink vest"]],
       "question": "What colour of clothing does Mr. Pendlebury choose?",
       "teaches": "hivis-colour"
     },
@@ -731,6 +746,7 @@
       "class": "third-party",
       "text": "Our dispatcher Mr. Loveday never praises anyone in writing, whereas I send a short thank-you note to the crew after a hard week.",
       "terms": [["never praises"]],
+      "nameless": [["dispatcher", "dispatchers"], ["never praises"]],
       "question": "Does Mr. Loveday acknowledge good work?",
       "teaches": "thank-notes"
     },

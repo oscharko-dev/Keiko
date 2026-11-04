@@ -529,12 +529,14 @@
       "class": "third-party",
       "text": "Meine Kollegin Frau Eschenlohr arbeitet am liebsten nachts an den Schnittstellen.",
       "terms": [["Eschenlohr"]],
+      "nameless": [["Kollegin", "Kolleginnen", "arbeitet"], ["nachts"]],
       "question": "Zu welcher Tageszeit ist Frau Eschenlohr am produktivsten?"
     },
     {
       "class": "third-party",
       "text": "Mein Kollege Herr Quellmalz mag Tabellen, ich bevorzuge Diagramme bei Auswertungen.",
       "terms": [["Quellmalz"]],
+      "nameless": [["Kollege", "Kollegen", "mag"], ["Tabellen"]],
       "question": "Was bevorzugt Herr Quellmalz?",
       "teaches": "report-visuals"
     },
@@ -614,6 +616,7 @@
       "class": "third-party",
       "text": "Mein Kollege Herr Zeidlerbach programmiert lieber drauflos, ich schreibe zuerst den Test und danach erst die Implementierung.",
       "terms": [["Zeidlerbach"]],
+      "nameless": [["Kollege", "Kollegen", "programmiert"], ["drauflos"]],
       "question": "Wie geht Herr Zeidlerbach bei neuem Code vor?",
       "teaches": "test-first"
     },
@@ -621,12 +624,14 @@
       "class": "third-party",
       "text": "Meine Kollegin Frau Amselbeck arbeitet seit zwei Jahren im Team für Betrugserkennung.",
       "terms": [["Amselbeck"]],
+      "nameless": [["Kollegin", "Kolleginnen", "arbeitet"], ["Betrugserkennung*"]],
       "question": "In welchem Team ist Frau Amselbeck tätig?"
     },
     {
       "class": "third-party",
       "text": "Unser Architekt Herr Grauwinkel hält jeden Montag eine Sprechstunde für Schnittstellenfragen ab.",
       "terms": [["Grauwinkel"]],
+      "nameless": [["Architekt", "Architektin", "hält"], ["Sprechstunde*"]],
       "question": "Wann hält Herr Grauwinkel seine Sprechstunde ab?"
     },
     {
@@ -705,18 +710,24 @@
       "class": "third-party",
       "text": "Unsere Produktverantwortliche Frau Kreuzmann wechselt zum Quartalsende in die Region Nord.",
       "terms": [["Kreuzmann"]],
+      "nameless": [["Produktverantwortliche*", "wechselt"], ["Region Nord"]],
       "question": "Wohin wechselt Frau Kreuzmann?"
     },
     {
       "class": "third-party",
       "text": "Unsere Werkstudentin Frau Brandtstetter schreibt gerade ihre Abschlussarbeit über Lastverteilung.",
       "terms": [["Brandtstetter"]],
+      "nameless": [
+        ["Werkstudentin", "Werkstudent", "Werkstudenten", "schreibt"],
+        ["Abschlussarbeit*", "Lastverteilung"]
+      ],
       "question": "Was untersucht Frau Brandtstetter zurzeit inhaltlich?"
     },
     {
       "class": "third-party",
       "text": "Mein Kollege Herr Tegtmeyer schwört auf eine Schrift mit fester Breite, ich nutze im Editor eine Schrift mit Ligaturen.",
       "terms": [["fester Breite"]],
+      "nameless": [["Kollege", "Kollegen", "schwört"], ["fester Breite"]],
       "question": "Welche Vorliebe hat Herr Tegtmeyer bei der Darstellung von Quelltext?",
       "teaches": "ide-font"
     },
@@ -724,6 +735,7 @@
       "class": "third-party",
       "text": "Ich lege für jede Idee sofort ein Ticket an, mein Kollege Herr Immenroth hält seine Einfälle lieber auf Notizzetteln fest.",
       "terms": [["Notizzetteln"]],
+      "nameless": [["Kollege", "Kollegen", "hält"], ["Notizzettel*"]],
       "question": "Wo hält Herr Immenroth seine Einfälle fest?",
       "teaches": "ticket-habit"
     },
@@ -731,6 +743,7 @@
       "class": "third-party",
       "text": "Herr Sattelmaier aus dem Nachbarteam braucht absolute Ruhe zum Nachdenken, bei kniffligen Aufgaben programmiere ich gern zu zweit am selben Bildschirm.",
       "terms": [["absolute Ruhe"]],
+      "nameless": [["Nachbarteam", "braucht"], ["absolute Ruhe"]],
       "question": "Was braucht Herr Sattelmaier zum Nachdenken?",
       "teaches": "pairing-pref"
     },

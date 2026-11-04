@@ -515,12 +515,14 @@
       "class": "third-party",
       "text": "Mein Kollege Herr Tanner nimmt sich jedes Jahr im Februar drei Wochen frei.",
       "terms": [["Tanner"]],
+      "nameless": [["Kollege", "Kollegen", "nimmt"], ["Februar"]],
       "question": "Wann ist Herr Tanner nicht im Haus?"
     },
     {
       "class": "third-party",
       "text": "Mein Kollege Herr Bauer schaut gern jede Mappe an, Personalakten öffne ich nur, wenn ein konkreter Anlass besteht.",
       "terms": [["Bauer"]],
+      "nameless": [["Kollege", "Kollegen", "schaut"], ["Mappe"]],
       "question": "Was schaut Herr Bauer gern an?",
       "teaches": "file-access"
     },
@@ -600,18 +602,21 @@
       "class": "third-party",
       "text": "Meine Kollegin Frau Iltischke leitet seit Jahren die Lohnbuchhaltung.",
       "terms": [["Iltischke"]],
+      "nameless": [["Kollegin", "Kolleginnen", "leitet"], ["Lohnbuchhaltung*"]],
       "question": "Was leitet Frau Iltischke?"
     },
     {
       "class": "third-party",
       "text": "Mein Kollege Herr Klosterkamp macht im Sommer einen Segelkurs an der Ostsee.",
       "terms": [["Klosterkamp"]],
+      "nameless": [["Kollege", "Kollegen", "macht"], ["Segelkurs*"]],
       "question": "Was macht Herr Klosterkamp im Sommer?"
     },
     {
       "class": "third-party",
       "text": "Unsere Auszubildende Frau Pfannenstiel beginnt im September bei uns.",
       "terms": [["Pfannenstiel"]],
+      "nameless": [["Auszubildende*", "Azubi", "beginnt"], ["September"]],
       "question": "Wann fängt Frau Pfannenstiel bei uns an?"
     },
     {
@@ -690,12 +695,17 @@
       "class": "third-party",
       "text": "Unsere Betriebsärztin Frau Lamprecht hat dienstags von neun bis zwölf Uhr Sprechstunde im Haus.",
       "terms": [["Lamprecht"]],
+      "nameless": [["Betriebsärztin", "Betriebsarzt", "Betriebsärzte*"], ["dienstags"]],
       "question": "Wann ist Frau Lamprecht im Haus?"
     },
     {
       "class": "third-party",
       "text": "In E-Mails an Bewerber verwende ich immer die förmliche Anrede, mein Kollege Herr Altenhoven duzt dagegen sogar völlig Fremde.",
       "terms": [["duzt"]],
+      "nameless": [
+        ["Kollege", "Kollegen", "duzt"],
+        ["duzt", "Fremde*"]
+      ],
       "question": "Wie spricht Herr Altenhoven Fremde an?",
       "teaches": "formal-address"
     },
@@ -703,6 +713,7 @@
       "class": "third-party",
       "text": "Gesprächsnotizen tippe ich unmittelbar nach dem Termin ab, meine Kollegin Frau Wiegandt vervollständigt ihre erst am Wochenende.",
       "terms": [["am Wochenende"]],
+      "nameless": [["Kollegin", "Kolleginnen", "vervollständigt"], ["am Wochenende"]],
       "question": "Wann vervollständigt Frau Wiegandt ihre Aufzeichnungen?",
       "teaches": "notes-habit"
     },
@@ -710,6 +721,7 @@
       "class": "third-party",
       "text": "Herr Lübbecke trinkt den ganzen Tag über literweise Cola, zwischendurch trinke ich am liebsten Kräutertee.",
       "terms": [["literweise"]],
+      "nameless": [["trinkt"], ["Cola", "literweise"]],
       "question": "Welches Getränk konsumiert Herr Lübbecke den ganzen Tag?",
       "teaches": "tea-break"
     },
@@ -717,6 +729,7 @@
       "class": "third-party",
       "text": "Auf meinem Schreibtisch steht immer eine Topfpflanze, meine Kollegin Frau Reisinger hat auf ihrem Tisch lieber gar nichts stehen.",
       "terms": [["gar nichts"]],
+      "nameless": [["Kollegin", "Kolleginnen"], ["gar nichts"]],
       "question": "Was hat Frau Reisinger auf ihrem Platz liegen?",
       "teaches": "plant-desk"
     },

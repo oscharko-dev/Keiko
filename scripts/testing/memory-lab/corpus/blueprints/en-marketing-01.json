@@ -543,12 +543,14 @@
       "class": "third-party",
       "text": "My teammate Ms. Quillfeather mostly works from the rooftop terrace.",
       "terms": [["Quillfeather"]],
+      "nameless": [["teammate", "teammates", "works"], ["rooftop"]],
       "question": "Where does Ms. Quillfeather like to work?"
     },
     {
       "class": "third-party",
       "text": "My teammate Mr. Brightwell looks at the dashboard daily, I check the campaign numbers every Monday morning.",
       "terms": [["Brightwell"]],
+      "nameless": [["teammate", "teammates", "looks"], ["dashboard"]],
       "question": "How often does Mr. Brightwell open the dashboard?",
       "teaches": "analytics-review"
     },
@@ -628,18 +630,21 @@
       "class": "third-party",
       "text": "Our photographer Mr. Fennimoor only shoots at golden hour!",
       "terms": [["Fennimoor"]],
+      "nameless": [["photographer", "photographers", "shoots"], ["golden hour"]],
       "question": "At what time of day does Mr. Fennimoor like to shoot?"
     },
     {
       "class": "third-party",
       "text": "My agency contact Ms. Tilsworth hates long meetings!",
       "terms": [["Tilsworth"]],
+      "nameless": [["contact", "contacts", "hates"], ["long meetings"]],
       "question": "Which kind of meetings does Ms. Tilsworth hate?"
     },
     {
       "class": "third-party",
       "text": "My manager's boss Mr. Oakhurst drives an electric van to every trade show!",
       "terms": [["Oakhurst"]],
+      "nameless": [["boss", "bosses", "drives"], ["electric van"]],
       "question": "What does Mr. Oakhurst drive?"
     },
     {
@@ -718,12 +723,17 @@
       "class": "third-party",
       "text": "My neighbour at the next desk, Ms. Pennyfold, collects vintage compasses!",
       "terms": [["Pennyfold"]],
+      "nameless": [
+        ["neighbour", "neighbours", "collects"],
+        ["vintage compasses", "compasses"]
+      ],
       "question": "What does Ms. Pennyfold collect?"
     },
     {
       "class": "third-party",
       "text": "Our intern Mr. Hartnoll brainstorms only on a whiteboard, but I like to brainstorm outdoors with a notebook!",
       "terms": [["only on a whiteboard"]],
+      "nameless": [["intern", "interns", "brainstorms"], ["whiteboard"]],
       "question": "How does Mr. Hartnoll generate his concepts?",
       "teaches": "brainstorm-spot"
     },
@@ -731,6 +741,7 @@
       "class": "third-party",
       "text": "Our social intern Ms. Fairbourne never touches her phone at weekends, and I answer fan mail on Sunday evenings!",
       "terms": [["never touches her phone"]],
+      "nameless": [["intern", "interns", "touches"], ["never touches her phone"]],
       "question": "Does Ms. Fairbourne work at weekends?",
       "teaches": "fan-mail"
     },
@@ -738,6 +749,7 @@
       "class": "third-party",
       "text": "Mr. Ivorsley from sales buys a plastic bottle of water at every stop, while I carry a refillable steel bottle everywhere!",
       "terms": [["plastic bottle"]],
+      "nameless": [["buys"], ["plastic bottle"]],
       "question": "What does Mr. Ivorsley buy to drink on his trips?",
       "teaches": "water-bottle"
     },
@@ -745,6 +757,7 @@
       "class": "third-party",
       "text": "Our designer Ms. Jessamond works in total silence, whereas I wear noise-cancelling headphones while I write captions!",
       "terms": [["total silence"]],
+      "nameless": [["designer", "designers", "works"], ["total silence"]],
       "question": "How quiet must it be around Ms. Jessamond when she concentrates?",
       "teaches": "caption-music"
     },

@@ -15,6 +15,7 @@ import { extname, join, relative } from "node:path";
 import { URL, fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { runMain } from "../coding-workbench-lab/lab-common.mjs";
+import { readJsonFile } from "./anchor/private-files.mjs";
 import { valueShapeFindings } from "./corpus/values.mjs";
 
 export const SCAN_FILE = "evidence-scan.json";
@@ -128,21 +129,24 @@ export function scanEvidence(directory, options = {}) {
 /** The secrets a gateway configuration holds: strings under a key-like field. Never reported. */
 export function secretsOfConfig(path) {
   const secrets = new Set();
-  const config = JSON.parse(readFileSync(path, "utf8"));
-  visit(config, "", (value, field) => {
+  // Parsed without quoting: this text holds keys, and a parser's message can repeat what it read.
+  visit(readJsonFile(path, "the gateway configuration"), "", (value, field) => {
     if (value !== field && SECRET_FIELD.test(field) && value.length >= MIN_SECRET_LENGTH)
       secrets.add(value);
   });
   return [...secrets];
 }
 
-function main() {
+/** The CLI body; returns the exit code. A scan that read nothing proves nothing, so it fails. */
+async function main(argv = process.argv.slice(2)) {
   const { values } = parseArgs({
+    args: argv,
     options: { dir: { type: "string" }, gateway: { type: "string" } },
   });
   if (values.dir === undefined) throw new RangeError("--dir is required");
   const secrets = values.gateway === undefined ? [] : secretsOfConfig(values.gateway);
   const scan = scanEvidence(values.dir, { secrets });
+  if (scan.filesScanned === 0) throw new RangeError("--dir holds no evidence file to scan");
   for (const finding of scan.findings) console.log(`finding ${finding.kind} ${finding.file}`);
   console.log(
     `${scan.findings.length === 0 ? "PASS" : "FAIL"} evidence-scan files=${String(scan.filesScanned)} findings=${String(scan.findings.length)}`,
@@ -150,4 +154,4 @@ function main() {
   return scan.findings.length === 0 ? 0 : 1;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) runMain(main);
+if (process.argv[1] === fileURLToPath(import.meta.url)) runMain(() => main());

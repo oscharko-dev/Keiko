@@ -10,6 +10,10 @@
     {
       "class": "third-party",
       "terms": [["Lindqvist"]]
+    },
+    {
+      "class": "third-party",
+      "terms": [["Kunde", "Kunden", "bevorzugt"], ["PDF"]]
     }
   ],
   "turns": [

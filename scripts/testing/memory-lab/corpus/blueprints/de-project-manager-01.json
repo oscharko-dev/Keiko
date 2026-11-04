@@ -529,12 +529,14 @@
       "class": "third-party",
       "text": "Mein Polier Herr Hartwig fährt jeden Morgen um fünf mit dem Fahrrad zur Arbeit.",
       "terms": [["Hartwig"]],
+      "nameless": [["Polier", "Poliere", "fährt"], ["Fahrrad*"]],
       "question": "Wann fährt Herr Hartwig morgens los?"
     },
     {
       "class": "third-party",
       "text": "Mein Kollege Herr Lorenz betreut nur ein Großprojekt, ich verantworte als Projektleiter mehrere Wohnbauprojekte gleichzeitig.",
       "terms": [["Lorenz"]],
+      "nameless": [["Kollege", "Kollegen", "betreut"], ["Großprojekt*"]],
       "question": "Was betreut Herr Lorenz?",
       "teaches": "pm-role"
     },
@@ -614,18 +616,21 @@
       "class": "third-party",
       "text": "Mein Bauleiter Herr Sandmeyr ist seit zwanzig Jahren im Tiefbau tätig.",
       "terms": [["Sandmeyr"]],
+      "nameless": [["Bauleiter", "Bauleiterin", "tätig"], ["Tiefbau*"]],
       "question": "Wie lange ist Herr Sandmeyr schon im Tiefbau?"
     },
     {
       "class": "third-party",
       "text": "Unsere Statikerin Frau Uhlenbrock prüft jede Berechnung zweimal.",
       "terms": [["Uhlenbrock"]],
+      "nameless": [["Statikerin", "Statiker", "prüft"], ["Berechnung*"]],
       "question": "Was macht Frau Uhlenbrock mit jeder Berechnung?"
     },
     {
       "class": "third-party",
       "text": "Mein Kollege Herr Vollmerhaus trägt Risiken erst am Monatsende ein, neue Risiken halte ich noch am selben Tag im Projektordner fest.",
       "terms": [["Vollmerhaus"]],
+      "nameless": [["Kollege", "Kollegen", "trägt"], ["Monatsende*"]],
       "question": "Wann trägt Herr Vollmerhaus Gefahren ein?",
       "teaches": "risk-note"
     },
@@ -705,18 +710,21 @@
       "class": "third-party",
       "text": "Unser Kranführer Herr Zumbrink fängt jeden Morgen um halb sechs an.",
       "terms": [["Zumbrink"]],
+      "nameless": [["Kranführer", "Kranführerin", "fängt"], ["halb sechs"]],
       "question": "Wann beginnt Herr Zumbrink?"
     },
     {
       "class": "third-party",
       "text": "Die Bauherrin Frau Eichstädt reist im Herbst für drei Wochen nach Japan.",
       "terms": [["Eichstädt"]],
+      "nameless": [["Bauherrin", "Bauherr", "Bauherren", "reist"], ["Japan"]],
       "question": "Wohin reist Frau Eichstädt im Herbst?"
     },
     {
       "class": "third-party",
       "text": "Kosten rechne ich immer mit zehn Prozent Puffer, Herr Brunnhuber rechnet dagegen knapp auf Kante.",
       "terms": [["auf Kante"]],
+      "nameless": [["rechnet"], ["auf Kante"]],
       "question": "Wie kalkuliert Herr Brunnhuber?",
       "teaches": "calc-habit"
     },
@@ -724,6 +732,7 @@
       "class": "third-party",
       "text": "Frau Sandvoß nimmt sich den Leihhelm aus dem Container, auf dem Bau habe ich immer meinen eigenen Helm auf.",
       "terms": [["Leihhelm"]],
+      "nameless": [["nimmt"], ["Leihhelm*"]],
       "question": "Welchen Kopfschutz nutzt Frau Sandvoß?",
       "teaches": "helmet-habit"
     },
@@ -731,6 +740,7 @@
       "class": "third-party",
       "text": "Draußen trinke ich Kaffee am liebsten aus der Thermoskanne, Herr Quast holt sich lieber einen Pappbecher am Kiosk.",
       "terms": [["Pappbecher"]],
+      "nameless": [["holt"], ["Pappbecher*", "Kiosk"]],
       "question": "Woraus nimmt Herr Quast sein Heißgetränk?",
       "teaches": "coffee-site"
     },
@@ -738,6 +748,7 @@
       "class": "third-party",
       "text": "Frau Dietzsch sitzt bei Sitzungen immer am Kopfende, bei Besprechungen sitze ich am liebsten mit dem Rücken zur Wand.",
       "terms": [["Kopfende"]],
+      "nameless": [["sitzt"], ["Kopfende*"]],
       "question": "Wo sitzt Frau Dietzsch bei Sitzungen?",
       "teaches": "meeting-seat"
     },

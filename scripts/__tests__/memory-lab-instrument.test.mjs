@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -19,6 +19,16 @@ describe("the instrument digest of a run", () => {
     const digest = instrumentDigest();
     expect(digest).toMatch(/^[0-9a-f]{64}$/u);
     expect(instrumentDigest()).toBe(digest);
+  });
+
+  // This list has drifted from the code twice, and an operator reads it to know what breaks comparison.
+  it("is named in full on the lab's page, every file of it", () => {
+    const page = readFileSync(join(LAB, "../../../docs/qa/memoria-viva-lab.md"), "utf8");
+    const start = page.indexOf("`INSTRUMENT_FILES` in `instrument.mjs`:");
+    const paragraph = page.slice(start, page.indexOf("), beside", start)).replace(/\s+/gu, " ");
+    expect(start).toBeGreaterThan(0);
+    const named = [...paragraph.matchAll(/`([\w/-]+\.mjs)`/gu)].map((match) => match[1]);
+    expect(named.filter((name) => name !== "instrument.mjs")).toEqual([...INSTRUMENT_FILES]);
   });
 
   it("changes with a file's content and with its name, not with the reader", () => {

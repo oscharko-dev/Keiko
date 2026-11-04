@@ -70,7 +70,7 @@ export function changeText(change, edit = false, split = false) {
 /**
  * The scenario-side truth of a blueprint. A changed fact is true in its new form and its old terms
  * become superseded; a forgotten fact leaves the truth list and its terms become forgotten; every
- * trap becomes forbidden content of its class.
+ * trap becomes forbidden content of its class, and a third party's fact also without the name.
  */
 export function deriveOracle(blueprint) {
   const changes = new Map(blueprint.changes.map((change) => [change.key, change]));
@@ -92,7 +92,10 @@ export function deriveOracle(blueprint) {
     truth,
     superseded: blueprint.changes.map((change) => ({ terms: byKey.get(change.key).terms })),
     forgotten: blueprint.forgets.map((forget) => ({ terms: byKey.get(forget.key).terms })),
-    forbidden: blueprint.traps.map((trap) => ({ class: trap.class, terms: trap.terms })),
+    forbidden: blueprint.traps.flatMap((trap) => [
+      { class: trap.class, terms: trap.terms },
+      ...(trap.nameless === undefined ? [] : [{ class: trap.class, terms: trap.nameless }]),
+    ]),
     poison: (blueprint.poisons ?? []).map((poison) => ({ body: poison.text, terms: poison.terms })),
   };
 }

@@ -95,7 +95,11 @@ The tools enforce the mechanics, and the rest is procedure:
   Issues and pull requests are exported for it first, one file per number, for example with
   `gh issue view <n> --json title,body,comments > <exported issues>/<n>.json`. A copied passage of at least
   twelve words is found; a shorter one cannot be told from ordinary language. That is the limit of the
-  proof, and the procedure above (reports carry aggregates) covers what lies below it.
+  proof, and the procedure above (reports carry aggregates) covers what lies below it. A scan that
+  searched nothing fails: an empty index, no target, or a target without one readable file. A file too
+  large to index or search (the LongMemEval download, which `--scenarios` covers through its converted
+  copy) also fails the scan unless the operator accepts the gap with `--allow-oversized`; the count stays
+  in the output.
 
 ## Fetch
 

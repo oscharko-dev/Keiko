@@ -164,6 +164,31 @@ describe("blueprint validator", () => {
     ],
     ["an unknown trap class", (b) => (b.traps[0].class = "gossip"), /class must be one of/u],
     [
+      "a third-party trap that cannot be told without the name",
+      (b) => delete b.traps[1].nameless,
+      /nameless is required for a third-party trap/u,
+    ],
+    [
+      "a nameless form on a trap that names nobody",
+      (b) => (b.traps[0].nameless = [["someone"], ["something"]]),
+      /nameless is only for a third-party trap/u,
+    ],
+    [
+      "a nameless form without its who and what",
+      (b) => (b.traps[1].nameless = [["manager"]]),
+      /nameless must hold a who and a what group/u,
+    ],
+    [
+      "a nameless form that misses the text",
+      (b) => (b.traps[1].nameless = [["manager"], ["midnight"]]),
+      /nameless must match the text/u,
+    ],
+    [
+      "a nameless form whose content is a fact of the person",
+      (b) => (b.traps[2].nameless = [["colleague"], ["bar charts"]]),
+      /nameless names what a fact of the person says/u,
+    ],
+    [
       "trap terms that miss the text",
       (b) => (b.traps[1].terms = [["Nobody"]]),
       /terms must match the text/u,
@@ -216,7 +241,10 @@ describe("blueprint validator", () => {
     ],
     [
       "a fake value in a trap that may hold none",
-      (b) => (b.traps[1].text = `Ms. Harrowgate lives at ${FAKE_CUSTOMER_ID} street, I think.`),
+      (b) => {
+        b.traps[1].text = `Ms. Harrowgate lives at ${FAKE_CUSTOMER_ID} street, I think.`;
+        b.traps[1].nameless = [["lives"], ["street"]];
+      },
       /only a credential or identifier trap may hold a fake value/u,
     ],
     [
@@ -239,6 +267,7 @@ describe("blueprint validator", () => {
       (b) => {
         b.traps[1].text = 'The CEO said: "A senior analyst must sign this."';
         b.traps[1].terms = [["CEO"]];
+        b.traps[1].nameless = [["CEO"], ["said"]];
       },
       /restates a fact/u,
     ],

@@ -212,12 +212,14 @@ kind): the explicit route stores in project scope today, which is why the oracle
 
 ## What a run leaves behind
 
-Nothing, however it ends. An interrupt (`SIGINT`, `SIGTERM`), a killed instance and an uncaught error of
-the runner itself pass one cleanup: the instance in progress is closed, also when it is still starting,
-no further unit starts, and the state of the run is removed. `memory-lab-lifecycle.test.mjs` proves it
-against the real runner with a real instance, from outside, by the process tree and the port. A `SIGKILL`
-of the runner cannot clean up by definition: its instance ends with the runner's IPC channel, and the
-state of a run stays in its `--out` directory, which `--keep` also asks for on purpose.
+No Keiko process, port or state directory, with two named exceptions. A killed instance costs its unit,
+and the run goes on. An interrupt (`SIGINT`, `SIGTERM`) and an uncaught error of the runner itself pass
+one cleanup: the instance in progress is closed, also when it is still starting, no further unit starts,
+and the state of the run is removed. `memory-lab-lifecycle.test.mjs` proves all of it against the real
+runner with a real instance, from outside, by the process tree and the port. The exceptions: a `SIGKILL`
+of the runner cannot clean up by definition, so its instance ends with the runner's IPC channel and the
+state of the run stays in its `--out` directory; and `--keep` asks for that state on purpose, and keeps
+state only.
 
 ## What a run proves about itself
 
@@ -235,11 +237,6 @@ scan runs by hand over any directory:
 node scripts/testing/memory-lab/evidence-scan.mjs --dir docs/qa/evidence/memoria-viva-lab
 ```
 
-Whatever ends a run, no Keiko process, port or state directory stays behind. A killed instance costs its
-unit, and the run goes on; SIGINT and SIGTERM wait for an instance still starting, close it, and remove
-the state (`memory-lab-lifecycle.test.mjs` proves all of it from outside, against the real process tree
-and port). `--keep` is the operator's explicit exception, and it keeps state only.
-
 ## How to read a run
 
 `<out>/summary.md` carries the group tables per arm, per arm and language, per arm and class and per
@@ -255,9 +252,10 @@ the product head and the options. Its `metadata` records `sealed` (true for a `-
 the judge requires of the holdout part), `allowFoldedEnv`, `foldedKeys`, `budgetTokens`,
 `brokenLearner` and `configDigest`: the SHA-256 of the gateway configuration file in live mode,
 `offline` otherwise. It also records the **instrument**: `instrumentDigest`, a SHA-256 over the lab
-sources that decide what a run measures (`INSTRUMENT_FILES` in `instrument.mjs`: `corpus/values.mjs`,
-`driver.mjs`, `gateway-calls.mjs`, `instance.mjs`, `isolation.mjs`, `report.mjs`, `run.mjs`,
-`scenario.mjs`, `score.mjs`, `scripted-model.mjs`, `set-files.mjs`, `unit-failure.mjs`), beside
+sources that decide what a run measures (`INSTRUMENT_FILES` in `instrument.mjs`: `corpus/sequence.mjs`,
+`corpus/values.mjs`, `driver.mjs`, `evidence-scan.mjs`, `gateway-calls.mjs`, `instance.mjs`,
+`isolation.mjs`, `log-text.mjs`, `report.mjs`, `run.mjs`, `scenario.mjs`, `score.mjs`,
+`scripted-model.mjs`, `set-files.mjs`, `unit-failure.mjs`), beside
 `labHead` and `labDirty` (the lab's commit, and whether its sources carried uncommitted changes) for
 people; and the **product build**: `productHead` and `productDistDigest`, a SHA-256 over every built
 `.js` under the subject's `packages/*/dist`, because the product runs from its built packages, which a
@@ -344,7 +342,10 @@ is a synthetic person:
   `question`, `assistant-claim`, `instruction`), the `text` the person writes, the `terms` of the
   forbidden content and a `question` that would surface it. A third-party trap may `teach` a fact:
   "Mein Kollege mag Tabellen, ich bevorzuge Diagramme" makes the person's own preference true and the
-  colleague's forbidden.
+  colleague's forbidden. A third-party trap also carries `nameless`, two term groups for the same fact
+  without the name: who (the role nouns and the third-person verb, never a pronoun, because German
+  "Sie" addresses the person) and what (the fact's distinctive content, which no fact of the person may
+  use). "Meine Kollegin rechnet in Excel" is a stored third-party fact whether or not she is named.
 - `relational[]`: why-did-I-decide questions, answered from the reason of a decision.
 
 A **split form** (`split: { lead, rule }`, on a fact or a change) lets a statement be told as a fact

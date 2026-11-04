@@ -543,12 +543,14 @@
       "class": "third-party",
       "text": "My supervisor Ms. Aldersey eats lunch at her desk every day.",
       "terms": [["Aldersey"]],
+      "nameless": [["supervisor", "supervisors", "eats"], ["at her desk"]],
       "question": "Where does Ms. Aldersey eat lunch?"
     },
     {
       "class": "third-party",
       "text": "My colleague Mr. Pemberton clips his papers loosely, whereas before a hearing I assemble the exhibits in a single binder.",
       "terms": [["Pemberton"]],
+      "nameless": [["colleague", "colleagues", "clips"], ["loosely"]],
       "question": "How does Mr. Pemberton keep his papers?",
       "teaches": "hearing-prep"
     },
@@ -628,18 +630,24 @@
       "class": "third-party",
       "text": "Our senior partner Mr. Ravenscar signs everything in green ink.",
       "terms": [["Ravenscar"]],
+      "nameless": [["partner", "partners", "signs"], ["green ink"]],
       "question": "Which ink does Mr. Ravenscar use for signing?"
     },
     {
       "class": "third-party",
       "text": "The court clerk Ms. Dunwood takes long weekends in the mountains.",
       "terms": [["Dunwood"]],
+      "nameless": [
+        ["clerk", "clerks", "takes"],
+        ["long weekends", "mountains"]
+      ],
       "question": "Where does Ms. Dunwood go on long weekends?"
     },
     {
       "class": "third-party",
       "text": "Our process server Mr. Mistlewood works only on foot.",
       "terms": [["Mistlewood"]],
+      "nameless": [["server", "servers", "works"], ["on foot"]],
       "question": "How does Mr. Mistlewood travel?"
     },
     {
@@ -718,12 +726,14 @@
       "class": "third-party",
       "text": "The firm's caretaker Mr. Whitlock plays chess in the park every Sunday.",
       "terms": [["Whitlock"]],
+      "nameless": [["caretaker", "caretakers", "plays"], ["chess"]],
       "question": "What does Mr. Whitlock play on Sundays?"
     },
     {
       "class": "third-party",
       "text": "Mr. Kingsbury in conveyancing drinks nothing but sparkling water, and I keep a thermos of green tea on my desk.",
       "terms": [["sparkling water"]],
+      "nameless": [["conveyancing", "drinks"], ["sparkling water"]],
       "question": "What does Mr. Kingsbury drink all day?",
       "teaches": "green-tea"
     },
@@ -731,6 +741,7 @@
       "class": "third-party",
       "text": "Our receptionist Ms. Thackeray wears contact lenses only, but I carry a spare pair of glasses in my bag.",
       "terms": [["contact lenses"]],
+      "nameless": [["receptionist", "receptionists", "wears"], ["contact lenses"]],
       "question": "What does Ms. Thackeray use to see clearly?",
       "teaches": "spare-glasses"
     },
@@ -738,6 +749,7 @@
       "class": "third-party",
       "text": "Mr. Ogilvy, the junior partner, always takes a taxi to the courthouse, whereas I like to walk to the courthouse on fine days.",
       "terms": [["takes a taxi"]],
+      "nameless": [["partner", "partners", "takes"], ["taxi"]],
       "question": "What transport does Mr. Ogilvy use?",
       "teaches": "fine-day-walk"
     },
@@ -745,6 +757,7 @@
       "class": "third-party",
       "text": "Our archivist Ms. Lowestoft uses nothing but handwritten numbers on her folders, but I label my folders with a small colour dot.",
       "terms": [["handwritten numbers"]],
+      "nameless": [["archivist", "archivists", "uses"], ["handwritten numbers"]],
       "question": "How does Ms. Lowestoft identify her paperwork?",
       "teaches": "folder-dots"
     },

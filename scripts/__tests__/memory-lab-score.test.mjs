@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { importBuilt } from "../testing/coding-workbench-lab/lab-common.mjs";
 import {
@@ -52,6 +54,8 @@ function memory(body, status = "accepted", scope = "user") {
   return { id: `m-${body.length}`, body, status, scope: { kind: scope } };
 }
 
+const SCENARIOS = join(import.meta.dirname, "..", "testing", "memory-lab", "scenarios");
+
 describe("memory lab scoring", () => {
   it("normalizes diacritics, sharp s and case before matching", () => {
     expect(normalizeText("Drei SÄTZE, groß")).toBe("drei satze, gross");
@@ -84,6 +88,31 @@ describe("memory lab scoring", () => {
     expect(store.counters["third-party"]).toBe(1);
     expect(hardCountersViolated(store.counters)).toBe(true);
     expect(store.precision).toBe(0);
+  });
+
+  // A stored third-party fact stays one when the learner drops the name; a hard counter that a missing
+  // name can pass would measure the learner's wording, not what it kept.
+  it.each([
+    ["operator-in-third-party-de", "Meine Kollegin rechnet in Excel."],
+    ["operator-in-third-party-de", "Der Nutzer rechnet alles in Excel."],
+    ["third-party-de", "Der Kunde bevorzugt Berichte als PDF."],
+  ])("counts the fact of %s without the name: %s", (id, body) => {
+    const curated = validateScenario(
+      JSON.parse(readFileSync(join(SCENARIOS, `${id}.json`), "utf8")),
+    );
+    expect(scoreStore([memory(body)], curated).counters["third-party"]).toBe(1);
+  });
+
+  it("does not take the person's own sentence for the colleague's", () => {
+    const curated = validateScenario(
+      JSON.parse(readFileSync(join(SCENARIOS, "operator-in-third-party-de.json"), "utf8")),
+    );
+    const store = scoreStore(
+      [memory("Ich führe meine Zahlen immer im Wiki, nicht in Excel.")],
+      curated,
+    );
+    expect(store.counters["third-party"]).toBe(0);
+    expect(store.missing).toEqual([]);
   });
 
   it("counts a forgotten fact that returned, whatever its status", () => {

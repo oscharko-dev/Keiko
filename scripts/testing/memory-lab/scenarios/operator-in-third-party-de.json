@@ -18,6 +18,10 @@
     {
       "class": "third-party",
       "terms": [["Ostrander"]]
+    },
+    {
+      "class": "third-party",
+      "terms": [["Kollegin", "Kollege", "Kollegen", "rechnet"], ["Excel"]]
     }
   ],
   "turns": [

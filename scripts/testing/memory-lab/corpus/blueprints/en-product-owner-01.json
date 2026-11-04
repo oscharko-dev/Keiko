@@ -571,12 +571,14 @@
       "class": "third-party",
       "text": "Our designer Ms. Brindlemoor always sketches on paper first.",
       "terms": [["Brindlemoor"]],
+      "nameless": [["designer", "designers", "sketches"], ["on paper"]],
       "question": "How does Ms. Brindlemoor begin her designs?"
     },
     {
       "class": "third-party",
       "text": "My co-owner Mr. Quillfeather wants weekly releases, I prefer to ship when the checklist is green.",
       "terms": [["Quillfeather"]],
+      "nameless": [["co-owner", "co-owners", "wants"], ["weekly releases"]],
       "question": "How often does Mr. Quillfeather want to publish?",
       "teaches": "ship-rule"
     },
@@ -656,18 +658,21 @@
       "class": "third-party",
       "text": "Our lead engineer Mr. Thistlewick codes best after midnight.",
       "terms": [["Thistlewick"]],
+      "nameless": [["engineer", "engineers", "codes"], ["after midnight"]],
       "question": "When does Mr. Thistlewick code best?"
     },
     {
       "class": "third-party",
       "text": "Our sales contact Ms. Ambersley is in Madrid twice a month.",
       "terms": [["Ambersley"]],
+      "nameless": [["contact", "contacts"], ["Madrid"]],
       "question": "How often is Ms. Ambersley in Madrid?"
     },
     {
       "class": "third-party",
       "text": "Our data scientist Mr. Fernsby bakes bread every Sunday.",
       "terms": [["Fernsby"]],
+      "nameless": [["scientist", "scientists", "bakes"], ["bread"]],
       "question": "What does Mr. Fernsby do on Sundays?"
     },
     {
@@ -746,12 +751,14 @@
       "class": "third-party",
       "text": "Our intern Mr. Ellsworth is training for a triathlon.",
       "terms": [["Ellsworth"]],
+      "nameless": [["intern", "interns", "training"], ["triathlon"]],
       "question": "What is Mr. Ellsworth training for?"
     },
     {
       "class": "third-party",
       "text": "Our scrum master Ms. Linfield has a huge fern behind her screen, and I keep a small succulent next to my monitor.",
       "terms": [["huge fern"]],
+      "nameless": [["scrum master", "scrum masters"], ["fern"]],
       "question": "Which plant does Ms. Linfield grow?",
       "teaches": "desk-plant"
     },
@@ -759,6 +766,7 @@
       "class": "third-party",
       "text": "Our architect Mr. Penhallow is only sharp after lunch, whereas I do my deep thinking before nine in the morning.",
       "terms": [["only sharp after lunch"]],
+      "nameless": [["architect", "architects"], ["only sharp after lunch"]],
       "question": "When is Mr. Penhallow at his best?",
       "teaches": "deep-thinking"
     },
@@ -766,6 +774,7 @@
       "class": "third-party",
       "text": "Mr. Stonehaven from QA never carries a pen at all, but I bring my own whiteboard markers.",
       "terms": [["never carries a pen"]],
+      "nameless": [["carries"], ["never carries a pen"]],
       "question": "What does Mr. Stonehaven carry for writing?",
       "teaches": "own-markers"
     },
@@ -773,6 +782,7 @@
       "class": "third-party",
       "text": "Ms. Quarrington, our tech lead, replies to every ping within seconds, while I answer messages in batches at eleven and at four.",
       "terms": [["within seconds"]],
+      "nameless": [["tech lead", "lead", "replies"], ["within seconds"]],
       "question": "How fast does Ms. Quarrington respond to pings?",
       "teaches": "message-batches"
     },

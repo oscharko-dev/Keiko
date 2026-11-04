@@ -568,12 +568,14 @@
       "class": "third-party",
       "text": "My manager Ms. Harrowgate usually starts her day at six in the morning.",
       "terms": [["Harrowgate"]],
+      "nameless": [["manager", "managers", "starts"], ["six in the morning"]],
       "question": "At what time does Ms. Harrowgate usually arrive?"
     },
     {
       "class": "third-party",
       "text": "My colleague Dr. Thornbury-Vale likes pie charts, but I prefer horizontal bar charts for rankings.",
       "terms": [["Thornbury"]],
+      "nameless": [["colleague", "colleagues", "likes"], ["pie charts"]],
       "question": "Which diagrams does Dr. Thornbury-Vale favour?",
       "teaches": "ranking-chart"
     },
@@ -653,18 +655,30 @@
       "class": "third-party",
       "text": "Our actuary Ms. Wintergill commutes by bicycle, whatever the weather.",
       "terms": [["Wintergill"]],
+      "nameless": [
+        ["actuary", "actuaries", "commutes"],
+        ["bicycle", "bike"]
+      ],
       "question": "How does Ms. Wintergill travel to work?"
     },
     {
       "class": "third-party",
       "text": "Our key client Mr. Larkenby reads everything on a tablet.",
       "terms": [["Larkenby"]],
+      "nameless": [
+        ["client", "clients", "reads"],
+        ["tablet", "tablets"]
+      ],
       "question": "Which device does Mr. Larkenby use for reading?"
     },
     {
       "class": "third-party",
       "text": "My team lead Ms. Cragmoor works part-time and is off on Thursdays.",
       "terms": [["Cragmoor"]],
+      "nameless": [
+        ["lead", "leads", "works"],
+        ["part-time", "Thursdays"]
+      ],
       "question": "On which days is Ms. Cragmoor off?"
     },
     {
@@ -743,12 +757,17 @@
       "class": "third-party",
       "text": "Our intern Ms. Kestrelwood plays the cello in a small orchestra.",
       "terms": [["Kestrelwood"]],
+      "nameless": [["intern", "interns", "plays"], ["cello"]],
       "question": "Which instrument does Ms. Kestrelwood play?"
     },
     {
       "class": "third-party",
       "text": "My colleague Mr. Hazelrigg sets everything in tiny grey type, but I write all my reports in a serif font.",
       "terms": [["grey type"]],
+      "nameless": [
+        ["colleague", "colleagues", "sets"],
+        ["grey type", "gray type"]
+      ],
       "question": "How does Mr. Hazelrigg style his pages?",
       "teaches": "report-font"
     },
@@ -756,6 +775,7 @@
       "class": "third-party",
       "text": "Our controller Ms. Ingleby never touches coffee, though I have one cup of coffee at ten every day.",
       "terms": [["never touches coffee"]],
+      "nameless": [["controller", "controllers"], ["never touches coffee"]],
       "question": "What does Ms. Ingleby drink at ten?",
       "teaches": "coffee-habit"
     },
@@ -763,6 +783,7 @@
       "class": "third-party",
       "text": "Mr. Garnethorpe from the data team cycles forty kilometres each way, while I take the train to the office rather than driving.",
       "terms": [["forty kilometres"]],
+      "nameless": [["cycles"], ["forty kilometres", "forty kilometers"]],
       "question": "How far does Mr. Garnethorpe ride to get to work?",
       "teaches": "commute-mode"
     },
@@ -770,6 +791,7 @@
       "class": "third-party",
       "text": "Our newest hire Mr. Bexmoor eats at his keyboard every single day, whereas I eat my midday meal away from my desk.",
       "terms": [["at his keyboard"]],
+      "nameless": [["hire", "hires", "eats"], ["at his keyboard"]],
       "question": "Where does Mr. Bexmoor sit when he eats?",
       "teaches": "lunch-place"
     },

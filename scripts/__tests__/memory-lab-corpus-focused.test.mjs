@@ -194,6 +194,7 @@ describe("focused units", () => {
     const bare = validated((blueprint) => {
       delete blueprint.changes[0].correction;
       delete blueprint.traps[1].question;
+      delete blueprint.traps[1].nameless;
       blueprint.traps[1].class = "quote";
     });
     const classes = focusedUnits(bare).map((entry) => entry.scenarioClass);
@@ -510,7 +511,10 @@ describe("focused scenarios", () => {
     const { scenario } = await focused(blueprint, "taught", "ranking-chart", "plain");
     expect(scenario.class).toBe("operator-in-third-party");
     expect(scenario.truth.map((fact) => fact.key)).toEqual(["ranking-chart"]);
-    expect(scenario.forbidden.map((entry) => entry.class)).toEqual(["third-party"]);
+    expect(scenario.forbidden).toEqual([
+      { class: "third-party", terms: [["Thornbury"]] },
+      { class: "third-party", terms: [["colleague", "likes"], ["pie charts"]] },
+    ]);
     expect(scenario.probes.map((probe) => probe.id)).toEqual([
       "ranking-chart-related",
       "ranking-chart-related-no-overlap",

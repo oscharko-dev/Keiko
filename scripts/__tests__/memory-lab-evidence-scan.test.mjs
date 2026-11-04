@@ -1,7 +1,8 @@
 // The scans that prove what the lab may not carry (#4207, #4208): each is shown to find what it looks
 // for, and to say so without repeating it. A scan that cannot fail proves nothing.
 import { Buffer } from "node:buffer";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -99,6 +100,42 @@ describe("scanning evidence", () => {
       }),
     );
     expect(secretsOfConfig(path)).toEqual([SECRET]);
+  });
+
+  it("does not quote a gateway configuration it cannot parse", () => {
+    const path = join(root, "gateway.txt");
+    writeFileSync(path, `{"apiKey":"${SECRET}" oops`);
+    expect(() => secretsOfConfig(path)).toThrow("not readable JSON (SyntaxError)");
+    try {
+      secretsOfConfig(path);
+    } catch (error) {
+      expect(error.message).not.toContain(SECRET);
+    }
+  });
+
+  // Spawned on purpose: importing the functions cannot see the documented command crash on start.
+  const command = (...args) => {
+    const script = join(import.meta.dirname, "..", "testing", "memory-lab", "evidence-scan.mjs");
+    return spawnSync(process.execPath, [script, ...args], { encoding: "utf8" });
+  };
+
+  it("answers through its documented command: 0 when clean, 1 with a finding", () => {
+    writeFileSync(join(root, "summary.json"), JSON.stringify({ route: "/api/memory" }));
+    const clean = command("--dir", root);
+    expect(clean.status).toBe(0);
+    expect(clean.stdout).toContain("PASS evidence-scan files=1 findings=0");
+    writeFileSync(join(root, "leak.json"), JSON.stringify({ path: "/private/tmp/x" }));
+    const found = command("--dir", root);
+    expect(found.status).toBe(1);
+    expect(found.stdout).toContain("finding absolute-path leak.json");
+    expect(found.stdout).not.toContain("/private/tmp/x");
+  });
+
+  it("fails on a directory with no evidence file, because that proves nothing", () => {
+    const empty = command("--dir", root);
+    expect(empty.status).toBe(1);
+    expect(empty.stdout).not.toContain("PASS");
+    expect(empty.stderr).toContain("no evidence file");
   });
 
   it("knows this machine", () => {
@@ -204,14 +241,72 @@ describe("scanning for real conversation text", () => {
       writeFileSync(join(target, "clean.md"), "nothing to see here");
       const args = ["--fetched", join(root, "fetched"), "--target", target];
       expect(await scanMain(args)).toBe(0);
-      expect(lines.at(-1)).toBe("PASS real-text-scan files-with-hits=0");
+      expect(lines.at(-1)).toBe("PASS real-text-scan files-with-hits=0 oversized=0");
       writeFileSync(join(target, "copy.md"), passage);
       expect(await scanMain(args)).toBe(1);
-      expect(lines.at(-1)).toBe("FAIL real-text-scan files-with-hits=1");
+      expect(lines.at(-1)).toBe("FAIL real-text-scan files-with-hits=1 oversized=0");
       expect(lines.join("\n")).not.toContain("kalender");
     } finally {
       log.mockRestore();
     }
+  });
+
+  describe("when it would have searched nothing", () => {
+    const silenced = async (args) => {
+      const lines = [];
+      const log = vi.spyOn(console, "log").mockImplementation((line) => lines.push(line));
+      try {
+        return { code: await scanMain(args), lines };
+      } finally {
+        log.mockRestore();
+      }
+    };
+
+    it("refuses an index without a passage", async () => {
+      mkdirSync(join(root, "nothing"));
+      writeFileSync(join(root, "target", "clean.md"), "nothing to see here");
+      await expect(
+        silenced(["--fetched", join(root, "nothing"), "--target", join(root, "target")]),
+      ).rejects.toThrow("index is empty");
+    });
+
+    it("refuses a call without a target", async () => {
+      await expect(silenced(["--fetched", join(root, "fetched")])).rejects.toThrow(
+        "at least one --git work tree or --target",
+      );
+    });
+
+    it("refuses a target without one readable file", async () => {
+      writeFileSync(join(root, "target", "image.bin"), Buffer.from([0, 1, 2]));
+      await expect(
+        silenced(["--fetched", join(root, "fetched"), "--target", join(root, "target")]),
+      ).rejects.toThrow("no readable file");
+    });
+
+    it("fails on a file too large to search unless the gap is accepted by name", async () => {
+      const target = join(root, "target");
+      writeFileSync(join(target, "clean.md"), "nothing to see here");
+      writeFileSync(join(target, "huge.md"), "");
+      truncateSync(join(target, "huge.md"), 8_000_001);
+      const args = ["--fetched", join(root, "fetched"), "--target", target];
+      const refused = await silenced(args);
+      expect(refused.code).toBe(1);
+      expect(refused.lines.at(-1)).toBe("FAIL real-text-scan files-with-hits=0 oversized=1");
+      const accepted = await silenced([...args, "--allow-oversized"]);
+      expect(accepted.code).toBe(0);
+      expect(accepted.lines.at(-1)).toBe("PASS real-text-scan files-with-hits=0 oversized=1");
+    });
+
+    it("fails on a source too large to index unless the gap is accepted by name", async () => {
+      writeFileSync(join(root, "fetched", "huge.json"), "");
+      truncateSync(join(root, "fetched", "huge.json"), 80_000_001);
+      writeFileSync(join(root, "target", "clean.md"), "nothing to see here");
+      const args = ["--fetched", join(root, "fetched"), "--target", join(root, "target")];
+      const refused = await silenced(args);
+      expect(refused.code).toBe(1);
+      expect(refused.lines[0]).toContain("oversized=1");
+      expect((await silenced([...args, "--allow-oversized"])).code).toBe(0);
+    });
   });
 
   it("reports the file and the count and no word of it, and skips binaries", () => {

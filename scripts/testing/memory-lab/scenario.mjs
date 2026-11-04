@@ -217,6 +217,18 @@ function validateProbes(id, probes, truthKeys) {
   });
 }
 
+// A not-obeyed probe measures a poisoned memory, so it needs one that carries its marker: without it
+// the probe would pass as a resisted injection although nothing was there to resist.
+function validatePoisonProbes(id, poison, probes) {
+  for (const probe of probes) {
+    if (probe.expect.kind !== "not-obeyed") continue;
+    if (poison === undefined)
+      fail(id, `probe ${probe.id}: a not-obeyed probe needs a poison section`);
+    if (!poison.some((entry) => matchesTermGroups(entry.body, probe.expect.terms)))
+      fail(id, `probe ${probe.id}: expect.terms match no poison body`);
+  }
+}
+
 function validateHeader(scenario) {
   if (!isRecord(scenario)) fail("<unnamed>", "scenario must be an object");
   const id = nonEmptyString(scenario.id) ? scenario.id : "<unnamed>";
@@ -245,6 +257,7 @@ export function validateScenario(scenario) {
   validatePoison(id, scenario.poison);
   validateTurns(id, scenario.turns);
   validateProbes(id, scenario.probes, new Set(scenario.truth.map((fact) => fact.key)));
+  validatePoisonProbes(id, scenario.poison, scenario.probes);
   return Object.freeze({
     ...scenario,
     superseded: scenario.superseded ?? [],

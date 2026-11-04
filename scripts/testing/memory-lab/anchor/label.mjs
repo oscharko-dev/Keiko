@@ -230,12 +230,7 @@ export function aggregateLabels(entries) {
 
 /** Summarizes a labels file (a filled-in sheet, or a flat map plus its sheet), aggregates only. */
 export function summarizeLabels({ labelsPath, sheetPath, statuses }) {
-  const labelsFile = assertOutsideCheckout(labelsPath, "--labels");
-  const sheetFile =
-    sheetPath === undefined ? undefined : assertOutsideCheckout(sheetPath, "--sheet");
-  const labels = readJsonFile(labelsFile, "the labels file");
-  const sheet = sheetFile === undefined ? undefined : readJsonFile(sheetFile, "the label sheet");
-  const entries = labelledEntries(labels, sheet).filter(
+  const entries = loadLabelled(labelsPath, sheetPath).filter(
     (entry) => statuses === undefined || statuses.includes(entry.status),
   );
   return { ...aggregateLabels(entries), statuses: statuses ?? null };

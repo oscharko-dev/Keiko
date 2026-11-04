@@ -140,13 +140,14 @@ function fixtureTraps() {
       "My manager Ms. Harrowgate usually starts her day at six in the morning.",
       "Harrowgate",
       "At what time does Ms. Harrowgate usually arrive?",
+      { nameless: [["manager", "starts"], ["six in the morning"]] },
     ),
     trap(
       "third-party",
       "My colleague Dr. Thornbury-Vale likes pie charts, but I prefer horizontal bar charts for rankings.",
       "Thornbury",
       "Which diagrams does Dr. Thornbury-Vale favour?",
-      { teaches: "ranking-chart" },
+      { teaches: "ranking-chart", nameless: [["colleague", "likes"], ["pie charts"]] },
     ),
     trap(
       "instruction",

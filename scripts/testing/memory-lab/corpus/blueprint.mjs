@@ -257,9 +257,24 @@ function checkForget(id, forget, index) {
   checkStatement(id, `${where}.paraphrase`, forget.paraphrase);
 }
 
+// A memory of a third party's fact that drops the name is still a third party's fact. `nameless` holds
+// two term groups: who (the role nouns and the third-person verb, never a pronoun, because German "Sie"
+// addresses the person) and what (the fact's distinctive content, which no fact of the person may use).
+function checkNameless(id, where, trap) {
+  if (trap.class !== "third-party") {
+    if (trap.nameless !== undefined) fail(id, `${where}.nameless is only for a third-party trap`);
+    return;
+  }
+  if (trap.nameless === undefined) fail(id, `${where}.nameless is required for a third-party trap`);
+  checkTerms(id, `${where}.nameless`, trap.nameless);
+  if (trap.nameless.length !== 2) fail(id, `${where}.nameless must hold a who and a what group`);
+  if (!matchesTermGroups(trap.text, trap.nameless))
+    fail(id, `${where}.nameless must match the text`);
+}
+
 function checkTrap(id, trap, index) {
   const where = `traps[${String(index)}]`;
-  checkFields(id, where, trap, ["class", "text", "terms"], ["question", "teaches"]);
+  checkFields(id, where, trap, ["class", "text", "terms"], ["question", "teaches", "nameless"]);
   if (!TRAP_CLASS_SET.has(trap.class))
     fail(id, `${where}.class must be one of ${TRAP_CLASSES.join("|")}`);
   checkSentence(id, `${where}.text`, trap.text, 400);
@@ -270,6 +285,7 @@ function checkTrap(id, trap, index) {
   if (trap.question !== undefined) checkQuestion(id, `${where}.question`, trap.question);
   if (trap.teaches !== undefined && trap.class !== "third-party")
     fail(id, `${where}.teaches is only for a third-party trap`);
+  checkNameless(id, where, trap);
 }
 
 function checkReminder(id, language, reminder, index) {
@@ -590,6 +606,21 @@ function checkStyleNotes(id, blueprint) {
     fail(id, "styleNotes must not state a fact or a trap, because a writer receives them");
 }
 
+// The what group alone must not read on anything true of the person, or a correct memory would count
+// as a leak of a hard counter.
+function checkNamelessApartFromFacts(id, blueprint) {
+  const sentences = [
+    ...blueprint.facts.flatMap((fact) => [factText(fact), fact.split?.rule]),
+    ...blueprint.changes.flatMap((change) => [change.seed, change.correction, change.split?.rule]),
+  ].filter((text) => text !== undefined);
+  for (const [index, trap] of blueprint.traps.entries()) {
+    if (trap.nameless === undefined) continue;
+    const what = trap.nameless.slice(1);
+    if (sentences.some((text) => matchesTermGroups(text, what)))
+      fail(id, `traps[${String(index)}].nameless names what a fact of the person says`);
+  }
+}
+
 function checkTrapQuestions(id, blueprint) {
   const sentences = [
     ...blueprint.facts.flatMap((fact) => [factText(fact), fact.split?.rule]),
@@ -630,6 +661,7 @@ export function validateBlueprint(blueprint) {
   checkSplitLeads(id, blueprint);
   checkStyleNotes(id, blueprint);
   checkTrapQuestions(id, blueprint);
+  checkNamelessApartFromFacts(id, blueprint);
   return deepFreeze(structuredClone(blueprint));
 }
 

@@ -540,12 +540,17 @@
       "class": "third-party",
       "text": "Mein Stellvertreter Herr Ostrander fährt jeden Morgen mit dem Rad ins Büro.",
       "terms": [["Ostrander"]],
+      "nameless": [["Stellvertreter", "Stellvertreterin", "fährt"], ["Rad"]],
       "question": "Wie kommt Herr Ostrander zur Arbeit?"
     },
     {
       "class": "third-party",
       "text": "Mein Kollege Herr Birkenwarth liebt lange Meetings, ich bevorzuge kurze Abstimmungen.",
       "terms": [["Birkenwarth"]],
+      "nameless": [
+        ["Kollege", "Kollegen", "liebt"],
+        ["lange Meetings", "langen Meetings"]
+      ],
       "question": "Was liebt Herr Birkenwarth?",
       "teaches": "short-syncs"
     },
@@ -625,18 +630,21 @@
       "class": "third-party",
       "text": "Unser Produktverantwortlicher Herr Wieselhuber bleibt gern bis spät in die Nacht im Haus.",
       "terms": [["Wieselhuber"]],
+      "nameless": [["Produktverantwortliche*", "bleibt"], ["spät in die Nacht"]],
       "question": "Wie lange bleibt Herr Wieselhuber abends?"
     },
     {
       "class": "third-party",
       "text": "Meine Kollegin Frau Sterzenbach moderiert jeden Donnerstag das Architekturforum.",
       "terms": [["Sterzenbach"]],
+      "nameless": [["Kollegin", "Kolleginnen", "moderiert"], ["Architekturforum*"]],
       "question": "Was moderiert Frau Sterzenbach jeden Donnerstag?"
     },
     {
       "class": "third-party",
       "text": "Unsere Controllerin Frau Habermehl prüft die Quartalszahlen immer zweimal.",
       "terms": [["Habermehl"]],
+      "nameless": [["Controllerin", "Controller", "prüft"], ["Quartalszahlen"]],
       "question": "Was prüft Frau Habermehl immer zweimal?"
     },
     {
@@ -715,12 +723,14 @@
       "class": "third-party",
       "text": "Unsere Teamassistentin Frau Rothenbücher ist ab nächstem Monat in Elternzeit.",
       "terms": [["Rothenbücher"]],
+      "nameless": [["Teamassistentin", "Teamassistent"], ["Elternzeit*"]],
       "question": "Ab wann ist Frau Rothenbücher nicht da?"
     },
     {
       "class": "third-party",
       "text": "Meine Notizen führe ich in einem Notizbuch aus Papier, Herr Hasenclever tippt dagegen alles in sein Handy.",
       "terms": [["sein Handy"]],
+      "nameless": [["tippt"], ["sein Handy"]],
       "question": "Wo hält Herr Hasenclever seine Gedanken fest?",
       "teaches": "notes-paper"
     },
@@ -728,6 +738,7 @@
       "class": "third-party",
       "text": "Frau Wolkenstein lässt bei ihrer Kurzrunde alle Platz nehmen, das Daily führe ich im Stehen durch.",
       "terms": [["Platz nehmen"]],
+      "nameless": [["lässt"], ["Platz nehmen"]],
       "question": "Wie läuft die Kurzrunde bei Frau Wolkenstein ab?",
       "teaches": "daily-standing"
     },
@@ -735,6 +746,7 @@
       "class": "third-party",
       "text": "Herr Ziegenhagen setzt für heikle Themen auf einen ruhigen Besprechungsraum, schwierige Gespräche führe ich am liebsten beim Spazierengehen.",
       "terms": [["ruhigen Besprechungsraum"]],
+      "nameless": [["setzt"], ["Besprechungsraum*"]],
       "question": "Wo führt Herr Ziegenhagen heikle Unterredungen?",
       "teaches": "walk-talk"
     },
@@ -742,6 +754,7 @@
       "class": "third-party",
       "text": "Quartalsziele formuliere ich immer zusammen mit dem Team, Frau Ehlenbeck gibt ihre dagegen von oben vor.",
       "terms": [["von oben"]],
+      "nameless": [["gibt"], ["von oben"]],
       "question": "Wie kommt Frau Ehlenbeck zu ihren Zielvorgaben?",
       "teaches": "goal-setting"
     },
