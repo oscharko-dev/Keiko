@@ -109,11 +109,39 @@ describe("parseReviewHarvestDataset", () => {
       "pullRequests.2",
     ],
     [
-      "a wrong schema version",
+      "a schema-1 dataset, which has no head anchors",
       (value: Record<string, unknown>): void => {
-        value.schemaVersion = 2;
+        value.schemaVersion = 1;
       },
       "schemaVersion",
+    ],
+    [
+      "a missing head anchor field",
+      (value: Record<string, unknown>): void => {
+        delete firstThread(value).headEndLine;
+      },
+      "pullRequests.0.threads.0.headEndLine",
+    ],
+    [
+      "an inverted head range",
+      (value: Record<string, unknown>): void => {
+        firstThread(value).headStartLine = 99;
+      },
+      "pullRequests.0.threads.0",
+    ],
+    [
+      "a half head range",
+      (value: Record<string, unknown>): void => {
+        firstThread(value).headStartLine = null;
+      },
+      "pullRequests.0.threads.0",
+    ],
+    [
+      "a head range on a base-side anchor",
+      (value: Record<string, unknown>): void => {
+        firstThread(value).side = "left";
+      },
+      "pullRequests.0.threads.0",
     ],
     [
       "a negative notice count",

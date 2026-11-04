@@ -14,6 +14,7 @@ export {
   labelReviewThread,
   matchReviewFinding,
   scoreReviewFindings,
+  threadOverlap,
 } from "./labels.js";
 export type { ReviewFindingMatch } from "./labels.js";
 export { REVIEW_EVALUATION_MANIFEST } from "./manifest.js";
@@ -66,6 +67,7 @@ export {
   REVIEW_EVAL_SCHEMA_VERSION,
   REVIEW_EVALUATION_SPLITS,
   REVIEW_FINDING_OUTCOMES,
+  REVIEW_HARVEST_SCHEMA_VERSION,
   REVIEW_PRODUCERS,
   REVIEW_REGION_CHANGES,
   REVIEW_REPLAY_PURPOSES,

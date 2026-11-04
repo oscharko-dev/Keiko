@@ -36,8 +36,11 @@ import {
   REGION_CHANGES,
   REPLY_CLASSIFICATIONS,
   REVIEW_PRODUCERS,
+  addHeadAnchors,
+  anchorFactsOf,
   anchorOf,
   buildReviewHarvestDataset,
+  carryAnchorToHead,
   classifyProducer,
   classifyReply,
   isReviewNotice,
@@ -237,6 +240,82 @@ describe("region change rule", () => {
   });
 });
 
+describe("head anchor (R4130-007)", () => {
+  const anchor = { startLine: 40, endLine: 42, fileLevel: false };
+  const base = {
+    anchor,
+    side: "right",
+    path: "src/a.ts",
+    reviewedCommit: REVIEWED,
+    headCommit: HEAD,
+  };
+
+  it("carries the anchor through every step, base merges included, into head line numbers", () => {
+    // A later commit inserts 20 lines above the region and fixes it: at head it sits at 60-62.
+    const steps = { kind: "steps", steps: [own(hunk(1, 0, 2, 20)), own(hunk(61, 1, 61, 1))] };
+    expect(carryAnchorToHead(steps, anchor)).toEqual({
+      startLine: 60,
+      endLine: 62,
+      fileLevel: false,
+    });
+    expect(carryAnchorToHead({ kind: "steps", steps: [merge(hunk(1, 0, 2, 5))] }, anchor)).toEqual({
+      startLine: 45,
+      endLine: 47,
+      fileLevel: false,
+    });
+    const cumulative = { kind: "cumulative", change: { kind: "hunks", hunks: [hunk(1, 3, 1, 0)] } };
+    expect(carryAnchorToHead(cumulative, anchor)).toEqual({
+      startLine: 37,
+      endLine: 39,
+      fileLevel: false,
+    });
+  });
+
+  it("does not carry across a binary or whole-file change", () => {
+    const steps = { kind: "steps", steps: [{ merge: false, change: { kind: "whole-file" } }] };
+    expect(carryAnchorToHead(steps, anchor)).toBeNull();
+  });
+
+  it("records the head range only where the anchor could be carried on the right side", () => {
+    const moved = () => ({
+      kind: "steps",
+      steps: [own(hunk(1, 0, 2, 20)), own(hunk(61, 1, 61, 1))],
+    });
+    expect(anchorFactsOf({ ...base, probe: moved })).toEqual({
+      regionChange: "changed",
+      headStartLine: 60,
+      headEndLine: 62,
+    });
+    expect(anchorFactsOf({ ...base, headCommit: REVIEWED, probe: moved })).toEqual({
+      regionChange: "no-later-commit",
+      headStartLine: 40,
+      headEndLine: 42,
+    });
+    const none = { headStartLine: null, headEndLine: null };
+    expect(anchorFactsOf({ ...base, side: "left", probe: moved })).toEqual({
+      regionChange: "unavailable",
+      ...none,
+    });
+    expect(anchorFactsOf({ ...base, probe: () => ({ kind: "unavailable" }) })).toEqual({
+      regionChange: "unavailable",
+      ...none,
+    });
+    expect(
+      anchorFactsOf({
+        ...base,
+        probe: () => ({ kind: "steps", steps: [{ merge: false, change: { kind: "whole-file" } }] }),
+      }),
+    ).toEqual({ regionChange: "changed", ...none });
+    expect(
+      anchorFactsOf({
+        ...base,
+        anchor: { startLine: null, endLine: null, fileLevel: true },
+        probe: moved,
+      }),
+    ).toEqual({ regionChange: "changed", ...none });
+  });
+});
+
 describe("thread and pull request normalization", () => {
   const context = { headCommit: HEAD, probe: changedProbe };
 
@@ -257,6 +336,8 @@ describe("thread and pull request normalization", () => {
       endLine: 12,
       reply: { classification: "fixed", producer: "human" },
       regionChange: "changed",
+      headStartLine: 10,
+      headEndLine: 12,
     });
     expect(normalized.record.bodyDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
     const serialized = JSON.stringify(normalized);
@@ -378,6 +459,8 @@ describe("dataset", () => {
         "bodyDigest",
         "endLine",
         "fileLevel",
+        "headEndLine",
+        "headStartLine",
         "id",
         "outdated",
         "path",
@@ -404,6 +487,86 @@ describe("dataset", () => {
     expect([...ReviewEval.REVIEW_PRODUCERS]).toEqual([...REVIEW_PRODUCERS]);
     expect([...ReviewEval.REVIEW_REPLY_CLASSIFICATIONS]).toEqual([...REPLY_CLASSIFICATIONS]);
     expect([...ReviewEval.REVIEW_REGION_CHANGES]).toEqual([...REGION_CHANGES]);
+  });
+
+  it("has one digest rule on both sides, so the loader recomputes what the harvest wrote", () => {
+    const built = buildReviewHarvestDataset({
+      repository: "o/r",
+      pullRequests: prs,
+      excludedNoticeThreads: { qodo: 1 },
+    });
+    const { digest, ...content } = built;
+    expect(ReviewEval.reviewHarvestDatasetDigest(content)).toBe(digest);
+  });
+});
+
+describe("addHeadAnchors", () => {
+  function schemaOne(threadOverrides = {}) {
+    const record = normalizePullRequest(
+      rawPullRequest(9, [rawThread("A", [comment(user("x"), "y")])]),
+      changedProbe,
+    ).record;
+    const threads = record.threads.map(({ headStartLine: _s, headEndLine: _e, ...thread }) => ({
+      ...thread,
+      ...threadOverrides,
+    }));
+    const content = {
+      ...buildReviewHarvestDataset({
+        repository: "o/r",
+        pullRequests: [{ ...record, threads }],
+        excludedNoticeThreads: {},
+      }),
+      schemaVersion: 1,
+    };
+    const { digest: _digest, ...body } = content;
+    return { ...body, digest: reviewHarvestDatasetDigest(body) };
+  }
+
+  it("adds the head range from local Git objects and keeps every other fact", () => {
+    const shifted = () => ({
+      kind: "steps",
+      steps: [own(hunk(1, 0, 2, 5)), own(hunk(16, 1, 16, 1))],
+    });
+    const result = addHeadAnchors(schemaOne(), shifted);
+    expect(result.schemaVersion).toBe(2);
+    expect(result.rules.headAnchor).toBe("right-side-first-parent-carried-to-head-v1");
+    expect(verifyReviewHarvestDataset(result)).toBe(true);
+    expect(result.pullRequests[0].threads[0]).toMatchObject({
+      id: "A",
+      startLine: 10,
+      endLine: 12,
+      regionChange: "changed",
+      headStartLine: 15,
+      headEndLine: 17,
+    });
+    expect(ReviewEval.parseReviewHarvestDataset(structuredClone(result))).toEqual(result);
+  });
+
+  it("refuses an unverified dataset and a region change the probe no longer reproduces", () => {
+    const tampered = { ...schemaOne(), repository: "x/y" };
+    expect(() => addHeadAnchors(tampered, changedProbe)).toThrow(/verified schema-1/u);
+    const unchanged = () => ({ kind: "steps", steps: [] });
+    expect(() => addHeadAnchors(schemaOne(), unchanged)).toThrow(/no longer measures/u);
+  });
+
+  it("runs from the CLI without GitHub and prints how many anchors stayed uncarried", async () => {
+    const source = schemaOne();
+    const written = new Map();
+    const lines = [];
+    const code = await executeReviewHarvestCli(
+      ["--add-head-anchors", "in.json", "--git-dir", "g", "--out", "out.json"],
+      {
+        out: (line) => lines.push(line),
+        read: () => encodeDataset("in.json", source),
+        write: (path, bytes) => written.set(path, bytes),
+        probe: () => ({ kind: "steps", steps: [{ merge: false, change: { kind: "whole-file" } }] }),
+      },
+    );
+    expect(code).toBe(0);
+    expect(readDataset("out.json", () => written.get("out.json")).schemaVersion).toBe(2);
+    expect(lines[1]).toBe(
+      `review-harvest: head anchors from ${source.digest}; 1 right-side line anchors not carried`,
+    );
   });
 });
 
@@ -850,6 +1013,10 @@ describe("review-harvest CLI", () => {
       mode: "verify",
       path: "d.json",
     });
+    expect(
+      parseHarvestArguments(["--add-head-anchors", "a.json", "--git-dir", "g", "--out", "b.json"]),
+    ).toEqual({ mode: "add-head-anchors", path: "a.json", gitDir: "g", out: "b.json" });
+    expect(() => parseHarvestArguments(["--add-head-anchors", "a.json"])).toThrow(/usage/u);
     expect(() => parseHarvestArguments(["--repo", "nope"])).toThrow(/usage/u);
     expect(() =>
       parseHarvestArguments([

@@ -17,7 +17,7 @@
 import { compareStrings } from "./compare-strings.mjs";
 import { sha256 } from "./digest.mjs";
 
-const REVIEW_HARVEST_SCHEMA_VERSION = 1;
+const REVIEW_HARVEST_SCHEMA_VERSION = 2;
 
 /** Every producer a thread can be attributed to, in reporting order. */
 export const REVIEW_PRODUCERS = Object.freeze([
@@ -43,6 +43,7 @@ const REGION_CHANGE_TOLERANCE_LINES = 3;
 const REVIEW_HARVEST_RULES = Object.freeze({
   regionChange: "first-parent-own-commits-carried-anchor-v1",
   regionChangeToleranceLines: REGION_CHANGE_TOLERANCE_LINES,
+  headAnchor: "right-side-first-parent-carried-to-head-v1",
   replyClassification: "first-foreign-reply-earliest-phrase-v1",
   producerAttribution: "graphql-bot-login-or-user-typename-v1",
 });
@@ -216,6 +217,24 @@ export function regionChangedInHistory(history, anchor, tolerance = REGION_CHANG
   return false;
 }
 
+/**
+ * The anchor carried through `history` into the head commit's line numbers, or null when the
+ * carry cannot be trusted: a binary or whole-file change replaced the region's lines. Every step
+ * carries, the base merges included, because head line numbers count every line at head. A
+ * rewritten history carries across its one cumulative diff, which maps reviewed lines to head lines
+ * directly.
+ */
+export function carryAnchorToHead(history, anchor) {
+  const changes =
+    history.kind === "cumulative" ? [history.change] : history.steps.map((step) => step.change);
+  let carried = anchor;
+  for (const change of changes) {
+    if (change.kind !== "hunks") return null;
+    carried = carryAnchor(carried, change);
+  }
+  return carried;
+}
+
 function commitOid(value, label) {
   if (value === null || value === undefined) return null;
   if (typeof value !== "string" || !FULL_COMMIT_OID.test(value)) {
@@ -244,12 +263,35 @@ export function anchorOf(thread) {
  * cannot answer (a commit is missing, or the anchor is on the base side, whose coordinates the
  * history does not carry). Unavailable is a measurement failure, never read as unchanged.
  */
-export function regionChangeOf({ anchor, side, path, reviewedCommit, headCommit, probe }) {
-  if (reviewedCommit === null || headCommit === null || side !== "right") return "unavailable";
-  if (reviewedCommit === headCommit) return "no-later-commit";
+export function regionChangeOf(facts) {
+  return anchorFactsOf(facts).regionChange;
+}
+
+const NO_HEAD_RANGE = Object.freeze({ headStartLine: null, headEndLine: null });
+
+function headRange(anchor) {
+  if (anchor === null || anchor.fileLevel) return NO_HEAD_RANGE;
+  return { headStartLine: anchor.startLine, headEndLine: anchor.endLine };
+}
+
+/**
+ * The region change and the anchor's range at the pull request's head commit, from one walk of the
+ * history. The head range is null for a file-level anchor, a base-side anchor, an unavailable
+ * history and an anchor whose carry failed; a replay treats a line anchor without a head range as
+ * unmeasured.
+ */
+export function anchorFactsOf({ anchor, side, path, reviewedCommit, headCommit, probe }) {
+  if (reviewedCommit === null || headCommit === null || side !== "right") {
+    return { regionChange: "unavailable", ...NO_HEAD_RANGE };
+  }
+  if (reviewedCommit === headCommit)
+    return { regionChange: "no-later-commit", ...headRange(anchor) };
   const history = probe({ from: reviewedCommit, to: headCommit, path });
-  if (history.kind === "unavailable") return "unavailable";
-  return regionChangedInHistory(history, anchor) ? "changed" : "unchanged";
+  if (history.kind === "unavailable") return { regionChange: "unavailable", ...NO_HEAD_RANGE };
+  return {
+    regionChange: regionChangedInHistory(history, anchor) ? "changed" : "unchanged",
+    ...headRange(carryAnchorToHead(history, anchor)),
+  };
 }
 
 function firstForeignReply(comments, root) {
@@ -271,6 +313,7 @@ function threadRecord(thread, root, producer, context) {
   const side = thread.diffSide === "LEFT" ? "left" : "right";
   const path = requireString(thread.path, "thread path");
   const reviewedCommit = commitOid(root.originalCommit?.oid, "reviewed commit");
+  const facts = anchorFactsOf({ ...context, anchor, side, path, reviewedCommit });
   return {
     id: requireString(thread.id, "thread id"),
     producer,
@@ -283,9 +326,56 @@ function threadRecord(thread, root, producer, context) {
     resolved: thread.isResolved === true,
     outdated: thread.isOutdated === true,
     reply: firstForeignReply(thread.comments.nodes, root),
-    regionChange: regionChangeOf({ ...context, anchor, side, path, reviewedCommit }),
+    regionChange: facts.regionChange,
+    headStartLine: facts.headStartLine,
+    headEndLine: facts.headEndLine,
     bodyDigest: `sha256:${sha256(typeof root.body === "string" ? root.body : "")}`,
   };
+}
+
+function threadWithHeadAnchor(thread, headCommit, probe) {
+  const facts = anchorFactsOf({
+    anchor: { startLine: thread.startLine, endLine: thread.endLine, fileLevel: thread.fileLevel },
+    side: thread.side,
+    path: thread.path,
+    reviewedCommit: thread.reviewedCommit,
+    headCommit,
+    probe,
+  });
+  if (facts.regionChange !== thread.regionChange) {
+    throw new Error(
+      `review harvest: thread ${thread.id} no longer measures as ${thread.regionChange}`,
+    );
+  }
+  const { bodyDigest, ...rest } = thread;
+  return {
+    ...rest,
+    headStartLine: facts.headStartLine,
+    headEndLine: facts.headEndLine,
+    bodyDigest,
+  };
+}
+
+/**
+ * Adds each thread's head range to a verified schema-1 dataset from local Git objects alone, with
+ * the same anchor walk the harvest uses (R4130-007). Every other recorded fact is kept; a thread
+ * whose region change the probe no longer reproduces fails the run instead of being rewritten.
+ */
+export function addHeadAnchors(dataset, probe) {
+  if (dataset.schemaVersion !== 1 || !verifyReviewHarvestDataset(dataset)) {
+    throw new Error("review harvest: --add-head-anchors needs a verified schema-1 dataset");
+  }
+  const pullRequests = dataset.pullRequests.map((pullRequest) => ({
+    ...pullRequest,
+    threads: pullRequest.threads.map((thread) =>
+      threadWithHeadAnchor(thread, pullRequest.headCommit, probe),
+    ),
+  }));
+  return buildReviewHarvestDataset({
+    repository: dataset.repository,
+    pullRequests,
+    excludedNoticeThreads: dataset.excludedNoticeThreads,
+  });
 }
 
 /** One raw GraphQL thread: a body-free record, a notice to count, or nothing (no comments). */

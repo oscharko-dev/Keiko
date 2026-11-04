@@ -8,6 +8,7 @@ import {
   labelReviewThread,
   matchReviewFinding,
   scoreReviewFindings,
+  threadOverlap,
 } from "./labels.js";
 import { thread } from "./_support.js";
 
@@ -161,5 +162,66 @@ describe("scoreReviewFindings", () => {
       threads,
     );
     expect(outcomes.map((entry) => entry.outcome)).toEqual(["undecided", "undecided"]);
+  });
+});
+
+describe("matching in head coordinates (R4130-007)", () => {
+  // Reviewed at lines 40-42; a later commit inserted 20 lines above and fixed it: 60-62 at head.
+  const moved = thread({
+    id: "moved",
+    regionChange: "changed",
+    startLine: 40,
+    endLine: 42,
+    headStartLine: 60,
+    headEndLine: 62,
+  });
+
+  it("matches a finding at head against the carried anchor, not the reviewed one", () => {
+    expect(matchReviewFinding({ file: "src/a.ts", startLine: 61, endLine: 61 }, [moved])).toEqual({
+      outcome: "hit",
+      matchedThreadIds: ["moved"],
+    });
+    expect(
+      matchReviewFinding({ file: "src/a.ts", startLine: 40, endLine: 42 }, [moved]).outcome,
+    ).toBe("unmatched");
+  });
+
+  it("treats a line anchor that could not be carried as unmeasured, never as a hit", () => {
+    const lost = thread({
+      id: "lost",
+      regionChange: "changed",
+      headStartLine: null,
+      headEndLine: null,
+    });
+    expect(matchReviewFinding({ file: "src/a.ts", startLine: 500, endLine: 500 }, [lost])).toEqual({
+      outcome: "unmeasured",
+      matchedThreadIds: ["lost"],
+    });
+    expect(threadOverlap({ file: "src/b.ts", startLine: 1, endLine: 1 }, lost)).toBe("apart");
+  });
+
+  it("does not credit an uncarried hit thread when another thread decides the finding", () => {
+    const lost = thread({
+      id: "lost",
+      regionChange: "changed",
+      headStartLine: null,
+      headEndLine: null,
+    });
+    const outcomes = scoreReviewFindings(
+      [
+        { file: "src/a.ts", startLine: 61, endLine: 61 },
+        { file: "src/a.ts", startLine: 62, endLine: 62 },
+      ],
+      [moved, lost],
+    );
+    expect(outcomes.map((entry) => entry.outcome)).toEqual(["hit", "duplicate"]);
+  });
+
+  it("matches only right-side anchors", () => {
+    const base = thread({ id: "base", side: "left", regionChange: "unavailable" });
+    expect(threadOverlap({ file: "src/a.ts", startLine: 10, endLine: 12 }, base)).toBe("apart");
+    expect(
+      matchReviewFinding({ file: "src/a.ts", startLine: 10, endLine: 12 }, [base]).outcome,
+    ).toBe("unmatched");
   });
 });

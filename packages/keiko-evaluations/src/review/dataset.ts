@@ -12,6 +12,7 @@ import { gunzipSync } from "node:zlib";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 
 import {
+  REVIEW_HARVEST_SCHEMA_VERSION,
   REVIEW_PRODUCERS,
   REVIEW_REGION_CHANGES,
   REVIEW_REPLY_CLASSIFICATIONS,
@@ -48,6 +49,8 @@ const THREAD_KEYS = new Set([
   "outdated",
   "reply",
   "regionChange",
+  "headStartLine",
+  "headEndLine",
   "bodyDigest",
 ]);
 const PULL_REQUEST_KEYS = new Set([
@@ -132,19 +135,37 @@ function anchor(
   return { startLine, endLine, fileLevel };
 }
 
+function headAnchor(
+  fields: Fields,
+  path: string,
+  lineAnchor: boolean,
+): Pick<ReviewHarvestThread, "headStartLine" | "headEndLine"> {
+  const headStartLine = lineOrNull(fields.headStartLine, `${path}.headStartLine`);
+  const headEndLine = lineOrNull(fields.headEndLine, `${path}.headEndLine`);
+  const absent = headStartLine === null && headEndLine === null;
+  const ordered = headStartLine !== null && headEndLine !== null && headStartLine <= headEndLine;
+  if (!(absent || (lineAnchor && ordered))) {
+    throw new ReviewDatasetError(path, "has an inconsistent head anchor");
+  }
+  return { headStartLine, headEndLine };
+}
+
 function thread(value: unknown, path: string): ReviewHarvestThread {
   const fields = record(value, path, THREAD_KEYS);
+  const lineAnchor = anchor(fields, path);
+  const side = oneOf(fields.side, ["left", "right"], `${path}.side`);
   return {
     id: text(fields.id, `${path}.id`),
     producer: oneOf(fields.producer, REVIEW_PRODUCERS, `${path}.producer`),
     path: text(fields.path, `${path}.path`),
-    ...anchor(fields, path),
-    side: oneOf(fields.side, ["left", "right"], `${path}.side`),
+    ...lineAnchor,
+    side,
     reviewedCommit: commitOrNull(fields.reviewedCommit, `${path}.reviewedCommit`),
     resolved: flag(fields.resolved, `${path}.resolved`),
     outdated: flag(fields.outdated, `${path}.outdated`),
     reply: reply(fields.reply, `${path}.reply`),
     regionChange: oneOf(fields.regionChange, REVIEW_REGION_CHANGES, `${path}.regionChange`),
+    ...headAnchor(fields, path, side === "right" && !lineAnchor.fileLevel),
     bodyDigest: text(fields.bodyDigest, `${path}.bodyDigest`, DIGEST),
   };
 }
@@ -232,13 +253,18 @@ function rules(value: unknown): ReviewHarvestDataset["rules"] {
 /** Validates an already-parsed dataset value; throws `ReviewDatasetError` on the first problem. */
 export function parseReviewHarvestDataset(value: unknown): ReviewHarvestDataset {
   const fields = record(value, "$");
-  if (fields.schemaVersion !== 1) throw new ReviewDatasetError("schemaVersion", "must be 1");
+  if (fields.schemaVersion !== REVIEW_HARVEST_SCHEMA_VERSION) {
+    throw new ReviewDatasetError(
+      "schemaVersion",
+      `must be ${String(REVIEW_HARVEST_SCHEMA_VERSION)}`,
+    );
+  }
   const pullRequests = list(fields.pullRequests, "pullRequests").map((entry, index) =>
     pullRequest(entry, `pullRequests.${String(index)}`),
   );
   ascending(pullRequests);
   return {
-    schemaVersion: 1,
+    schemaVersion: REVIEW_HARVEST_SCHEMA_VERSION,
     repository: text(fields.repository, "repository"),
     rules: rules(fields.rules),
     population: population(fields.population),

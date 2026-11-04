@@ -28,8 +28,9 @@ export const COMMIT_A = "a".repeat(40);
 export const COMMIT_B = "b".repeat(40);
 export const DIGEST = `sha256:${"0".repeat(64)}`;
 
+/** A thread; unless overridden, its head range equals its anchor (a right-side line anchor). */
 export function thread(overrides: Partial<ReviewHarvestThread> = {}): ReviewHarvestThread {
-  return {
+  const base = {
     id: "PRRT_1",
     producer: "coderabbit",
     path: "src/a.ts",
@@ -44,6 +45,18 @@ export function thread(overrides: Partial<ReviewHarvestThread> = {}): ReviewHarv
     regionChange: "unchanged",
     bodyDigest: DIGEST,
     ...overrides,
+  } satisfies Partial<ReviewHarvestThread>;
+  const carried = base.side === "right" && !base.fileLevel;
+  return {
+    ...base,
+    headStartLine:
+      "headStartLine" in overrides
+        ? (overrides.headStartLine ?? null)
+        : carried
+          ? base.startLine
+          : null,
+    headEndLine:
+      "headEndLine" in overrides ? (overrides.headEndLine ?? null) : carried ? base.endLine : null,
   };
 }
 
@@ -66,7 +79,7 @@ export function pullRequest(
 /** A dataset whose `digest` is the real content digest, so the loader accepts it. */
 export function dataset(pullRequests: readonly ReviewHarvestPullRequest[]): ReviewHarvestDataset {
   const content = {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     repository: "example/repo",
     rules: { regionChange: "fixture" },
     population: {

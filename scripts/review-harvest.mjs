@@ -8,6 +8,11 @@
 //   node scripts/review-harvest.mjs --repo oscharko-dev/Keiko --git-dir <bare repo with refs/pull>
 //     --checkpoint <file> --out packages/keiko-evaluations/src/review/fixtures/<dataset>.json.gz
 //   node scripts/review-harvest.mjs --verify <dataset>.json.gz
+//   node scripts/review-harvest.mjs --add-head-anchors <schema-1 dataset>.json.gz
+//     --git-dir <bare repo with refs/pull> --out <schema-2 dataset>.json.gz
+//
+// `--add-head-anchors` reads no GitHub data: it carries every right-side anchor of an existing,
+// verified dataset to its pull request's head commit with the local Git objects (R4130-007).
 //
 // The checkpoint is body-free like the dataset and is rewritten after every page, so an interrupted
 // run resumes where it stopped. How to prepare `--git-dir` and what each field means is documented
@@ -22,6 +27,7 @@ import { isMainModule } from "./lib/is-main-module.mjs";
 import { createGitRegionProbe } from "./lib/review-harvest-git.mjs";
 import { createGhTransport, harvestReviewThreads } from "./lib/review-harvest-graphql.mjs";
 import {
+  addHeadAnchors,
   buildReviewHarvestDataset,
   verifyReviewHarvestDataset,
 } from "./lib/review-harvest-records.mjs";
@@ -29,7 +35,8 @@ import {
 const REPOSITORY_SLUG = /^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/u;
 const USAGE =
   "usage: review-harvest --repo <owner/name> --git-dir <dir> --checkpoint <file> --out <file>" +
-  " [--page-size <n>] [--fetch-missing-commits] | --verify <file>";
+  " [--page-size <n>] [--fetch-missing-commits] | --verify <file>" +
+  " | --add-head-anchors <file> --git-dir <dir> --out <file>";
 
 function argValue(argv, name) {
   const index = argv.indexOf(name);
@@ -47,10 +54,19 @@ function harvestRequest(argv) {
   return { mode: "harvest", owner: repo[1], name: repo[2], gitDir, checkpoint, out };
 }
 
-/** Parses the command line into a harvest or a verify request; throws a usage error otherwise. */
+function headAnchorRequest(argv, path) {
+  const gitDir = argValue(argv, "--git-dir");
+  const out = argValue(argv, "--out");
+  if (gitDir === undefined || out === undefined) throw new Error(USAGE);
+  return { mode: "add-head-anchors", path, gitDir, out };
+}
+
+/** Parses the command line into a harvest, verify or head-anchor request; throws on a usage error. */
 export function parseHarvestArguments(argv) {
   const verify = argValue(argv, "--verify");
   if (verify !== undefined) return { mode: "verify", path: verify };
+  const headAnchors = argValue(argv, "--add-head-anchors");
+  if (headAnchors !== undefined) return headAnchorRequest(argv, headAnchors);
   const pageSize = Number(argValue(argv, "--page-size") ?? "10");
   if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 50) {
     throw new Error("--page-size must be an integer from 1 to 50");
@@ -130,11 +146,28 @@ function runVerify(request, io) {
   return verdict === "PASS" ? 0 : 1;
 }
 
+function runAddHeadAnchors(request, io) {
+  const source = readDataset(request.path, io.read);
+  const dataset = addHeadAnchors(source, io.probe ?? createGitRegionProbe(request.gitDir));
+  (io.write ?? writeFileSync)(request.out, encodeDataset(request.out, dataset));
+  const threads = dataset.pullRequests.flatMap((pullRequest) => pullRequest.threads);
+  const uncarried = threads.filter(
+    (thread) => thread.side === "right" && !thread.fileLevel && thread.headStartLine === null,
+  ).length;
+  io.out(summaryLine("PASS", dataset));
+  io.out(
+    `review-harvest: head anchors from ${source.digest}; ${String(uncarried)} right-side line anchors not carried`,
+  );
+  return 0;
+}
+
+const RUNNERS = { verify: runVerify, "add-head-anchors": runAddHeadAnchors, harvest: runHarvest };
+
 /** The CLI body, with every effect injectable. Resolves to the process exit code. */
 export async function executeReviewHarvestCli(argv, io) {
   try {
     const request = parseHarvestArguments(argv);
-    return request.mode === "verify" ? runVerify(request, io) : await runHarvest(request, io);
+    return await RUNNERS[request.mode](request, io);
   } catch (error) {
     io.out(`review-harvest FAIL: ${error instanceof Error ? error.message : String(error)}`);
     return 1;

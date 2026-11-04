@@ -59,6 +59,13 @@ export interface ReviewHarvestThread {
   /** The first reply by someone other than the thread's author; null when nobody answered. */
   readonly reply: ReviewHarvestReply | null;
   readonly regionChange: ReviewRegionChange;
+  /**
+   * The right-side line anchor carried to the pull request's head commit (R4130-007): the line
+   * numbers a replayed finding at head is compared with. Both null for a file-level or base-side
+   * thread and for a line anchor whose carry failed; a replay treats the latter as unmeasured.
+   */
+  readonly headStartLine: number | null;
+  readonly headEndLine: number | null;
   /** `sha256:<hex>` of the root comment body, for duplicate detection only. */
   readonly bodyDigest: string;
 }
@@ -73,8 +80,10 @@ export interface ReviewHarvestPullRequest {
   readonly threads: readonly ReviewHarvestThread[];
 }
 
+export const REVIEW_HARVEST_SCHEMA_VERSION = 2 as const;
+
 export interface ReviewHarvestDataset {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof REVIEW_HARVEST_SCHEMA_VERSION;
   readonly repository: string;
   readonly rules: Readonly<Record<string, string | number>>;
   readonly population: {
