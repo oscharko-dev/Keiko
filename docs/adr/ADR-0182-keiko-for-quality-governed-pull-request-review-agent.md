@@ -419,7 +419,10 @@ the holdout rate):
   (R4130-010).
 - The verdict counts only for a holdout evaluation over the default selection; any other run is
   `unmeasured` (R4130-011). The gate fails when more than the manifest's `maximumNotCompleteShare`
-  (20 %) of the reviews settle other than `complete`.
+  (20 %) of the reviews settle other than `complete`. The bound is an owner decision of
+  2026-11-04, made with the holdout's settlement counts known and its rate unknown. The owner kept
+  it knowing that most stored holdout reviews settled other than `complete`, so that holdout fails
+  on coverage while its rate is still measured and reported.
 
 The 50 % threshold, the Wilson interval reported next to every rate and the limit of three findings
 per pull request are unchanged.

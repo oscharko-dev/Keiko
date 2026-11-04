@@ -223,7 +223,9 @@ measurable thread. Otherwise it passes when all of these hold:
 - at most `maximumNotCompleteShare` (0.2) of the reviews settled other than `complete`.
 
 The last bound exists because a review that did not complete often presents nothing, and the rate
-would then describe only the reviews that finished. The report always prints that share.
+would then describe only the reviews that finished. The report always prints that share. The
+owner kept the 20 % bound on 2026-11-04, with the holdout's settlement counts known and its rate
+unknown (ADR-0182 D9).
 `rescoreReviewReplayRun` scores a stored run again from its finding locations and the dataset alone,
 so stored reviews can be re-scored under the current rules without a model call.
 
