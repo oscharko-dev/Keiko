@@ -71,12 +71,40 @@ function markupKind(input: ParserSelectionInput): MarkupKind {
   );
 }
 
-// A file with neither extension nor media type (README, LICENSE, Makefile, .gitignore: the caller
-// derives an empty extension for them) is text exactly when its bytes carry no binary evidence.
+// Well-known files that have no extension and are plain text. The caller derives an empty extension
+// for all of them, so the name is the only evidence; an arbitrary extension-less file (a binary, a
+// dotfile that may hold credentials) is not claimed.
+const EXTENSIONLESS_TEXT_FILE_NAMES: ReadonlySet<string> = new Set([
+  "authors",
+  "changelog",
+  "changes",
+  "codeowners",
+  "containerfile",
+  "contributing",
+  "contributors",
+  "copying",
+  "dockerfile",
+  "gemfile",
+  "gnumakefile",
+  "jenkinsfile",
+  "license",
+  "licence",
+  "maintainers",
+  "makefile",
+  "notice",
+  "procfile",
+  "rakefile",
+  "readme",
+  "vagrantfile",
+]);
+
+// Text exactly when the bytes carry no binary evidence.
 function isExtensionlessText(input: ParserSelectionInput): boolean {
   return (
     input.extension === "" &&
     input.mediaType === "" &&
+    input.fileName !== undefined &&
+    EXTENSIONLESS_TEXT_FILE_NAMES.has(input.fileName.toLowerCase()) &&
     input.bytes.length > 0 &&
     binaryContentReason(input.bytes) === undefined
   );

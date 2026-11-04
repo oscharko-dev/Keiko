@@ -189,22 +189,45 @@ describe("OCR magic bytes do not hijack text files (#4235 F4)", () => {
 });
 
 describe("well-known files without an extension are text (#4235 F15)", () => {
-  it.each(["README", "LICENSE", "Makefile", ".gitignore"])("accepts %s content as text", (name) => {
-    const text = `${name}\nbuild:\n\tmake all\n`;
-    const { parserId, result } = resolveAndParse(
-      selectionFromText(text, { extension: "", mediaType: "" }),
-    );
-    expect(parserId).toBe("text");
-    expect(result.normalizedText).toBe(text);
-  });
+  function named(text: string, fileName: string): ParserSelectionInput {
+    return { ...selectionFromText(text, { extension: "", mediaType: "" }), fileName };
+  }
 
-  it("does not claim extension-less binary content", () => {
+  it.each(["README", "LICENSE", "Makefile", "Dockerfile", "readme", "CODEOWNERS"])(
+    "accepts %s content as text",
+    (name) => {
+      const text = `${name}\nbuild:\n\tmake all\n`;
+      const { parserId, result } = resolveAndParse(named(text, name));
+      expect(parserId).toBe("text");
+      expect(result.normalizedText).toBe(text);
+    },
+  );
+
+  it.each([".gitignore", ".env", ".npmrc", "id_rsa", "data"])(
+    "does not claim the arbitrary extension-less file %s",
+    (name) => {
+      const registry = createDefaultParserRegistry();
+      expect(registry.resolve(named("key=value\n", name)).kind).toBe("unsupported");
+    },
+  );
+
+  it("does not claim a named file whose bytes are binary", () => {
     const registry = createDefaultParserRegistry();
-    const resolution = registry.resolve(
-      selectionFromBytes(Uint8Array.of(1, 2, 0, 0, 3, 4, 0, 5), { extension: "" }),
-    );
+    const input = {
+      ...selectionFromBytes(Uint8Array.of(1, 2, 0, 0, 3, 4, 0, 5), { extension: "" }),
+      fileName: "README",
+    };
+    const resolution = registry.resolve(input);
     expect(
       resolution.kind === "matched" ? resolution.adapter.capability.parserId : "none",
     ).not.toBe("text");
+  });
+
+  it("does not claim an extension-less file the caller could not name", () => {
+    const registry = createDefaultParserRegistry();
+    const resolution = registry.resolve(
+      selectionFromText("text\n", { extension: "", mediaType: "" }),
+    );
+    expect(resolution.kind).toBe("unsupported");
   });
 });
