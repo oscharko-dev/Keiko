@@ -356,7 +356,7 @@ const AXIS_TOLERANCE_DEGREES = 2;
 
 /** What pdf.js reported for one page, reduced to the evidence reading order is decided from. */
 export function pageLayoutOf(items: readonly PositionedTextItem[]): PageLayout {
-  const positioned = items.filter(hasPosition);
+  const positioned = items.filter((item) => hasPosition(item));
   if (positioned.length === 0) {
     const plain = items
       .map((item) => cleanItemText(item.str ?? ""))
@@ -368,7 +368,7 @@ export function pageLayoutOf(items: readonly PositionedTextItem[]): PageLayout {
   const onAxis = (item: PositionedTextItem): boolean =>
     Math.abs(itemAngle(item) - angle) <= AXIS_TOLERANCE_DEGREES;
   const readable = positioned
-    .filter(onAxis)
+    .filter((item) => onAxis(item))
     .map((item) => layoutItem(item, angle))
     .filter((item) => item.text.length > 0);
   const rows = layoutRows(readable);
@@ -513,8 +513,12 @@ function repeatedFurniture(pages: readonly PageLayout[], bodyHeight: number): Re
     counts.set(key, (counts.get(key) ?? 0) + 1);
   };
   for (const page of pages) {
-    new Set(furnitureRows(page, bodyHeight).map((row) => furnitureKey(row))).forEach(count);
-    new Set(page.offAxis.map((text) => offAxisKey(text))).forEach(count);
+    new Set(furnitureRows(page, bodyHeight).map((row) => furnitureKey(row))).forEach((key) => {
+      count(key);
+    });
+    new Set(page.offAxis.map((text) => offAxisKey(text))).forEach((key) => {
+      count(key);
+    });
   }
   const needed = Math.max(FURNITURE_MIN_PAGES, Math.ceil(pages.length * FURNITURE_PAGE_SHARE));
   return new Set([...counts].filter(([, seen]) => seen >= needed).map(([key]) => key));
@@ -1375,7 +1379,7 @@ class ParagraphWriter {
 }
 
 function paragraphLines(rows: readonly LayoutRow[], facts: DocumentFacts): readonly OutLine[] {
-  const lines = rows.map(textLineOf).filter((line) => line !== undefined);
+  const lines = rows.map((row) => textLineOf(row)).filter((line) => line !== undefined);
   if (lines.length === 0) return [];
   const writer = new ParagraphWriter(paragraphContext(lines, facts.bodyRight), facts.vocabulary);
   for (const line of lines) writer.add(line);
@@ -1472,7 +1476,7 @@ const HEADING_SIZE_BUCKET = 2;
 
 function headingLevels(sizes: readonly number[]): ReadonlyMap<number, number> {
   const bucket = (size: number): number => Math.round(size * HEADING_SIZE_BUCKET);
-  const ranked = [...new Set(sizes.map(bucket))].sort((a, b) => b - a);
+  const ranked = [...new Set(sizes.map((size) => bucket(size)))].sort((a, b) => b - a);
   return new Map(
     sizes.map((size) => [size, Math.min(ranked.indexOf(bucket(size)) + 1, HEADING_MAX_LEVEL)]),
   );
@@ -1535,7 +1539,7 @@ interface PagePlan {
 }
 
 function planPage(page: PageLayout): PagePlan {
-  return { page, flows: readingFlows(page.rows).map(flowBlocks) };
+  return { page, flows: readingFlows(page.rows).map((flow) => flowBlocks(flow)) };
 }
 
 function proseRightEdge(plan: PagePlan): readonly number[] {
@@ -1551,7 +1555,9 @@ function proseRightEdge(plan: PagePlan): readonly number[] {
  * Tables are no evidence: their cell padding can overhang the margin text wraps against.
  */
 function documentBodyRight(plans: readonly PagePlan[]): number {
-  const edges = plans.filter((plan) => plan.flows.length === 1).flatMap(proseRightEdge);
+  const edges = plans
+    .filter((plan) => plan.flows.length === 1)
+    .flatMap((plan) => proseRightEdge(plan));
   const ordered = [...edges].sort((a, b) => a - b);
   return ordered[Math.floor(ordered.length / 2)] ?? 0;
 }
@@ -1584,7 +1590,7 @@ export interface PageEdge {
 }
 
 function textLinesOf(rows: readonly LayoutRow[]): readonly TextLine[] {
-  return rows.map(textLineOf).filter((line) => line !== undefined);
+  return rows.map((row) => textLineOf(row)).filter((line) => line !== undefined);
 }
 
 function endsInHeading(page: ComposedPageLines): boolean {
@@ -1663,7 +1669,10 @@ export function openingOfRun(
 ): TextLine | undefined {
   const first = pages[0];
   if (first === undefined || !hasPageContent(first)) return undefined;
-  return composeWindow(pages.filter(hasPageContent), furniture).edges[0]?.opening;
+  return composeWindow(
+    pages.filter((page) => hasPageContent(page)),
+    furniture,
+  ).edges[0]?.opening;
 }
 
 function withoutClosingWrapHyphen(
@@ -1727,7 +1736,7 @@ function composeWindow(
   const bodyHeight = bodyStyleOf(pages).height;
   const furniture = new Set([...knownFurniture, ...repeatedFurniture(pages, bodyHeight)]);
   const cleaned = pages.map((page) => withoutFurniture(page, furniture, bodyHeight));
-  const plans = cleaned.map(planPage);
+  const plans = cleaned.map((page) => planPage(page));
   const facts: DocumentFacts = {
     bodyRight: documentBodyRight(plans),
     vocabulary: documentVocabulary(cleaned),
@@ -1824,7 +1833,10 @@ export function composeInWindows(
   let lastEdge: PageEdge | undefined;
   for (let first = 0; first < pages.length; first += step) {
     const run = pages.slice(first, first + step);
-    const withText = composeWindow(run.filter(hasPageContent), furniture);
+    const withText = composeWindow(
+      run.filter((page) => hasPageContent(page)),
+      furniture,
+    );
     furniture = withText.furniture;
     const placed = spreadOverRun(run, withText);
     const next = endsInOpenHyphen(placed.texts, placed.edges)

@@ -184,7 +184,7 @@ const toRawItems = (parsed: unknown): readonly unknown[] => {
 // How many test-case objects a container holds. A list of numbers such as the evidence citation
 // `[1]` in a reasoning preamble is a JSON array too, but it holds no candidate.
 const candidateContainerItemCount = (parsed: unknown): number =>
-  hasCandidateContainer(parsed) ? toRawItems(parsed).filter(isObject).length : -1;
+  hasCandidateContainer(parsed) ? toRawItems(parsed).filter((item) => isObject(item)).length : -1;
 
 interface ParsedJsonSlice {
   readonly parsed: unknown;
