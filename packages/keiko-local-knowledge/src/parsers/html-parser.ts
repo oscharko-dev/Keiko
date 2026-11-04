@@ -29,7 +29,6 @@ import {
   emptyResult,
   encodingDiagnostic,
   limitSeverity,
-  readAttribute,
   shouldStop,
   textInputRefusal,
 } from "./_internal.js";
@@ -273,6 +272,13 @@ function parseTagAttributes(raw: string): ReadonlyMap<string, string> {
     if (name.length > 0 && !attributes.has(name)) attributes.set(name, value);
   }
   return attributes;
+}
+
+// One attribute of an opening tag, with the quoting HTML allows (double, single or none) and its
+// entities decoded; an attribute inside another attribute's value is never read.
+function tagAttribute(tagRaw: string, name: string): string | undefined {
+  const value = parseTagAttributes(tagRaw).get(name);
+  return value === undefined ? undefined : visibleText(value);
 }
 
 function attributeTokens(attributes: ReadonlyMap<string, string>): readonly string[] {
@@ -837,7 +843,7 @@ const MAX_CELL_SPAN = 1000;
 const MAX_EXPANDED_CELLS_PER_TABLE = 20_000;
 
 function readSpanCount(tagRaw: string, attribute: string): number {
-  const raw = readAttribute(tagRaw, attribute);
+  const raw = tagAttribute(tagRaw, attribute);
   if (raw === undefined) return 1;
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed < 1) return 1;
@@ -1195,7 +1201,7 @@ function firstCodeLanguage(elementHtml: string): string | undefined {
   if (at < 0) return undefined;
   const gt = elementHtml.indexOf(">", at);
   if (gt < 0) return undefined;
-  return codeLanguageFromClass(readAttribute(elementHtml.slice(at, gt + 1), "class"));
+  return codeLanguageFromClass(tagAttribute(elementHtml.slice(at, gt + 1), "class"));
 }
 
 function appendPreformatted(state: ScanState, elementHtml: string, tag: Tag): void {
@@ -1203,7 +1209,7 @@ function appendPreformatted(state: ScanState, elementHtml: string, tag: Tag): vo
   // indentation and exact identifiers survive for lexical retrieval.
   const code = fragmentTextRaw(elementHtml);
   const language =
-    codeLanguageFromClass(readAttribute(tag.raw, "class")) ?? firstCodeLanguage(elementHtml);
+    codeLanguageFromClass(tagAttribute(tag.raw, "class")) ?? firstCodeLanguage(elementHtml);
   pushVerbatimBlock(state, language !== undefined ? `Code (${language}):\n${code}` : code);
 }
 
@@ -1249,7 +1255,7 @@ function redactFrameTarget(src: string): string | undefined {
 }
 
 function appendFrameLink(state: ScanState, tag: Tag): void {
-  const src = readAttribute(tag.raw, "src");
+  const src = tagAttribute(tag.raw, "src");
   if (src === undefined) return;
   const target = redactFrameTarget(src);
   if (target === undefined) return;
@@ -1414,7 +1420,7 @@ function isAnchorSlug(value: string): boolean {
 }
 
 function anchorFromTag(tag: Tag): string | undefined {
-  const raw = readAttribute(tag.raw, "id") ?? readAttribute(tag.raw, "name");
+  const raw = tagAttribute(tag.raw, "id") ?? tagAttribute(tag.raw, "name");
   if (raw === undefined) return undefined;
   const value = raw.startsWith("#") ? raw.slice(1) : raw;
   return isAnchorSlug(value) ? value : undefined;
