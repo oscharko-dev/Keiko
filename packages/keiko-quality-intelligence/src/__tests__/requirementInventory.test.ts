@@ -853,3 +853,70 @@ describe("a statement label is presentation, not content (#4179 review)", () => 
     ]);
   });
 });
+
+describe("acceptance criteria wrapped by the extractor", () => {
+  const criteriaOf = (lines: readonly string[]): readonly string[] =>
+    detect([
+      "LH-001: Anmeldung",
+      "Das Portal meldet an.",
+      "Abnahmekriterien:",
+      ...lines,
+    ]).entries[0]?.acceptanceCriteria.map((item) => item.text) ?? [];
+
+  it("joins a marked criterion that plain text hard-wrapped, in the same digest", () => {
+    const block = (criteria: readonly string[]): readonly string[] => [
+      "LH-001: Anmeldung",
+      "Das Portal meldet an.",
+      "Abnahmekriterien:",
+      ...criteria,
+      "Priorität: Muss.",
+    ];
+    const wrapped = detect(
+      block([
+        "• Angenommen der Kunde meldet sich an, wenn die Seite lädt, dann werden",
+        "mindestens sieben Anlässe",
+        "angezeigt.",
+        "• Fehler werden gemeldet.",
+      ]),
+    ).entries[0];
+    const whole = detect(
+      block([
+        "• Angenommen der Kunde meldet sich an, wenn die Seite lädt, dann werden mindestens sieben Anlässe angezeigt.",
+        "• Fehler werden gemeldet.",
+      ]),
+    ).entries[0];
+    expect(wrapped?.acceptanceCriteria.map((item) => item.text)).toEqual([
+      "Angenommen der Kunde meldet sich an, wenn die Seite lädt, dann werden mindestens sieben Anlässe angezeigt.",
+      "Fehler werden gemeldet.",
+    ]);
+    expect(wrapped?.priority).toBe("Muss");
+    expect(wrapped?.digest).toBe(whole?.digest);
+  });
+
+  it.each(["–", "—"])("treats %s as a list marker", (marker) => {
+    expect(
+      criteriaOf([`${marker} Der Ort ist`, "verfügbar.", `${marker} Fehler erscheinen.`]),
+    ).toEqual(["Der Ort ist verfügbar.", "Fehler erscheinen."]);
+  });
+
+  it("keeps one criterion per line when the list has no markers", () => {
+    expect(criteriaOf(["Der Ort ist verfügbar", "Fehler erscheinen"])).toEqual([
+      "Der Ort ist verfügbar",
+      "Fehler erscheinen",
+    ]);
+  });
+
+  it("does not join an unmarked line after a marked criterion that is closed", () => {
+    expect(criteriaOf(["• Der Ort ist verfügbar.", "Fehler erscheinen."])).toEqual([
+      "Der Ort ist verfügbar.",
+      "Fehler erscheinen.",
+    ]);
+  });
+
+  it("keeps marked criteria apart when none of them has a closing mark", () => {
+    expect(criteriaOf(["• Der Ort ist verfügbar", "• Fehler erscheinen"])).toEqual([
+      "Der Ort ist verfügbar",
+      "Fehler erscheinen",
+    ]);
+  });
+});

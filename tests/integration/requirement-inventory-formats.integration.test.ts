@@ -402,6 +402,26 @@ describe("requirement inventory across document formats", () => {
     expect(slides?.sectionPath).not.toEqual(markdownEntry?.sectionPath);
   });
 
+  it("keeps the requirements and digests when a PDF wraps its marked criteria", async () => {
+    const lines = markdown()
+      .replaceAll(/^#+ /gmu, "")
+      .split("\n")
+      .flatMap((line) => {
+        if (!line.startsWith("- ")) return [line];
+        const words = line.slice(2).split(" ");
+        const middle = Math.ceil(words.length / 2);
+        return [`- ${words.slice(0, middle).join(" ")}`, words.slice(middle).join(" ")];
+      });
+    const wrapped = extraction(
+      await pdfParser.parseAsync(
+        selectionFromBytes(pdf(lines), { extension: "pdf", mediaType: "application/pdf" }),
+        OPTIONS,
+      ),
+    );
+
+    expect(content(wrapped)).toEqual(content(await extract("markdown")));
+  });
+
   it.each([
     ["a sheet name with an equals sign", xlsx("Requirements=v2")],
     ["a sheet name with a pipe", xlsx("Requirements|v2")],

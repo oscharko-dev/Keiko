@@ -530,6 +530,8 @@ interface BodyState {
   readonly criteria: string[];
   priority: string | undefined;
   mode: Mode;
+  /** A marked criterion without a closing mark: the next unmarked line is its wrapped remainder. */
+  criterionOpen: boolean;
 }
 
 function stripCriterionNumber(value: string): string {
@@ -558,13 +560,35 @@ function readStatementLabel(state: BodyState, value: string): void {
 
 function readCriteria(state: BodyState, criteria: string): void {
   state.mode = "criteria";
+  state.criterionOpen = false;
   for (const item of criteria.split(MERGED_ITEMS)) {
     const criterion = stripCriterionNumber(item);
     if (criterion.length > 0) state.criteria.push(criterion);
   }
 }
 
-function readSegment(state: BodyState, segment: string, vocabulary: CompiledVocabulary): void {
+/**
+ * One extractor line of a criteria list. A PDF reports a wrapped list item as several lines, so an
+ * unmarked line continues a marked item that has not closed. A list without markers has no such
+ * evidence and keeps one criterion per line.
+ */
+function readCriterionLine(state: BodyState, segment: string, marked: boolean): void {
+  const text = stripCriterionNumber(segment);
+  const last = state.criteria.length - 1;
+  if (state.criterionOpen && !marked && last >= 0) {
+    state.criteria[last] = collapse(`${state.criteria[last] ?? ""} ${text}`);
+  } else {
+    state.criteria.push(text);
+  }
+  state.criterionOpen = (marked || state.criterionOpen) && !CLOSING_MARK.test(text);
+}
+
+function readSegment(
+  state: BodyState,
+  segment: string,
+  vocabulary: CompiledVocabulary,
+  marked: boolean,
+): void {
   const priority = keyValue(segment, vocabulary.priorityKey);
   const criteria = keyValue(segment, vocabulary.criteriaKey);
   const label = keyValue(segment, vocabulary.statementKey);
@@ -578,17 +602,25 @@ function readSegment(state: BodyState, segment: string, vocabulary: CompiledVoca
   } else if (vocabulary.metaKey.test(segment)) {
     state.mode = "meta";
   } else if (state.mode === "criteria") {
-    state.criteria.push(stripCriterionNumber(segment));
+    readCriterionLine(state, segment, marked);
   } else if (state.mode === "text") {
     state.statement.push(segment);
   }
 }
 
 function interpretBody(bodyLines: readonly Line[], vocabulary: CompiledVocabulary): Interpreted {
-  const state: BodyState = { statement: [], criteria: [], priority: undefined, mode: "text" };
-  for (const line of bodyLines)
+  const state: BodyState = {
+    statement: [],
+    criteria: [],
+    priority: undefined,
+    mode: "text",
+    criterionOpen: false,
+  };
+  for (const line of bodyLines) {
+    const marked = LIST_MARKER.test(line.text);
     for (const segment of segmentsOf(line.text, vocabulary))
-      readSegment(state, segment, vocabulary);
+      readSegment(state, segment, vocabulary, marked);
+  }
   return {
     ...(state.priority === undefined || state.priority.length === 0
       ? {}

@@ -34,7 +34,7 @@ export function collapse(value: string): string {
 }
 
 export const MARKDOWN_HEADING = /^\s{0,3}#{1,6}\s+/u;
-export const LIST_MARKER = /^\s*(?:[-*•·]\s+|\d+[.)]\s+|[a-z][.)]\s+)/iu;
+export const LIST_MARKER = /^\s*(?:[-–—*•·]\s+|\d+[.)]\s+|[a-z][.)]\s+)/iu;
 
 const EMPHASIS_MARKS = ["**", "__", "`"] as const;
 
