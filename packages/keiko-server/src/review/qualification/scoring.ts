@@ -2,10 +2,14 @@
 // `ReviewSeedRunResult` from its presented findings and is scored with child 1's one rule,
 // `scoreReviewSeedRun`, both per case (for the case's own result) and for the whole corpus. A run
 // that did not settle `complete` or `incomplete` has no presented findings to score: the case is
-// `not-scored` and the qualification can only end `incomplete`, never qualified or failed.
+// `not-scored` and the qualification can only end `incomplete`, never qualified or failed. So is a
+// run whose Reviewer failed (`model-failed`) or ran out of time (`deadline-exceeded`) before it
+// presented anything (R4130-012, ADR-0182 D8): no model reviewed that case, so "nothing presented"
+// is not a measured "found nothing".
 
 import type {
   ReviewFindingCategory,
+  ReviewIncompleteReason,
   ReviewPairQualificationOutcome,
   ReviewRunView,
   ReviewSeedCase,
@@ -15,13 +19,26 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { scoreReviewSeedRun } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-rules";
 
+/** Incomplete reasons that mean the Reviewer did not finish reviewing, rather than measured work. */
+const REVIEWER_FAILED: ReadonlySet<ReviewIncompleteReason> = new Set([
+  "model-failed",
+  "deadline-exceeded",
+]);
+
+/** Whether the run's settlement measured the case: a clean end, or presented findings to score. */
+function measured(view: ReviewRunView): boolean {
+  const settlement = view.settlement;
+  if (settlement?.kind === "complete") return true;
+  if (settlement?.kind !== "incomplete") return false;
+  return !REVIEWER_FAILED.has(settlement.reason) || view.presentedFindings.length > 0;
+}
+
 /** The scoreable result of one case's settled run, or `undefined` when it cannot be scored. */
 export function seedRunResult(
   seed: ReviewSeedCase,
   view: ReviewRunView | undefined,
 ): ReviewSeedRunResult | undefined {
-  const kind = view?.settlement?.kind;
-  if (view === undefined || (kind !== "complete" && kind !== "incomplete")) return undefined;
+  if (view === undefined || !measured(view)) return undefined;
   return {
     caseId: seed.id,
     outcome: view.stale ? "stale" : "settled",
