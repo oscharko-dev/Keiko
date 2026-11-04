@@ -331,6 +331,14 @@ function skipSpecialMarker(text: string, after: number): number | null {
   return null;
 }
 
+// The position of the last `>` of the document being scanned, found once per document.
+let lastTagEnd: { readonly text: string; readonly at: number } | undefined;
+
+function lastTagEndOf(text: string): number {
+  if (lastTagEnd?.text !== text) lastTagEnd = { text, at: text.lastIndexOf(">") };
+  return lastTagEnd.at;
+}
+
 // Quote-aware scan for a tag's terminating `>`. A single- or double-quoted attribute value may
 // contain a literal `>` (e.g. `title="Section > Details"`); a bare `indexOf(">", from)` would
 // mis-terminate the tag there, corrupting `tag.raw` and desynchronizing the scanner cursor for
@@ -361,6 +369,9 @@ function findQuotedTagEnd(text: string, from: number): number {
 // just this one tag by falling back to a plain `>` search (ignoring quote state) so the scanner
 // re-synchronizes on the next tag boundary instead of corrupting everything that follows.
 function findTagEnd(text: string, from: number): number {
+  // Past the last `>` of the document no tag can end: answering that at once keeps a document made
+  // of thousands of tag openings and no `>` linear instead of scanning to its end for each.
+  if (from > lastTagEndOf(text)) return -1;
   const quoted = findQuotedTagEnd(text, from);
   if (quoted !== -1) return quoted;
   return text.indexOf(">", from);

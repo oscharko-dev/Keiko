@@ -68,3 +68,12 @@ describe("a table whose end tags are left out", () => {
     expect(textOf("<dl><dt>Term<dd>Def one<dt>T2<dd>D2</dl>")).toBe("Term: Def one\nT2: D2");
   });
 });
+
+describe("markup with many tag openings and no closing bracket", () => {
+  it("is read in linear time and keeps its text", () => {
+    const started = performance.now();
+    const text = textOf(`${"<a".repeat(100_000)}`);
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(text.length).toBeGreaterThan(0);
+  });
+});
