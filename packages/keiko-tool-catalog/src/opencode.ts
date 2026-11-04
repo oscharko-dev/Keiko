@@ -455,8 +455,16 @@ function verificationSpec(): OpenCodeToolSpec {
           description:
             "Use an empty string for ordinary gates; targeted-test requires one workspace-relative test path.",
         },
+        packageDir: {
+          type: "string",
+          minLength: 0,
+          maxLength: 4096,
+          pattern: String.raw`^(?:$|(?![\\/])(?!.*(?:^|/)\.\.?(?:/|$))(?!.*\\).+)$`,
+          description:
+            "Workspace-relative folder of a nested package.json; an empty string finds it.",
+        },
       },
-      ["verifierId", "targetPath"],
+      ["verifierId", "targetPath", "packageDir"],
     ),
     effects: ["verification"],
     idempotency: "server-key-required",

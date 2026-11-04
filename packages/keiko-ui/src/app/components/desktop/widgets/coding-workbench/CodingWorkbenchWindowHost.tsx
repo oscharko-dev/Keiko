@@ -4,6 +4,10 @@ import { useRef, type ReactNode } from "react";
 import type { WindowCfgRecord, WindowRenderContext } from "../../windows/WindowsRegistry";
 import { CodingWorkbenchWindow, type CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
 import type { WorkbenchExecutionLocation } from "./CodingWorkbenchRepositorySelector";
+import {
+  ConnectorWindowsProvider,
+  useWorkspaceConnectorWindows,
+} from "../../connector-windows-context";
 
 function openGit(context: WindowRenderContext, target: CodingWorkbenchGitTarget): void {
   const { root, binding, repositoryDialog, descriptionReview } = target;
@@ -102,32 +106,34 @@ export function CodingWorkbenchWindowHost({
     !restoringHistory && (cfg.executionLocation === "local" || cfg.executionLocation === "worktree")
       ? cfg.executionLocation
       : undefined;
+  const connectorWindows = useWorkspaceConnectorWindows(context.openWindow);
   return (
-    <CodingWorkbenchWindow
-      historySelection={historySelection}
-      onHistorySelectionHandled={() => context.updateCfg(handledHistoryPatch(restoringHistory))}
-      onOpenHistory={() => context.openWindow("codingHistory")}
-      onOpenMcpSettings={() => context.openWindow("settings", { initialTab: "mcp" })}
-      selectedRoot={root ?? undefined}
-      selectedBranch={targetBranch}
-      selectedLocation={selectedLocation}
-      onSelectRepository={(repositoryPath) => {
-        // #A review: a selection is local window state until Start, not a failure — routine
-        // diagnostics were removed here (they showed up server-side as warn-level client
-        // failures for an ordinary pick). The run-start request already carries the bound
-        // repository and target branch for the operation that actually matters.
-        context.updateCfg({
-          repositoryPath,
-          targetBranch: undefined,
-          targetBranchRoot: undefined,
-          executionLocation: undefined,
-        });
-      }}
-      onSelectBranch={(branch) => {
-        context.updateCfg({ targetBranch: branch, targetBranchRoot: root ?? undefined });
-      }}
-      onSelectLocation={(executionLocation) => context.updateCfg({ executionLocation })}
-      onOpenGit={(target) => openGit(context, target)}
-    />
+    <ConnectorWindowsProvider value={connectorWindows}>
+      <CodingWorkbenchWindow
+        historySelection={historySelection}
+        onHistorySelectionHandled={() => context.updateCfg(handledHistoryPatch(restoringHistory))}
+        onOpenHistory={() => context.openWindow("codingHistory")}
+        selectedRoot={root ?? undefined}
+        selectedBranch={targetBranch}
+        selectedLocation={selectedLocation}
+        onSelectRepository={(repositoryPath) => {
+          // #A review: a selection is local window state until Start, not a failure — routine
+          // diagnostics were removed here (they showed up server-side as warn-level client
+          // failures for an ordinary pick). The run-start request already carries the bound
+          // repository and target branch for the operation that actually matters.
+          context.updateCfg({
+            repositoryPath,
+            targetBranch: undefined,
+            targetBranchRoot: undefined,
+            executionLocation: undefined,
+          });
+        }}
+        onSelectBranch={(branch) => {
+          context.updateCfg({ targetBranch: branch, targetBranchRoot: root ?? undefined });
+        }}
+        onSelectLocation={(executionLocation) => context.updateCfg({ executionLocation })}
+        onOpenGit={(target) => openGit(context, target)}
+      />
+    </ConnectorWindowsProvider>
   );
 }

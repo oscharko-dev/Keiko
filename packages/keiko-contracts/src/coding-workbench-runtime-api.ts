@@ -44,6 +44,7 @@ import type {
 } from "./coding-workbench-runtime-constants.js";
 import { MODEL_REASONING_EFFORTS, type ModelReasoningEffort } from "./gateway.js";
 import { isChatJiraPodId } from "./bff-wire.js";
+import { isMcpServerName, MCP_SERVER_MAX } from "./mcp-servers.js";
 export {
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
   type CodingWorkbenchGatewayEventKind,
@@ -753,6 +754,12 @@ export interface CodingWorkbenchRuntimeStartRequest {
    * the run exactly as before. An id, never a name, URL or credential.
    */
   readonly jiraPodId?: string | undefined;
+  /**
+   * The centrally configured MCP servers the human selected for this run (owner decision
+   * 2026-11-02). Absent offers every enabled server; an empty list offers none. The selection only
+   * narrows the operator's registry, never widens it; an unknown or disabled name offers nothing.
+   */
+  readonly mcpServers?: readonly string[] | undefined;
 }
 
 /**
@@ -1367,6 +1374,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   validateProjectMemoryRequest(value.projectMemory, errors);
   validateStartAgent(value.agent, errors);
   validateJiraPodId(value.jiraPodId, errors);
+  validateMcpServerSelection(value.mcpServers, errors);
   validateStartPromptInputs(value, errors);
   if (
     value.expectedIssueBindingDigest !== undefined &&
@@ -1397,12 +1405,25 @@ const START_REQUEST_KEYS: readonly string[] = [
   "mentions",
   "fork",
   "jiraPodId",
+  "mcpServers",
 ];
 
 // The Pod is named by the id Jira Pod custody minted; what it is allowed to do is decided by the
 // server against the caller's own, ready Pods, never by this shape.
 function validateJiraPodId(value: unknown, errors: string[]): void {
   if (value !== undefined && !isChatJiraPodId(value)) errors.push("jiraPodId is invalid");
+}
+
+// Names only; which of them a run may use is decided by the server against its registry.
+function validateMcpServerSelection(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (
+    !Array.isArray(value) ||
+    value.length > MCP_SERVER_MAX ||
+    !value.every(isMcpServerName) ||
+    new Set(value).size !== value.length
+  )
+    errors.push("mcpServers is invalid");
 }
 
 // A fork names the task to fork and, optionally, the message to fork before; it starts a NEW task, so

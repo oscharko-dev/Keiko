@@ -1,4 +1,4 @@
-# Public API surface — 1.3.5
+# Public API surface — 1.4.0
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -109,6 +109,10 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 `KEIKO_PRODUCT_VERSION`.
 
 ## Stability notes
+
+- 1.4.0: root exports and CLI entrypoints remain stable. Chat adds Jira write, draft and report
+  tools, requirement tools on Knowledge Pods and PowerPoint indexing. The UI store moves from schema
+  56 to 58 with additive migrations.
 
 - 1.3.5: root exports and CLI entrypoints remain stable. The Coding Workbench sidecar profile
   judges the selected model's own readiness and accepts `check=1` to check it; an unanswered

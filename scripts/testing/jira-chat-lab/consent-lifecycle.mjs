@@ -141,7 +141,7 @@ function turnIntent(group, id, expectedReadGrants, write, before) {
     mode: "governed-assist",
     transport: id === "initial-read" || id === "restart-read" ? "buffered" : "stream",
     expectedReadGrants,
-    ...(expectedReadGrants === 0 ? { reusedReadGrantId: group.readGrant.grantId } : {}),
+    ...(expectedReadGrants === 0 ? { reusedReadGrant: group.readGrant } : {}),
     before,
     key: group.key,
     marker: group.marker,
@@ -211,12 +211,14 @@ async function rotateAndReverify(context, group, chat) {
   assert.equal(rotated.livePod.podId, identity.livePod.podId);
   assert.ok(rotated.livePod.authenticationGeneration > identity.livePod.authenticationGeneration);
   assert.equal(rotated.livePod.verificationStatus, "unverified");
-  const invalidated = await globalThis.fetch(
+  // No route reads or revives a grant any more. The grant the server established belongs to the
+  // superseded authentication generation, so the next fresh disclosure must be a different grant.
+  const retired = await globalThis.fetch(
     `${context.origin}/api/atlassian-connectors/action-approvals/${encodeURIComponent(group.readGrant.grantId)}/chat-read-consent`,
     { headers: { Cookie: context.cookie } },
   );
-  assert.equal(invalidated.status, 404);
-  assert.equal((await invalidated.json()).error.code, "CHAT_READ_CONSENT_UNAVAILABLE");
+  assert.equal(retired.status, 404);
+  assert.ok(group.readGrant.authenticationGeneration < rotated.livePod.authenticationGeneration);
   group.phase = "verification-pending";
   save(group);
   const verified = await jsonRequest(
@@ -349,6 +351,8 @@ async function main() {
         session,
         context.projectPath,
         modelId,
+        "api",
+        "governed-assist",
       );
       group.chatId = chat.id;
       await turn(context, group, observer, chat, "initial-read", 1);

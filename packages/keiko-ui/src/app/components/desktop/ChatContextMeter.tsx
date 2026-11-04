@@ -4,6 +4,7 @@ import { useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useContextDisclosure } from "./useContextDisclosure";
 import type {
+  ChatContextConnectorWire,
   ChatContextSegmentWire,
   ChatContextStatusWire,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -20,6 +21,7 @@ const LockIcon = Icons.lock;
 const UNCOMPACTED_SEGMENTS = new Set<ChatContextSegmentWire["id"]>([
   "system",
   "skill",
+  "tools",
   "knowledge",
 ]);
 
@@ -75,6 +77,7 @@ function segmentLabel(
   const labels: Record<ChatContextSegmentWire["id"], string> = {
     system: t("chat.context.segment.system"),
     skill: t("chat.context.segment.skill"),
+    tools: t("chat.context.segment.tools"),
     summary: t("chat.context.segment.summary"),
     messages: t("chat.context.segment.messages"),
     knowledge: t("chat.context.segment.knowledge"),
@@ -174,6 +177,60 @@ function SegmentRow({
   );
 }
 
+function ConnectorRow({ connector }: { readonly connector: ChatContextConnectorWire }): ReactNode {
+  const t = useTranslate();
+  const locale = useLocale();
+  const kind = t(
+    connector.kind === "jira" ? "chat.context.connector.jira" : "chat.context.connector.mcp",
+  );
+  const count = connector.toolCount;
+  return (
+    <li className={styles.cmpConnectorRow} data-kind={connector.kind}>
+      <span className={styles.cmpLegendLabel}>
+        {connector.name ?? kind}
+        {connector.name === undefined ? null : (
+          <span className={styles.cmpLegendDetail}>{kind}</span>
+        )}
+      </span>
+      {count === undefined ? (
+        <span className={styles.cmpLegendShare}>{t("chat.context.connector.idle")}</span>
+      ) : (
+        <>
+          <span className={styles.cmpLegendShare}>
+            {t(count === 1 ? "chat.context.connector.tools.one" : "chat.context.connector.tools", {
+              count: count.toLocaleString(locale),
+            })}
+          </span>
+          <span className={styles.cmpLegendValue}>
+            {t("chat.context.connector.tokens", {
+              tokens: (connector.tokens ?? 0).toLocaleString(locale),
+            })}
+          </span>
+        </>
+      )}
+    </li>
+  );
+}
+
+function ConnectorList({
+  connectors,
+}: {
+  readonly connectors: readonly ChatContextConnectorWire[] | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  if (connectors === undefined || connectors.length === 0) return null;
+  return (
+    <>
+      <h4 className={styles.cmpConnectorsHeading}>{t("chat.context.connectors")}</h4>
+      <ul className={styles.cmpConnectors} aria-label={t("chat.context.connectors")}>
+        {connectors.map((connector) => (
+          <ConnectorRow key={`${connector.kind}:${connector.name ?? ""}`} connector={connector} />
+        ))}
+      </ul>
+    </>
+  );
+}
+
 function ContextBreakdown({
   status,
   segments,
@@ -199,6 +256,7 @@ function ContextBreakdown({
           <SegmentRow key={segment.id} segment={segment} status={status} />
         ))}
       </ul>
+      <ConnectorList connectors={status.connectors} />
     </>
   );
 }
