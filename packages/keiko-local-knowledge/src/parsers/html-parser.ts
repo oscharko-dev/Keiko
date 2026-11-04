@@ -64,7 +64,7 @@ function collapseWhitespace(value: string): string {
 }
 
 const PARSER_ID = "html";
-const PARSER_VERSION = "1";
+const PARSER_VERSION = "2";
 
 const HTML_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS);
 const HTML_MEDIA_TYPES: ReadonlySet<string> = new Set(["text/html", "application/xhtml+xml"]);
@@ -101,15 +101,192 @@ const METADATA_TAGS: ReadonlySet<string> = new Set(["title"]);
 // a frameset table-of-contents is discoverable without executing scripts or following the link.
 const FRAME_TAGS: ReadonlySet<string> = new Set(["frame", "iframe"]);
 const BOILERPLATE_TAGS: ReadonlySet<string> = new Set(["nav", "footer", "aside"]);
-const BOILERPLATE_HINTS: readonly string[] = [
+// Whole class/id TOKENS (split at every non-alphanumeric character) that mark a wrapper as page
+// furniture. A hint inside any other attribute (`data-track="consent-manager"`) or inside a longer
+// word never counts, and a wrapper that holds most of the page is content whatever it is called.
+const BOILERPLATE_HINTS: ReadonlySet<string> = new Set([
   "cookie",
+  "cookies",
   "consent",
   "banner",
   "navbar",
   "breadcrumb",
+  "breadcrumbs",
   "sidebar",
   "footer",
-];
+]);
+const HEADER_BOILERPLATE_HINTS: ReadonlySet<string> = new Set([
+  "nav",
+  "navbar",
+  "navigation",
+  "banner",
+]);
+// A hint-named subtree larger than this share of the document is not removed.
+const MAX_REMOVABLE_SHARE = 0.5;
+
+// Elements that end the text flow around them: every one of them (opening, closing or void) starts
+// a new block, so adjacent paragraphs, list items and lines never fuse into one word. Inline
+// elements (`b`, `a`, `span`, …) are absent on purpose: they stay inside the surrounding text.
+const BLOCK_TAGS: ReadonlySet<string> = new Set([
+  "address",
+  "article",
+  "blockquote",
+  "body",
+  "br",
+  "center",
+  "dd",
+  "details",
+  "dialog",
+  "div",
+  "dt",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "form",
+  "head",
+  "header",
+  "hgroup",
+  "hr",
+  "html",
+  "legend",
+  "li",
+  "main",
+  "menu",
+  "ol",
+  "optgroup",
+  "option",
+  "p",
+  "section",
+  "summary",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "tr",
+  "ul",
+]);
+// Elements without content or end tag: a subtree walk for them would run to the end of the page.
+const VOID_TAGS: ReadonlySet<string> = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
+const MAX_ATTRIBUTES_PER_TAG = 64;
+
+const NBSP = String.fromCodePoint(0xa0);
+const SOFT_HYPHEN = String.fromCodePoint(0xad);
+
+// Decoded visible text: a non-breaking space is a space (it would otherwise survive whitespace
+// collapsing and split `a&nbsp;b` queries), and a soft hyphen is an invisible hint inside a word.
+function visibleText(raw: string): string {
+  return decodeHtmlEntities(raw).replaceAll(NBSP, " ").replaceAll(SOFT_HYPHEN, "");
+}
+
+function isAttributeSpace(code: number): boolean {
+  return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d || code === 0x0c;
+}
+
+interface AttributeCursor {
+  readonly raw: string;
+  position: number;
+}
+
+function skipAttributeSpaces(cursor: AttributeCursor): void {
+  while (
+    cursor.position < cursor.raw.length &&
+    isAttributeSpace(cursor.raw.codePointAt(cursor.position) ?? 0)
+  ) {
+    cursor.position += 1;
+  }
+}
+
+function readAttributeName(cursor: AttributeCursor): string {
+  const start = cursor.position;
+  while (cursor.position < cursor.raw.length) {
+    const char = cursor.raw[cursor.position] ?? "";
+    if (isAttributeSpace(char.codePointAt(0) ?? 0) || "=>/".includes(char)) break;
+    cursor.position += 1;
+  }
+  return cursor.raw.slice(start, cursor.position).toLowerCase();
+}
+
+// Value after `=`: quoted (to the closing quote) or bare (to the next space or `>`).
+function readAttributeValue(cursor: AttributeCursor): string {
+  skipAttributeSpaces(cursor);
+  const quote = cursor.raw[cursor.position];
+  if (quote === '"' || quote === "'") {
+    const close = cursor.raw.indexOf(quote, cursor.position + 1);
+    const end = close === -1 ? cursor.raw.length : close;
+    const value = cursor.raw.slice(cursor.position + 1, end);
+    cursor.position = end + 1;
+    return value;
+  }
+  const start = cursor.position;
+  while (
+    cursor.position < cursor.raw.length &&
+    cursor.raw[cursor.position] !== ">" &&
+    !isAttributeSpace(cursor.raw.codePointAt(cursor.position) ?? 0)
+  ) {
+    cursor.position += 1;
+  }
+  return cursor.raw.slice(start, cursor.position);
+}
+
+// One `name`, `name=value` or stray character; `name` is empty for the latter.
+function readNextAttribute(cursor: AttributeCursor): { name: string; value: string } {
+  skipAttributeSpaces(cursor);
+  while (cursor.raw[cursor.position] === "/") cursor.position += 1;
+  const name = readAttributeName(cursor);
+  skipAttributeSpaces(cursor);
+  const hasValue = cursor.raw[cursor.position] === "=";
+  if (hasValue) cursor.position += 1;
+  if (name.length === 0 && !hasValue) cursor.position += 1;
+  return { name, value: hasValue ? readAttributeValue(cursor) : "" };
+}
+
+// Attributes of ONE tag literal, quote-aware, first occurrence wins (HTML semantics). Names are
+// lower-cased, values are returned raw (undecoded); a boolean attribute has the empty string.
+function parseTagAttributes(raw: string): ReadonlyMap<string, string> {
+  const attributes = new Map<string, string>();
+  const cursor: AttributeCursor = { raw, position: 1 };
+  while (cursor.position < raw.length && !isAttributeSpace(raw.codePointAt(cursor.position) ?? 0)) {
+    cursor.position += 1;
+  }
+  while (cursor.position < raw.length && attributes.size < MAX_ATTRIBUTES_PER_TAG) {
+    const { name, value } = readNextAttribute(cursor);
+    if (name.length > 0 && !attributes.has(name)) attributes.set(name, value);
+  }
+  return attributes;
+}
+
+function attributeTokens(attributes: ReadonlyMap<string, string>): readonly string[] {
+  const joined = `${attributes.get("class") ?? ""} ${attributes.get("id") ?? ""}`.toLowerCase();
+  return joined.split(/[^a-z0-9]+/u).filter((token) => token.length > 0);
+}
+
+// `hidden` attribute or an inline `display:none`: a reader cannot see the element, so it is not
+// document text (owner decision, #4235).
+function isHiddenByAttributes(attributes: ReadonlyMap<string, string>): boolean {
+  if (attributes.has("hidden")) return true;
+  const style = (attributes.get("style") ?? "").toLowerCase().replaceAll(/\s+/gu, "");
+  return style
+    .split(";")
+    .some(
+      (declaration) => declaration === "display:none" || declaration.startsWith("display:none!"),
+    );
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -307,25 +484,54 @@ function skipElement(text: string, textLower: string, tagName: string, from: num
   return skipNestableElement(text, textLower, tagName, from);
 }
 
-function isBoilerplateTag(tag: Tag): boolean {
-  if (tag.kind !== "open") return false;
-  if (BOILERPLATE_TAGS.has(tag.name)) return true;
-  const raw = tag.raw.toLowerCase();
-  if (tag.name === "header" && (raw.includes("nav") || raw.includes("banner"))) return true;
-  if (tag.name !== "div" && tag.name !== "section") return false;
-  return BOILERPLATE_HINTS.some((hint) => raw.includes(hint));
+function hintsFor(tagName: string): ReadonlySet<string> | undefined {
+  if (tagName === "header") return HEADER_BOILERPLATE_HINTS;
+  return tagName === "div" || tagName === "section" ? BOILERPLATE_HINTS : undefined;
 }
 
+type SubtreeVerdict = "none" | "boilerplate-tag" | "boilerplate-hint" | "hidden";
+
+// Whether an opening tag starts a subtree that is not document text. Semantic page furniture
+// (`nav`, `footer`, `aside`) is always dropped; a wrapper is dropped only for a class/id TOKEN that
+// names furniture, and the caller still refuses to drop one that holds most of the page.
+function classifySubtree(tag: Tag): SubtreeVerdict {
+  if (tag.kind !== "open") return "none";
+  if (BOILERPLATE_TAGS.has(tag.name)) return "boilerplate-tag";
+  if (VOID_TAGS.has(tag.name) || tag.raw.length <= tag.name.length + 3) return "none";
+  const attributes = parseTagAttributes(tag.raw);
+  if (isHiddenByAttributes(attributes)) return "hidden";
+  const hints = hintsFor(tag.name);
+  if (hints === undefined) return "none";
+  return attributeTokens(attributes).some((token) => hints.has(token))
+    ? "boilerplate-hint"
+    : "none";
+}
+
+// The `<main>` element: found with the same tag scanner as the body, so `<main>` inside a script,
+// a comment or a longer name (`<mainframe>`, `<main-nav>`) is never mistaken for it.
 function selectMainContent(text: string): string {
-  const lower = text.toLowerCase();
-  const open = lower.indexOf("<main");
-  if (open < 0) return text;
-  const openEnd = text.indexOf(">", open);
-  if (openEnd < 0) return text;
-  const close = lower.indexOf("</main", openEnd + 1);
-  if (close < 0) return text.slice(open);
-  const closeEnd = text.indexOf(">", close);
-  return text.slice(open, closeEnd < 0 ? text.length : closeEnd + 1);
+  const textLower = text.toLowerCase();
+  let cursor = 0;
+  while (cursor < text.length) {
+    const event = nextEvent(text, cursor);
+    if (event.kind === "eof") break;
+    if (event.kind !== "tag") {
+      cursor = event.next;
+      continue;
+    }
+    const { tag } = event;
+    if (RAW_TEXT_TAGS.has(tag.name) && tag.kind === "open") {
+      cursor = skipRawText(text, textLower, tag.name, tag.end);
+    } else if (tag.name === "main" && tag.kind === "open") {
+      return text.slice(
+        tag.start,
+        findNestableElementEnd(text, textLower, "main", tag.end).elementEnd,
+      );
+    } else {
+      cursor = event.next;
+    }
+  }
+  return text;
 }
 
 // ─── Heading stack ───────────────────────────────────────────────────────────
@@ -371,6 +577,17 @@ interface ScanState {
   // carries an `id`/`name`. Body-safe: a fragment slug, never a full URL. Stamped as `anchorId`.
   currentAnchor: string | undefined;
   stopped: boolean;
+  // Open lists, innermost last: the marker of the next list item and the indentation of nested items.
+  readonly lists: { ordered: boolean; count: number }[];
+  // Marker of the list item whose text has not been emitted yet.
+  pendingMarker: string | undefined;
+  // Subtrees left out of the text because a reader does not see them as document content.
+  excludedBoilerplate: number;
+  excludedHidden: number;
+  // Tables rendered so far (names the next table's rows) and whether the next block must be set off
+  // from a table's last row by an empty line, which is what ends a projected row.
+  tableCount: number;
+  blankBeforeNext: boolean;
   // GRD-003: build a cleaned, tag/script/style-free normalizedText projection and re-base
   // unit offsets onto it (mirrors the xlsx parser). The raw bytes — including <script> bodies
   // and embedded secrets — must NEVER become the persisted normalized_text / LLM excerpt.
@@ -407,7 +624,19 @@ function recordScanLimit(state: ScanState): boolean {
   return true;
 }
 
+// A single newline between blocks (a gap not covered by any unit range); an empty line after a table.
+function pushSeparator(state: ScanState): void {
+  if (state.cleanedParts.length > 0) {
+    const separator = state.blankBeforeNext ? "\n\n" : "\n";
+    state.cleanedParts.push(separator);
+    state.cleanedOffset += separator.length;
+  }
+  state.blankBeforeNext = false;
+}
+
 function flushBlock(state: ScanState, end: number): void {
+  // Any block boundary ends a heading that was never closed.
+  finishHeading(state);
   if (state.pendingBlockStart === null) return;
   if (end <= state.pendingBlockStart || !state.pendingBlockHasText) {
     resetBlock(state);
@@ -419,16 +648,15 @@ function flushBlock(state: ScanState, end: number): void {
   }
   // Offsets index the CLEANED projection, not the raw HTML — so citation slices and chunk
   // spans never expose tags, <script>/<style> bodies, or embedded secrets.
-  const cleaned = collapseWhitespace(state.blockText);
-  if (cleaned.length === 0) {
+  const collapsed = collapseWhitespace(state.blockText);
+  if (collapsed.length === 0) {
     resetBlock(state);
     return;
   }
-  if (state.cleanedParts.length > 0) {
-    // Single newline separator between blocks (a gap not covered by any unit range).
-    state.cleanedParts.push("\n");
-    state.cleanedOffset += 1;
-  }
+  // A list item's marker leads the first block with text and is spent with it.
+  const cleaned = `${state.pendingMarker ?? ""}${collapsed}`;
+  state.pendingMarker = undefined;
+  pushSeparator(state);
   const start = state.cleanedOffset;
   state.cleanedParts.push(cleaned);
   state.cleanedOffset += cleaned.length;
@@ -449,10 +677,7 @@ function flushBlock(state: ScanState, end: number): void {
 function pushRenderedBlock(state: ScanState, rendered: string): void {
   if (rendered.length === 0) return;
   if (recordScanLimit(state)) return;
-  if (state.cleanedParts.length > 0) {
-    state.cleanedParts.push("\n");
-    state.cleanedOffset += 1;
-  }
+  pushSeparator(state);
   const start = state.cleanedOffset;
   state.cleanedParts.push(rendered);
   state.cleanedOffset += rendered.length;
@@ -504,7 +729,7 @@ function fragmentTextRaw(fragment: string): string {
     }
     cursor = event.next;
   }
-  return decodeHtmlEntities(out);
+  return visibleText(out);
 }
 
 function htmlFragmentText(fragment: string): string {
@@ -586,41 +811,115 @@ function tableCells(rowHtml: string): readonly TableCell[] {
   }));
 }
 
-// Repeats each cell `colspan` times so a spanning `<th>`/`<td>` occupies one array slot per
-// logical column it covers — otherwise header-to-value zipping (`appendTableRows`) stays purely
-// positional and misaligns every column from a spanning cell onward.
 interface TableExpansionBudget {
   remaining: number;
 }
 
-interface ExpandedTableRow {
+// A cell that spans rows keeps occupying its column(s) in the rows below it.
+interface HeldCell {
+  readonly cell: TableCell;
+  left: number;
+}
+
+interface LaidOutRow {
+  // One slot per logical column: a `colspan` cell fills every column it covers and a `rowspan` cell
+  // of an earlier row fills its column again, so header-to-value pairing stays by column.
   readonly cells: readonly TableCell[];
+  // Every cell that starts in this row is a header cell: the row is part of the table header.
+  readonly headerOnly: boolean;
   readonly truncated: boolean;
 }
 
-function expandRowByColspan(
-  row: readonly TableCell[],
-  budget: TableExpansionBudget,
-): ExpandedTableRow {
-  const expanded: TableCell[] = [];
-  for (const cell of row) {
-    for (let i = 0; i < cell.colspan; i += 1) {
-      if (budget.remaining === 0) return { cells: expanded, truncated: true };
-      expanded.push(cell);
-      budget.remaining -= 1;
-    }
-  }
-  return { cells: expanded, truncated: false };
+interface RowLayout {
+  readonly cells: TableCell[];
+  column: number;
+  truncated: boolean;
 }
 
-function expandedTableRows(state: ScanState, tableHtml: string): readonly (readonly TableCell[])[] {
+// Fills the columns held by `rowspan` cells of earlier rows, starting at the current column.
+function fillHeldColumns(
+  layout: RowLayout,
+  held: Map<number, HeldCell>,
+  budget: TableExpansionBudget,
+): void {
+  for (let entry = held.get(layout.column); entry !== undefined; entry = held.get(layout.column)) {
+    if (budget.remaining === 0) {
+      layout.truncated = true;
+      return;
+    }
+    layout.cells.push(entry.cell);
+    budget.remaining -= 1;
+    entry.left -= 1;
+    if (entry.left <= 0) held.delete(layout.column);
+    layout.column += 1;
+  }
+}
+
+function placeCell(
+  layout: RowLayout,
+  cell: TableCell,
+  held: Map<number, HeldCell>,
+  budget: TableExpansionBudget,
+): void {
+  for (let i = 0; i < cell.colspan; i += 1) {
+    if (budget.remaining === 0) {
+      layout.truncated = true;
+      return;
+    }
+    layout.cells.push(cell);
+    budget.remaining -= 1;
+    if (cell.rowspan > 1) held.set(layout.column, { cell, left: cell.rowspan - 1 });
+    layout.column += 1;
+  }
+}
+
+// Read through a function so control-flow analysis does not narrow the flag the helpers mutate.
+function isTruncated(layout: RowLayout): boolean {
+  return layout.truncated;
+}
+
+function layoutRow(
+  row: readonly TableCell[],
+  held: Map<number, HeldCell>,
+  budget: TableExpansionBudget,
+): LaidOutRow {
+  const layout: RowLayout = { cells: [], column: 0, truncated: false };
+  for (const cell of row) {
+    fillHeldColumns(layout, held, budget);
+    if (isTruncated(layout)) break;
+    placeCell(layout, cell, held, budget);
+    if (isTruncated(layout)) break;
+  }
+  if (!isTruncated(layout)) fillHeldColumns(layout, held, budget);
+  return {
+    cells: layout.cells,
+    headerOnly: row.length > 0 && row.every((cell) => cell.header),
+    truncated: layout.truncated,
+  };
+}
+
+interface TableGrid {
+  readonly rows: readonly LaidOutRow[];
+  // Rows inside `<thead>`: header rows even when their cells are `td`.
+  readonly theadRows: number;
+}
+
+const THEAD_TAGS: ReadonlySet<string> = new Set(["thead"]);
+
+function theadRowCount(tableHtml: string): number {
+  const thead = extractElements(tableHtml, THEAD_TAGS)[0];
+  return thead === undefined ? 0 : extractElements(thead.innerHtml, ROW_TAGS).length;
+}
+
+function tableGrid(state: ScanState, tableHtml: string): TableGrid {
   const budget: TableExpansionBudget = { remaining: MAX_EXPANDED_CELLS_PER_TABLE };
-  const rows: (readonly TableCell[])[] = [];
+  const held = new Map<number, HeldCell>();
+  const rows: LaidOutRow[] = [];
   for (const row of extractElements(tableHtml, ROW_TAGS)) {
     if (recordScanLimit(state)) break;
-    const expanded = expandRowByColspan(tableCells(row.innerHtml), budget);
-    rows.push(expanded.cells);
-    if (!expanded.truncated) continue;
+    const laidOut = layoutRow(tableCells(row.innerHtml), held, budget);
+    rows.push(laidOut);
+    if (!laidOut.truncated) continue;
     state.diagnostics.push(
       diagnostic(
         "UNIT_LIMIT_REACHED",
@@ -631,7 +930,7 @@ function expandedTableRows(state: ScanState, tableHtml: string): readonly (reado
     );
     break;
   }
-  return rows;
+  return { rows, theadRows: theadRowCount(tableHtml) };
 }
 
 function normalizeHeaders(headers: readonly string[], count: number): readonly string[] {
@@ -660,48 +959,134 @@ function appendTableCaption(state: ScanState, tableHtml: string): void {
   pushCleanedBlock(state, `Table caption: ${text}`);
 }
 
-// A header cell's `rowspan` is meant to carry that header down across the spanned data rows below
-// it — this parser does not track per-column carry-forward state across rows, so a spanning header
-// only labels its own row. Surface a body-safe diagnostic instead of silently misaligning the
-// spanned rows' headers.
-function warnIfHeaderRowspanUnsupported(state: ScanState, headerRow: readonly TableCell[]): void {
-  if (!headerRow.some((cell) => cell.header && cell.rowspan > 1)) return;
-  state.diagnostics.push(
-    diagnostic(
-      "HTML_TABLE_SPAN_UNSUPPORTED",
-      "table header cell uses rowspan > 1; header association is not carried into the spanned rows below it",
-      state.input.documentId,
-      "warning",
-    ),
+type TableLayout =
+  | { readonly kind: "columns"; readonly headerRows: number }
+  | { readonly kind: "rows" }
+  | { readonly kind: "none" };
+
+const LETTER = /[A-Za-z_]/u;
+const EMPTY_CELL: TableCell = { header: false, text: "", colspan: 1, rowspan: 1 };
+
+function leadingHeaderRows(grid: TableGrid): number {
+  let count = 0;
+  while (grid.rows[count]?.headerOnly === true) count += 1;
+  return Math.max(count, grid.theadRows);
+}
+
+function hasHeaderCells(rows: readonly LaidOutRow[]): boolean {
+  return rows.some((row) => row.cells.some((cell) => cell.header));
+}
+
+// What the table says about its own orientation, in order of evidence: header rows (a `thead`, or
+// rows made of `th`), a `th` in the first column of every row (row headers), a plain two-column
+// table without any `th` (label and value), and only then the weak guess that a first row with
+// letters names the columns.
+function tableLayout(grid: TableGrid): TableLayout {
+  const { rows } = grid;
+  const lead = leadingHeaderRows(grid);
+  if (lead > 0)
+    return lead < rows.length ? { kind: "columns", headerRows: lead } : { kind: "none" };
+  if (rows.length < 2) return { kind: "none" };
+  if (rows.every((row) => row.cells[0]?.header === true)) return { kind: "rows" };
+  if (!hasHeaderCells(rows) && rows.every((row) => row.cells.length === 2)) return { kind: "rows" };
+  const first = rows[0]?.cells ?? [];
+  return first.some((cell) => cell.header || LETTER.test(cell.text))
+    ? { kind: "columns", headerRows: 1 }
+    : { kind: "none" };
+}
+
+// One label per column from the header rows; a cell spanning several rows or columns counts once per
+// column, and a label that repeats an earlier header row's cell is not repeated.
+function columnHeaders(headerRows: readonly LaidOutRow[], count: number): readonly string[] {
+  const labels = Array.from({ length: count }, (_, column) => {
+    const parts: string[] = [];
+    let previous: TableCell | undefined;
+    for (const row of headerRows) {
+      const cell = row.cells[column];
+      if (cell !== undefined && cell !== previous && cell.text.length > 0) parts.push(cell.text);
+      previous = cell;
+    }
+    return parts.join(" ");
+  });
+  return normalizeHeaders(labels, count);
+}
+
+function isEmptyRow(row: LaidOutRow): boolean {
+  return row.cells.every((cell) => cell.text.length === 0);
+}
+
+function rowCells(row: LaidOutRow, layout: TableLayout, headers: readonly string[]): string {
+  if (layout.kind === "rows") {
+    const [label, ...values] = row.cells.map((cell) => cell.text);
+    return `${label ?? ""}=${values.join(" | ")}`;
+  }
+  return row.cells
+    .map((cell, index) => `${headers[index] ?? `Column ${String(index + 1)}`}=${cell.text}`)
+    .join(" | ");
+}
+
+// A table of plain label/value rows describes ONE thing (a requirement's id, title, priority, ...):
+// it reads as a single record. A long one is a glossary and keeps one row per line.
+const MAX_RECORD_ROWS = 64;
+
+function isRecordTable(grid: TableGrid, layout: TableLayout): boolean {
+  return (
+    layout.kind === "rows" &&
+    grid.rows.length <= MAX_RECORD_ROWS &&
+    grid.rows.every((row) => row.cells.length === 2)
   );
+}
+
+// The name a table's rows carry, in the shape of a spreadsheet row reference (`Sheet!2:`) that the
+// requirement inventory already reads for workbooks; the number is the row's position in the table.
+function tableName(state: ScanState): string {
+  state.tableCount += 1;
+  return state.tableCount === 1 ? "Table" : `Table ${String(state.tableCount)}`;
+}
+
+interface TableLine {
+  readonly number: number;
+  readonly text: string;
+}
+
+function tableLines(grid: TableGrid, layout: TableLayout): readonly TableLine[] {
+  const headerCount = layout.kind === "columns" ? layout.headerRows : 0;
+  const maxCells = grid.rows.reduce((max, row) => Math.max(max, row.cells.length), 0);
+  const headers =
+    layout.kind === "columns"
+      ? columnHeaders(grid.rows.slice(0, headerCount), maxCells)
+      : normalizeHeaders([], maxCells);
+  // A header cell that spans into the rows below the header labels its column; it is not a value.
+  const headerCells = new Set(grid.rows.slice(0, headerCount).flatMap((row) => row.cells));
+  const lines: TableLine[] = [];
+  for (const [index, row] of grid.rows.entries()) {
+    if (index < headerCount) continue;
+    const values: LaidOutRow = {
+      ...row,
+      cells: row.cells.map((cell) => (headerCells.has(cell) ? EMPTY_CELL : cell)),
+    };
+    if (!isEmptyRow(values)) {
+      lines.push({ number: index + 1, text: rowCells(values, layout, headers) });
+    }
+  }
+  return lines;
 }
 
 function appendTableRows(state: ScanState, tableHtml: string): void {
   appendTableCaption(state, tableHtml);
-  const rows = expandedTableRows(state, tableHtml);
-  if (rows.length === 0) return;
-  const first = rows[0] ?? [];
-  const headerIsSchema =
-    rows.length > 1 && first.some((cell) => cell.header || /[A-Za-z_]/u.test(cell.text));
-  if (headerIsSchema) warnIfHeaderRowspanUnsupported(state, first);
-  const maxCells = rows.reduce((max, row) => Math.max(max, row.length), 0);
-  const headers = headerIsSchema
-    ? normalizeHeaders(
-        first.map((cell) => cell.text),
-        maxCells,
-      )
-    : normalizeHeaders([], maxCells);
-  const dataRows = headerIsSchema ? rows.slice(1) : rows;
-  for (const row of dataRows) {
-    if (state.stopped) return;
-    const text = row
-      .map((cell, index) => {
-        const headerLabel = headers[index] ?? `Column ${String(index + 1)}`;
-        return `${headerLabel}=${cell.text}`;
-      })
-      .join(" | ");
-    pushCleanedBlock(state, `Table: ${text}`);
+  const grid = tableGrid(state, tableHtml);
+  if (grid.rows.length === 0) return;
+  const name = tableName(state);
+  const layout = tableLayout(grid);
+  const lines = tableLines(grid, layout);
+  const emitted = isRecordTable(grid, layout)
+    ? [{ number: 1, text: lines.map((line) => line.text).join(" | ") }]
+    : lines;
+  for (const line of emitted) {
+    if (state.stopped) break;
+    pushCleanedBlock(state, `${name}!${String(line.number)}: ${line.text}`);
   }
+  state.blankBeforeNext = true;
 }
 
 // ─── Definition lists ────────────────────────────────────────────────────────
@@ -996,32 +1381,47 @@ function handleHeadingOpen(state: ScanState, tag: Tag, level: number): number {
   return tag.end;
 }
 
-function handleHeadingClose(state: ScanState, tag: Tag): number {
-  // #2906 KEIKO-0775 — collapse internal whitespace once at close time so the heading
-  // label reads as flowing prose (source indentation, embedded newlines/tabs between
-  // inline tags, or multiple runs never survive into headingPath). Matches how
-  // flushBlock/pushCleanedBlock normalize ordinary body text; kept OUT of appendTextRun
-  // per the audit's guidance (accumulate raw, collapse the full label once).
-  const label = collapseWhitespace(state.pendingHeadingLabel ?? "").trim();
+// Closes the heading being read: its collapsed label joins the heading path AND the text as a block
+// of its own, owned by the path it opens (so a Markdown `## Title` line and an `<h2>` read alike and
+// the heading's words are searchable). #2906 KEIKO-0775: whitespace is collapsed once, at close time,
+// so source indentation and inline-tag gaps never survive into the label.
+function finishHeading(state: ScanState): void {
+  if (state.pendingHeadingLabel === null) return;
+  const label = collapseWhitespace(state.pendingHeadingLabel).trim();
   if (label.length > 0 && state.pendingHeadingLevel > 0) {
     pushHeading(state.heading, state.pendingHeadingLevel, label);
+    pushRenderedBlock(state, label);
   }
   state.pendingHeadingLabel = null;
   state.pendingHeadingLevel = 0;
+}
+
+function handleHeadingClose(state: ScanState, tag: Tag): number {
+  finishHeading(state);
   state.pendingBlockStart = tag.end;
   return tag.end;
 }
 
-function appendTextRun(state: ScanState, from: number, to: number): void {
-  if (from >= to) return;
+// Inline text goes to the heading being read or to the current block.
+function appendInlineText(state: ScanState, at: number, text: string, hasText: boolean): void {
   if (state.pendingHeadingLabel !== null) {
-    state.pendingHeadingLabel += decodeHtmlEntities(state.text.slice(from, to));
+    state.pendingHeadingLabel += text;
     return;
   }
-  openBlock(state, from, !isWhitespaceOnly(state.text, from, to));
+  openBlock(state, at, hasText);
   // Accumulate only inter-tag text runs — inline tag literals (<b>, <a …>) are never part of
   // a run, so the cleaned projection is tag-free by construction.
-  state.blockText += decodeHtmlEntities(state.text.slice(from, to));
+  state.blockText += text;
+}
+
+function appendTextRun(state: ScanState, from: number, to: number): void {
+  if (from >= to) return;
+  appendInlineText(
+    state,
+    from,
+    visibleText(state.text.slice(from, to)),
+    !isWhitespaceOnly(state.text, from, to),
+  );
 }
 
 // Elements whose whole subtree is skipped in the body scan and re-rendered structurally: table
@@ -1035,6 +1435,7 @@ function handleStructuralTag(state: ScanState, tag: Tag): number | undefined {
   }
   if (tag.name === "table" || tag.name === "dl" || tag.name === "pre") {
     flushBlock(state, tag.start);
+    state.pendingMarker = undefined;
     // `<table>` and `<dl>` can legitimately nest same-named children (a cell with a sub-table, a
     // `<dd>` with a nested `<dl>`); `<pre>` cannot, so the simpler raw-text-style skip is enough.
     const end =
@@ -1050,8 +1451,28 @@ function handleStructuralTag(state: ScanState, tag: Tag): number | undefined {
   return undefined;
 }
 
-// Tags whose subtree is dropped from the body flow (raw-text/script, boilerplate) or surfaced as a
-// navigation reference (frame). Returns the cursor past the tag, or `undefined` when not handled.
+// A subtree that is not document text: a hidden element or page furniture. Page furniture named
+// only by a class/id token, and any hidden element, is removed only when its end tag exists and it
+// holds at most {@link MAX_REMOVABLE_SHARE} of the document: a wrapper around the real content is
+// content, whatever it is called, and an element that never closes would otherwise take the rest
+// of the page with it. Returns the cursor past the subtree, or `undefined` to keep it.
+function handleExcludedSubtree(state: ScanState, tag: Tag): number | undefined {
+  const verdict = classifySubtree(tag);
+  if (verdict === "none") return undefined;
+  const bounds = findNestableElementEnd(state.text, state.textLower, tag.name, tag.end);
+  const unconditional = verdict === "boilerplate-tag";
+  const closed = bounds.contentEnd < state.text.length;
+  const small = (bounds.elementEnd - tag.start) / state.text.length <= MAX_REMOVABLE_SHARE;
+  if (!unconditional && !(closed && small)) return undefined;
+  flushBlock(state, tag.start);
+  if (verdict === "hidden") state.excludedHidden += 1;
+  else state.excludedBoilerplate += 1;
+  return bounds.elementEnd;
+}
+
+// Tags whose subtree is dropped from the body flow (raw-text/script, boilerplate, hidden) or
+// surfaced as a navigation reference (frame). Returns the cursor past the tag, or `undefined` when
+// not handled.
 function handleDropTag(state: ScanState, tag: Tag): number | undefined {
   if (RAW_TEXT_TAGS.has(tag.name) && tag.kind === "open") {
     // Terminate any in-progress block at the tag boundary so the raw bytes never appear in
@@ -1059,10 +1480,8 @@ function handleDropTag(state: ScanState, tag: Tag): number | undefined {
     flushBlock(state, tag.start);
     return skipRawText(state.text, state.textLower, tag.name, tag.end);
   }
-  if (isBoilerplateTag(tag)) {
-    flushBlock(state, tag.start);
-    return skipElement(state.text, state.textLower, tag.name, tag.end);
-  }
+  const excluded = handleExcludedSubtree(state, tag);
+  if (excluded !== undefined) return excluded;
   if (FRAME_TAGS.has(tag.name) && tag.kind !== "close") {
     appendFrameLink(state, tag);
     return tag.end;
@@ -1077,11 +1496,50 @@ function handleHeading(state: ScanState, tag: Tag): number | undefined {
   return undefined;
 }
 
+function appendImageAlt(state: ScanState, tag: Tag): void {
+  const alt = visibleText(parseTagAttributes(tag.raw).get("alt") ?? "").trim();
+  if (alt.length > 0) appendInlineText(state, tag.start, ` ${alt} `, true);
+}
+
+function enterList(state: ScanState, tag: Tag): void {
+  if (tag.kind === "open") state.lists.push({ ordered: tag.name === "ol", count: 0 });
+  else if (tag.kind === "close") state.lists.pop();
+}
+
+// The marker of a list item: `- ` or its number, indented two spaces per enclosing list, so the
+// structure of a list survives in the plain text.
+function listItemMarker(state: ScanState): string {
+  const list = state.lists.at(-1);
+  if (list !== undefined) list.count += 1;
+  const indent = "  ".repeat(Math.max(0, state.lists.length - 1));
+  return `${indent}${list?.ordered === true ? `${String(list.count)}. ` : "- "}`;
+}
+
+// Block-level elements end the current block, so neighbouring paragraphs, items and lines are
+// separate lines of text. Inline elements are not listed and stay inside the running text.
+function handleFlowTag(state: ScanState, tag: Tag): number | undefined {
+  if (tag.name === "img" && tag.kind !== "close") {
+    appendImageAlt(state, tag);
+    return tag.end;
+  }
+  if (tag.name === "br" && state.pendingHeadingLabel !== null) {
+    state.pendingHeadingLabel += " ";
+    return tag.end;
+  }
+  if (!BLOCK_TAGS.has(tag.name)) return undefined;
+  if (tag.name === "ul" || tag.name === "ol") enterList(state, tag);
+  flushBlock(state, tag.start);
+  if (tag.name === "li")
+    state.pendingMarker = tag.kind === "open" ? listItemMarker(state) : undefined;
+  return tag.end;
+}
+
 function handleTag(state: ScanState, tag: Tag): number {
   return (
     handleDropTag(state, tag) ??
     handleStructuralTag(state, tag) ??
     handleHeading(state, tag) ??
+    handleFlowTag(state, tag) ??
     tag.end
   );
 }
@@ -1109,6 +1567,19 @@ function step(state: ScanState, cursor: number): number {
 // scanning work, and small enough that the deadline is honoured promptly on a block-free document.
 const SCAN_DEADLINE_CHECK_STEPS = 4096;
 
+// Body-free count of what was left out: neither the names nor the text of the subtrees.
+function exclusionDiagnostics(state: ScanState): readonly ParserDiagnostic[] {
+  if (state.excludedBoilerplate === 0 && state.excludedHidden === 0) return [];
+  return [
+    diagnostic(
+      "HTML_CONTENT_EXCLUDED",
+      `excluded ${String(state.excludedBoilerplate)} boilerplate and ${String(state.excludedHidden)} hidden subtree(s) from the text`,
+      state.input.documentId,
+      "info",
+    ),
+  ];
+}
+
 function emitHtml(rawText: string, input: ParserSelectionInput, options: ParserOptions): Emission {
   // Read the title from the FULL document (before <main> narrowing drops the head) so a manual's
   // name is preserved as a searchable block even when it lives in <head>.
@@ -1129,6 +1600,12 @@ function emitHtml(rawText: string, input: ParserSelectionInput, options: ParserO
     pendingHeadingLevel: 0,
     currentAnchor: undefined,
     stopped: false,
+    lists: [],
+    pendingMarker: undefined,
+    excludedBoilerplate: 0,
+    excludedHidden: 0,
+    tableCount: 0,
+    blankBeforeNext: false,
     blockText: "",
     cleanedParts: [],
     cleanedOffset: 0,
@@ -1144,7 +1621,7 @@ function emitHtml(rawText: string, input: ParserSelectionInput, options: ParserO
   flushBlock(state, text.length);
   return {
     units: state.units,
-    diagnostics: state.diagnostics,
+    diagnostics: [...exclusionDiagnostics(state), ...state.diagnostics],
     normalizedText: state.cleanedParts.join(""),
   };
 }
