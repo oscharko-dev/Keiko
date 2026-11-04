@@ -946,6 +946,28 @@ describe("review of real producers (#4235)", () => {
     ]);
   });
 
+  it("reads the runs of a right-to-left line in logical order, the first one at the right", () => {
+    // pdf.js reports the runs in logical order; a right-to-left line starts at its right end.
+    const text = textOf([
+      drawn("אבגד", 149, 700),
+      drawn("Keiko", 118, 700),
+      drawn("בבבב", 92, 700),
+      drawn("Bank", 66, 700),
+      drawn("דהוז", 40, 700),
+    ]);
+    expect(text).toBe("אבגד Keiko בבבב Bank דהוז");
+  });
+
+  it("keeps the lines of a right-to-left page apart, which end at the margin on the right", () => {
+    const hebrew = "אבגד ".repeat(18).trimEnd();
+    const text = textOf([
+      drawn(hebrew, LEFT, 700),
+      drawn(hebrew, LEFT, 688),
+      drawn("Ende.", LEFT, 676),
+    ]);
+    expect(text.split("\n")).toHaveLength(3);
+  });
+
   it("keeps the hyphen of a URL or an identifier that a wrap broke after it", () => {
     const url = fullLineEndingIn("siehe https://example.org/a-");
     expect(bodyText([drawn(url, LEFT, 700), drawn("b/c.html weiter.", LEFT, 688)])).toBe(

@@ -25,6 +25,8 @@ interface LayoutItem {
 
 interface Segment {
   readonly text: string;
+  /** The segment is written from right to left; its text is already in logical order. */
+  readonly rightToLeft: boolean;
   readonly x: number;
   readonly right: number;
   readonly items: readonly LayoutItem[];
@@ -144,6 +146,11 @@ const WORD_CORE = /[\p{L}\p{N}](?:.*[\p{L}\p{N}])?/su;
 const PLAIN_WORD = /^[^\p{L}\p{N}]*\p{L}+(?:-\p{L}+)*[^\p{L}\p{N}/_@:\\]*$/u;
 const NUMBER_FRAGMENT_END = /[\p{N}-]$/u;
 const NUMBER_FRAGMENT_START = /^\p{N}/u;
+// Letters of the scripts written from right to left. pdf.js reports the text of a run in logical
+// order, but the runs of a line sit on the page from right to left.
+const RIGHT_TO_LEFT_LETTER =
+  /[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}]/u;
+const LEFT_TO_RIGHT_LETTER = /[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Script=Han}]/u;
 const ZERO_WIDTH = /[\u200B\u2060\uFEFF]/gu;
 
 // A page can hold more items than a call takes as arguments, so these never spread.
@@ -239,14 +246,76 @@ function needsWordSpace(previous: LayoutItem, item: LayoutItem): boolean {
   return item.x - previous.right > Math.max(previous.height, item.height) * WORD_GAP_RATIO;
 }
 
-function toSegment(items: readonly LayoutItem[], first: LayoutItem): Segment {
-  let text = "";
+function separatorBefore(items: readonly LayoutItem[], index: number): string {
+  const previous = items[index - 1];
+  const item = items[index];
+  return previous !== undefined && item !== undefined && needsWordSpace(previous, item) ? " " : "";
+}
+
+function isRightToLeftItem(item: LayoutItem): boolean {
+  return RIGHT_TO_LEFT_LETTER.test(item.text);
+}
+
+/** A line is written from right to left when most of its letters are. */
+function isRightToLeftLine(items: readonly LayoutItem[]): boolean {
+  let rightToLeft = 0;
+  let leftToRight = 0;
+  for (const item of items) {
+    if (isRightToLeftItem(item)) rightToLeft += item.text.length;
+    else if (LEFT_TO_RIGHT_LETTER.test(item.text)) leftToRight += item.text.length;
+  }
+  return rightToLeft > leftToRight;
+}
+
+/**
+ * The items of a right-to-left line in logical order. Runs of one direction sit next to each other
+ * on the page: a right-to-left run reads from its right end, a left-to-right run (a name, a number)
+ * from its left, and the runs follow each other from the right.
+ */
+function logicalOrder(items: readonly LayoutItem[]): readonly number[] {
+  const runs: number[][] = [];
   items.forEach((item, index) => {
-    const previous = items[index - 1];
-    text += previous !== undefined && needsWordSpace(previous, item) ? ` ${item.text}` : item.text;
+    const last = runs.at(-1);
+    const lastItem = last === undefined ? undefined : items[last[0] ?? 0];
+    if (
+      last !== undefined &&
+      lastItem !== undefined &&
+      isRightToLeftItem(lastItem) === isRightToLeftItem(item)
+    ) {
+      last.push(index);
+    } else {
+      runs.push([index]);
+    }
   });
+  return runs.reverse().flatMap((run) => {
+    const first = items[run[0] ?? 0];
+    return first !== undefined && isRightToLeftItem(first) ? run.reverse() : run;
+  });
+}
+
+/** Neighbours on the page keep the space the producer left; other neighbours get one. */
+function rightToLeftText(items: readonly LayoutItem[]): string {
+  const order = logicalOrder(items);
+  let text = "";
+  order.forEach((index, position) => {
+    const before = order[position - 1];
+    const text_ = items[index]?.text ?? "";
+    if (before === undefined) text = text_;
+    else if (Math.abs(before - index) === 1)
+      text += `${separatorBefore(items, Math.max(before, index))}${text_}`;
+    else text += ` ${text_}`;
+  });
+  return text;
+}
+
+function toSegment(items: readonly LayoutItem[], first: LayoutItem): Segment {
+  const rightToLeft = isRightToLeftLine(items);
+  let text = "";
+  if (rightToLeft) text = rightToLeftText(items);
+  else items.forEach((item, index) => (text += `${separatorBefore(items, index)}${item.text}`));
   return {
     text,
+    rightToLeft,
     x: first.x,
     right: maxOf(items.map((item) => item.right)),
     items,
@@ -354,8 +423,19 @@ export function pageLayoutOf(items: readonly PositionedTextItem[]): PageLayout {
   return { rows, offAxis, plain: "" };
 }
 
+function isRightToLeftRow(row: LayoutRow): boolean {
+  const weight = (segment: Segment): number => segment.text.length;
+  const rightToLeft = row.segments.filter((segment) => segment.rightToLeft);
+  const rest = row.segments.filter((segment) => !segment.rightToLeft);
+  return (
+    rightToLeft.reduce((sum, s) => sum + weight(s), 0) > rest.reduce((sum, s) => sum + weight(s), 0)
+  );
+}
+
+/** The text of a row; the segments of a right-to-left row follow each other from the right. */
 function rowText(row: LayoutRow): string {
-  return row.segments.map((segment) => segment.text).join(" ");
+  const ordered = isRightToLeftRow(row) ? [...row.segments].reverse() : row.segments;
+  return ordered.map((segment) => segment.text).join(" ");
 }
 
 // ─── Repeated page furniture ─────────────────────────────────────────────────
@@ -957,6 +1037,8 @@ interface TextLine {
   readonly first: LayoutItem;
   /** The one font the whole line is set in, or undefined when it mixes fonts. */
   readonly font: string | undefined;
+  /** The line ends at the margin on its left; layout cannot tell whether a wrap forced it. */
+  readonly rightToLeft: boolean;
 }
 
 /** What is true of a whole document and decides how its lines are read. */
@@ -997,6 +1079,7 @@ function textLineOf(row: LayoutRow): TextLine | undefined {
     height: row.height,
     first,
     font: uniformFont(row),
+    rightToLeft: isRightToLeftRow(row),
   };
 }
 
@@ -1074,6 +1157,7 @@ function continuesParagraph(
   line: TextLine,
   context: ParagraphContext,
 ): boolean {
+  if (last.rightToLeft || line.rightToLeft) return false;
   if (isParagraphGap(last, line, context) || !sizesMatch(last, line)) return false;
   if (!wasForcedByWidth(last, line, context)) return false;
   if (endsInAbbreviation(last.text)) return true;
