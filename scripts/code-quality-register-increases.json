@@ -5322,6 +5322,110 @@
       "issue": 3914
     },
     {
+      "path": "packages/keiko-memory-vault/src/serialize.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/serialize.test.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/serialize.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 4,
+      "to": 5,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/serialize.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 3,
+      "to": 9,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/serialize.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 2,
+      "to": 4,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/serialize.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 5,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault-log.test.ts",
+      "rule": "anti-slop-effect/prefer-effect-match",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault-log.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault-log.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault-log.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 1,
+      "to": 4,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault.test.ts",
+      "rule": "anti-slop/no-array-filter-map",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 1,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 183,
+      "to": 204,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-model-gateway/src/__fixtures__/speech-routing-contract.ts",
       "rule": "anti-slop/no-conditional-empty-object-spread",
       "from": 0,
@@ -6946,6 +7050,22 @@
       "issue": 3914
     },
     {
+      "path": "packages/keiko-server/src/process-log-sink.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-server/src/process-log-sink.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-server/src/requirement-changes.test.ts",
       "rule": "anti-slop/require-safety-comment-for-type-assertion",
       "from": 0,
@@ -8491,9 +8611,33 @@
     },
     {
       "path": "tests/activity-log-scenarios/memory-knowledge.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/activity-log-scenarios/memory-knowledge.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/activity-log-scenarios/memory-knowledge.test.ts",
       "rule": "anti-slop/require-safety-comment-for-type-assertion",
       "from": 6,
       "to": 8,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/activity-log-scenarios/memory-knowledge.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 8,
+      "to": 10,
       "reason": "test-witness",
       "issue": 3918
     },
