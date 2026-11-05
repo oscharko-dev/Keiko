@@ -107156,7 +107156,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1823",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1833",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -107726,7 +107726,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2186",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2196",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

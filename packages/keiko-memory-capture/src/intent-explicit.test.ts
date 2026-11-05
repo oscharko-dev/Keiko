@@ -423,7 +423,7 @@ describe("explicit German forget and remember statements (#4211)", () => {
     const targets: string[] = [];
     return {
       targets,
-      resolver: (target) => {
+      resolver: (target): readonly MemoryId[] => {
         targets.push(target);
         return ["m-1" as MemoryId];
       },

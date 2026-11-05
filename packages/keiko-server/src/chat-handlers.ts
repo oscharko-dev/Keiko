@@ -1741,6 +1741,16 @@ async function captureActionFromOutcome(
   }
 }
 
+function previousContent(
+  messages: readonly { readonly role: string; readonly content: string }[],
+  ordinal: number,
+): string | undefined {
+  return messages
+    .slice(0, ordinal)
+    .filter((message) => message.role === "user")
+    .at(-1)?.content;
+}
+
 function captureActionsFromOutcomes(
   outcomes: readonly CaptureOutcome[],
   deps: UiHandlerDeps,
@@ -4110,6 +4120,7 @@ function collectCanonicalTurnLocalMemoryActions(
   }
   const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
   const surface = request.memory.surface ?? "desktop";
+  const scopes = conversationMemoryScopes(context);
   return request.messages.reduce<Promise<ConversationMemoryActionWire[]>>(
     async (previous, message, messageOrdinal) => {
       const actions = await previous;
@@ -4117,16 +4128,14 @@ function collectCanonicalTurnLocalMemoryActions(
       const outcomes = extractCandidatesFromUserText(
         message.content,
         buildCaptureContext(context, request.clientTurnId, messageOrdinal),
-        {
-          ...memoryCapturePolicyForDeps(deps, {
-            resolver: createMemoryTargetResolver(vault),
-            forgetResolver: createMemoryForgetResolver(vault, {
-              scopes: conversationMemoryScopes(context),
-              conversationId: context.conversationId,
-              lastTurnStartedAt: () => undefined,
-            }),
+        memoryCapturePolicyForDeps(deps, {
+          resolver: createMemoryTargetResolver(vault),
+          forgetResolver: createMemoryForgetResolver(vault, {
+            scopes,
+            conversationId: context.conversationId,
+            lastTurnStartedAt: () => undefined,
           }),
-        },
+        }),
       );
       actions.push(
         ...(await captureActionsFromOutcomes(
@@ -4135,14 +4144,7 @@ function collectCanonicalTurnLocalMemoryActions(
           mode,
           surface,
           request.clientTurnId !== undefined,
-          {
-            scopes: conversationMemoryScopes(context),
-            previousStatement: () =>
-              request.messages
-                .slice(0, messageOrdinal)
-                .filter((m) => m.role === "user")
-                .at(-1)?.content,
-          },
+          { scopes, previousStatement: () => previousContent(request.messages, messageOrdinal) },
         )),
       );
       return actions;
