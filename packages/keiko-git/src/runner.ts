@@ -598,12 +598,70 @@ export function createGitProcessRunner(buildEnv: () => NodeJS.ProcessEnv): GitPr
   return createGitProcessRunnerWithFixedArgs(buildEnv, []);
 }
 
+// A filter driver is a program named by repository-local configuration, under a name the repository
+// chooses, and `status` and the diff family run its `clean` command on any modified file carrying
+// the attribute. A folder can hold a repository whose configuration an agent or a download wrote
+// (#4271 audit, reproduced), and a person opening that folder must not run it. The local reads
+// already ignore global configuration, where a filter such as Git LFS is normally installed, so a
+// local driver is treated the same way: its names are read first and each is overridden to nothing.
+const FILTER_APPLYING_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "blame",
+  "status",
+  "diff",
+  "diff-files",
+  "diff-index",
+  "ls-files",
+]);
+const FILTER_DRIVER_KEY = /^filter\.(.+)\.(?:clean|smudge|process|required)$/iu;
+const FILTER_DRIVER_NAME_OVERRIDABLE = /^[^=\n\r\0]+$/u;
+
+// The listing must read the configuration the read itself will use, so it keeps the caller's `-C`.
+function configNamesArgs(args: readonly string[]): readonly string[] {
+  const index = findSubcommandIndex(args) ?? 0;
+  return [...args.slice(0, index), "config", "--name-only", "--list"];
+}
+
+function filterDriverNames(listing: string): readonly string[] {
+  const names = listing
+    .split("\n")
+    .map((key) => FILTER_DRIVER_KEY.exec(key)?.[1])
+    .filter((name): name is string => name !== undefined);
+  return [...new Set(names)];
+}
+
+function filterNeutralizingArgs(names: readonly string[]): readonly string[] {
+  return names.flatMap((name) => [
+    "-c",
+    `filter.${name}.clean=`,
+    "-c",
+    `filter.${name}.smudge=`,
+    "-c",
+    `filter.${name}.process=`,
+    "-c",
+    `filter.${name}.required=false`,
+  ]);
+}
+
 // Local reads use the hardened, config-isolated env; network sync needs credential account state
 // but command-overrides repository-controlled executable config and never prompts — see env.ts.
-export const defaultGitProcessRunner: GitProcessRunner = createGitProcessRunnerWithFixedArgs(
-  gitEnv,
-  LOCAL_READ_CONFIG_ARGS,
-);
+const localGitProcessRunner = createGitProcessRunnerWithFixedArgs(gitEnv, LOCAL_READ_CONFIG_ARGS);
+
+export const defaultGitProcessRunner: GitProcessRunner = async (args, options) => {
+  if (!FILTER_APPLYING_SUBCOMMANDS.has(gitSubcommand(args) ?? ""))
+    return await localGitProcessRunner(args, options);
+  const listing = await localGitProcessRunner(configNamesArgs(args), options);
+  // Outside a repository the listing is empty and the read fails on its own; a listing cut short
+  // cannot prove there is no driver, so that read does not run.
+  if (listing.truncated || listing.timedOut || listing.aborted) return listing;
+  const names = filterDriverNames(listing.stdout);
+  if (names.length === 0) return await localGitProcessRunner(args, options);
+  if (!names.every((name) => FILTER_DRIVER_NAME_OVERRIDABLE.test(name)))
+    return refusedOptionResult("filter", "config-override");
+  return await createGitProcessRunnerWithFixedArgs(gitEnv, [
+    ...LOCAL_READ_CONFIG_ARGS,
+    ...filterNeutralizingArgs(names),
+  ])(args, options);
+};
 
 export const defaultGitNetworkProcessRunner: GitProcessRunner = createGitProcessRunnerWithFixedArgs(
   networkGitEnv,

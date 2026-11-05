@@ -2654,3 +2654,18 @@ the configuration file the shell can read. This boundary does not extend to othe
 same user: a shell child can read the exec environment of any non-platform process, so an operator
 must not export credentials into the environment that starts Keiko.
 
+**The run cannot decide what Keiko's own Git executes (#4271).** Keiko runs Git outside the sandbox
+on the run's workspace, so repository configuration a shell child writes would run or read with
+Keiko's authority: filter drivers, `core.worktree`, `commondir`, `gitdir`, alternates. The native
+profile therefore denies writes to that metadata (`opencodeNativeGitMetadata.ts`). Refs, objects, the
+index and hooks stay writable, because Keiko's Git never runs hooks in a run's repository and the
+ordinary `git add` must keep working; Keiko's delivery tools change configuration from outside the
+sandbox. In a folder without a repository the whole `.git` name at the workspace root is denied, so
+a run cannot make its folder a repository: `git init` there exits with an error, and a person can do
+it before the run. A repository in a subfolder stays the run's own. Two read-lane rules cover what a
+person later opens, where the kernel rule does not reach: the local reads override every
+repository-local filter driver with nothing, reading the driver names through the same `-C`, and a
+folder whose configuration names a work tree that does not contain it counts as no repository
+(`keiko-git`). The mutation lane keeps filter drivers because `git-crypt` must run on commit; it
+relies on the kernel rule for the run's repository, and a person who commits in a subfolder
+repository a run created accepts its configuration as they would in a terminal.

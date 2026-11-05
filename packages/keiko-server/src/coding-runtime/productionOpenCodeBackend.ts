@@ -1451,11 +1451,9 @@ function gatewayFilesystem(
         ? {
             deniedReadRoots: nativeDeniedReadRoots(input.runtimeStateRoot),
             toolchainReadRoots: nativeSupportReadRoots(input, run),
-            ...nativeGitMetadataReadRoots(input, run),
+            ...nativeGitMetadataRoots(input, run, privateStateRoot),
             ...externalReadRootsField(input, run, macos),
             ...linkedFilesField(input, run, macos),
-            // The policy plugin and the private configuration are read-only to the shell.
-            protectedWriteRoots: [openCodeConfigDirectory(privateStateRoot)],
             // The plan agent's private notes take no link that could name a workspace file.
             linkFreeWriteRoots: [openCodePlanDirectory(privateStateRoot)],
           }
@@ -1465,10 +1463,14 @@ function gatewayFilesystem(
 }
 
 /** A linked worktree's proven common Git directory, recorded body-free (#3897 review). */
-function nativeGitMetadataReadRoots(
+function nativeGitMetadataRoots(
   input: LaunchInput,
   run: ProductionRuntimeBackendInput,
-): { readonly gitMetadataReadRoots?: readonly string[] } {
+  privateStateRoot: string,
+): {
+  readonly gitMetadataReadRoots?: readonly string[];
+  readonly protectedWriteRoots: readonly string[];
+} {
   const resolution = resolveNativeGitMetadata(
     run.context.workspaceRoot,
     run.resolveWorkspaceRootAccess(),
@@ -1478,7 +1480,15 @@ function nativeGitMetadataReadRoots(
     run.minted.authorityRef.runId,
     resolution,
   );
-  return resolution.readRoots.length === 0 ? {} : { gitMetadataReadRoots: resolution.readRoots };
+  return {
+    ...(resolution.readRoots.length === 0 ? {} : { gitMetadataReadRoots: resolution.readRoots }),
+    // The policy plugin and the private configuration are read-only to the shell, and so is what
+    // decides what Keiko's own Git runs in this workspace.
+    protectedWriteRoots: [
+      openCodeConfigDirectory(privateStateRoot),
+      ...resolution.protectedWriteRoots,
+    ],
+  };
 }
 
 function runtimeGatewayConfinement(

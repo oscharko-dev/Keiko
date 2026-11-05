@@ -12,6 +12,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -1000,5 +1001,89 @@ describe("gitSubcommand", () => {
     // literal, but this function reads whatever sits at the subcommand position, so anything that
     // is not a plausible subcommand name must come back as `undefined` rather than be copied out.
     expect(gitSubcommand([...GIT_BASE_ARGS, token])).toBeUndefined();
+  });
+});
+
+describe("repository-local filter drivers (#4271)", () => {
+  function filteredRepository(): { readonly repo: string; readonly marker: string } {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-filter-")));
+    const marker = join(repo, "filter-ran");
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    writeFileSync(join(repo, ".gitattributes"), "*.txt filter=hostile\n");
+    writeFileSync(join(repo, "a.txt"), "before\n");
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync(
+      "git",
+      ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "seed"],
+      { cwd: repo },
+    );
+    // Same size, later mtime: only then does Git have to hash the file to know it changed, and
+    // hashing is what runs the driver.
+    writeFileSync(join(repo, "a.txt"), "behind\n");
+    utimesSync(join(repo, "a.txt"), new Date(), new Date(Date.now() + 60_000));
+    execFileSync("git", ["config", "filter.hostile.clean", `touch ${marker}; cat`], { cwd: repo });
+    return { repo, marker };
+  }
+
+  it.each([
+    ["status", ["status", "--porcelain"]],
+    ["diff", ["diff", "--stat"]],
+    ["ls-files", ["ls-files", "--modified"]],
+    ["blame", ["blame", "--", "a.txt"]],
+  ] as const)("does not run a driver for %s", async (_name, args) => {
+    const { repo, marker } = filteredRepository();
+    try {
+      const result = await defaultGitProcessRunner([...GIT_BASE_ARGS, ...args], {
+        cwd: repo,
+        timeoutMs: 10_000,
+        maxBytes: 65_536,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+      // Positive control: plain Git in the same state does run it, so the assertion above can fail.
+      execFileSync("git", ["status", "--porcelain"], { cwd: repo });
+      expect(existsSync(marker)).toBe(true);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the driver names of the repository the read is about, not of its cwd", async () => {
+    const { repo, marker } = filteredRepository();
+    try {
+      const result = await defaultGitProcessRunner(
+        [...GIT_BASE_ARGS, "-C", repo, "status", "--porcelain"],
+        { cwd: root, timeoutMs: 10_000, maxBytes: 65_536 },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a read when a driver's name cannot be overridden", async () => {
+    const { repo, marker } = filteredRepository();
+    try {
+      execFileSync("git", ["config", "filter.a=b.clean", `touch ${marker}`], { cwd: repo });
+      const result = await defaultGitProcessRunner([...GIT_BASE_ARGS, "status", "--porcelain"], {
+        cwd: repo,
+        timeoutMs: 10_000,
+        maxBytes: 65_536,
+      });
+      expect(result.refusal).toBe("config-override");
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a repository without a driver to the ordinary read", async () => {
+    const result = await defaultGitProcessRunner([...GIT_BASE_ARGS, "status", "--porcelain"], {
+      cwd: root,
+      timeoutMs: 10_000,
+      maxBytes: 65_536,
+    });
+    expect(result.exitCode).toBe(0);
   });
 });

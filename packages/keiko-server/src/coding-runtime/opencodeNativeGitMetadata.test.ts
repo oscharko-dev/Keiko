@@ -72,6 +72,7 @@ describe("native Git metadata of the task workspace (#3897 review)", () => {
       layout: "linked-worktree",
       binding: "managed-task",
       readRoots: [realpathSync(join(repository, ".git"))],
+      protectedWriteRoots: [join(worktree, ".git")],
     });
   });
 
@@ -81,6 +82,7 @@ describe("native Git metadata of the task workspace (#3897 review)", () => {
       layout: "linked-worktree",
       binding: "ordinary",
       readRoots: [realpathSync(join(repository, ".git"))],
+      protectedWriteRoots: [join(worktree, ".git")],
     });
   });
 
@@ -92,11 +94,13 @@ describe("native Git metadata of the task workspace (#3897 review)", () => {
       layout: "repository",
       binding: "unresolved",
       readRoots: [],
+      protectedWriteRoots: expect.arrayContaining([join(repository, ".git", "config")]),
     });
     expect(resolveNativeGitMetadata(folder, access("ordinary", folder))).toEqual({
       layout: "none",
       binding: "ordinary",
       readRoots: [],
+      protectedWriteRoots: [join(folder, ".git")],
     });
   });
 
@@ -111,6 +115,7 @@ describe("native Git metadata of the task workspace (#3897 review)", () => {
       layout: "unproven",
       binding: "ordinary",
       readRoots: [],
+      protectedWriteRoots: [join(forged, ".git")],
     });
   });
 
@@ -129,6 +134,7 @@ describe("native Git metadata of the task workspace (#3897 review)", () => {
       layout: "unproven",
       binding: "ordinary",
       readRoots: [],
+      protectedWriteRoots: [join(misdirected, ".git")],
     });
   });
 
@@ -139,6 +145,7 @@ describe("native Git metadata of the task workspace (#3897 review)", () => {
       layout: "unproven",
       binding: "managed-task",
       readRoots: [],
+      protectedWriteRoots: [join(worktree, ".git")],
     });
   });
 
@@ -186,4 +193,41 @@ describe("native Git metadata of the task workspace (#3897 review)", () => {
       expect(JSON.stringify(line)).not.toContain("PRIVATE_REPOSITORY");
     },
   );
+});
+
+describe("resolveNativeGitMetadata protected write roots (#4271)", () => {
+  it("protects what decides which programs Git runs in a repository, and leaves the rest", () => {
+    const repository = join(root, "plain-repository");
+    mkdirSync(repository);
+    git(repository, "init", "-q");
+    const { protectedWriteRoots } = resolveNativeGitMetadata(repository, undefined);
+    expect(protectedWriteRoots).toContain(join(repository, ".git", "config"));
+    expect(protectedWriteRoots).toContain(join(repository, ".git", "commondir"));
+    expect(protectedWriteRoots).not.toContain(join(repository, ".git"));
+    expect(protectedWriteRoots).not.toContain(join(repository, ".git", "index"));
+  });
+
+  it("keeps a .git from appearing at the root of a folder that has none", () => {
+    const folder = join(root, "plain-folder");
+    mkdirSync(folder);
+    expect(resolveNativeGitMetadata(folder, undefined).protectedWriteRoots).toEqual([
+      join(folder, ".git"),
+    ]);
+  });
+
+  it("protects the pointer of a linked worktree", () => {
+    const { worktree } = repositoryWithWorktree("pointer");
+    expect(resolveNativeGitMetadata(worktree, undefined).protectedWriteRoots).toEqual([
+      join(worktree, ".git"),
+    ]);
+  });
+
+  it("protects a .git pointer it cannot prove", () => {
+    const folder = join(root, "forged");
+    mkdirSync(folder);
+    writeFileSync(join(folder, ".git"), "gitdir: /elsewhere\n");
+    const resolution = resolveNativeGitMetadata(folder, undefined);
+    expect(resolution.layout).toBe("unproven");
+    expect(resolution.protectedWriteRoots).toEqual([join(folder, ".git")]);
+  });
 });

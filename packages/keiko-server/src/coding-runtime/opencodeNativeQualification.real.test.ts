@@ -38,6 +38,7 @@ import {
   openCodePlanDirectory,
   openCodeRepositoryInstructionsPath,
 } from "./opencodeLaunchProfile.js";
+import { resolveNativeGitMetadata } from "./opencodeNativeGitMetadata.js";
 import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
 import { resolveNativeExternalReadRoots } from "./opencodeNativeExternalRoots.js";
 import { nativeLinkedFilesField } from "./opencodeNativeLinkedFiles.js";
@@ -515,7 +516,10 @@ function launch(
       workspaceAccess: "read-write",
       privateStateRoot: fixture.state,
       runtimeReadRoot: runtimeRoot,
-      protectedWriteRoots: [openCodeConfigDirectory(fixture.state)],
+      protectedWriteRoots: [
+        openCodeConfigDirectory(fixture.state),
+        ...resolveNativeGitMetadata(fixture.workspace, undefined).protectedWriteRoots,
+      ],
       // As production opens them: the admitted local MCP servers' install prefixes (#3903) and the
       // launcher's toolchain `PATH` (#3901 AC1).
       ...toolchainReadRoots(options, fixture),
@@ -1562,6 +1566,35 @@ describe("pinned native OpenCode plan tool (T19)", () => {
 
   // The producer runs a model's `bash` call as its `shell` tool when no tool has that name, so the
   // alias must reach the same mode decision as an ordinary `shell` call.
+  it.skipIf(skip)(
+    "keeps what Keiko's own Git runs out of a shell's reach, and ordinary repository work in it",
+    async () => {
+      await withRun({ mode: "autonomous-delivery" }, async (run) => {
+        const config = join(run.fixture.workspace, ".git", "config");
+        const before = readFileSync(config, "utf8");
+        const tampering = [
+          `printf '[filter "x"]\\n\\tclean = touch OWNED\\n' >> .git/config`,
+          "/usr/bin/env git config --file .git/config core.worktree /",
+          "mv .git/config .git/config.moved",
+          "mv .git .git.moved",
+          "printf /elsewhere > .git/commondir",
+          "mkdir -p .git/modules/x && echo x > .git/modules/x/config",
+        ];
+        for (const command of tampering) {
+          const result = await scriptedTurn(run, shell(`${command}; echo "exit=$?"`));
+          expect(result, command).not.toContain("exit=0");
+        }
+        expect(readFileSync(config, "utf8")).toBe(before);
+        expect(existsSync(join(run.fixture.workspace, ".git.moved"))).toBe(false);
+        const work = "echo tracked > tracked.txt && /usr/bin/env git add tracked.txt; echo exit=$?";
+        expect(await scriptedTurn(run, shell(work))).toContain("exit=0");
+        const nested = "/usr/bin/env git init -q nested; echo exit=$?";
+        expect(await scriptedTurn(run, shell(nested))).toContain("exit=0");
+      });
+    },
+    120_000,
+  );
+
   it.skipIf(skip)(
     "leaves no launch secret readable in the runtime's exec environment",
     async () => {
