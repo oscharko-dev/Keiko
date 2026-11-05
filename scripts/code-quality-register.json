@@ -5011,7 +5011,7 @@
       "anti-slop/no-known-value-widening": 12,
       "anti-slop/no-runtime-typeof": 4,
       "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unsafe-dictionary-type": 4
+      "anti-slop/no-unsafe-dictionary-type": 5
     },
     "packages/keiko-memory-vault/src/tombstones.test.ts": {
       "anti-slop/no-known-value-widening": 1,

@@ -28,7 +28,6 @@ import {
   nullMemoryVaultLogSink,
   startMemoryVaultLogTimer,
   type MemoryVaultLogTransport,
-  type MemoryVaultLogEvent,
   type MemoryVaultLogSink,
 } from "./vault-log.js";
 import {

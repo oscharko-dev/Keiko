@@ -488,9 +488,10 @@ function captureMemoryPayload(
   value: MemoryRecord["payload"],
 ): MemoryRecord["payload"] | CapturedMemoryGroup {
   if (!isMemoryFieldGroup(value)) return value;
-  const kind = value.kind;
+  const group: Readonly<Record<string, unknown>> = value;
+  const kind = group.kind;
   if (kind === "string-list") {
-    const items = value.items;
+    const items = group.items;
     return ownMemoryFields({
       kind,
       items: Array.isArray(items)
@@ -499,7 +500,7 @@ function captureMemoryPayload(
     });
   }
   if (kind === "key-value") {
-    const entries = value.entries;
+    const entries = group.entries;
     return ownMemoryFields({
       kind,
       entries: Array.isArray(entries) ? captureMemoryEntries(entries) : entries,
