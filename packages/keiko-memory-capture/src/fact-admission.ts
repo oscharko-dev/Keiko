@@ -335,13 +335,20 @@ export function namesOtherPerson(text: string): boolean {
   return BARE_RELATION_RE.test(text.replace(OWN_ROLE_RE, " "));
 }
 
+// A question or a request asks for something; it states no fact.
+function speechActDropReason(evidence: string, sentence: string): FactDropReason | null {
+  if (sentence.trimEnd().endsWith("?") || evidence.includes("?")) return "question";
+  if (POLITE_REQUEST_RE.test(evidence) || IMPERATIVE_TO_ME_RE.test(evidence)) return "request";
+  return null;
+}
+
 function contextDropReason(
   evidence: string,
   sentence: string,
   prefix: string,
 ): FactDropReason | null {
-  if (sentence.trimEnd().endsWith("?") || evidence.includes("?")) return "question";
-  if (POLITE_REQUEST_RE.test(evidence) || IMPERATIVE_TO_ME_RE.test(evidence)) return "request";
+  const speechAct = speechActDropReason(evidence, sentence);
+  if (speechAct !== null) return speechAct;
   if (isHypothetical(evidence, prefix)) return "hypothetical";
   if (IRONY_RE.test(sentence) || IRONIC_OPENING_RE.test(sentence)) return "ironic";
   if (UNCERTAIN_RE.test(sentence)) return "uncertain";

@@ -128,6 +128,13 @@ function equalWordsComparison(
   return COMPARATOR_RE.test(a) && !keepsOrder(wordsA, wordsB) ? "reversed" : "same";
 }
 
+// A shared "bevorzugt" does not make "Tabellen" and "Tee" two values of one fact.
+function sharesSlot(wordsA: readonly string[], wordsB: readonly string[]): boolean {
+  return wordsA.some(
+    (word) => hasWord(wordsB, word) && (!isPredicateWord(word) || isSingleValuePredicate(word)),
+  );
+}
+
 export function compareFacts(a: string, b: string): FactComparison {
   const wordsA = factWords(a);
   const wordsB = factWords(b);
@@ -140,11 +147,9 @@ export function compareFacts(a: string, b: string): FactComparison {
   const shared = wordsA.length - onlyA.length;
   if (shared === 0 || onlyA.length !== onlyB.length) return "different";
   if ([...onlyA, ...onlyB].every(isNumberWord)) return "number-changed";
-  // A shared "bevorzugt" does not make "Tabellen" and "Tee" two values of one fact.
-  const sameSlot = wordsA.some(
-    (word) => hasWord(wordsB, word) && (!isPredicateWord(word) || isSingleValuePredicate(word)),
-  );
-  return sameSlot && onlyA.length <= MAX_SLOT_WORDS ? "slot-changed" : "different";
+  return sharesSlot(wordsA, wordsB) && onlyA.length <= MAX_SLOT_WORDS
+    ? "slot-changed"
+    : "different";
 }
 
 // Whether two bodies state one fact. A changed value or a reversed preference is never the same
