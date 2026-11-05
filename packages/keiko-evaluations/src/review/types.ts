@@ -178,16 +178,23 @@ export interface ReviewReplayPullRequestResult {
   readonly cost: ReviewRunCost;
 }
 
-/** The record of one replay run: which split produced it, for what purpose, and its results. */
-export interface ReviewReplayRun {
-  readonly schemaVersion: typeof REVIEW_EVAL_SCHEMA_VERSION;
-  readonly datasetDigest: string;
-  readonly holdoutFromPullRequest: number;
+/**
+ * What a replay measured and for which model: the split, the purpose, how its pull requests were
+ * selected and the holdout boundary. A run and the summary scored from it share this scope.
+ */
+export interface ReviewReplayScope {
   readonly split: ReviewEvaluationSplit;
   readonly purpose: ReviewReplayPurpose;
   readonly selection: ReviewReplaySelection;
-  readonly tuningInputs: readonly number[];
+  readonly holdoutFromPullRequest: number;
   readonly modelId: string;
+}
+
+/** The record of one replay run: its scope, the dataset it read and its results. */
+export interface ReviewReplayRun extends ReviewReplayScope {
+  readonly schemaVersion: typeof REVIEW_EVAL_SCHEMA_VERSION;
+  readonly datasetDigest: string;
+  readonly tuningInputs: readonly number[];
   readonly pullRequests: readonly ReviewReplayPullRequestResult[];
 }
 
@@ -217,12 +224,7 @@ export interface ReviewCostSummary {
   readonly meanPerPullRequest: number | null;
 }
 
-export interface ReviewPrecisionSummary {
-  readonly split: ReviewEvaluationSplit;
-  readonly purpose: ReviewReplayPurpose;
-  readonly selection: ReviewReplaySelection;
-  readonly holdoutFromPullRequest: number;
-  readonly modelId: string;
+export interface ReviewPrecisionSummary extends ReviewReplayScope {
   readonly pullRequests: number;
   readonly overall: ReviewOutcomeCounts;
   readonly byCategory: Readonly<Record<ReviewFindingCategory, ReviewOutcomeCounts>>;
