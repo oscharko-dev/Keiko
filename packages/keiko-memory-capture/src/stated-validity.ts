@@ -38,8 +38,16 @@ const MONTHS: Readonly<Record<string, number>> = {
   dec: 11,
 };
 
-const END_OF_MONTH_RE =
-  /(?:^|[^\p{L}])(?:bis(?:\s+(?:ende|zum\s+ende))?|until(?:\s+the\s+end\s+of)?|till|through)\s+(\p{L}+)(?:\s+(\d{4}))?(?![\p{L}])/iu;
+const UNTIL_PHRASES = [
+  String.raw`bis(?:\s+(?:ende|zum\s+ende))?`,
+  String.raw`until(?:\s+the\s+end\s+of)?`,
+  "till",
+  "through",
+];
+const END_OF_MONTH_RE = new RegExp(
+  String.raw`(?:^|[^\p{L}])(?:${UNTIL_PHRASES.join("|")})\s+(\p{L}+)(?:\s+(\d{4}))?(?!\p{L})`,
+  "iu",
+);
 const GERMAN_DATE_RE = /(?:^|[^\p{L}])bis(?:\s+zum)?\s+(\d{1,2})\.(\d{1,2})\.(\d{4})?(?!\d)/iu;
 const ISO_DATE_RE = /(?:^|[^\p{L}])(?:bis|until|till|through)\s+(\d{4})-(\d{2})-(\d{2})(?!\d)/iu;
 const REASON_RE = /(?:^|[^\p{L}])(?:weil|denn|da|because|since)\s+([^.!?…\n]{3,300})/iu;

@@ -79,7 +79,7 @@ const PREFERENCE_RE = anyWordPattern([
   "prefers",
   "rather",
 ]);
-const QUALIFIER_RE = /(?:^|[^\p{L}])(?:für|fuer|for)\s+(.+)$/iu;
+const QUALIFIER_RE = /(?:^|[^\p{L}])(?:für|fuer|for)\s+(\S.*)$/iu;
 const STATED_CHANGE_RE = anyWordPattern([
   "ab jetzt",
   "ab sofort",
@@ -144,14 +144,39 @@ const SINGLE_VALUE_SLOT_RES: readonly RegExp[] = [
   /(?:^\s*|(?:is|am|i['’]m|be)\s+)(?:named|called)\s+/u,
 ];
 // The value ends where the next phrase begins: "Acme" in "bei Acme mit Excel".
-const VALUE_END_RE =
-  /\s(?:mit|seit|als|im|in|am|an|auf|fur|fuer|wegen|weil|und|oder|with|as|since|from|on|at|for|because|and|or)\s|[,;:.!?]/u;
+const VALUE_END_WORDS = [
+  "mit",
+  "seit",
+  "als",
+  "im",
+  "in",
+  "am",
+  "an",
+  "auf",
+  "fur",
+  "fuer",
+  "wegen",
+  "weil",
+  "und",
+  "oder",
+  "with",
+  "as",
+  "since",
+  "from",
+  "on",
+  "at",
+  "for",
+  "because",
+  "and",
+  "or",
+];
+const VALUE_END_RE = new RegExp(String.raw`\s(?:${VALUE_END_WORDS.join("|")})\s|[,;:.!?]`, "u");
 // One preference at a time for one purpose: "Bevorzugt Tabellen für Zahlen". Using or liking
 // something does not end using or liking another thing.
 const CHOSEN_PREFERENCE_RE = anyWordPattern([
   String.raw`bevorzug\p{L}*`,
-  String.raw`prefers?`,
-  String.raw`preferred`,
+  "prefers?",
+  "preferred",
   "lieber",
   "rather",
 ]);

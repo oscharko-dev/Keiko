@@ -29,7 +29,7 @@ export const FACT_DROP_REASONS = [
 
 export type FactDropReason = (typeof FACT_DROP_REASONS)[number];
 
-export const FACT_SUBJECTS = ["self", "other", "unclear"] as const;
+export const FACT_SUBJECTS = ["self", "team", "other", "unclear"] as const;
 
 export type FactSubject = (typeof FACT_SUBJECTS)[number];
 
@@ -39,10 +39,18 @@ export interface ProposedFact {
   readonly about: string;
 }
 
+// What the person said just before this message, in their own words: the only place a pronoun in
+// this message may point to ("Ich habe eine Regel für meine Berichte." then "Sie beginnen …").
+export interface AdmissionContext {
+  readonly previousUserText?: string | undefined;
+}
+
 export type FactAdmission =
   | {
       readonly admitted: true;
       readonly sentence: string;
+      // "team" is the person's team or project as a whole; its fact belongs to the project.
+      readonly subject: "self" | "team";
       // No first-person word: "Ab jetzt lieber Listen". Such a fact only stands as a change of a
       // fact the person already stated, which the relation check decides.
       readonly subjectless: boolean;
@@ -66,7 +74,7 @@ const CLAUSE_FOLLOWER_RE =
 
 const FIRST_PERSON_RE = anyWordPattern([
   "ich",
-  String.raw`mein(?:e|em|en|er|es)?`,
+  "mein(?:e|em|en|er|es)?",
   "mir",
   "mich",
   "i",
@@ -74,14 +82,7 @@ const FIRST_PERSON_RE = anyWordPattern([
   "me",
   "mine",
 ]);
-const WE_RE = anyWordPattern([
-  "wir",
-  String.raw`unser(?:e|em|en|er|es)?`,
-  "uns",
-  "we",
-  "our",
-  "ours",
-]);
+const WE_RE = anyWordPattern(["wir", "unser(?:e|em|en|er|es)?", "uns", "we", "our", "ours"]);
 const CHANGE_WITHOUT_SUBJECT_RE = anyWordPattern([
   "ab jetzt",
   "ab sofort",
@@ -112,45 +113,46 @@ const FAMILY_WORDS = [
 // A role names a person only once something points at one: "der Kunde", "this colleague". "Ich
 // arbeite mit Kunden" and "customer tickets" name a kind of work, not someone.
 const ENGLISH_ROLE_WORDS = [
-  String.raw`doctors?`,
-  String.raw`lawyers?`,
-  String.raw`therapists?`,
-  String.raw`colleagues?`,
-  String.raw`coworkers?`,
+  "doctors?",
+  "lawyers?",
+  "therapists?",
+  "colleagues?",
+  "coworkers?",
   "boss",
-  String.raw`customers?`,
-  String.raw`friends?`,
-  String.raw`neighbou?rs?`,
-  String.raw`employees?`,
+  "customers?",
+  "friends?",
+  "neighbou?rs?",
+  "employees?",
 ];
 const ROLE_WORDS = [
-  String.raw`kolleg(?:e|en|in|innen)`,
-  String.raw`chef(?:in)?`,
-  String.raw`vorgesetzte[rn]?`,
-  String.raw`kund(?:e|en|in|innen)`,
-  String.raw`mandant(?:en|in)?`,
-  String.raw`freund(?:in)?`,
-  String.raw`nachbar(?:in|n)?`,
-  String.raw`mitarbeiter(?:in)?`,
+  "kolleg(?:e|en|in|innen)",
+  "chef(?:in)?",
+  "vorgesetzte[rn]?",
+  "kund(?:e|en|in|innen)",
+  "mandant(?:en|in)?",
+  "freund(?:in)?",
+  "nachbar(?:in|n)?",
+  "mitarbeiter(?:in)?",
   "arzt",
-  String.raw`ärztin`,
-  String.raw`aerztin`,
+  "ärztin",
+  "aerztin",
   "anwalt",
-  String.raw`anwältin`,
-  String.raw`anwaeltin`,
-  String.raw`therapeut(?:in)?`,
+  "anwältin",
+  "anwaeltin",
+  "therapeut(?:in)?",
   ...ENGLISH_ROLE_WORDS,
 ];
 const RELATION_WORDS = [...FAMILY_WORDS, ...ROLE_WORDS];
-const DETERMINER = String.raw`(?:der|die|den|dem|des|ein|eine|einen|einem|einer|eines|dies(?:e|er|em|en|es)?|jen(?:e|er|em|en|es)|the|this|that|a|an)`;
+const DETERMINER =
+  "(?:der|die|den|dem|des|ein|eine|einen|einem|einer|eines|dies(?:e|er|em|en|es)?|jen(?:e|er|em|en|es)|the|this|that|a|an)";
 // These also name things ("desktop client", "Teamleiter"), so they only count behind a possessive.
 const POSSESSIVE_ONLY_RELATION_WORDS = [
-  String.raw`partner(?:in)?`,
+  "partner(?:in)?",
   "mann",
   "frau",
   "team",
   "manager",
-  String.raw`clients?`,
+  "clients?",
 ];
 const FAMILY_RE = anyWordPattern(FAMILY_WORDS);
 // A person named through their relation to someone else: "Annas Chef", "Sam's boss".
@@ -194,7 +196,7 @@ const HYPOTHETICAL_RE = anyWordPattern([
   "imagine",
   "hypothetically",
 ]);
-const LEADING_CONDITION_RE = /^\s*(?:wenn|falls|angenommen|if|suppose|imagine)(?![\p{L}])/iu;
+const LEADING_CONDITION_RE = /^\s*(?:wenn|falls|angenommen|if|suppose|imagine)(?!\p{L})/iu;
 const SUBJUNCTIVE_RE = anyWordPattern([
   "würden?",
   "wuerden?",
@@ -243,9 +245,9 @@ const UNCERTAIN_RE = anyWordPattern([
   // object states a fact: "Ich schätze Klarheit", "Ich denke in Tabellen", "I believe in testing".
   // A hedge unless a preposition makes it a fact about the person: "Ich denke in Tabellen", "Ich
   // glaube an Gott", "I believe in testing". "Ich schätze Klarheit" values one plain object.
-  String.raw`(?:glaube|denke|vermute)(?!\s+(?:in|an|auf|über|ueber|daran|dran)(?![\p{L}]))`,
+  String.raw`(?:glaube|denke|vermute)(?!\s+(?:in|an|auf|über|ueber|daran|dran)(?!\p{L}))`,
   String.raw`(?:schätze|schaetze)(?!\s+[\p{L}-]+(?:\s+[\p{L}-]+)?\s*[.!]?\s*$)`,
-  String.raw`i\s+(?:think|believe|guess|suppose)(?!\s+(?:in|of|about)(?![\p{L}]))`,
+  String.raw`i\s+(?:think|believe|guess|suppose)(?!\s+(?:in|of|about)(?!\p{L}))`,
   String.raw`(?:think|guess|suppose)\s*$`,
 ]);
 const PAST_RE = anyWordPattern([
@@ -271,7 +273,31 @@ const PERFECT_AUXILIARY_RE = anyWordPattern(["habe", "hab"]);
 // "Ich habe Excel genutzt" or "verwendet" is over. A participle is lower case, so a noun ("Gerät",
 // "Gewohnheit") is none. A change made holds now: "Ich habe zu Listen gewechselt".
 const PAST_PARTICIPLE_RE =
-  /(?:^|[^\p{L}])(?!(?:gewechselt|migriert|installiert|aktiviert|ersetzt|gewählt|gewaehlt|getauscht|konfiguriert|eingerichtet|umgestellt|spezialisiert|erkannt|entdeckt|gelernt)(?![\p{L}]))(?:(?:ge|be|ver|er|ent|zer)\p{Ll}{2,30}t|\p{Ll}{2,30}iert)(?![\p{L}\p{N}])/u;
+  /(?<!\p{L})(?:(?:ge|be|ver|er|ent|zer)\p{Ll}{2,30}t|\p{Ll}{2,30}iert)(?![\p{L}\p{N}])/gu;
+const PRESENT_STATE_PARTICIPLES: ReadonlySet<string> = new Set([
+  "gewechselt",
+  "migriert",
+  "installiert",
+  "aktiviert",
+  "ersetzt",
+  "gewählt",
+  "gewaehlt",
+  "getauscht",
+  "konfiguriert",
+  "eingerichtet",
+  "umgestellt",
+  "spezialisiert",
+  "erkannt",
+  "entdeckt",
+  "gelernt",
+]);
+
+function hasPastParticiple(claim: string): boolean {
+  for (const match of claim.matchAll(PAST_PARTICIPLE_RE)) {
+    if (!PRESENT_STATE_PARTICIPLES.has(match[0])) return true;
+  }
+  return false;
+}
 // The simple past next to the person: "Ich nutzte Excel", "Damals verwendete ich", "I used Excel".
 // Closed lists: an open "-ed" or "-te" ending also matches the present ("I embed", "ich arbeite").
 // A decision or a switch made in the past holds now and is not on them.
@@ -357,29 +383,40 @@ const PRETERITE_RE = anyWordPattern([
 ]);
 // "Anna und ich nutzen Jira" speaks for two: the pair opens its clause, or a plural verb follows.
 // "Ich mag Tabellen und ich nutze Excel" joins two of the person's own clauses.
-const ME_AND_OTHER_RE =
-  /(?:(?:^|[,;:])\s*(?:\p{L}+\s+(?:und|and)\s+(?:ich|i)|(?:ich|i)\s+(?:und|and)\s+\p{L}+)|(?:^|[^\p{L}])\p{L}+\s+und\s+ich\s+\p{L}+en|(?:^|[^\p{L}])\p{L}+en\s+\p{L}+\s+und\s+ich)(?![\p{L}\p{N}])/iu;
+const ME_AND_OTHER_RES: readonly RegExp[] = [
+  /(?:^|[,;:])\s*\p{L}+\s+(?:und|and)\s+(?:ich|i)(?![\p{L}\p{N}])/iu,
+  /(?:^|[,;:])\s*(?:ich|i)\s+(?:und|and)\s+\p{L}+(?![\p{L}\p{N}])/iu,
+  /(?:^|[^\p{L}])\p{L}+\s+und\s+ich\s+\p{L}+en(?![\p{L}\p{N}])/iu,
+  /(?:^|[^\p{L}])\p{L}+en\s+\p{L}+\s+und\s+ich(?![\p{L}\p{N}])/iu,
+];
 // A partner named by the relation itself: "Ich lebe mit Peter zusammen", "I am married to Sam".
 // English marks no plural on the verb, so a capitalized word before "and I" is the pair anywhere:
 // "Today Anna and I use Jira". Once the person spoke as "I", "and I" joins their own clauses: "I like
 // Vim and I use Linux". The pronoun "I" itself is always capital.
 const ENGLISH_PAIR_RE = /(?:^|[^\p{L}])\p{Lu}\p{Ll}+\s+and\s+I(?![\p{L}\p{N}])/u;
 const ENGLISH_I_RE = /(?:^|[^\p{L}])I(?![\p{L}\p{N}])/u;
-const PARTNER_RE =
-  /(?:^|[^\p{L}])(?:(?:lebe|wohne)\s+mit\s+\S+\s+zusammen|bin\s+mit\s+\S+\s+verheiratet|(?:am|i['’]m)\s+married\s+to\s+(?!(?:my|a|an|the)\s))/iu;
-// "I live with Sam" names someone; "I live with legacy code" or "two cats" does not.
-const LIVE_WITH_NAME_RE =
-  /(?:^|[^\p{L}])(?:[Ll]ive|[Ll]ives)\s+with\s+\p{Lu}\p{Ll}+(?:\s*(?:[.,;!?]|$)|\s+(?:and|together)(?![\p{L}]))/u;
+const PARTNER_RES: readonly RegExp[] = [
+  /(?:^|[^\p{L}])(?:lebe|wohne)\s+mit\s+\S+\s+zusammen/iu,
+  /(?:^|[^\p{L}])bin\s+mit\s+\S+\s+verheiratet/iu,
+  /(?:^|[^\p{L}])(?:am|i['’]m)\s+married\s+to\s+(?!(?:my|a|an|the)\s)/iu,
+  // "I live with Sam" names someone; "I live with legacy code" or "two cats" does not.
+  /(?:^|[^\p{L}])[Ll]ives?\s+with\s+\p{Lu}\p{Ll}+\s*(?:[.,;!?]|$)/u,
+  /(?:^|[^\p{L}])[Ll]ives?\s+with\s+\p{Lu}\p{Ll}+\s+(?:and|together)(?!\p{L})/u,
+];
 // Lower case only: the formal "Sie" and "Ihnen" address the reader, not someone else. A capital one
 // opens the claim or a clause after a colon: "Er hilft mir".
-const GERMAN_OTHER_PRONOUN_RE =
-  /(?:^|[^\p{L}])(?:er|sie|ihm|ihn|ihr|ihnen)(?![\p{L}\p{N}])|(?:^|[.:;!?])\s*(?:Er|Sie|Ihm|Ihn|Ihr|Ihnen)(?![\p{L}\p{N}])/u;
+const GERMAN_OTHER_PRONOUN_RES: readonly RegExp[] = [
+  /(?:^|[^\p{L}])(?:er|sie|ihm|ihn|ihr|ihnen)(?![\p{L}\p{N}])/u,
+  /(?:^|[.:;!?])\s*(?:Er|Sie|Ihm|Ihn|Ihr|Ihnen)(?![\p{L}\p{N}])/u,
+];
 const ENGLISH_OTHER_PRONOUN_RE = anyWordPattern(["he", "she", "him", "her", "they", "them"]);
 // The claim ends where its reason, condition or time begins: in "Ich nutze Tabellen, weil sie
 // übersichtlich sind" the "sie" is the tables. "Ich mag, dass sie pünktlich ist" keeps its object.
 // Each alternative starts only at the first of a run of spaces, so a long run stays linear.
-const CLAIM_END_RE =
-  /(?<![\s,])[,\s]\s*(?:weil|denn|obwohl|because|although|since)(?![\p{L}\p{N}])|(?<!\s),\s*(?:da|wenn|falls|sobald|as|when|if|while)(?![\p{L}\p{N}])/iu;
+const CLAIM_END_RES: readonly RegExp[] = [
+  /(?<![\s,])[,\s]\s*(?:weil|denn|obwohl|because|although|since)(?![\p{L}\p{N}])/iu,
+  /(?<!\s),\s*(?:da|wenn|falls|sobald|as|when|if|while)(?![\p{L}\p{N}])/iu,
+];
 // A reason that is someone else's wish, word or taste: "weil Anna es so will", "because they asked".
 // Each language has its own words: English "will" is the future, German "will" a wish.
 const GERMAN_REASON_RE =
@@ -393,45 +430,45 @@ const GERMAN_ATTRIBUTION_RE = anyWordPattern([
   "wollen",
   "möchte",
   "moechte",
-  String.raw`wünscht(?:e|en)?`,
-  String.raw`wuenscht(?:e|en)?`,
-  String.raw`verlangt(?:e|en)?`,
+  "wünscht(?:e|en)?",
+  "wuenscht(?:e|en)?",
+  "verlangt(?:e|en)?",
   "bat",
   "baten",
-  String.raw`fordert(?:e|en)?`,
-  String.raw`sagt(?:e|en)?`,
-  String.raw`meint(?:e|en)?`,
+  "fordert(?:e|en)?",
+  "sagt(?:e|en)?",
+  "meint(?:e|en)?",
   "mag",
   "mochte",
-  String.raw`bevorzugt(?:e|en)?`,
+  "bevorzugt(?:e|en)?",
   "entschied",
   "entscheidet",
-  String.raw`empfiehlt`,
+  "empfiehlt",
   "empfahl",
-  String.raw`rät`,
+  "rät",
   "raet",
   "riet",
 ]);
 const ENGLISH_ATTRIBUTION_RE = anyWordPattern([
-  String.raw`want(?:s|ed)?`,
-  String.raw`ask(?:s|ed)?`,
-  String.raw`request(?:s|ed)?`,
-  String.raw`says?`,
+  "want(?:s|ed)?",
+  "ask(?:s|ed)?",
+  "request(?:s|ed)?",
+  "says?",
   "said",
-  String.raw`insist(?:s|ed)?`,
-  String.raw`decide(?:s|d)?`,
-  String.raw`tells?`,
+  "insist(?:s|ed)?",
+  "decide(?:s|d)?",
+  "tells?",
   "told",
   // "likes" and "liked" have a subject; the bare "like" compares: "it feels like home".
-  String.raw`likes`,
+  "likes",
   "liked",
-  String.raw`prefer(?:s|red)?`,
-  String.raw`recommend(?:s|ed)?`,
-  String.raw`suggest(?:s|ed)?`,
-  String.raw`advise(?:s|d)?`,
-  String.raw`thinks?`,
+  "prefer(?:s|red)?",
+  "recommend(?:s|ed)?",
+  "suggest(?:s|ed)?",
+  "advise(?:s|d)?",
+  "thinks?",
   "thought",
-  String.raw`believe(?:s|d)?`,
+  "believe(?:s|d)?",
 ]);
 // The person as the one who wants: "weil ich es so will". "mir" or "me" is someone telling them.
 const FIRST_PERSON_SUBJECT_RE = anyWordPattern(["ich", "i"]);
@@ -449,19 +486,19 @@ const ENGLISH_ROLE_RE = anyWordPattern(ENGLISH_ROLE_WORDS);
 const CAPITAL_WORD_RE = /^\s+\p{Lu}/u;
 // The person's own role names a relation word without being about anyone else: "Ich bin Manager".
 // "Ich bin der Chef von Anna" still names Anna, so a role followed by "von" or "of" stays.
-const OWN_ROLE_RE =
-  /(?:^|[^\p{L}])(?:ich bin|i am|i['’]m)\s+(?:(?:an?|the|ein|eine|der|die|das)\s+)?\p{L}+(?![\p{L}])/giu;
+const I_AM_DETERMINED = String.raw`(?:^|[^\p{L}])(?:ich bin|i am|i['’]m)\s+(?:(?:an?|the|ein|eine|der|die|das)\s+)?`;
+const OWN_ROLE_RE = new RegExp(String.raw`${I_AM_DETERMINED}\p{L}+(?!\p{L})`, "giu");
 // A role between people names the other one: "Ich bin der Vorgesetzte von Anna", "I'm Sam's boss".
 // "I'm an employee of Foo" names an organization.
 const ROLE_TOWARD_OTHER_RE = new RegExp(
-  String.raw`(?:^|[^\p{L}])(?:ich bin|i am|i['’]m)\s+(?:(?:an?|the|ein|eine|der|die|das)\s+)?(?:${[
-    String.raw`kolleg(?:e|in)`,
-    String.raw`chef(?:in)?`,
-    String.raw`vorgesetzte[r]?`,
-    String.raw`freund(?:in)?`,
-    String.raw`nachbar(?:in)?`,
-    String.raw`colleague`,
-    String.raw`coworker`,
+  String.raw`${I_AM_DETERMINED}(?:${[
+    "kolleg(?:e|in)",
+    "chef(?:in)?",
+    "vorgesetzte[r]?",
+    "freund(?:in)?",
+    "nachbar(?:in)?",
+    "colleague",
+    "coworker",
     "boss",
     "neighbou?r",
     "mentor",
@@ -476,7 +513,7 @@ const IMPERATIVE_TO_ME_RE =
   /^\s*(?!(?:für|fuer|for|bei|mit|zu|von|to|with|by|wie|like)\s)\p{L}+\s+(?:mir|mich|me)(?![\p{L}\p{N}])/iu;
 const CONTEXT_NEGATION_RE = anyWordPattern([
   "nicht",
-  String.raw`kein(?:e|en|er|em)?`,
+  "kein(?:e|en|er|em)?",
   "nie",
   "not",
   "never",
@@ -555,15 +592,15 @@ function isDeniedByPrefix(prefix: string): boolean {
 
 // The part of the evidence that states the claim, without its reason, condition or time.
 function claimClause(evidence: string): string {
-  const end = CLAIM_END_RE.exec(evidence);
-  return end === null ? evidence : evidence.slice(0, end.index);
+  const ends = CLAIM_END_RES.map((pattern) => pattern.exec(evidence)?.index ?? evidence.length);
+  return evidence.slice(0, Math.min(...ends));
 }
 
 // "Ich nutze Excel, weil es früher besser war" is about now; only the claim's own tense counts.
 function isPast(evidence: string): boolean {
   const claim = claimClause(evidence);
   if (PAST_RE.test(claim) || PRETERITE_RE.test(claim)) return true;
-  return PERFECT_AUXILIARY_RE.test(claim) && PAST_PARTICIPLE_RE.test(claim);
+  return PERFECT_AUXILIARY_RE.test(claim) && hasPastParticiple(claim);
 }
 
 // A reason in which someone else wants, says or likes something, and the person is not the one who
@@ -616,8 +653,7 @@ function namesRelatedPerson(text: string): boolean {
   return (
     capitalFollows(text, GENITIVE_RELATION_RE) ||
     capitalFollows(text, ROLE_TOWARD_OTHER_RE) ||
-    PARTNER_RE.test(text) ||
-    LIVE_WITH_NAME_RE.test(text)
+    PARTNER_RES.some((pattern) => pattern.test(text))
   );
 }
 
@@ -637,7 +673,10 @@ export function namesOtherPerson(text: string): boolean {
 
 function claimNamesOtherPronoun(evidence: string): boolean {
   const claim = claimClause(evidence);
-  return GERMAN_OTHER_PRONOUN_RE.test(claim) || ENGLISH_OTHER_PRONOUN_RE.test(claim);
+  return (
+    GERMAN_OTHER_PRONOUN_RES.some((pattern) => pattern.test(claim)) ||
+    ENGLISH_OTHER_PRONOUN_RE.test(claim)
+  );
 }
 
 // A question or a request asks for something; it states no fact.
@@ -663,11 +702,26 @@ function contextDropReason(
 
 // "Wir", "Anna und ich", "Today Anna and I": a statement for more than the person.
 function speaksForMore(evidence: string): boolean {
-  return WE_RE.test(evidence) || ME_AND_OTHER_RE.test(evidence) || speaksAsEnglishPair(evidence);
+  return (
+    WE_RE.test(evidence) ||
+    ME_AND_OTHER_RES.some((pattern) => pattern.test(evidence)) ||
+    speaksAsEnglishPair(evidence)
+  );
+}
+
+// "We decided as a team to release on Tuesdays": the team's fact, which never names anyone else.
+function teamDropReason(evidence: string): FactDropReason | null {
+  const pair =
+    ME_AND_OTHER_RES.some((pattern) => pattern.test(evidence)) || speaksAsEnglishPair(evidence);
+  if (pair || TITLED_PERSON_RE.test(evidence) || RELATION_RE.test(evidence)) return "third-party";
+  if (namesOtherPerson(evidence) || claimNamesOtherPronoun(evidence)) return "third-party";
+  return WE_RE.test(evidence) ? null : "not-self";
 }
 
 function subjectDropReason(about: string, evidence: string): FactDropReason | null {
-  if (about.trim().toLowerCase() !== "self") return "not-self";
+  const subject = about.trim().toLowerCase();
+  if (subject === "team") return teamDropReason(evidence);
+  if (subject !== "self") return "not-self";
   if (TITLED_PERSON_RE.test(evidence) || RELATION_RE.test(evidence)) return "third-party";
   if (speaksForMore(evidence)) return "we-statement";
   if (!FIRST_PERSON_RE.test(evidence) && !CHANGE_WITHOUT_SUBJECT_RE.test(evidence)) {
@@ -707,11 +761,33 @@ function spanDropReason(evidence: string, text: string): FactDropReason | null {
   return INNER_SENTENCE_RE.test(evidence) ? "not-clause-boundary" : null;
 }
 
+// "Sie beginnen immer mit einer Zusammenfassung" after "… meine Berichte": the claim's subject is the
+// person's own thing only when the body names it and the person named it just before as theirs.
+const LEADING_THING_PRONOUN_RE = /^(?:Sie|Es|Diese|They|It|These)\s+/u;
+const OWN_THING_RE = /^(?:mein(?:e|em|en|er|es)?|my)\s+(\p{L}+)/iu;
+
+function resolvedClaim(body: string, evidence: string, context: AdmissionContext): string {
+  const pronoun = LEADING_THING_PRONOUN_RE.exec(evidence);
+  const own = OWN_THING_RE.exec(body.normalize("NFC").trim());
+  const earlier = context.previousUserText?.normalize("NFC");
+  if (pronoun === null || own === null || earlier === undefined) return evidence;
+  const noun = own[1] ?? "";
+  const named = new RegExp(
+    String.raw`(?:^|[^\p{L}])(?:mein(?:e|em|en|er|es)?|my)\s+${noun}(?!\p{L})`,
+    "iu",
+  );
+  return named.test(earlier) ? `${own[0]} ${evidence.slice(pronoun[0].length)}` : evidence;
+}
+
 function dropped(reason: FactDropReason): FactAdmission {
   return { admitted: false, reason };
 }
 
-export function admitProposedFact(fact: ProposedFact, spokenText: string): FactAdmission {
+export function admitProposedFact(
+  fact: ProposedFact,
+  spokenText: string,
+  context: AdmissionContext = {},
+): FactAdmission {
   // A decomposed "würde" must read like the composed one to every check below.
   const userText = spokenText.normalize("NFC");
   const evidence = fact.evidence.normalize("NFC").trim();
@@ -728,16 +804,23 @@ export function admitProposedFact(fact: ProposedFact, spokenText: string): FactA
   if (looksLikePersonalIdentifier(evidence) || looksLikePersonalIdentifier(fact.body)) {
     return dropped("personal-identifier");
   }
+  const reason = contextDropReason(evidence, sentence, userText.slice(from, start));
+  return reason === null
+    ? admittedClaim(fact, resolvedClaim(fact.body, evidence, context), sentence)
+    : dropped(reason);
+}
+
+function admittedClaim(fact: ProposedFact, claim: string, sentence: string): FactAdmission {
   const reason =
-    contextDropReason(evidence, sentence, userText.slice(from, start)) ??
-    subjectDropReason(fact.about, evidence) ??
-    entailmentDropReason(fact.body.trim(), evidence);
+    subjectDropReason(fact.about, claim) ?? entailmentDropReason(fact.body.trim(), claim);
   if (reason !== null) return dropped(reason);
-  const subjectless = !FIRST_PERSON_RE.test(evidence);
+  const subject = fact.about.trim().toLowerCase() === "team" ? "team" : "self";
+  const subjectless = subject === "self" && !FIRST_PERSON_RE.test(claim);
   return {
     admitted: true,
     sentence,
+    subject,
     subjectless,
-    confidence: derivedConfidence(fact.body, evidence, subjectless),
+    confidence: derivedConfidence(fact.body, claim, subjectless),
   };
 }

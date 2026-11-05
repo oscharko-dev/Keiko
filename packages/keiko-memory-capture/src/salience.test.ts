@@ -477,6 +477,41 @@ describe("extractSalientMemories", () => {
   });
 });
 
+describe("a team's fact and a pronoun from the previous message", () => {
+  const decision = "We decided as a team to release only on Tuesdays.";
+
+  it("learns the team's decision into the project, never into the person's own scope", async () => {
+    const outcomes = await learn(decision, [
+      fact(decision, decision, { about: "team", type: "decision" }),
+    ]);
+    const [learned] = candidates(outcomes);
+    expect(learned?.proposal.scope).toEqual({ kind: "project", projectId: "p-1" });
+  });
+
+  it("learns no team decision outside a project", async () => {
+    const { projectId: _projectId, ...withoutProject } = baseContext();
+    const outcomes = await learn(
+      decision,
+      [fact(decision, decision, { about: "team", type: "decision" })],
+      { context: withoutProject },
+    );
+    expect(candidates(outcomes)).toEqual([]);
+  });
+
+  it("shows the learner the previous message and resolves its pronoun", async () => {
+    const said = "Sie beginnen immer mit einer Zusammenfassung.";
+    const body = "Meine Berichte beginnen immer mit einer Zusammenfassung";
+    const run = harness(reply(fact(body, said.slice(0, -1), { type: "procedural" })));
+    const outcomes = await extractSalientMemories(
+      input(said, { previousUserText: "Ich habe eine neue Regel fuer meine Berichte." }),
+      run.deps,
+    );
+    expect(bodies(outcomes)).toEqual([body]);
+    const userMessage = run.calls[0]?.find((message) => message.role === "user");
+    expect(userMessage?.content).toContain("Ich habe eine neue Regel fuer meine Berichte.");
+  });
+});
+
 describe("buildSalienceMessages", () => {
   it("leaves out the assistant role and known facts when there are none", () => {
     expect(buildSalienceMessages("Hallo", "   ").map((message) => message.role)).toEqual([

@@ -372,3 +372,76 @@ describe("admitProposedFact", () => {
     expect(performance.now() - started).toBeLessThan(2000);
   });
 });
+
+describe("a team's fact", () => {
+  const decision =
+    "We decided as a team to release only on Tuesdays, because support is fully staffed then.";
+
+  it("admits the team's own decision for its project", () => {
+    const admission = admitProposedFact(
+      { body: decision, evidence: decision, about: "team" },
+      decision,
+    );
+    expect(admission).toMatchObject({ admitted: true, subject: "team", subjectless: false });
+  });
+
+  it("keeps a group statement labelled as the person's own out", () => {
+    expect(reasonOf(decision, decision)).toBe("we-statement");
+  });
+
+  it.each([
+    ["names a teammate", "Anna and I decided to release on Tuesdays."],
+    ["names a titled person", "Wir haben mit Frau Müller entschieden, dienstags zu releasen."],
+    ["names a relative", "Wir nehmen mit unserem Sohn jeden Freitag frei."],
+  ])("drops a team fact that %s", (_, text) => {
+    const evidence = text.slice(0, -1);
+    expect(admitProposedFact({ body: evidence, evidence, about: "team" }, text)).toEqual({
+      admitted: false,
+      reason: "third-party",
+    });
+  });
+
+  it("drops a team label without a group", () => {
+    const text = "Ich nutze Excel.";
+    expect(
+      admitProposedFact(
+        { body: "Ich nutze Excel", evidence: "Ich nutze Excel", about: "team" },
+        text,
+      ),
+    ).toEqual({ admitted: false, reason: "not-self" });
+  });
+});
+
+describe("a pronoun for the person's own thing", () => {
+  const text = "Sie beginnen immer mit einer Zusammenfassung in drei Saetzen.";
+  const evidence = text.slice(0, -1);
+  const body = "Meine Berichte beginnen immer mit einer Zusammenfassung in drei Saetzen";
+
+  it("admits the claim when the person named the thing as theirs just before", () => {
+    const admission = admitProposedFact({ body, evidence, about: "self" }, text, {
+      previousUserText: "Ich habe eine neue Regel fuer meine Berichte.",
+    });
+    expect(admission).toMatchObject({ admitted: true, subject: "self", subjectless: false });
+  });
+
+  it.each([
+    ["without a previous message", undefined],
+    ["when the thing was not theirs", "Ich lese oft Berichte."],
+    ["when another thing was theirs", "Ich habe eine Regel fuer meine Notizen."],
+  ])("drops it %s", (_, previousUserText) => {
+    expect(
+      admitProposedFact({ body, evidence, about: "self" }, text, { previousUserText }).admitted,
+    ).toBe(false);
+  });
+
+  it("still drops a pronoun for a person the person named", () => {
+    const said = "Sie arbeitet in Berlin.";
+    expect(
+      admitProposedFact(
+        { body: "Meine Kollegin arbeitet in Berlin", evidence: said.slice(0, -1), about: "self" },
+        said,
+        { previousUserText: "Ich mag meine Kollegin." },
+      ),
+    ).toEqual({ admitted: false, reason: "third-party" });
+  });
+});

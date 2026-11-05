@@ -199,16 +199,23 @@ export function isSingleValuePredicate(word: string): boolean {
 
 // A word of one list as a pattern that does not match inside a longer word.
 export function anyWordPattern(words: readonly string[]): RegExp {
-  return new RegExp(`(?:^|[^\\p{L}])(?:${words.join("|")})(?![\\p{L}\\p{N}])`, "iu");
+  return new RegExp(String.raw`(?:^|[^\p{L}])(?:${words.join("|")})(?![\p{L}\p{N}])`, "iu");
+}
+
+// Linear on any input: a regular expression anchored at both ends backtracks over long runs.
+function trimHyphens(word: string): string {
+  let start = 0;
+  let end = word.length;
+  while (start < end && word[start] === "-") start += 1;
+  while (end > start && word[end - 1] === "-") end -= 1;
+  return word.slice(start, end);
 }
 
 export function isNegated(text: string): boolean {
   const normalized = normalizeMemoryText(text);
   if (CONTRACTED_NEGATION_RE.test(normalized)) return true;
   // A hyphenated compound is one word: "no-code" and "Nicht-Raucher" deny nothing.
-  return normalized
-    .split(/[^\p{L}\p{N}-]+/u)
-    .some((word) => NEGATION_WORDS.has(word.replace(/^-+|-+$/gu, "")));
+  return normalized.split(/[^\p{L}\p{N}-]+/u).some((word) => NEGATION_WORDS.has(trimHyphens(word)));
 }
 
 export function hasWord(words: readonly string[], word: string): boolean {

@@ -4298,11 +4298,12 @@ function sourceMessageOf(
   content: string,
   conversationId: string,
 ): { readonly sourceMessageId?: string } {
-  const row = deps.store
-    .listMessages(conversationId)
-    .filter((message) => message.role === "user" && message.content === content)
-    .at(-1);
-  return row === undefined ? {} : { sourceMessageId: row.id };
+  const messages = deps.store.listMessages(conversationId);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const row = messages[index];
+    if (row?.role === "user" && row.content === content) return { sourceMessageId: row.id };
+  }
+  return {};
 }
 
 function scheduleCanonicalTurnSalienceCapture(

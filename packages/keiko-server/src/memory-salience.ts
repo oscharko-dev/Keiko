@@ -126,7 +126,7 @@ const SALIENCE_RESPONSE_FORMAT: ResponseFormat = {
           properties: {
             body: { type: "string", minLength: 1 },
             evidence: { type: "string", minLength: 1 },
-            about: { type: "string", enum: ["self", "other", "unclear"] },
+            about: { type: "string", enum: ["self", "team", "other", "unclear"] },
             type: { type: "string", enum: ["preference", "fact", "decision", "procedural"] },
             relation: { type: "string", enum: ["new", "same", "update", "contradiction"] },
             related: { type: ["integer", "null"] },
@@ -663,6 +663,27 @@ interface TurnSalienceInputs {
   readonly correlationId: string;
 }
 
+// The person's message just before this one, so a pronoun can point back to it. A message the
+// learner may not see stays out, like the current one would.
+function previousUserText(
+  deps: UiHandlerDeps,
+  request: SalienceTurnRequest,
+  context: ConversationMemoryRuntimeContext,
+  policy: ReturnType<typeof memoryCapturePolicyForDeps>,
+): string | undefined {
+  if (request.sourceMessageId === undefined) return undefined;
+  const messages = deps.store.listMessages(context.conversationId);
+  const current = messages.findIndex((message) => message.id === request.sourceMessageId);
+  for (let index = current - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "user") continue;
+    return memoryTextSecretEgressRejectionReason(message.content, policy) === null
+      ? message.content
+      : undefined;
+  }
+  return undefined;
+}
+
 async function extractTurnSalienceOutcomes(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
@@ -679,9 +700,11 @@ async function extractTurnSalienceOutcomes(
   const refusalReason = memoryTextSecretEgressRejectionReason(request.content, policy);
   if (refusalReason !== null) return { kind: "refused", reason: refusalReason };
   const sourceMessageCount = request.sourceMessageId === undefined ? 0 : 1;
+  const previous = previousUserText(deps, request, context, policy);
   const outcomes = await extractSalientMemories(
     {
       userText: request.content,
+      ...(previous === undefined ? {} : { previousUserText: previous }),
       assistantText,
       knownFacts: gatherKnownFacts(vault, context),
       ...(request.sourceMessageId === undefined
