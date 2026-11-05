@@ -199,14 +199,14 @@ describe("installed live runtime model catalog", (): void => {
     try {
       vi.setSystemTime(new Date("2026-10-17T04:00:00.000Z"));
       const handler = await installedRuntimeHandler();
-      const first = capturedCatalogRoute("");
+      const first = capturedApiRoute("/api/models");
       await handler(first.route);
       vi.advanceTimersByTime(5_000);
-      const refreshed = capturedCatalogRoute("?refresh=1");
+      const refreshed = capturedApiRoute("/api/models?refresh=1");
       await handler(refreshed.route);
       expect(refreshed.fulfillment()?.body).toBe(first.fulfillment()?.body);
       const nextHandler = await installedRuntimeHandler();
-      const next = capturedCatalogRoute("");
+      const next = capturedApiRoute("/api/models");
       await nextHandler(next.route);
       expect(next.fulfillment()?.body).not.toBe(first.fulfillment()?.body);
     } finally {
