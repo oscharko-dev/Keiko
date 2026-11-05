@@ -131,20 +131,44 @@ function equalWordsComparison(
 }
 
 // A person has one of these at a time, so a new value replaces the old one. The preposition decides:
-// "Arbeitet bei Acme" names one employer, "Arbeitet mit Excel" one of many tools.
+// "Arbeitet bei Acme" names one employer, "Arbeitet mit Excel" one of many tools. Each pattern
+// captures the slot's value.
 const SINGLE_VALUE_SLOT_RES: readonly RegExp[] = [
-  /(?:^|[^\p{L}])arbeite\p{L}*\s+(?:bei|fur|fuer)\s/u,
-  /(?:^|[^\p{L}])works?\s+(?:at|for)\s/u,
-  /(?:^|[^\p{L}])wohn\p{L}*\s+in\s/u,
-  /(?:^|[^\p{L}])lives?\s+in\s/u,
-  /(?:^|[^\p{L}])heiss\p{L}*\s/u,
-  /(?:^|[^\p{L}])(?:named|called)\s/u,
+  /(?:^|[^\p{L}])arbeite\p{L}*\s+(?:bei|fur|fuer)\s+([\p{L}\p{N}]+)/u,
+  /(?:^|[^\p{L}])works?\s+(?:at|for)\s+([\p{L}\p{N}]+)/u,
+  /(?:^|[^\p{L}])wohn\p{L}*\s+in\s+([\p{L}\p{N}]+)/u,
+  /(?:^|[^\p{L}])lives?\s+in\s+([\p{L}\p{N}]+)/u,
+  /(?:^|[^\p{L}])heiss\p{L}*\s+([\p{L}\p{N}]+)/u,
+  /(?:^|[^\p{L}])(?:named|called)\s+([\p{L}\p{N}]+)/u,
 ];
+// One preference at a time for one purpose: "Bevorzugt Tabellen für Zahlen". Using or liking
+// something does not end using or liking another thing.
+const CHOSEN_PREFERENCE_RE = anyWordPattern([
+  String.raw`bevorzug\p{L}*`,
+  String.raw`prefers?`,
+  String.raw`preferred`,
+  "lieber",
+  "rather",
+]);
+
+function slotValues(text: string): readonly (string | undefined)[] {
+  const normalized = normalizeMemoryText(text);
+  return SINGLE_VALUE_SLOT_RES.map((slot) => slot.exec(normalized)?.[1]);
+}
 
 function sharesSingleValueSlot(a: string, b: string): boolean {
-  const textA = `${normalizeMemoryText(a)} `;
-  const textB = `${normalizeMemoryText(b)} `;
-  return SINGLE_VALUE_SLOT_RES.some((slot) => slot.test(textA) && slot.test(textB));
+  const valuesB = slotValues(b);
+  return slotValues(a).some((value, index) => value !== undefined && valuesB[index] !== undefined);
+}
+
+// Whether the value of a one-at-a-time slot differs: the new employer, not a new tool beside it.
+function singleValueChanged(a: string, b: string): boolean {
+  if (CHOSEN_PREFERENCE_RE.test(a) && CHOSEN_PREFERENCE_RE.test(b)) return true;
+  const valuesB = slotValues(b);
+  return slotValues(a).some((value, index) => {
+    const other = valuesB[index];
+    return value !== undefined && other !== undefined && !sameFactWord(value, other);
+  });
 }
 
 // A shared "bevorzugt" does not make "Tabellen" and "Tee" two values of one fact; a shared content
@@ -252,7 +276,11 @@ function labelledChange(
   related: KnownFact,
 ): FactRelationDecision | null {
   if (!sameSubject(body, related.body)) return null;
-  if (compareFacts(body, related.body) === "slot-changed") {
+  // A model label alone replaces only a one-at-a-time value; anything else needs a stated change.
+  if (
+    compareFacts(body, related.body) === "slot-changed" &&
+    singleValueChanged(body, related.body)
+  ) {
     return { kind: "supersede", factId: related.id, basis: "slot-changed" };
   }
   const sameKind =

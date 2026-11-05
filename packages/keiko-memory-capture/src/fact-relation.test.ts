@@ -209,4 +209,39 @@ describe("mostSimilarFacts", () => {
       }),
     ).toEqual({ kind: "new" });
   });
+
+  it.each([
+    ["Nutzt Word für Berichte", "Ich nutze Word für Berichte", "Nutzt Excel für Berichte"],
+    ["Arbeitet bei Acme mit Word", "Ich arbeite bei Acme mit Word", "Arbeitet bei Acme mit Excel"],
+    ["Mag Listen für Zahlen", "Ich mag Listen für Zahlen", "Mag Tabellen für Zahlen"],
+  ])("keeps both on a label alone when %s may stand beside the old fact", (body, evidence, old) => {
+    expect(decide(body, evidence, "update", old)).toEqual({ kind: "new" });
+  });
+
+  it.each([
+    ["Arbeitet bei Globex", "Ich arbeite bei Globex", "Arbeitet bei Acme"],
+    ["Wohnt in Hamburg", "Ich wohne in Hamburg", "Wohnt in Berlin"],
+    [
+      "Bevorzugt Listen für Zahlen",
+      "Ich bevorzuge Listen für Zahlen",
+      "Bevorzugt Tabellen für Zahlen",
+    ],
+  ])("replaces a one-at-a-time value on a label: %s", (body, evidence, old) => {
+    expect(decide(body, evidence, "update", old)).toEqual({
+      kind: "supersede",
+      factId: "old",
+      basis: "slot-changed",
+    });
+  });
+
+  it("still replaces a use on a stated change", () => {
+    expect(
+      decide(
+        "Nutzt jetzt Word für Berichte",
+        "Ich nutze jetzt Word für Berichte",
+        "update",
+        "Nutzt Excel für Berichte",
+      ),
+    ).toMatchObject({ kind: "supersede", factId: "old" });
+  });
 });

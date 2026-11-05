@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { admitProposedFact, type FactDropReason } from "./fact-admission.js";
+import {
+  admitProposedFact,
+  reasonNamesOtherPerson,
+  type FactDropReason,
+} from "./fact-admission.js";
 
 function admit(text: string, evidence: string, body = evidence, about = "self") {
   return admitProposedFact({ body, evidence, about }, text);
@@ -255,6 +259,21 @@ describe("admitProposedFact", () => {
     ["a present verb ending like a past one", "Ich arbeite mit Excel."],
     ["a present verb that keeps its stem", "Ich verwalte die Budgets."],
     ["a wish of the person", "Ich nutze Jira, weil ich es so will."],
+    ["an own wish without a repeated subject", "Ich nutze Excel und möchte Tabellen."],
+    ["an own wish after aber", "Ich nutze Vim, möchte aber Emacs."],
+    ["an English own wish", "I use vim and want plugins."],
+    ["a relative clause that says something", "I use vim, which says nothing."],
+    ["a future reason", "I use Jira because it will scale."],
+    ["a hyphenated role compound", "Ich bearbeite die Kunden-Tickets."],
+    ["another hyphenated role compound", "Ich mag die Mitarbeiter-App."],
+    ["a title-case product name", "Ich nutze ein Customer Relationship Tool."],
+    ["a present verb ending in ed", "I embed fonts in my slides."],
+    ["a migration made", "I migrated to Postgres."],
+    ["an installation made", "I installed Obsidian."],
+    ["a start made", "I started using vim."],
+    ["a German migration made", "Ich migrierte zu Postgres."],
+    ["a perfect migration", "Ich habe zu Postgres migriert."],
+    ["a present verb with a stem t", "Ich halte Vorträge."],
   ])("keeps a genuine fact with %s", (_, text) => {
     const evidence = text.slice(0, -1);
     expect(reasonOf(text, evidence)).toBeNull();
@@ -267,6 +286,12 @@ describe("admitProposedFact", () => {
     ["a pointed role", "Ich telefoniere jeden Tag mit dem Kunden.", "third-party"],
     ["a family word without a possessive", "Ich hole Tochter jeden Tag ab.", "third-party"],
     ["someone else's wish", "Ich nutze Jira, weil Anna es wollte.", "third-party"],
+    ["someone else's present wish", "Ich nutze Jira, weil Anna es so will.", "third-party"],
+    ["someone telling the person", "Ich nutze Jira, weil Anna es mir sagte.", "third-party"],
+    ["an English wish of another", "I use Jira because Sam asked for it.", "third-party"],
+    ["a pronoun after a colon", "Ich nutze Vim: Er hilft mir.", "third-party"],
+    ["a prefixed perfect", "Ich habe Excel verwendet.", "past-statement"],
+    ["another prefixed perfect", "Ich habe Word benutzt.", "past-statement"],
     ["the German simple past", "Ich nutzte Excel.", "past-statement"],
     ["an inverted simple past", "Damals verwendete ich Excel.", "past-statement"],
     ["a weak simple past", "Ich arbeitete mit Excel.", "past-statement"],
@@ -279,5 +304,14 @@ describe("admitProposedFact", () => {
 
   it("does not read a present need as a past", () => {
     expect(reasonOf("I need tables for numbers.", "I need tables for numbers")).toBeNull();
+  });
+
+  it("stays linear on a long run of spaces before a reason", () => {
+    const text = `Ich nutze Excel${" ".repeat(50_000)}, weil Anna es will.`;
+    const started = performance.now();
+    expect(admit(text, "Ich nutze Excel").admitted).toBe(true);
+    expect(reasonNamesOtherPerson(text)).toBe(true);
+    expect(reasonNamesOtherPerson(`${" ".repeat(50_000)}weil`)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(2000);
   });
 });

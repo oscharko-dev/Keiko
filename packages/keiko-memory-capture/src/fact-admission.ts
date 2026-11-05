@@ -111,6 +111,15 @@ const FAMILY_WORDS = [
 ];
 // A role names a person only once something points at one: "der Kunde", "this colleague". "Ich
 // arbeite mit Kunden" and "customer tickets" name a kind of work, not someone.
+const ENGLISH_ROLE_WORDS = [
+  String.raw`colleagues?`,
+  String.raw`coworkers?`,
+  "boss",
+  String.raw`customers?`,
+  String.raw`friends?`,
+  String.raw`neighbou?rs?`,
+  String.raw`employees?`,
+];
 const ROLE_WORDS = [
   String.raw`kolleg(?:e|en|in|innen)`,
   String.raw`chef(?:in)?`,
@@ -120,13 +129,7 @@ const ROLE_WORDS = [
   String.raw`freund(?:in)?`,
   String.raw`nachbar(?:in|n)?`,
   String.raw`mitarbeiter(?:in)?`,
-  String.raw`colleagues?`,
-  String.raw`coworkers?`,
-  "boss",
-  String.raw`customers?`,
-  String.raw`friends?`,
-  String.raw`neighbou?rs?`,
-  String.raw`employees?`,
+  ...ENGLISH_ROLE_WORDS,
 ];
 const RELATION_WORDS = [...FAMILY_WORDS, ...ROLE_WORDS];
 const DETERMINER = String.raw`(?:der|die|den|dem|des|ein|eine|einen|einem|einer|eines|dies(?:e|er|em|en|es)?|jen(?:e|er|em|en|es)|the|this|that|a|an)`;
@@ -140,9 +143,10 @@ const POSSESSIVE_ONLY_RELATION_WORDS = [
   String.raw`clients?`,
 ];
 const FAMILY_RE = anyWordPattern(FAMILY_WORDS);
-const POINTED_ROLE_RE = anyWordPattern([
-  String.raw`${DETERMINER}\s+(?:\p{L}+\s+)?(?:${ROLE_WORDS.join("|")})`,
-]);
+const POINTED_ROLE_RE = new RegExp(
+  String.raw`(?:^|[^\p{L}])${DETERMINER}\s+(?:\p{L}+\s+)?(${ROLE_WORDS.join("|")})(?![\p{L}\p{N}])`,
+  "giu",
+);
 const RELATION_RE = anyWordPattern([
   String.raw`(?:mein(?:e|em|en|er|es)?|my|unser(?:e|em|en|er|es)?|our)\s+(?:\p{L}+\s+)?(?:${[...RELATION_WORDS, ...POSSESSIVE_ONLY_RELATION_WORDS].join("|")})`,
 ]);
@@ -230,10 +234,13 @@ const PAST_RE = anyWordPattern([
   "were",
 ]);
 const PERFECT_AUXILIARY_RE = anyWordPattern(["habe"]);
-// "Ich habe Excel genutzt" is over; "Ich habe zu Listen gewechselt" is the change itself. A participle
-// is lower case, so a noun ("Gerät", "Gewohnheit") is none.
-const PAST_PARTICIPLE_RE = /(?:^|[^\p{L}])ge(?!wechselt)\p{Ll}{2,30}t(?![\p{L}\p{N}])/u;
-// "Ich nutzte Excel", "Damals verwendete ich", "I used Excel": the simple past next to the person.
+// "Ich habe Excel genutzt" or "verwendet" is over. A participle is lower case, so a noun ("Gerät",
+// "Gewohnheit") is none. A change made holds now: "Ich habe zu Listen gewechselt".
+const PAST_PARTICIPLE_RE =
+  /(?:^|[^\p{L}])(?!(?:gewechselt|migriert|installiert|aktiviert)(?![\p{L}]))(?:(?:ge|be|ver|er|ent|zer)\p{Ll}{2,30}t|\p{Ll}{2,30}iert)(?![\p{L}\p{N}])/u;
+// The simple past next to the person: "Ich nutzte Excel", "Damals verwendete ich", "I used Excel".
+// Closed lists: an open "-ed" or "-te" ending also matches the present ("I embed", "ich arbeite").
+// A decision or a switch made in the past holds now and is not on them.
 const GERMAN_PRETERITE = String.raw`(?:${[
   "nutzte",
   "benutzte",
@@ -241,6 +248,7 @@ const GERMAN_PRETERITE = String.raw`(?:${[
   "wohnte",
   "lebte",
   "liebte",
+  "hasste",
   "spielte",
   "machte",
   "bevorzugte",
@@ -264,9 +272,41 @@ const GERMAN_PRETERITE = String.raw`(?:${[
   "trug",
   "nahm",
   "blieb",
-].join("|")}|\p{Ll}+(?:ierte|tete|dete|nete))`;
-// A decision or a switch made in the past holds now: "I decided on a local queue".
-const ENGLISH_PRETERITE = String.raw`(?:(?:always|often|usually|mostly|once|really|also|just)\s+)?(?!(?:decided|chose|switched|moved|changed|picked|settled|opted|committed|adopted|agreed)(?![\p{L}]))(?:\p{Ll}*[^\se]ed|\p{Ll}+ied|was|had|did|went|wrote|drank|ate|took|made|got|knew|thought|found|bought|spent|kept|became)`;
+  "programmierte",
+  "studierte",
+].join("|")}|\p{L}+(?:tete|dete|nete))`;
+const ENGLISH_PRETERITE = String.raw`(?:(?:always|often|usually|mostly|once|really|also|just)\s+)?(?:${[
+  "used",
+  "liked",
+  "preferred",
+  "loved",
+  "hated",
+  "worked",
+  "lived",
+  "wanted",
+  "needed",
+  "owned",
+  "enjoyed",
+  "played",
+  "studied",
+  "was",
+  "had",
+  "did",
+  "went",
+  "wrote",
+  "drank",
+  "ate",
+  "took",
+  "made",
+  "got",
+  "knew",
+  "thought",
+  "found",
+  "bought",
+  "spent",
+  "kept",
+  "became",
+].join("|")})`;
 const PRETERITE_RE = anyWordPattern([
   String.raw`ich\s+${GERMAN_PRETERITE}`,
   String.raw`${GERMAN_PRETERITE}\s+ich`,
@@ -275,17 +315,24 @@ const PRETERITE_RE = anyWordPattern([
 // "Anna und ich nutzen Jira" speaks for two.
 const ME_AND_OTHER_RE =
   /(?:^|[^\p{L}])(?:\p{L}+\s+(?:und|and)\s+(?:ich|i)|(?:ich|i)\s+(?:und|and)\s+\p{L}+)(?![\p{L}\p{N}])/iu;
-// Lower case only: the formal "Sie" and "Ihnen" address the reader, not someone else.
-// A capital one opens the claim: "Er hilft mir".
+// Lower case only: the formal "Sie" and "Ihnen" address the reader, not someone else. A capital one
+// opens the claim or a clause after a colon: "Er hilft mir".
 const GERMAN_OTHER_PRONOUN_RE =
-  /(?:^|[^\p{L}])(?:er|sie|ihm|ihn|ihr|ihnen)(?![\p{L}\p{N}])|^\s*(?:Er|Sie|Ihm|Ihn|Ihr|Ihnen)(?![\p{L}\p{N}])/u;
+  /(?:^|[^\p{L}])(?:er|sie|ihm|ihn|ihr|ihnen)(?![\p{L}\p{N}])|(?:^|[.:;!?])\s*(?:Er|Sie|Ihm|Ihn|Ihr|Ihnen)(?![\p{L}\p{N}])/u;
 const ENGLISH_OTHER_PRONOUN_RE = anyWordPattern(["he", "she", "him", "her", "they", "them"]);
 // The claim ends where its reason, condition or time begins: in "Ich nutze Tabellen, weil sie
 // übersichtlich sind" the "sie" is the tables. "Ich mag, dass sie pünktlich ist" keeps its object.
+// Each alternative starts only at the first of a run of spaces, so a long run stays linear.
 const CLAIM_END_RE =
-  /(?:,\s*|\s+)(?:weil|denn|obwohl|because|although|since)(?![\p{L}\p{N}])|,\s*(?:da|wenn|falls|sobald|as|when|if|while)(?![\p{L}\p{N}])/iu;
-// Someone else's wish or word: "weil Anna es wollte", "because they asked".
-const ATTRIBUTION_RE = anyWordPattern([
+  /(?<![\s,])[,\s]\s*(?:weil|denn|obwohl|because|although|since)(?![\p{L}\p{N}])|(?<!\s),\s*(?:da|wenn|falls|sobald|as|when|if|while)(?![\p{L}\p{N}])/iu;
+// A reason that is someone else's wish, word or taste: "weil Anna es so will", "because they asked".
+// Each language has its own words: English "will" is the future, German "will" a wish.
+const GERMAN_REASON_RE =
+  /(?:(?<![\p{L}\p{N}])(?:weil|denn)|(?:^|,)\s*da)\s+([^,;:.!?…\n]{1,300})/giu;
+const ENGLISH_REASON_RE =
+  /(?:(?<![\p{L}\p{N}])(?:because|since)|(?:^|,)\s*as)\s+([^,;:.!?…\n]{1,300})/giu;
+const GERMAN_ATTRIBUTION_RE = anyWordPattern([
+  "will",
   "wollte",
   "wollten",
   "wollen",
@@ -299,19 +346,35 @@ const ATTRIBUTION_RE = anyWordPattern([
   String.raw`fordert(?:e|en)?`,
   String.raw`sagt(?:e|en)?`,
   String.raw`meint(?:e|en)?`,
+  String.raw`findet`,
+  "fand",
+  "mag",
+  "mochte",
+  String.raw`bevorzugt(?:e|en)?`,
   String.raw`entschied(?:en)?`,
-  String.raw`wants?`,
-  "wanted",
-  "asked",
-  "requested",
+  String.raw`entscheidet`,
+]);
+const ENGLISH_ATTRIBUTION_RE = anyWordPattern([
+  String.raw`want(?:s|ed)?`,
+  String.raw`ask(?:s|ed)?`,
+  String.raw`request(?:s|ed)?`,
   String.raw`says?`,
   "said",
-  "insisted",
-  "decided",
+  String.raw`insist(?:s|ed)?`,
+  String.raw`decide(?:s|d)?`,
+  String.raw`tells?`,
   "told",
+  String.raw`like(?:s|d)?`,
+  String.raw`prefer(?:s|red)?`,
+  String.raw`thinks?`,
+  "thought",
+  String.raw`believe(?:s|d)?`,
 ]);
-const CLAUSE_RE =
-  /[,;:–—]|(?:^|\s)(?:weil|denn|da|wenn|und|aber|because|since|when|and|but)(?=\s)/iu;
+// The person as the one who wants: "weil ich es so will". "mir" or "me" is someone telling them.
+const FIRST_PERSON_SUBJECT_RE = anyWordPattern(["ich", "i"]);
+// An English role is a compound when a capital word follows: "Customer Relationship Tool".
+const ENGLISH_ROLE_RE = anyWordPattern(ENGLISH_ROLE_WORDS);
+const CAPITAL_WORD_RE = /^\s+\p{Lu}/u;
 // The person's own role names a relation word without being about anyone else: "Ich bin Manager".
 const OWN_ROLE_RE = /(?:^|[^\p{L}])(?:ich bin|i am|i['’]m)\s+(?:(?:an?|ein|eine)\s+)?\p{L}+/giu;
 // A person asking for something states no fact about themselves, even when the request names them:
@@ -410,20 +473,39 @@ function isPast(evidence: string): boolean {
   return PERFECT_AUXILIARY_RE.test(claim) && PAST_PARTICIPLE_RE.test(claim);
 }
 
-// A clause that reports a wish or word without the person in it: "weil Anna es wollte".
-function attributesToOther(text: string): boolean {
-  return text
-    .split(CLAUSE_RE)
-    .some((clause) => ATTRIBUTION_RE.test(clause) && !FIRST_PERSON_RE.test(clause));
+// A reason in which someone else wants, says or likes something, and the person is not the one who
+// does: "weil Anna es so will". Only a reason clause counts, so "Ich nutze Excel und möchte Tabellen"
+// stays the person's own wish.
+export function reasonNamesOtherPerson(text: string): boolean {
+  const attributed = (pattern: RegExp, attribution: RegExp): boolean =>
+    [...text.matchAll(pattern)].some((match) => {
+      const reason = match[1] ?? "";
+      return attribution.test(reason) && !FIRST_PERSON_SUBJECT_RE.test(reason);
+    });
+  return (
+    attributed(GERMAN_REASON_RE, GERMAN_ATTRIBUTION_RE) ||
+    attributed(ENGLISH_REASON_RE, ENGLISH_ATTRIBUTION_RE)
+  );
+}
+
+// "der Kunde" or "this colleague" points at one person; "die Kunden-Tickets" and "the Customer
+// Relationship Tool" name a thing.
+function pointsAtPerson(text: string): boolean {
+  return [...text.matchAll(POINTED_ROLE_RE)].some((match) => {
+    const after = text.slice(match.index + match[0].length);
+    if (after.startsWith("-")) return false;
+    const role = match[1] ?? "";
+    return !(ENGLISH_ROLE_RE.test(role) && /^\p{Lu}/u.test(role) && CAPITAL_WORD_RE.test(after));
+  });
 }
 
 // Whether a text names someone other than the person. Private memory holds nothing about others.
 export function namesOtherPerson(text: string): boolean {
-  if (TITLED_PERSON_RE.test(text) || RELATION_RE.test(text) || attributesToOther(text)) {
+  if (TITLED_PERSON_RE.test(text) || RELATION_RE.test(text) || reasonNamesOtherPerson(text)) {
     return true;
   }
   const withoutOwnRole = text.replace(OWN_ROLE_RE, " ");
-  return FAMILY_RE.test(withoutOwnRole) || POINTED_ROLE_RE.test(withoutOwnRole);
+  return FAMILY_RE.test(withoutOwnRole) || pointsAtPerson(withoutOwnRole);
 }
 
 function claimNamesOtherPronoun(evidence: string): boolean {

@@ -13,7 +13,7 @@
 import { MEMORY_BODY_MAX_CHARS_DEFAULT } from "./_constants.js";
 import { buildProposal } from "./_envelopes.js";
 import { memoryTextCaptureRejectionReason } from "./capture-safety.js";
-import { admitProposedFact, namesOtherPerson } from "./fact-admission.js";
+import { admitProposedFact, namesOtherPerson, reasonNamesOtherPerson } from "./fact-admission.js";
 import {
   decideFactRelation,
   FACT_RELATION_LABELS,
@@ -315,6 +315,7 @@ function decisionPayload(
   if (
     reason === null ||
     namesOtherPerson(reason) ||
+    reasonNamesOtherPerson(sentence) ||
     looksLikePersonalIdentifier(reason) ||
     memoryTextCaptureRejectionReason(reason, policy) !== null
   ) {
