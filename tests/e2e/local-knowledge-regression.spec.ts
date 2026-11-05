@@ -860,6 +860,9 @@ async function uiCreateCapsule(page: Page, displayName: string): Promise<Knowled
     displayName: displayName.trim(),
     modelUsePolicy: standardPodModelUsePolicy(),
   });
+  await expect(page.getByRole("heading", { name: displayName.trim(), exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Select documents", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Back to Knowledge Pods", exact: true }).click();
   await expect(
     page.getByRole("article", { name: `Knowledge Pod: ${displayName.trim()}` }),
   ).toBeVisible();
@@ -1040,7 +1043,7 @@ async function expectJiraPodSection(page: Page, healthy: boolean, width: number)
   await expect(card.getByText(JIRA_LAYOUT_POD.baseUrl, { exact: true })).toHaveCount(0);
   await expect(card.getByTestId("acx-pod-state")).toHaveCount(0);
   await expect(card.locator(".acx-hint")).toHaveCount(0);
-  await expect(card.getByRole("button")).toHaveCount(2);
+  await expect(card.getByRole("button")).toHaveCount(3);
   await expect(card.getByRole("button", { name: "Add to workspace", exact: true })).toBeVisible();
   await expectPodRowFits(card, width);
   const actions = card.getByRole("button", {
@@ -1408,6 +1411,69 @@ async function runRegressionPass(
   });
 }
 
+test("keeps document selection and indexing bound to the newly created Knowledge Pod", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  const corpus = ensureCorpus();
+  await ensureProject(request);
+  await resetWorkspaceState(page);
+  await stubNativeFileDialog(page, corpus.smallFiles);
+  await openLocalKnowledge(page);
+  const previous = await uiCreateCapsule(page, "Source ownership previous");
+  const current = await uiCreateCapsule(page, "Source ownership current");
+  try {
+    const currentRow = page.getByRole("article", { name: `Knowledge Pod: ${current.displayName}` });
+    await currentRow
+      .getByRole("button", { name: `Add documents to Knowledge Pod ${current.displayName}` })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: current.displayName, exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Select documents", exact: true }).click();
+    await expect(page.getByLabel("Source path")).toHaveValue("");
+    await page.getByRole("button", { name: "Select documents", exact: true }).click();
+    await expect(page.getByLabel("Source path")).toHaveValue(corpus.smallFiles);
+    const connection = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname.endsWith("/connection"),
+    );
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    const connected = await connection;
+    expect(new URL(connected.url()).pathname).toBe(
+      `/api/local-knowledge/capsules/${encodeURIComponent(current.id)}/connection`,
+    );
+    expect(connected.status()).toBe(201);
+    await page.getByRole("button", { name: "Index this Knowledge Pod now", exact: true }).click();
+    await expect
+      .poll(async () => (await detail(request, current.id)).capsule.lifecycleState)
+      .toBe("ready");
+    const indexed = await expectIndexed(request, current.id);
+    expect(indexed.health.documentCount).toBe(2);
+    expect(indexed.health.vectorCount).toBeGreaterThan(0);
+    expect(countRows("capsule_sources", previous.id)).toBe(0);
+    expect(countRows("documents", previous.id)).toBe(0);
+    await page.getByRole("button", { name: "Back to Knowledge Pods", exact: true }).click();
+    await expect(currentRow.getByRole("button", { name: /start indexing/u })).toHaveCount(0);
+    await expect(
+      currentRow.getByRole("button", {
+        name: `Add Knowledge Pod ${current.displayName} to workspace`,
+      }),
+    ).toBeEnabled();
+  } finally {
+    for (const capsule of [previous, current]) {
+      await apiJson(
+        request,
+        "delete",
+        `/api/local-knowledge/capsules/${encodeURIComponent(capsule.id)}`,
+        {},
+      );
+    }
+  }
+});
+
 test("creates a Knowledge Pod from its name with the normal model-use policy", async ({
   page,
   request,
@@ -1466,8 +1532,8 @@ test("creates a Knowledge Pod from its name with the normal model-use policy", a
     await expect(
       row.getByRole("button", { name: /^(?:Start indexing|Cancel indexing)/u }),
     ).toHaveCount(0);
-    const addToWorkspace = row.getByRole("button", {
-      name: "Add Knowledge Pod Name-only Knowledge Pod to workspace",
+    const addDocuments = row.getByRole("button", {
+      name: "Add documents to Knowledge Pod Name-only Knowledge Pod",
     });
     const actions = row.getByRole("button", {
       name: "Actions for Knowledge Pod Name-only Knowledge Pod",
@@ -1488,7 +1554,7 @@ test("creates a Knowledge Pod from its name with the normal model-use policy", a
         for (const width of [1029, 640]) {
           await page.setViewportSize({ ...desktopViewport, width });
           await expect(name).toBeVisible();
-          await expect(addToWorkspace).toBeVisible();
+          await expect(addDocuments).toBeVisible();
           await expect(actions).toBeVisible();
           await expect(
             page.getByRole("button", { name: "Add HTML manual", exact: true }),
@@ -1515,16 +1581,41 @@ test("creates a Knowledge Pod from its name with the normal model-use policy", a
     await expect(connectorWindows).toHaveCount(connectorWindowsBefore + 1);
     const jiraNode = connectorWindows.last().getByTestId("knowledge-connector-node");
     await expect(jiraNode.getByText(JIRA_LAYOUT_POD.displayName, { exact: true })).toBeVisible();
-    await expect(jiraNode.getByText("Verified Jira Pod", { exact: true })).toBeVisible();
+    await expect(jiraNode.getByText("Verified Jira Pod", { exact: true })).toHaveCount(0);
+    const dragIdentity = jiraSection.getByRole("button", {
+      name: `Drag Jira Pod ${JIRA_LAYOUT_POD.displayName} to the workspace`,
+    });
+    const dragStart = await dragIdentity.boundingBox();
+    const dropPoint = await page.locator("main.workspace").evaluate((workspace) => {
+      const bounds = workspace.getBoundingClientRect();
+      for (let y = bounds.bottom - 100; y > bounds.top + 100; y -= 80) {
+        for (let x = bounds.right - 100; x > bounds.left + 100; x -= 80) {
+          const target = document.elementFromPoint(x, y);
+          if (target?.closest("main.workspace") !== null && target?.closest(".window") === null)
+            return { x, y };
+        }
+      }
+      return null;
+    });
+    if (dragStart === null || dropPoint === null)
+      throw new TypeError("Expected a visible drag handle and free workspace.");
+    await page.mouse.move(dragStart.x + 20, dragStart.y + dragStart.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(dropPoint.x, dropPoint.y, { steps: 12 });
+    await page.mouse.up();
+    await expect(connectorWindows).toHaveCount(connectorWindowsBefore + 2);
+    await expect(connectorWindows.last().getByRole("img", { name: "Jira" })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath("pod-workspace.png"), fullPage: true });
     jiraDisplayName = "Renamed Layout Jira Pod";
     await page.reload();
-    await expect(connectorWindows).toHaveCount(connectorWindowsBefore + 1);
+    await expect(connectorWindows).toHaveCount(connectorWindowsBefore + 2);
     await expect(jiraNode.getByText(jiraDisplayName, { exact: true })).toBeVisible();
-    await expect(jiraNode.getByText("Verified Jira Pod", { exact: true })).toBeVisible();
-    await expect(jiraNode.getByText("Live Jira tools", { exact: true })).toBeVisible();
+    await expect(jiraNode.getByText("Verified Jira Pod", { exact: true })).toHaveCount(0);
+    await expect(jiraNode.getByText("Live Jira tools", { exact: true })).toHaveCount(0);
+    await expect(jiraNode.getByRole("img", { name: "Jira" })).toBeVisible();
     await expect(jiraNode.getByText(JIRA_LAYOUT_POD.displayName, { exact: true })).toHaveCount(0);
     await page.getByRole("heading", { name: "Knowledge Pods", level: 1, exact: true }).click();
-    await addToWorkspace.focus();
+    await addDocuments.focus();
     await page.keyboard.press("Tab");
     await expect(actions).toBeFocused();
     await page.keyboard.press("Enter");

@@ -3811,6 +3811,8 @@ it.each([
   ["markdown copy feedback", "settled", "markdown-copy-feedback"],
   ["transcript navigation", "started", "transcript-navigation"],
   ["transcript navigation", "settled", "transcript-navigation"],
+  ["knowledge pod selection", "started", "knowledge-pod-selection"],
+  ["knowledge pod selection", "settled", "knowledge-pod-selection"],
 ] as const)(
   "persists %s %s through the existing activity log",
   async (stage, phase, activityStage) => {

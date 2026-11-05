@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type { ChatMessage as GatewayMessage } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { gatewayMessagesForToolExchange } from "./conversation-gateway.js";
-import { estimateGatewayMessageTokens, fitToolContinuation } from "./chat-tool-continuation-fit.js";
+import {
+  estimateGatewayMessageTokens,
+  fitToolContinuation,
+  fitToolRoundOutput,
+} from "./chat-tool-continuation-fit.js";
 
 function exchange(
   index: number,
@@ -167,5 +173,77 @@ describe("fitToolContinuation", () => {
     const fitted = fitToolContinuation(CONTINUATION, EXCHANGES.slice(1), 0);
     expect(fitted.messages[1]).toEqual(CONTINUATION[1]);
     expect(fitted.elidedCount).toBe(2);
+  });
+});
+
+// Output is a maximum: a continued turn may use the remaining window without losing its sources.
+describe("fitToolRoundOutput", () => {
+  const tools = [
+    {
+      name: "read",
+      description: "Read source material",
+      parameters: { type: "object", properties: {} },
+    },
+  ];
+  const request = {
+    modelId: "fit-proof",
+    messages: [{ role: "user" as const, content: "Synthetic source. ".repeat(100) }],
+    maxOutputTokens: 1024,
+    responseFormat: {
+      type: "json_schema" as const,
+      name: "result",
+      strict: true,
+      schema: { type: "object", properties: {} },
+    },
+  };
+  const limits = { maxOutputTokens: 1024 };
+  const prompt = countGatewayPromptTokens({ ...request, tools });
+  const profile = deriveContextProfile({
+    maxInputTokens: prompt + 256 + 600,
+    reservedOutputTokens: 1024,
+    safetyMarginTokens: 256,
+  });
+
+  it("accounts for tools and structured output while preserving full input and its safety margin", () => {
+    const fitted = fitToolRoundOutput(request, profile, tools, limits);
+    expect(fitted.maxOutputTokens).toBe(600);
+    expect(fitted.messages).toBe(request.messages);
+    expect(fitted.responseFormat).toBe(request.responseFormat);
+    expect(
+      countGatewayPromptTokens({ ...fitted, tools }) +
+        (fitted.maxOutputTokens ?? 0) +
+        profile.safetyMarginTokens,
+    ).toBe(profile.maxInputTokens);
+  });
+
+  it("does not consume an independent input ceiling or leave an unusably small output", () => {
+    expect(
+      fitToolRoundOutput(request, { ...profile, inputTokenLimit: prompt - 1 }, tools, limits),
+    ).toBe(request);
+    expect(
+      fitToolRoundOutput(
+        request,
+        { ...profile, maxInputTokens: prompt + 256 + 255 },
+        tools,
+        limits,
+      ),
+    ).toBe(request);
+  });
+
+  it("accepts a valid explicit output maximum above the profile default reserve", () => {
+    const explicit = { ...request, maxOutputTokens: 1536 };
+    expect(
+      fitToolRoundOutput(explicit, profile, tools, { maxOutputTokens: 2048 }).maxOutputTokens,
+    ).toBe(600);
+  });
+
+  it("never increases a requested reserve or repairs invalid caller output bounds", () => {
+    expect(fitToolRoundOutput(request, { ...profile, maxInputTokens: 32768 }, tools, limits)).toBe(
+      request,
+    );
+    const invalid = { ...request, maxOutputTokens: 0 };
+    expect(fitToolRoundOutput(invalid, profile, tools, limits)).toBe(invalid);
+    const over = { ...request, maxOutputTokens: 2048 };
+    expect(fitToolRoundOutput(over, profile, tools, limits)).toBe(over);
   });
 });

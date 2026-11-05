@@ -392,15 +392,6 @@
   gap: 8px 10px;
 }
 
-/* Reuse the Knowledge Pod icon, info and name primitives inside a static identity block.
-   Its spacing matches the existing drag handle without implying a drag interaction. */
-.cmpEmbeddedIdentity {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  text-align: left;
-}
-
 /* The identity keeps a readable width; when the window is narrow the chip and the actions wrap
    below it instead of squeezing the name. */
 .cmpPodIdentity {

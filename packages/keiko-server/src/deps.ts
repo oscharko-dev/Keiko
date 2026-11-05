@@ -1,3 +1,7 @@
+import {
+  installKnowledgeChatCatalogRuntime,
+  type KnowledgeChatCatalogRuntime,
+} from "./knowledge-chat-catalog.js";
 import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { createNativeMcpMutationJournal } from "./coding-runtime/opencodeNativeMcpMutationJournal.js";
 import type { ChatToolTurnPort } from "./chat-tool-turn.js";
@@ -1011,6 +1015,7 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly atlassianSyncJobRegistry?: AtlassianSyncJobRegistry | undefined;
   /** Lazy application-owned managed host; shared by ordinary Chat turns and bound Pods. */
   readonly jiraChatCatalog?: JiraChatCatalogRuntime;
+  readonly knowledgeChatCatalog?: KnowledgeChatCatalogRuntime;
   /** In-memory Jira reports (#4181): the tool resumes them and the export route reads them. */
   readonly jiraReportStore?: JiraReportStore;
   /** In-memory staged backlog drafts (#4178): the staging tool appends, approval and runs read. */
@@ -1154,6 +1159,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly gatewayConfig?: RuntimeGatewayConfig | undefined;
   /** Starts a shared background catalog check; callers keep reading the current projection. */
   readonly refreshGatewayCatalog?: ((correlationId?: string) => void) | undefined;
+  /** Joins only current startup catalog discovery; never starts provider checks. */
+  readonly waitForStartupGatewayCatalog?: (() => Promise<void>) | undefined;
   // Test seam for first-run setup. Production uses the real OpenAI-compatible gateway call.
   readonly gatewaySetupTester?:
     | ((
@@ -1962,7 +1969,7 @@ export function currentGatewayVerification(
   return deps.gatewayConfig?.verification() ?? UNVERIFIED_GATEWAY;
 }
 
-/** A live success must be renewed; configuration alone cannot keep it ready indefinitely. */
+/** Legacy freshness window used only to describe the age of observed readiness in diagnostics. */
 export const CONVERSATION_READINESS_MAX_AGE_MS = 5 * 60_000;
 
 export function conversationReadinessAgeMs(
@@ -1971,7 +1978,7 @@ export function conversationReadinessAgeMs(
   return Date.now() - Date.parse(observation.conversationCheckedAt ?? observation.checkedAt);
 }
 
-/** Returns true only for a fresh basic-chat success bound to the current generation. */
+/** A checked success remains usable for its configuration generation; no per-chat expiry. */
 export function currentConversationReady(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
   modelId: string,
@@ -1980,13 +1987,9 @@ export function currentConversationReady(
 }
 
 /**
- * Tri-state view for the models wire: `true`/`false` only when the CURRENT generation holds an
- * actual basic-chat observation, `undefined` when this process never probed the model or its
- * successful observation expired. Configuration reloads also invalidate observations. The observation store is process-local by design, so collapsing
- * "unknown" into "not ready" told the UI after every restart that no model was usable until a
- * manual probe plus reload (customer field incident, 0.3.11). Admission guards keep using the
- * strict boolean `currentConversationReady` — unknown never admits, it only defers to the
- * configuration-initialization probe already running before conversation admission.
+ * Process-local result of the startup or explicit Settings check. A configuration replacement
+ * invalidates it. Age alone never schedules provider work or turns a known success into unknown;
+ * malformed and future timestamps remain unavailable. Actual calls still surface provider errors.
  */
 export function currentConversationReadinessObservation(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
@@ -1995,29 +1998,11 @@ export function currentConversationReadinessObservation(
   const holder = deps.gatewayConfig;
   if (holder === undefined) return undefined;
   const observation = holder.verifiedCapability(modelId);
-  if (observation?.generation !== holder.generation()) return undefined;
+  if (observation?.generation !== holder.generation() || observation.modelId !== modelId)
+    return undefined;
   if (observation.fields.conversationReady !== true) return observation.fields.conversationReady;
   const ageMs = conversationReadinessAgeMs(observation);
-  return ageMs >= 0 && ageMs < CONVERSATION_READINESS_MAX_AGE_MS ? true : undefined;
-}
-
-/**
- * True when the CURRENT generation holds a successful basic-chat observation that has aged past
- * `CONVERSATION_READINESS_MAX_AGE_MS`. `currentConversationReadinessObservation` folds that case
- * into `undefined`, exactly like a model nobody probed; this is the one place that tells them apart
- * (#3905), and the models wire carries it as `conversationReadinessStale`. A failed observation
- * never goes stale, and a malformed or future timestamp stays unknown.
- */
-export function currentConversationReadinessStale(
-  deps: Pick<UiHandlerDeps, "gatewayConfig">,
-  modelId: string,
-): boolean {
-  const holder = deps.gatewayConfig;
-  if (holder === undefined) return false;
-  const observation = holder.verifiedCapability(modelId);
-  if (observation?.generation !== holder.generation()) return false;
-  if (observation.fields.conversationReady !== true) return false;
-  return conversationReadinessAgeMs(observation) >= CONVERSATION_READINESS_MAX_AGE_MS;
+  return Number.isFinite(ageMs) && ageMs >= 0 ? true : undefined;
 }
 
 function configuredChatContextProfile(
@@ -5081,7 +5066,10 @@ function installChatToolCatalogs(
     primary: options.activityLog ?? processServerLogSink(),
     diagnostics: options.diagnostics ?? defaultServerDiagnosticSink,
   };
-  return installMcpChatCatalogRuntime(installJiraChatCatalogRuntime(deps, log), log);
+  return installKnowledgeChatCatalogRuntime(
+    installMcpChatCatalogRuntime(installJiraChatCatalogRuntime(deps, log), log),
+    log,
+  );
 }
 
 /**
@@ -5110,6 +5098,7 @@ export function installConversationReadinessInitialization(deps: UiHandlerDeps):
   const disposeServices = deps.dispose;
   return Object.assign(deps, {
     refreshGatewayCatalog: startup.refresh,
+    waitForStartupGatewayCatalog: startup.catalogSettled,
     dispose: async (): Promise<void> => {
       unsubscribe?.();
       await stopChatCompactionWork(deps);

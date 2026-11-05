@@ -932,7 +932,10 @@ States:
   streamed path alike, while the stream has delivered nothing but reasoning: a streamed tool call is
   delivered only with the terminal answer, so a rejected one was never handed to the caller, and the
   next attempt carries the schema correction (`gateway.tool-catalog.repair state=scheduled`). A
-  streamed rejection that carries no correction is never replayed as it was, and one that follows
+  catalog rejection that carries no correction, including an unoffered tool identity, is terminal
+  on the buffered and streamed paths alike: regenerating the identical request supplies no model
+  feedback. Its stable `GATEWAY_MALFORMED_TOOL_CALL` code is classified as `validation-failed`,
+  including retry diagnostics, rather than an internal Keiko fault. A rejection that follows
   answer text the caller already received (a sentence of preface, then a malformed call) surfaces at
   once, because a repair would deliver that text a second time; the coding sidecar then ends the turn
   as `invalid-tool-call` with `runtimeRetry=refused`. OpenCode must not repeat the identical

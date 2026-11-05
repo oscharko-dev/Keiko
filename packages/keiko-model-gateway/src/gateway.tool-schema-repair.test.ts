@@ -257,6 +257,43 @@ describe("Gateway bounded tool-schema repair", () => {
     });
   });
 
+  it("returns the corrected tool call only after its arguments pass catalog binding", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const args = {
+      changeset: {
+        edits: [{ file: "src/a.ts", oldString: "before", newString: "after", replaceAll: false }],
+        deletions: [],
+        renames: [],
+        files: [{ file: "src/a.ts", expectedContentHash: sha256Hex("before") }],
+        selectedFiles: ["src/a.ts"],
+      },
+    };
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(invalidArguments("call-invalid"))
+      .mockResolvedValueOnce(providerResponse("call-corrected", "keiko_changeset_edit", args));
+    const result = await new Gateway(config(), {
+      clock: clock(),
+      random: (): number => 1,
+      fetchImpl,
+      log: { write: (event): void => void events.push(event) },
+    }).chat(request());
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(result.toolCalls).toMatchObject([
+      {
+        id: "call-corrected",
+        name: "keiko_changeset_edit",
+        arguments: args,
+        invocation: { kind: "bound", offerId: "offer-1", arguments: args },
+      },
+    ]);
+    expect(events.filter((event) => event.op === "gateway.tool-catalog.call-bound")).toHaveLength(
+      1,
+    );
+    expect(events.filter((event) => event.op === "gateway.tool-catalog.repair")).toHaveLength(1);
+  });
+
   it("announces the schema correction to the caller admission on the corrected attempt only", async () => {
     const announced: (true | undefined)[] = [];
     let providerCalls = 0;
@@ -427,30 +464,34 @@ describe("Gateway bounded tool-schema repair", () => {
     expect(events.filter((event) => event.op === "gateway.tool-catalog.repair")).toHaveLength(2);
   });
 
-  it("does not add repair feedback for an unoffered tool identity rejection", async () => {
-    const bodies: Record<string, unknown>[] = [];
-    let providerCalls = 0;
+  it("does not replay an unoffered tool identity without a correction", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(providerResponse("call-unoffered", "not_an_offered_tool", {}))
+      .mockResolvedValueOnce(successfulResponse());
     const gateway = new Gateway(config(), {
       clock: clock(),
       random: (): number => 1,
-      fetchImpl: (_url, init): Promise<Response> => {
-        bodies.push(parsedProviderBody(init));
-        providerCalls += 1;
-        return Promise.resolve(
-          providerCalls === 1
-            ? providerResponse("call-unoffered", "not_an_offered_tool", {})
-            : successfulResponse(),
-        );
-      },
+      fetchImpl,
+      log: { write: (event): void => void events.push(event) },
     });
 
-    await expect(gateway.chat(request())).resolves.toMatchObject({ content: "corrected" });
+    await expect(gateway.chat(request())).rejects.toMatchObject({
+      code: "GATEWAY_MALFORMED_TOOL_CALL",
+      retryable: false,
+      repair: undefined,
+    });
 
-    expect(bodies).toHaveLength(2);
-    expect(bodies.map((body) => body.messages)).toEqual([
-      [{ role: "user", content: "bounded fixture request" }],
-      [{ role: "user", content: "bounded fixture request" }],
-    ]);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(events.filter((event) => event.op === "gateway.retry.scheduled")).toEqual([]);
+    expect(events.filter((event) => event.op === "gateway.tool-catalog.repair")).toEqual([]);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.chat.failed",
+        errorKind: "validation-failed",
+      }),
+    );
   });
 
   it("rejects an overflowing explicit output reservation before even the first provider call", async () => {
@@ -484,7 +525,7 @@ describe("Gateway bounded tool-schema repair", () => {
         name: "keiko_changeset_edit",
         arguments: argumentsWithCycle,
       }),
-    ).toThrow(expect.objectContaining({ repair: undefined }));
+    ).toThrow(expect.objectContaining({ repair: undefined, retryable: false }));
   });
 
   it("refuses the reserved safety margin before a provider or repair call", async () => {

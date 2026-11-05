@@ -58,12 +58,14 @@ export type JiraChatAuthorityEnvelope = ChatToolAuthorityEnvelope & {
   readonly subject: JiraChatToolAuthoritySubject;
   readonly connectorScopes: readonly ("issue-tracker.read" | "issue-tracker.write")[];
 };
-function isJiraEnvelope(
+export function isJiraEnvelope(
   envelope: ChatToolAuthorityEnvelope,
 ): envelope is JiraChatAuthorityEnvelope {
   return (
-    envelope.subject.kind !== "configured-mcp" &&
-    envelope.connectorScopes.every((scope) => scope !== "mcp.tools")
+    envelope.subject.kind === undefined &&
+    envelope.connectorScopes.every(
+      (scope) => scope === "issue-tracker.read" || scope === "issue-tracker.write",
+    )
   );
 }
 

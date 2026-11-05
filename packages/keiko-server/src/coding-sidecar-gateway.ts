@@ -4890,7 +4890,7 @@ export async function handleCodingSidecarGatewayProfile(
   // missing configuration must never cause a paid provider probe (ADR-0124 D5). A probe can cure a
   // lapsed proof and a model nobody proved yet (#3578); the targets decide whether any model needs
   // one, and a refuted or non-chat model never does.
-  if (elected.status === "available" || probeCuresShortfall(elected.reason)) {
+  if (checkRequested && (elected.status === "available" || probeCuresShortfall(elected.reason))) {
     // #3591 (1.1.7): the browser reads this profile with a 15 s deadline while a probe against a
     // slow gateway may take minutes. Wait a bounded moment for the elected model's proof; past it,
     // answer with the projection (`model-verification-pending` while the probe runs) and let
@@ -4913,10 +4913,8 @@ export async function handleCodingSidecarGatewayProfile(
   return { status: 200, body: gatewayReadinessProjection(ctx, deps, modelId) };
 }
 
-// Choosing a model in the picker checks it (`check=1`), when it holds no fresh answer, exactly as a
-// Chat request would. Every other read only describes what is known: a re-read after a catalog
-// update, a configuration change or a running check never starts one, so an open Workbench probes
-// nothing in the background (customer 1.3.4).
+// A picker selection (`check=1`) may join configuration-owned startup verification. Every other
+// read describes cached readiness immediately; neither path starts a basic-chat health check.
 function electedConversationReadiness(
   ctx: RouteContext,
   deps: UiHandlerDeps,

@@ -1,4 +1,3 @@
-import type { NormalizedResponse } from "@oscharko-dev/keiko-contracts";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { GatewayCallRequest, GatewayStreamChunk } from "@oscharko-dev/keiko-model-gateway";
 
@@ -89,7 +88,6 @@ function admissionDisposition(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
   admission: ConversationReadinessAdmission,
   modelId: string,
-  completedAt?: number,
 ): ConversationAdmissionDisposition {
   if (modelId !== admission.modelId) return "model-changed";
   const holder = deps.gatewayConfig;
@@ -98,12 +96,11 @@ function admissionDisposition(
   const observation = holder.verifiedCapability(modelId);
   if (observation?.generation !== holder.generation() || observation.modelId !== modelId)
     return "observation-unavailable";
-  return observationDisposition(observation, completedAt);
+  return observationDisposition(observation);
 }
 
 function observationDisposition(
   observation: VerifiedModelCapabilityObservation,
-  completedAt: number | undefined,
 ): ConversationAdmissionDisposition {
   if (observation.fields.conversationReady !== true)
     return observation.fields.conversationReady === false
@@ -111,47 +108,21 @@ function observationDisposition(
       : "observation-unavailable";
   const ageMs = conversationReadinessAgeMs(observation);
   if (!Number.isFinite(ageMs) || ageMs < 0) return "timestamp-invalid";
-  if (ageMs < CONVERSATION_READINESS_MAX_AGE_MS) return "allowed-fresh";
-  const completionAgeMs = completedAt === undefined ? Number.NaN : Date.now() - completedAt;
-  return completionAgeMs >= 0 && completionAgeMs < CONVERSATION_READINESS_MAX_AGE_MS
-    ? "allowed-continuation"
-    : "expired";
+  return ageMs < CONVERSATION_READINESS_MAX_AGE_MS ? "allowed-fresh" : "allowed-cached";
 }
 
-/**
- * Checks the model again through the conversation-request readiness check (ADR-0171). Given to the
- * guard, an admission that merely expired during a long turn is checked once more instead of
- * refused: a tool turn can outlast the freshness interval without a served response, and refusing it
- * then ended a working Jira turn with "failed its live readiness check" while the very next check of
- * the same model answered ready (2026-11-01, S08).
- */
-export type ConversationReadinessRecheck = (
-  modelId: string,
-  correlationId: string | undefined,
-) => Promise<void>;
-
-interface ConversationCallGuard {
-  assert(request: GatewayCallRequest, signal: AbortSignal): Promise<void>;
-  complete(response: NormalizedResponse, signal: AbortSignal): void;
-}
-
-const SERVED_FINISH_REASONS = new Set<NormalizedResponse["finishReason"]>([
-  "stop",
-  "tool_calls",
-  "length",
-]);
-
-function conversationCallGuard(
+/** Read the current generation-bound result at dispatch; never send a readiness probe. */
+export function withConversationReadinessAdmission(
+  model: ModelPort,
   modelId: string,
   admission: ConversationReadinessAdmission,
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
-  recheck: ConversationReadinessRecheck | undefined,
-): ConversationCallGuard {
-  let completedAt: number | undefined;
-  const decide = (request: GatewayCallRequest): ConversationAdmissionDisposition => {
+): ModelPort {
+  const assert = (request: GatewayCallRequest, signal: AbortSignal): void => {
+    signal.throwIfAborted();
     const disposition =
       request.modelId === modelId
-        ? admissionDisposition(deps, admission, modelId, completedAt)
+        ? admissionDisposition(deps, admission, modelId)
         : "model-changed";
     logConversationAdmission(
       disposition,
@@ -159,62 +130,19 @@ function conversationCallGuard(
       admission.gatewayConfigGeneration,
       deps.gatewayConfig?.generation(),
     );
-    return disposition;
+    if (!disposition.startsWith("allowed-")) throw new ConversationModelNotReadyError();
   };
-  return {
-    async assert(request, signal): Promise<void> {
-      signal.throwIfAborted();
-      let disposition = decide(request);
-      // Only an expiry is checked again; a failed probe, a replaced model or configuration and a
-      // missing or malformed observation still refuse at once. The recheck must leave a fresh
-      // positive observation of this generation, or the call is refused before any provider work.
-      if (disposition === "expired" && recheck !== undefined) {
-        await recheck(modelId, request.logContext?.correlationId);
-        signal.throwIfAborted();
-        disposition = decide(request);
-      }
-      if (!disposition.startsWith("allowed-")) throw new ConversationModelNotReadyError();
-    },
-    complete(response, signal): void {
-      if (
-        !signal.aborted &&
-        response.modelId === modelId &&
-        SERVED_FINISH_REASONS.has(response.finishReason)
-      )
-        completedAt = Date.now();
-    },
-  };
-}
-
-export function withConversationReadinessAdmission(
-  model: ModelPort,
-  modelId: string,
-  admission: ConversationReadinessAdmission,
-  deps: Pick<UiHandlerDeps, "gatewayConfig">,
-  recheck?: ConversationReadinessRecheck,
-): ModelPort {
-  const guard = conversationCallGuard(modelId, admission, deps, recheck);
   const call: ModelPort["call"] = async (request, signal) => {
-    await guard.assert(request, signal);
-    const response = await model.call(request, signal);
-    guard.complete(response, signal);
-    return response;
+    assert(request, signal);
+    return model.call(request, signal);
   };
   if (model.callStream === undefined) return { call };
-  // Bind the receiver: GatewayModelPort.callStream is a prototype method reading
-  // this.gateway — extracting it bare would throw a TypeError on the first next() of any
-  // streaming consumer (same rule chat-stream-handlers already follows with .bind).
-  const callStream = model.callStream.bind(model);
+  const stream = model.callStream.bind(model);
   return {
     call,
     callStream: async function* (request, signal): AsyncIterable<GatewayStreamChunk> {
-      await guard.assert(request, signal);
-      let completedResponse: NormalizedResponse | undefined;
-      for await (const chunk of callStream(request, signal)) {
-        if (chunk.type === "done") completedResponse = chunk.response;
-        yield chunk;
-      }
-      if (completedResponse !== undefined) guard.complete(completedResponse, signal);
+      assert(request, signal);
+      yield* stream(request, signal);
     },
   };
 }

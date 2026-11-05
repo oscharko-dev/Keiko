@@ -11,9 +11,15 @@ import type {
   CatalogDigest,
   CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { catalogJsonBytes, validateToolResultEnvelope } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  catalogJsonBytes,
+  validateToolArguments,
+  validateToolResultEnvelope,
+} from "@oscharko-dev/keiko-tool-catalog";
 import { KEY_RANGE_ENTRY_CHARS } from "./jiraDraftKeyRanges.js";
 import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
+import { checkJiraDraft } from "@oscharko-dev/keiko-connectors";
+import { JIRA_DRAFT_STAGE_DECLARATION } from "./jiraDraftDescriptor.js";
 import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
 import { JIRA_REJECTED_GUIDANCE, jiraAttemptToolResult } from "./jiraMutationResult.js";
 
@@ -320,5 +326,39 @@ describe("the refusal detail of every single-issue mutation fits its descriptor 
   it("needed more than the former 4,096 bytes for the largest named refusal", () => {
     const result = jiraAttemptToolResult("rejected", refusedWith("x".repeat(200), "a".repeat(64)));
     expect(catalogJsonBytes(result.data)).toBeGreaterThan(4096);
+  });
+});
+
+describe("staged drafts declare the item shape their handler accepts", () => {
+  const item = {
+    ref: "migration",
+    projectId: "10000",
+    issueTypeId: "10001",
+    fields: {
+      summary: "Synthetic migration",
+      description: "Synthetic description",
+      labels: ["synthetic"],
+      customfield_10010: { value: "Synthetic choice" },
+    },
+  };
+  const descriptors = [JIRA_DRAFT_STAGE_DECLARATION.descriptor, draftDescriptor()];
+
+  it("accepts the same complete item and dynamic Jira fields for staging and execution", () => {
+    expect(checkJiraDraft({ items: [item] }).ok).toBe(true);
+    for (const descriptor of descriptors)
+      expect(validateToolArguments({ items: [item] }, descriptor)).toEqual({ items: [item] });
+  });
+
+  it.each([
+    ["missing fields", { ref: item.ref, projectId: item.projectId, issueTypeId: item.issueTypeId }],
+    ["top-level summary", { ...item, summary: "Synthetic title" }],
+    ["top-level description and labels", { ...item, description: "Synthetic", labels: [] }],
+    ["missing summary", { ...item, fields: { description: "Synthetic" } }],
+  ])("rejects %s at the catalog boundary before handler work", (_kind, invalid) => {
+    expect(checkJiraDraft({ items: [invalid] }).ok).toBe(false);
+    for (const descriptor of descriptors)
+      expect(() => validateToolArguments({ items: [invalid] }, descriptor)).toThrow(
+        "invalid-shape",
+      );
   });
 });

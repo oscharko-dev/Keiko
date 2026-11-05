@@ -1,12 +1,16 @@
 import {
-  JIRA_DRAFT_ID_PATTERN,
   JIRA_DRAFT_PAGE_ITEMS_MAX,
   JIRA_FIELD_VALIDATION_FAILURES,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  compileExternalCatalogSchema,
+  createToolDescriptor,
+  createToolRef,
+} from "@oscharko-dev/keiko-tool-catalog";
 import { object, text } from "./jiraManagedSchemas.js";
 import {
+  JIRA_DRAFT_ITEM_SCHEMA,
   JIRA_FAILURE_MESSAGES_SCHEMA,
   JIRA_VIOLATIONS_SCHEMA,
 } from "./jiraManagedMutationDescriptors.js";
@@ -17,34 +21,25 @@ const DESCRIPTION =
   " items in the jira.draft item form; pass the returned draftId to append. A page that breaks an issue template is refused whole with the violations to correct. " +
   "When unresolvedRefCount is 0, call jira.draft with only draftId and the last draftDigest: the human approves the whole draft once. Changes nothing in Jira.";
 
-// The item form is jira.draft's, declared there once: repeating it here would spend the model's
-// context on every turn. The tool checks every item against that form and names the first item
-// that does not match it.
-const STAGED_ITEM = {
-  type: "object",
-  description: "One item in the jira.draft item form, requirementIds included.",
-  properties: {},
-  required: [],
-  additionalProperties: true,
-};
-
 export const JIRA_DRAFT_STAGE_DECLARATION: ManagedMcpToolDeclaration = Object.freeze({
   name: "jira.draft-stage",
   risk: "read",
   descriptor: createToolDescriptor({
     toolRef: createToolRef("keiko.jira.draft.stage", 1),
     description: DESCRIPTION,
-    inputSchema: object(
-      {
-        draftId: { ...text(36), pattern: JIRA_DRAFT_ID_PATTERN },
-        items: {
-          type: "array",
-          minItems: 1,
-          maxItems: JIRA_DRAFT_PAGE_ITEMS_MAX,
-          items: STAGED_ITEM,
+    inputSchema: compileExternalCatalogSchema(
+      object(
+        {
+          draftId: { ...text(36), format: "uuid", pattern: "^[0-9a-f-]{36}$" },
+          items: {
+            type: "array",
+            minItems: 1,
+            maxItems: JIRA_DRAFT_PAGE_ITEMS_MAX,
+            items: JIRA_DRAFT_ITEM_SCHEMA,
+          },
         },
-      },
-      ["items"],
+        ["items"],
+      ),
     ),
     resultSchema: object(
       {

@@ -3,6 +3,9 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserApprovalManagementResult } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import * as api from "@/lib/browser-approval-api";
+import { ApiError, askGrounded, sendDesktopChatStream } from "@/lib/api";
+import { readChatDraft, writeChatDraft } from "@/lib/chat-draft-api";
+import { bffFetchJson } from "@/lib/http";
 import { openLauncherBrowser } from "@/lib/launcher-browser-client";
 vi.mock("@/lib/launcher-browser-client", () => ({ openLauncherBrowser: vi.fn() }));
 import {
@@ -74,11 +77,135 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   resetClientDiagnosticWriter();
   vi.useRealTimers();
 });
 
 describe("browser notice authentication lifecycle", () => {
+  it.each(["grounded", "streamed", "draft"] as const)(
+    "replaces a stale positive browser inspection after a concealed %s mutation refusal",
+    async (surface) => {
+      render(<BrowserApprovalNotice compact />);
+      await waitFor(() => expect(api.inspectBrowserApprovals).toHaveBeenCalledOnce());
+      expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull();
+      active = false;
+      const fetchMock = vi.fn().mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: { code: "NOT_FOUND", message: "Private resource not found." },
+            }),
+            { status: 404, headers: { "Content-Type": "application/json" } },
+          ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      await act(async () => {
+        const pending =
+          surface === "grounded"
+            ? askGrounded({
+                chatId: "a",
+                content: "Retain this prompt.",
+                expectedSkillSelectionRevision: 1,
+              })
+            : surface === "streamed"
+              ? sendDesktopChatStream(
+                  { chatId: "a", projectPath: "/workspace", content: "Retain this prompt." },
+                  new AbortController().signal,
+                  {
+                    onToken: () => undefined,
+                    onDone: () => undefined,
+                    onError: () => undefined,
+                    onCancelled: () => undefined,
+                  },
+                )
+              : writeChatDraft("a", { text: "Retain this prompt.", expectedRevision: 1 });
+        await expect(pending).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
+      });
+      await screen.findByRole("button", { name: "Connect browser" });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(api.inspectBrowserApprovals).toHaveBeenCalledTimes(3);
+      expect(api.requestBrowserApproval).not.toHaveBeenCalled();
+      expect(openLauncherBrowser).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [401, "UNAUTHORIZED", true],
+    [403, "FORBIDDEN", true],
+    [403, "PATH_ESCAPE", false],
+    [409, "SKILL_SELECTION_CHANGED", false],
+    [404, "OTHER_NOT_FOUND", false],
+  ] as const)(
+    "reinspects only session-relevant mutation refusals: %s %s",
+    async (status, code, expected) => {
+      render(<BrowserApprovalNotice compact />);
+      await waitFor(() => expect(api.inspectBrowserApprovals).toHaveBeenCalledOnce());
+      active = false;
+      const fetchMock = vi.fn().mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: { code, message: "Refused." },
+            }),
+            { status },
+          ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      await act(async () => {
+        await expect(
+          bffFetchJson("/api/chats/a/draft", { method: "PUT", body: "{}" }),
+        ).rejects.toMatchObject({ status, code });
+      });
+      if (expected) await screen.findByRole("button", { name: "Connect browser" });
+      else expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull();
+      expect(api.inspectBrowserApprovals).toHaveBeenCalledTimes(expected ? 3 : 1);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not recurse when session-dependent follow-up reads are also concealed", async () => {
+    render(<BrowserApprovalNotice compact />);
+    await waitFor(() => expect(api.inspectBrowserApprovals).toHaveBeenCalledOnce());
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: { code: "NOT_FOUND", message: "Private resource not found." },
+          }),
+          { status: 404, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(readChatDraft("a")).rejects.toMatchObject({ status: 404 });
+    await expect(bffFetchJson("/api/chats/a/skill")).rejects.toMatchObject({ status: 404 });
+    expect(api.inspectBrowserApprovals).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull();
+  });
+
+  it("preserves genuine missing-resource errors when the authoritative session is still active", async () => {
+    render(<BrowserApprovalNotice compact />);
+    await waitFor(() => expect(api.inspectBrowserApprovals).toHaveBeenCalledOnce());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: { code: "NOT_FOUND", message: "Chat not found." },
+          }),
+          { status: 404 },
+        ),
+      ),
+    );
+    await act(async () => {
+      await expect(
+        askGrounded({ chatId: "removed", content: "Keep this prompt." }),
+      ).rejects.toMatchObject(new ApiError("NOT_FOUND", "Chat not found.", 404));
+    });
+    await waitFor(() => expect(api.inspectBrowserApprovals).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull();
+  });
+
   it("connects in one click through the native launcher without a code dialog", async () => {
     active = false;
     vi.mocked(openLauncherBrowser).mockImplementation(async () => {

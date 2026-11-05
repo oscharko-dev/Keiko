@@ -1555,14 +1555,30 @@ function assertPreservedWriteContinuation(requests: readonly string[]): void {
 }
 
 function boundCallerSynthesisInput(grant: number): void {
+  // This synthetic caller owns one allowance across answer and citation repair. Narrowing only
+  // answer() options leaves repair() using the unchanged context pack's much larger budget.
+  let spent = 0;
   const run = groundedOrchestrator.runGroundedExploration;
   vi.spyOn(groundedOrchestrator, "runGroundedExploration").mockImplementation((input, deps) =>
     run(input, {
       ...deps,
       answerer: {
         ...deps.answerer,
-        answer: (question, pack, options) =>
-          deps.answerer.answer(question, pack, { ...options, modelInputTokensMax: grant }),
+        answer: async (question, pack, options) => {
+          const answer = await deps.answerer.answer(question, pack, {
+            ...options,
+            modelInputTokensMax: grant,
+          });
+          if (typeof answer !== "string") spent += answer.usage.promptTokens;
+          return answer;
+        },
+        repair: (question, pack, original, options) => {
+          if (deps.answerer.repair === undefined) throw new Error("Missing gateway repair");
+          return deps.answerer.repair(question, pack, original, {
+            ...options,
+            modelInputTokensMax: Math.max(0, grant - spent),
+          });
+        },
       },
     }),
   );
@@ -1815,6 +1831,70 @@ async function connectDataPod(
   }
 }
 
+function assertRuntimeInventoryRequest(request: string | undefined, content: string): void {
+  const firstRequest = JSON.parse(request ?? "{}") as {
+    messages: { role: string; content: string }[];
+  };
+  const inventory = firstRequest.messages.find((message) =>
+    message.content.includes('"kind":"runtime-tool-observation"'),
+  );
+  expect(inventory).toBeDefined();
+  expect(inventory?.role).toBe("user");
+  const lastUser = firstRequest.messages.filter((message) => message.role === "user").at(-1);
+  expect(lastUser?.content).toContain(content);
+  expect(lastUser?.content).not.toContain('"kind":"runtime-tool-observation"');
+  expect(inventory?.content).toContain('"documentCount":9');
+  expect(inventory?.content).toContain('"inventoryComplete":true');
+  for (let index = 1; index < 9; index++)
+    expect(inventory?.content).toContain(`inventory-document-${String(index)}.md`);
+  expect(firstRequest.messages.some((message) => message.role === "assistant")).toBe(false);
+}
+
+it.each(["grounded", "desktop-mixed"] as const)(
+  "sends the runtime corpus inventory before the first %s synthesis call even when the model uses no tools",
+  async (surface) => {
+    const f = runtime();
+    await connectDataPod(f, "Feature returns true. Feature is a function.");
+    if (surface === "grounded") f.deps.store.updateChat(f.chatId, { jiraPodId: null });
+    const store = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: dirname(f.deps.uiDbPath ?? "") }),
+    });
+    try {
+      const insert = store._internal.db.prepare(
+        "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) SELECT ?, capsule_id, source_id, ?, size_bytes, ?, content_hash, parser_id, parser_version, last_extracted_at, status, ? FROM documents LIMIT 1",
+      );
+      for (let index = 1; index < 9; index++) {
+        const id = `inventory-document-${String(index)}`;
+        insert.run(id, id, "text/markdown", `${id}.md`);
+      }
+    } finally {
+      store.close();
+    }
+    const requests = provider(["answer"], "Feature returns true [1].");
+    const body = {
+      chatId: f.chatId,
+      projectPath: f.root,
+      content: "List the attached documents.",
+      modelId: MODEL,
+      clientTurnId: `runtime-inventory-${surface}`,
+    };
+    const result = await (surface === "grounded" ? handleGroundedAsk : handleSendDesktopChat)(
+      context(body),
+      f.deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(requests).toHaveLength(1);
+    assertRuntimeInventoryRequest(requests[0], body.content);
+    const exchanges = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges;
+    expect(exchanges).toHaveLength(1);
+    expect(exchanges?.[0]).toMatchObject({
+      call: { name: "knowledge_documents", origin: "runtime", arguments: { view: "inventory" } },
+      result: { status: "completed" },
+    });
+    expect(f.jiraRequests).toHaveLength(0);
+  },
+);
+
 it("uses the existing local Data-Pod evidence pack with Jira and keeps its numeric citations", async () => {
   const f = runtime();
   await connectDataPod(f, "Feature returns true. Feature is a function.");
@@ -1859,7 +1939,12 @@ it("retains a Data-Pod turn's committed write across the existing adopted-window
   expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
   assertPreservedWriteContinuation(requests);
   const messages = f.deps.store.listMessages(f.chatId);
-  expect(messages[0]?.toolTranscript?.exchanges[0]).toMatchObject({
+  const exchanges = messages[0]?.toolTranscript?.exchanges;
+  expect(exchanges?.find((exchange) => exchange.call.origin === "runtime")).toMatchObject({
+    call: { name: "knowledge_documents" },
+    result: { status: "completed" },
+  });
+  expect(exchanges?.find((exchange) => exchange.call.id === "mixed-call-1")).toMatchObject({
     call: { id: "mixed-call-1", name: "jira_comment" },
     mutationOutcome: "succeeded",
     result: { status: "completed" },
@@ -2013,9 +2098,10 @@ it.each([false, true])(
   },
 );
 
-it("abstains when a tool-only empty-pack model invents an answer without invoking Jira", async () => {
+it.each([false, true])("abstains without evidence after runtime metadata=%s", async (metadata) => {
   const f = runtime();
   rmSync(join(f.root, "src"), { recursive: true });
+  if (metadata) await connectDataPod(f, "Orchids grow in violet garden beds.");
   const requests = provider(["answer"], "Invented Jira source fact.");
   const result = await handleGroundedAsk(
     context({ chatId: f.chatId, content: "List Jira projects.", modelId: MODEL }),

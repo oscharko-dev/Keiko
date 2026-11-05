@@ -87,6 +87,7 @@ afterEach(async () => {
   await Promise.all(hosts.splice(0).map((host) => host.close()));
   exchanges.length = 0;
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function fixture(
@@ -664,4 +665,82 @@ it("executes an external open schema with a local reference and optional union w
   await f.host.call("fixture.echo", { text: "synthetic", extra: 7 }, context("external"));
   expect(run).toHaveBeenCalledOnce();
   expect(run.mock.calls[0]?.[0]).toEqual({ text: "synthetic", extra: 7 });
+});
+
+describe("managed MCP invocation durations", () => {
+  it("completes through the actual SDK beyond both former host and SDK defaults", async () => {
+    const entered = deferred();
+    const release = deferred();
+    let allowed = false;
+    let settled = false;
+    const { host } = fixture(
+      async (args, ctx) => {
+        entered.resolve();
+        await release.promise;
+        allowed = ctx.beforeEffect();
+        return { data: { text: args.text ?? "", binding: ctx.binding } };
+      },
+      undefined,
+      { durationMs: 90_000 },
+    );
+    await host.admit("admission-fixture");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const outcome = host.call("fixture.echo", { text: "one" }, context("first"));
+    void outcome.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await entered.promise;
+    await vi.advanceTimersByTimeAsync(75_000);
+    expect(settled).toBe(false);
+    release.resolve();
+    await expect(outcome).resolves.toEqual({ text: "one", binding: "first" });
+    expect(allowed).toBe(true);
+    expect(exchanges.filter(({ method }) => method === "tools/call")).toHaveLength(1);
+  });
+
+  it.each([
+    { label: "declared tool duration", durationMs: 90_000, abortAtMs: undefined },
+    { label: "earlier caller cancellation", durationMs: 180_000, abortAtMs: 15_000 },
+  ])("revokes delayed effects at the $label", async ({ durationMs, abortAtMs }) => {
+    const entered = deferred();
+    const release = deferred();
+    const finished = deferred();
+    const controller = new AbortController();
+    let allowed = true;
+    const { host } = fixture(
+      async (args, ctx) => {
+        entered.resolve();
+        await release.promise;
+        allowed = ctx.beforeEffect();
+        finished.resolve();
+        return { data: { text: args.text ?? "", binding: ctx.binding } };
+      },
+      undefined,
+      { durationMs, risk: "write" },
+    );
+    await host.admit("admission-fixture");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const caller = { ...context("first", controller.signal), maxDurationMs: 3_600_000 };
+    const outcome = host.call("fixture.echo", { text: "one" }, caller).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await entered.promise;
+    if (abortAtMs !== undefined)
+      setTimeout(() => {
+        controller.abort();
+      }, abortAtMs);
+    await vi.advanceTimersByTimeAsync((abortAtMs ?? durationMs) + 1);
+    expect(await outcome).toMatchObject({
+      reason: abortAtMs === undefined ? "deadline-exceeded" : "aborted",
+    });
+    release.resolve();
+    await finished.promise;
+    expect(allowed).toBe(false);
+  });
 });

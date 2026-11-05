@@ -111,7 +111,8 @@ describe("workspace-persistence", () => {
     if (restored === undefined) throw new TypeError("Missing restored Jira node");
     render(createElement(ConnectorPickerWidget, { ...restored.cfg, onSelect: vi.fn() }));
     expect(await screen.findByText("Restored Jira")).toBeVisible();
-    expect(screen.getByText("Verified Jira Pod")).toBeVisible();
+    expect(screen.queryByText("Verified Jira Pod")).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Jira" })).toBeVisible();
     expect(screen.getByTestId("knowledge-connector-node")).toBeVisible();
     expect(fetchCapsules).not.toHaveBeenCalled();
     expect(fetchCapsuleSets).not.toHaveBeenCalled();

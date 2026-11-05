@@ -3818,6 +3818,12 @@
               "required": false
             },
             {
+              "name": "pendingKnowledgePageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "settledExchangeCount",
               "type": "integer",
               "dataClass": "count",
@@ -40200,11 +40206,19 @@
       "lifecycleOperations": {
         "start": [],
         "state": [],
-        "end": ["knowledge.requirement-trace.applied", "knowledge.requirements.read"],
+        "end": [
+          "knowledge.documents.operation",
+          "knowledge.requirement-trace.applied",
+          "knowledge.requirements.read"
+        ],
         "failure": [],
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "knowledge.documents.operation",
+          "mode": "correlation"
+        },
         {
           "op": "knowledge.requirement-trace.applied",
           "mode": "correlation"
@@ -40215,9 +40229,97 @@
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["knowledge.requirement-trace.applied", "knowledge.requirements.read"],
+      "resourceSignals": [
+        "knowledge.documents.operation",
+        "knowledge.requirement-trace.applied",
+        "knowledge.requirements.read"
+      ],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "knowledge.documents.operation",
+          "owner": "keiko-server",
+          "category": "search",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "cached",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "disposition",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "documentCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "hasNextPage",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "operation",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "pendingPageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "readRequirementCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "requirementCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "returnedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "reviewedDocumentCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "sourceChars",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["knowledge.documents.operation.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "knowledge.requirement-trace.applied",
           "owner": "keiko-server",

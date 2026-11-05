@@ -1,3 +1,4 @@
+import { raceAbortDeadline, type AbortDeadlineOptions } from "./abort-race.js";
 import type { IncomingMessage } from "node:http";
 import { TimeoutError, TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
@@ -2755,12 +2756,7 @@ interface ConversationInitializationQueue {
   active: number;
   disposed: boolean;
   readonly controller: AbortController;
-  initializedGeneration: number;
   readonly pending: (() => Promise<void>)[];
-  // When each model's latest probe of the current generation settled. A failed report may keep an
-  // older feature-observation timestamp (`preserveUnexecutedCapabilityObservation`), so the
-  // cooldown a conversation request honours is dated by the probe, never by that timestamp.
-  readonly probeSettledAt: Map<string, number>;
   // The deployment each model's latest check ran against, recorded when it starts to run (a probe
   // a replacement skipped never ran). It survives a generation change, because a proof another
   // model's check persisted bumps the generation without changing this model.
@@ -2780,9 +2776,7 @@ function conversationQueue(
       active: 0,
       disposed: false,
       controller: new AbortController(),
-      initializedGeneration: -1,
       pending: [],
-      probeSettledAt: new Map(),
       startupChecked: new Map(),
     };
     conversationQueues.set(holder, queue);
@@ -2890,8 +2884,8 @@ export function withReadinessParentCorrelation(
   };
 }
 
-// The one startup check of a model: its result stands until a request or a selection needs a fresh
-// answer. Nothing re-probes in the background (owner decision 2026-11-01, customer 1.3.4).
+// Startup checks each configured connection once. Requests consume this process-local result;
+// only configuration replacement or explicit Settings verification can initiate another check.
 function checkConversationModelOnce(
   deps: UiHandlerDeps,
   modelId: string,
@@ -2921,15 +2915,6 @@ function checkConversationModelOnce(
   );
 }
 
-function resetConversationGeneration(
-  queue: ConversationInitializationQueue,
-  generation: number,
-): void {
-  if (queue.initializedGeneration === generation) return;
-  queue.probeSettledAt.clear();
-  queue.initializedGeneration = generation;
-}
-
 /** Whether a basic-chat check of this model is running now, in the current generation. */
 export function isConversationReadinessCheckRunning(deps: UiHandlerDeps, modelId: string): boolean {
   const holder = deps.gatewayConfig;
@@ -2939,11 +2924,31 @@ export function isConversationReadinessCheckRunning(deps: UiHandlerDeps, modelId
   );
 }
 
+/** Observe only checks that initialization already owns; this never starts a provider call. */
+export function pendingConversationReadiness(deps: UiHandlerDeps): readonly Promise<void>[] {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return [];
+  const prefix = `${String(holder.generation())}:`;
+  return [...readinessProbesFor(holder)]
+    .filter(([key]) => key.startsWith(prefix))
+    .map(([, probe]) => probe.promise);
+}
+
+/** A passive metadata reader joins the existing checks, including a replacement generation. */
+export async function awaitPendingConversationReadiness(
+  deps: UiHandlerDeps,
+  bounds: AbortDeadlineOptions,
+): Promise<void> {
+  let generation: number | undefined;
+  do {
+    generation = deps.gatewayConfig?.generation();
+    await raceAbortDeadline(() => Promise.allSettled(pendingConversationReadiness(deps)), bounds);
+  } while (generation !== deps.gatewayConfig?.generation());
+}
+
 // Startup checks a model this configuration generation has not answered for yet (ready or not),
 // once per deployment: a generation that only persisted another model's proof repeats no check.
-// A user-driven refresh (a page load) checks again every model that did not answer ready, within
-// the not-ready cooldown. A success that only expired stays usable, as in Chat, and is checked by
-// the request that uses it; nothing re-checks a model on a timer (customer 1.3.4).
+// Explicit verification can retry a failed model; passive page loads and model reads do not.
 function initializeConversationModel(
   deps: UiHandlerDeps,
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
@@ -2981,8 +2986,8 @@ function answerThisGeneration(
 }
 
 /**
- * Each configured chat model is checked once per connection, at startup; `recheck`
- * (a user-driven refresh) checks again the models that are not ready now.
+ * Each configured chat model is checked once per connection, at startup; `recheck` is reserved
+ * for explicit verification of models that are not ready. A browser reload never sets it.
  */
 export function initializeConfiguredConversationReadiness(
   deps: UiHandlerDeps,
@@ -2993,7 +2998,6 @@ export function initializeConfiguredConversationReadiness(
   if (holder === undefined) return;
   const queue = conversationQueue(holder);
   if (queue.disposed) return;
-  resetConversationGeneration(queue, holder.generation());
   const config = currentGatewayConfig(deps);
   if (config === undefined) return;
   for (const model of listConfiguredCapabilities(config)) {
@@ -3003,10 +3007,9 @@ export function initializeConfiguredConversationReadiness(
 }
 
 /**
- * Fresh chat success adds no interactive readiness request. A running probe is joined; an expired
- * success or a failed observation outside its cooldown can share one fresh check through the
- * existing two-slot queue. The startup check uses the same in-flight owner, so simultaneous
- * requests cannot create a probe storm.
+ * Requests may join configuration-owned initialization, but never start a readiness check.
+ * The same current-generation result applies to every turn until explicit verification or
+ * a changed connection replaces it. Actual provider failures surface from the user's call.
  */
 export async function awaitInitializedConversationReadiness(
   deps: UiHandlerDeps,
@@ -3026,10 +3029,7 @@ async function awaitConversationRequestReadiness(
 ): Promise<void> {
   if (currentConversationReady(deps, modelId)) return;
   const probe = readinessProbesFor(holder).get(`${String(holder.generation())}:${modelId}`);
-  if (probe === undefined) {
-    await reprobeExpiredNotReadyModel(deps, holder, modelId, correlationId);
-    return;
-  }
+  if (probe === undefined) return;
   logAutomaticReadinessJoined(
     deps,
     modelId,
@@ -3040,46 +3040,8 @@ async function awaitConversationRequestReadiness(
   await settledWithinBudget(probe.promise, CHAT_MODEL_WALK_BUDGET_MS);
 }
 
-async function reprobeExpiredNotReadyModel(
-  deps: UiHandlerDeps,
-  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
-  modelId: string,
-  correlationId: string | undefined,
-): Promise<void> {
-  if (modelId.length === 0 || conversationQueue(holder).disposed) return;
-  // Only an observed failure waits out its cooldown. An expired success and a model that holds no
-  // answer (its startup check never settled) are checked now: the request would otherwise wait for
-  // a check nobody runs (customer 1.3.4).
-  const observedFailure = notReadyObservationAgeMs(holder, modelId) !== undefined;
-  if (observedFailure && !notReadyCooldownElapsed(holder, modelId)) return;
-  const requestCorrelationId = correlationId ?? newCorrelationId();
-  // The probe's own lines carry the request's correlation id; a probe failure is reported once by
-  // the queue and once here, against the request that was waiting for it.
-  const reprobe = ensureOnDemandConversationReadiness(deps, modelId, requestCorrelationId).catch(
-    (error: unknown) => {
-      emitServerDiagnostic(
-        deps.diagnostics,
-        serverDiagnosticFromError({
-          correlationId: requestCorrelationId,
-          operation: "gateway.readiness",
-          source: "gateway-readiness.conversation-request",
-          error,
-          summary: "A gateway readiness probe could not be completed.",
-          redact: (message): string => String(deps.redactor(message)),
-        }),
-      );
-    },
-  );
-  await settledWithinBudget(reprobe, CHAT_MODEL_WALK_BUDGET_MS);
-}
-
-// A failed probe must not pin the model for the whole configuration generation: a transient
-// gateway outage would brick every chat surface until a manual re-probe or restart (the
-// readiness twin of the 0.3.11 endless-indexing incident). It must not be re-probed on every
-// request either — each probe can burn the full provider timeout against a dead gateway. So a
-// current-generation non-ready observation answers the guard only within this window; after it,
-// the first conversation request, Workbench read or page load that needs the model re-probes and
-// either heals or refreshes the pin. Nothing re-probes on a timer (customer 1.3.4).
+// Bound repeated explicit/initialization checks after a failed observation. Conversation
+// requests and passive reads only consume the recorded result, regardless of this interval.
 export const NOT_READY_REPROBE_COOLDOWN_MS = 30_000;
 
 // Age of the current-generation EXPLICIT failed chat observation of a model, `NaN` when its
@@ -3107,23 +3069,6 @@ function withinNotReadyCooldown(
   return ageMs !== undefined && ageMs >= 0 && ageMs < NOT_READY_REPROBE_COOLDOWN_MS;
 }
 
-// The conversation-request twin of `withinNotReadyCooldown`: a request may start a probe only for a
-// failed observation whose LATEST evidence — the observation or the probe that settled it,
-// whichever is younger — has outlived the cooldown. A malformed or future timestamp fails CLOSED
-// here (it yields no usable age): interactive Chat never adds a readiness request on a value it
-// cannot date; a page load still checks such a model again.
-function notReadyCooldownElapsed(
-  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
-  modelId: string,
-): boolean {
-  const observedAgeMs = notReadyObservationAgeMs(holder, modelId);
-  if (observedAgeMs === undefined) return false;
-  const settledAt = conversationQueue(holder).probeSettledAt.get(modelId);
-  const ages = [observedAgeMs, settledAt === undefined ? Number.NaN : Date.now() - settledAt];
-  const usableAges = ages.filter((ageMs) => Number.isFinite(ageMs) && ageMs >= 0);
-  return usableAges.length > 0 && Math.min(...usableAges) >= NOT_READY_REPROBE_COOLDOWN_MS;
-}
-
 function conversationProbeDue(
   deps: UiHandlerDeps,
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
@@ -3134,8 +3079,8 @@ function conversationProbeDue(
   return !currentConversationReady(deps, modelId);
 }
 
-// `correlationId` is the conversation request that needed the answer: the probe's lines carry it,
-// so that request's timeline shows the check it waited for.
+// The initialization or explicit verification owner supplies the correlation; joining consumers
+// link their own request timeline to this probe instead of creating provider traffic.
 export async function ensureOnDemandConversationReadiness(
   deps: UiHandlerDeps,
   modelId: string,
@@ -3244,10 +3189,6 @@ async function runOnDemandReadinessProbe(
     );
   logOnDemandProbeStarted(deps, holder, modelId, probeCorrelationId, backgroundAttempt);
   await observeOnDemandProbe(deps, modelId, probeCorrelationId);
-  if (holder.generation() === generation) {
-    const queue = conversationQueue(holder);
-    queue.probeSettledAt.set(modelId, Date.now());
-  }
   // A failed report CLEARS the capability entry; without a current-generation observation
   // every subsequent chat attempt would probe the provider again. Persist an explicit
   // not-ready so retries hit the guard instead of the wire (the settings probe replaces it).

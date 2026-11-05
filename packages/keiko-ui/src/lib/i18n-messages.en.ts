@@ -572,7 +572,7 @@ export const EN_MESSAGES = {
   "chat.model.title": "Model",
 
   "chat.model.noneConfiguredTitle":
-    "No conversation-eligible model is configured - connect a gateway in Settings",
+    "No conversation model is currently available - check gateway and model status in Settings",
 
   "chat.voice": "Voice",
   "chat.voice.interrupt": "Interrupt the assistant",

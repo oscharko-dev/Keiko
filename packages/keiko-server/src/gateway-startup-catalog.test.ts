@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { mkdtempSync, realpathSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +20,8 @@ import {
   isCodingWorkbenchProbePending,
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
   ensureCodingWorkbenchContextWindows,
+  initializeLiteLlmCodingReadiness,
+  runGatewayReadiness,
   resetCodingWorkbenchContextWindowProbesForTests,
   withReadinessParentCorrelation,
 } from "./gateway-readiness.js";
@@ -39,7 +42,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import { activityLogOperationSchema } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { RouteContext } from "./routes.js";
+import { matchRoute, type RouteContext } from "./routes.js";
 
 import { openProviderCredentialVault, providerSecretRef } from "./credentialVault.js";
 
@@ -83,6 +86,7 @@ function startupDeps(
 ): UiHandlerDeps {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-startup-catalog-"));
   directories.push(dir);
+  env.KEIKO_MEMORY_DIR = join(dir, "memory");
   const deps = buildUiHandlerDeps({
     configPath: undefined,
     env,
@@ -215,15 +219,12 @@ it("retries a real discovery response-body transport rejection instead of pinnin
   expect(JSON.stringify(events)).not.toContain("terminated synthetic private diagnostic");
 });
 
-it("refreshes on reload without waiting and shares concurrent reload catalog discovery", async () => {
+it("reuses startup discovery on repeated browser reloads without provider traffic", async () => {
   stubReadyChat();
-  const pending = deferredValue<ReturnType<typeof discoveredCatalog>>();
-  const discovery = vi
-    .fn()
-    .mockResolvedValueOnce(discoveredCatalog())
-    .mockReturnValue(pending.promise);
+  const discovery = vi.fn().mockResolvedValue(discoveredCatalog());
   const deps = startupDeps(discovery);
-  deps.gatewayConfig?.set(startupConfig(), true);
+  const config = startupConfig();
+  deps.gatewayConfig?.set(config, true);
   await vi.waitFor(() => {
     expect(discovery).toHaveBeenCalledOnce();
   });
@@ -232,24 +233,70 @@ it("refreshes on reload without waiting and shares concurrent reload catalog dis
     correlationId: "corr-browser-reload",
     url: new URL("http://127.0.0.1/api/models?refresh=1"),
   } as RouteContext;
-  try {
+  for (let reload = 0; reload < 3; reload += 1) {
     const result = handleModels(context, deps);
     expect(result).toMatchObject({ status: 200, body: { models: [{ id: "chat-model" }] } });
-    handleModels(context, deps);
-    await vi.waitFor(() => {
-      expect(discovery).toHaveBeenCalledTimes(2);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(discovery).toHaveBeenCalledOnce();
+  }
+  // Explicit Settings/configuration work retains its separate direct discovery operation.
+  await explicitlyRefreshStartupCatalog(deps, requiredStartupProvider(config));
+  expect(discovery).toHaveBeenCalledTimes(2);
+});
+
+it("serves the settled startup catalog on the first mounted browser read without another discovery", async () => {
+  const readiness = deferredValue<undefined>();
+  vi.stubGlobal("fetch", async () => {
+    await readiness.promise;
+    return Response.json({
+      choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
     });
-    handleModels({ ...context, url: new URL("http://127.0.0.1/api/models") }, deps);
-    expect(discovery).toHaveBeenCalledTimes(2);
+  });
+  const pending = deferredValue<ReturnType<typeof discoveredCatalog>>();
+  const discovery = vi.fn(() => pending.promise);
+  const deps = startupDeps(discovery);
+  deps.gatewayConfig?.set(managedStartupConfig("discovered"), true);
+  const route = matchRoute("GET", "/api/models");
+  if (route === undefined || route === "method-not-allowed") {
+    throw new TypeError("Expected mounted models route.");
+  }
+  const context = {
+    correlationId: "corr-cold-browser-catalog",
+    url: new URL("http://127.0.0.1/api/models"),
+  } as RouteContext;
+  let settled = false;
+  const first = Promise.resolve(route.definition.handler(context, deps)).then((response) => {
+    settled = true;
+    return response;
+  });
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(discovery).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+
+    pending.resolve({
+      modelIds: ["replacement-chat"],
+      chatModelIds: ["replacement-chat"],
+      embeddingModelIds: [],
+    });
+    // Metadata publication must finish even while conversation/Coding inference is still pending.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(true);
+    expect(await first).toMatchObject({
+      status: 200,
+      body: { models: [{ id: "replacement-chat" }] },
+    });
+    for (let read = 0; read < 3; read += 1) {
+      expect(await route.definition.handler(context, deps)).toMatchObject({
+        status: 200,
+        body: { models: [{ id: "replacement-chat" }] },
+      });
+    }
+    expect(discovery).toHaveBeenCalledOnce();
   } finally {
     pending.resolve(discoveredCatalog());
+    readiness.resolve(undefined);
   }
-  await pending.promise;
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  handleModels(context, deps);
-  await vi.waitFor(() => {
-    expect(discovery).toHaveBeenCalledTimes(3);
-  });
 });
 
 it("retries a failed startup catalog in the background and stops rediscovering after recovery", async () => {
@@ -743,7 +790,7 @@ it("keeps the accepted credential source after the last discovered model disappe
     chatModelIds: ["new-chat"],
     embeddingModelIds: [],
   });
-  deps.refreshGatewayCatalog?.("corr-after-empty");
+  await explicitlyRefreshStartupCatalog(deps, requiredStartupProvider(config));
   await vi.waitFor(() => {
     expect(startupProviderIds(deps)).toEqual(["new-chat"]);
   });
@@ -916,6 +963,9 @@ it("reconciles the actual models route including complete empty and later new ca
     deps,
   );
   expect(response).toMatchObject({ status: 200, body: { models: [] } });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(startupProviderIds(deps)).toEqual([]);
+  await explicitlyRefreshStartupCatalog(deps, requiredStartupProvider(configured));
   await vi.waitFor(() => {
     expect(startupProviderIds(deps)).toEqual(["new-chat"]);
   });
@@ -1110,6 +1160,7 @@ function envCatalogState(): { configPath: string; env: Record<string, string> } 
     env: {
       KEIKO_MODEL_CHAT_MODEL_API_KEY: "synthetic-env-only-credential",
       KEIKO_PROVIDER_CREDENTIALS_KEY: Buffer.alloc(32, 0x21).toString("base64"),
+      KEIKO_MEMORY_DIR: join(dir, "memory"),
     },
   };
 }
@@ -1431,9 +1482,8 @@ it("starts a changed connection with its own first retry delay and parent", asyn
   });
 });
 
-// Customer 1.3.4: an unanswered startup check is retried when someone asks (here a page load), never
-// on a timer, so a busy gateway is not probed in the background.
-it("checks an unanswered tool-only startup once and recovers on an explicit reload, not a timer", async () => {
+// An unanswered startup capability check is retried by explicit Settings verification only.
+it("checks an unanswered tool-only startup once and recovers in Settings without reload probes", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   let toolCalls = 0;
   let recovered = false;
@@ -1471,6 +1521,13 @@ it("checks an unanswered tool-only startup once and recovers on an explicit relo
   recovered = true;
   deps.refreshGatewayCatalog?.("corr-explicit-reload");
   await vi.advanceTimersByTimeAsync(0);
+  expect(toolCalls).toBe(1);
+  await runGatewayReadiness(
+    { modelId: "chat-model", options: { probes: ["tool_calling"] } },
+    deps,
+    "corr-explicit-settings",
+    "settings",
+  );
   expect(toolCalls).toBe(2);
   expect(startupModels(deps)[0]?.toolCallingVerification?.status).toBe("verified");
 });
@@ -1687,7 +1744,7 @@ function expectStartupRetryProofs(
   }
 }
 
-it("lets an explicit reload recover at the existing connection backoff after a bounded burst", async () => {
+it("keeps an exhausted startup burst cached on reload and permits explicit Settings discovery", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   stubReadyChat();
   const discovery = vi.fn().mockRejectedValue(new Error("Synthetic transport fault."));
@@ -1698,12 +1755,9 @@ it("lets an explicit reload recover at the existing connection backoff after a b
   expect(discovery).toHaveBeenCalledTimes(3);
   discovery.mockResolvedValue(discoveredCatalog());
   deps.refreshGatewayCatalog?.("corr-early-explicit-reload");
-  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(3_600_000);
   expect(discovery).toHaveBeenCalledTimes(3);
-  const backoff = events.find((event) => event.extra?.retryDisposition === "backoff");
-  const remainingDelay = backoff?.extra?.retryDelayMs;
-  if (typeof remainingDelay !== "number") throw new TypeError("Expected existing backoff delay.");
-  await vi.advanceTimersByTimeAsync(remainingDelay + 1);
+  await explicitlyRefreshStartupCatalog(deps, requiredStartupProvider(startupConfig()));
   expect(discovery).toHaveBeenCalledTimes(4);
   expect(catalogCompletions(events).at(-1)?.extra?.outcome).toBe("unchanged");
 });
@@ -2187,7 +2241,8 @@ it("re-probes a re-pointed alias even inside the cooldown of the earlier deploym
     expect(onlyModel(deps).toolCalling).toBe(true);
   });
   expect(probe.toolCalls()).toBe(1);
-  deps.refreshGatewayCatalog?.("corr-repoint-inside-cooldown");
+  await explicitlyRefreshStartupCatalog(deps, requiredStartupProvider(unproven));
+  await initializeLiteLlmCodingReadiness(deps, "corr-explicit-settings");
   await vi.waitFor(() => {
     expect(probe.toolCalls()).toBe(2);
   });
@@ -2278,4 +2333,152 @@ it("does not flag a proof the server will not renew or has refuted", async () =>
     expect(onlyModel(refuted).toolCallingVerification?.status).toBe("unsupported");
   });
   expect(modelsWire(refuted)).not.toHaveProperty("toolCallingRenewalPending");
+});
+
+it("adopts startup readiness in one passive settlement read without another provider check", async () => {
+  const gate = deferredValue<undefined>();
+  const provider = vi.fn(async () => {
+    await gate.promise;
+    return new Response("", { status: 401 });
+  });
+  vi.stubGlobal("fetch", provider);
+  const discovery = vi.fn(() => Promise.resolve(discoveredCatalog()));
+  const deps = startupDeps(discovery, undefined, { KEIKO_CODING_SIDECAR_DISABLED: "1" });
+  deps.gatewayConfig?.set(startupConfig(), true);
+  const route = matchRoute("GET", "/api/models");
+  if (route === undefined || route === "method-not-allowed")
+    throw new TypeError("Expected model route.");
+  const context = {
+    req: new EventEmitter(),
+    res: new EventEmitter(),
+    correlationId: "corr-startup-settlement",
+    url: new URL("http://127.0.0.1/api/models"),
+  } as RouteContext;
+  try {
+    const first = await route.definition.handler(context, deps);
+    expect(first).toMatchObject({ status: 200, body: { startupReadinessPending: true } });
+    let settled = false;
+    const final = Promise.resolve(
+      route.definition.handler(
+        { ...context, url: new URL("http://127.0.0.1/api/models?settleStartup=1") },
+        deps,
+      ),
+    ).then((response) => {
+      settled = true;
+      return response;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    gate.resolve(undefined);
+    const response = await final;
+    expect(response).toMatchObject({
+      status: 200,
+      body: { models: [{ id: "chat-model", conversationReady: false }] },
+    });
+    expect(response).toHaveProperty("body");
+    expect((response as { body: object }).body).not.toHaveProperty("startupReadinessPending");
+    expect(provider).toHaveBeenCalledOnce();
+    expect(discovery).toHaveBeenCalledOnce();
+  } finally {
+    gate.resolve(undefined);
+  }
+});
+
+it("cancels a disconnected metadata wait without cancelling the startup probe", async () => {
+  const gate = deferredValue<undefined>();
+  vi.stubGlobal("fetch", async () => {
+    await gate.promise;
+    return new Response("", { status: 401 });
+  });
+  const deps = startupDeps(() => Promise.resolve(discoveredCatalog()), undefined, {
+    KEIKO_CODING_SIDECAR_DISABLED: "1",
+  });
+  deps.gatewayConfig?.set(startupConfig(), true);
+  const route = matchRoute("GET", "/api/models");
+  if (route === undefined || route === "method-not-allowed")
+    throw new TypeError("Expected model route.");
+  const req = new EventEmitter();
+  const res = new EventEmitter();
+  const context = {
+    req,
+    res,
+    correlationId: "corr-startup-disconnect",
+    url: new URL("http://127.0.0.1/api/models?settleStartup=1"),
+  } as RouteContext;
+  try {
+    const response = Promise.resolve(route.definition.handler(context, deps));
+    const rejected = expect(response).rejects.toMatchObject({ reason: "aborted" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    req.emit("aborted");
+    await rejected;
+    expect(req.listenerCount("aborted")).toBe(0);
+    expect(res.listenerCount("close")).toBe(0);
+    expect(modelsWire(deps)).not.toHaveProperty("conversationReady");
+  } finally {
+    gate.resolve(undefined);
+  }
+  await vi.waitFor(() => {
+    expect(modelsWire(deps)).toHaveProperty("conversationReady", false);
+  });
+});
+
+it("waits for the replacement generation instead of adopting a superseded startup verdict", async () => {
+  const oldGate = deferredValue<undefined>();
+  const newGate = deferredValue<undefined>();
+  let calls = 0;
+  vi.stubGlobal("fetch", async () => {
+    calls += 1;
+    if (calls === 1) {
+      await oldGate.promise;
+      return new Response("", { status: 401 });
+    }
+    await newGate.promise;
+    return Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] });
+  });
+  const deps = startupDeps(() => Promise.resolve(discoveredCatalog()), undefined, {
+    KEIKO_CODING_SIDECAR_DISABLED: "1",
+  });
+  const initial = startupConfig();
+  deps.gatewayConfig?.set(initial, true);
+  const route = matchRoute("GET", "/api/models");
+  if (route === undefined || route === "method-not-allowed")
+    throw new TypeError("Expected model route.");
+  const context = {
+    req: new EventEmitter(),
+    res: new EventEmitter(),
+    correlationId: "corr-startup-replaced",
+    url: new URL("http://127.0.0.1/api/models?settleStartup=1"),
+  } as RouteContext;
+  try {
+    let settled = false;
+    const response = Promise.resolve(route.definition.handler(context, deps)).then((value) => {
+      settled = true;
+      return value;
+    });
+    await vi.waitFor(() => {
+      expect(calls).toBe(1);
+    });
+    deps.gatewayConfig?.set(
+      {
+        ...initial,
+        providers: initial.providers.map((provider) => ({
+          ...provider,
+          apiKey: "replacement-key",
+        })),
+      },
+      true,
+    );
+    await vi.waitFor(() => {
+      expect(calls).toBe(2);
+    });
+    oldGate.resolve(undefined);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    newGate.resolve(undefined);
+    expect(await response).toMatchObject({ body: { models: [{ conversationReady: true }] } });
+    expect(calls).toBe(2);
+  } finally {
+    oldGate.resolve(undefined);
+    newGate.resolve(undefined);
+  }
 });

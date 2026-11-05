@@ -16,6 +16,22 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { ConversationModelNotReadyError } from "./conversation-readiness-admission.js";
 
+type ModelAttemptReservation = NonNullable<
+  ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>
+>;
+interface OwnedSynthesisAttemptReservation extends ModelAttemptReservation {
+  confirmToolRound(): boolean;
+  releaseUnusableAttempt(): void;
+}
+const toolAttemptConfirmations = new WeakMap<ModelAttemptReservation, () => void>();
+
+/** Only this owner's exact reservation can release its provisional synthesis charge. */
+export function groundedToolAttemptConfirmation(
+  reservation: ModelAttemptReservation,
+): (() => void) | undefined {
+  return toolAttemptConfirmations.get(reservation);
+}
+
 export interface GroundedAnswerUsage {
   readonly promptTokens: number;
   readonly completionTokens: number;
@@ -158,17 +174,8 @@ export function createGroundedSynthesisAttemptAdmission(
     );
     return latest;
   };
-  const settleFallback: GroundedSynthesisAttemptTracker["settleFallback"] = (
-    promptTokens,
-    reported,
-    outputState = "observed",
-  ): void => {
-    if (gatewayOwned) return;
-    const reservation = admission({ promptTokens, maxOutputTokens: options.outputTokensMax });
-    if (reservation === undefined)
-      throw new CallerAttemptAdmissionError("Synthesis attempt grant exhausted before dispatch");
-    reservation.settle(groundedSynthesisAttemptUsage(promptTokens, reported), true, outputState);
-  };
+  const settleFallback = synthesisFallback(admission, options.outputTokensMax, () => gatewayOwned);
+
   return {
     admission,
     retryFollows: synthesisRetryDecision(budget, options),
@@ -181,6 +188,20 @@ export function createGroundedSynthesisAttemptAdmission(
     settleFallbackFailure(promptTokens, failure): void {
       settleFailedAttempt(settleFallback, promptTokens, failure);
     },
+  };
+}
+
+function synthesisFallback(
+  admission: GroundedSynthesisAttemptTracker["admission"],
+  maxOutputTokens: number,
+  gatewayOwned: () => boolean,
+): GroundedSynthesisAttemptTracker["settleFallback"] {
+  return (promptTokens, reported, outputState = "observed"): void => {
+    if (gatewayOwned()) return;
+    const reservation = admission({ promptTokens, maxOutputTokens });
+    if (reservation === undefined)
+      throw new CallerAttemptAdmissionError("Synthesis attempt grant exhausted before dispatch");
+    reservation.settle(groundedSynthesisAttemptUsage(promptTokens, reported), true, outputState);
   };
 }
 
@@ -254,14 +275,11 @@ function synthesisAttemptReservation(
   budget: GroundedSynthesisCallBudget,
   promptTokens: number,
   maxOutputTokens: number,
-): NonNullable<ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>> & {
-  confirmToolRound(): boolean;
-  releaseUnusableAttempt(): void;
-} {
+): OwnedSynthesisAttemptReservation {
   let settled = false;
   let observed: GroundedAnswerUsage | undefined;
   let charged: GroundedAnswerUsage | undefined;
-  return {
+  const reservation: OwnedSynthesisAttemptReservation = {
     maxOutputTokens,
     releaseUnusableAttempt(): void {
       if (charged === undefined) return;
@@ -295,6 +313,19 @@ function synthesisAttemptReservation(
       if (outputState === "observed") observed = usage;
     },
   };
+  retainToolAttemptConfirmation(reservation);
+  return reservation;
+}
+
+function retainToolAttemptConfirmation(
+  reservation: ReturnType<typeof synthesisAttemptReservation>,
+): void {
+  const confirm = (): void => {
+    if (toolAttemptConfirmations.get(reservation) !== confirm) return;
+    confirmObservedToolRound(reservation);
+    toolAttemptConfirmations.delete(reservation);
+  };
+  toolAttemptConfirmations.set(reservation, confirm);
 }
 
 export function combinedGroundedSynthesisFields(

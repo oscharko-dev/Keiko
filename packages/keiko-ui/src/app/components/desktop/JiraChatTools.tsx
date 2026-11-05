@@ -18,6 +18,8 @@ import {
 import styles from "./JiraChatTools.module.css";
 import { JiraReportCard } from "./JiraReportCard";
 import { jiraReportView } from "./jira-report-view";
+import { ChatProcessingPipeline } from "./ChatProcessingPipeline";
+import { chatProcessingSteps } from "./chat-processing-pipeline";
 function jiraReportOf(exchange: ChatToolExchange): ReturnType<typeof jiraReportView> {
   return exchange.call.name === "jira_report" ? jiraReportView(exchange.result?.data) : undefined;
 }
@@ -70,29 +72,37 @@ export function JiraChatTools({
   transcript,
   turnState,
   chatId,
+  showPending = false,
 }: {
   readonly transcript: ChatToolTranscript | undefined;
   readonly turnState?: ChatTurnState | undefined;
   readonly chatId?: string | undefined;
+  readonly showPending?: boolean | undefined;
 }): ReactNode {
-  if (transcript === undefined) return null;
+  const steps = chatProcessingSteps(transcript, turnState, showPending);
+  if (steps.length === 0) return null;
   return (
-    <div className={styles.cmpStack}>
-      {transcript.exchanges.map((exchange) => (
-        <div key={exchange.call.id} className={styles.cmpExchange}>
-          {exchange.approval === undefined ? null : (
-            <JiraWriteApproval
-              key={exchange.approval.approvalId}
-              approval={exchange.approval}
-              call={exchange.call}
-              turnState={turnState}
-            />
-          )}
-          {awaitsDecision(exchange, turnState) ? null : (
-            <JiraToolExchange exchange={exchange} turnState={turnState} chatId={chatId} />
-          )}
+    <div className={styles.cmpLayout}>
+      <div className={styles.cmpContent}>
+        <ChatProcessingPipeline steps={steps} />
+        <div className={styles.cmpStack}>
+          {transcript?.exchanges.map((exchange) => (
+            <div key={exchange.call.id} className={styles.cmpExchange}>
+              {exchange.approval === undefined ? null : (
+                <JiraWriteApproval
+                  key={exchange.approval.approvalId}
+                  approval={exchange.approval}
+                  call={exchange.call}
+                  turnState={turnState}
+                />
+              )}
+              {awaitsDecision(exchange, turnState) ? null : (
+                <JiraToolExchange exchange={exchange} turnState={turnState} chatId={chatId} />
+              )}
+            </div>
+          ))}
         </div>
-      ))}
+      </div>
     </div>
   );
 }

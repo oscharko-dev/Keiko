@@ -28,6 +28,22 @@ const MCP_OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKe
 const MANAGED_TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
 /** The Chat alias of the local `knowledge.requirements` read (#4179). */
 const REQUIREMENTS_TOOL_ALIAS = "knowledge_requirements";
+const KNOWLEDGE_TOOLS: Readonly<
+  Record<string, { readonly label: WidgetMessageKey; readonly details: WidgetMessageKey }>
+> = {
+  knowledge_requirements: {
+    label: "chat.requirements.tool",
+    details: "chat.requirements.details",
+  },
+  knowledge_documents: {
+    label: "chat.documents.tool",
+    details: "chat.documents.details",
+  },
+  knowledge_review: {
+    label: "chat.review.tool",
+    details: "chat.review.details",
+  },
+};
 const REQUIREMENTS_CUT_COUNTS = ["unitsOmitted", "documentsOmitted", "documentsNotExtracted"];
 
 /** A draft and an attachment are governed like a create and an edit, but are neither to the human. */
@@ -56,7 +72,8 @@ export function jiraCallLabel(
     : jiraOperationLabel(operation);
 }
 export function jiraToolLabel(exchange: ChatToolExchange): WidgetMessageKey {
-  if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS) return "chat.requirements.tool";
+  const knowledge = KNOWLEDGE_TOOLS[exchange.call.name];
+  if (knowledge !== undefined) return knowledge.label;
   const operation = MANAGED_TOOLS.find(
     (name) => name.replace(/[.-]/gu, "_") === exchange.call.name,
   );
@@ -65,11 +82,13 @@ export function jiraToolLabel(exchange: ChatToolExchange): WidgetMessageKey {
     : jiraCallLabel(operation, exchange.call.arguments);
 }
 export function jiraToolRegionLabel(exchange: ChatToolExchange): WidgetMessageKey {
-  if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS) return "chat.requirements.tool";
+  const knowledge = KNOWLEDGE_TOOLS[exchange.call.name];
+  if (knowledge !== undefined) return knowledge.label;
   return exchange.call.name.startsWith("mcp_") ? "chat.mcp.tool" : "chat.jira.tool";
 }
 export function jiraToolDetailsLabel(exchange: ChatToolExchange): WidgetMessageKey {
-  if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS) return "chat.requirements.details";
+  const knowledge = KNOWLEDGE_TOOLS[exchange.call.name];
+  if (knowledge !== undefined) return knowledge.details;
   return exchange.call.name.startsWith("mcp_") ? "chat.mcp.details" : "chat.jira.details";
 }
 function plainRecord(value: unknown): Record<string, unknown> | undefined {
@@ -97,6 +116,8 @@ export function jiraToolPartialNotice(exchange: ChatToolExchange): WidgetMessage
     return undefined;
   if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS)
     return requirementsCut(exchange.result) ? "chat.requirements.partial" : undefined;
+  if (KNOWLEDGE_TOOLS[exchange.call.name] !== undefined)
+    return exchange.result.page.truncated ? "chat.knowledge.partial" : undefined;
   return exchange.result.page.truncated ? "chat.jira.partial" : undefined;
 }
 function mutationOutcome(exchange: ChatToolExchange): JiraMutationResultState | undefined {

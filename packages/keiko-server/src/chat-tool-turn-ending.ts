@@ -166,7 +166,11 @@ export function chatToolTurnPartialAnswer(
   ].join("\n");
 }
 
-const COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
+const COUNT_FIELD = {
+  type: "integer",
+  dataClass: "count",
+  required: true,
+} as const;
 
 const TURN_ENDED = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -176,8 +180,18 @@ const TURN_ENDED = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "chat-tool-turn-ending.recordChatToolTurnEnded",
   fields: {
-    messageDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    reason: { type: "string", dataClass: "closed-enum", required: true, values: REASONS },
+    messageDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: true,
+      maxLength: 64,
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: REASONS,
+    },
     exchangeCount: COUNT_FIELD,
     succeededWriteCount: COUNT_FIELD,
     unconfirmedWriteCount: COUNT_FIELD,
@@ -186,7 +200,11 @@ const TURN_ENDED = defineActivityLogOperation({
     refusedCount: COUNT_FIELD,
     maxToolCalls: COUNT_FIELD,
     maxRuntimeMs: { type: "integer", dataClass: "duration", required: true },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    completeness: {
+      type: "string",
+      dataClass: "completeness-state",
+      required: true,
+    },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
@@ -205,7 +223,10 @@ export function recordChatToolTurnEnded(
     readonly messageId: string;
     readonly reason: ChatToolTurnEndReason;
     readonly exchanges: readonly ChatToolExchange[];
-    readonly budget: { readonly maxToolCalls: number; readonly maxRuntimeMs: number };
+    readonly budget: {
+      readonly maxToolCalls: number;
+      readonly maxRuntimeMs: number;
+    };
   },
 ): void {
   const counts = tally(input.exchanges);
@@ -243,10 +264,23 @@ const CONTEXT_FITTED = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "chat-tool-turn-ending.recordChatToolTurnContextFitted",
   fields: {
-    messageDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    messageDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: true,
+      maxLength: 64,
+    },
     elidedResultCount: { type: "integer", dataClass: "count", required: true },
-    continuationMessageCount: { type: "integer", dataClass: "count", required: true },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    continuationMessageCount: {
+      type: "integer",
+      dataClass: "count",
+      required: true,
+    },
+    completeness: {
+      type: "string",
+      dataClass: "completeness-state",
+      required: true,
+    },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
@@ -294,8 +328,17 @@ const CORRECTED = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "chat-tool-turn-ending.recordChatToolTurnCorrected",
   fields: {
-    messageDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    settledExchangeCount: { type: "integer", dataClass: "count", required: true },
+    messageDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: true,
+      maxLength: 64,
+    },
+    settledExchangeCount: {
+      type: "integer",
+      dataClass: "count",
+      required: true,
+    },
     correctionKind: {
       type: "string",
       dataClass: "closed-enum",
@@ -306,12 +349,34 @@ const CORRECTED = defineActivityLogOperation({
         "report-omission",
         "report-coverage",
         "unsupported-issue-key",
+        "knowledge-coverage",
       ],
     },
-    omittedFindingCount: { type: "integer", dataClass: "count", required: false },
-    mismatchedRequirementCount: { type: "integer", dataClass: "count", required: false },
-    unsupportedKeyCount: { type: "integer", dataClass: "count", required: false },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    omittedFindingCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    mismatchedRequirementCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    unsupportedKeyCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    pendingKnowledgePageCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    completeness: {
+      type: "string",
+      dataClass: "completeness-state",
+      required: true,
+    },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
@@ -342,10 +407,12 @@ export function recordChatToolTurnCorrected(
       | "empty-answer"
       | "report-omission"
       | "report-coverage"
-      | "unsupported-issue-key";
+      | "unsupported-issue-key"
+      | "knowledge-coverage";
     readonly omittedFindingCount?: number;
     readonly mismatchedRequirementCount?: number;
     readonly unsupportedKeyCount?: number;
+    readonly pendingKnowledgePageCount?: number;
   },
 ): void {
   try {
@@ -366,6 +433,9 @@ export function recordChatToolTurnCorrected(
           ...(input.unsupportedKeyCount === undefined
             ? {}
             : { unsupportedKeyCount: input.unsupportedKeyCount }),
+          ...(input.pendingKnowledgePageCount === undefined
+            ? {}
+            : { pendingKnowledgePageCount: input.pendingKnowledgePageCount }),
           completeness: "complete",
           loss: "none",
         },
@@ -377,10 +447,10 @@ export function recordChatToolTurnCorrected(
 }
 
 interface ToolTranscriptLookup {
-  findMessageById(
-    id: string,
-  ):
-    | { readonly toolTranscript?: { readonly exchanges: readonly ChatToolExchange[] } | undefined }
+  findMessageById(id: string):
+    | {
+        readonly toolTranscript?: { readonly exchanges: readonly ChatToolExchange[] } | undefined;
+      }
     | undefined;
 }
 
@@ -395,7 +465,13 @@ export function withToolResultsAsSource<
   },
 >(answer: Answer, store: ToolTranscriptLookup): Answer {
   const exchanges = store.findMessageById(answer.userMessageId)?.toolTranscript?.exchanges ?? [];
-  if (!exchanges.some((exchange) => exchange.result?.status === "completed")) return answer;
+  // Runtime inventory establishes document membership, not support for uncited content claims.
+  if (
+    !exchanges.some(
+      (exchange) => exchange.call.origin !== "runtime" && exchange.result?.status === "completed",
+    )
+  )
+    return answer;
   return {
     ...answer,
     uncertainty: answer.uncertainty.filter((marker) => marker.kind !== "uncited-answer"),

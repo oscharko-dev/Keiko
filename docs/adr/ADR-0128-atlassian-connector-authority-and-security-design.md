@@ -212,6 +212,11 @@ retriable network failures. POST and PUT use the gateway's single-attempt transp
 CA trust from the first attempt. An optional synchronous response observer records the HTTP status
 before body consumption, so truncated or failed body reads cannot erase an observed acknowledgement.
 Observer failures release the unread body, emit a content-free server diagnostic and propagate.
+For authenticated GET requests, a successful response explicitly marked `X-AUSERNAME: anonymous`
+is classified as 401 before observation and body consumption. Jira can otherwise accept an invalid
+PAT anonymously and return an empty collection (JRASERVER-78126). No header value crosses the port.
+Mutation acknowledgements retain their observed status; this read safeguard must never conceal an
+already dispatched remote effect.
 These callbacks do not themselves grant authority: the composing owner must supply the current
 binding, mode, approval, budget and durable mutation checks before exposing a write operation.
 
@@ -769,11 +774,12 @@ changes nothing in Jira, so it needs the Chat's read grant, not a write approval
 appends at most 50 validated items to a server-held draft session — in memory only, bound to the
 Chat that started it, expiring when idle, and bounded per Chat and in total, exactly like a
 `jira.report` session — and returns its `draftId`, the `draftDigest` of the exact item list, the
-item count and the `unresolvedRefs` still to be written. Its item schema only points at
-`jira.draft`'s item form to keep the catalog small, and names `requirementIds` there, because that
-schema is the only place a model learns of the trace argument (lab S14, 2026-11-02: a model staged
-four epics without `requirementIds`, so none traced its requirement and the later change comparison
-found no baseline). Every appended item first passes the
+item count and the `unresolvedRefs` still to be written. Staging and execution publish the same
+shared item schema, including numeric routing IDs, required `fields.summary`, optional relations
+and `requirementIds`. Each tool is self-describing; staging never relies on the model finding the
+item form in another tool's description. Dynamic Jira fields remain inside `fields`, and malformed
+items are rejected by the catalog before handler work. Existing argument-rejection and draft
+activity records retain body-free evidence. Every appended item first passes the
 customer-template dry run of a create (#4177), then Keiko's own validation of the fields its create
 will send (2026-11-03, S05); a violating page is refused whole, naming the violations or the first
 invalid item and its field, and nothing of it is staged. An item's identity needs the whole draft, so

@@ -3819,7 +3819,7 @@ describe("runtime gateway accepted source and active inventory", () => {
     }
   }
 
-  it("expires a genuine chat success at five minutes without replacing its generation", async () => {
+  it("retains a genuine startup success for the configuration generation without a five-minute recheck", async () => {
     await withFreshnessDeps((deps): void => {
       const holder = deps.gatewayConfig;
       holder?.recordVerifiedCapability(
@@ -3832,8 +3832,8 @@ describe("runtime gateway accepted source and active inventory", () => {
       expect(currentConversationReady(deps, "retained-chat")).toBe(true);
       vi.setSystemTime(new Date("2026-10-08T12:05:00.000Z"));
       expect(holder?.generation()).toBe(generation);
-      expect(currentConversationReady(deps, "retained-chat")).toBe(false);
-      expect(currentConversationReadinessObservation(deps, "retained-chat")).toBeUndefined();
+      expect(currentConversationReady(deps, "retained-chat")).toBe(true);
+      expect(currentConversationReadinessObservation(deps, "retained-chat")).toBe(true);
     });
   });
 
@@ -3870,7 +3870,7 @@ describe("runtime gateway accepted source and active inventory", () => {
       });
       expect(currentConversationReady(deps, "retained-chat")).toBe(true);
       vi.setSystemTime(new Date("2026-10-08T12:05:00.000Z"));
-      expect(currentConversationReady(deps, "retained-chat")).toBe(false);
+      expect(currentConversationReady(deps, "retained-chat")).toBe(true);
     });
   });
 });

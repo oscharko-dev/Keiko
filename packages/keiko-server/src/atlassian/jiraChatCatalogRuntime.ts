@@ -1,3 +1,4 @@
+import { createManagedChatCatalogRuntime } from "../tool-catalog/managedChatCatalogRuntime.js";
 import { randomUUID } from "node:crypto";
 import {
   createJiraDraftStore,
@@ -23,7 +24,7 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "../deps.js";
 import type { CatalogHandlerContext } from "../tool-catalog/catalogToolPorts.js";
 import type { CatalogLifecycleLogPort } from "../tool-catalog/catalogToolLifecycle.js";
-import { CatalogDispatchFault, requireDispatch } from "../tool-catalog/catalogToolErrors.js";
+import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import {
   createManagedProviderCatalog,
   managedCatalogToolDefinitions,
@@ -67,9 +68,6 @@ import {
 } from "./jiraChatAttachment.js";
 
 type ChatCatalog = ManagedProviderCatalog<JiraChatCatalogConsumer>;
-type CatalogInitialization =
-  | { readonly ok: true; readonly value: ChatCatalog }
-  | { readonly ok: false; readonly error: unknown };
 type MutationExecutor = JiraManagedMutationExecutor<CatalogHandlerContext<JiraChatCatalogConsumer>>;
 type ApprovalRegistry = NonNullable<UiHandlerDeps["atlassianActionApprovalRegistry"]>;
 const JIRA_CHAT_PROFILE = { id: "jira-chat", version: 1 } as const;
@@ -447,48 +445,9 @@ export function createJiraChatCatalogRuntime(
   store: JiraReportStore = createJiraReportStore(),
   draftStore: JiraDraftStore = createJiraDraftStore(),
 ): JiraChatCatalogRuntime {
-  let catalog: Promise<CatalogInitialization> | undefined;
-  let closing: Promise<void> | undefined;
-  let closed = false;
-  const requireOpen = (): void => {
-    if (closed) throw new CatalogDispatchFault("failed", "handler-unavailable");
-  };
-  const initialize = (): Promise<CatalogInitialization> => {
-    const pending: Promise<CatalogInitialization> = initializeCatalog(
-      deps,
-      log,
-      store,
-      draftStore,
-    ).then(
-      (value) => ({ ok: true, value }),
-      (error: unknown) => {
-        // The managed initializer logs and disposes this failed host. Preserve the error for
-        // its waiting callers, but never let that attempt poison a later initialization.
-        if (catalog === pending) catalog = undefined;
-        return { ok: false, error };
-      },
-    );
-    return pending;
-  };
-  return {
-    toolDefinitions: staticToolDefinitions(deps, store, draftStore),
-    get: async (): Promise<ChatCatalog> => {
-      requireOpen();
-      catalog ??= initialize();
-      const admitted = await catalog;
-      if (!admitted.ok) throw admitted.error;
-      requireOpen();
-      return admitted.value;
-    },
-    close: (): Promise<void> => {
-      closed = true;
-      closing ??=
-        catalog === undefined
-          ? Promise.resolve()
-          : catalog.then((admitted) => (admitted.ok ? admitted.value.close() : undefined));
-      return closing;
-    },
-  };
+  return createManagedChatCatalogRuntime(staticToolDefinitions(deps, store, draftStore), () =>
+    initializeCatalog(deps, log, store, draftStore),
+  );
 }
 
 export function installJiraChatCatalogRuntime(

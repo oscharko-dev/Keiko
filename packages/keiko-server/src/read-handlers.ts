@@ -1,3 +1,5 @@
+import { createRequestCancellation } from "./request-cancellation.js";
+import { raceAbortDeadline } from "./abort-race.js";
 // The six read-only BFF endpoints (ADR-0011 D5 routes 2,3,4,10,11,12). Each returns a redacted JSON
 // projection of already-safe data: config via `toSafeObject` (strips apiKey), configured model
 // capabilities, the workflow launch-form descriptors, the workspace summary built from the workspace
@@ -47,10 +49,13 @@ import { resolveRecordedWorkspaceRoot } from "./workspace-root-denial-log.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
-import { isToolCallingRenewalPending } from "./gateway-readiness.js";
+import {
+  awaitPendingConversationReadiness,
+  isToolCallingRenewalPending,
+  pendingConversationReadiness,
+} from "./gateway-readiness.js";
 import {
   currentConversationReadinessObservation,
-  currentConversationReadinessStale,
   currentGatewayConfig,
   currentGatewayConfigPresent,
   currentGroundingLimits,
@@ -89,15 +94,49 @@ export function handleModels(ctx: RouteContext, deps: UiHandlerDeps): RouteResul
           return {
             ...model,
             ...(conversationReady === undefined ? {} : { conversationReady }),
-            ...(currentConversationReadinessStale(deps, model.id)
-              ? { conversationReadinessStale: true as const }
-              : {}),
             ...(isToolCallingRenewalPending(config, model.id)
               ? { toolCallingRenewalPending: true as const }
               : {}),
           };
         });
-  return { status: 200, body: { models } };
+  return {
+    status: 200,
+    body: {
+      models,
+      ...(pendingConversationReadiness(deps).length > 0 ? { startupReadinessPending: true } : {}),
+    },
+  };
+}
+
+/** The browser's initial shared read must not cache the catalog before discovery replaces it. */
+export async function handleModelsAfterStartupCatalog(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  if (ctx.url.searchParams.get("settleStartup") === "1") return settleStartupModels(ctx, deps);
+  await deps.waitForStartupGatewayCatalog?.();
+  return handleModels(ctx, deps);
+}
+
+async function settleStartupModels(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
+  const cancellation = createRequestCancellation(ctx, "startup model metadata read cancelled");
+  const bounds = {
+    signal: cancellation.signal,
+    deadlineAtMs: Date.now() + 600_000,
+    nowMs: Date.now,
+  };
+  try {
+    do {
+      await raceAbortDeadline(
+        () => deps.waitForStartupGatewayCatalog?.() ?? Promise.resolve(),
+        bounds,
+      );
+      await awaitPendingConversationReadiness(deps, bounds);
+    } while (pendingConversationReadiness(deps).length > 0);
+    return handleModels(ctx, deps);
+  } finally {
+    cancellation.dispose();
+  }
 }
 
 // Voice-capability disable kill-switch (Issue #493, ADR-0100 D1). A regulated deployment can

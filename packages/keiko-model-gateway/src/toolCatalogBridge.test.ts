@@ -736,7 +736,7 @@ describe("native extensions (OpenCode V2 question, #3414 follow-up)", () => {
       (): number => NOW,
     );
     expect(() => bridge.bind({ id: "call-1", name: "not_a_real_tool", arguments: {} })).toThrow(
-      expect.objectContaining({ retryable: true }),
+      expect.objectContaining({ retryable: false }),
     );
   });
 

@@ -1646,6 +1646,7 @@ export function CapsuleActions({
         </div>
       </div>
       <ConnectSourceForm
+        key={capsuleId}
         capsuleId={capsuleId}
         onConnected={onActionComplete}
         connectImpl={connectCapsuleSourceImpl}

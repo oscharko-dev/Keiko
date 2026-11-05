@@ -23,6 +23,7 @@ export type {
   ChatToolAuthoritySubject,
   JiraChatToolAuthoritySubject,
   McpChatToolAuthoritySubject,
+  KnowledgeChatToolAuthoritySubject,
   McpChatToolReadGrantView,
   McpChatToolWriteApprovalView,
   ChatToolReadGrant,

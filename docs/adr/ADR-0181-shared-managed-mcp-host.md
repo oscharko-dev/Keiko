@@ -54,6 +54,15 @@ Caller cancellation, host shutdown, request cancellation and the SDK handler sig
 are combined in the provider context and its final before-effect guard; settlement
 revokes that guard. A timed-out caller cannot leave a delayed provider authorized.
 
+Invocation duration follows the validated, captured tool descriptor and is passed explicitly
+to the SDK. There is no additional fixed 30-second host ceiling or implicit SDK-default
+timeout. Earlier caller cancellation and the enclosing task or authority deadline still end
+the invocation. Caller arguments and metadata cannot extend these bounds. Semantic Knowledge
+review reuses the gateway's normal buffered model-call bound; it adds no shorter inner
+model deadline. The active model's canonical context profile supplies its output reserve, still
+bounded by provider capacity, context fit and the enclosing caller and turn grants. Ordinary
+tools retain their own declared durations.
+
 Provider handler references are captured with the initial metadata and served from
 immutable host-owned bindings. A provider must return stable functions across
 registration queries. Replacing a handler while retaining its name/schema/digest is
@@ -311,6 +320,29 @@ The transcript retains one current read-grant view per source kind, with its leg
 single `readGrant` field projecting the latest update. Existing single-source transcripts
 and execution paths remain valid.
 
+**Knowledge-only Chat tools (owner correction 2026-11-05).** A Chat with attached Knowledge
+Pods has `knowledge.requirements`, `knowledge.documents` and `knowledge.review` through the same
+managed MCP host and catalog, including when no Jira Pod or external MCP server is selected. Its
+private authority subject is `knowledge-pods`, bound to the current actor, Chat and Knowledge
+selection digest, and carries only `knowledge.read`. It neither fabricates Jira credentials nor
+reuses or widens the `configured-mcp` subject. The current open Chat, principal, selection, mode,
+deployment ceiling, expiry and shared cumulative budget are checked before admission and effects;
+Knowledge lifecycle, containment and model-use policy remain provider-owned checks. Modifying
+tools are always denied under that subject. When external MCP servers are also selected, the
+existing two-source catalog and atomic accepted-turn registry retain both independent authorities
+and one budget. Semantic review receives the same server-private turn model meter through either
+binding, so its gateway work is charged to the original authority and remains cancellable. The
+application graph owns the lazy catalogs and closes their MCP hosts with the graph; a status read
+only derives the static tool definitions for context accounting.
+
+Before synthesis, a turn with selected Knowledge Pods obtains one bounded metadata inventory page
+through the existing catalog offer, binder and dispatch path. It consumes the same authority and
+tool budget as a model-requested read; no extra synthesis allowance or semantic review is implicit.
+The persisted call carries `origin: "runtime"`, and the gateway receives its result as untrusted
+context before the actual human message, never as an invented model tool call. History selection
+and token accounting retain that observation. Counts, cursors and partial coverage remain explicit;
+metadata alone neither satisfies content-evidence admission nor suppresses uncited-content warnings.
+
 **Per-Chat and per-run connector selection (owner decision 2026-11-02).** The person picks, in the
 Chat composer's Connectors menu, which centrally configured MCP servers and which Jira Pod a Chat
 offers to its model; the Coding Workbench composer offers the same menu for a run (`mcpServers` and
@@ -337,7 +369,15 @@ ceiling and the original token grant. A long Jira turn therefore no longer fails
 earlier tool rounds spent the answer's grant. Jira results stay
 in the tool transcript and are attributed separately from connected-evidence citations.
 `chat.grounded-tool-round.completed` records that phase and remaining synthesis count
-without source content. Data-only preparation and synthesis keep their existing path.
+without source content. A nested semantic review also retains the enclosing caller admission and
+accepted turn meter. Only a fully observed, parsed review that passes the final source-revision,
+authority and result-bound checks can confirm its own factory-owned synthesis reservation as tool
+orchestration. Confirmation is bound to that exact reservation and response, including concurrent
+results; it cannot release another attempt or a generic caller's grant. Physical usage remains in
+the reported total and the accepted turn's cumulative budget. Invalid, stale, cancelled or
+unobserved reviews retain their synthesis charge. A valid partial review can confirm its observed
+work without claiming complete source coverage. Data-only preparation and synthesis keep their
+existing path.
 
 An empty connected-evidence pack still permits the already admitted Jira turn to run.
 When neither governed Memory context nor the existing own-assessment policy permits an
@@ -384,7 +424,6 @@ use the real SDK path. Architecture fixtures prove both the import isolation and
 contracts/security package boundary. Registered producer-line and analyzer proofs,
 production non-Coding binder coverage, Workbench regressions and the complete dependency,
 package and release gates are required before final acceptance.
-
 
 The ordinary Chat consumer retains one bounded invocation loop per accepted human
 turn, including context-window retries. Its gateway physical-attempt hook charges
@@ -466,7 +505,6 @@ Supervised workspace require the existing action approval; Full access may act w
 authority. The relay uses the already admitted loopback gateway route. This capability does not
 relax the coding process's network sandbox or the Full access restriction on direct external
 connections, including the existing native OAuth path.
-
 
 Ordinary Chat also consumes this Settings-owned catalog. Its consumer uses the existing
 accepted-turn authority and a configured-MCP subject (actor, Chat and configuration identity),

@@ -56,7 +56,7 @@ export interface ConnectorGraphState {
   readonly handleCancelIndexing: (id: KnowledgeCapsuleId) => void;
   readonly handleDisconnect: (id: KnowledgeCapsuleId) => void;
   readonly handleOpenHealth: (id: KnowledgeCapsuleId) => void;
-  readonly handleCreateCapsule: (name: string) => Promise<void>;
+  readonly handleCreateCapsule: (name: string) => Promise<KnowledgeCapsuleId>;
   readonly capsuleSetActionBusy: CapsuleSetId | null;
   readonly capsuleSetActionError: string | null;
   readonly clearCapsuleSetActionError: () => void;

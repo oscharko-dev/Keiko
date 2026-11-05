@@ -42,6 +42,7 @@ import {
 } from "@/lib/chat-session-error";
 import type { ConversationAttachmentDescriptorWire, MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
+  type GatewayModelsResponseWire,
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
   MAX_DESKTOP_CHAT_INPUT_BYTES,
   MAX_DESKTOP_CHAT_INPUT_CHARS,
@@ -85,7 +86,6 @@ import {
   notifyGatewayModelCatalogUpdated,
 } from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
-import { createVisibilityPoller } from "@/lib/visibility-poller";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
@@ -1700,6 +1700,7 @@ interface SessionState {
   catalogSource: ClientModelCatalogEvidence["source"];
   catalogCorrelationId: string | undefined;
   modelCatalogStatus: "unknown" | "loading" | "ready" | "failed";
+  startupReadinessPending?: boolean;
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   selectedModel: string | undefined;
@@ -1843,39 +1844,90 @@ type GatewayModelRefreshResult =
       readonly models: readonly ModelCapability[];
       readonly source: "foreground" | "background";
       readonly correlationId: string;
+      readonly startupReadinessPending?: boolean;
     }
   | { readonly kind: "failure"; readonly message: string };
 const gatewayModelRefreshSubscribers = new Set<(result: GatewayModelRefreshResult) => void>();
 let gatewayModelRefreshGeneration = 0;
-let gatewayModelRefreshPoller: ReturnType<typeof createVisibilityPoller> | undefined;
-let backgroundGatewayReadInflight = false;
-let backgroundGatewayNextReadAt = 0;
-let backgroundGatewayFailureCount = 0;
-let backgroundGatewayFastUntil = 0;
-let backgroundGatewayModelSnapshot: string | undefined;
+let gatewayModelSnapshot: string | undefined;
 
-// Read only the BFF projection; provider verification belongs to server startup checks.
-function refreshGatewayModelsInBackground(): void {
-  if (backgroundGatewayReadInflight || document.visibilityState === "hidden") return;
-  const generation = gatewayModelRefreshGeneration;
-  const correlationId = newClientCorrelationId();
-  const startedAt = performance.now();
-  backgroundGatewayReadInflight = true;
-  void fetchModels(correlationId)
-    .then(
-      ({ models }): void => {
-        if (generation !== gatewayModelRefreshGeneration) return;
-        adoptBackgroundGatewayModels(models, correlationId, performance.now() - startedAt);
-      },
-      (error: unknown): void => {
-        if (generation === gatewayModelRefreshGeneration) {
-          reportBackgroundGatewayFailure(error, correlationId);
-        }
-      },
-    )
-    .finally(() => {
-      backgroundGatewayReadInflight = false;
-    });
+interface StartupModelSettlement {
+  readonly controller: AbortController;
+  readonly generation: number;
+  subscribers: number;
+}
+let startupModelSettlement: StartupModelSettlement | undefined;
+
+function stopStartupModelSettlement(): void {
+  startupModelSettlement?.controller.abort();
+  startupModelSettlement = undefined;
+}
+
+function adoptStartupModelSettlement(
+  entry: StartupModelSettlement,
+  payload: GatewayModelsResponseWire,
+  correlationId: string,
+  startedAt: number,
+): void {
+  if (entry.controller.signal.aborted || entry.generation !== gatewayModelRefreshGeneration) return;
+  invalidateSharedBootstrap();
+  recordCatalogAdoption(
+    payload.models,
+    "background",
+    "adopted",
+    correlationId,
+    performance.now() - startedAt,
+  );
+  publishGatewayModelRefresh({
+    kind: "success",
+    models: payload.models,
+    source: "background",
+    correlationId,
+  });
+}
+
+// One shared follow-up consumes already-running startup observations. No timer, focus listener,
+// provider check or retry is introduced, and configuration changes discard this observation.
+function joinStartupModelSettlement(): () => void {
+  let entry = startupModelSettlement;
+  if (entry === undefined) {
+    entry = {
+      controller: new AbortController(),
+      generation: gatewayModelRefreshGeneration,
+      subscribers: 0,
+    };
+    startupModelSettlement = entry;
+    const current = entry;
+    const correlationId = newClientCorrelationId();
+    const startedAt = performance.now();
+    void fetchModels(correlationId, false, {
+      waitForStartup: true,
+      signal: current.controller.signal,
+    })
+      .then(
+        (payload): void => {
+          adoptStartupModelSettlement(current, payload, correlationId, startedAt);
+        },
+        (error_: unknown): void => {
+          if (
+            !current.controller.signal.aborted &&
+            current.generation === gatewayModelRefreshGeneration
+          ) {
+            publishGatewayModelRefresh({ kind: "failure", message: errorMessage(error_) });
+          }
+        },
+      )
+      .finally(() => {
+        if (startupModelSettlement === current) startupModelSettlement = undefined;
+      });
+  }
+  const current = entry;
+  current.subscribers += 1;
+  return (): void => {
+    current.subscribers -= 1;
+    if (current.subscribers === 0 && startupModelSettlement === current)
+      stopStartupModelSettlement();
+  };
 }
 
 // `readMs` is the catalog read the adoption waited for (#3905): request sent to catalog adopted.
@@ -1886,7 +1938,9 @@ function recordCatalogAdoption(
   correlationId: string,
   readMs: number,
 ): void {
-  backgroundGatewayModelSnapshot = JSON.stringify(models);
+  const snapshot = JSON.stringify(models);
+  const changed = gatewayModelSnapshot !== undefined && snapshot !== gatewayModelSnapshot;
+  gatewayModelSnapshot = snapshot;
   reportModelCatalogStage(
     "gateway catalog adoption",
     {
@@ -1899,68 +1953,7 @@ function recordCatalogAdoption(
     correlationId,
     readMs,
   );
-}
-
-function adoptBackgroundGatewayModels(
-  models: readonly ModelCapability[],
-  correlationId: string,
-  readMs: number,
-): void {
-  const snapshot = JSON.stringify(models);
-  const changed =
-    backgroundGatewayModelSnapshot !== undefined && snapshot !== backgroundGatewayModelSnapshot;
-  backgroundGatewayFailureCount = 0;
-  const fast = changed || Date.now() < backgroundGatewayFastUntil;
-  backgroundGatewayNextReadAt = Date.now() + (fast ? 5_000 : 60_000);
-  backgroundGatewayModelSnapshot = snapshot;
-  publishGatewayModelRefresh({ kind: "success", models, source: "background", correlationId });
-  if (!changed) return;
-  invalidateSharedBootstrap();
-  recordCatalogAdoption(models, "background", "changed", correlationId, readMs);
-  notifyGatewayModelCatalogUpdated(correlationId);
-}
-
-function reportBackgroundGatewayFailure(error: unknown, correlationId: string): void {
-  backgroundGatewayFailureCount += 1;
-  backgroundGatewayNextReadAt =
-    Date.now() + Math.min(5_000 * 2 ** Math.min(backgroundGatewayFailureCount - 1, 4), 60_000);
-  if (backgroundGatewayFailureCount !== 1) return;
-  reportClientDiagnostic(
-    `Background model catalog refresh failed (${clientErrorSummary(error)}).`,
-    {
-      correlationId: correlationIdOf(error) ?? correlationId,
-      kind: "other",
-      errorKind: bffRequestErrorKind(error),
-      errorEvidence: clientErrorEvidence(error),
-    },
-  );
-}
-
-function pollGatewayModels(): void {
-  if (Date.now() >= backgroundGatewayNextReadAt) refreshGatewayModelsInBackground();
-}
-
-function resumeGatewayModelReads(): void {
-  backgroundGatewayNextReadAt = 0;
-  gatewayModelRefreshPoller?.sync();
-}
-
-function startGatewayModelReads(): void {
-  backgroundGatewayNextReadAt = 0;
-  backgroundGatewayFastUntil = Date.now() + 120_000;
-  backgroundGatewayFailureCount = 0;
-  gatewayModelRefreshPoller = createVisibilityPoller(pollGatewayModels, 5_000);
-  gatewayModelRefreshPoller.start();
-  window.addEventListener("focus", resumeGatewayModelReads);
-  document.addEventListener("visibilitychange", resumeGatewayModelReads);
-}
-
-function stopGatewayModelReads(): void {
-  gatewayModelRefreshGeneration += 1;
-  gatewayModelRefreshPoller?.stop();
-  gatewayModelRefreshPoller = undefined;
-  window.removeEventListener("focus", resumeGatewayModelReads);
-  document.removeEventListener("visibilitychange", resumeGatewayModelReads);
+  if (changed) notifyGatewayModelCatalogUpdated(correlationId);
 }
 
 function publishGatewayModelRefresh(result: GatewayModelRefreshResult): void {
@@ -1970,6 +1963,7 @@ function publishGatewayModelRefresh(result: GatewayModelRefreshResult): void {
 // A person's own step (the Workbench or a model picker opened) also checks again the models that
 // are not ready; every other refresh only rereads the catalog (customer 1.3.4).
 function refreshGatewayModels(event?: Event): void {
+  stopStartupModelSettlement();
   const check = event !== undefined && gatewayModelCatalogCheckRequested(event);
   const generation = gatewayModelRefreshGeneration + 1;
   gatewayModelRefreshGeneration = generation;
@@ -1982,7 +1976,7 @@ function refreshGatewayModels(event?: Event): void {
   const correlationId = newClientCorrelationId();
   const startedAt = performance.now();
   void fetchModels(correlationId, check).then(
-    ({ models }): void => {
+    ({ models, startupReadinessPending }): void => {
       if (generation === gatewayModelRefreshGeneration) {
         recordCatalogAdoption(
           models,
@@ -1996,6 +1990,7 @@ function refreshGatewayModels(event?: Event): void {
           models,
           source: "foreground",
           correlationId,
+          ...(startupReadinessPending === true ? { startupReadinessPending: true } : {}),
         });
       }
     },
@@ -2014,13 +2009,12 @@ function subscribeGatewayModelRefresh(
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
     window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, refreshGatewayModels);
     window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refreshGatewayModels);
-    startGatewayModelReads();
   }
   gatewayModelRefreshSubscribers.add(subscriber);
   return (): void => {
     gatewayModelRefreshSubscribers.delete(subscriber);
     if (gatewayModelRefreshSubscribers.size === 0) {
-      stopGatewayModelReads();
+      gatewayModelRefreshGeneration += 1;
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
       window.removeEventListener(
         GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
@@ -2167,9 +2161,10 @@ function sharedFetchChatMessages(
 }
 
 export function clearChatSessionBootstrapCacheForTests(): void {
+  stopStartupModelSettlement();
   invalidateSharedBootstrap();
   gatewayBootstrapRefreshRequested = false;
-  backgroundGatewayModelSnapshot = undefined;
+  gatewayModelSnapshot = undefined;
   gatewayModelRefreshGeneration += 1;
   sharedChatListInflight.clear();
   sharedChatMessagesInflight.clear();
@@ -2414,7 +2409,10 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
     correlationId,
     performance.now() - startedAt,
   );
-  const catalog = sessionCatalogState(modelPayload.models, "bootstrap", correlationId);
+  const catalog = {
+    ...sessionCatalogState(modelPayload.models, "bootstrap", correlationId),
+    startupReadinessPending: modelPayload.startupReadinessPending === true,
+  };
   // Issue #144: source of truth is the helper, not an inline kind check. Pin
   // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown. Models the server
   // never probed (tri-state: conversationReady ABSENT) stay usable — the on-demand probe at
@@ -2575,6 +2573,7 @@ function sessionCatalogState(
   | "catalogSource"
   | "catalogCorrelationId"
   | "modelCatalogStatus"
+  | "startupReadinessPending"
 > {
   return {
     models: capabilities.filter(isUsableConversationModel),
@@ -2587,6 +2586,7 @@ function sessionCatalogState(
     catalogSource: source,
     catalogCorrelationId: correlationId,
     modelCatalogStatus: "ready",
+    startupReadinessPending: false,
   };
 }
 
@@ -2613,6 +2613,7 @@ function refreshSessionModels(
   return {
     ...previous,
     ...catalog,
+    startupReadinessPending: result.startupReadinessPending === true,
     ...selectSessionModel(
       remembered.id,
       remembered.elected,
@@ -2710,6 +2711,7 @@ function clearSessionModelsForPendingRefresh(previous: SessionState): SessionSta
     models: [],
     catalogCorrelationId: undefined,
     modelCatalogStatus: "loading",
+    startupReadinessPending: false,
     // Pinned choreography: the selection is invalidated synchronously so no send can target
     // a model that may no longer exist — but the id is remembered so the success path can
     // restore it against the refreshed catalog instead of falling back to the first ready
@@ -2930,6 +2932,46 @@ function exactCanonicalAssistant(
     (message): boolean =>
       message.role === "assistant" && message.canonicalTurnRef === canonicalTurnRef,
   );
+}
+
+/** Cancellation may finish locally before the server settles its accepted canonical turn. */
+async function canonicalReconciliationPayload(input: {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly canonicalTurnRef: string;
+  readonly signal: AbortSignal;
+  readonly waitForTerminal: boolean;
+  readonly current: () => boolean;
+}): Promise<Awaited<ReturnType<typeof fetchChatMessages>>> {
+  const read = (): Promise<Awaited<ReturnType<typeof fetchChatMessages>>> =>
+    raceUiAbort(fetchChatMessages(input.chatId, input.projectPath, input.signal), input.signal);
+  let payload = await read();
+  while (
+    input.waitForTerminal &&
+    input.current() &&
+    payload.messages.some(
+      (message) =>
+        isExactCanonicalUserMessage(message, input.canonicalTurnRef) &&
+        message.turnState === "pending",
+    )
+  ) {
+    try {
+      await abortableSleep(CANONICAL_VOICE_RECONCILE_INTERVAL_MS, input.signal);
+      if (!input.current()) return payload;
+      payload = await read();
+    } catch (error) {
+      if (!input.signal.aborted && input.current())
+        reportClientDiagnostic("Canonical chat reconciliation failed.", {
+          correlationId: correlationIdOf(error) ?? newClientCorrelationId(),
+          kind: "other",
+          errorKind: bffRequestErrorKind(error),
+          errorEvidence: clientErrorEvidence(error),
+        });
+      // The last server observation remains authoritative when a bounded retry cannot settle.
+      return payload;
+    }
+  }
+  return payload;
 }
 
 function canonicalTurnPresentation(
@@ -3605,10 +3647,17 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       reconciliationControllersRef.current.set(controller, timer);
       try {
         const canonicalTurnRef = await canonicalTurnReferenceForClient(chatId, clientTurnId);
-        const payload = await raceUiAbort(
-          fetchChatMessages(chatId, projectPath, controller.signal),
-          controller.signal,
-        );
+        const payload = await canonicalReconciliationPayload({
+          chatId,
+          projectPath,
+          canonicalTurnRef,
+          signal: controller.signal,
+          waitForTerminal: signal.aborted,
+          current: () =>
+            mountedRef.current &&
+            activeChatIdRef.current === chatId &&
+            latestSendSignalRef.current === signal,
+        });
         const persistence = hasExactCanonicalUserMessage(payload.messages, canonicalTurnRef)
           ? "persisted"
           : "missing";
@@ -3753,7 +3802,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       if (result.kind === "failure") {
         catalogError = result.message;
         setError(result.message);
-        setState((previous) => ({ ...previous, modelCatalogStatus: "failed" }));
+        setState((previous) => ({
+          ...previous,
+          modelCatalogStatus: "failed",
+          startupReadinessPending: false,
+        }));
         return;
       }
       const recoveredError = catalogError;
@@ -3762,6 +3815,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setState((previous) => refreshSessionModels(previous, result));
     });
   }, []);
+
+  useEffect(() => {
+    if (state.startupReadinessPending !== true) return;
+    return joinStartupModelSettlement();
+  }, [state.startupReadinessPending]);
 
   useEffect(() => {
     return subscribeChatMutations((mutation) => {

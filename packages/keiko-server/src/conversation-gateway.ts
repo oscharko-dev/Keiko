@@ -31,6 +31,18 @@ export function gatewayMessagesForToolExchange(
     reason: "observation-unavailable",
     effect: "unknown",
   };
+  if (exchange.call.origin === "runtime")
+    return [
+      {
+        role: "user",
+        content: JSON.stringify({
+          kind: "runtime-tool-observation",
+          sourceTrust: "untrusted-data",
+          call: exchange.call,
+          result,
+        }),
+      },
+    ];
   return [
     { role: "assistant", content: "", toolCalls: [exchange.call] },
     {
@@ -49,8 +61,15 @@ function transcriptMessages(message: ChatMessage): GatewayConversationMessage[] 
   const exchanges = message.toolTranscript?.exchanges;
   if (exchanges === undefined || exchanges.length === 0) return undefined;
   const turn: GatewayConversationMessage = { role: message.role, content: message.content };
-  const tools = exchanges.flatMap(gatewayMessagesForToolExchange);
-  return message.role === "assistant" ? [...tools, turn] : [turn, ...tools];
+  const runtime = exchanges
+    .filter((exchange) => exchange.call.origin === "runtime")
+    .flatMap(gatewayMessagesForToolExchange);
+  const tools = exchanges
+    .filter((exchange) => exchange.call.origin !== "runtime")
+    .flatMap(gatewayMessagesForToolExchange);
+  // Keep the actual human message last among user-role context entries: attachments and prompt
+  // selection must still bind to the person, not to a runtime observation.
+  return message.role === "assistant" ? [...runtime, ...tools, turn] : [...runtime, turn, ...tools];
 }
 
 export const MAX_CONTEXT_MESSAGES = 24;
@@ -103,7 +122,7 @@ function messageForGateway(message: ChatMessage): GatewayConversationTurn | null
     content:
       verbatim === undefined
         ? message.content
-        : `${message.content}\n\n[Untrusted tool observations]\n${JSON.stringify(verbatim.filter((entry) => entry.toolCalls !== undefined || entry.role === "tool"))}`,
+        : `${message.content}\n\n[Untrusted tool observations]\n${JSON.stringify(message.toolTranscript?.exchanges.flatMap(gatewayMessagesForToolExchange))}`,
     ...(verbatim === undefined ? {} : { verbatim }),
   };
 }

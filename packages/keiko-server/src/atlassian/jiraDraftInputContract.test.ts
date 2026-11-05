@@ -20,6 +20,30 @@ import {
 import { buildUiHandlerDeps } from "../deps.js";
 import { createJiraChatCatalogRuntime } from "./jiraChatCatalogRuntime.js";
 import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
+import { KNOWLEDGE_DOCUMENTS_TOOL, KNOWLEDGE_REVIEW_TOOL } from "../requirementsToolName.js";
+
+// Preserve the previously admitted catalog exactly; only the two scoped Knowledge additions join it.
+const ORIGINAL_TOOL_ALIASES = [
+  "jira_projects",
+  "jira_issue_types",
+  "jira_create_fields",
+  "jira_edit_fields",
+  "jira_search",
+  "jira_issue",
+  "jira_comments",
+  "jira_transitions",
+  "jira_assignable_users",
+  "jira_report",
+  "jira_draft_stage",
+  "jira_create",
+  "jira_edit",
+  "jira_assign",
+  "jira_comment",
+  "jira_transition",
+  "jira_draft",
+  "jira_attach",
+  "knowledge_requirements",
+] as const;
 
 const ITEM = {
   ref: "task",
@@ -136,7 +160,20 @@ describe("the Jira draft schema actually offered to Chat", () => {
   });
 
   it("preserves the declared union in the model projection without changing the other tools", () => {
-    expect(runtime.toolDefinitions()).toHaveLength(19);
+    expect(ORIGINAL_TOOL_ALIASES).toHaveLength(19);
+    expect([KNOWLEDGE_DOCUMENTS_TOOL, KNOWLEDGE_REVIEW_TOOL]).toEqual([
+      "knowledge.documents",
+      "knowledge.review",
+    ]);
+    const addedAliases = [KNOWLEDGE_DOCUMENTS_TOOL, KNOWLEDGE_REVIEW_TOOL].map((name) =>
+      name.replaceAll(".", "_"),
+    );
+    expect(
+      runtime
+        .toolDefinitions()
+        .map((tool) => tool.name)
+        .sort((left, right) => left.localeCompare(right)),
+    ).toEqual([...ORIGINAL_TOOL_ALIASES, ...addedAliases].sort());
     expect(parameters("jira_draft")).toEqual(descriptor?.inputSchema);
     expect(parameters("jira_draft").oneOf).toHaveLength(2);
     expect(parameters("jira_create")).toMatchObject({
@@ -181,7 +218,9 @@ describe("the Jira draft schema actually offered to Chat", () => {
     (key) => {
       const item = Object.fromEntries(Object.entries(ITEM).filter(([name]) => name !== key));
       expect(
-        describeCatalogSchemaMismatch(parameters("jira_draft"), { items: [item] }),
+        describeCatalogSchemaMismatch(parameters("jira_draft"), {
+          items: [item],
+        }),
       ).toBeDefined();
     },
   );

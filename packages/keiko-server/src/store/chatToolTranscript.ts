@@ -115,7 +115,8 @@ function exact(value: Record<string, unknown>, keys: readonly string[]): boolean
 function validCall(value: unknown): value is ChatToolExchange["call"] {
   return (
     object(value) &&
-    exact(value, ["id", "name", "arguments"]) &&
+    exact(value, ["id", "name", "arguments", "origin"]) &&
+    (value.origin === undefined || value.origin === "runtime") &&
     typeof value.id === "string" &&
     /^[\w-]{1,128}$/.test(value.id) &&
     typeof value.name === "string" &&

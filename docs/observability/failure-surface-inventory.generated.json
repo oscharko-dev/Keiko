@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "79904b0a2d40438cb169523f891cea60cd435223f705ac3f4ce0f38a3baa63d6"
+    "catalogDigest": "9113020e32dc23e89618c07a0810f4ab9295ddfa431e8bf042493b5b4b5251f4"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 632,
-    "proofCount": 654,
-    "resolvedProofCount": 654,
+    "operationCount": 633,
+    "proofCount": 655,
+    "resolvedProofCount": 655,
     "failureClassCount": 388,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -552,6 +552,7 @@
         "indexing.source.started",
         "indexing.start.accepted",
         "indexing.start.refused",
+        "knowledge.documents.operation",
         "knowledge.log.sink-failed",
         "knowledge.requirement-trace.applied",
         "knowledge.requirements.read",
@@ -2536,6 +2537,9 @@
     ],
     "jira.template.admission.line": [
       "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts"
+    ],
+    "knowledge.documents.operation.line": [
+      "packages/keiko-server/src/knowledgeDocumentsTool.test.ts"
     ],
     "knowledge.log.sink-failed.body-free": [
       "packages/keiko-local-knowledge/src/knowledge-log.test.ts"

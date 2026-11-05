@@ -6,7 +6,8 @@
 // (owner decision 2026-11-04); standalone connector settings retain the address and health chip.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import Image from "next/image";
+import { PodDragHandle } from "@/app/local-knowledge/pod-drag-handle";
+import { useLocalKnowledgeTranslate } from "@/app/local-knowledge/local-knowledge-i18n";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import type {
   AtlassianConnectorMetadata,
@@ -213,37 +214,28 @@ export function LivePodHeader({
   readonly actions: ReactNode;
   readonly embedded: boolean;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useLocalKnowledgeTranslate();
   return (
     <>
       <div className={styles.cmpPodHead}>
-        <div className={`${styles.cmpPodIdentity} ${embedded ? styles.cmpEmbeddedIdentity : ""}`}>
-          {embedded ? (
-            <>
-              <span className="lk-capsule-icon">
-                <Image
-                  src="/assets/brands/jira.svg?v=ad20a139"
-                  alt={t("atlassianConnectors.provider.jira")}
-                  width={15}
-                  height={15}
-                  unoptimized
-                />
-              </span>
-              <div className="lk-capsule-info">
-                <div className="lk-capsule-name" title={connector.displayName}>
-                  {connector.displayName}
-                </div>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="acx-card-title">{connector.displayName}</p>
-              <p className={`acx-meta ${styles.cmpPodUrl}`} title={connector.baseUrl}>
-                {connector.baseUrl}
-              </p>
-            </>
-          )}
-        </div>
+        {embedded && connector.deployment === "data-center" && connector.livePod !== undefined ? (
+          <PodDragHandle
+            payload={{
+              kind: "jira-live",
+              id: connector.livePod.podId,
+              label: connector.displayName,
+            }}
+            name={connector.displayName}
+            label={t("localKnowledge.row.dragJiraPod", { name: connector.displayName })}
+          />
+        ) : (
+          <div className={styles.cmpPodIdentity}>
+            <p className="acx-card-title">{connector.displayName}</p>
+            <p className={`acx-meta ${styles.cmpPodUrl}`} title={connector.baseUrl}>
+              {connector.baseUrl}
+            </p>
+          </div>
+        )}
         {embedded && state.kind === "ready" ? null : <StatusChip state={state} />}
         {actions}
       </div>

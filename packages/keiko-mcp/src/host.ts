@@ -360,7 +360,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
     if (tool === undefined) throw new ManagedMcpError("invalid-arguments");
     const invocation = new AbortController();
     const bound = withSignal(context, this.#lifetime.signal, invocation.signal);
-    const timeout = Math.min(30_000, tool.descriptor.bounds.maxDurationMs);
+    const timeout = tool.descriptor.bounds.maxDurationMs;
     const timer = setTimeout(() => {
       invocation.abort();
     }, timeout);

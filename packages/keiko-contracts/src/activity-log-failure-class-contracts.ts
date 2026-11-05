@@ -7597,18 +7597,28 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLifecycleOperations: {
       start: [],
       state: [],
-      end: ["knowledge.requirement-trace.applied", "knowledge.requirements.read"],
+      end: [
+        "knowledge.documents.operation",
+        "knowledge.requirement-trace.applied",
+        "knowledge.requirements.read",
+      ],
       failure: [],
       loss: [],
     },
     requiredCausalOperations: [
+      "knowledge.documents.operation",
       "knowledge.requirement-trace.applied",
       "knowledge.requirements.read",
     ],
     requiredLossOperations: [],
-    requiredProofOperations: ["knowledge.requirement-trace.applied", "knowledge.requirements.read"],
+    requiredProofOperations: [
+      "knowledge.documents.operation",
+      "knowledge.requirement-trace.applied",
+      "knowledge.requirements.read",
+    ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
+      "knowledge.documents.operation",
       "knowledge.requirement-trace.applied",
       "knowledge.requirements.read",
     ],

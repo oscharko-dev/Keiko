@@ -41,7 +41,14 @@ export interface RequirementScopeQuery {
 }
 
 /** The Pods of a Chat: the plural list supersedes the legacy single scope, never both. */
-export function chatKnowledgeScopes(chat: Chat | undefined): readonly RequirementScopeQuery[] {
+export function chatKnowledgeScopes(
+  chat:
+    | {
+        readonly localKnowledgeScopes?: Chat["localKnowledgeScopes"] | undefined;
+        readonly localKnowledgeScope?: Chat["localKnowledgeScope"] | undefined;
+      }
+    | undefined,
+): readonly RequirementScopeQuery[] {
   const scopes =
     chat?.localKnowledgeScopes ?? (chat?.localKnowledgeScope ? [chat.localKnowledgeScope] : []);
   return scopes.map((scope) =>

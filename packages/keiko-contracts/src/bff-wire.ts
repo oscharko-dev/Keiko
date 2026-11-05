@@ -525,7 +525,10 @@ export interface ChatAssistantResponseVersion {
 
 /** A call/result pair stays attached to its canonical human turn during history selection. */
 export interface ChatToolExchange {
-  readonly call: Pick<NormalizedToolCall, "id" | "name" | "arguments">;
+  readonly call: Pick<NormalizedToolCall, "id" | "name" | "arguments"> & {
+    /** Present only for an application-initiated observation, never a model-authored call. */
+    readonly origin?: "runtime" | undefined;
+  };
   readonly result?: ToolResultEnvelope | undefined;
   readonly approval?: ChatToolWriteApprovalView | undefined;
   /** Durable remote-effect knowledge is independent from transport cancellation or denial. */
@@ -736,7 +739,7 @@ export interface ChatContextSegmentWire {
  * server can resolve it.
  */
 export interface ChatContextConnectorWire {
-  readonly kind: "mcp" | "jira";
+  readonly kind: "mcp" | "jira" | "knowledge";
   readonly name?: string | undefined;
   readonly toolCount?: number | undefined;
   readonly tokens?: number | undefined;
@@ -1188,11 +1191,16 @@ export function isChatToolWriteApprovalView(value: unknown): value is ChatToolWr
   return validateChatToolWriteApprovalView(value).ok;
 }
 
+function isRuntimeToolOrigin(value: unknown): boolean {
+  return value === undefined || value === "runtime";
+}
+
 function isChatToolCallView(value: unknown): value is ChatToolExchange["call"] {
   const parsed = parseSafely(() => {
     if (
       !isWireRecord(value) ||
-      exactKeys(value, ["id", "name", "arguments"], "call").length > 0 ||
+      exactKeys(value, ["id", "name", "arguments", "origin"], "call").length > 0 ||
+      !isRuntimeToolOrigin(value.origin) ||
       typeof value.id !== "string" ||
       !/^[\w-]{1,128}$/u.test(value.id) ||
       typeof value.name !== "string" ||
@@ -1565,6 +1573,12 @@ export interface SafeRerankerConfig {
   readonly modelId: string;
   readonly credentialHeaderName: string;
   readonly timeoutMs: number;
+}
+
+/** Credential-free model metadata and the startup observation already in progress. */
+export interface GatewayModelsResponseWire {
+  readonly models: ModelCapability[];
+  readonly startupReadinessPending?: true;
 }
 
 export interface SafeGatewayConfig {

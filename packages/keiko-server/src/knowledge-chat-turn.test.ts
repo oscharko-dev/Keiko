@@ -1,0 +1,799 @@
+import {
+  createGroundedSynthesisCallBudget,
+  createGroundedSynthesisAttemptAdmission,
+} from "./grounded-answer.js";
+import { callGroundedSynthesisModel } from "./grounded-plural-synthesis.js";
+import { conversationForGateway, usableGatewayTurns } from "./conversation-gateway.js";
+import {
+  captureConversationReadinessAdmission,
+  withConversationReadinessAdmission,
+  ConversationModelNotReadyError,
+} from "./conversation-readiness-admission.js";
+import { realpathSync } from "node:fs";
+import { afterEach, expect, it, vi } from "vitest";
+import type { EditorAgentGovernedAuthorityReference } from "@oscharko-dev/keiko-contracts";
+import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
+import type { ExternalMcpConnection } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { installMcpChatCatalogRuntime } from "./mcp/mcpChatCatalogRuntime.js";
+import { reserveCurrentKnowledgeChatAuthority } from "./knowledge-chat-authority.js";
+import {
+  knowledgeDocumentSnapshot,
+  knowledgeDocumentScope,
+  knowledgeDocumentRevision,
+} from "./knowledge-document-source.js";
+import {
+  createDefaultChatCapability,
+  findConfiguredCapability,
+  CallerAttemptAdmissionError,
+  createGatewayToolCatalogBridge,
+  parseGatewayConfig,
+  toolCallingConfigurationFingerprint,
+  type GatewayCallRequest,
+  type NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { podFixture, specification, type PodFixture } from "./_requirementSupport.js";
+import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
+import { createChatToolTurn } from "./chat-tool-runtime.js";
+import { installKnowledgeChatCatalogRuntime } from "./knowledge-chat-catalog.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { chatConnectorTools } from "./chat-context-connectors.js";
+import {
+  deriveContextProfile,
+  deriveContextProfileFromCapability,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+
+const cleanup: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const close of cleanup.splice(0)) await close();
+  vi.restoreAllMocks();
+});
+const MODEL = "knowledge-only-model";
+function configure(deps: UiHandlerDeps, maxOutputTokens = 1024, contextWindow = 4096): void {
+  const provider = {
+    modelId: MODEL,
+    baseUrl: "https://model.example.invalid/v1",
+    apiKey: "synthetic-unused",
+    timeoutMs: 5000,
+    maxRetries: 0,
+    retryBaseDelayMs: 1,
+  };
+  deps.gatewayConfig?.set(
+    parseGatewayConfig({
+      providers: [provider],
+      capabilities: [
+        {
+          ...createDefaultChatCapability(MODEL),
+          maxOutputTokens,
+          contextWindow,
+          toolCalling: true,
+          toolCallingVerification: {
+            status: "verified",
+            checkedAt: new Date().toISOString(),
+            probe: "gateway-tool-calling-v1",
+            configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+          },
+        },
+      ],
+    }),
+    true,
+  );
+}
+async function fixture(
+  documentCount = 1,
+  maxOutputTokens = 1024,
+  contextWindow = 4096,
+): Promise<{ pod: PodFixture; deps: UiHandlerDeps }> {
+  const pod = await podFixture(
+    Array.from({ length: documentCount }, (_, index) => ({
+      capsuleId: index === 0 ? "knowledge-chat-pod" : `knowledge-chat-pod-${String(index)}`,
+      text: specification(3).text,
+    })),
+  );
+  const runtimeDir = realpathSync(pod.runtimeDir);
+  const base = buildUiHandlerDeps({
+    configPath: undefined,
+    evidenceDir: `${runtimeDir}/evidence`,
+    uiDbPath: `${runtimeDir}/runtime-ui.db`,
+    env: { KEIKO_STATE_DIR: runtimeDir },
+  });
+  const deps = installKnowledgeChatCatalogRuntime(Object.assign(base, pod.deps), {
+    primary: createBufferedServerLogSink(),
+    diagnostics: { record: () => undefined },
+  });
+  configure(deps, maxOutputTokens, contextWindow);
+  cleanup.push(async () => {
+    await deps.dispose?.();
+    pod.cleanup();
+  });
+  return { pod, deps };
+}
+function model(
+  calls: GatewayCallRequest[],
+  toolName: string,
+  args: Record<string, string>,
+): ModelPort {
+  return {
+    call: (request): Promise<NormalizedResponse> => {
+      calls.push(request);
+      const admission = request.attemptAdmission?.({ promptTokens: 100, maxOutputTokens: 100 });
+      const response: NormalizedResponse = {
+        modelId: MODEL,
+        content: "Observed the Knowledge Pod documents.",
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId: `knowledge-response-${String(calls.length)}`,
+          promptTokens: 100,
+          completionTokens: 10,
+          latencyMs: 1,
+          costClass: "low",
+        },
+      };
+      admission?.settle(response.usage, true, "observed");
+      if (calls.length > 1) return Promise.resolve(response);
+      if (request.toolCatalog?.kind !== "bound") throw new Error("Expected real bound MCP catalog");
+      const entry = request.toolCatalog.projection.tools.find(
+        (tool) => tool.toolRef.canonicalId === `keiko.${toolName}`,
+      );
+      if (entry === undefined) throw new Error("Expected Knowledge tool");
+      const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
+      return Promise.resolve({
+        ...response,
+        content: "",
+        finishReason: "tool_calls",
+        toolCalls: [bridge.bind({ id: "knowledge-call", name: entry.alias, arguments: args })],
+      });
+    },
+  };
+}
+function assertRuntimeContext(
+  request: GatewayCallRequest | undefined,
+  history: Parameters<typeof usableGatewayTurns>[0],
+  human: GatewayCallRequest["messages"][number],
+  original: string,
+): void {
+  expect(request?.messages.filter((message) => message.role === "user").at(-1)).toEqual(human);
+  const projection = usableGatewayTurns(history)[0]?.content;
+  expect(projection).toContain("runtime-tool-observation");
+  expect(projection).toContain("knowledge-chat-pod.md");
+  expect(
+    conversationForGateway(history)
+      .filter((message) => message.role === "user")
+      .at(-1)?.content,
+  ).toBe(original);
+}
+
+it.each([
+  { tool: "knowledge.requirements", args: {} },
+  { tool: "knowledge.documents", args: { view: "inventory" } },
+])("executes $tool through the real MCP catalog in a Pod-only Chat", async ({ tool, args }) => {
+  const { pod, deps } = await fixture();
+  const accepted = deps.store.admitChatTurn(`human-${tool}`, {
+    chatId: pod.chatId,
+    role: "user",
+    content: "Read the attached documents",
+    timestamp: Date.now(),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+  if (accepted.kind !== "admitted") throw new Error("Expected human turn");
+  const calls: GatewayCallRequest[] = [];
+  const turn = await createChatToolTurn(
+    deps,
+    MODEL,
+    accepted.userMessage,
+    new AbortController().signal,
+    "knowledge-mcp-proof",
+  );
+  if (turn === undefined) throw new Error("Expected Knowledge-only turn");
+  const humanMessage = {
+    role: "user" as const,
+    content: "Read the documents",
+    contentParts: [
+      { type: "image_url" as const, image_url: { url: "data:image/png;base64,AAAA" } },
+    ],
+  };
+  const response = await turn.call(
+    turn.meter(model(calls, tool, args)),
+    { modelId: MODEL, messages: [humanMessage] },
+    new AbortController().signal,
+  );
+  assertRuntimeContext(
+    calls[0],
+    deps.store.listMessages(pod.chatId),
+    humanMessage,
+    accepted.userMessage.content,
+  );
+  expect(response.content).toContain("Observed");
+  expect(calls).toHaveLength(2);
+  const transcript = deps.store.findMessageById(accepted.userMessage.id)?.toolTranscript;
+  expect(transcript?.exchanges[0]?.result?.status).toBe("completed");
+  expect(
+    calls[1]?.messages.some(
+      (message) => message.role === "tool" && message.content.includes("succeeded"),
+    ),
+  ).toBe(true);
+  expect(deps.store.findChatById(pod.chatId)?.jiraPodBinding).toBeUndefined();
+  expect(transcript?.readGrant).toBeUndefined();
+});
+it("accounts for Knowledge tool definitions without admitting a host", async () => {
+  const { pod, deps } = await fixture();
+  const profile = deriveContextProfile({
+    maxInputTokens: 32_000,
+    reservedOutputTokens: 2000,
+    safetyMarginTokens: 1000,
+  });
+  const tools = chatConnectorTools(
+    deps,
+    deps.store.findChatById(pod.chatId),
+    profile.tokenAccounting,
+    "knowledge-context-proof",
+  );
+  expect(tools.connectors).toEqual([
+    { kind: "knowledge", toolCount: 3, tokens: expect.any(Number) as number },
+  ]);
+  expect(tools.tokens).toBeGreaterThan(0);
+});
+
+function requiredReviewOwners(deps: UiHandlerDeps): {
+  readonly settings: NonNullable<UiHandlerDeps["mcpSettings"]>;
+  readonly registry: NonNullable<UiHandlerDeps["agentAuthorityRegistry"]>;
+} {
+  const settings = deps.mcpSettings;
+  const registry = deps.agentAuthorityRegistry;
+  if (settings === undefined || registry === undefined) throw new Error("Expected source owners");
+  return { settings, registry };
+}
+function rotateBeforeReview(deps: UiHandlerDeps, rotate: boolean, round: number): void {
+  if (!rotate || round !== 2) return;
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) throw new Error("Expected gateway configuration");
+  vi.spyOn(holder, "generation").mockReturnValue(holder.generation() + 1);
+}
+
+function reviewAttempt(
+  request: GatewayCallRequest,
+): ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>> {
+  const admission = request.attemptAdmission?.({ promptTokens: 100, maxOutputTokens: 100 });
+  if (request.attemptAdmission !== undefined && admission === undefined)
+    throw new CallerAttemptAdmissionError("Fixture caller grant exhausted before dispatch");
+  expect(admission?.maxOutputTokens).toBe(25);
+  return admission;
+}
+function expectReviewFits(
+  deps: UiHandlerDeps,
+  request: GatewayCallRequest | undefined,
+  expectedOutput = 1024,
+): void {
+  const config = deps.gatewayConfig?.current();
+  const capability = config === undefined ? undefined : findConfiguredCapability(config, MODEL);
+  if (request === undefined || capability?.kind !== "chat")
+    throw new Error("Expected review capability");
+  expect(request.maxOutputTokens).toBe(expectedOutput);
+  const profile = deriveContextProfileFromCapability(capability);
+  expect(
+    countGatewayPromptTokens(request) + (request.maxOutputTokens ?? 0) + profile.safetyMarginTokens,
+  ).toBeLessThanOrEqual(profile.maxInputTokens);
+}
+function expectRemainingReviewAuthority(
+  deps: UiHandlerDeps,
+  pod: PodFixture,
+  reference: EditorAgentGovernedAuthorityReference | undefined,
+  remaining: number,
+): void {
+  if (reference === undefined) throw new Error("Expected retained Knowledge authority");
+  const reserve = (promptTokens: number): ReturnType<typeof reserveCurrentKnowledgeChatAuthority> =>
+    reserveCurrentKnowledgeChatAuthority(
+      deps,
+      pod.chatId,
+      reference,
+      { toolCalls: 0, promptTokens, patchBytes: 0 },
+      new Date().toISOString(),
+      "knowledge-source-proof",
+    );
+  expect(reserve(remaining + 1).ok).toBe(false);
+  expect(reserve(remaining).ok).toBe(true);
+}
+
+it.each([
+  {
+    rotate: false,
+    callerCalls: 4,
+    maxOutputTokens: 1024,
+    contextWindow: 4096,
+    expectedOutput: 1024,
+  },
+  {
+    rotate: true,
+    callerCalls: 4,
+    maxOutputTokens: 1024,
+    contextWindow: 4096,
+    expectedOutput: 1024,
+  },
+  {
+    rotate: false,
+    callerCalls: 2,
+    maxOutputTokens: 1024,
+    contextWindow: 4096,
+    expectedOutput: 1024,
+  },
+  {
+    rotate: false,
+    callerCalls: 4,
+    maxOutputTokens: 16_384,
+    contextWindow: 131_072,
+    expectedOutput: 8192,
+  },
+])(
+  "shares review admission with external MCP tools (rotated: $rotate, caller calls: $callerCalls, output: $maxOutputTokens)",
+  async ({ rotate, callerCalls, maxOutputTokens, contextWindow, expectedOutput }) => {
+    const { pod, deps } = await fixture(1, maxOutputTokens, contextWindow);
+    const { settings, registry } = requiredReviewOwners(deps);
+    const server: McpServerDefinition = {
+      name: "synthetic",
+      description: "Read-only test tools",
+      enabled: true,
+      transport: { kind: "local", command: [process.execPath], environment: {} },
+      tools: { status: "read" },
+    };
+    settings.update(
+      {
+        expectedRevision: settings.read("knowledge-source-proof").revision,
+        servers: [server],
+        secrets: {},
+      },
+      "knowledge-source-proof",
+    );
+    const connection: ExternalMcpConnection = {
+      signal: new AbortController().signal,
+      tools: [
+        {
+          name: "status",
+          inputSchema: {
+            type: "object",
+            properties: {},
+            required: [],
+            additionalProperties: false,
+          },
+        },
+      ],
+      call: () => Promise.resolve({}),
+      close: () => Promise.resolve(),
+    };
+    Object.assign(deps, {
+      chatToolTurnBudget: {
+        maxRuntimeMs: 60_000,
+        maxToolCalls: 10,
+        maxPromptTokens: 1000,
+        maxPatchBytes: 0,
+      },
+      mcpConnections: {
+        inspect: () => [],
+        connect: () => Promise.resolve(connection),
+        generation: () => new AbortController().signal,
+        serve: () => Promise.resolve(new Response(null, { status: 404 })),
+        close: () => Promise.resolve(),
+      },
+    });
+    installMcpChatCatalogRuntime(deps, {
+      primary: createBufferedServerLogSink(),
+      diagnostics: { record: () => undefined },
+    });
+    let references: readonly EditorAgentGovernedAuthorityReference[] = [];
+    const register = registry.registerChatSources.bind(registry);
+    vi.spyOn(registry, "registerChatSources").mockImplementation((...args) => {
+      const result = register(...args);
+      if (result.ok) references = result.authorityRefs;
+      return result;
+    });
+    let reviewArguments: Record<string, string> = {};
+    pod.withStore((store) => {
+      const document = knowledgeDocumentSnapshot(deps, store, pod.chatId).documents[0];
+      if (document === undefined) throw new Error("Expected source document");
+      reviewArguments = {
+        documentScope: knowledgeDocumentScope(document),
+        revisionDigest: knowledgeDocumentRevision(document),
+      };
+    });
+    const outer: GatewayCallRequest[] = [];
+    const semantic: GatewayCallRequest[] = [];
+    const testModel: ModelPort = {
+      call: (request): Promise<NormalizedResponse> => {
+        const admission = reviewAttempt(request);
+        const response: NormalizedResponse = {
+          modelId: MODEL,
+          content: "Observed Knowledge review proposals.",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "combined-review-model",
+            promptTokens: 100,
+            completionTokens: 10,
+            latencyMs: 1,
+            costClass: "low",
+          },
+        };
+        admission?.settle(response.usage, true, "observed");
+        if (request.toolCatalog?.kind !== "bound") {
+          semantic.push(request);
+          const review = {
+            complete: true,
+            findings: [
+              {
+                kind: "acceptance-criterion",
+                anchors: [0],
+                proposal: "Verify the documented processing deadline.",
+                question: "",
+              },
+            ],
+          };
+          return Promise.resolve({
+            ...response,
+            content: JSON.stringify(review),
+            structuredOutput: review,
+          });
+        }
+        outer.push(request);
+        expect(
+          request.toolCatalog.projection.tools.some((tool) => tool.alias.includes("status")),
+        ).toBe(true);
+        if (outer.length > 2) return Promise.resolve(response);
+        rotateBeforeReview(deps, rotate, outer.length);
+        const toolName = outer.length === 1 ? "knowledge.documents" : "knowledge.review";
+        const tool = request.toolCatalog.projection.tools.find(
+          (entry) => entry.toolRef.canonicalId === `keiko.${toolName}`,
+        );
+        if (tool === undefined) throw new Error("Expected combined Knowledge tool");
+        const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
+        return Promise.resolve({
+          ...response,
+          content: "",
+          finishReason: "tool_calls",
+          toolCalls: [
+            bridge.bind({
+              id: `combined-${String(outer.length)}`,
+              name: tool.alias,
+              arguments: outer.length === 1 ? { view: "inventory" } : reviewArguments,
+            }),
+          ],
+        });
+      },
+    };
+    Object.assign(deps, { modelPortFactory: () => testModel });
+    const admitted = deps.store.admitChatTurn("combined-human-turn", {
+      chatId: pod.chatId,
+      role: "user",
+      content: "Review the attached document",
+      timestamp: Date.now(),
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    if (admitted.kind !== "admitted") throw new Error("Expected turn");
+    const turn = await createChatToolTurn(
+      deps,
+      MODEL,
+      admitted.userMessage,
+      new AbortController().signal,
+      "knowledge-source-proof",
+    );
+    if (turn === undefined) throw new Error("Expected combined turn");
+    deps.gatewayConfig?.recordVerifiedCapability(
+      MODEL,
+      { conversationReady: true },
+      new Date().toISOString(),
+    );
+    const admittedModel = captureConversationReadinessAdmission(deps, MODEL);
+    if ("status" in admittedModel) throw new Error("Expected admitted model");
+    const checkedModel = withConversationReadinessAdmission(testModel, MODEL, admittedModel, deps);
+    let reserved = 0;
+    const callerSettlement = vi.fn(() => undefined);
+    const callerAdmission = vi.fn(() => {
+      if (reserved >= callerCalls) return undefined;
+      reserved++;
+      return { maxOutputTokens: 25, settle: callerSettlement };
+    });
+    const work = turn.call(
+      turn.meter(checkedModel),
+      {
+        modelId: MODEL,
+        messages: [{ role: "user", content: "Review the document" }],
+        attemptAdmission: callerAdmission,
+      },
+      new AbortController().signal,
+    );
+    if (rotate) {
+      await expect(work).rejects.toBeInstanceOf(ConversationModelNotReadyError);
+      expect(semantic).toHaveLength(0);
+      return;
+    }
+    if (callerCalls === 2) {
+      await expect(work).rejects.toBeInstanceOf(CallerAttemptAdmissionError);
+      expect(outer).toHaveLength(2);
+      expect(semantic).toHaveLength(0);
+      expect(callerSettlement).toHaveBeenCalledTimes(2);
+      expectRemainingReviewAuthority(deps, pod, references[0], 800);
+      return;
+    }
+    await work;
+    expect(outer).toHaveLength(3);
+    expect(semantic).toHaveLength(1);
+    expect(callerAdmission).toHaveBeenCalledTimes(outer.length + semantic.length);
+    expect(callerSettlement).toHaveBeenCalledTimes(4);
+    expect(semantic[0]?.modelId).toBe(MODEL);
+    expectReviewFits(deps, semantic[0], expectedOutput);
+    expect(
+      deps.store
+        .findMessageById(admitted.userMessage.id)
+        ?.toolTranscript?.exchanges.map((exchange) => exchange.result?.status),
+    ).toEqual(["completed", "completed", "completed"]);
+    expectRemainingReviewAuthority(deps, pod, references[0], 600);
+  },
+);
+
+it("charges the runtime inventory to a one-tool envelope without exempting final synthesis", async () => {
+  const { pod, deps } = await fixture();
+  Object.assign(deps, {
+    chatToolTurnBudget: {
+      maxRuntimeMs: 60_000,
+      maxToolCalls: 1,
+      maxPromptTokens: 100_000,
+      maxPatchBytes: 0,
+    },
+  });
+  const accepted = deps.store.admitChatTurn("runtime-inventory-budget", {
+    chatId: pod.chatId,
+    role: "user",
+    content: "List the selected documents",
+    timestamp: Date.now(),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+  if (accepted.kind !== "admitted") throw new Error("Expected human turn");
+  const turn = await createChatToolTurn(
+    deps,
+    MODEL,
+    accepted.userMessage,
+    new AbortController().signal,
+    "runtime-inventory-budget",
+  );
+  if (turn === undefined) throw new Error("Expected Knowledge turn");
+  const calls: GatewayCallRequest[] = [];
+  const answer = await turn.call(
+    turn.meter(model(calls, "knowledge.documents", { view: "inventory" })),
+    { modelId: MODEL, messages: [{ role: "user", content: "List the selected documents" }] },
+    new AbortController().signal,
+  );
+  expect(calls).toHaveLength(0);
+  const exchanges = deps.store.findMessageById(accepted.userMessage.id)?.toolTranscript?.exchanges;
+  expect(exchanges).toHaveLength(1);
+  expect(exchanges?.[0]).toMatchObject({
+    call: { origin: "runtime", name: "knowledge_documents" },
+    result: { status: "completed" },
+  });
+  expect(answer.content).toContain("this turn used up its tool-call or prompt budget");
+  expect(answer.content).not.toContain("Source coverage:");
+  expect(turn.endedEarly).toBe(true);
+});
+
+function installSemanticExternalCatalog(deps: UiHandlerDeps): void {
+  const { settings } = requiredReviewOwners(deps);
+  settings.update(
+    {
+      expectedRevision: settings.read("semantic-ledger-proof").revision,
+      servers: [
+        {
+          name: "semantic-external",
+          description: "Read-only test tools",
+          enabled: true,
+          transport: { kind: "local", command: [process.execPath], environment: {} },
+          tools: { status: "read" },
+        },
+      ],
+      secrets: {},
+    },
+    "semantic-ledger-proof",
+  );
+  const connection: ExternalMcpConnection = {
+    signal: new AbortController().signal,
+    tools: [
+      {
+        name: "status",
+        inputSchema: { type: "object", properties: {}, required: [], additionalProperties: false },
+      },
+    ],
+    call: () => Promise.resolve({}),
+    close: () => Promise.resolve(),
+  };
+  Object.assign(deps, {
+    mcpConnections: {
+      inspect: () => [],
+      connect: () => Promise.resolve(connection),
+      generation: () => new AbortController().signal,
+      serve: () => Promise.resolve(new Response(null, { status: 404 })),
+      close: () => Promise.resolve(),
+    },
+  });
+  installMcpChatCatalogRuntime(deps, {
+    primary: createBufferedServerLogSink(),
+    diagnostics: { record: () => undefined },
+  });
+}
+
+it.each([
+  { complete: true, external: false },
+  { complete: false, external: false },
+  { complete: true, external: true },
+])(
+  "keeps three parsed semantic windows inside the tool envelope before final synthesis (complete: $complete, external: $external)",
+  async ({ complete, external }) => {
+    const { pod, deps } = await fixture(3);
+    Object.assign(deps, {
+      chatToolTurnBudget: {
+        maxRuntimeMs: 60_000,
+        maxToolCalls: 10,
+        maxPromptTokens: 1000,
+        maxPatchBytes: 0,
+      },
+    });
+    if (external) installSemanticExternalCatalog(deps);
+    const { registry } = requiredReviewOwners(deps);
+    let authority: EditorAgentGovernedAuthorityReference | undefined;
+    const register = registry.registerChat.bind(registry);
+    vi.spyOn(registry, "registerChat").mockImplementation((...args) => {
+      const result = register(...args);
+      if (result.ok) authority = result.authorityRef;
+      return result;
+    });
+    const registerSources = registry.registerChatSources.bind(registry);
+    vi.spyOn(registry, "registerChatSources").mockImplementation((...args) => {
+      const result = registerSources(...args);
+      if (result.ok) authority = result.authorityRefs[0];
+      return result;
+    });
+    let argumentsByDocument: Record<string, string>[] = [];
+    pod.withStore((store) => {
+      argumentsByDocument = knowledgeDocumentSnapshot(deps, store, pod.chatId).documents.map(
+        (document) => ({
+          documentScope: knowledgeDocumentScope(document),
+          revisionDigest: knowledgeDocumentRevision(document),
+        }),
+      );
+    });
+    const calls: GatewayCallRequest[] = [];
+    let outer = 0;
+    let reviewed = 0;
+    const testModel: ModelPort = {
+      call: (request): Promise<NormalizedResponse> => {
+        const reservation = request.attemptAdmission?.({
+          promptTokens: 100,
+          maxOutputTokens: 25,
+        });
+        if (reservation === undefined)
+          throw new CallerAttemptAdmissionError("Fixture caller grant exhausted before dispatch");
+        calls.push(request);
+        const response: NormalizedResponse = {
+          modelId: MODEL,
+          content: "The reviewed source proposals are ready.",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: `review-${String(calls.length)}`,
+            promptTokens: 100,
+            completionTokens: 10,
+            latencyMs: 1,
+            costClass: "low",
+          },
+        };
+        reservation.settle(response.usage, true, "observed");
+        if (request.toolCatalog?.kind !== "bound") {
+          reviewed++;
+          return Promise.resolve({
+            ...response,
+            content: JSON.stringify({ complete, findings: [] }),
+          });
+        }
+        const args = argumentsByDocument[outer++];
+        if (args === undefined) return Promise.resolve(response);
+        const entry = request.toolCatalog.projection.tools.find(
+          (candidate) => candidate.toolRef.canonicalId === "keiko.knowledge.review",
+        );
+        if (entry === undefined) throw new Error("Expected semantic review tool");
+        const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
+        return Promise.resolve({
+          ...response,
+          content: "",
+          finishReason: "tool_calls",
+          toolCalls: [
+            bridge.bind({
+              id: `semantic-${String(outer)}`,
+              name: entry.alias,
+              arguments: args,
+            }),
+          ],
+        });
+      },
+    };
+    Object.assign(deps, { modelPortFactory: () => testModel });
+    const accepted = deps.store.admitChatTurn("semantic-ledger-owner", {
+      chatId: pod.chatId,
+      role: "user",
+      content: "Review the attached source documents and report proposals.",
+      timestamp: Date.now(),
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    if (accepted.kind !== "admitted") throw new Error("Expected accepted turn");
+    const signal = new AbortController().signal;
+    const turn = await createChatToolTurn(
+      deps,
+      MODEL,
+      accepted.userMessage,
+      signal,
+      "semantic-ledger-proof",
+    );
+    if (turn === undefined) throw new Error("Expected accepted Knowledge tool turn");
+    const budget = createGroundedSynthesisCallBudget();
+    const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+      inputTokensMax: 1000,
+      outputTokensMax: 1000,
+    });
+    const result = await callGroundedSynthesisModel(
+      turn.meter(testModel),
+      {
+        modelId: MODEL,
+        messages: [{ role: "user", content: "Review the attached source documents" }],
+        attemptAdmission: tracker.admission,
+      },
+      signal,
+      tracker,
+      turn,
+    );
+    expect(result.content).toContain("reviewed source proposals");
+    expect(reviewed).toBe(3);
+    expect(calls).toHaveLength(7);
+    expect(budget.remaining()).toBe(1);
+    expect(budget.pendingUsage()).toEqual({
+      promptTokens: 100,
+      completionTokens: 10,
+    });
+    expect(budget.takeUsage()).toEqual({
+      promptTokens: 700,
+      completionTokens: 70,
+    });
+    const reference = authority;
+    if (reference === undefined) throw new Error("Expected accepted source authority");
+    const reserve = (
+      promptTokens: number,
+    ): ReturnType<typeof reserveCurrentKnowledgeChatAuthority> =>
+      reserveCurrentKnowledgeChatAuthority(
+        deps,
+        pod.chatId,
+        reference,
+        { toolCalls: 0, promptTokens, patchBytes: 0 },
+        new Date().toISOString(),
+        "semantic-ledger-proof",
+      );
+    expect(reserve(301).ok).toBe(false);
+    expect(reserve(300).ok).toBe(true);
+    expect(tracker.admission({ promptTokens: 100, maxOutputTokens: 25 })).toBeDefined();
+    expect(tracker.admission({ promptTokens: 1, maxOutputTokens: 1 })).toBeUndefined();
+  },
+);

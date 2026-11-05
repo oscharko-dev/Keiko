@@ -506,11 +506,16 @@ function shapeDetails(shape: CatalogSchemaMismatch | undefined): CatalogRejectio
   };
 }
 
-function retryableResponseRejection(phase: "projection" | "response", cause: unknown): boolean {
+function retryableResponseRejection(
+  phase: "projection" | "response",
+  cause: unknown,
+  repair: GatewayToolCallRepair | undefined,
+): boolean {
   return (
     phase === "response" &&
     cause instanceof ToolCatalogError &&
-    (cause.reason === "invalid-shape" || cause.reason === "invalid-identity")
+    cause.reason === "invalid-shape" &&
+    repair !== undefined
   );
 }
 
@@ -528,7 +533,7 @@ function reject(
       : new GatewayToolCatalogError(
           reason,
           cause,
-          retryableResponseRejection(phase, cause),
+          retryableResponseRejection(phase, cause, repair),
           repair,
         );
   log.write(

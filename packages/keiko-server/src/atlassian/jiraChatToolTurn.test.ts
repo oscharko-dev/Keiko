@@ -1,3 +1,4 @@
+import { CHAT_CATALOG_TOOLS } from "./jiraChatCatalogConsumer.js";
 import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import { JiraChatToolTurn } from "./jiraChatToolTurn.js";
@@ -613,7 +614,7 @@ function expectUnchangedJiraOffer(calls: readonly GatewayCallRequest[]): void {
 function expectJiraDraftUnionOffered(calls: readonly GatewayCallRequest[]): void {
   const offered = calls[0]?.toolCatalog;
   if (offered?.kind !== "bound") throw new Error("Missing real Chat catalog offer");
-  expect(offered.projection.tools).toHaveLength(19);
+  expect(offered.projection.tools).toHaveLength(CHAT_CATALOG_TOOLS.length);
   expect(
     offered.projection.tools.find((tool) => tool.alias === "jira_draft")?.inputSchema.oneOf,
   ).toHaveLength(2);
@@ -874,7 +875,10 @@ describe("normal streamed Chat through the owned Jira catalog", () => {
 it("keeps the shared Jira rules out of every Jira tool description", async () => {
   const f = fixture();
   const managed = await f.deps.jiraChatCatalog?.get();
-  const descriptions = managed?.catalog.descriptors.map((entry) => entry.description) ?? [];
+  const descriptions =
+    managed?.catalog.descriptors
+      .filter((entry) => entry.toolRef.canonicalId.startsWith("keiko.jira."))
+      .map((entry) => entry.description) ?? [];
   expect(descriptions.length).toBeGreaterThan(10);
   for (const description of descriptions) {
     expect(description).not.toMatch(

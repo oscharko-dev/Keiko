@@ -37,7 +37,7 @@ import { STREAMING } from "./route-outcome.js";
 export { STREAMING } from "./route-outcome.js";
 import {
   handleConfig,
-  handleModels,
+  handleModelsAfterStartupCatalog,
   handleVoiceCapability,
   handleWorkflows,
   handleWorkspace,
@@ -571,7 +571,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   ...EDITOR_LOCAL_HISTORY_ROUTE_GROUP,
   ...DAP_DEBUG_ROUTE_GROUP,
   { method: "GET", pattern: "/api/config", handler: handleConfig },
-  { method: "GET", pattern: "/api/models", handler: handleModels },
+  { method: "GET", pattern: "/api/models", handler: handleModelsAfterStartupCatalog },
   { method: "GET", pattern: "/api/voice/capability", handler: handleVoiceCapability },
   // Issue #494 (Epic #491) — optional, capability-gated STT composer dictation (ADR-0100 D1/D2/D4).
   // POST a short audio clip (base64 inside the JSON + CSRF envelope) and receive its transcript;

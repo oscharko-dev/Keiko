@@ -1163,6 +1163,7 @@ function ChatBubbleImpl({
           transcript={message.toolTranscript}
           turnState={message.turnState}
           chatId={message.chatId}
+          showPending={isUser && message.turnState === "pending"}
         />
         <ResponseVersionSelector
           message={message}
@@ -1237,12 +1238,15 @@ function KeikoMessageMark({ pulsing = false }: { readonly pulsing?: boolean }): 
   );
 }
 
-function TypingBubble(): ReactNode {
+function TypingBubble({ showProgress }: { readonly showProgress: boolean }): ReactNode {
   const t = useTranslate();
   return (
     <article className="chat-msg" data-role="assistant">
       <div className="chat-msg-bubble">
         <KeikoMessageMark pulsing />
+        {showProgress ? (
+          <JiraChatTools transcript={undefined} turnState="pending" showPending />
+        ) : null}
         {/* uiux-fix F042 (C319) — aria-label is prohibited on a generic span and
             ignored by AT; role="img" makes the label exposed. The lifecycle
             announcement itself comes from SendLifecycleStatus. */}
@@ -1435,7 +1439,14 @@ function ConversationThreadImpl({
           <div className="chat-turn-cell chat-turn-prompt" />
           <div className="chat-turn-cell chat-turn-answer">
             <div className="chatw-typing-row">
-              <TypingBubble />
+              <TypingBubble
+                showProgress={
+                  (sendStatus === "contacting" || sendStatus === "awaiting-decision") &&
+                  !messages.some(
+                    (message) => message.role === "user" && message.turnState === "pending",
+                  )
+                }
+              />
               {hasGroundingScope(activeChat) ? (
                 <button
                   type="button"

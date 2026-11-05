@@ -79,6 +79,26 @@ function result(): ToolResultEnvelope {
   };
 }
 describe("ordinary Chat structured tool transcript", () => {
+  it("retains runtime provenance and rejects unknown call origins", () => {
+    const { store, id } = fixture();
+    store.updateChatToolTranscript(
+      id,
+      { kind: "started", call: { ...call, origin: "runtime" } },
+      "runtime-origin-proof",
+    );
+    expect(store.findMessageById(id)?.toolTranscript?.exchanges[0]?.call.origin).toBe("runtime");
+    expect(() => {
+      store.updateChatToolTranscript(
+        id,
+        {
+          kind: "started",
+          call: { ...call, id: "invalid-origin", origin: "external" as "runtime" },
+        },
+        "runtime-origin-proof",
+      );
+    }).toThrow();
+  });
+
   it("persists identity/result pairs, redacts bodies and never changes the user text", () => {
     const { store, id } = fixture();
     store.updateChatToolTranscript(

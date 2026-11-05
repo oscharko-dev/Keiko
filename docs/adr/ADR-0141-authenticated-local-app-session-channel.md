@@ -149,6 +149,16 @@ redeems the attestation. Other tabs in the same browser profile then observe the
 After a server restart the same action reconnects; `dev:start` can also request this handoff from an
 already running server without restarting it or recovering its private secret.
 
+A protected mutation refused with an authentication status, or with the existence-concealing
+`404 NOT_FOUND`, invalidates the browser's last positive inspection through the existing session
+notification port. The banner then follows a fresh authoritative inventory read; a 404 alone never
+proves missing session authority or a missing skill. Buffered chat, streamed chat and private draft
+saves share this notification. The refusal is preserved and no write is replayed. Follow-up reads
+never publish another notification, so an unpaired skill or draft read cannot cause a refresh loop.
+The existing `403 DENIED` confirmation path retains its bounded read-only repair/replay policy.
+Diagnostic delivery opts out of both mechanisms and counts its own refusals without recursively
+reporting them through the failing transport.
+
 The destination is an exact HTTP loopback origin on the server-owned public UI port; no supplied
 URL, path, executable, principal or additional arguments are admitted. Browser selection uses a
 closed target list and fixed native application identifiers/commands with no shell. Calls are

@@ -5,6 +5,7 @@ import {
   withConversationReadinessAdmission,
 } from "./conversation-readiness-admission.js";
 import {
+  groundedToolAttemptConfirmation,
   createGroundedSynthesisCallBudget,
   createGroundedSynthesisAttemptAdmission,
   groundedSynthesisAttemptUsage,
@@ -308,4 +309,32 @@ it("never releases an unsettled attempt for an announced correction", () => {
   expect(
     tracker.admission({ promptTokens: 1, maxOutputTokens: 1, correctsUnusableAttempt: true }),
   ).toBeUndefined();
+});
+
+describe("exact nested synthesis attempt confirmation", () => {
+  it("confirms only its fully observed exact reservation despite a later concurrent admission", () => {
+    const budget = createGroundedSynthesisCallBudget();
+    const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+      inputTokensMax: 1000,
+      outputTokensMax: 1000,
+    });
+    const first = tracker.admission({ promptTokens: 100, maxOutputTokens: 25 });
+    const second = tracker.admission({
+      promptTokens: 200,
+      maxOutputTokens: 25,
+    });
+    if (first === undefined || second === undefined) throw new Error("Expected exact reservations");
+    first.settle({ promptTokens: 100, completionTokens: 5 }, true, "observed");
+    second.settle({ promptTokens: 200, completionTokens: 7 }, true, "unknown");
+    groundedToolAttemptConfirmation(first)?.();
+    groundedToolAttemptConfirmation(first)?.();
+    expect(budget.remaining()).toBe(1);
+    expect(budget.pendingUsage()).toEqual({
+      promptTokens: 200,
+      completionTokens: 25,
+    });
+    expect(() => groundedToolAttemptConfirmation(second)?.()).toThrow(CallerAttemptAdmissionError);
+    expect(budget.remaining()).toBe(1);
+    expect(groundedToolAttemptConfirmation({ settle: vi.fn() })).toBeUndefined();
+  });
 });

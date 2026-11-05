@@ -78,8 +78,8 @@ interface StageArgs {
   readonly items: readonly StagedJiraDraftItem[];
 }
 /**
- * What to correct in a page that is not well formed. The declaration leaves the item form to
- * jira.draft's, so this names the first item that does not match it (counting from 1).
+ * What to correct in a page that is not well formed. The catalog declares the shared draft item
+ * form; this handler revalidates it and names the first item that does not match (counting from 1).
  */
 function invalidPageGuidance(raw: CatalogJsonObject): string {
   const { items } = raw;

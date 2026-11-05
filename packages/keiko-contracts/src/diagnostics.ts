@@ -1045,6 +1045,7 @@ export const CLIENT_STAGE_IDS = [
   "markdown copy feedback",
   "transcript navigation",
   "browser approval",
+  "knowledge pod selection",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
 
@@ -1179,6 +1180,7 @@ export const CLIENT_NAVIGATION_OUTCOMES = [
 export type ClientNavigationOutcome = (typeof CLIENT_NAVIGATION_OUTCOMES)[number];
 const NAVIGATION_OUTCOMES: ReadonlySet<string> = new Set(CLIENT_NAVIGATION_OUTCOMES);
 const NAVIGATION_OUTCOME_STAGES: ReadonlySet<string> = new Set([
+  "knowledge pod selection",
   "editor project selection",
   "files directory load",
   "files source preview",

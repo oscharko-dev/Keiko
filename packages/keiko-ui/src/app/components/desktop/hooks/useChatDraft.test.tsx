@@ -128,6 +128,20 @@ describe("private chat drafts", () => {
     expect(draft.hasUnsaved()).toBe(false);
   });
 
+  it("preserves an explicit clear while the initial saved draft is still loading", async () => {
+    const draft = controller();
+    const pending = deferred<ChatDraft>();
+    vi.mocked(readChatDraft).mockReturnValueOnce(pending.promise);
+    const loading = draft.refresh("a");
+    draft.setText("a", "local");
+    draft.setText("a", "");
+    pending.resolve({ text: "remote", revision: 3 });
+    await loading;
+    expect(draft.entry("a")).toMatchObject({ text: "", phase: "conflict" });
+    await draft.save("a");
+    expect(writeChatDraft).not.toHaveBeenCalled();
+  });
+
   it("keeps typing during initial load without overwriting an existing saved draft", async () => {
     const draft = controller();
     const pending = deferred<ChatDraft>();

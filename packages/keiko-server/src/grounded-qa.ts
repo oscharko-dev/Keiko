@@ -2006,7 +2006,6 @@ function resolveGroundedAnswerModel(
     modelId,
     readinessAdmission,
     deps,
-    (id, correlationId) => awaitInitializedConversationReadiness(deps, id, correlationId),
   );
 }
 
@@ -2773,7 +2772,6 @@ function resolveMultiSourceSeam(
     modelId,
     readinessAdmission,
     deps,
-    (id, correlationId) => awaitInitializedConversationReadiness(deps, id, correlationId),
   );
   return {
     retriever: defaultRetriever(signal, deps, correlationId),
@@ -3066,17 +3064,24 @@ async function dispatchPreparedGroundedAsk(
   return dispatchHybridAsk(preparedWithCanonicalFolders, deps, skippedFolders, hybrid);
 }
 
-function admitGroundedUser(
+function groundedSkillSelectionRefusal(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
-): PreparedGroundedAsk | RouteResult {
-  if (prepared.userMessage !== undefined) return prepared;
-  const skillRefusal = markdownSkillSelectionRefusal(
+): RouteResult | undefined {
+  return markdownSkillSelectionRefusal(
     deps,
     prepared.chat.id,
     prepared.input.expectedSkillSelectionRevision,
     prepared.correlationId,
   );
+}
+
+function admitGroundedUser(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): PreparedGroundedAsk | RouteResult {
+  if (prepared.userMessage !== undefined) return prepared;
+  const skillRefusal = groundedSkillSelectionRefusal(prepared, deps);
   if (skillRefusal !== undefined) return skillRefusal;
   const messageCountBeforeTurn = deps.store.countMessages(prepared.chat.id);
   const newUserMessage = {
@@ -3485,6 +3490,8 @@ async function executeGroundedAskInTurn(
   multiSource?: MultiSourceSeam,
   hybrid?: HybridSeam,
 ): Promise<RouteResult> {
+  const skillRefusal = groundedSkillSelectionRefusal(prepared, deps);
+  if (skillRefusal !== undefined) return skillRefusal;
   const modelAdmitted = await admitGroundedModel(
     prepared,
     deps,

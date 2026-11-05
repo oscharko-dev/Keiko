@@ -587,7 +587,7 @@ export const DE_MESSAGES = {
   "chat.model.title": "Modell",
 
   "chat.model.noneConfiguredTitle":
-    "Kein dialogfähiges Modell ist konfiguriert - verbinde ein Gateway in den Einstellungen",
+    "Derzeit ist kein dialogfähiges Modell verfügbar - prüfe den Gateway- und Modellstatus in den Einstellungen",
 
   "chat.voice": "Spracheingabe",
   "chat.voice.interrupt": "Assistenz unterbrechen",

@@ -15,6 +15,7 @@ import type {
   CapsuleDetail,
   CapsuleDetailResponse,
 } from "@/lib/local-knowledge-api";
+import { translateLocalKnowledge } from "../local-knowledge-i18n";
 
 // Epic #1941 — Browse opens the native OS dialog through the shared client. The capability hook
 // and the pick call are mocked; the path-mapping helper stays REAL so the root/relative-files
@@ -32,18 +33,8 @@ import { pickWithNativeDialog } from "@/lib/native-file-dialog";
 
 const mockPickWithNativeDialog = vi.mocked(pickWithNativeDialog);
 
-const FILE_FILTER_NAMES = {
-  documents: "PDF, Word and Excel",
-  structuredData: "Tables and structured data",
-  textDocuments: "Text and Markdown",
-  webDocuments: "Web documents",
-  scripts: "Scripts",
-  sourceCode: "Source code",
-  configuration: "Configuration files",
-} as const;
-
 const NATIVE_DOCUMENT_FILTERS = LOCAL_KNOWLEDGE_FILE_FILTERS.map((filter) => ({
-  name: FILE_FILTER_NAMES[filter.id],
+  name: translateLocalKnowledge("en", `localKnowledge.detail.connect.filter.${filter.id}`),
   extensions: filter.extensions,
 }));
 
@@ -184,6 +175,22 @@ async function openMaintenance(user: ReturnType<typeof userEvent.setup>): Promis
 // ---------------------------------------------------------------------------
 
 describe("CapsuleActions — connect source", () => {
+  it("clears a previous pod's source selection when the destination pod changes", async () => {
+    const user = userEvent.setup();
+    const props = defaultProps();
+    const { rerender } = render(<CapsuleActions {...props} />);
+    await user.type(screen.getByLabelText(/source path/i), "/documents/first-pod");
+    rerender(
+      <CapsuleActions
+        {...props}
+        capsuleId={makeCapsuleId("second")}
+        capsuleDisplayName="Second pod"
+      />,
+    );
+    expect(screen.getByLabelText(/source path/i)).toHaveValue("");
+    expect(screen.getByRole("button", { name: /^connect$/i })).toBeDisabled();
+  });
+
   it("connects a folder scope by default", async () => {
     const user = userEvent.setup();
     const connectCapsuleSourceImpl = vi.fn().mockResolvedValue(connectedCapsuleResponse());

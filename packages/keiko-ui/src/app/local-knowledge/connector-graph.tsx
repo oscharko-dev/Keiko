@@ -18,8 +18,6 @@ import {
   useState,
   type DragEvent,
   type SubmitEvent,
-  type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
   type RefObject,
   type ReactNode,
 } from "react";
@@ -30,7 +28,6 @@ import type {
   ManualRefreshChangeSummary,
   ManualRefreshReasonCode,
 } from "@oscharko-dev/keiko-contracts";
-import { isPrimaryActivationPointer } from "@/app/components/desktop/interactionGuards";
 import { useDialogTabTrap } from "@/app/components/desktop/hooks/useDialogTabTrap";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
 import {
@@ -54,6 +51,8 @@ import type {
 } from "./connector-graph-types";
 import { STATUS_LABEL_KEYS } from "./connector-graph-types";
 import { useConnectorGraph } from "./connector-graph-state";
+import { PodDragHandle } from "./pod-drag-handle";
+import { beginPodSelectionEvidence } from "./pod-selection-evidence";
 import { CapsuleSetComposeDialog } from "./capsule-set-compose";
 import { AtlassianConnectorsPanel } from "@/app/components/desktop/widgets/connectors/AtlassianConnectorsPanel";
 import podStyles from "@/app/components/desktop/widgets/connectors/connectors.module.css";
@@ -674,7 +673,8 @@ function CapsuleRowActions({
       className="lk-capsule-actions"
       style={NATIVE_FIELDSET_RESET_STYLE}
     >
-      {capsule.sourceCount > 0 || capsule.lifecycleState === "indexing" ? (
+      {(capsule.sourceCount > 0 && capsule.lifecycleState !== "ready") ||
+      capsule.lifecycleState === "indexing" ? (
         <IndexOrCancelBtn
           capsule={capsule}
           busy={busy}
@@ -683,17 +683,31 @@ function CapsuleRowActions({
           onCancel={onCancel}
         />
       ) : null}
-      <button
-        type="button"
-        disabled={busy}
-        aria-label={t("localKnowledge.row.addToWorkspaceLabel", { name: displayName })}
-        onClick={() => {
-          onAddToWorkspace(id);
-        }}
-        className="lk-btn lk-btn-ghost"
-      >
-        {t("localKnowledge.row.addToWorkspace")}
-      </button>
+      {capsule.sourceCount === 0 &&
+      capsule.lifecycleState !== "indexing" &&
+      capsule.lifecycleState !== "ready" ? (
+        <button
+          type="button"
+          disabled={busy}
+          aria-label={t("localKnowledge.row.addDocumentsLabel", { name: displayName })}
+          onClick={() => onHealth(id)}
+          className="lk-btn lk-btn-primary"
+        >
+          {t("localKnowledge.row.addDocuments")}
+        </button>
+      ) : (
+        <button
+          type="button"
+          disabled={busy}
+          aria-label={t("localKnowledge.row.addToWorkspaceLabel", { name: displayName })}
+          onClick={() => {
+            onAddToWorkspace(id);
+          }}
+          className="lk-btn lk-btn-ghost"
+        >
+          {t("localKnowledge.row.addToWorkspace")}
+        </button>
+      )}
       <PodActionsMenu
         label={t("localKnowledge.row.actionsLabel", { name: displayName })}
         disabled={busy}
@@ -721,18 +735,6 @@ function CapsuleRowActions({
 // CapsuleRow
 // ---------------------------------------------------------------------------
 
-function isRowActionDragTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return false;
-  return target.closest(".lk-capsule-actions,a,input,select,textarea") !== null;
-}
-
-interface CapsuleDragGhost {
-  readonly x: number;
-  readonly y: number;
-  readonly label: string;
-  readonly state: CapsuleLifecycleState;
-}
-
 function CapsuleRow({
   capsule,
   busy,
@@ -744,169 +746,25 @@ function CapsuleRow({
   onAddToWorkspace,
 }: RowActionProps): ReactNode {
   const t = useTranslate();
-  const manualRefresh = capsule.knowledgePod?.manualRefresh;
   const manualRefreshHeadingId = useId();
-  const [dragGhost, setDragGhost] = useState<CapsuleDragGhost | null>(null);
-  const dragActiveRef = useRef(false);
-  const dropDispatchedRef = useRef(false);
-  const payload: LocalKnowledgeConnectorDragPayload = {
-    kind: "capsule",
-    id: capsule.id,
-    label: capsule.displayName,
-    lifecycleState: capsule.lifecycleState,
-  };
-  const emitDrop = (event: { readonly clientX: number; readonly clientY: number }): void => {
-    if (dropDispatchedRef.current) return;
-    dropDispatchedRef.current = true;
-    dispatchConnectorDrop(payload, event);
-    window.setTimeout(() => {
-      dropDispatchedRef.current = false;
-    }, 250);
-  };
-  const onDragStart = (event: DragEvent<HTMLElement>): void => {
-    if (isRowActionDragTarget(event.target)) {
-      event.preventDefault();
-      return;
-    }
-    event.dataTransfer.effectAllowed = "copy";
-    event.dataTransfer.setData(
-      LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
-      serializeLocalKnowledgeConnectorDrag(payload),
-    );
-    event.dataTransfer.setData("text/plain", capsule.displayName);
-  };
-  const onDragEnd = (event: DragEvent<HTMLElement>): void => {
-    if (isWorkspaceDropTarget(event.clientX, event.clientY)) {
-      emitDrop(event);
-    }
-  };
-  // GEN-PERF-MEMORY-004 — a single drag gesture previously registered BOTH the
-  // pointer* and mouse* event families (double per-move work on devices that fire
-  // both) and had NO pointercancel handler, so a gesture stolen by the browser
-  // (scroll/zoom/contextmenu) left document.body.style.cursor='grabbing' and the
-  // global listeners leaked. Use only the Pointer Events family — with an explicit
-  // pointercancel teardown — falling back to mouse* only when PointerEvent is
-  // unsupported.
-  const pointerEventsSupported = typeof window !== "undefined" && "PointerEvent" in window;
-  const startDragOut = (startX: number, startY: number): void => {
-    dragActiveRef.current = true;
-    let dragging = false;
-    // GEN-PERF-LK-DRAG-001 — raw pointermove fires at up to 120-240Hz; committing the
-    // ghost position per event meant one React render per event. Buffer the latest
-    // pointer and commit at most once per animation frame (last-event-wins), the same
-    // pattern as workspaceActions' connect gesture.
-    let lastGhostX = 0;
-    let lastGhostY = 0;
-    let ghostFrame: number | null = null;
-    const applyGhost = (): void => {
-      ghostFrame = null;
-      if (!dragging) return;
-      setDragGhost({
-        x: lastGhostX,
-        y: lastGhostY,
-        label: capsule.displayName,
-        state: capsule.lifecycleState,
-      });
-    };
-    const move = (moveEvent: PointerEvent | MouseEvent): void => {
-      const dx = moveEvent.clientX - startX;
-      const dy = moveEvent.clientY - startY;
-      if (!dragging && Math.hypot(dx, dy) < 6) return;
-      dragging = true;
-      document.body.style.cursor = "grabbing";
-      lastGhostX = moveEvent.clientX;
-      lastGhostY = moveEvent.clientY;
-      ghostFrame ??= requestAnimationFrame(applyGhost);
-    };
-    const teardown = (): void => {
-      if (ghostFrame !== null) {
-        cancelAnimationFrame(ghostFrame);
-        ghostFrame = null;
-      }
-      if (pointerEventsSupported) {
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
-        window.removeEventListener("pointercancel", cancel);
-      } else {
-        window.removeEventListener("mousemove", move);
-        window.removeEventListener("mouseup", up);
-      }
-      dragActiveRef.current = false;
-      document.body.style.cursor = "";
-      setDragGhost(null);
-    };
-    const up = (upEvent: PointerEvent | MouseEvent): void => {
-      const wasDragging = dragging;
-      const clientX = upEvent.clientX;
-      const clientY = upEvent.clientY;
-      teardown();
-      if (wasDragging && isWorkspaceDropTarget(clientX, clientY)) {
-        emitDrop({ clientX, clientY });
-      }
-    };
-    // A cancelled gesture must run the same teardown (reset cursor + ghost + drop the
-    // global listeners) but never emit a drop.
-    const cancel = (): void => {
-      teardown();
-    };
-    if (pointerEventsSupported) {
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up);
-      window.addEventListener("pointercancel", cancel);
-    } else {
-      window.addEventListener("mousemove", move);
-      window.addEventListener("mouseup", up);
-    }
-  };
-  const onPointerDown = (event: ReactPointerEvent<HTMLElement>): void => {
-    if (dragActiveRef.current || isRowActionDragTarget(event.target)) return;
-    if (!isPrimaryActivationPointer(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    startDragOut(event.clientX, event.clientY);
-  };
-  const onMouseDown = (event: ReactMouseEvent<HTMLElement>): void => {
-    // Only start from mouse* when Pointer Events are unavailable; otherwise the
-    // pointerdown path owns the gesture (avoids a synthetic mousedown double-start).
-    if (pointerEventsSupported) return;
-    if (dragActiveRef.current || isRowActionDragTarget(event.target)) return;
-    if (!isPrimaryActivationPointer(event)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    startDragOut(event.clientX, event.clientY);
-  };
-
   return (
     <>
       <article
         aria-label={t("localKnowledge.row.article", { name: capsule.displayName })}
         className="lk-capsule-row"
       >
-        <button
-          type="button"
-          className="lk-capsule-drag-handle"
-          // Pointer-only affordance: keyboard users add the capsule via the
-          // "Add to workspace" button in CapsuleRowActions, so this drag handle
-          // is removed from the Tab order (tabIndex={-1}) to avoid a redundant,
-          // keyboard-inert stop (GEN-UI-KEYBOARD-004 / GEN-UI-INTERACTION-004).
-          tabIndex={-1}
-          aria-label={t("localKnowledge.row.dragPod", { name: capsule.displayName })}
+        <PodDragHandle
+          payload={{
+            kind: "capsule",
+            id: capsule.id,
+            label: capsule.displayName,
+            lifecycleState: capsule.lifecycleState,
+          }}
+          name={capsule.displayName}
+          label={t("localKnowledge.row.dragPod", { name: capsule.displayName })}
           title={t("localKnowledge.row.dragPodTitle")}
-          onPointerDown={onPointerDown}
-          onMouseDown={onMouseDown}
-          onDragStart={onDragStart}
-          onDragEnd={onDragEnd}
-          draggable
-        >
-          <span aria-hidden="true" className="lk-capsule-icon">
-            <span className={detailStyles.capsulePodGlyph} />
-          </span>
-          <span className={`lk-capsule-info ${detailStyles.capsuleRowInfo}`}>
-            <span className="lk-capsule-name" title={capsule.displayName}>
-              {capsule.displayName}
-            </span>
-          </span>
-        </button>
+          disabled={busy}
+        />
         <CapsuleRowActions
           capsule={capsule}
           busy={busy}
@@ -918,25 +776,10 @@ function CapsuleRow({
           onAddToWorkspace={onAddToWorkspace}
         />
       </article>
-      <ManualRefreshPanel manualRefresh={manualRefresh} headingId={manualRefreshHeadingId} />
-      {dragGhost !== null
-        ? createPortal(
-            <div
-              className="lk-connector-drag-ghost"
-              style={{ left: dragGhost.x + 14, top: dragGhost.y + 14 }}
-              aria-hidden="true"
-            >
-              <span className="lk-connector-drag-ghost-icon">
-                <span className={detailStyles.capsulePodGlyph} />
-              </span>
-              <span className="lk-connector-drag-ghost-copy">
-                <span>{dragGhost.label}</span>
-                <small>{t(STATUS_LABEL_KEYS[dragGhost.state])}</small>
-              </span>
-            </div>,
-            document.body,
-          )
-        : null}
+      <ManualRefreshPanel
+        manualRefresh={capsule.knowledgePod?.manualRefresh}
+        headingId={manualRefreshHeadingId}
+      />
     </>
   );
 }
@@ -984,6 +827,7 @@ function EmptyState({
 interface CapsuleSectionProps {
   readonly capsules: readonly CapsuleListEntry[];
   readonly isLoading: boolean;
+  readonly loadFailed: boolean;
   readonly creating: boolean;
   readonly actionBusy: KnowledgeCapsuleId | null;
   readonly actionKind: RowActionKind | null;
@@ -997,6 +841,7 @@ interface CapsuleSectionProps {
 function CapsuleSection({
   capsules,
   isLoading,
+  loadFailed,
   creating,
   actionBusy,
   actionKind,
@@ -1015,7 +860,7 @@ function CapsuleSection({
     );
   }
   if (capsules.length === 0) {
-    return <EmptyState creating={creating} onCreateCapsule={onCreateCapsule} />;
+    return loadFailed ? null : <EmptyState creating={creating} onCreateCapsule={onCreateCapsule} />;
   }
   return (
     <ul
@@ -1345,11 +1190,14 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
   const [activeCapsuleId, setActiveCapsuleId] = useState<KnowledgeCapsuleId | null>(null);
   const handleOpenCapsule = useCallback(
     (id: KnowledgeCapsuleId): void => {
+      const settled = beginPodSelectionEvidence();
       if (externalOpenCapsule !== undefined) {
         externalOpenCapsule(id);
+        settled("applied");
         return;
       }
       setActiveCapsuleId(id);
+      settled("applied");
     },
     [externalOpenCapsule],
   );
@@ -1388,8 +1236,9 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
 
   async function submitCreateCapsule(name: string): Promise<void> {
     try {
-      await handleCreateCapsule(name);
+      const createdId = await handleCreateCapsule(name);
       setCreateDialogOpen(false);
+      handleOpenCapsule(createdId);
     } catch {
       // The state hook surfaces the error message; keep the dialog open for correction/retry.
     }
@@ -1461,6 +1310,7 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
         <CapsuleSection
           capsules={capsules}
           isLoading={isLoading}
+          loadFailed={loadStatus === "error"}
           creating={creating}
           actionBusy={actionBusy}
           actionKind={actionKind}

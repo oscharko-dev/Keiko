@@ -3402,6 +3402,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "report-omission",
           "report-coverage",
           "unsupported-issue-key",
+          "knowledge-coverage",
         ],
       },
       omittedFindingCount: {
@@ -3415,6 +3416,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       unsupportedKeyCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      pendingKnowledgePageCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -6283,6 +6289,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "markdown-copy-feedback",
           "transcript-navigation",
           "browser-approval",
+          "knowledge-pod-selection",
         ],
       },
       ordinal: {
@@ -6466,6 +6473,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "markdown-copy-feedback",
           "transcript-navigation",
           "browser-approval",
+          "knowledge-pod-selection",
         ],
       },
       ordinal: {
@@ -20963,13 +20971,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "allowed-untracked",
           "allowed-fresh",
-          "allowed-continuation",
+          "allowed-cached",
           "model-changed",
           "generation-changed",
           "observation-unavailable",
           "probe-failed",
           "timestamp-invalid",
-          "expired",
         ],
       },
       admittedGeneration: {
@@ -30423,6 +30430,95 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["markdown-skill-library"],
     proofIds: ["jira.template.admission.line"],
     releaseImpact: "minor",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "knowledge.documents.operation",
+    category: "search",
+    owner: "keiko-server",
+    emitter: "knowledge-document-activity.logKnowledgeDocumentOperation",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      operation: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["inventory", "search", "read", "review", "coverage"],
+      },
+      disposition: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["served", "refused", "unavailable"],
+      },
+      documentCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      returnedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      sourceChars: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      hasNextPage: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      cached: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      requirementCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      readRequirementCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      reviewedDocumentCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      pendingPageCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["requirement-inventory"],
+    proofIds: ["knowledge.documents.operation.line"],
+    releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "disposition",
+        values: ["refused", "unavailable"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",

@@ -128,13 +128,15 @@ const DRAFT_LINKS = {
     ["type", "direction"],
   ),
 };
-const JIRA_DRAFT_ITEM_SCHEMA = object(
+export const JIRA_DRAFT_ITEM_SCHEMA = object(
   {
     ref: DRAFT_REF,
     projectId: PROJECT_ID,
     issueTypeId: ISSUE_TYPE_ID,
     fields: {
       ...FIELDS,
+      properties: { summary: { type: "string", minLength: 1 } },
+      required: ["summary"],
       description:
         "Create fields as for jira.create; summary is required. Omit the field the parent relation writes.",
     },
