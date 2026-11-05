@@ -1593,6 +1593,10 @@ async function persistCandidateRecord(
   return { kind: "persisted", persisted, confirmed: false };
 }
 
+function explicitStatementMark(explicit: boolean): { readonly explicitStatement?: true } {
+  return explicit ? { explicitStatement: true } : {};
+}
+
 async function candidateActionFromOutcome(
   outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
   deps: UiHandlerDeps,
@@ -1624,7 +1628,7 @@ async function candidateActionFromOutcome(
     return {
       kind: "rejected",
       reason: result.reason,
-      ...(explicit ? { explicitStatement: true as const } : {}),
+      ...explicitStatementMark(explicit),
     };
   }
   const { persisted } = result;
@@ -1639,7 +1643,7 @@ async function candidateActionFromOutcome(
     scopeLabel: scopeLabel(inserted.scope),
     requiresApproval: outcome.requiresApproval,
     status: inserted.status === "accepted" ? "accepted" : "proposed",
-    ...(explicit ? { explicitStatement: true as const } : {}),
+    ...explicitStatementMark(explicit),
   };
 }
 

@@ -201,6 +201,7 @@ function bodyAfterPrefix(prefixMatch: RegExpExecArray, text: string): string | n
 const SENTENCE_MARKS_RE = /[.!?…]+/gu;
 const STARTS_UPPERCASE_RE = /^\p{Lu}/u;
 const ENDS_IN_NUMBER_RE = /\p{N}$/u;
+const SINGLE_LETTER_RE = /^\p{L}$/u;
 const SHORT_FORM_PART_CHARS = 2;
 const ABBREVIATIONS = new Set("bzw ca dr etc evtl ggf inkl nr prof sog usw vgl vs zzgl".split(" "));
 
@@ -213,7 +214,7 @@ function periodBelongsToWord(line: string, index: number): boolean {
   const parts = word.split(".");
   return parts.length > 1
     ? parts.every((part) => part.length <= SHORT_FORM_PART_CHARS)
-    : [...word].length === 1;
+    : SINGLE_LETTER_RE.test(word);
 }
 
 function nextSentenceStartsAt(line: string, index: number): boolean {

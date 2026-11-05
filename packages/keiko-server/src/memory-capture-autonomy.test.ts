@@ -988,7 +988,7 @@ describe("explicit forget statement in chat", () => {
       ...learned,
       store: {
         ...learned.store,
-        listMessages: () => [
+        listMessages: (): ChatMessage[] => [
           { ...said, id: "m1", timestamp: asked },
           { ...said, id: "m2", timestamp: asked + 2 },
         ],
