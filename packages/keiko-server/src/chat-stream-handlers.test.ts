@@ -5212,6 +5212,8 @@ it("publishes a complete code block larger than the real HTTP high-water mark to
   expect(store.listMessages(chatId).find((message) => message.role === "assistant")?.content).toBe(
     source,
   );
+});
+
 it("carries a legacy streamed request id into the actual captured memory write", async () => {
   const memoryDir = join(tmp, "stream-context-vault");
   mkdirSync(memoryDir);

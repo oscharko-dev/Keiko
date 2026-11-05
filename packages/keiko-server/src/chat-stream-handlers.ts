@@ -282,12 +282,7 @@ async function persistStreamedTurn(
 ): Promise<DesktopChatSendResponse | undefined> {
   const { request, chat, modelId, memoryContext } = prepared;
   const redactedContent = currentContentRedactor(deps)(turn.response.content) as string;
-  const actions: readonly ConversationMemoryActionWire[] = await collectMemoryActions(
-    deps,
-    request,
-    memoryContext,
-    { correlationId },
-  );
+  const actions = await collectMemoryActions(deps, request, memoryContext, { correlationId });
   if (signal.aborted) return undefined;
   const createdAssistant = createAssistantMessage(
     deps,
