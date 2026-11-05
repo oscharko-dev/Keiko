@@ -87,21 +87,23 @@ const WE_RE = anyWordPattern(["wir", "unser(?:e|em|en|er|es)?", "uns", "we", "ou
 // Another group's name is no marker: "The marketing team decided that we ship on Fridays".
 const TEAM_MARKERS = [
   String.raw`als\s+team`,
-  String.raw`im\s+(?:team|projekt)`,
-  String.raw`unser(?:e|em|en|er|es)?\s+(?:\p{L}+\s+)?(?:team|projekt|abteilung|firma|unternehmen)`,
+  String.raw`im\s+(?:\p{L}+-)?(?:team|projekt)`,
+  String.raw`unser(?:e|em|en|er|es)?\s+(?:\p{L}+\s+)?(?:\p{L}+-?)?(?:team|projekt|abteilung|firma|unternehmen)`,
   "(?:team|projekt|firmen)-?weit",
   String.raw`as\s+a\s+team`,
   String.raw`(?:in|on)\s+the\s+(?:team|project)`,
-  String.raw`our\s+(?:\p{L}+\s+)?(?:team|project|department|company)`,
+  String.raw`our\s+(?:\p{L}+\s+)?(?:team|project|department|company)(?!\s+(?:lead|leader|manager|owner)s?(?!\p{L}))`,
   "(?:team|project|company)-?wide",
 ];
 const TEAM_MARKER_RE = anyWordPattern(TEAM_MARKERS);
 const TEAM_MARKER_GLOBAL_RE = new RegExp(TEAM_MARKER_RE.source, "giu");
 // "Wir und Anna nutzen Jira", "Anna und wir": the group includes someone named.
 const WE_AND_OTHER_RES: readonly RegExp[] = [
-  /(?:^|[,;:])\s*(?:wir|we)\s+(?:und|and)\s+\p{L}+/iu,
+  /(?:^|[,;:])\s*(?:wir|we)\s+(?:und|and)\s+(?!unser|our(?!\p{L}))\p{L}+/iu,
   /(?:^|[,;:])\s*\p{L}+\s+(?:und|and)\s+(?:wir|we)(?![\p{L}\p{N}])/iu,
 ];
+// "Unser Team und Anna nutzen Jira": with the marker removed, the clause opens on "und Anna".
+const MARKER_AND_OTHER_RE = /(?:^|[,;:])\s*(?:und|and)\s+\p{L}+/iu;
 const CHANGE_WITHOUT_SUBJECT_RE = anyWordPattern([
   "ab jetzt",
   "ab sofort",
@@ -213,8 +215,18 @@ const GENITIVE_RELATION_RE = new RegExp(
   "giu",
 );
 const CAPITAL_START_RE = /^\p{Lu}/u;
-// Words ending in "s" that are no one's name: "Das Team", "This client", "his manager".
+// Words ending in "s" that are no one's name: "Das Team", "This client", "his manager", "Als Lehrerin".
 const NOT_A_NAME = new Set([
+  "al",
+  "au",
+  "bi",
+  "un",
+  "etwa",
+  "eine",
+  "meine",
+  "deine",
+  "seine",
+  "unsere",
   "da",
   "de",
   "die",
@@ -768,7 +780,8 @@ function teamDropReason(evidence: string): FactDropReason | null {
   const rest = evidence.replace(TEAM_MARKER_GLOBAL_RE, " ");
   const pair =
     ME_AND_OTHER_RES.some((pattern) => pattern.test(rest)) ||
-    WE_AND_OTHER_RES.some((pattern) => pattern.test(rest)) ||
+    WE_AND_OTHER_RES.some((pattern) => pattern.test(evidence)) ||
+    MARKER_AND_OTHER_RE.test(rest) ||
     speaksAsEnglishPair(rest);
   if (pair || namesOtherPerson(rest) || claimNamesOtherPronoun(rest)) return "third-party";
   return WE_RE.test(evidence) && TEAM_MARKER_RE.test(evidence) ? null : "not-self";

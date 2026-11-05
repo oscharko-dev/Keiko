@@ -405,6 +405,8 @@ describe("a team's fact", () => {
     ["Unser Team hat entschieden, freitags nichts zu releasen."],
     ["Wir haben im Projekt vereinbart, jeden Pull Request zu reviewen."],
     ["In our team we write every ticket in English."],
+    ["Unser Entwicklungsteam nutzt Jira für jedes Ticket."],
+    ["Wir und unser Team nutzen Jira."],
   ])("admits a statement that names the group as the person's team: %s", (text) => {
     const evidence = text.slice(0, -1);
     expect(admitProposedFact({ body: evidence, evidence, about: "team" }, text)).toMatchObject({
@@ -432,6 +434,8 @@ describe("a team's fact", () => {
     ["a group with someone named", "Wir und Anna nutzen im Team Jira.", "third-party"],
     ["someone named with the group", "Anna und wir nutzen im Team Jira.", "third-party"],
     ["the person's people", "Unser Team und meine Leute nutzen Jira.", "third-party"],
+    ["the group with someone named", "Unser Team und Anna nutzen Jira.", "third-party"],
+    ["the team's lead", "Our team lead decided we use Jira.", "third-party"],
   ])("drops %s", (_, text, reason) => {
     const evidence = text.slice(0, -1);
     expect(admitProposedFact({ body: evidence, evidence, about: "team" }, text)).toEqual({
@@ -521,6 +525,8 @@ describe("people named by their relation to the person", () => {
     ["Ich bin Lehrerin an einer Grundschule."],
     ["I am a teacher and I grade on Fridays."],
     ["Ich bin Mieterin in Köln."],
+    ["Als Lehrerin korrigiere ich viel."],
+    ["Als Chef entscheide ich schnell."],
   ])("keeps the person's own work and role: %s", (text) => {
     expect(reasonOf(text, text.slice(0, -1))).toBeNull();
   });
