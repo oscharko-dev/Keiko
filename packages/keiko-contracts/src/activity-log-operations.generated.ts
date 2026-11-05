@@ -14677,6 +14677,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
       },
+      readOnlyAuthority: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "failure",

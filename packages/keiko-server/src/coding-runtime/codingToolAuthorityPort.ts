@@ -135,6 +135,8 @@ const CODING_RUNTIME_TOOL_AUTHORITY_DENIED_OPERATION = defineActivityLogOperatio
       required: true,
       values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
     },
+    // R4130-009: present and true only when the read-only review authority refused the action.
+    readOnlyAuthority: { type: "boolean", dataClass: "closed-enum", required: false },
   },
   causal: "correlation",
   lifecycle: "failure",
@@ -281,7 +283,11 @@ function logAuthorityDenial(
         correlationId: context.correlationId ?? UNKNOWN_CORRELATION_ID,
         errorKind: "authority-denied",
       },
-      { action: request.action, effectiveMode: envelope.authority.effectiveMode },
+      {
+        action: request.action,
+        effectiveMode: envelope.authority.effectiveMode,
+        ...(readOnlyAuthorityRefuses(envelope, request) ? { readOnlyAuthority: true } : {}),
+      },
     ),
   );
 }
@@ -819,9 +825,31 @@ function actionAllowed(
   approvalVerified: boolean,
 ): boolean {
   return (
+    !readOnlyAuthorityRefuses(envelope, request) &&
     actionClassesAllowed(envelope, request, approvalVerified) &&
     additionalPolicyAllowed(envelope, request, approvalVerified)
   );
+}
+
+// R4130-009 (ADR-0182 D2 layer 3): an authority that carries `workspace-read` alone is the read-only
+// review authority. Skills, skill discovery, child agents and Git reads need only `workspace-read`
+// too, so the class check would admit them; this rule admits only the review tools instead, as
+// PLANNING_CLASSES does for planning. Every coding authority carries `workspace-write`
+// (`codingRuntimeActionClassesForMode`), so no Coding Workbench mode reaches this rule. No approval
+// can lift it, because `actionAllowed` applies it whatever `approvalVerified` says.
+const READ_ONLY_AUTHORITY_ACTIONS: ReadonlySet<CodingToolActionRequest["action"]> = new Set([
+  "read",
+  "discover",
+  "search",
+  "review-report",
+]);
+
+function readOnlyAuthorityRefuses(
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  request: CodingToolActionRequest,
+): boolean {
+  const readOnly = envelope.authority.actionClasses.every((entry) => entry === "workspace-read");
+  return readOnly && !READ_ONLY_AUTHORITY_ACTIONS.has(request.action);
 }
 
 function actionClassesAllowed(

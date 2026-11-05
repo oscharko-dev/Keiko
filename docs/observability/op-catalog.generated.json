@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9a1c13370bd45ea84d7f214cd5a164411cf5d69ee790902f817853ff116b1581",
+    "catalogDigest": "b2b1af2a6259708dc57a68fa2de2c7d15f09058b0a04163188a959b275f15a85",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -15295,6 +15295,11 @@
             "dataClass": "closed-enum",
             "required": true,
             "values": ["governed-assist", "supervised-coding", "autonomous-delivery"]
+          },
+          "readOnlyAuthority": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
           }
         },
         "causal": "correlation",
@@ -15304,7 +15309,7 @@
         "proofIds": ["coding-runtime.tool-authority.denied.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:103",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:277"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:279"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -15487,8 +15492,8 @@
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:3",
         "emitterSites": [
           "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.ts:146",
-          "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:1438",
-          "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:1716",
+          "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:1466",
+          "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:1744",
           "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:953",
           "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1221",
           "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1240",
@@ -75220,6 +75225,12 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "readOnlyAuthority",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
                 }
               ],
               "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
@@ -113357,7 +113368,7 @@
     {
       "op": "coding-runtime.tool-result",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:1458",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:1486",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

@@ -90,7 +90,12 @@ governed-tools plugin (which registers exactly the four tools) and the context p
 gateway's `hasExactOpenCodeVisibleToolContract(tools, "review")`, which pins their projected schemas
 by digest; layer 3 is the review authority (`workspace-read` alone, `governed-assist`, review
 purpose), checked by the tool authority port on every call, whose relaxed planning paths now also
-require `workspace-write`; layer 4 is `reviewRuntimeGuard.ts`. Its purpose is the composition's own:
+require `workspace-write`. Skills, skill discovery, child agents and Git reads need only
+`workspace-read`, so the class check alone would admit them. The port therefore admits only read,
+discover, search and the report for an authority that carries `workspace-read` alone, and no
+approval lifts that refusal. Its denial line on `coding-runtime.tool-authority.denied` carries
+`readOnlyAuthority: true` (R4130-009). Every Coding Workbench mode carries `workspace-write`, so
+this rule does not reach them; layer 4 is `reviewRuntimeGuard.ts`. Its purpose is the composition's own:
 a runtime composed with the `review` tool profile hands every run's tool facade, catalog bridge and
 tool bridge the review purpose itself (`composedRuntimePurpose`), never copied from the minted
 context, so layer 4 still refuses when the authority of layer 3 is absent or wrong. The tool facade
