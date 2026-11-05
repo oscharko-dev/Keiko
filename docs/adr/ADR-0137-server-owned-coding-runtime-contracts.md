@@ -1211,6 +1211,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   (`opencodeNativeProjectBoundary.real.test.ts`) pins it with the production plugin and a facade
   that allows everything: Plan's project write leaves the file unchanged without asking the hook,
   its plan-file write and Build's write go through.
+- **Machine-wide OpenCode configuration stays out (#4271).** OpenCode reads
+  `/Library/Application Support/opencode` and the `ai.opencode.managed` managed preferences and
+  lets them win over the configuration Keiko supplies. The native profile runs on macOS only, and
+  its kernel read boundary admits neither tree, so a value placed there cannot change a run. A
+  backend test pins that boundary. Linux and Windows map to `direct`, whose governed catalog does
+  not take its authority from OpenCode configuration; a future native boundary there must close
+  `/etc/opencode` and the Windows equivalent before it qualifies.
 - **A native run readies only with its governing plugins active.** No configured rule stands in for
   the policy hook, so the fail-closed property lives in readiness: after the protocol digest the
   adapter enters the `policy-plugin` phase, which polls the producer's admitted `GET /api/plugin`

@@ -435,6 +435,15 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
     );
   }
 
+  // OpenCode reads machine-wide configuration from these two trees and lets it win over the
+  // configuration Keiko hands the run. The read boundary is what keeps it out on macOS.
+  it("keeps machine-wide OpenCode configuration outside the native read boundary", () => {
+    const profile = nativeProfile("inherited");
+    expect(profile).not.toContain('(subpath "/Library")');
+    expect(profile).not.toContain('(subpath "/Library/Application Support');
+    expect(profile).not.toContain('(subpath "/Library/Managed Preferences');
+  });
+
   it("compiles the native profile with inherited exec and egress at Full access", () => {
     const wrapped = buildGatewaySeatbeltCommand(
       gateway,
