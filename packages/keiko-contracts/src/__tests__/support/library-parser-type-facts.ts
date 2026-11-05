@@ -159,3 +159,15 @@ export type OptionalFieldPair<Source, Public, Key extends keyof Source & keyof P
   Required<Source>[Key],
   Required<Public>[Key],
 ];
+
+/** The parser triple's facts plus the public stage's checked-result facts. */
+export type PublicParserFacts<
+  S extends Callable,
+  P extends Callable,
+  W extends Callable,
+> = readonly [LibraryParserTripleFacts<S, P, W>, CheckedResultFacts<P>];
+
+export type PublicParserExpected<SOutput, POutput> = readonly [
+  LibraryParserTripleExpected<SOutput, POutput, POutput>,
+  CheckedResultExpected,
+];

@@ -30,7 +30,7 @@ export type TestQualityDimensionName = (typeof TEST_QUALITY_RUBRIC_DIMENSIONS)[n
 // same bug class command-runner.ts's COMMAND_TASK_RULES already documents and was fixed for
 // (KEIKO-0139). A caller mutating a nested field in place (e.g. flipping `additionalProperties:
 // false` to `true`) would silently weaken the constraint for every subsequent judge call.
-export const TEST_QUALITY_JUDGE_RESPONSE_SCHEMA: Readonly<Record<string, unknown>> = deepFreeze({
+export const TEST_QUALITY_JUDGE_RESPONSE_SCHEMA = deepFreeze({
   type: "object",
   additionalProperties: false,
   required: ["dimensions", "overallRationale"],
@@ -50,7 +50,7 @@ export const TEST_QUALITY_JUDGE_RESPONSE_SCHEMA: Readonly<Record<string, unknown
     },
     overallRationale: { type: "string" },
   },
-});
+} as const);
 
 export interface TestQualityRubricDimension {
   readonly name: TestQualityDimensionName;

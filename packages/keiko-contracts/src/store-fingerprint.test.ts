@@ -169,3 +169,59 @@ describe("isStoreFingerprint", () => {
     ).toBe(false);
   });
 });
+
+import * as publicFingerprint from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
+describe("Consolidated Support physical migrations", () => {
+  for (const [surface, valid] of [
+    ["source", isStoreFingerprint],
+    ["public", publicFingerprint.isStoreFingerprint],
+  ] as const) {
+    it(`${surface}: healthy preserves populated fingerprint`, () => {
+      expect(valid(validFingerprint())).toBe(true);
+    });
+    it(`${surface}: unsafe refuses physical migration members`, () => {
+      expect(
+        valid({
+          ...validFingerprint(),
+          migrationsApplied: Object.assign([42], { every: (): boolean => true }),
+        }),
+      ).toBe(false);
+    });
+  }
+});
+
+describe("Support migration extent preservation", () => {
+  for (const [surface, valid] of [
+    ["source", isStoreFingerprint],
+    ["public", publicFingerprint.isStoreFingerprint],
+  ] as const) {
+    it(`${surface}: preserves the original two healthy extent observations`, () => {
+      let reads = 0;
+      const migrationsApplied = new Proxy(["fixture"], {
+        get(target, key): unknown {
+          if (key === "length") reads += 1;
+          return Reflect.get(target, key);
+        },
+      });
+      expect(valid({ ...validFingerprint(), migrationsApplied })).toBe(true);
+      expect(reads).toBe(2);
+    });
+    it(`${surface}: preserves positive first-bound refusal and physical-hole refusal`, () => {
+      let reads = 0;
+      const migrationsApplied = new Proxy(["fixture"], {
+        get(target, key): unknown {
+          if (key === "length") {
+            reads += 1;
+            return Number.NaN;
+          }
+          return Reflect.get(target, key);
+        },
+      });
+      expect(valid({ ...validFingerprint(), migrationsApplied })).toBe(false);
+      expect(reads).toBe(1);
+      expect(valid({ ...validFingerprint(), migrationsApplied: new Array<unknown>(1) })).toBe(
+        false,
+      );
+    });
+  }
+});

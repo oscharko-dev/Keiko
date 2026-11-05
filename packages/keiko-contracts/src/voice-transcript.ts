@@ -22,6 +22,7 @@
 // (ADR-0019 direction 1): no `@oscharko-dev/keiko-*` imports may appear here; sibling types are reached
 // by relative path.
 
+import { isOneOf } from "./contract-validation-primitives.js";
 import type { VoiceProfile } from "./gateway.js";
 import type {
   VoiceControlMessageKind,
@@ -182,25 +183,17 @@ export const VOICE_TRANSCRIPT_SEGMENT_TRANSITIONS: Record<
 export function isVoiceTranscriptSegmentState(
   value: unknown,
 ): value is VoiceTranscriptSegmentState {
-  return (
-    typeof value === "string" &&
-    (VOICE_TRANSCRIPT_SEGMENT_STATES as readonly string[]).includes(value)
-  );
+  return isOneOf(value, VOICE_TRANSCRIPT_SEGMENT_STATES);
 }
 
 export function isVoiceTranscriptProviderErrorKind(
   value: unknown,
 ): value is VoiceTranscriptProviderErrorKind {
-  return (
-    typeof value === "string" &&
-    (VOICE_TRANSCRIPT_PROVIDER_ERROR_KINDS as readonly string[]).includes(value)
-  );
+  return isOneOf(value, VOICE_TRANSCRIPT_PROVIDER_ERROR_KINDS);
 }
 
 export function isVoiceTranscriptSource(value: unknown): value is VoiceTranscriptSource {
-  return (
-    typeof value === "string" && (VOICE_TRANSCRIPT_SOURCES as readonly string[]).includes(value)
-  );
+  return isOneOf(value, VOICE_TRANSCRIPT_SOURCES);
 }
 
 export function voiceTranscriptSegmentReplayClass(
@@ -225,7 +218,7 @@ export function canTransitionVoiceTranscriptSegment(
 
 // AC5: a segment's text is consumable downstream iff it is committed or corrected.
 export function isCommittedVoiceTranscriptState(state: VoiceTranscriptSegmentState): boolean {
-  return (VOICE_TRANSCRIPT_CONSUMABLE_STATES as readonly string[]).includes(state);
+  return new Set<string>(VOICE_TRANSCRIPT_CONSUMABLE_STATES).has(state);
 }
 
 // Exhaustiveness guard: a `default`/fall-through that reaches this fails to type-check if a new

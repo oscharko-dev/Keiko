@@ -106,19 +106,31 @@ export const validatePromptEnhancerIdString = (
   return { ok: true };
 };
 
-const constructPromptEnhancerId = (value: string, kind: string): string => {
-  const result = validatePromptEnhancerIdString(value, kind);
+function assertPromptEnhancementRequestId(
+  value: string,
+): asserts value is PromptEnhancementRequestId {
+  const result = validatePromptEnhancerIdString(value, "PromptEnhancementRequestId");
   if (!result.ok) {
-    throw new TypeError(`Invalid ${kind}: ${result.reason}`);
+    throw new TypeError(`Invalid PromptEnhancementRequestId: ${result.reason}`);
   }
+}
+
+function assertEnhancedPromptId(value: string): asserts value is EnhancedPromptId {
+  const result = validatePromptEnhancerIdString(value, "EnhancedPromptId");
+  if (!result.ok) {
+    throw new TypeError(`Invalid EnhancedPromptId: ${result.reason}`);
+  }
+}
+
+export const asPromptEnhancementRequestId = (value: string): PromptEnhancementRequestId => {
+  assertPromptEnhancementRequestId(value);
   return value;
 };
 
-export const asPromptEnhancementRequestId = (value: string): PromptEnhancementRequestId =>
-  constructPromptEnhancerId(value, "PromptEnhancementRequestId") as PromptEnhancementRequestId;
-
-export const asEnhancedPromptId = (value: string): EnhancedPromptId =>
-  constructPromptEnhancerId(value, "EnhancedPromptId") as EnhancedPromptId;
+export const asEnhancedPromptId = (value: string): EnhancedPromptId => {
+  assertEnhancedPromptId(value);
+  return value;
+};
 
 // ─── Task taxonomy (≥10 classes) ─────────────────────────────────────────────────
 // A closed set covering every MVP bucket named in Issue #1309 (research, coding/debugging/

@@ -101,7 +101,7 @@ export const PROMPT_SAFETY_VIOLATION_CODES: readonly PromptSafetyViolationCode[]
 ] as const;
 
 export const isPromptSafetyViolationCode = (value: unknown): value is PromptSafetyViolationCode =>
-  typeof value === "string" && (PROMPT_SAFETY_VIOLATION_CODES as readonly string[]).includes(value);
+  typeof value === "string" && new Set<string>(PROMPT_SAFETY_VIOLATION_CODES).has(value);
 
 // ─── Severity ──────────────────────────────────────────────────────────────────────
 // `blocking` rejects the artefact (validation fail); `warning` is recorded and may down-rank a
@@ -221,7 +221,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isMember = <T extends string>(value: unknown, allowed: readonly T[]): value is T =>
-  typeof value === "string" && (allowed as readonly string[]).includes(value);
+  typeof value === "string" && new Set<string>(allowed).has(value);
 
 const isBoundedSafeText = (value: unknown, max: number): value is string =>
   typeof value === "string" && value.length <= max && stripUnsafeFormatChars(value) === value;
@@ -325,6 +325,14 @@ export function requiresHumanReviewForAnalysis(analysis: PromptTaskAnalysis): bo
   );
 }
 
+type PromptSafetySummary =
+  | { readonly decision: "rejected"; readonly verificationStatus: "failed" }
+  | {
+      readonly decision: "requires-human-review";
+      readonly verificationStatus: "passed-with-review";
+    }
+  | { readonly decision: "accepted"; readonly verificationStatus: "passed" };
+
 /**
  * Reduce a finding set and the human-review flag to the decision + verification status. Pure. Shared
  * by the structural assessor and the gateway validate stage (which adds security findings first).
@@ -332,10 +340,7 @@ export function requiresHumanReviewForAnalysis(analysis: PromptTaskAnalysis): bo
 export function summarizePromptSafety(
   findings: readonly PromptSafetyFinding[],
   requiresHumanReview: boolean,
-): {
-  readonly decision: PromptSafetyDecision;
-  readonly verificationStatus: PromptSafetyVerificationStatus;
-} {
+): PromptSafetySummary {
   if (findings.some((finding) => finding.severity === "blocking")) {
     return { decision: "rejected", verificationStatus: "failed" };
   }
@@ -371,7 +376,8 @@ function collectBaselineSafeguardFindings(prompt: EnhancedPrompt): PromptSafetyF
   const findings: PromptSafetyFinding[] = [];
   // AC2 — untrusted content must be marked. `untrustedContent` is pinned to `true` in the type, but a
   // forged/cast object can violate it, so the runtime check is load-bearing.
-  if ((prompt.groundingPlan as { readonly untrustedContent?: unknown }).untrustedContent !== true) {
+  const untrustedContent: unknown = prompt.groundingPlan.untrustedContent;
+  if (untrustedContent !== true) {
     findings.push(finding("missing-untrusted-marker", "untrusted-content-marked", "blocking"));
   }
   // AC1 — the Input section must be labelled as data, not instructions.
@@ -551,7 +557,12 @@ const VERIFICATION_BY_DECISION: Readonly<
   rejected: "failed",
 };
 
-function validateFinding(value: unknown, index: number, errors: string[]): boolean {
+function validateFinding(
+  value: unknown,
+  index: number,
+  errors: string[],
+  observation: { blocking: boolean },
+): value is PromptSafetyFinding {
   const label = `assessment.findings[${String(index)}]`;
   if (!isRecord(value)) {
     errors.push(`${label} must be an object`);
@@ -570,7 +581,7 @@ function validateFinding(value: unknown, index: number, errors: string[]): boole
     errors.push(`${label}.ruleId must be a known safety rule id`);
     ok = false;
   }
-  const isBlocking = value.severity === "blocking";
+  observation.blocking = value.severity === "blocking";
   if (!isMember(value.severity, PROMPT_SAFETY_SEVERITIES)) {
     errors.push(`${label}.severity must be a known severity`);
     ok = false;
@@ -579,84 +590,138 @@ function validateFinding(value: unknown, index: number, errors: string[]): boole
     errors.push(`${label}.detail must be a bounded, control-free string`);
     ok = false;
   }
-  return ok && isBlocking;
+  return ok;
 }
 
-function validateAssessmentScalars(input: Record<string, unknown>, errors: string[]): void {
+function validateAssessmentScalars(input: Record<string, unknown>, errors: string[]): boolean {
+  let admitted = true;
   if (Object.keys(input).some((key) => !ASSESSMENT_KEYS.has(key))) {
     errors.push("assessment must not contain unknown fields");
+    admitted = false;
   }
   if (input.schemaVersion !== PROMPT_ENHANCER_SCHEMA_VERSION) {
     errors.push(`assessment.schemaVersion must be "${PROMPT_ENHANCER_SCHEMA_VERSION}"`);
+    admitted = false;
   }
   const promptIdResult = validatePromptEnhancerIdString(input.promptId, "EnhancedPromptId");
-  if (!promptIdResult.ok) errors.push(`assessment.promptId: ${promptIdResult.reason}`);
+  if (!promptIdResult.ok) {
+    errors.push(`assessment.promptId: ${promptIdResult.reason}`);
+    admitted = false;
+  }
   if (!isMember(input.decision, PROMPT_SAFETY_DECISIONS)) {
     errors.push(`assessment.decision must be one of ${PROMPT_SAFETY_DECISIONS.join("|")}`);
+    admitted = false;
   }
   if (typeof input.requiresHumanReview !== "boolean") {
     errors.push("assessment.requiresHumanReview must be a boolean");
+    admitted = false;
   }
   if (!isMember(input.verificationStatus, PROMPT_SAFETY_VERIFICATION_STATUSES)) {
     errors.push(
       `assessment.verificationStatus must be one of ${PROMPT_SAFETY_VERIFICATION_STATUSES.join("|")}`,
     );
+    admitted = false;
   }
+  return admitted;
 }
 
 // Validate the findings array; returns the number of well-formed blocking findings (or -1 when the
 // array itself is malformed, so the caller can skip the blocking-count cross-checks).
-function validateAssessmentFindings(input: Record<string, unknown>, errors: string[]): number {
+function validateAssessmentFindings(
+  input: Record<string, unknown>,
+  errors: string[],
+  observation: { blockingCount: number },
+): boolean {
   if (!Array.isArray(input.findings) || input.findings.length > ASSESSMENT_FINDINGS_MAX) {
     errors.push(
       `assessment.findings must be an array of at most ${String(ASSESSMENT_FINDINGS_MAX)} entries`,
     );
-    return -1;
+    observation.blockingCount = -1;
+    return false;
   }
-  let blockingCount = 0;
-  input.findings.forEach((entry, index) => {
-    if (validateFinding(entry, index, errors)) blockingCount += 1;
-  });
-  return blockingCount;
+  const findings: unknown = input.findings;
+  if (!Array.isArray(findings)) {
+    errors.push(
+      `assessment.findings must be an array of at most ${String(ASSESSMENT_FINDINGS_MAX)} entries`,
+    );
+    observation.blockingCount = -1;
+    return false;
+  }
+  return validateFindingMembers(findings, errors, observation);
+}
+
+function validateFindingMembers(
+  findings: readonly unknown[],
+  errors: string[],
+  observation: { blockingCount: number },
+): boolean {
+  const extent = findings.length;
+  if (!Number.isSafeInteger(extent) || extent < 0 || extent > ASSESSMENT_FINDINGS_MAX) {
+    errors.push(
+      `assessment.findings must be an array of at most ${String(ASSESSMENT_FINDINGS_MAX)} entries`,
+    );
+    observation.blockingCount = -1;
+    return false;
+  }
+  let admitted = true;
+  for (let index = 0; index < extent; index += 1) {
+    const entry: unknown = findings[index];
+    const findingObservation = { blocking: false };
+    if (!validateFinding(entry, index, errors, findingObservation)) admitted = false;
+    else if (findingObservation.blocking) observation.blockingCount += 1;
+  }
+  return admitted;
 }
 
 function isValidLeastPrivilege(value: unknown): value is readonly LeastPrivilegeConstraint[] {
-  return (
-    Array.isArray(value) &&
-    value.every((entry) => isMember(entry, LEAST_PRIVILEGE_CONSTRAINTS)) &&
-    new Set(value).size === value.length
-  );
+  if (!Array.isArray(value)) return false;
+  const extent: number = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0) return false;
+  for (let index = 0; index < extent; index += 1) {
+    const entry: unknown = value[index];
+    if (!isMember(entry, LEAST_PRIVILEGE_CONSTRAINTS)) return false;
+  }
+  return new Set(value).size === value.length;
 }
 
 function validateDecisionConsistency(
   input: Record<string, unknown>,
   blockingCount: number,
   errors: string[],
-): void {
-  if (!isMember(input.decision, PROMPT_SAFETY_DECISIONS) || blockingCount < 0) return;
+): boolean {
+  let admitted = true;
+  if (!isMember(input.decision, PROMPT_SAFETY_DECISIONS) || blockingCount < 0) return true;
   if (input.verificationStatus !== VERIFICATION_BY_DECISION[input.decision]) {
     errors.push("assessment.verificationStatus must match the decision");
+    admitted = false;
   }
   if (input.decision === "rejected" && blockingCount === 0) {
     errors.push("assessment.decision rejected requires at least one blocking finding");
+    admitted = false;
   }
   if (input.decision !== "rejected" && blockingCount > 0) {
     errors.push("assessment.decision must be rejected when a blocking finding is present");
+    admitted = false;
   }
+  return admitted;
 }
 
 function validateDecisionRequiresHumanReviewAgreement(
   input: Record<string, unknown>,
   errors: string[],
-): void {
+): boolean {
+  let admitted = true;
   if (input.decision === "accepted" && input.requiresHumanReview !== false) {
     errors.push("assessment.decision accepted requires requiresHumanReview to be false");
+    admitted = false;
   }
   if (input.decision === "requires-human-review" && input.requiresHumanReview !== true) {
     errors.push(
       "assessment.decision requires-human-review requires requiresHumanReview to be true",
     );
+    admitted = false;
   }
+  return admitted;
 }
 
 // The two-way requiresHumanReview <-> leastPrivilege invariant: true implies the
@@ -670,30 +735,41 @@ function validateLeastPrivilegeHumanReviewAgreement(
   input: Record<string, unknown>,
   leastPrivilegeOk: boolean,
   errors: string[],
-): void {
-  if (!leastPrivilegeOk) return;
-  const hasHumanApproval = (input.leastPrivilege as readonly LeastPrivilegeConstraint[]).includes(
-    "require-human-approval",
-  );
+): boolean {
+  let admitted = true;
+  if (!leastPrivilegeOk) return true;
+  const observedConstraints: unknown = input.leastPrivilege;
+  if (!Array.isArray(observedConstraints)) {
+    errors.push("assessment.leastPrivilege must be an array of unique least-privilege constraints");
+    return false;
+  }
+  const constraints: readonly unknown[] = observedConstraints;
+  const hasHumanApproval = constraints.includes("require-human-approval");
   if (input.requiresHumanReview === true && !hasHumanApproval) {
     errors.push(
       "assessment.leastPrivilege must include require-human-approval when human review is required",
     );
+    admitted = false;
   }
   if (input.requiresHumanReview === false && hasHumanApproval) {
     errors.push(
       "assessment.leastPrivilege must not include require-human-approval when human review is not required",
     );
+    admitted = false;
   }
+  return admitted;
 }
 
 function validateHumanReviewConstraint(
   input: Record<string, unknown>,
   leastPrivilegeOk: boolean,
   errors: string[],
-): void {
-  validateDecisionRequiresHumanReviewAgreement(input, errors);
-  validateLeastPrivilegeHumanReviewAgreement(input, leastPrivilegeOk, errors);
+): boolean {
+  let admitted = true;
+  admitted = validateDecisionRequiresHumanReviewAgreement(input, errors) && admitted;
+  admitted =
+    validateLeastPrivilegeHumanReviewAgreement(input, leastPrivilegeOk, errors) && admitted;
+  return admitted;
 }
 
 function validateAssessmentCrossFields(
@@ -701,9 +777,34 @@ function validateAssessmentCrossFields(
   blockingCount: number,
   leastPrivilegeOk: boolean,
   errors: string[],
-): void {
-  validateDecisionConsistency(input, blockingCount, errors);
-  validateHumanReviewConstraint(input, leastPrivilegeOk, errors);
+): boolean {
+  let admitted = true;
+  admitted = validateDecisionConsistency(input, blockingCount, errors) && admitted;
+  admitted = validateHumanReviewConstraint(input, leastPrivilegeOk, errors) && admitted;
+  return admitted;
+}
+
+function admitsPromptSafetyAssessment(
+  input: unknown,
+  errors: string[],
+): input is PromptSafetyAssessment {
+  if (!isRecord(input)) {
+    errors.push("assessment must be an object");
+    return false;
+  }
+  let admitted = true;
+  admitted = validateAssessmentScalars(input, errors) && admitted;
+  const observation = { blockingCount: 0 };
+  admitted = validateAssessmentFindings(input, errors, observation) && admitted;
+  const leastPrivilegeOk = isValidLeastPrivilege(input.leastPrivilege);
+  if (!leastPrivilegeOk) {
+    errors.push("assessment.leastPrivilege must be an array of unique least-privilege constraints");
+    admitted = false;
+  }
+  admitted =
+    validateAssessmentCrossFields(input, observation.blockingCount, leastPrivilegeOk, errors) &&
+    admitted;
+  return admitted;
 }
 
 /**
@@ -716,17 +817,7 @@ function validateAssessmentCrossFields(
 export function validatePromptSafetyAssessment(
   input: unknown,
 ): PromptEnhancerValidation<PromptSafetyAssessment> {
-  if (!isRecord(input)) {
-    return { ok: false, errors: ["assessment must be an object"] };
-  }
   const errors: string[] = [];
-  validateAssessmentScalars(input, errors);
-  const blockingCount = validateAssessmentFindings(input, errors);
-  const leastPrivilegeOk = isValidLeastPrivilege(input.leastPrivilege);
-  if (!leastPrivilegeOk) {
-    errors.push("assessment.leastPrivilege must be an array of unique least-privilege constraints");
-  }
-  validateAssessmentCrossFields(input, blockingCount, leastPrivilegeOk, errors);
-  if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, value: input as unknown as PromptSafetyAssessment };
+  if (!admitsPromptSafetyAssessment(input, errors)) return { ok: false, errors };
+  return { ok: true, value: input };
 }

@@ -55,9 +55,7 @@ export const SPOKEN_ACTION_EFFECT_CLASSES: readonly SpokenActionEffectClass[] = 
 ] as const;
 
 export function isSpokenActionEffectClass(value: unknown): value is SpokenActionEffectClass {
-  return (
-    typeof value === "string" && (SPOKEN_ACTION_EFFECT_CLASSES as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && new Set<string>(SPOKEN_ACTION_EFFECT_CLASSES).has(value);
 }
 
 export function assertNeverSpokenActionEffectClass(value: never): never {
@@ -258,7 +256,7 @@ export const SPOKEN_ACTION_STATE_TRANSITIONS: Readonly<
 } as const;
 
 export function isSpokenActionState(value: unknown): value is SpokenActionState {
-  return typeof value === "string" && (SPOKEN_ACTION_STATES as readonly string[]).includes(value);
+  return typeof value === "string" && new Set<string>(SPOKEN_ACTION_STATES).has(value);
 }
 
 export function canTransitionSpokenAction(from: SpokenActionState, to: SpokenActionState): boolean {
@@ -266,7 +264,7 @@ export function canTransitionSpokenAction(from: SpokenActionState, to: SpokenAct
 }
 
 export function isTerminalSpokenActionState(state: SpokenActionState): boolean {
-  return (SPOKEN_ACTION_TERMINAL_STATES as readonly string[]).includes(state);
+  return new Set<string>(SPOKEN_ACTION_TERMINAL_STATES).has(state);
 }
 
 export function assertNeverSpokenActionState(value: never): never {
@@ -294,7 +292,7 @@ export const SPOKEN_ACTION_OUTCOMES: readonly SpokenActionOutcome[] = [
 ] as const;
 
 export function isSpokenActionOutcome(value: unknown): value is SpokenActionOutcome {
-  return typeof value === "string" && (SPOKEN_ACTION_OUTCOMES as readonly string[]).includes(value);
+  return typeof value === "string" && new Set<string>(SPOKEN_ACTION_OUTCOMES).has(value);
 }
 
 // ─── Confirmation binding input (AC4) ─────────────────────────────────────────────
