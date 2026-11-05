@@ -364,6 +364,7 @@ function refreshRun(
   ctx: ManualPodJobContext,
   request: HtmlManualPodRefreshRequest,
   controller: AbortController,
+  correlationId: string,
 ): ManualPodJobRunner {
   return (onCrawlEvent): Promise<ManualPodRunOutcome> =>
     refreshHtmlManualPod({
@@ -375,6 +376,7 @@ function refreshRun(
       sourceId: request.sourceId as KnowledgeSourceId,
       signal: controller.signal,
       logSink: processServerLogSink(),
+      correlationId,
       onCrawlEvent,
     })
       .then((result) => ({
@@ -392,6 +394,7 @@ function createRun(
   identity: KnowledgeCapsule["embeddingModelIdentity"],
   ids: { readonly capsuleId: string; readonly sourceId: string },
   controller: AbortController,
+  correlationId: string,
 ): ManualPodJobRunner {
   return (onCrawlEvent): Promise<ManualPodRunOutcome> =>
     createHtmlManualPod(
@@ -405,6 +408,7 @@ function createRun(
         sourceId: ids.sourceId as KnowledgeSourceId,
         signal: controller.signal,
         logSink: processServerLogSink(),
+        correlationId,
         onCrawlEvent,
       },
       source,
@@ -460,6 +464,7 @@ export async function startManualPodCreate(
         identity,
         ids,
         controller,
+        base.jobId,
       ),
     deps.diagnostics,
   );
@@ -509,6 +514,7 @@ export function startManualPodRefresh(
         overrides.context ?? productionManualPodJobContext(deps, ctx, base.jobId),
         request,
         controller,
+        base.jobId,
       ),
     deps.diagnostics,
   );

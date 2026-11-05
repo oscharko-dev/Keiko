@@ -208,6 +208,27 @@ The following are explicitly out of scope for this epic and are follow-up work:
   renders the last redacted refresh summary from `KnowledgePodSummary.manualRefresh`. A refresh
   button, confirm dialog, and live progress indicator depend on the deferred trigger route.
 
+The metadata writer now validates captured selected source facts before INSERT and captured summary
+bytes before UPDATE. It never rereads the original source/state to bind SQL after checking. Additional
+schema/name/redirect observations and inconsistent kind refusal are intentional writer hardening;
+ordinary selected-field order, clock/prepare position, approved IDs/limits and healthy summary bytes
+remain intact. Canonical summary validation plus exact JSON roundtrip refuses discarded duplicate-key
+content or non-roundtripping formatting without silently normalizing it. No universal input-byte cap
+or permanent mutable-reference guarantee is added.
+
+Actual owner refusal is caught by the existing manual job runner and written through registered
+`server.diagnostic.failure`; the BFF scenario reconstructs its job correlation and fixed body-free
+code through support analysis. A refused metadata statement leaves its target row unchanged, but
+source attachment or refresh apply/index may precede it. The narrower post-crawl limitations above
+remain; no whole-job rollback is claimed. The independent pod reader now settles examined summary refusals through its existing injected
+KnowledgeLogSink as `knowledge.manual-refresh-summary.rejected`: invalid JSON/summary counts, closed
+reason and a returned-summary flag only. It preserves first-valid-source ordering, ordinary omission,
+read counts and stored bytes. Request listings/default documentation proposal checks and job/run
+projections forward their existing correlations before event construction. Set-only and healthy
+projections do not emit. An unwired or failing sink retains the existing loss evidence; it cannot
+claim complete primary evidence. Physical metadata refusal and reader omission remain separate
+outcomes, neither providing whole-job rollback.
+
 ### Legacy pods (pre-v27)
 
 A refresh over an `html_manual_sources` row written before migration v27 (which has no persisted

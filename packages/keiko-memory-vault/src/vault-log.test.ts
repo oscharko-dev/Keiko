@@ -10,8 +10,15 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFailingRecordingSink } from "../../../tests/support/recording-log-sink.js";
+import { defineSynchronousLogDeliveryContract } from "../../../tests/support/synchronous-log-delivery-contract.js";
+import {
+  defineClassifierObservationContract,
+  inheritedFallbackCause,
+} from "../../../tests/support/log-classifier-observations.js";
+import * as vaultLog from "./vault-log.js";
 import {
   activityLogLossCounters,
+  activityLogEventWillBeRejected,
   resetActivityLogLossCountersForTests,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
@@ -21,6 +28,7 @@ import {
   nullMemoryVaultLogSink,
   startMemoryVaultLogTimer,
   type MemoryVaultLogTransport,
+  type MemoryVaultLogEvent,
   type MemoryVaultLogSink,
 } from "./vault-log.js";
 import {
@@ -336,4 +344,279 @@ describe("emitMemoryVaultLogEvent loss accounting", () => {
       resetActivityLogLossCountersForTests();
     }
   });
+});
+
+describe("initial write refusal log producer", () => {
+  it("preserves known and parent ids and supplies the canonical unknown fallback", () => {
+    expect(vaultLog).toHaveProperty("emitMemoryWriteRejected");
+    const events: MemoryVaultLogTransport[] = [];
+    const sink = {
+      write: (event: MemoryVaultLogTransport): void => {
+        events.push(event);
+      },
+    };
+    vaultLog.emitMemoryWriteRejected(sink, "insert", {
+      correlationId: "request-one",
+      parentCorrelationId: "parent-request",
+    });
+    vaultLog.emitMemoryWriteRejected(sink, "update", { correlationId: "request-two" });
+    vaultLog.emitMemoryWriteRejected(sink, "graph", undefined);
+    vaultLog.emitMemoryWriteRejected(sink, "insert", { correlationId: "bad" });
+    expect(
+      events.map((event) =>
+        expectActivityLogProof(
+          "memory-vault.write.rejected.initial-admission",
+          formatActivityLogProofLine(event),
+        ),
+      ),
+    ).toMatchObject([
+      { correlationId: "request-one", parentCorrelationId: "parent-request", admitted: false },
+      { correlationId: "request-two", admitted: false },
+      { correlationId: "unknown-correlation-id", admitted: false },
+      { correlationId: "unknown-correlation-id", admitted: false },
+    ]);
+  });
+
+  it("never lets an unreadable context or failed sink escape the evidence boundary", () => {
+    expect(vaultLog).toHaveProperty("emitMemoryWriteRejected");
+    const context = {
+      get correlationId(): string {
+        throw new TypeError("private-context-canary");
+      },
+    };
+    const events: MemoryVaultLogTransport[] = [];
+    expect(() => {
+      vaultLog.emitMemoryWriteRejected(
+        {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        "insert",
+        context,
+      );
+    }).not.toThrow();
+    expect(events).toHaveLength(1);
+    expect(activityLogEventWillBeRejected(events[0] ?? {})).toBe(true);
+    expect(JSON.stringify(events)).not.toContain("private-context-canary");
+    const before = activityLogLossCounters()["port-sink-failed"];
+    expect(() => {
+      vaultLog.emitMemoryWriteRejected(
+        {
+          write: (): never => {
+            throw new TypeError("private-sink-canary");
+          },
+        },
+        "update",
+        { correlationId: "sink-request" },
+      );
+    }).not.toThrow();
+    expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
+    const unwired = activityLogLossCounters()["port-unwired"];
+    vaultLog.emitMemoryWriteRejected(undefined, "insert", undefined);
+    expect(activityLogLossCounters()["port-unwired"]).toBe(unwired + 1);
+  });
+});
+
+describe("physical write refusal and capture evidence", () => {
+  it("retains canonical physical invalidity without changing initial refusal fields", () => {
+    const events: MemoryVaultLogTransport[] = [];
+    vaultLog.emitMemoryWriteRejected(
+      { write: (event) => events.push(event) },
+      "update-batch",
+      { correlationId: "physical-validation-request" },
+      "physical-admission",
+    );
+    expect(
+      expectActivityLogProof(
+        "memory-vault.write.rejected.initial-admission",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({
+      stage: "physical-admission",
+      reason: "invalid-record",
+      method: "update-batch",
+      admitted: false,
+      rejectionCount: 1,
+      errorKind: "validation-failed",
+    });
+  });
+
+  it("uses the evidence provider's receiver and admits a legitimate empty cause chain", () => {
+    const events: MemoryVaultLogTransport[] = [];
+    const failure = new TypeError("private-capture-log-canary");
+    const sink: MemoryVaultLogSink = {
+      write: (event) => events.push(event),
+      errorEvidence(error: unknown): vaultLog.MemoryVaultErrorEvidence {
+        expect(this).toBe(sink);
+        expect(error).toBe(failure);
+        return { frames: ["packages/keiko-memory-vault/src/serialize.ts:10:2"], causeChain: [] };
+      },
+    };
+    vaultLog.emitMemoryWriteCaptureFailed(
+      sink,
+      "insert",
+      {
+        correlationId: "physical-capture-request",
+        parentCorrelationId: "physical-capture-parent",
+      },
+      failure,
+    );
+    expect(
+      expectActivityLogProof(
+        "memory-vault.write.capture-failed.physical-admission",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({
+      correlationId: "physical-capture-request",
+      parentCorrelationId: "physical-capture-parent",
+      method: "insert",
+      stage: "physical-admission",
+      reason: "capture-unavailable",
+      admitted: false,
+      rejectionCount: 1,
+      errorKind: "internal",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(JSON.stringify(events)).not.toContain("private-capture-log-canary");
+  });
+
+  it.each([
+    "absent",
+    "throws",
+    "getter",
+    "fields-getter",
+    "empty",
+    "foreign",
+    "invalid-causes",
+  ] as const)("retains partial capture evidence when the provider is %s", (mode) => {
+    const events: MemoryVaultLogTransport[] = [];
+    const sink: MemoryVaultLogSink = { write: (event) => events.push(event) };
+    if (mode !== "absent")
+      Object.defineProperty(sink, "errorEvidence", {
+        get: () => {
+          if (mode === "getter") throw new TypeError("private-provider-canary");
+          return (): vaultLog.MemoryVaultErrorEvidence => {
+            if (mode === "throws") throw new TypeError("private-provider-canary");
+            if (mode === "fields-getter")
+              return {
+                get frames(): readonly string[] {
+                  throw new TypeError("private-provider-canary");
+                },
+                causeChain: [],
+              };
+            return {
+              frames:
+                mode === "empty"
+                  ? []
+                  : mode === "foreign"
+                    ? ["raw-private-stack"]
+                    : ["packages/keiko-memory-vault/src/serialize.ts:10:2"],
+              causeChain: mode === "invalid-causes" ? ["raw private cause text"] : [],
+            };
+          };
+        },
+      });
+    const before = activityLogLossCounters();
+    vaultLog.emitMemoryWriteCaptureFailed(sink, "graph", undefined, new TypeError("fixture"));
+    expect(
+      expectActivityLogProof(
+        "memory-vault.write.capture-failed.physical-admission",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({
+      correlationId: "unknown-correlation-id",
+      completeness: "partial",
+      loss: "none",
+    });
+    expect(activityLogLossCounters()).toEqual(before);
+    expect(JSON.stringify(events)).not.toContain("private-provider-canary");
+    expect(JSON.stringify(events)).not.toContain("raw-private-stack");
+    expect(JSON.stringify(events)).not.toContain("raw private cause text");
+  });
+
+  it("counts a failed capture emission once through the existing sink fallback", () => {
+    const events: MemoryVaultLogTransport[] = [];
+    const before = activityLogLossCounters()["port-sink-failed"];
+    vaultLog.emitMemoryWriteCaptureFailed(
+      {
+        write: (event) => {
+          if (event.op === "memory-vault.write.capture-failed")
+            throw new TypeError("fixture transport");
+          events.push(event);
+        },
+      },
+      "update",
+      { correlationId: "capture-loss-request" },
+      new TypeError("fixture"),
+    );
+    expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
+    expect(events.map((event) => event.op)).toEqual(["memory-vault.log.sink-failed"]);
+    const unwired = activityLogLossCounters()["port-unwired"];
+    vaultLog.emitMemoryWriteCaptureFailed(undefined, "insert", undefined, new TypeError("fixture"));
+    expect(activityLogLossCounters()["port-unwired"]).toBe(unwired + 1);
+  });
+});
+
+describe("#3918 synchronous port delivery observations", () => {
+  defineSynchronousLogDeliveryContract<
+    MemoryVaultLogTransport,
+    MemoryVaultLogSink,
+    "memory-vault.store.opened"
+  >({
+    emit: emitMemoryVaultLogEvent,
+    makeSink: (readWrite): MemoryVaultLogSink => ({
+      get write(): (received: MemoryVaultLogTransport) => void {
+        return readWrite(this);
+      },
+    }),
+    unreadOperationEvent: (readOp): MemoryVaultLogTransport => ({
+      category: "memory",
+      get op(): never {
+        return readOp();
+      },
+    }),
+    countedOperationEvent: (readOp): MemoryVaultLogTransport => ({
+      category: "memory",
+      get op(): "memory-vault.store.opened" {
+        return readOp();
+      },
+    }),
+    droppedOp: "memory-vault.store.opened",
+    noticeOp: "memory-vault.log.sink-failed",
+  });
+});
+
+describe("#3918 classifier foreign observation contract", (): void => {
+  defineClassifierObservationContract(memoryVaultErrorKind);
+});
+
+it("#3918 preserves inherited fallback observations through the registered failure port", (): void => {
+  resetActivityLogLossCountersForTests();
+  try {
+    const trace: string[] = [];
+    const receivers: unknown[] = [];
+    const cause: Error = inheritedFallbackCause(trace, receivers);
+    const notices: MemoryVaultLogTransport[] = [];
+    const sink: MemoryVaultLogSink = {
+      write(event): void {
+        if (event.op !== "memory-vault.log.sink-failed") throw cause;
+        notices.push(event);
+      },
+    };
+    emitMemoryVaultLogEvent(sink, { category: "memory", op: "memory-vault.store.opened" });
+    expect(trace).toEqual(["code", "name"]);
+    expect(receivers).toHaveLength(2);
+    expect(receivers[0]).toBe(cause);
+    expect(receivers[1]).toBe(cause);
+    expect(notices).toHaveLength(1);
+    const line = formatActivityLogProofLine(notices[0] ?? {});
+    const persisted = expectActivityLogProof("memory-vault.log.sink-failed.body-free", line);
+    expect(persisted.failureKind).toBe("ENOSPC");
+    expect(line).not.toContain("private-classifier-canary");
+    expect(activityLogLossCounters()["port-sink-failed"]).toBe(1);
+  } finally {
+    resetActivityLogLossCountersForTests();
+  }
 });

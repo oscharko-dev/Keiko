@@ -1459,6 +1459,7 @@ export function maybeRunChatAutoMaintenance(
     nowMs,
     enabled: true,
     correlationId,
+    parentCorrelationId: requestCorrelationId,
     autonomyMode: resolveMaintenanceAutonomyMode(deps, correlationId),
     ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
     ...(retentionPolicy !== undefined ? { retentionPolicy } : {}),
@@ -1652,6 +1653,7 @@ async function candidateActionFromOutcome(
   mode: CodingWorkbenchMode,
   surface: ConversationMemoryCaptureSurfaceWire,
   canonicalCapture: boolean,
+  writeContext: MemoryWriteContext,
 ): Promise<ConversationMemoryActionWire | null> {
   if (deps.memoryVault === undefined) return null;
   if (!isPersistableMemoryCandidate(outcome)) {
@@ -1663,7 +1665,12 @@ async function candidateActionFromOutcome(
     return { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON };
   }
   const candidate = captureCandidateForMode(record, mode, outcome);
-  const persisted = persistCapturedMemory(deps.memoryVault, candidate, canonicalCapture);
+  const persisted = persistCapturedMemory(
+    deps.memoryVault,
+    candidate,
+    canonicalCapture,
+    writeContext,
+  );
   const inserted = persisted.memory;
   if ((persisted.inserted || persisted.promoted) && inserted.status === "accepted") {
     recordAutoAcceptedMemoryCaptureDecision(deps, mode, surface, inserted);
@@ -1688,10 +1695,18 @@ async function captureActionFromOutcome(
   mode: CodingWorkbenchMode,
   surface: ConversationMemoryCaptureSurfaceWire,
   canonicalCapture = false,
+  writeContext?: MemoryWriteContext,
 ): Promise<ConversationMemoryActionWire | null> {
   switch (outcome.kind) {
     case "candidate":
-      return candidateActionFromOutcome(outcome, deps, mode, surface, canonicalCapture);
+      return candidateActionFromOutcome(
+        outcome,
+        deps,
+        mode,
+        surface,
+        canonicalCapture,
+        writeContext,
+      );
     case "update":
       return {
         kind: "update",
@@ -1717,10 +1732,18 @@ function captureActionsFromOutcomes(
   mode: CodingWorkbenchMode,
   surface: ConversationMemoryCaptureSurfaceWire,
   canonicalCapture: boolean,
+  writeContext: MemoryWriteContext,
 ): Promise<ConversationMemoryActionWire[]> {
   return outcomes.reduce<Promise<ConversationMemoryActionWire[]>>(async (previous, outcome) => {
     const actions = await previous;
-    const action = await captureActionFromOutcome(outcome, deps, mode, surface, canonicalCapture);
+    const action = await captureActionFromOutcome(
+      outcome,
+      deps,
+      mode,
+      surface,
+      canonicalCapture,
+      writeContext,
+    );
     if (action !== null) actions.push(action);
     return actions;
   }, Promise.resolve([]));
@@ -1730,6 +1753,7 @@ function captureMemoryActions(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
   context: ConversationMemoryRuntimeContext,
+  writeContext: MemoryWriteContext,
 ): Promise<readonly ConversationMemoryActionWire[]> {
   if (request.memory === undefined || !request.memory.enabled || deps.memoryVault === undefined) {
     return Promise.resolve([]);
@@ -1751,6 +1775,7 @@ function captureMemoryActions(
     mode,
     surface,
     request.clientTurnId !== undefined,
+    writeContext,
   );
 }
 
@@ -1758,11 +1783,12 @@ export async function collectMemoryActions(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   memoryContext: ConversationMemoryRuntimeContext | undefined,
+  writeContext?: MemoryWriteContext,
 ): Promise<readonly ConversationMemoryActionWire[]> {
   if (memoryContext === undefined) {
     return [];
   }
-  return captureMemoryActions(request, deps, memoryContext);
+  return captureMemoryActions(request, deps, memoryContext, writeContext);
 }
 
 function recordPostCommitMemoryFailure(
@@ -2750,7 +2776,9 @@ async function finalizeAndRecordBufferedTurn(
   abortSignal: AbortSignal,
   compaction: BufferedCompactionContext,
 ): Promise<RouteResult> {
-  const finalized = await finalizeBufferedTurn(deps, turn, memory, result, abortSignal);
+  const finalized = await finalizeBufferedTurn(deps, turn, memory, result, abortSignal, {
+    correlationId: compaction.correlationId,
+  });
   if (finalized.status === 200) {
     recordChatCompaction(deps, {
       compaction: compaction.assembly.compaction,
@@ -2828,13 +2856,14 @@ async function finalizeBufferedTurn(
     response: Pick<NormalizedResponse, "content"> & { usage?: NormalizedResponse["usage"] };
   },
   abortSignal: AbortSignal,
+  writeContext: MemoryWriteContext,
 ): Promise<RouteResult> {
   const { request, modelId, memoryContext } = turn;
   // Issue #631 — redact the model's raw content before persisting and before returning it to the
   // browser, mirroring the grounded-QA path which already applies deps.redactor here.
   const redactedContent = currentContentRedactor(deps)(result.response.content) as string;
   assertUsableAssistantContent(redactedContent, modelId);
-  const memoryActions = await collectMemoryActions(deps, request, memoryContext);
+  const memoryActions = await collectMemoryActions(deps, request, memoryContext, writeContext);
   if (requestSignalAborted(abortSignal)) {
     failDesktopChatTurn(deps, request, "cancelled");
     return requestCancelledResult();
@@ -3058,6 +3087,16 @@ export async function persistGitChangeDescriptionTurn(
   }
 }
 
+function blockHeldChatDescription(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  scope: ChatGitChangeScope,
+  held: HeldChatDescription,
+): void {
+  held.service?.invalidate();
+  updateChatDescriptionScope(deps, prepared.chat.id, scope, { status: "blocked" });
+}
+
 async function completeGitChangeDescriptionTurn(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -3101,10 +3140,10 @@ async function completeGitChangeDescriptionTurn(
       response: descriptionTurnResponse(generated.artifact.markdown, generated.usage),
     },
     abortSignal,
+    { correlationId },
   );
   if (result.status !== 200) {
-    held.service?.invalidate();
-    updateChatDescriptionScope(deps, prepared.chat.id, scope, { status: "blocked" });
+    blockHeldChatDescription(deps, prepared, scope, held);
   }
   return result;
 }
@@ -4051,6 +4090,7 @@ function collectCanonicalTurnLocalMemoryActions(
   deps: UiHandlerDeps,
   request: CanonicalTurnMemoryRequest,
   context: ConversationMemoryRuntimeContext | undefined,
+  writeContext: MemoryWriteContext,
 ): Promise<readonly ConversationMemoryActionWire[]> {
   if (context === undefined || request.memory?.enabled !== true) {
     return Promise.resolve([]);
@@ -4081,6 +4121,7 @@ function collectCanonicalTurnLocalMemoryActions(
           mode,
           surface,
           request.clientTurnId !== undefined,
+          writeContext,
         )),
       );
       return actions;
@@ -4258,6 +4299,7 @@ export async function buildCanonicalTurnMemoryResult(
   options: {
     readonly retrievalContent?: string | undefined;
     readonly precomputedMemory?: ConversationMemoryResultWire | undefined;
+    readonly writeContext?: MemoryWriteContext;
   } = {},
 ): Promise<ConversationMemoryResultWire | undefined> {
   if (request.memory === undefined) {
@@ -4272,7 +4314,12 @@ export async function buildCanonicalTurnMemoryResult(
   const memory =
     options.precomputedMemory ??
     (await buildMemoryResult(canonicalTurnAsSendRequest(request, content), deps, memoryContext));
-  const actions = await collectCanonicalTurnLocalMemoryActions(deps, request, memoryContext);
+  const actions = await collectCanonicalTurnLocalMemoryActions(
+    deps,
+    request,
+    memoryContext,
+    options.writeContext,
+  );
   return { ...memory, actions };
 }
 
@@ -4579,3 +4626,5 @@ export async function handleRegenerateDesktopChat(
     cancellation.dispose();
   }
 }
+
+type MemoryWriteContext = Parameters<MemoryVaultStore["insertMemory"]>[1];

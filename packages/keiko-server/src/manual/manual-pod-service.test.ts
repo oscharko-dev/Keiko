@@ -1,3 +1,27 @@
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import {
+  htmlManualSourceKindTag,
+  htmlManualSourceFingerprintTag,
+} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
+import type {
+  EmbeddingModelIdentity,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  addSourceToCapsule,
+  createCapsule,
+  createInMemoryManualFetcher,
+  persistHtmlManualSourceMetadata,
+  openKnowledgeStore,
+} from "@oscharko-dev/keiko-local-knowledge";
+import { scriptedAdapter } from "@oscharko-dev/keiko-local-knowledge/testing";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import {
+  createServerLogger,
+  setServerLogger,
+  type ServerLogEvent,
+} from "../observability/index.js";
 // Unit proof for the manual-pod job registry + body-free progress projection (Issue #2063). The
 // background create/refresh runners compose already-tested domain functions; here we pin the pure
 // orchestration: registry lifecycle, coarse live-progress event application, and the domain->wire
@@ -8,7 +32,10 @@ import type {
   HtmlManualIndexingProgress,
   ManualCrawlEvent,
 } from "@oscharko-dev/keiko-local-knowledge";
-import type { UiHandlerDeps } from "../deps.js";
+import { buildRedactor, type UiHandlerDeps } from "../deps.js";
+import { createRunRegistry } from "../runs.js";
+import { createInMemoryUiStore } from "../store/index.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import {
   MAX_RETAINED_JOBS,
   ManualPodJobRegistry,
@@ -509,5 +536,123 @@ describe("startManualPodRefresh (real-deps context resolution)", () => {
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("no-embedding-model");
+  });
+});
+
+function seedJobManualSource(
+  context: ManualPodJobContext,
+  capsuleId: KnowledgeCapsuleId,
+  sourceId: KnowledgeSourceId,
+  corrupt: boolean,
+): void {
+  addSourceToCapsule(context.env.store, capsuleId, {
+    id: sourceId,
+    displayName: "Fixture manual",
+    tags: [htmlManualSourceKindTag("html-manual-http"), htmlManualSourceFingerprintTag("fp-job")],
+    scope: { kind: "files", rootPath: "/fixture/manual", files: ["index.html"] },
+  });
+  persistHtmlManualSourceMetadata(context.env.store, capsuleId, sourceId, {
+    schemaVersion: "1",
+    scope: { kind: "html-manual-http", origin: "https://manual.example.invalid", pathPrefix: null },
+    limits: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
+    sourceFingerprint: "fp-job",
+    proposedPodName: "Fixture manual",
+  });
+  if (corrupt)
+    context.env.store._internal.db
+      .prepare(
+        "UPDATE html_manual_sources SET last_change_summary_json = :bytes WHERE source_id = :id",
+      )
+      .run({ bytes: "{historical-fixture", id: sourceId });
+}
+
+function summaryJobDeps(diagnostics: ServerDiagnosticSink): UiHandlerDeps {
+  return {
+    config: undefined,
+    configPresent: false,
+    env: {},
+    redactor: buildRedactor({}),
+    diagnostics,
+    registry: createRunRegistry(),
+    modelPortFactory: () => undefined,
+    store: createInMemoryUiStore(),
+    evidenceStore: {
+      put: () => "",
+      list: () => [],
+      get: () => undefined,
+      delete: () => undefined,
+    },
+  };
+}
+
+const JOB_EMBEDDING_IDENTITY: EmbeddingModelIdentity = {
+  provider: "openai",
+  modelId: "text-embedding-3-small",
+  vectorDimensions: 1536,
+  vectorMetric: "cosine",
+  normalization: "l2",
+  instructionVersion: "keiko-embedding-input-v1",
+  embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:3ff5f7fb35874f7a6b414af6",
+};
+
+function createSummaryJobCapsule(store: ManualPodJobContext["env"]["store"]): KnowledgeCapsuleId {
+  return createCapsule(store, {
+    id: "job-manual-obs" as KnowledgeCapsuleId,
+    displayName: "Engineering Capsule",
+    tags: ["alpha", "beta"],
+    retrievalEffort: "default",
+    outputMode: "answers",
+    answerGroundingPolicy: "require-citations",
+    embeddingModelIdentity: JOB_EMBEDDING_IDENTITY,
+    lifecycleState: "draft",
+    storageReference: "engineering/capsule-1",
+  }).id;
+}
+
+describe("default manual refresh runner summary correlation", () => {
+  it("passes its allocated job id through the actual domain reader", async () => {
+    const store = openKnowledgeStore({ dbPath: ":memory:" });
+    const close = vi.fn();
+    const context: ManualPodJobContext = {
+      env: {
+        store,
+        close,
+        embeddingAdapter: scriptedAdapter({ identity: JOB_EMBEDDING_IDENTITY }),
+      },
+      fetcher: createInMemoryManualFetcher(new Map()),
+    };
+    const capsuleId = createSummaryJobCapsule(store);
+    seedJobManualSource(context, capsuleId, "earlier-corrupt" as KnowledgeSourceId, true);
+    seedJobManualSource(context, capsuleId, "refresh-target" as KnowledgeSourceId, false);
+    const events: ServerLogEvent[] = [];
+    const diagnostic = vi.fn();
+    setServerLogger(
+      createServerLogger({ sink: { write: (event) => events.push(event) }, level: "debug" }),
+    );
+    try {
+      const accepted = startManualPodRefresh(
+        summaryJobDeps({ record: diagnostic }),
+        { capsuleId, sourceId: "refresh-target" },
+        { context },
+      );
+      expect(accepted.ok).toBe(true);
+      if (!accepted.ok) throw new TypeError("Expected fixture job acceptance");
+      await vi.waitFor(() => {
+        expect(getManualPodJob(accepted.job.jobId)?.state).not.toBe("running");
+      });
+      expect(diagnostic).not.toHaveBeenCalled();
+      const rejected = events.filter(
+        (event) => event.op === "knowledge.manual-refresh-summary.rejected",
+      );
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]).toMatchObject({
+        correlationId: accepted.job.jobId,
+        extra: { invalidJsonCount: 1, summaryReturned: true },
+      });
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      resetServerLogger();
+      store.close();
+    }
   });
 });

@@ -228,6 +228,32 @@ no UI action triggers them, and the `gatewayFetch`-backed HTTP `ManualCrawlFetch
 `html-manual-http` sources described above has not been built. Wiring a governed BFF trigger route
 and the HTTP fetcher is tracked in Issue #2063.
 
+**Physical metadata persistence (#3918).** The source INSERT captures the selected scope, fingerprint,
+limits and clock observations once, canonical-validates those captured facts and binds the same facts.
+Contradictory scope-kind observations and widened redirects are refused. The writer additionally reads
+schemaVersion, proposedPodName and followRedirects at this boundary; it does not promise stability of
+an original mutable object after validation. Safe absolute local roots remain a domain capability,
+without adding a live local-root create input.
+
+The refresh metadata UPDATE captures its timestamp, crawl-run ID and summary bytes before validation.
+It parses and canonical-validates the summary and requires JSON roundtrip byte equality before binding
+those same bytes. Duplicate-key discarded content, malformed shape and non-roundtripping strings are
+refused, never silently normalized. This intentionally tightens the public writer's compatibility;
+the real refresh producer's JSON remains unchanged. No new fixed byte cap is introduced at this public
+string boundary; parse/serialize cost follows the supplied length.
+
+Writer refusals use fixed body-free TypeError codes. The existing manual job catch emits
+`server.diagnostic.failure` under the actual job correlation through the default registered Activity
+Log writer; no leaf logger or new operation is introduced. A refused statement leaves its metadata
+row unchanged. Source refusal may follow capsule/source attachment; summary refusal may follow refresh
+apply/index work. Neither is a whole-create or whole-refresh rollback guarantee. The independent summary reader retains omission and first-valid-source behavior. Its owning
+`knowledge.manual-refresh-summary.rejected` operation settles examined invalid JSON/summary counts,
+a closed reason and whether a later valid summary was returned, under the actual request/job/run
+correlation. Absent or healthy records and pod-set-only listings emit no rejection. Existing injected
+KnowledgeLogSink and the registered physical writer carry this evidence; unbound or failed sinks
+retain the existing explicit loss ceiling. No raw persisted bytes, source identifiers or validation
+messages enter the event, and no second scan or repair write is performed.
+
 ## Extension: citation-driven navigation for HTML manual chat answers (Epic #1854)
 
 Accepted as an extension of this ADR (Epic #1854, Issues #1878-#1883, 2026-07-06). Epic #1854 turns

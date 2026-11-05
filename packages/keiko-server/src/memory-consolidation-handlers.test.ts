@@ -355,17 +355,21 @@ describe("memory consolidation job handlers", () => {
     );
     if (item === undefined) throw new Error("Expected a consolidation review item.");
 
+    const mutating = vi.spyOn(vault, "applyGraphMutation");
     const apply = await handleApplyConsolidationReviewItem(
-      makeCtx(
-        `/api/memory/consolidation/jobs/${jobId}/review-items/${item.id}/apply`,
-        {
-          preconditions: item.memoryExcerpts.map(({ memoryId, expectedUpdatedAt }) => ({
-            memoryId,
-            expectedUpdatedAt,
-          })),
-        },
-        { jobId, itemId: item.id },
-      ),
+      {
+        ...makeCtx(
+          `/api/memory/consolidation/jobs/${jobId}/review-items/${item.id}/apply`,
+          {
+            preconditions: item.memoryExcerpts.map(({ memoryId, expectedUpdatedAt }) => ({
+              memoryId,
+              expectedUpdatedAt,
+            })),
+          },
+          { jobId, itemId: item.id },
+        ),
+        correlationId: "consolidation-apply-request",
+      },
       deps,
     );
 
@@ -396,6 +400,7 @@ describe("memory consolidation job handlers", () => {
     );
     expect(second).toEqual(apply);
     expect(vault.listOutgoingEdges(proposed.id)).toHaveLength(3);
+    expect(mutating.mock.calls[0]?.[1]).toEqual({ correlationId: "consolidation-apply-request" });
   });
 
   it("propagates non-precondition apply failures without a follow-up mutation or evidence leak", async () => {

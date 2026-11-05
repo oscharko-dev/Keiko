@@ -222,7 +222,7 @@ function persistWorkflowCandidates(
     }
     const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
     const record = buildMemoryRecordFromProposal(proposalId, outcome);
-    options.vault.insertMemory(record);
+    options.vault.insertMemory(record, { correlationId: options.runId });
     proposedMemoryIds.push(record.id);
   }
   return proposedMemoryIds;

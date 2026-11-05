@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 387,
-  "completeClassCount": 387,
+  "supportedClassCount": 392,
+  "completeClassCount": 392,
   "completeness": "complete",
   "classes": [
     {
@@ -20859,6 +20859,118 @@
       "completeness": "complete"
     },
     {
+      "failureClass": "editor-semantic-token-refusal",
+      "requirementContract": "editor-semantic-token-refusal",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["failure"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": [],
+        "failure": ["editor.semantic-tokens.refused"],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "editor.semantic-tokens.refused",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": [],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "editor.semantic-tokens.refused",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["editor.semantic-tokens.refused.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "editor-semantic-token-settlement",
+      "requirementContract": "editor-semantic-token-settlement",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["end"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": ["editor.semantic-tokens.settled"],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "editor.semantic-tokens.settled",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["editor.semantic-tokens.settled"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "editor.semantic-tokens.settled",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "returnedTokenCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["editor.semantic-tokens.settled.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
       "failureClass": "editor-workspace-watch-authority",
       "requirementContract": "editor-workspace-watch-authority",
       "productSurfaces": ["keiko-server"],
@@ -35448,6 +35560,74 @@
       "completeness": "complete"
     },
     {
+      "failureClass": "knowledge-manual-summary-validation",
+      "requirementContract": "knowledge-manual-summary-validation",
+      "productSurfaces": ["keiko-local-knowledge"],
+      "lifecycleTransitions": ["failure"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": [],
+        "failure": ["knowledge.manual-refresh-summary.rejected"],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "knowledge.manual-refresh-summary.rejected",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": [],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "knowledge.manual-refresh-summary.rejected",
+          "owner": "keiko-local-knowledge",
+          "category": "diagnostic",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "invalidJsonCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "invalidSummaryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "summaryReturned",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["knowledge.manual-refresh-summary.rejected.omission"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
       "failureClass": "knowledge-prompt-window",
       "requirementContract": "knowledge-prompt-window",
       "productSurfaces": ["keiko-server"],
@@ -37549,6 +37729,173 @@
             "causeChain": false
           },
           "proofIds": ["memory-vault.store.quarantined.recovery"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "memory-write-capture",
+      "requirementContract": "memory-write-capture",
+      "productSurfaces": ["keiko-memory-vault"],
+      "lifecycleTransitions": ["failure"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": [],
+        "failure": ["memory-vault.write.capture-failed"],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "memory-vault.write.capture-failed",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": [],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "memory-vault.write.capture-failed",
+          "owner": "keiko-memory-vault",
+          "category": "memory",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "admitted",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "safe-platform-class",
+              "required": false
+            },
+            {
+              "name": "method",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "rejectionCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "stage",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "safe-platform-class"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["memory-vault.write.capture-failed.physical-admission"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "memory-write-validation",
+      "requirementContract": "memory-write-validation",
+      "productSurfaces": ["keiko-memory-vault"],
+      "lifecycleTransitions": ["failure"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": [],
+        "failure": ["memory-vault.write.rejected"],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "memory-vault.write.rejected",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": [],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "memory-vault.write.rejected",
+          "owner": "keiko-memory-vault",
+          "category": "memory",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "admitted",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "method",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "rejectionCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "stage",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory-vault.write.rejected.initial-admission"],
           "replayReferences": [],
           "missingObligations": []
         }

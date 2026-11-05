@@ -279,6 +279,7 @@ async function persistStreamedTurn(
   turn: StreamedTurn,
   userMessage: ChatMessage,
   signal: AbortSignal,
+  correlationId: string | undefined,
 ): Promise<DesktopChatSendResponse | undefined> {
   const { request, chat, modelId, memoryContext } = prepared;
   const redactedContent = currentContentRedactor(deps)(turn.response.content) as string;
@@ -286,6 +287,7 @@ async function persistStreamedTurn(
     deps,
     request,
     memoryContext,
+    { correlationId },
   );
   if (signal.aborted) return undefined;
   const createdAssistant = createAssistantMessage(
@@ -425,6 +427,7 @@ async function streamAndPersist(
     turn,
     userMessage,
     controller.signal,
+    ctx.correlationId,
   );
   if (payload === undefined) {
     failCancelledStreamTurn(ctx, deps, request, true);
