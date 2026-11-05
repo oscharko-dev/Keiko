@@ -10,8 +10,12 @@
 // The HOME variable stays untouched: other tools read it, and the macOS keychain reacts to a home
 // without one by raising a dialog on the person's desktop. `KEIKO_STATE_DIR` stays unset too, because
 // setting it selects the production Activity Log writer (see `activity-log-test-writer.ts`).
+//
+// The private home lives in `~/.keiko-test-homes`, not in the temporary directory: a home is where
+// the portable install suites place their managed roots, and the product refuses a managed install
+// root inside a temporary directory or a repository (`portable-root-policy.ts`, #4271).
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import { join } from "node:path";
@@ -24,10 +28,16 @@ const runnerHome = process.env.HOME;
 const realHomedir = os.homedir.bind(os);
 let privateHome: string | undefined;
 
+function createPrivateHome(): string {
+  const homes = join(realHomedir(), ".keiko-test-homes");
+  mkdirSync(homes, { recursive: true, mode: 0o700 });
+  return mkdtempSync(join(homes, "home-"));
+}
+
 os.homedir = (): string => {
   if (process.env.HOME !== runnerHome) return realHomedir();
   // Created on first use, so the many test files that never ask leave nothing behind.
-  privateHome ??= mkdtempSync(join(tempRoot, "keiko-test-home-"));
+  privateHome ??= createPrivateHome();
   return privateHome;
 };
 syncBuiltinESMExports();
