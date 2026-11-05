@@ -3,6 +3,11 @@
 // ServerResponse, mirroring command-runner-routes.test.ts's openCommandSseStream pattern.
 
 import { EventEmitter } from "node:events";
+import {
+  createObservedSseSubscription,
+  defineSseSubscriptionObservationContract,
+  type NativeSseSubscription,
+} from "../../../../tests/support/sse-subscription-observations.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -440,5 +445,39 @@ describe("openVerificationSseStream (AC6)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("openVerificationSseStream subscription lifecycle", () => {
+  defineSseSubscriptionObservationContract<FakeManager, FakeSseRes>({
+    response: makeFakeSseRes,
+    subscription: (): NativeSseSubscription<FakeManager> => {
+      const manager = new FakeManager();
+      const subscribe = manager.subscribe;
+      return createObservedSseSubscription(manager, subscribe, (acquire): void => {
+        vi.spyOn(manager, "subscribe").mockImplementation(acquire);
+      });
+    },
+    open: openVerificationSseStream,
+    emitFirst: (manager): void => {
+      manager.emitExternal({
+        schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+        kind: "run-cancelled",
+        runId: "lifecycle-first",
+      });
+    },
+    emitNext: (manager): void => {
+      manager.emitExternal({
+        schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+        kind: "run-cancelled",
+        runId: "lifecycle-next",
+      });
+    },
+    closePairResponse: (response): void => {
+      response.res.emit("close");
+    },
+    inputCorrelationIds: ["verification-subscription-first", "verification-subscription-second"],
+    expectedCorrelationIds: ["verification-subscription-first", "verification-subscription-second"],
+    expectedCursorFrames: ["id: 1\nevent: verification:", "id: 2\nevent: verification:"],
   });
 });

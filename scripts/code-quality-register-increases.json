@@ -6242,6 +6242,30 @@
       "issue": 3914
     },
     {
+      "path": "packages/keiko-server/src/browser-routes.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 1,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-server/src/browser-routes.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-server/src/browser-routes.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-server/src/chat-activity.ts",
       "rule": "anti-slop/no-conditional-empty-object-spread",
       "from": 5,
@@ -7026,6 +7050,38 @@
       "issue": 3914
     },
     {
+      "path": "packages/keiko-server/src/sse.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-server/src/sse.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-server/src/sse.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 5,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-server/src/sse.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 7,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-server/src/store/chat-grounding-scope-identity.ts",
       "rule": "anti-slop/no-known-value-widening",
       "from": 1,
@@ -7144,6 +7200,22 @@
       "to": 7,
       "reason": "dev-cutoff-sync",
       "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/terminal-routes.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 1,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-server/src/terminal-routes.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 1,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
     },
     {
       "path": "packages/keiko-tool-catalog/src/descriptor.ts",
@@ -8394,6 +8466,14 @@
       "issue": 3914
     },
     {
+      "path": "tests/support/atlassian-sync-activity-log.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
       "path": "tests/support/editor-request-parser-contract.ts",
       "rule": "anti-slop/no-known-value-widening",
       "from": 0,
@@ -8534,6 +8614,46 @@
       "rule": "anti-slop/no-known-value-widening",
       "from": 0,
       "to": 2,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/sse-subscription-observations.ts",
+      "rule": "anti-slop/no-chained-type-assertions",
+      "from": 0,
+      "to": 5,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/sse-subscription-observations.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/sse-subscription-observations.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/sse-subscription-observations.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/sse-subscription-observations.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 10,
       "reason": "proof-fixture",
       "issue": 3918
     }
