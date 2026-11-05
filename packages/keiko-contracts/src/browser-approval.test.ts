@@ -1,5 +1,5 @@
 import { createPublicKey, verify, webcrypto } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   BROWSER_APPROVAL_CHALLENGE_TTL_MS,
   BROWSER_APPROVAL_MAX_RECORDS,
@@ -18,6 +18,7 @@ import {
   validateBrowserApprovalManagementResult,
   validateBrowserApprovalProofResult,
   type BrowserApprovalDescriptor,
+  type BrowserApprovalProofResult,
   type BrowserApprovalRequestDescriptor,
   type BrowserApprovalChallenge,
 } from "./browser-approval.js";
@@ -284,3 +285,161 @@ function changedBindings(): readonly Partial<BrowserApprovalChallenge>[] {
     { expiresAtMs: 2_000 },
   ];
 }
+
+const browserPhysicalInventories = ["requests", "approvals"] as const;
+
+function browserInventoryMember(
+  field: "requests" | "approvals",
+): BrowserApprovalRequestDescriptor | BrowserApprovalDescriptor {
+  return field === "requests" ? requestDescriptor() : approvalDescriptor();
+}
+
+describe("browser management physical inventory admission", () => {
+  for (const field of browserPhysicalInventories) {
+    it(`retains the original dense ${field} and result references`, () => {
+      const value = {
+        state: "active",
+        requests: [],
+        approvals: [],
+        [field]: [browserInventoryMember(field)],
+      };
+      const result = validateBrowserApprovalManagementResult(value);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(value);
+    });
+    it(`refuses a one-hole ${field} inventory`, () => {
+      const members: unknown[] = [browserInventoryMember(field)];
+      expect(Reflect.deleteProperty(members, "0")).toBe(true);
+      const value = { state: "active", requests: [], approvals: [], [field]: members };
+      expect(validateBrowserApprovalManagementResult(value)).toEqual({
+        ok: false,
+        errors: [`browser management ${field} are invalid`],
+      });
+    });
+    it(`refuses invalid ${field} despite caller every and map overrides`, () => {
+      const members: unknown[] = [{}];
+      let calls = 0;
+      Object.defineProperties(members, {
+        every: {
+          value: (): boolean => {
+            calls += 1;
+            return true;
+          },
+        },
+        map: {
+          value: (): string[] => {
+            calls += 1;
+            return ["forged"];
+          },
+        },
+      });
+      const result = validateBrowserApprovalManagementResult({
+        state: "active",
+        requests: [],
+        approvals: [],
+        [field]: members,
+      });
+      expect(result.ok).toBe(false);
+      expect(calls).toBe(0);
+    });
+    it(`refuses duplicate ${field} despite a caller map inventing unique identities`, () => {
+      const member = browserInventoryMember(field);
+      const members = [member, member];
+      let calls = 0;
+      Object.defineProperty(members, "map", {
+        value: (): string[] => {
+          calls += 1;
+          return ["first", "second"];
+        },
+      });
+      const result = validateBrowserApprovalManagementResult({
+        state: "active",
+        requests: [],
+        approvals: [],
+        [field]: members,
+      });
+      expect(result.ok).toBe(false);
+      expect(calls).toBe(0);
+    });
+  }
+  it("retains own undefined approval and truthful presence types", () => {
+    type ActiveProof = Extract<BrowserApprovalProofResult, { readonly state: "active" }>;
+    expectTypeOf<Required<ActiveProof>["approval"]>().toEqualTypeOf<
+      BrowserApprovalDescriptor | undefined
+    >();
+    const value = { state: "active", approval: undefined };
+    const result = validateBrowserApprovalProofResult(value);
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.value.state !== "active") throw new TypeError("Expected active proof");
+    expect(result.value).toBe(value);
+    expect(Object.hasOwn(result.value, "approval")).toBe(true);
+    if ("approval" in result.value) {
+      expectTypeOf(result.value.approval).toEqualTypeOf<BrowserApprovalDescriptor | undefined>();
+      expect(result.value.approval).toBeUndefined();
+    }
+  });
+});
+
+interface BrowserSecondObservationFixture {
+  readonly value: {
+    readonly state: "active";
+    readonly requests: readonly unknown[];
+    readonly approvals: readonly unknown[];
+  };
+  readonly members: readonly unknown[];
+  readonly receivers: readonly unknown[];
+  readonly reads: () => number;
+}
+
+function browserSecondObservation(
+  field: "requests" | "approvals",
+  second: unknown,
+): BrowserSecondObservationFixture {
+  const first = browserInventoryMember(field);
+  const members: unknown[] = [first];
+  const receivers: unknown[] = [];
+  let reads = 0;
+  Object.defineProperty(members, "0", {
+    configurable: true,
+    get(this: unknown): unknown {
+      receivers.push(this);
+      reads += 1;
+      return reads === 1 ? first : second;
+    },
+  });
+  return {
+    value: {
+      state: "active",
+      requests: field === "requests" ? members : [],
+      approvals: field === "approvals" ? members : [],
+    },
+    members,
+    receivers,
+    reads: (): number => reads,
+  };
+}
+
+describe("browser management consumed second observation", () => {
+  for (const field of browserPhysicalInventories) {
+    it(`refuses ${field} whose second physical observation is not a descriptor`, () => {
+      const fixture = browserSecondObservation(field, {});
+      const result = validateBrowserApprovalManagementResult(fixture.value);
+      expect(result.ok).toBe(false);
+      expect(fixture.reads()).toBe(2);
+      expect(fixture.receivers).toHaveLength(2);
+      expect(fixture.receivers[0]).toBe(fixture.members);
+      expect(fixture.receivers[1]).toBe(fixture.members);
+    });
+    it(`retains a healthy independent second ${field} descriptor observation`, () => {
+      const second = field === "requests" ? requestDescriptor(2) : approvalDescriptor(2);
+      const fixture = browserSecondObservation(field, second);
+      const result = validateBrowserApprovalManagementResult(fixture.value);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(fixture.value);
+      expect(fixture.reads()).toBe(2);
+      expect(fixture.receivers).toHaveLength(2);
+      expect(fixture.receivers[0]).toBe(fixture.members);
+      expect(fixture.receivers[1]).toBe(fixture.members);
+    });
+  }
+});

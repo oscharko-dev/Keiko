@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   PROMPT_ENHANCEMENT_DEFAULT_CANDIDATE_COUNT,
@@ -219,7 +219,212 @@ describe("prompt enhancer wire constants", () => {
   });
 });
 
+// Family6 preparation: conditional original-first source/public copy-phase hypotheses.
+// These controls have not been executed and are not a regression claim.
+describe("family6 wire copy observations", () => {
+  const sourceEntry = validatePromptEnhancementWireRequest;
+  it.each(["source", "public"])("admits the actual copied text through %s", async (entry) => {
+    const validate =
+      entry === "source"
+        ? sourceEntry
+        : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+            .validatePromptEnhancementWireRequest;
+    let reads = 0;
+    const input = {
+      get text(): unknown {
+        reads += 1;
+        return reads === 4 ? 42 : "healthy draft";
+      },
+    };
+    expect(validate(input)).toEqual({ ok: false, errors: ["request.text must be a string"] });
+    expect(reads).toBe(4);
+  });
+  it.each(["source", "public"])("preserves a healthy copied text through %s", async (entry) => {
+    const validate =
+      entry === "source"
+        ? sourceEntry
+        : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+            .validatePromptEnhancementWireRequest;
+    let reads = 0;
+    const input = {
+      get text(): string {
+        reads += 1;
+        return "healthy draft";
+      },
+    };
+    const result = validate(input);
+    expect(result).toEqual({ ok: true, value: { text: "healthy draft" } });
+    expect(reads).toBe(4);
+    if (result.ok) expect(result.value).not.toBe(input);
+  });
+});
+
+// Source-only healthy changing copy observation; UNEXECUTED.
+describe("family6 healthy changing wire copy", () => {
+  it.each(["source", "public"])(
+    "retains the fourth valid copied text through %s",
+    async (entry) => {
+      const validate =
+        entry === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      let reads = 0;
+      const input = {
+        get text(): string {
+          return ++reads === 4 ? "later valid draft" : "earlier valid draft";
+        },
+      };
+      const result = validate(input);
+      expect(result).toEqual({ ok: true, value: { text: "later valid draft" } });
+      expect(reads).toBe(4);
+      if (result.ok) expect(result.value).not.toBe(input);
+    },
+  );
+});
+
+describe("complete wire optional copy admission", () => {
+  it.each(["source", "public"] as const)(
+    "preserves absent and ordinary undefined omission through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      for (const input of [
+        { text: "healthy draft" },
+        { text: "healthy draft", profilePreference: undefined },
+      ]) {
+        const result = validate(input);
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(Object.keys(result.value)).toEqual(["text"]);
+          expect(Object.getPrototypeOf(result.value)).toBe(Object.prototype);
+          expect(result.value).not.toBe(input);
+        }
+      }
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "preserves the actual later-valid profile copy through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      let reads = 0;
+      const input = {
+        text: "healthy draft",
+        get profilePreference(): string {
+          return ++reads < 4 ? "technical" : "precise";
+        },
+      };
+      const result = validate(input);
+      const observedReads = reads;
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.profilePreference).toBe("precise");
+        expect(Object.keys(result.value)).toEqual(["text", "profilePreference"]);
+        expect(result.value).not.toBe(input);
+      }
+      expect(observedReads).toBe(4);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "refuses an actual present undefined profile copy through %s",
+    async (surface) => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      let reads = 0;
+      const input = {
+        text: "healthy draft",
+        get profilePreference(): unknown {
+          return ++reads < 4 ? "technical" : undefined;
+        },
+      };
+      const result = validate(input);
+      const observedReads = reads;
+      expect(result).toEqual({
+        ok: false,
+        errors: ["request.profilePreference must be a known profile id when set"],
+      });
+      expect(observedReads).toBe(4);
+    },
+  );
+});
+
 describe("private skill output kind", () => {
+  // DEV-SYNC-PROMPT-OUTPUT-KIND-COPY-01: admit the actual supplied copy, not a filtered mode.
+  for (const surface of ["source", "public"] as const) {
+    it(`${surface}: refuses an invalid output kind observed during copying`, async () => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      let reads = 0;
+      const input = {
+        text: "Synthetic complete document",
+        get outputKind(): string {
+          return ++reads < 3 ? "markdown-skill" : "invalid-kind";
+        },
+      };
+      expect(validate(input)).toEqual({
+        ok: false,
+        errors: ["request.outputKind must be markdown-skill when set"],
+      });
+      expect(reads).toBe(4);
+    });
+    it(`${surface}: refuses a present undefined mode copied after successful preflight`, async () => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      let reads = 0;
+      const input = {
+        text: "Synthetic complete document",
+        get outputKind(): string | undefined {
+          return ++reads < 4 ? "markdown-skill" : undefined;
+        },
+      };
+      expect(validate(input)).toEqual({
+        ok: false,
+        errors: ["request.outputKind must be markdown-skill when set"],
+      });
+      expect(reads).toBe(4);
+    });
+    it(`${surface}: preserves ordinary mode omission skill mode and initial error order`, async () => {
+      const validate =
+        surface === "source"
+          ? validatePromptEnhancementWireRequest
+          : (await import("@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff"))
+              .validatePromptEnhancementWireRequest;
+      for (const input of [
+        { text: "Synthetic complete document" },
+        { text: "Synthetic complete document", outputKind: undefined },
+      ]) {
+        expect(validate(input)).toEqual({ ok: true, value: { text: input.text } });
+      }
+      const skill = { text: "Synthetic complete document", outputKind: "markdown-skill" };
+      expect(validate(skill)).toEqual({ ok: true, value: skill });
+      expect(
+        validate({ text: null, outputKind: "invalid-kind", profilePreference: "invalid" }),
+      ).toEqual({
+        ok: false,
+        errors: [
+          "request.outputKind must be markdown-skill when set",
+          "request.text must be a string",
+          "request.profilePreference must be a known profile id when set",
+        ],
+      });
+    });
+  }
   it("preserves the opt-in document-to-skill mode", () => {
     expect(
       validatePromptEnhancementWireRequest({
@@ -233,4 +438,274 @@ describe("private skill output kind", () => {
       false,
     );
   });
+});
+
+import {
+  validatePromptEnhancementWireRequest as publicWireCapture,
+  type PromptEnhancementWireRequest as PublicWireRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff";
+import type { PromptEnhancerValidation as PublicPromptValidation } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
+
+it("retains truthful public raw input and admitted wire key types (#3918)", () => {
+  expectTypeOf(publicWireCapture).parameter(0).toEqualTypeOf<unknown>();
+  expectTypeOf(publicWireCapture).returns.toEqualTypeOf<
+    PublicPromptValidation<PublicWireRequest>
+  >();
+  expectTypeOf<keyof PublicWireRequest>().toEqualTypeOf<
+    | "text"
+    | "outputKind"
+    | "profilePreference"
+    | "missingInformationStrategy"
+    | "hasConnectedContext"
+    | "attachmentCount"
+    | "locale"
+    | "modelId"
+    | "candidateCount"
+  >();
+});
+
+it("preserves the public nine-field copy after actual admission (#3918)", () => {
+  const input = {
+    text: "Synthetic complete document",
+    outputKind: "markdown-skill",
+    profilePreference: "precise",
+    missingInformationStrategy: "clarify",
+    hasConnectedContext: true,
+    attachmentCount: 2,
+    locale: "en-US",
+    modelId: "example-chat-model",
+    candidateCount: 2,
+  };
+  const parsed = publicWireCapture(input);
+  if (!parsed.ok) throw new TypeError("healthy public wire capture refused");
+  expect(parsed.value).toEqual(input);
+  expect(parsed.value).not.toBe(input);
+  expect(Object.keys(parsed.value)).toEqual([
+    "text",
+    "outputKind",
+    "profilePreference",
+    "missingInformationStrategy",
+    "hasConnectedContext",
+    "attachmentCount",
+    "locale",
+    "modelId",
+    "candidateCount",
+  ]);
+});
+
+const PROMPT_WIRE_PHASE_TRACE = [
+  "output",
+  "output",
+  "text",
+  "text",
+  "text",
+  "profile",
+  "profile",
+  "strategy",
+  "strategy",
+  "connected",
+  "connected",
+  "attachment",
+  "attachment",
+  "locale",
+  "locale",
+  "model",
+  "model",
+  "model",
+  "candidate",
+  "text",
+  "output",
+  "output",
+  "profile",
+  "profile",
+  "strategy",
+  "strategy",
+  "connected",
+  "connected",
+  "attachment",
+  "attachment",
+  "locale",
+  "locale",
+  "model",
+  "model",
+  "candidate",
+  "candidate",
+];
+
+function tracedWireRequest(trace: string[]): Record<string, unknown> {
+  const input = {
+    get text(): string {
+      trace.push("text");
+      return "Synthetic complete document";
+    },
+    get outputKind(): string {
+      trace.push("output");
+      return "markdown-skill";
+    },
+    get profilePreference(): string {
+      trace.push("profile");
+      return "precise";
+    },
+    get missingInformationStrategy(): string {
+      trace.push("strategy");
+      return "clarify";
+    },
+    get hasConnectedContext(): boolean {
+      trace.push("connected");
+      return true;
+    },
+    get attachmentCount(): number {
+      trace.push("attachment");
+      return 2;
+    },
+    get modelId(): string {
+      trace.push("model");
+      return "example-chat-model";
+    },
+    get candidateCount(): number {
+      trace.push("candidate");
+      return 2;
+    },
+  };
+  Object.setPrototypeOf(input, {
+    get locale(): string {
+      trace.push("locale");
+      return "en-US";
+    },
+  });
+  return input;
+}
+
+describe("wire capture intent context and model observations (#3918)", (): void => {
+  for (const surface of ["source", "public"] as const) {
+    const validate =
+      surface === "source" ? validatePromptEnhancementWireRequest : publicWireCapture;
+
+    it(`${surface}: preserves complete phase order and inherited context capture`, (): void => {
+      const trace: string[] = [];
+      const input = tracedWireRequest(trace);
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      expect(trace).toEqual(PROMPT_WIRE_PHASE_TRACE);
+      if (result.ok) {
+        expect(result.value.locale).toBe("en-US");
+        expect(Object.keys(result.value)).toEqual([
+          "text",
+          "outputKind",
+          "profilePreference",
+          "missingInformationStrategy",
+          "hasConnectedContext",
+          "attachmentCount",
+          "locale",
+          "modelId",
+          "candidateCount",
+        ]);
+        expect(Object.getPrototypeOf(result.value)).toBe(Object.prototype);
+        expect(result.value).not.toBe(input);
+      }
+      expect(Object.hasOwn(input, "locale")).toBe(false);
+    });
+
+    it(`${surface}: eagerly refuses later context and model copy values in order`, (): void => {
+      let connected = 0;
+      let attachment = 0;
+      let locale = 0;
+      let model = 0;
+      let candidate = 0;
+      const input = {
+        text: "Synthetic complete document",
+        get hasConnectedContext(): unknown {
+          return ++connected === 4 ? undefined : true;
+        },
+        get attachmentCount(): number {
+          return ++attachment === 4 ? -1 : 2;
+        },
+        get locale(): unknown {
+          return ++locale === 4 ? undefined : "en-US";
+        },
+        get modelId(): string {
+          return ++model === 5 ? "" : "example-chat-model";
+        },
+        get candidateCount(): number {
+          return ++candidate === 3 ? 0 : 2;
+        },
+      };
+      expect(validate(input)).toEqual({
+        ok: false,
+        errors: [
+          "request.hasConnectedContext must be a boolean when set",
+          "request.attachmentCount must be a non-negative integer when set",
+          "request.locale must be safe text of at most 35 characters when set",
+          "request.modelId must be non-empty safe text of at most 200 characters when set",
+          "request.candidateCount must be an integer in [1, 7] when set",
+        ],
+      });
+      expect([connected, attachment, locale, model, candidate]).toEqual([4, 4, 4, 5, 3]);
+    });
+
+    it(`${surface}: observes context mutation before capturing model options`, (): void => {
+      let locale = 0;
+      let model = 0;
+      let selectedModel = "earlier-model";
+      const input = {
+        text: "Synthetic complete document",
+        get locale(): string {
+          if (++locale === 4) selectedModel = "later-model";
+          return "en-US";
+        },
+        get modelId(): string {
+          model += 1;
+          return selectedModel;
+        },
+      };
+      expect(validate(input)).toEqual({
+        ok: true,
+        value: {
+          text: "Synthetic complete document",
+          locale: "en-US",
+          modelId: "later-model",
+        },
+      });
+      expect([locale, model]).toEqual([4, 5]);
+    });
+
+    it(`${surface}: preserves opaque capture failure and stops before model reads`, (): void => {
+      const sentinel: Error = Object.freeze(new TypeError("synthetic capture failure"));
+      const trace: string[] = [];
+      let locale = 0;
+      const input = {
+        text: "Synthetic complete document",
+        get locale(): string {
+          trace.push("locale");
+          if (++locale === 4) throw sentinel;
+          return "en-US";
+        },
+        get modelId(): string {
+          trace.push("model");
+          return "example-chat-model";
+        },
+        get candidateCount(): number {
+          trace.push("candidate");
+          return 2;
+        },
+      };
+      let caught: unknown;
+      try {
+        validate(input);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBe(sentinel);
+      expect(trace).toEqual([
+        "locale",
+        "locale",
+        "model",
+        "model",
+        "model",
+        "candidate",
+        "locale",
+        "locale",
+      ]);
+    });
+  }
 });

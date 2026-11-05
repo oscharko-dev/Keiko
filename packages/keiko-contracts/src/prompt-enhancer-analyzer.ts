@@ -410,10 +410,12 @@ interface TaskClassResult {
   readonly confidence: PromptSignalStrength;
 }
 
-function scoreTaskClassRule(
-  rule: TaskClassRule,
-  lower: string,
-): { score: number; strong: boolean } {
+interface TaskClassRuleScore {
+  score: number;
+  strong: boolean;
+}
+
+function scoreTaskClassRule(rule: TaskClassRule, lower: string): TaskClassRuleScore {
   const strongHits = countMatches(lower, rule.strong);
   const weakHits = countMatches(lower, rule.weak);
   return { score: strongHits * 2 + weakHits, strong: strongHits > 0 };

@@ -319,6 +319,10 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "A failed fsync is returned as the closed durability-uncertain deferral of the batch.",
     "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:isFile":
       "A metadata probe failure other than a missing path is the fail-closed true result of this ripgrep-provider predicate: the entry leaves the degraded PATH. coding-runtime.ripgrep.resolved records the launch outcome without paths.",
+    "packages/keiko-contracts/src/prompt-enhancer-validation.ts:validatePromptCandidateScorecard":
+      "Pure scorecard inspection returns a fixed validation refusal without reading the thrown value. This leaf artifact boundary performs no I/O; validation remains separate from redaction under ADR-0044 D5.",
+    "packages/keiko-contracts/src/prompt-enhancer-validation.ts:validatePromptCandidateSelection":
+      "Pure selection inspection returns a fixed validation refusal without reading the thrown value. This leaf artifact boundary performs no I/O; validation remains separate from redaction under ADR-0044 D5.",
     "packages/keiko-contracts/src/command-runner.ts:parseCommandTaskRunRequest":
       "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
     "packages/keiko-contracts/src/command-runner.ts:validateCommandTaskCatalog":
@@ -358,7 +362,10 @@ function isReviewedFailurePath(path, owner, node) {
   if (!REVIEWED_FAILURE_PATH_EXEMPTIONS.has(site)) return false;
   if (REVIEWED_FIXED_FAILURE_FALLBACKS.has(site))
     return exactFailureFallback(node, REVIEWED_FIXED_FAILURE_FALLBACKS.get(site));
-  if (path === "packages/keiko-contracts/src/command-runner.ts")
+  if (
+    path === "packages/keiko-contracts/src/command-runner.ts" ||
+    path === "packages/keiko-contracts/src/prompt-enhancer-validation.ts"
+  )
     return exactCommandInspectionRefusal(node);
   return true;
 }

@@ -122,3 +122,72 @@ describe("observed ready rebinding", () => {
     expect(isObservedReadyRebinding(previous, next)).toBe(false);
   });
 });
+
+import * as g2PublicApplication from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
+
+describe("G2 final application reason lookup", () => {
+  for (const [surface, validate] of [
+    ["source", isPrDescriptionApplicationStatus],
+    ["public", g2PublicApplication.isPrDescriptionApplicationStatus],
+  ] as const) {
+    it(`${surface} preserves a healthy application receipt`, () => {
+      expect(validate(APPLICATION_STATUS)).toBe(true);
+    });
+    it(`${surface} refuses an invalid final reason instead of admitting undefined state`, () => {
+      let reads = 0;
+      const input = new Proxy(
+        { ...APPLICATION_STATUS, state: undefined, effect: "none" },
+        {
+          get: (target, key, receiver): unknown => {
+            if (key === "reason") return ++reads < 3 ? "applied" : "not-a-reason";
+            const value: unknown = Reflect.get(target, key, receiver);
+            return value;
+          },
+        },
+      );
+      expect(validate(input)).toBe(false);
+      expect(reads).toBe(3);
+    });
+  }
+});
+
+it("G2 source/public preserve a valid later application reason", () => {
+  for (const validate of [
+    isPrDescriptionApplicationStatus,
+    g2PublicApplication.isPrDescriptionApplicationStatus,
+  ]) {
+    let reads = 0;
+    const input = new Proxy(
+      { ...APPLICATION_STATUS, effect: "reconciled" },
+      {
+        get: (target, key, receiver): unknown => {
+          if (key === "reason") return ++reads < 3 ? "applied" : "reconciled";
+          const value: unknown = Reflect.get(target, key, receiver);
+          return value;
+        },
+      },
+    );
+    expect(validate(input)).toBe(true);
+    expect(reads).toBe(5);
+  }
+});
+
+describe("G2 healthy application descriptor refusal", () => {
+  for (const [surface, validate] of [
+    ["source", isPrDescriptionApplicationStatus],
+    ["public", g2PublicApplication.isPrDescriptionApplicationStatus],
+  ] as const) {
+    it(`${surface} preserves ordinary accessor refusal before any reason read`, () => {
+      let reads = 0;
+      const input = {
+        ...APPLICATION_STATUS,
+        get reason(): unknown {
+          reads += 1;
+          return "applied";
+        },
+      };
+      expect(validate(input)).toBe(false);
+      expect(reads).toBe(0);
+    });
+  }
+});

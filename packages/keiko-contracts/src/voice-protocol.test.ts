@@ -1107,3 +1107,111 @@ describe("timeout / reconnect defaults", () => {
     expect(t.maxReconnectAttempts).toBeGreaterThan(0);
   });
 });
+
+// Source and public validation preserve the current dispatch observation schedule.
+describe("voice protocol current dispatch observation", () => {
+  it.each(["source", "public"] as const)(
+    "refuses an unknown second kind through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validateVoiceControlMessage
+          : (await import("@oscharko-dev/keiko-contracts/runtime/voice-protocol"))
+              .validateVoiceControlMessage;
+      let reads = 0;
+      const input = {
+        protocolVersion: VOICE_PROTOCOL_VERSION,
+        sessionId: "session-current-dispatch",
+        seq: 1,
+        direction: "client-to-host",
+        get kind(): string {
+          reads += 1;
+          return reads === 1 ? "control.cancel" : "unknown-control";
+        },
+      };
+      expect(validate(input)).toEqual({ ok: false, reasons: ["kind invalid"] });
+      expect(reads).toBe(2);
+    },
+  );
+
+  it.each(["source", "public"] as const)(
+    "preserves a stable healthy kind through %s",
+    async (entrypoint) => {
+      const validate =
+        entrypoint === "source"
+          ? validateVoiceControlMessage
+          : (await import("@oscharko-dev/keiko-contracts/runtime/voice-protocol"))
+              .validateVoiceControlMessage;
+      let reads = 0;
+      const input = {
+        protocolVersion: VOICE_PROTOCOL_VERSION,
+        sessionId: "session-current-dispatch",
+        seq: 1,
+        direction: "client-to-host",
+        get kind(): string {
+          reads += 1;
+          return "control.cancel";
+        },
+      };
+      expect(validate(input)).toEqual({ ok: true });
+      expect(reads).toBe(2);
+    },
+  );
+});
+
+// Healthy changing second dispatch observation grants no transport authority.
+describe("family6 healthy changing current voice dispatch", () => {
+  it.each(["source", "public"])(
+    "retains an allowed envelope-only second kind through %s",
+    async (entry) => {
+      const validate =
+        entry === "source"
+          ? validateVoiceControlMessage
+          : (await import("@oscharko-dev/keiko-contracts/runtime/voice-protocol"))
+              .validateVoiceControlMessage;
+      let reads = 0;
+      const input = {
+        protocolVersion: VOICE_PROTOCOL_VERSION,
+        sessionId: "session-current-dispatch",
+        seq: 1,
+        direction: "client-to-host",
+        get kind(): string {
+          return ++reads === 1 ? "control.cancel" : "transcript.discarded";
+        },
+      };
+      expect(validate(input)).toEqual({ ok: true });
+      expect(reads).toBe(2);
+    },
+  );
+});
+
+describe("voice structural validation responsibility", () => {
+  it.each(["source", "public"] as const)(
+    "voice guard and decoder preserve identity and refuse malformed input through %s",
+    async (entrypoint) => {
+      const publicApi = await import("@oscharko-dev/keiko-contracts/runtime/voice-protocol");
+      const validate =
+        entrypoint === "source"
+          ? validateVoiceControlMessage
+          : publicApi.validateVoiceControlMessage;
+      const guard =
+        entrypoint === "source" ? isVoiceControlMessage : publicApi.isVoiceControlMessage;
+      const decode =
+        entrypoint === "source" ? decodeVoiceControlMessage : publicApi.decodeVoiceControlMessage;
+      const healthy = {
+        ...wellFormedMessage("error"),
+        direction: "host-to-client",
+        code: "negotiation-failed",
+        correlationId: "voice-chain-healthy",
+      };
+      const malformed = withoutField(healthy, "code");
+
+      expect(validate(healthy)).toEqual({ ok: true });
+      expect(guard(healthy)).toBe(true);
+      expect(decode(healthy)).toBe(healthy);
+      expect(validate(malformed)).toEqual({ ok: false, reasons: ["error code invalid"] });
+      expect(guard(malformed)).toBe(false);
+      expect(decode(malformed)).toBeUndefined();
+    },
+  );
+});

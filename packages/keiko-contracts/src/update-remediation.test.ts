@@ -91,3 +91,104 @@ describe("closed-set membership guards", () => {
     expect(isUpdateStateStore(null)).toBe(false);
   });
 });
+
+import * as publicRemediation from "@oscharko-dev/keiko-contracts/runtime/update-remediation";
+
+describe("source and public remediation decision preservation", () => {
+  for (const [surface, parse] of [
+    ["source", parseUpdateRemediationActionRequest],
+    ["public", publicRemediation.parseUpdateRemediationActionRequest],
+  ] as const) {
+    it.each(["run", "defer"])(`${surface}: retains admitted decision %s`, (decision) => {
+      expect(parse({ actionId: "action-1", decision })).toEqual({
+        ok: true,
+        value: { actionId: "action-1", decision },
+      });
+    });
+    it.each([null, 1, "foreign", {}, []])(
+      `${surface}: refuses malformed decision %j`,
+      (decision) => {
+        expect(parse({ actionId: "action-1", decision })).toEqual({
+          ok: false,
+          errors: ["decision must be run or defer"],
+        });
+      },
+    );
+    it(`${surface}: preserves omission and explicit undefined`, () => {
+      expect(parse({ actionId: "action-1" })).toEqual({
+        ok: true,
+        value: { actionId: "action-1" },
+      });
+      expect(parse({ actionId: "action-1", decision: undefined })).toEqual({
+        ok: true,
+        value: { actionId: "action-1" },
+      });
+    });
+  }
+});
+
+describe("copied persist admission", () => {
+  for (const [surface, parse] of [
+    ["source", parseUpdateRemediationStatusRequest],
+    ["public", publicRemediation.parseUpdateRemediationStatusRequest],
+  ] as const) {
+    it(`${surface}: refuses the malformed final copied persist flag`, () => {
+      let reads = 0;
+      const input = {
+        get persist(): unknown {
+          reads += 1;
+          return reads === 4 ? "invalid" : true;
+        },
+      };
+      expect(parse(input)).toEqual({ ok: false, errors: ["persist must be a boolean"] });
+      expect(reads).toBe(4);
+    });
+    it(`${surface}: preserves a healthy changing final copied persist flag`, () => {
+      let reads = 0;
+      const input = {
+        get persist(): unknown {
+          reads += 1;
+          return reads === 4 ? false : true;
+        },
+      };
+      expect(parse(input)).toEqual({ ok: true, value: { persist: false } });
+      expect(reads).toBe(4);
+    });
+  }
+});
+
+describe("Consolidated Support physical arrays", () => {
+  for (const [surface, parse] of [
+    ["source", parseUpdateRemediationActionRequest],
+    ["public", publicRemediation.parseUpdateRemediationActionRequest],
+  ] as const) {
+    it(`${surface}: healthy preserves impact references`, () => {
+      const affectedStateStores = ["memory-vault"];
+      const stateImpact = [
+        {
+          store: "memory-vault",
+          description: "upgrade",
+          remediation: "migration-required",
+          userActionRequired: false,
+        },
+      ];
+      const result = parse({ actionId: "fixture", impact: { affectedStateStores, stateImpact } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("healthy impact required");
+      expect(result.value.impact?.affectedStateStores).toBe(affectedStateStores);
+      expect(result.value.impact?.stateImpact).toBe(stateImpact);
+    });
+    for (const [field, message] of [
+      ["affectedStateStores", "impact.affectedStateStores must be a string array"],
+      ["stateImpact", "impact.stateImpact must contain release-impact state entries"],
+    ] as const) {
+      it(`${surface}: unsafe refuses physical ${field}`, () => {
+        const entries = Object.assign([42], { every: (): boolean => true });
+        expect(parse({ actionId: "fixture", impact: { [field]: entries } })).toEqual({
+          ok: false,
+          errors: [message],
+        });
+      });
+    }
+  }
+});

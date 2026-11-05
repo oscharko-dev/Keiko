@@ -14,7 +14,7 @@ const DISCRIMINANT_MAX_CHARS = 64;
 
 const readDiscriminant = (value: unknown): string => {
   if (value !== null && typeof value === "object" && "kind" in value) {
-    const kind = (value as { readonly kind?: unknown }).kind;
+    const kind = value.kind;
     // Only render primitive kinds — a `kind` field that itself holds an object would default to
     // `[object Object]` via String(), which is misleading and still risks leaking a nested shape.
     if (typeof kind === "string") return kind.slice(0, DISCRIMINANT_MAX_CHARS);

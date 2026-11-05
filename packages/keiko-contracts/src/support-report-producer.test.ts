@@ -45,3 +45,40 @@ describe("limited support report correlation normalization", () => {
     ).toEqual({ rootCorrelationId: "selected-health-request", childCorrelationIds: [] });
   });
 });
+
+import * as publicSupportProducer from "@oscharko-dev/keiko-contracts/runtime/observability";
+
+describe("actual limited support producer public preservation", () => {
+  it("keeps the actual producer's closed insufficiency and unavailable facts", () => {
+    const result = publicSupportProducer.clientOnlySupportReportSections(
+      input("selected-health-request"),
+    );
+    expect(publicSupportProducer.parseSupportIncidentPrivateProjection(result.incident)).toBe(
+      result.incident,
+    );
+    expect(result.incident.clientReport?.serverEvidence).toBe("unavailable");
+    expect(result.incident.sufficiencyStatus).toBe("insufficient");
+    expect(result.selection.requiredBytes).toBe(0);
+    expect(result.evidence.recordCount).toBe(0);
+    expect(result.evidence.encoding).toBe("deflate-base64");
+    expect(result.incident.correlation.rootCorrelationId).toBe("selected-health-request");
+  });
+});
+
+import { isClientReportFailure as sourceClientReportFailure } from "./support-incident.js";
+
+describe("closed browser context physical membership", () => {
+  for (const [surface, admit] of [
+    ["source", sourceClientReportFailure],
+    ["public", publicSupportProducer.isClientReportFailure],
+  ] as const) {
+    it(`${surface}: refuses a foreign context hidden behind caller traversal`, () => {
+      const context = Object.assign(["foreign-context"], { every: () => true });
+      expect(admit({ errorKind: "internal", context })).toBe(false);
+    });
+    it(`${surface}: preserves healthy browser context facts`, () => {
+      const context = ["kind:window-error"];
+      expect(admit({ errorKind: "internal", context })).toBe(true);
+    });
+  }
+});

@@ -18,7 +18,7 @@ type MatcherPass<M> = [M] extends [never]
       : false
     : false;
 
-type LibraryParserTypeFacts<F extends Callable> = readonly [
+export type LibraryParserTypeFacts<F extends Callable> = readonly [
   MatcherPass<ExpectTypeOf<LibraryInput<F>, { positive: true }>["toBeUnknown"]>,
   MatcherPass<ExpectTypeOf<LibraryInput<F>, { positive: true }>["not"]["toBeAny"]>,
   LibraryOutput<F>,
@@ -158,4 +158,16 @@ export type ContextDiagnosticTripleExpected<Result> = readonly [
 export type OptionalFieldPair<Source, Public, Key extends keyof Source & keyof Public> = readonly [
   Required<Source>[Key],
   Required<Public>[Key],
+];
+
+/** The parser triple's facts plus the public stage's checked-result facts. */
+export type PublicParserFacts<
+  S extends Callable,
+  P extends Callable,
+  W extends Callable,
+> = readonly [LibraryParserTripleFacts<S, P, W>, CheckedResultFacts<P>];
+
+export type PublicParserExpected<SOutput, POutput> = readonly [
+  LibraryParserTripleExpected<SOutput, POutput, POutput>,
+  CheckedResultExpected,
 ];

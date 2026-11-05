@@ -35,7 +35,7 @@ interface CapturedExtentObservation {
   readonly lengths: readonly unknown[];
 }
 
-function observeCapturedExtent(
+export function observeCapturedExtent(
   values: unknown[],
   laterExtent: number,
   firstObservation: { readonly first: unknown },
