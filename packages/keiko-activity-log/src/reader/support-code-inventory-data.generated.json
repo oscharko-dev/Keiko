@@ -1840,6 +1840,8 @@
     "keiko-server/memory-diagnostics",
     "keiko-server/memory-embedding",
     "keiko-server/memory-embedding-identity",
+    "keiko-server/memory-explicit-statement-log",
+    "keiko-server/memory-explicit-statements",
     "keiko-server/memory-handlers",
     "keiko-server/memory-health-scan-handlers",
     "keiko-server/memory-maintenance-handlers",

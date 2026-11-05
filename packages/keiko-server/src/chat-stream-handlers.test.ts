@@ -2213,17 +2213,21 @@ describe("desktop chat SSE streaming handler", () => {
         content: "Remember that streamed deployment also waits for green CI.",
       },
     ]);
-    expect(
-      store.inspectChatTurn(
-        chatId,
-        "stream-memory-disconnect",
-        canonicalPlainTurnIdentity(
+    // The handler returns once the reader is gone; the turn settles when capture finishes.
+    await vi.waitFor(() => {
+      expect(
+        store.inspectChatTurn(
           chatId,
-          "Remember that streamed deployment also waits for green CI.",
-          { memory: { enabled: true, budgetTokens: 900 } },
-        ),
-      ).kind,
-    ).toBe("retryable");
+          "stream-memory-disconnect",
+          canonicalPlainTurnIdentity(
+            chatId,
+            "Remember that streamed deployment also waits for green CI.",
+            { memory: { enabled: true, budgetTokens: 900 } },
+          ),
+        ).kind,
+      ).toBe("retryable");
+    });
+    expect(store.listMessages(chatId)).toHaveLength(1);
     memoryVault.close();
   });
 
