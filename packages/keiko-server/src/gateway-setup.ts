@@ -1803,7 +1803,7 @@ export function modelIdFromDiscoveryItem(item: unknown): string | undefined {
 export function parseModelDiscovery(
   payload: unknown,
   correlationId?: string,
-  options?: { readonly allowEmpty: boolean },
+  options?: { readonly allowEmpty: boolean; readonly recordMerges?: boolean },
 ): GatewayDiscoveredModels {
   if (!isRecord(payload) || !Array.isArray(payload.data)) {
     throw new Error("model discovery response must contain a data array");
@@ -1830,8 +1830,15 @@ export function parseModelDiscovery(
     usableEntries.length > MAX_DISCOVERED_MODELS || voiceEntries.length > MAX_DISCOVERED_MODELS;
   const usable = usableEntries.slice(0, MAX_DISCOVERED_MODELS);
   const boundedVoice = voiceEntries.slice(0, MAX_DISCOVERED_MODELS);
-  for (const entry of [...usable, ...boundedVoice, ...unsupported.slice(0, MAX_DISCOVERED_MODELS)])
-    logDiscoveryMerge(entry, correlationId);
+  // A read that is only an input to a later, merged read records nothing: the alias lines describe
+  // the discovery RESULT, and a LiteLLM gateway is read twice (/model/info, then the listing).
+  if (options?.recordMerges !== false)
+    for (const entry of [
+      ...usable,
+      ...boundedVoice,
+      ...unsupported.slice(0, MAX_DISCOVERED_MODELS),
+    ])
+      logDiscoveryMerge(entry, correlationId);
   if (options?.allowEmpty !== true)
     assertDiscoveryYieldedUsableModels([...usable, ...boundedVoice], unsupported);
   return discoveredModelLists(usable, boundedVoice, unsupported, wasTruncated);
@@ -2208,10 +2215,12 @@ async function discoverLiteLlmModelInfo(
     signal,
     deadlineAt,
     trace,
+    recordMerges,
   }: {
     readonly signal: AbortSignal;
     readonly deadlineAt: number;
     readonly trace: SetupDiscoveryTrace;
+    readonly recordMerges: boolean;
   },
 ): Promise<LiteLlmModelInformation | undefined> {
   const endpoints = modelInfoEndpointCandidates(baseUrl);
@@ -2227,7 +2236,10 @@ async function discoverLiteLlmModelInfo(
         correlationId,
         discoveryManagementSignal(signal, deadlineAt, endpoints.length - index),
       );
-      const discovered = parseModelDiscovery(payload, correlationId);
+      const discovered = parseModelDiscovery(payload, correlationId, {
+        allowEmpty: false,
+        recordMerges,
+      });
       trace[outcomeKey] = "available";
       return {
         payload,
@@ -2286,7 +2298,9 @@ async function defaultGatewayModelDiscovery(
     apiKeyHeaderName,
     egress,
     correlationId,
-    { signal, deadlineAt, trace },
+    // Only the metadata-only path returns this read as the result; otherwise the merged listing
+    // below is parsed (and recorded) instead.
+    { signal, deadlineAt, trace, recordMerges: metadataOnly },
   );
   // Explicit human deployment names remain authoritative on gateways without a models route.
   if (litellmModels !== undefined && metadataOnly) return litellmModels.models;
