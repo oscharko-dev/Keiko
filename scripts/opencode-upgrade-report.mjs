@@ -48,16 +48,36 @@ export function versionsBetween(tags, from, to) {
     .sort(compareVersions);
 }
 
-/** The `#### title` entries of a release note's breaking section. */
+const HEADING = /^(#{1,6})\s+(.*)$/u;
+const BREAKING_HEADING = /^#{1,6}\s+breaking\s+changes?\b/iu;
+const LIST_ENTRY = /^[-*]\s+(.*)$/u;
+const UNPLACED_BREAK = "the note mentions a breaking change outside a section: read it";
+
+function sectionLines(lines, start) {
+  const level = HEADING.exec(lines[start])[1].length;
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => {
+    const heading = HEADING.exec(line);
+    return heading !== null && heading[1].length <= level;
+  });
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+const captured = (pattern, line) => pattern.exec(line)?.at(-1)?.trim();
+
+/**
+ * The entries of a release note's breaking section: its headings, or its list when it has none.
+ * Upstream's spelling varies between releases, and a mention no section explains is still named.
+ */
 export function breakingChanges(notes) {
   const lines = notes.split("\n").map((line) => line.trim());
-  const start = lines.indexOf("### Breaking changes");
-  if (start === -1) return [];
-  const rest = lines.slice(start + 1);
-  const end = rest.findIndex((line) => line.startsWith("### "));
-  return (end === -1 ? rest : rest.slice(0, end))
-    .filter((line) => line.startsWith("#### "))
-    .map((line) => line.slice("#### ".length).trim());
+  const start = lines.findIndex((line) => BREAKING_HEADING.test(line));
+  if (start === -1) return /\bbreaking\b/iu.test(notes) ? [UNPLACED_BREAK] : [];
+  const section = sectionLines(lines, start);
+  const headings = section.map((line) => captured(HEADING, line)).filter(Boolean);
+  return headings.length > 0
+    ? headings
+    : section.map((line) => captured(LIST_ENTRY, line)).filter(Boolean);
 }
 
 function changedKeys(previous, next) {
@@ -117,16 +137,28 @@ export function sourceTreeDiff(previous, next) {
   };
 }
 
+const UPSTREAM_TEXT_MAX = 200;
+
+// Release notes, paths and operation names are upstream's text and this report is read by people
+// and agents: no escape sequence or hidden character reaches a terminal, and no entry runs on.
+function dataOnly(value) {
+  return value.replace(/[\p{Cc}\p{Cf}]/gu, "?").slice(0, UPSTREAM_TEXT_MAX);
+}
+
 function bullets(values) {
-  return values.length === 0 ? ["- none"] : values.map((value) => `- ${value}`);
+  return values.length === 0 ? ["- none"] : values.map((value) => `- ${dataOnly(value)}`);
 }
 
 function watchedSections(tree) {
   return WATCHED_SOURCES.flatMap(([title, pattern]) => {
     const added = tree.added.filter((path) => pattern.test(path));
     const removed = tree.removed.filter((path) => pattern.test(path));
+    // An area upstream moved would otherwise read as an area that did not change.
+    const summary = (tree.paths ?? []).some((path) => pattern.test(path))
+      ? `${String(added.length)} added, ${String(removed.length)} removed`
+      : "no file matches here any more, find where it moved";
     return [
-      `### ${title}: ${String(added.length)} added, ${String(removed.length)} removed`,
+      `### ${title}: ${summary}`,
       "",
       ...bullets([
         ...added.map((path) => `added ${path}`),
@@ -220,8 +252,10 @@ function requestHeaders(token) {
   };
 }
 
+const request = (deps, url) => deps.fetchFn(url, { headers: requestHeaders(deps.token) });
+
 async function fetched(deps, url) {
-  const response = await deps.fetchFn(url, { headers: requestHeaders(deps.token) });
+  const response = await request(deps, url);
   if (!response.ok) throw new Error(`${url} answered ${String(response.status)}`);
   return response;
 }
@@ -250,13 +284,19 @@ async function tagFacts(deps, version) {
 }
 
 async function releaseNotes(deps, version) {
-  const release = await fetchJson(deps, `${API_BASE}/releases/tags/v${version}`);
+  const url = `${API_BASE}/releases/tags/v${version}`;
+  const response = await request(deps, url);
+  // A tag need not have a release; that is a fact to read, neither a failure nor "no break".
+  if (response.status === 404) return { version, breaking: ["no release note: read the commits"] };
+  if (!response.ok) throw new Error(`${url} answered ${String(response.status)}`);
+  const release = await response.json();
   return { version, breaking: breakingChanges(release.body ?? "") };
 }
 
 /** Fetches everything for one report; injectable so the test stays offline. */
 export async function buildUpgradeReport(to, deps) {
   const from = PINS.pins[0].version;
+  // This endpoint answers every matching tag at once and has no pages (1106 at 2.2.5).
   const tags = await fetchJson(deps, `${API_BASE}/git/matching-refs/tags/v`);
   const versions = versionsBetween(
     tags.map((tag) => tag.ref),
@@ -289,7 +329,10 @@ export async function buildUpgradeReport(to, deps) {
       extractOpenCodeConfigurationPaths(next.document),
     ),
     admitted: admittedSurfaceDiff(previous.projection, next.projection),
-    tree: sourceTreeDiff(previous.files, next.files),
+    tree: {
+      ...sourceTreeDiff(previous.files, next.files),
+      paths: next.files.map((entry) => entry.path),
+    },
   });
 }
 

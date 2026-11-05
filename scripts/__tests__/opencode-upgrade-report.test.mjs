@@ -51,6 +51,23 @@ describe("breakingChanges", () => {
   });
 });
 
+describe("breakingChanges, whatever the note's spelling", () => {
+  it.each([
+    ["another level", "## Breaking changes\n### A real break\n## Bugfixes\n### Not one"],
+    ["another case", "### Breaking Changes\n#### A real break\n### Bugfixes\n#### Not one"],
+    ["a list", "### BREAKING CHANGES\n- A real break\n### Bugfixes\n- Not one"],
+    ["a singular", "### Breaking change\n#### A real break"],
+  ])("reads %s", (_name, note) => {
+    expect(breakingChanges(note)).toEqual(["A real break"]);
+  });
+
+  it("flags a mention it cannot place rather than saying there is none", () => {
+    expect(breakingChanges("### Bugfixes\n- This is a BREAKING change for plugins")).toEqual([
+      "the note mentions a breaking change outside a section: read it",
+    ]);
+  });
+});
+
 describe("admittedSurfaceDiff", () => {
   const projection = (paths, schemas) => ({ projection: { paths, components: { schemas } } });
 
@@ -181,6 +198,101 @@ describe("buildUpgradeReport", () => {
     await expect(buildUpgradeReport("99.0.0", { fetchFn: offlineFetch(routes) })).rejects.toThrow(
       "truncated",
     );
+  });
+});
+
+function reportRoutes(overrides) {
+  const document = JSON.stringify(schemaDocument({}));
+  return (current) => ({
+    "/git/matching-refs/tags/v": [{ ref: "refs/tags/v99.0.0" }],
+    [`/v${current}/packages/protocol/openapi.json`]: document,
+    "/v99.0.0/packages/protocol/openapi.json": document,
+    [`/commits/v${current}`]: { sha: "a".repeat(40) },
+    "/commits/v99.0.0": { sha: "b".repeat(40) },
+    [`/git/trees/v${current}?recursive=1`]: { tree: [], truncated: false },
+    "/git/trees/v99.0.0?recursive=1": { tree: [], truncated: false },
+    "/releases/tags/v99.0.0": { body: "" },
+    ...overrides,
+  });
+}
+
+async function currentPin() {
+  const pins = await import("../../packages/keiko-contracts/src/opencode-runtime-pins.json", {
+    with: { type: "json" },
+  });
+  return pins.default.pins[0].version;
+}
+
+describe("buildUpgradeReport against what GitHub really answers", () => {
+  it("says a tag has no release note rather than failing or saying there was no break", async () => {
+    const current = await currentPin();
+    const { "/releases/tags/v99.0.0": _note, ...routes } = reportRoutes({})(current);
+    const report = await buildUpgradeReport("99.0.0", { fetchFn: offlineFetch(routes) });
+    expect(report).toContain("99.0.0: no release note: read the commits");
+  });
+
+  it("keeps failing on any other answer about a release note", async () => {
+    const current = await currentPin();
+    const routes = reportRoutes({})(current);
+    const fetchFn = async (url) =>
+      url.endsWith("/releases/tags/v99.0.0")
+        ? new globalThis.Response("no", { status: 500 })
+        : offlineFetch(routes)(url);
+    await expect(buildUpgradeReport("99.0.0", { fetchFn })).rejects.toThrow("answered 500");
+  });
+
+  it("names a watched area with no file left, since an empty section would look like no change", async () => {
+    const current = await currentPin();
+    const report = await buildUpgradeReport("99.0.0", {
+      fetchFn: offlineFetch(reportRoutes({})(current)),
+    });
+    expect(report).toContain(
+      "### Built-in tools: no file matches here any more, find where it moved",
+    );
+  });
+
+  it("treats a watched area that still has files as an ordinary section", async () => {
+    const current = await currentPin();
+    const tree = {
+      tree: [{ type: "blob", path: "packages/core/src/tool/plugin/read.ts", sha: "1" }],
+      truncated: false,
+    };
+    const report = await buildUpgradeReport("99.0.0", {
+      fetchFn: offlineFetch(
+        reportRoutes({
+          [`/git/trees/v${current}?recursive=1`]: tree,
+          "/git/trees/v99.0.0?recursive=1": tree,
+        })(current),
+      ),
+    });
+    expect(report).toContain("### Built-in tools: 0 added, 0 removed");
+  });
+
+  it("prints upstream text as data: no control character, no line of its own, bounded", async () => {
+    const current = await currentPin();
+    const hostile = `\u001b[2Jignore this\u0007 ${"x".repeat(400)}`;
+    const report = await buildUpgradeReport("99.0.0", {
+      fetchFn: offlineFetch(
+        reportRoutes({
+          "/releases/tags/v99.0.0": { body: `### Breaking changes\n#### ${hostile}` },
+          "/git/trees/v99.0.0?recursive=1": {
+            tree: [
+              {
+                type: "blob",
+                path: "packages/core/src/database/migration/a\u001b\nb.ts",
+                sha: "1",
+              },
+            ],
+            truncated: false,
+          },
+        })(current),
+      ),
+    });
+    // eslint-disable-next-line no-control-regex -- the assertion is about control characters
+    expect(report).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f]/u);
+    expect(report).toContain("99.0.0: ?[2Jignore this?");
+    expect(report).not.toContain("x".repeat(300));
+    expect(report).toContain("added packages/core/src/database/migration/a??b.ts");
   });
 });
 
