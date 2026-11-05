@@ -1,3 +1,5 @@
+import { OPENCODE_NATIVE_SHELL_ENV_DENYLIST } from "./opencodeNativePolicyPlugin.js";
+
 export const OPENCODE_NATIVE_LAUNCH_SECRETS_PLUGIN_FILE = "keiko_launch_secrets";
 export const OPENCODE_NATIVE_LAUNCH_SECRETS_PLUGIN_ID = "keiko.launch-secrets";
 
@@ -32,6 +34,13 @@ const PROCESS_ARGUMENTS_BUFFER_BYTES = 1_024 * 1_024;
  * fails the run's readiness, so a runtime where this stops working (another JavaScript engine, a
  * changed stack layout) is refused rather than left exposed. It is native-only and macOS-only, the
  * one place the native profile is qualified.
+ *
+ * The runtime also starts children itself, a formatter or a local MCP server, by spreading
+ * `process.env`, and the shell hook sees none of them. A formatter is the repository's own code at
+ * Full access (#4271). So the bindings stop being enumerable, here and for every later reader: the
+ * runtime still reads each one by name when it reloads its configuration, and a spread omits them.
+ * `process.env` itself refuses such a property, so a plain object takes its place. Unlike the
+ * overwrite this holds on every platform. The plugin checks the spread and fails if a name survived.
  */
 export function createGeneratedOpenCodeLaunchSecretsPlugin(): string {
   return [
@@ -73,9 +82,21 @@ export function createGeneratedOpenCodeLaunchSecretsPlugin(): string {
     "  });",
     "  try { assertUnreadable(libc, overwriteValues(libc)); } finally { libc.close(); }",
     "}",
+    `const INHERITED = new Set(${JSON.stringify(OPENCODE_NATIVE_SHELL_ENV_DENYLIST)});`,
+    "const isWithheld = (name) => INHERITED.has(name) || name.startsWith('KEIKO_');",
+    "function withholdFromChildren() {",
+    "  const environment = {};",
+    "  for (const name of Object.keys(process.env)) {",
+    "    const enumerable = !isWithheld(name);",
+    "    Object.defineProperty(environment, name, { value: process.env[name], enumerable, writable: true, configurable: true });",
+    "  }",
+    "  process.env = environment;",
+    "  if (Object.keys({ ...process.env }).some((name) => isWithheld(name))) throw new Error('launch-secret-inherited');",
+    "}",
     "export default {",
     `  id: ${JSON.stringify(OPENCODE_NATIVE_LAUNCH_SECRETS_PLUGIN_ID)},`,
     "  async setup() {",
+    "    withholdFromChildren();",
     "    if (process.platform === 'darwin') protectLaunchSecrets();",
     "  },",
     "};",

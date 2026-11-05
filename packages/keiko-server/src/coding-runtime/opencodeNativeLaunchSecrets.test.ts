@@ -22,6 +22,12 @@ describe("launch secrets plugin source", () => {
     expect(source).toContain("throw new Error('process-arguments-unavailable')");
   });
 
+  it("withholds the bindings from what the runtime's children inherit, and checks that", () => {
+    expect(source).toContain("withholdFromChildren();");
+    expect(source).toContain("throw new Error('launch-secret-inherited')");
+    expect(source).toContain("name.startsWith('KEIKO_')");
+  });
+
   it("is required for a native run to become ready", () => {
     expect(OPENCODE_NATIVE_REQUIRED_PLUGINS).toContainEqual({
       id: "keiko.launch-secrets",

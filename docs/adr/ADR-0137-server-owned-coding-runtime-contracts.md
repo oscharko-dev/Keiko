@@ -2621,7 +2621,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   when they were decided; the real-binary suites re-proved their behaviour on this pin.
   - **New built-in plugins are withheld.** `OPENCODE_WITHHELD_BUILT_IN_PLUGINS` removes the browser,
     goal, Claude Agent provider, artifact, image generation and schedule plugins through the
-    producer's own `plugins` setting, on both profiles. Their `experimental` switches stay off. A
+    producer's own `plugins` setting, on both profiles, and the Ollama, LM Studio and vLLM providers, which
+    would ask their default loopback ports every 30 s. Their `experimental` switches stay off, and
+    `location_idle_timeout` is `false` so an hour of quiet does not unload a directory under a run. A
     filter behind the producer cannot do this: the browser plugin appends an agent rule after Keiko's
     and so keeps a denied native tool advertised. `/goal` starts model turns on its own and stays out
     until it has its own proof.
@@ -2653,6 +2655,11 @@ connections per form), `require-not` does not apply to network filters, and macO
 the configuration file the shell can read. This boundary does not extend to other processes of the
 same user: a shell child can read the exec environment of any non-platform process, so an operator
 must not export credentials into the environment that starts Keiko.
+
+The runtime's own children never held these values either: a formatter (the repository's code at
+Full access) or a local MCP server is started by spreading `process.env`, so the same plugin makes
+every shell-denied binding non-enumerable on a plain object that replaces `process.env`. Named reads
+keep working, and a spread omits them; the plugin fails readiness if one survives.
 
 **The run cannot decide what Keiko's own Git executes (#4271).** Keiko runs Git outside the sandbox
 on the run's workspace, so repository configuration a shell child writes would run or read with

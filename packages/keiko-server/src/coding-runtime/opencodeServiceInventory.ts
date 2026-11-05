@@ -806,6 +806,8 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
   ),
   keikoSet(["S09"], ["tool_output", "tool_output.max_bytes"]),
   keikoSet(["T19"], ["experimental", "experimental.todo"]),
+  // #4271: Keiko alone bounds the runtime's lifetime, so a quiet hour unloads nothing under a run.
+  keikoSet(["S01"], ["experimental.location_idle_timeout"]),
   // #4271: stated closed, so a changed producer default cannot open one; the plugins are withheld.
   keikoSet(
     ["C05"],
@@ -1053,7 +1055,6 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
   refused("leaves-machine", 3900, ["T15"], ["websearch", "websearch.provider"]),
   refused("keiko-owns-workspace-binding", 3902, ["S17"], ["worktree", "worktree.directory"]),
   refused("experimental-unadmitted", 3904, ["S08"], ["experimental.background_compaction"]),
-  refused("experimental-unadmitted", 3899, ["S01"], ["experimental.location_idle_timeout"]),
   refused("experimental-unadmitted", 3901, ["S16"], ["experimental.portable_shell_scanner"]),
   refused("experimental-unadmitted", 3903, ["T16"], ["experimental.subagent_depth"]),
   refused(

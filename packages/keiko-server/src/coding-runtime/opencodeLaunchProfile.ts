@@ -169,6 +169,11 @@ export const OPENCODE_WITHHELD_BUILT_IN_PLUGINS = Object.freeze([
   "opencode.browser",
   "opencode.goal",
   "opencode.provider.claude-agent",
+  // A local provider asks its default loopback port every 30 s whether a model server runs there,
+  // and reloads the catalog when one does. The provider policy would refuse the models anyway.
+  "opencode.provider.lmstudio",
+  "opencode.provider.ollama",
+  "opencode.provider.vllm",
   "opencode.tool.artifact",
   "opencode.tool.image-generate",
   "opencode.tool.schedule",
@@ -182,6 +187,9 @@ const OPENCODE_PLUGIN_REMOVALS = Object.freeze(
 const OPENCODE_CLOSED_EXPERIMENTS = Object.freeze({
   artifacts: false,
   image_generate: false,
+  // A session idle for an hour would otherwise unload the directory's plugins and tools under a
+  // run Keiko still holds; Keiko alone bounds the runtime's lifetime.
+  location_idle_timeout: false,
   media_blob: false,
   schedules: false,
 });

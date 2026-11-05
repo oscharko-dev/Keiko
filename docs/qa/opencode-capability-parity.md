@@ -1022,15 +1022,15 @@ A refusal is an open, owned gap, never parity evidence. Two facts found while ma
 
 | Disposition                             | Settings |
 | --------------------------------------- | -------- |
-| `keiko-set`                             | 68       |
+| `keiko-set`                             | 69       |
 | `keiko-operation`                       | 15       |
-| `refused`                               | 165      |
+| `refused`                               | 164      |
 | refused: `leaves-machine`               | 6        |
 | refused: `keiko-owns-workspace-binding` | 3        |
 | refused: `keiko-owns-authority`         | 10       |
 | refused: `keiko-owns-configuration`     | 106      |
 | refused: `keiko-owns-credentials`       | 8        |
-| refused: `experimental-unadmitted`      | 4        |
+| refused: `experimental-unadmitted`      | 3        |
 | refused: `host-surface`                 | 0        |
 | refused: `not-yet-implemented`          | 20       |
 | refused: `producer-inert`               | 8        |
@@ -1089,7 +1089,7 @@ A refusal is an open, owned gap, never parity evidence. Two facts found while ma
 | `experimental.image_generate.model.model`                         | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `experimental.image_generate.model.providerID`                    | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `experimental.image_generate.model.variant`                       | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
-| `experimental.location_idle_timeout`                              | `refused`         | `experimental-unadmitted`                                                                         | #3899 | S01      |
+| `experimental.location_idle_timeout`                              | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S01      |
 | `experimental.media_blob`                                         | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | C05      |
 | `experimental.policies`                                           | `refused`         | `keiko-owns-authority`                                                                            | #3903 | S16, C06 |
 | `experimental.policies.action`                                    | `refused`         | `keiko-owns-authority`                                                                            | #3903 | S16, C06 |

@@ -222,6 +222,8 @@ function writeHostToolchain(state: string): string {
     ].join("\n"),
     { mode: 0o755 },
   );
+  // Another custom formatter, whose whole output is the environment it inherited (#4271).
+  writeFileSync(join(bin, "keiko-env"), '#!/bin/sh\n/usr/bin/env > "$1"\n', { mode: 0o755 });
   writeFileSync(
     join(bin, "gofmt"),
     [
@@ -670,6 +672,32 @@ describe("pinned native OpenCode built-in formatter governance", () => {
       upper: { command: ["keiko-upper", "$FILE"], extensions: [".txt"] },
     },
   };
+
+  // #4271: a formatter is the repository's own code, started by the runtime with no shell hook in
+  // between, so what it inherits is what the runtime's environment shows a spread.
+  it.skipIf(skip)(
+    "Full access: a formatter the project configures inherits none of the run's secrets",
+    async () => {
+      const dump = {
+        formatter: { envdump: { command: ["keiko-env", "$FILE"], extensions: [".dump"] } },
+      };
+      await withRun(
+        { mode: "autonomous-delivery", formatterKey: "bound", projectConfig: dump },
+        async (run) => {
+          await scriptedTurn(run, writeCall("inherited.dump", "placeholder\n"));
+          const inherited = read(run, "inherited.dump");
+          // Positive control: the formatter ran, and its environment is in the file.
+          expect(inherited).toContain("PATH=");
+          expect(inherited).not.toContain("placeholder");
+          for (const secret of [run.password, GATEWAY_CAPABILITY, FACADE_CAPABILITY])
+            expect(inherited).not.toContain(secret);
+          expect(inherited).not.toContain("OPENCODE_CONFIG_CONTENT");
+          expect(inherited).not.toContain("KEIKO_");
+        },
+      );
+    },
+    180_000,
+  );
 
   it.skipIf(skip)(
     "Full access: runs a custom formatter the project configures and honors a disabled built-in",
