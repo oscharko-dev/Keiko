@@ -6802,6 +6802,14 @@
       "issue": 3914
     },
     {
+      "path": "packages/keiko-ui/src/app/components/desktop/hooks/useChatDraft.test.tsx",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 2,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-ui/src/app/components/desktop/hooks/useChatSession.test.tsx",
       "rule": "anti-slop/no-chained-type-assertions",
       "from": 8,
