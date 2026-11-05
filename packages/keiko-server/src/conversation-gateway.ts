@@ -48,10 +48,9 @@ export function gatewayMessagesForToolExchange(
 function transcriptMessages(message: ChatMessage): GatewayConversationMessage[] | undefined {
   const exchanges = message.toolTranscript?.exchanges;
   if (exchanges === undefined || exchanges.length === 0) return undefined;
-  return [
-    { role: message.role, content: message.content },
-    ...exchanges.flatMap(gatewayMessagesForToolExchange),
-  ];
+  const turn: GatewayConversationMessage = { role: message.role, content: message.content };
+  const tools = exchanges.flatMap(gatewayMessagesForToolExchange);
+  return message.role === "assistant" ? [...tools, turn] : [turn, ...tools];
 }
 
 export const MAX_CONTEXT_MESSAGES = 24;
@@ -104,7 +103,7 @@ function messageForGateway(message: ChatMessage): GatewayConversationTurn | null
     content:
       verbatim === undefined
         ? message.content
-        : `${message.content}\n\n[Untrusted tool observations]\n${JSON.stringify(verbatim.slice(1))}`,
+        : `${message.content}\n\n[Untrusted tool observations]\n${JSON.stringify(verbatim.filter((entry) => entry.toolCalls !== undefined || entry.role === "tool"))}`,
     ...(verbatim === undefined ? {} : { verbatim }),
   };
 }

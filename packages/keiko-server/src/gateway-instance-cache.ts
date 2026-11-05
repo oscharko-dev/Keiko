@@ -25,10 +25,12 @@ function newGateway(
   spendBudget?: GatewaySpendBudget,
   configurationCorrelationId?: string,
   onContextWindowReported?: ContextWindowReporter,
+  reasoningHistorySource?: Gateway,
 ): Gateway {
   return new Gateway(config, {
     ...GATEWAY_LOG_DEPS,
     spendBudget,
+    reasoningHistorySource,
     ...(configurationCorrelationId === undefined ? {} : { configurationCorrelationId }),
     ...(onContextWindowReported === undefined ? {} : { onContextWindowReported }),
   });
@@ -50,6 +52,7 @@ type RuntimeGatewayEntry =
       readonly config: GatewayConfig;
       readonly gateway: Gateway;
       readonly generation: number;
+      readonly historyEpoch: object;
     }
   | { readonly kind: "unavailable"; readonly generation: number };
 
@@ -176,6 +179,22 @@ function runtimeSelectionReason(
   return existing.config === config ? "reused" : "rebound";
 }
 
+function runtimeHistoryEpoch(
+  existing: RuntimeGatewayEntry | undefined,
+  reason: RuntimeSelectionReason,
+): object {
+  return existing?.kind === "available" && !isLifecycleResetReason(reason)
+    ? existing.historyEpoch
+    : {};
+}
+
+function runtimeContinuation(
+  existing: RuntimeGatewayEntry | undefined,
+  reason: RuntimeSelectionReason,
+): Gateway | undefined {
+  return reason === "rebound" && existing?.kind === "available" ? existing.gateway : undefined;
+}
+
 function logRuntimeSelection(
   reason: RuntimeSelectionReason,
   generation: number,
@@ -248,19 +267,32 @@ class GatewayInstanceCache {
   constructor(private readonly spendBudget?: GatewaySpendBudget) {}
   private readonly byConfig = new WeakMap<GatewayConfig, Gateway>();
   private readonly byRuntimeConfig = new WeakMap<RuntimeGatewayConfigSource, RuntimeGatewayEntry>();
+  private readonly runtimeEpochs = new WeakMap<Gateway, object>();
+
+  private compatibleRuntime(config: GatewayConfig, historyEpoch: object): boolean {
+    const gateway = this.byConfig.get(config);
+    const owner = gateway === undefined ? undefined : this.runtimeEpochs.get(gateway);
+    return owner === undefined || owner === historyEpoch;
+  }
 
   forConfig(
     config: GatewayConfig,
     configurationCorrelationId?: string,
     onContextWindowReported?: ContextWindowReporter,
+    reasoningHistorySource?: Gateway,
   ): Gateway {
     const existing = this.byConfig.get(config);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) {
+      if (reasoningHistorySource !== undefined)
+        existing.joinReasoningHistory(reasoningHistorySource);
+      return existing;
+    }
     const gateway = newGateway(
       config,
       this.spendBudget,
       configurationCorrelationId,
       onContextWindowReported,
+      reasoningHistorySource,
     );
     this.byConfig.set(config, gateway);
     return gateway;
@@ -280,14 +312,25 @@ class GatewayInstanceCache {
       reason === "created" && generation === 0 ? source.initializationCorrelationId : undefined;
     logRuntimeSelection(reason, generation, initializationCorrelationId);
     if (reason === "reused" && existing?.kind === "available") return existing.gateway;
+    const historyEpoch = runtimeHistoryEpoch(existing, reason);
     // A runtime generation change invalidates circuit-breaker and request state even when a caller
     // reused the same parsed config object. A config change inside the SAME generation is not an
     // invalidation, so it must still converge with direct callers on the config-keyed instance.
     const reporter = generationStampedReporter(source.onContextWindowReported, generation);
-    const gateway = isLifecycleResetReason(reason)
-      ? newGateway(config, this.spendBudget, undefined, reporter)
-      : this.forConfig(config, initializationCorrelationId, reporter);
-    this.byRuntimeConfig.set(source, { kind: "available", config, gateway, generation });
+    const continuation = runtimeContinuation(existing, reason);
+    const gateway =
+      isLifecycleResetReason(reason) || !this.compatibleRuntime(config, historyEpoch)
+        ? newGateway(config, this.spendBudget, undefined, reporter, continuation)
+        : this.forConfig(config, initializationCorrelationId, reporter, continuation);
+    this.runtimeEpochs.set(gateway, historyEpoch);
+    if (reason === "rebound") this.byConfig.set(config, gateway);
+    this.byRuntimeConfig.set(source, {
+      kind: "available",
+      config,
+      gateway,
+      generation,
+      historyEpoch,
+    });
     return gateway;
   }
 }

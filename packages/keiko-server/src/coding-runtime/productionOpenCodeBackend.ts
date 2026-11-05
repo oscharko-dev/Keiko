@@ -194,6 +194,7 @@ export interface ProductionOpenCodeBackendInput {
   readonly gatewayCodingModelIds?: (() => readonly string[]) | undefined;
   readonly resolveGatewayRunMetadata?:
     ((modelId: string) => CodingWorkbenchSidecarGatewayRunMetadata | undefined) | undefined;
+  readonly requiresCompleteReasoningHistory?: ((modelId: string) => boolean) | undefined;
   /**
    * ADR-0043 D11-D14 (#3390): the full loopback URL the tool facade rides -- the SAME attested
    * origin as `gatewayUrl`, at `/api/coding-sidecar/tool` -- never a second listener.
@@ -665,6 +666,8 @@ function sessionContinuityFor(
     sessionContinuity: {
       service: input.sessionContinuity,
       workspaceId: run.context.workspaceId,
+      freshReasoningHistory:
+        input.requiresCompleteReasoningHistory?.(run.context.modelProfile.profileId) === true,
       // #3903 AC4, #3902 AC3: a task of the workspace this one was provisioned from may be forked.
       ...(source === undefined
         ? {}
