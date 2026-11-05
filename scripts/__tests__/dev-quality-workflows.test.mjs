@@ -521,7 +521,7 @@ describe("dev quality workflows", () => {
     expect(job.name).toBe(`Coverage shard (packages \${{ matrix.shard }}/${shards.length})`);
     expect(measure.run).toContain(`--shard=\${{ matrix.shard }}/${shards.length} `);
     expect(guard.run).toMatch(new RegExp(`^expected=${shards.length}$`, "mu"));
-    expect(job["timeout-minutes"]).toBe(30);
+    expect(job["timeout-minutes"]).toBe(45);
     expect(job.strategy["fail-fast"]).toBe(false);
     expect(measure.env.NODE_OPTIONS).toBe("--max-old-space-size=3072");
   });

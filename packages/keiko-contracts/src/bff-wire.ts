@@ -541,6 +541,8 @@ export interface ChatToolTranscript {
 }
 
 export interface ChatMessage {
+  /** Private stored prompt metadata. Browser response projections omit it; content is the draft. */
+  readonly documentContext?: readonly ConversationDocumentContextWire[] | undefined;
   readonly toolTranscript?: ChatToolTranscript | undefined;
   readonly id: string;
   readonly chatId: string;
@@ -626,6 +628,7 @@ export interface UpdateChatPatch {
 }
 
 export interface NewChatMessage {
+  readonly documentContext?: readonly ConversationDocumentContextWire[] | undefined;
   readonly chatId: string;
   readonly role: ChatRole;
   readonly content: string;

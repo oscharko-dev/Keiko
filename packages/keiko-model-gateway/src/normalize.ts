@@ -37,10 +37,11 @@ function asCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
-function mapFinishReason(value: unknown): FinishReason {
+export function normalizedFinishReason(value: unknown): FinishReason | undefined {
+  if (value === "aborted" || value === "insufficient_system_resource") return "error";
   return typeof value === "string" && FINISH_REASONS.has(value as FinishReason)
     ? (value as FinishReason)
-    : "stop";
+    : undefined;
 }
 
 // #3878: the provider's own count of reasoning tokens, only when it reports one as a whole
@@ -225,7 +226,7 @@ export function normalizeChatResponse(
   const usage = buildUsage(payload, seed);
   const choice = firstChoice(payload);
   const message = firstMessage(payload);
-  const finishReason = mapFinishReason(choice?.finish_reason);
+  const finishReason = normalizedFinishReason(choice?.finish_reason) ?? "stop";
   assertNotRefusal(message, finishReason);
   const toolCalls = parseToolCallsOrExhaustion(message, finishReason, modelId, secrets, usage);
   const content = textFromContent(message.content);

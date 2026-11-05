@@ -1,3 +1,4 @@
+import type { ChatMessage } from "@oscharko-dev/keiko-contracts/bff-wire";
 // Issue #148 — Pure prompt composer for conversation send payloads (AC #4).
 //
 // The composer keeps the user-authored draft and the attached document context in distinct,
@@ -107,4 +108,13 @@ export function composeConversationPrompt(
     return body;
   }
   return `${composeDiscussionDirectiveBlock(discussionMode)}\n\n${body}`;
+}
+
+/** The canonical history source includes attachments while the visible bubble stays the draft. */
+export function chatMessagePromptContent(
+  message: Pick<ChatMessage, "role" | "content" | "documentContext">,
+): string {
+  return message.role === "user"
+    ? composeConversationPrompt(message.content, message.documentContext ?? [])
+    : message.content;
 }

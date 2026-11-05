@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "79904b0a2d40438cb169523f891cea60cd435223f705ac3f4ce0f38a3baa63d6"
+    "catalogDigest": "2d10fbb34dd4c425b3c43baaabc95ea07e19572ccf3e0795d9d50500d9c4b663"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 632,
-    "proofCount": 654,
-    "resolvedProofCount": 654,
+    "operationCount": 634,
+    "proofCount": 656,
+    "resolvedProofCount": 656,
     "failureClassCount": 388,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -121,6 +121,7 @@
         "chat.creation.rejected",
         "chat.draft.operation",
         "chat.grounded-tool-round.completed",
+        "chat.messages.projected",
         "chat.regeneration.rejected",
         "chat.response.message",
         "chat.scope.update",
@@ -150,6 +151,7 @@
         "runs.apply.settled",
         "runs.patch.refused",
         "server.diagnostic.failure",
+        "server.diagnostic.observation",
         "skills.library.operation",
         "skills.workflow.attached",
         "sse.run-events.resume",
@@ -1319,6 +1321,9 @@
     "chat.draft.operation.lifecycle": ["packages/keiko-server/src/chat-draft-routes.test.ts"],
     "chat.grounded-tool-round.completed.schedule": [
       "packages/keiko-server/src/chat-activity.test.ts"
+    ],
+    "chat.messages.projected.document-context": [
+      "packages/keiko-server/src/chat-message-projection.test.ts"
     ],
     "chat.regeneration.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.request.compatibility-retry.emitted-line": [
@@ -2892,6 +2897,9 @@
       "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts",
       "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
       "packages/keiko-server/src/grounded-qa-multi-source.test.ts"
+    ],
+    "server.diagnostic.observation.activity-log-line": [
+      "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts"
     ],
     "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],
     "skills.library.operation.lifecycle": [

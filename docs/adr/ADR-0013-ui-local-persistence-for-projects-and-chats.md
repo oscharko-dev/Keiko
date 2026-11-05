@@ -329,6 +329,16 @@ listed without message context) or if the columns grew beyond five. Three usages
 inline pattern must be observed before extracting it. This is recorded as a documented extension
 point.
 
+**User document context (#4157).** A user message may retain its validated extracted attachment
+text in the additive `document_context_json` column. The visible `content` remains the human draft.
+Only user rows accept this metadata; it uses the existing content redactor before persistence,
+per-document and aggregate byte bounds, and the chat's existing deletion/retention lifecycle. No
+original file or new attachment store is created. Gateway history composes the untrusted document
+block before token accounting and compaction. The existing private FTS indexes include this text,
+and archive recall applies the current content policy and credential floor within its existing
+budgets. Activity Log evidence contains candidate counts and prompt-token counts, never document
+names, IDs or text. The forward-only migration rebuilds the existing indexes transactionally.
+
 **WAL mode.** `PRAGMA journal_mode = WAL` is set once at DB open. WAL allows concurrent reads
 during a write and is the correct mode for a local single-writer, potentially multi-reader
 process (e.g. a future CLI command that reads the DB while `keiko ui` is running). WAL is

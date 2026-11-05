@@ -1,3 +1,4 @@
+import { browserChatMessages } from "./chat-message-projection.js";
 import { hasMixedToolGroundingScope } from "./chat-grounding.js";
 import {
   createChatToolTurn,
@@ -313,7 +314,7 @@ async function persistStreamedTurn(
   );
   return {
     chat: updatedChat,
-    messages: [canonicalUser, assistantMessage],
+    messages: browserChatMessages([canonicalUser, assistantMessage]),
     usage: turn.response.usage,
     memory: { ...memory, actions },
     ...(conversationImageDeliveries(request).length === 0
