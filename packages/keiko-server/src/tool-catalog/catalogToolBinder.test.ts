@@ -12,6 +12,7 @@ import {
   createCatalogBindingFromPreparation,
   createCatalogBindingPreparation,
   createCatalogOffer,
+  createCatalogOfferForTool,
   lifecycleIdentity,
 } from "./catalogToolBinder.js";
 import { catalogToolFixture } from "./__fixtures__/catalogToolFixture.js";
@@ -224,6 +225,39 @@ describe("catalog handler binding and offered projection", () => {
       "private-capability",
       expect.objectContaining({ action: "read" }),
     );
+  });
+  // #4271 L1.2: a dispatch-time offer for ONE ready tool must not log that "the handler is
+  // unavailable" because some other handler of the same catalog is; the line states the selected
+  // handler's readiness, which is what the projection line beside it already reports.
+  it("logs the selected tool as bound when only another catalog handler is unavailable", () => {
+    const fixture = catalogToolFixture();
+    const catalog = createInitialToolCatalog();
+    const projection = compileToolProjection(catalog, { id: "legacy-native", version: 1 });
+    const descriptor = catalog.descriptors.find(
+      (item) => item.toolRef.canonicalId === "keiko.file.read",
+    );
+    if (descriptor === undefined) throw new Error("Missing production descriptor");
+    const handler = {
+      ...fixture.handler,
+      toolRef: descriptor.toolRef,
+      descriptorDigest: descriptor.descriptorDigest,
+      handlerId: descriptor.handlerRequirement.id,
+      catalogAction: "read_file",
+    };
+    const preparation = createCatalogBindingPreparation(
+      { ...fixture.input, projection, handlerBindings: [handler] },
+      catalog,
+    );
+    const state = createCatalogBindingFromPreparation(preparation, { ...fixture.options, catalog });
+    expect(state.bindingReadiness).toBe("unavailable");
+
+    const offer = createCatalogOfferForTool(state, descriptor.toolRef);
+
+    expect(offer.toolRefs).toEqual([descriptor.toolRef]);
+    expect(fixture.primary.events.map((event) => event.op)).toEqual([
+      "tool-catalog.bind-ready",
+      "tool-catalog.projection",
+    ]);
   });
   it("captures each readiness observation once per offered-set computation", () => {
     const fixture = catalogToolFixture();
