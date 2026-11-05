@@ -462,6 +462,8 @@
   "memory-vault.store.encryption-migrated": "memory-knowledge",
   "memory-vault.store.opened": "memory-knowledge",
   "memory-vault.store.quarantined": "memory-knowledge",
+  "memory-vault.write.capture-failed": "memory-knowledge",
+  "memory-vault.write.rejected": "memory-knowledge",
   "memory.audit.state-cache.seeded": "lifecycle-crash",
   "memory.capture.novelty-gate": "memory-knowledge",
   "memory.embedding.invalidated": "memory-knowledge",
