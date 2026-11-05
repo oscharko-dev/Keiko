@@ -562,6 +562,59 @@ describe("what stays out of the way of a learned fact", () => {
   });
 });
 
+describe("what a pronoun and a team's decision become", () => {
+  function userMessage(
+    deps: UiHandlerDeps,
+    chatId: string,
+    content: string,
+    at: number,
+  ): ReturnType<UiHandlerDeps["store"]["createMessage"]> {
+    return deps.store.createMessage({
+      chatId,
+      role: "user",
+      content,
+      timestamp: at,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+  }
+
+  it("resolves a pronoun from the person's previous message in the same chat", async () => {
+    const vault = makeVault();
+    const base = context();
+    const body = "Meine Berichte beginnen immer mit einer Zusammenfassung";
+    const evidence = "Sie beginnen immer mit einer Zusammenfassung";
+    const deps = makeDeps(vault, [{ body, evidence, type: "procedural" }]);
+    deps.store.createProject(base.projectId, "Fixture");
+    const chatId = deps.store.createChat(base.projectId, "Fixture", "gpt-test").id;
+    const ctx = { ...base, conversationId: chatId as ConversationId };
+    userMessage(deps, chatId, "Ich habe eine neue Regel fuer meine Berichte.", 1);
+    const current = userMessage(deps, chatId, `${evidence}.`, 2);
+    const request = {
+      content: current.content,
+      sourceMessageId: current.id,
+      memory: { enabled: true },
+    };
+    await captureSalientFromTurn(deps, request, ctx, "gpt-test", "ok");
+
+    expect(liveBodies(vault, ctx)).toEqual([body]);
+  });
+
+  it("stores a team's decision in the project", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const decision = "We decided as a team to release only on Tuesdays.";
+    await say(vault, ctx, decision, [{ body: decision, about: "team", type: "decision" }]);
+
+    expect(recordsWith(vault, ctx, "accepted").map((record) => record.scope.kind)).toEqual([
+      "project",
+    ]);
+  });
+});
+
 describe("a replacement that cannot complete", () => {
   async function replaceWith(
     fault: (vault: MemoryVaultStore) => MemoryVaultStore,
