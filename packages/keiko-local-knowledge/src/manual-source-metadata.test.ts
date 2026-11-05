@@ -206,8 +206,10 @@ describe("manual-source-metadata", () => {
         let bytes = healthy;
         if (kind === "invalid-json") bytes = "{";
         if (kind === "incomplete") bytes = '{"outcome":"updated"}';
-        if (kind === "unknown") bytes = healthy.replace("{", '{"privateField":"body-marker",');
-        if (kind === "duplicate") bytes = healthy.replace("{", '{"outcome":"body-marker",');
+        // Insert one member after the summary object's opening brace.
+        expect(healthy.startsWith("{")).toBe(true);
+        if (kind === "unknown") bytes = `{"privateField":"body-marker",${healthy.slice(1)}`;
+        if (kind === "duplicate") bytes = `{"outcome":"body-marker",${healthy.slice(1)}`;
         if (kind === "noncanonical") bytes = " " + healthy;
         if (kind === "primitive") bytes = "null";
         expect(() => {

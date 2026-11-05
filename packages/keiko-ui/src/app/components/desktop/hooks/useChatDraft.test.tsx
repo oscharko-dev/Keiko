@@ -1,7 +1,9 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatDraft, ChatDraftUpdate } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { readChatDraft, writeChatDraft } from "@/lib/chat-draft-api";
 import { notifyCodingAppSessionChanged } from "@/lib/coding-app-session-client";
 import { ChatDraftController } from "./chat-draft-controller";
@@ -36,6 +38,41 @@ function controller(): ChatDraftController {
 }
 
 describe("private chat drafts", () => {
+  it("publishes a child edit before the parent passive subscription mounts", async () => {
+    const initialRead = deferred<ChatDraft>();
+    vi.mocked(readChatDraft).mockReturnValue(initialRead.promise);
+    const observed: { controller?: ChatDraftController } = {};
+    function PublishDraft({ publish }: { readonly publish: (text: string) => void }): ReactNode {
+      useEffect(() => publish("Immediate child edit"), [publish]);
+      return null;
+    }
+    function DraftOwner(): ReactNode {
+      const draft = useChatDraft("a");
+      observed.controller = draft.controller;
+      return (
+        <>
+          <output aria-label="Current draft">{draft.text}</output>
+          <PublishDraft publish={draft.setText} />
+        </>
+      );
+    }
+    const rendered = render(<DraftOwner />);
+    try {
+      expect(observed.controller?.entry("a").text).toBe("Immediate child edit");
+      expect(screen.getByLabelText("Current draft")).toHaveTextContent("Immediate child edit");
+      expect(reportClientDiagnostic).toHaveBeenCalledWith(
+        "Private chat draft notifications ready.",
+        { composerActivity: "draft-notifications-ready" },
+      );
+    } finally {
+      initialRead.resolve({ text: "", revision: 0 });
+      await waitFor(() => expect(readChatDraft).toHaveBeenCalled());
+      await waitFor(() => expect(observed.controller?.entry("a").pending).toBe(false));
+      rendered.unmount();
+      observed.controller?.forget("a");
+    }
+  });
+
   it("hydrates a saved draft and never persists the body in browser storage", async () => {
     const local = vi.spyOn(Storage.prototype, "setItem");
     vi.mocked(readChatDraft).mockResolvedValue({ text: "私の Entwurf", revision: 7 });
