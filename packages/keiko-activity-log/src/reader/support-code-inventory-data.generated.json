@@ -391,6 +391,7 @@
     "keiko-contracts/store-fingerprint",
     "keiko-contracts/support-incident",
     "keiko-contracts/support-report",
+    "keiko-contracts/support-report-correlation",
     "keiko-contracts/support-report-json",
     "keiko-contracts/support-report-policy",
     "keiko-contracts/support-report-producer",
