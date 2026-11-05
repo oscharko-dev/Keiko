@@ -2661,6 +2661,14 @@ Full access) or a local MCP server is started by spreading `process.env`, so the
 every shell-denied binding non-enumerable on a plain object that replaces `process.env`. Named reads
 keep working, and a spread omits them; the plugin fails readiness if one survives.
 
+**Host services that answer with the person's data are closed (#4271).** The native profile denies
+the lookup of the clipboard and keychain daemons by name, in every mode, because the daemon reads
+the files the path rules deny and answers a tool its entry trusts. A shell therefore cannot use a
+credential stored in the keychain, and governed delivery runs outside the sandbox with the
+person's own credentials. Other lookups stay open, since toolchains need them (TLS verification goes
+through `trustd`). A toolchain's `var` directory, where its services keep their state, is denied
+too.
+
 **The run cannot decide what Keiko's own Git executes (#4271).** Keiko runs Git outside the sandbox
 on the run's workspace, so repository configuration a shell child writes would run or read with
 Keiko's authority: filter drivers, `core.worktree`, `commondir`, `gitdir`, alternates. The native

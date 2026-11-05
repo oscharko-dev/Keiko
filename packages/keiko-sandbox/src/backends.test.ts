@@ -452,6 +452,10 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
     expect(profile).not.toContain("(deny mach-lookup)");
     for (const denied of ["appleevent-send", "lsopen"])
       expect(profile).toContain(`(deny ${denied})`);
+    // #4271: named services only; a toolchain's other lookups stay open (see the pin above).
+    for (const service of ["com.apple.pasteboard.1", "com.apple.SecurityServer"])
+      expect(profile).toContain(`(global-name "${service}")`);
+    expect(profile).toContain('(subpath "/usr/local/var")');
     expect(profile).toContain('(subpath "/accepted/workspace")');
     expect(profile).toContain('(deny file-read* file-write* (subpath "/Users/owner/.ssh")');
     // The workspace and the private state root are re-allowed after the denied roots, so Keiko's

@@ -283,6 +283,19 @@ const NATIVE_LOOPBACK_ONLY_NETWORK_RULES =
   '(allow network-inbound (local ip "localhost:*"))' +
   '(allow network-bind (local ip "localhost:*"))';
 
+// The host services that answer with the person's data whatever the file rules say: the clipboard,
+// and the keychain, whose daemon reads the files the rules deny and answers a tool its entry trusts,
+// such as Git's credential helper (#4271). Everything else a toolchain looks up stays reachable;
+// TLS verification goes through trustd, not these. Proved against curl, Git, Node, Python and Xcode
+// tools.
+const NATIVE_HOST_SECRET_SERVICE_RULE =
+  "(deny mach-lookup" +
+  ' (global-name "com.apple.pasteboard.1")' +
+  ' (global-name "com.apple.SecurityServer")' +
+  ' (global-name "com.apple.securityd.xpc")' +
+  ' (global-name "com.apple.security.agent")' +
+  ' (global-name "com.apple.SecurityAgent"))';
+
 /**
  * The native profile (#3897): the agent runs its own shell and toolchains like standalone
  * OpenCode. What the kernel enforces for the whole process tree is the filesystem boundary (a read
@@ -306,6 +319,7 @@ function buildNativeSeatbeltCommand(
   if (filesystem === undefined) throw new TypeError("native-seatbelt-filesystem-invalid");
   const profile =
     "(version 1)(allow default)(deny appleevent-send)(deny lsopen)" +
+    NATIVE_HOST_SECRET_SERVICE_RULE +
     OWN_PROCESS_TARGETS_SEATBELT_RULE +
     nativeWorkspaceSeatbeltRules(filesystem) +
     (egress === "inherited" ? "" : NATIVE_LOOPBACK_ONLY_NETWORK_RULES);
