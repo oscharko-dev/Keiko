@@ -2,7 +2,7 @@
 // checks confirm it, because a wrong replacement would quietly lose a true fact and nobody approves
 // learned facts. A check that cannot confirm a change leaves both facts standing.
 
-import { normalizeMemoryText } from "@oscharko-dev/keiko-contracts/memory";
+import { normalizeMemoryText, type MemoryScopeKind } from "@oscharko-dev/keiko-contracts/memory";
 
 import {
   anyWordPattern,
@@ -38,6 +38,9 @@ export interface KnownFact {
   // A fact a learned one may confirm and never replace: what the person stated clearly, and anything
   // outside their private scope.
   readonly fixed?: boolean;
+  // Where the fact lives. A team's fact is compared only with its project's facts, so it never
+  // confirms or replaces what the person keeps privately.
+  readonly scopeKind?: MemoryScopeKind;
 }
 
 export type FactRelationDecision =

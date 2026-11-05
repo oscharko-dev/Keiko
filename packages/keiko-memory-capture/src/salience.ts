@@ -406,6 +406,11 @@ function relatedFact(item: RawSalienceItem, shown: readonly KnownFact[]): KnownF
   return item.related === null ? undefined : shown[item.related - 1];
 }
 
+// A team's fact meets only its project's facts: it never confirms or replaces a private one.
+function comparableFact(fact: AdmittedFact, known: KnownFact): boolean {
+  return fact.subject !== "team" || known.scopeKind === "project";
+}
+
 function learnedCandidate(
   fact: AdmittedFact,
   relation: LearnedFactRelation,
@@ -452,12 +457,13 @@ function outcomeForItem(item: RawSalienceItem, turn: LearningTurn): SalienceOutc
   const fact = admitItem(item, turn);
   if (fact === null) return null;
   const related = relatedFact(item, turn.shown);
+  const comparable = related !== undefined && comparableFact(fact, related);
   const decision = decideFactRelation({
     body: fact.body,
     evidence: item.evidence,
-    label: item.relation,
-    ...(related === undefined ? {} : { related }),
-    known: turn.known,
+    label: comparable ? item.relation : "new",
+    ...(comparable ? { related } : {}),
+    known: turn.known.filter((known) => comparableFact(fact, known)),
   });
   if (fact.subjectless && decision.kind !== "supersede") {
     turn.drop("no-first-person");

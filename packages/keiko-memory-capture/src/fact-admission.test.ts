@@ -401,6 +401,45 @@ describe("a team's fact", () => {
     });
   });
 
+  it.each([
+    ["Unser Team hat entschieden, freitags nichts zu releasen."],
+    ["Wir haben im Projekt vereinbart, jeden Pull Request zu reviewen."],
+    ["In our team we write every ticket in English."],
+  ])("admits a statement that names the group as the person's team: %s", (text) => {
+    const evidence = text.slice(0, -1);
+    expect(admitProposedFact({ body: evidence, evidence, about: "team" }, text)).toMatchObject({
+      admitted: true,
+      subject: "team",
+    });
+  });
+
+  it.each([
+    ["a household", "Wir erwarten im Mai ein Kind.", "not-self"],
+    ["a couple", "We are getting divorced.", "not-self"],
+    ["where they live", "Wir wohnen in Hamburg.", "not-self"],
+    ["a decision about someone", "We decided to fire Tom Becker next month.", "not-self"],
+    [
+      "a decision naming a person",
+      "Wir haben entschieden, dass Anna die Releases verantwortet.",
+      "not-self",
+    ],
+    ["another team", "The marketing team decided that we ship on Fridays.", "not-self"],
+    [
+      "another department",
+      "Das Marketing hat entschieden, dass wir freitags releasen.",
+      "not-self",
+    ],
+    ["a group with someone named", "Wir und Anna nutzen im Team Jira.", "third-party"],
+    ["someone named with the group", "Anna und wir nutzen im Team Jira.", "third-party"],
+    ["the person's people", "Unser Team und meine Leute nutzen Jira.", "third-party"],
+  ])("drops %s", (_, text, reason) => {
+    const evidence = text.slice(0, -1);
+    expect(admitProposedFact({ body: evidence, evidence, about: "team" }, text)).toEqual({
+      admitted: false,
+      reason,
+    });
+  });
+
   it("drops a team label without a group", () => {
     const text = "Ich nutze Excel.";
     expect(
@@ -434,6 +473,27 @@ describe("a pronoun for the person's own thing", () => {
     ).toBe(false);
   });
 
+  it.each([
+    [
+      "Sie ist unfreundlich.",
+      "Meine Vermieterin ist unfreundlich",
+      "Ich schreibe gerade meiner Vermieterin.",
+    ],
+    ["It is a nightmare.", "My landlord is a nightmare", "I need to email my landlord."],
+    [
+      "Sie sind unzuverlässig.",
+      "Meine Leute sind unzuverlässig",
+      "Ich muss meine Leute informieren.",
+    ],
+    ["They are loud.", "My kids are loud", "I picked up my kids."],
+  ])("drops a pronoun resolved to a person: %s", (said, resolved, previousUserText) => {
+    expect(
+      admitProposedFact({ body: resolved, evidence: said.slice(0, -1), about: "self" }, said, {
+        previousUserText,
+      }),
+    ).toEqual({ admitted: false, reason: "third-party" });
+  });
+
   it("still drops a pronoun for a person the person named", () => {
     const said = "Sie arbeitet in Berlin.";
     expect(
@@ -443,5 +503,25 @@ describe("a pronoun for the person's own thing", () => {
         { previousUserText: "Ich mag meine Kollegin." },
       ),
     ).toEqual({ admitted: false, reason: "third-party" });
+  });
+});
+
+describe("people named by their relation to the person", () => {
+  it.each([
+    ["Meine Vermieterin ist unfreundlich."],
+    ["My landlord never answers."],
+    ["Meine Eltern wohnen in Bonn."],
+    ["Meine Oma backt sonntags."],
+  ])("drops a statement about them: %s", (text) => {
+    expect(reasonOf(text, text.slice(0, -1))).toBe("third-party");
+  });
+
+  it.each([
+    ["Ich unterrichte Kinder in Mathe."],
+    ["Ich bin Lehrerin an einer Grundschule."],
+    ["I am a teacher and I grade on Fridays."],
+    ["Ich bin Mieterin in Köln."],
+  ])("keeps the person's own work and role: %s", (text) => {
+    expect(reasonOf(text, text.slice(0, -1))).toBeNull();
   });
 });

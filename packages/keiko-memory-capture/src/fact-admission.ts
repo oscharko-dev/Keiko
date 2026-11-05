@@ -83,6 +83,25 @@ const FIRST_PERSON_RE = anyWordPattern([
   "mine",
 ]);
 const WE_RE = anyWordPattern(["wir", "unser(?:e|em|en|er|es)?", "uns", "we", "our", "ours"]);
+// The person names the group as their team or project: "als Team", "in unserem Projekt", "our team".
+// Another group's name is no marker: "The marketing team decided that we ship on Fridays".
+const TEAM_MARKERS = [
+  String.raw`als\s+team`,
+  String.raw`im\s+(?:team|projekt)`,
+  String.raw`unser(?:e|em|en|er|es)?\s+(?:\p{L}+\s+)?(?:team|projekt|abteilung|firma|unternehmen)`,
+  "(?:team|projekt|firmen)-?weit",
+  String.raw`as\s+a\s+team`,
+  String.raw`(?:in|on)\s+the\s+(?:team|project)`,
+  String.raw`our\s+(?:\p{L}+\s+)?(?:team|project|department|company)`,
+  "(?:team|project|company)-?wide",
+];
+const TEAM_MARKER_RE = anyWordPattern(TEAM_MARKERS);
+const TEAM_MARKER_GLOBAL_RE = new RegExp(TEAM_MARKER_RE.source, "giu");
+// "Wir und Anna nutzen Jira", "Anna und wir": the group includes someone named.
+const WE_AND_OTHER_RES: readonly RegExp[] = [
+  /(?:^|[,;:])\s*(?:wir|we)\s+(?:und|and)\s+\p{L}+/iu,
+  /(?:^|[,;:])\s*\p{L}+\s+(?:und|and)\s+(?:wir|we)(?![\p{L}\p{N}])/iu,
+];
 const CHANGE_WITHOUT_SUBJECT_RE = anyWordPattern([
   "ab jetzt",
   "ab sofort",
@@ -109,6 +128,20 @@ const FAMILY_WORDS = [
   "sister",
   "mother",
   "father",
+  "enkel(?:in|kinder)?",
+  "oma",
+  "opa",
+  "onkel",
+  "tante",
+  "ehemann",
+  "ehefrau",
+  "verlobter?",
+  "grand(?:ma|pa|mother|father|son|daughter)",
+  "uncle",
+  "aunt",
+  "girlfriend",
+  "boyfriend",
+  "fianc[eé]e?",
 ];
 // A role names a person only once something points at one: "der Kunde", "this colleague". "Ich
 // arbeite mit Kunden" and "customer tickets" name a kind of work, not someone.
@@ -123,6 +156,12 @@ const ENGLISH_ROLE_WORDS = [
   "friends?",
   "neighbou?rs?",
   "employees?",
+  "landlord",
+  "landlady",
+  "tenants?",
+  "roommates?",
+  "flatmates?",
+  "teachers?",
 ];
 const ROLE_WORDS = [
   "kolleg(?:e|en|in|innen)",
@@ -140,6 +179,10 @@ const ROLE_WORDS = [
   "anwältin",
   "anwaeltin",
   "therapeut(?:in)?",
+  "vermieter(?:in)?",
+  "mieter(?:in)?",
+  "mitbewohner(?:in)?",
+  "lehrer(?:in)?",
   ...ENGLISH_ROLE_WORDS,
 ];
 const RELATION_WORDS = [...FAMILY_WORDS, ...ROLE_WORDS];
@@ -153,6 +196,14 @@ const POSSESSIVE_ONLY_RELATION_WORDS = [
   "team",
   "manager",
   "clients?",
+  "leute",
+  "people",
+  "menschen",
+  "eltern",
+  "kinder(?:n)?",
+  "parents",
+  "children",
+  "kids",
 ];
 const FAMILY_RE = anyWordPattern(FAMILY_WORDS);
 // A person named through their relation to someone else: "Annas Chef", "Sam's boss".
@@ -710,12 +761,17 @@ function speaksForMore(evidence: string): boolean {
 }
 
 // "We decided as a team to release on Tuesdays": the team's fact, which never names anyone else.
+// "Wir" alone may be a couple or a household ("Wir erwarten ein Kind"), so the person must name the
+// group as their team or project; the marker itself names no one, the rest of the claim must not
+// either.
 function teamDropReason(evidence: string): FactDropReason | null {
+  const rest = evidence.replace(TEAM_MARKER_GLOBAL_RE, " ");
   const pair =
-    ME_AND_OTHER_RES.some((pattern) => pattern.test(evidence)) || speaksAsEnglishPair(evidence);
-  if (pair || TITLED_PERSON_RE.test(evidence) || RELATION_RE.test(evidence)) return "third-party";
-  if (namesOtherPerson(evidence) || claimNamesOtherPronoun(evidence)) return "third-party";
-  return WE_RE.test(evidence) ? null : "not-self";
+    ME_AND_OTHER_RES.some((pattern) => pattern.test(rest)) ||
+    WE_AND_OTHER_RES.some((pattern) => pattern.test(rest)) ||
+    speaksAsEnglishPair(rest);
+  if (pair || namesOtherPerson(rest) || claimNamesOtherPronoun(rest)) return "third-party";
+  return WE_RE.test(evidence) && TEAM_MARKER_RE.test(evidence) ? null : "not-self";
 }
 
 function subjectDropReason(about: string, evidence: string): FactDropReason | null {

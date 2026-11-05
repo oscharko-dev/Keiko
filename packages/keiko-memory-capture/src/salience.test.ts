@@ -488,6 +488,28 @@ describe("a team's fact and a pronoun from the previous message", () => {
     expect(learned?.proposal.scope).toEqual({ kind: "project", projectId: "p-1" });
   });
 
+  it.each([
+    ["confirm", "same", "We decided as a team to release only on Tuesdays"],
+    ["replace", "update", "We decided as a team to release only on Mondays"],
+  ])("does not %s the person's private fact with a team's", async (_, relation, privateBody) => {
+    const [learned] = await learn(
+      decision,
+      [fact(decision, decision, { about: "team", type: "decision", relation, related: 1 })],
+      { knownFacts: [{ id: "private", body: privateBody, scopeKind: "user" }] },
+    );
+    expect(learned).toMatchObject({ kind: "candidate", relation: { kind: "new" } });
+    expect(learned?.kind === "candidate" && learned.proposal.scope.kind).toBe("project");
+  });
+
+  it("confirms the project's own fact with the team's repeat", async () => {
+    const [learned] = await learn(
+      decision,
+      [fact(decision, decision, { about: "team", type: "decision", relation: "same", related: 1 })],
+      { knownFacts: [{ id: "team-fact", body: decision, scopeKind: "project", fixed: true }] },
+    );
+    expect(learned).toMatchObject({ kind: "confirmation", memoryId: "team-fact" });
+  });
+
   it("learns no team decision outside a project", async () => {
     const { projectId: _projectId, ...withoutProject } = baseContext();
     const outcomes = await learn(

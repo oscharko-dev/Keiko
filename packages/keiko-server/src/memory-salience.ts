@@ -155,6 +155,7 @@ function gatherKnownFacts(
         body: record.body,
         // Only what Keiko learned, in the person's own scope, gives way to what it learns next.
         fixed: record.provenance.evidenceSpan === undefined || record.scope.kind !== "user",
+        scopeKind: record.scope.kind,
       });
       if (known.length >= MAX_KNOWN_FACTS) return known;
     }
