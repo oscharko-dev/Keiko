@@ -2474,8 +2474,7 @@
       "anti-slop/require-safety-comment-for-type-assertion": 1
     },
     "packages/keiko-contracts/src/jira-issue-template.ts": {
-      "anti-slop/no-conditional-empty-object-spread": 7,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-conditional-empty-object-spread": 7
     },
     "packages/keiko-contracts/src/jira-template-pattern.ts": {
       "anti-slop/no-known-value-widening": 2
@@ -2485,10 +2484,8 @@
     },
     "packages/keiko-contracts/src/jira-tool-execution.ts": {
       "anti-slop/no-conditional-empty-object-spread": 5,
-      "anti-slop/no-reflect-get": 17,
-      "anti-slop/no-runtime-typeof": 15,
-      "anti-slop/no-unknown-parameters": 7,
-      "anti-slop/require-safety-comment-for-type-assertion": 4
+      "anti-slop/no-runtime-typeof": 10,
+      "anti-slop/no-unknown-parameters": 7
     },
     "packages/keiko-contracts/src/language-service.test.ts": {
       "anti-slop/no-unknown-returns": 2

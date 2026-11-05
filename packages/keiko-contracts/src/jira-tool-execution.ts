@@ -1,6 +1,8 @@
 import type { AtlassianConnectorWriteFailureReason } from "./atlassian-connectors.js";
 import type { JiraTemplateViolation } from "./jira-issue-template.js";
+import { ownField } from "./code-task-acceptance.js";
 import { compareStrings } from "./comparators.js";
+import { isOneOf, isRecord } from "./contract-validation-primitives.js";
 
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
@@ -102,12 +104,12 @@ function isAttachmentSize(value: unknown): boolean {
   );
 }
 export function isJiraAttachmentPreview(value: unknown): value is JiraAttachmentPreview {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const digest: unknown = Reflect.get(value, "sha256");
+  if (!isRecord(value)) return false;
+  const digest = ownField(value, "sha256");
   return (
     Object.keys(value).sort(compareStrings).join() === "name,sha256,sizeBytes" &&
-    isJiraAttachmentName(Reflect.get(value, "name")) &&
-    isAttachmentSize(Reflect.get(value, "sizeBytes")) &&
+    isJiraAttachmentName(ownField(value, "name")) &&
+    isAttachmentSize(ownField(value, "sizeBytes")) &&
     typeof digest === "string" &&
     SHA256_HEX.test(digest)
   );
@@ -237,12 +239,13 @@ function detailFieldId(value: unknown): value is string {
 }
 function detailFieldErrors(value: unknown): readonly JiraMutationFieldError[] {
   if (!Array.isArray(value)) return [];
+  const entries: readonly unknown[] = value.slice(0, JIRA_MUTATION_DETAIL_LIMITS.fieldErrors);
   const errors: JiraMutationFieldError[] = [];
-  for (const entry of value.slice(0, JIRA_MUTATION_DETAIL_LIMITS.fieldErrors) as unknown[]) {
-    const record = typeof entry === "object" && entry !== null ? entry : {};
-    const fieldId: unknown = Reflect.get(record, "fieldId");
-    const message = detailText(Reflect.get(record, "message"));
-    const fieldName = detailText(Reflect.get(record, "fieldName"));
+  for (const entry of entries) {
+    if (!isRecord(entry)) continue;
+    const fieldId = ownField(entry, "fieldId");
+    const message = detailText(ownField(entry, "message"));
+    const fieldName = detailText(ownField(entry, "fieldName"));
     if (detailFieldId(fieldId) && message !== undefined)
       errors.push({ fieldId, ...(fieldName === undefined ? {} : { fieldName }), message });
   }
@@ -250,26 +253,27 @@ function detailFieldErrors(value: unknown): readonly JiraMutationFieldError[] {
 }
 function detailMessages(value: unknown): readonly string[] {
   if (!Array.isArray(value)) return [];
-  return (value as unknown[])
-    .map(detailText)
-    .filter((text): text is string => text !== undefined)
-    .slice(0, JIRA_MUTATION_DETAIL_LIMITS.messages);
+  const entries: readonly unknown[] = value;
+  const messages: string[] = [];
+  for (const entry of entries) {
+    if (messages.length === JIRA_MUTATION_DETAIL_LIMITS.messages) break;
+    const text = detailText(entry);
+    if (text !== undefined) messages.push(text);
+  }
+  return messages;
 }
-const VALIDATION_FAILURES: ReadonlySet<unknown> = new Set(JIRA_FIELD_VALIDATION_FAILURES);
 /** One bounded, control-free projection, applied wherever a detail crosses a boundary. */
 export function sanitizeJiraMutationFailureDetail(
   value: unknown,
 ): JiraMutationFailureDetail | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const fieldId: unknown = Reflect.get(value, "fieldId");
-  const validation: unknown = Reflect.get(value, "validation");
-  const fieldErrors = detailFieldErrors(Reflect.get(value, "fieldErrors"));
-  const messages = detailMessages(Reflect.get(value, "messages"));
+  if (!isRecord(value)) return undefined;
+  const fieldId = ownField(value, "fieldId");
+  const validation = ownField(value, "validation");
+  const fieldErrors = detailFieldErrors(ownField(value, "fieldErrors"));
+  const messages = detailMessages(ownField(value, "messages"));
   const detail: JiraMutationFailureDetail = {
     ...(detailFieldId(fieldId) ? { fieldId } : {}),
-    ...(VALIDATION_FAILURES.has(validation)
-      ? { validation: validation as JiraFieldValidationFailure }
-      : {}),
+    ...(isOneOf(validation, JIRA_FIELD_VALIDATION_FAILURES) ? { validation } : {}),
     ...(fieldErrors.length === 0 ? {} : { fieldErrors }),
     ...(messages.length === 0 ? {} : { messages }),
   };
@@ -288,10 +292,10 @@ function linkTypeName(value: unknown): value is string {
   );
 }
 function linkRef(value: unknown): JiraMutationLinkRef | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const type: unknown = Reflect.get(value, "type");
-  const direction: unknown = Reflect.get(value, "direction");
-  const issueKey: unknown = Reflect.get(value, "issueKey");
+  if (!isRecord(value)) return undefined;
+  const type = ownField(value, "type");
+  const direction = ownField(value, "direction");
+  const issueKey = ownField(value, "issueKey");
   if (!linkTypeName(type) || (direction !== "inward" && direction !== "outward")) return undefined;
   return typeof issueKey === "string" && LINK_ISSUE_KEY.test(issueKey)
     ? { type, direction, issueKey }
@@ -309,14 +313,15 @@ function linkCount(value: unknown): value is number {
 export function sanitizeJiraMutationLinkAccount(
   value: unknown,
 ): JiraMutationLinkAccount | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const requested: unknown = Reflect.get(value, "requested");
-  const created: unknown = Reflect.get(value, "created");
-  const unconfirmed: unknown = Reflect.get(value, "unconfirmed");
-  const listed: unknown = Reflect.get(value, "missing");
+  if (!isRecord(value)) return undefined;
+  const requested = ownField(value, "requested");
+  const created = ownField(value, "created");
+  const unconfirmed = ownField(value, "unconfirmed");
+  const listed = ownField(value, "missing");
   if (!linkCount(requested) || !linkCount(created) || created > requested) return undefined;
   if (typeof unconfirmed !== "boolean" || !Array.isArray(listed)) return undefined;
-  const missing: (JiraMutationLinkRef | undefined)[] = (listed as unknown[]).map(linkRef);
+  const entries: readonly unknown[] = listed;
+  const missing: (JiraMutationLinkRef | undefined)[] = entries.map(linkRef);
   if (missing.length > requested) return undefined;
   const refs = missing.filter((link): link is JiraMutationLinkRef => link !== undefined);
   return refs.length === missing.length

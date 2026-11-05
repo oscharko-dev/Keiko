@@ -204,6 +204,8 @@ function unquote(raw: string): string | undefined {
   const value = raw.trim();
   if (!value.startsWith('"')) return value.includes('"') ? undefined : value;
   // Only a well-formed JSON string literal reaches the decoder, so it cannot throw.
+  // SAFETY: QUOTED admits exactly one complete JSON string literal, which JSON.parse decodes to a
+  // string; no other JSON value can match it.
   return QUOTED.test(value) ? (JSON.parse(value) as string) : undefined;
 }
 
