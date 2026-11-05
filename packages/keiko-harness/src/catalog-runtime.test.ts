@@ -68,10 +68,10 @@ describe("native harness catalog consumer", () => {
       const adapter: ProviderAdapter = {
         call: (_request, provider) => {
           providerCalls += 1;
-          if (reasoningHistory !== undefined && providerCalls === 2)
+          if (providerCalls === 2)
             expect(
               _request.messages.find((message) => message.role === "assistant")?.reasoningContent,
-            ).toBe("Inspect the accepted file.");
+            ).toBe(reasoningHistory === undefined ? undefined : "Inspect the accepted file.");
           const gatewayCatalog = createGatewayToolCatalogBridge(_request, () => 0);
           return Promise.resolve(
             providerCalls === 1

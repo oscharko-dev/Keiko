@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "128bc8a035fa9d94fd6b437e108e706cf7f68812eea777f9a81b9ee76f7a2507",
+    "catalogDigest": "79904b0a2d40438cb169523f891cea60cd435223f705ac3f4ce0f38a3baa63d6",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -16520,7 +16520,7 @@
         "proofIds": ["coding-sidecar.gateway.readiness-insufficient.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-sidecar-gateway.ts:386",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:4839"]
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:4840"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -16746,7 +16746,7 @@
         "proofIds": ["coding-sidecar.gateway.request-validated.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-sidecar-gateway.ts:314",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5484"]
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5485"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -16887,7 +16887,7 @@
         "proofIds": ["coding-sidecar.gateway.skill-attached.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/coding-sidecar-gateway.ts:361",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5417"]
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5418"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23071,7 +23071,7 @@
         "proofIds": ["gateway.reasoning-history.lifecycle"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/reasoning-history.ts:18",
-        "emitterSites": ["packages/keiko-model-gateway/src/reasoning-history.ts:427"]
+        "emitterSites": ["packages/keiko-model-gateway/src/reasoning-history.ts:429"]
       },
       {
         "contractKind": "activity-log-operation",

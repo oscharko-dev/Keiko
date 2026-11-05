@@ -227,6 +227,8 @@ export class GatewayReasoningHistory {
       const retained = request.reasoningScope === undefined ? undefined : this.entries.get(key);
       if (retained === undefined || retained.ambiguous === true) this.unavailable(request);
       retained.expiresAt = this.now() + REASONING_HISTORY_TTL_MS;
+      this.entries.delete(key);
+      this.entries.set(key, retained);
       messages[index] = {
         ...message,
         reasoningContent: redactContent(

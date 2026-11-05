@@ -994,7 +994,8 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   or `reasoning` for a provider that requires that spelling. No alias-name inference enables it.
   The gateway captures the successful complete response before display suppression; failed,
   cancelled and output-truncated attempts do not supply continuation. Its state is memory-only,
-  bounded to 2,048 entries and 32 MiB (reasoning plus assistant payloads), and idle entries expire
+  bounded to 2,048 entries and 32 MiB (reasoning plus assistant payloads). A successful restore
+  refreshes both expiry and eviction priority; idle entries expire
   after 30 minutes on the next lookup. Keys bind the trusted session/run, provider configuration,
   most recent human message and exact assistant payload. Conflicting successful reasoning for
   an identical payload is ambiguous and refused. Chat's split persisted tool pairs may be restored

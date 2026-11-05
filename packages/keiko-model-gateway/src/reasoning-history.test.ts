@@ -175,6 +175,25 @@ describe("transient completed reasoning state", () => {
     expect(() => f.history.prepare(followup(), PROVIDER)).toThrow("reasoning history");
   });
 
+  it("evicts idle entries before recently restored history at the entry bound", () => {
+    const f = fixture();
+    for (let index = 0; index < REASONING_HISTORY_MAX_ENTRIES; index++)
+      f.history.remember(
+        { ...INITIAL, reasoningScope: `scope-${String(index)}` },
+        PROVIDER,
+        ANSWER,
+      );
+    const active = { ...followup(), reasoningScope: "scope-0" };
+    f.history.prepare(active, PROVIDER);
+    f.history.remember({ ...INITIAL, reasoningScope: "new-scope" }, PROVIDER, ANSWER);
+    expect(f.history.prepare(active, PROVIDER).messages[1]?.reasoningContent).toBe(
+      ANSWER.reasoning,
+    );
+    expect(() => f.history.prepare({ ...followup(), reasoningScope: "scope-1" }, PROVIDER)).toThrow(
+      "reasoning history",
+    );
+  });
+
   it.each(["baseUrl", "modelId", "deploymentIdentitySha256"] as const)(
     "does not borrow reasoning after %s changes",
     (field) => {

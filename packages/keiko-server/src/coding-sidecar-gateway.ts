@@ -3825,7 +3825,7 @@ async function pumpGatewayStreamWithCancellation(
         turnFailureRecorded,
       );
     }
-    settleGatewayStreamError(session, runtimeRetry, outputRepairOf(error));
+    settleGatewayStreamError(session, error, runtimeRetry, outputRepairOf(error));
   } finally {
     stopHeartbeat();
     cancellationSignal.removeEventListener("abort", cancelIterator);
@@ -4276,6 +4276,7 @@ function logGatewayCompletionUsage(
 
 function settleGatewayStreamError(
   session: GatewayStreamSession,
+  error: unknown,
   runtimeRetry: RuntimeRetry,
   repair?: GatewayOutputRepairOutcome,
 ): void {
@@ -4286,7 +4287,7 @@ function settleGatewayStreamError(
   recordSessionOutcome(session, "failed", settledRepair(repair));
   if (runtimeRetry === "refused") {
     const { ctx, id, created, modelId, cancellation } = session;
-    writeStreamRejection({ ctx, id, created, modelId, transport: cancellation.transport });
+    writeStreamRejection({ ctx, id, created, modelId, transport: cancellation.transport }, error);
   } else {
     writeSessionTerminal(session, "error");
   }

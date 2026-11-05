@@ -20,6 +20,7 @@ import {
   ProviderError,
   ProviderResponseInvalidError,
   ResponseRedactionError,
+  ReasoningHistoryUnavailableError,
   resolveCodingSafeSidecarGatewayProfile,
   type GatewayCallRequest,
   type GatewayConfig,
@@ -11354,6 +11355,55 @@ describe("coding sidecar completed reasoning continuation", () => {
         expect(first.body()).not.toContain("Completed provider thinking.");
     },
   );
+});
+
+it("explains unavailable continuation after a live stream has opened", async () => {
+  const sink = captureServerLog("warn");
+  const response = mockResponse({ captureBody: true });
+  const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+    await Promise.resolve();
+    yield { type: "delta", token: "Visible partial answer." };
+    throw new ReasoningHistoryUnavailableError();
+  };
+  try {
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-live-history-unavailable" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 5 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    };
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          tools: modelVisibleTools(),
+          messages: [{ role: "user", content: "synthetic" }],
+        }),
+        res: response.res,
+      },
+      deps,
+    );
+    expect(result).toBe(STREAMING);
+    expect(response.body()).toContain("Visible partial answer.");
+    expect(response.body()).toContain(
+      "Model continuation is unavailable. Start a new coding task.",
+    );
+    expect(response.body()).not.toContain("The model provider rejected this turn.");
+    expect(response.body()).not.toContain('"finish_reason":"error"');
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+    ).toMatchObject({ runtimeRetry: "refused" });
+  } finally {
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  }
 });
 
 it("explains unavailable local continuation without calling or blaming the provider", async () => {
