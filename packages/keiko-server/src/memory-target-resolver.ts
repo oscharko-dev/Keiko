@@ -163,13 +163,21 @@ function referredRecords(
     (record) => record.provenance.sourceConversationId === context.conversationId,
   );
   const lastTurnStartedAt = context.lastTurnStartedAt();
-  if (lastTurnStartedAt === undefined) return ofConversation;
+  // No earlier turn left anything behind, so an older record of this conversation is not "das".
+  if (lastTurnStartedAt === undefined) return [];
   const left = ofConversation.filter((record) => record.createdAt >= lastTurnStartedAt);
-  if (!lastTurnReachedMemory(context.previousStatement())) return left;
+  const statement = context.previousStatement();
+  // The person said a stored fact again and it was folded into that memory: "das" is that memory,
+  // or the forget would be reported while the fact stays.
+  const said = (record: MemoryRecord): boolean =>
+    statement !== undefined && namesRecord(statement, record);
+  const anyTouched = lastTurnReachedMemory(statement);
   const stats = vault.getAccessStats(records.map((record) => record.id));
   const reached = records.filter(
     (record) =>
-      !left.includes(record) && (stats.get(record.id)?.lastAccessedAt ?? 0) >= lastTurnStartedAt,
+      !left.includes(record) &&
+      (anyTouched || said(record)) &&
+      (stats.get(record.id)?.lastAccessedAt ?? 0) >= lastTurnStartedAt,
   );
   return [...left, ...reached];
 }

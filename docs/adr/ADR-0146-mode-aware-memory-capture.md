@@ -195,6 +195,9 @@ novelty gate with one. A paraphrase of a forgotten fact is suppressed the same w
 including a parked proposal, and goes through the one forget implementation with its audit preflight
 and tombstone. It also reaches an older memory the last turn drew on, when that turn asked a question
 or said the fact again. After any other sentence the memory an answer happened to use is not "das".
+A sentence that repeats a stored fact reaches the memory it was folded into, so the forget is not
+reported while the fact stays. Every chat path reads the last turn from the conversation, grounded
+turns included; with no earlier turn nothing was left behind and no older memory is "das".
 If that turn left nothing, "das" is the statement before it, not an older memory; a question or a
 pasted document is no such statement, so the person is asked:
 `recordForgottenStatements` writes a tombstone in each scope of the conversation, so a later

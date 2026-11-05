@@ -4109,8 +4109,11 @@ function canonicalMessageMemoryActions(
   correlationId: string,
 ): Promise<ConversationMemoryActionWire[]> {
   const scopes = conversationMemoryScopes(context);
+  // A grounded request holds only this turn, so the last turn comes from the conversation.
+  const previousMessage = (): ChatMessage | undefined =>
+    previousUserMessage(deps, message.content, context.conversationId);
   const previousStatement = (): string | undefined =>
-    previousContent(request.messages, message.ordinal);
+    previousContent(request.messages, message.ordinal) ?? previousMessage()?.content;
   const outcomes = extractCandidatesFromUserText(
     message.content,
     buildCaptureContext(context, request.clientTurnId, message.ordinal),
@@ -4120,7 +4123,7 @@ function canonicalMessageMemoryActions(
       forgetResolver: createMemoryForgetResolver(vault, {
         scopes,
         conversationId: context.conversationId,
-        lastTurnStartedAt: () => undefined,
+        lastTurnStartedAt: () => previousMessage()?.timestamp,
         previousStatement,
       }),
     }),
