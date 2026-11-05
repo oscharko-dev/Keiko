@@ -1,8 +1,5 @@
-import {
-  createBufferedServerLogSink,
-  type BufferedServerLogSink,
-} from "../../../../tests/support/buffered-server-log.js";
-import type { UiHandlerDeps } from "../deps.js";
+import { createBufferedServerLogSink, type BufferedServerLogSink } from "./buffered-server-log.js";
+import type { UiHandlerDeps } from "../../packages/keiko-server/src/deps.js";
 
 /** The fixture dependencies with the Atlassian credential port writing to a captured log. */
 export function withSyncActivityLog(deps: UiHandlerDeps): {

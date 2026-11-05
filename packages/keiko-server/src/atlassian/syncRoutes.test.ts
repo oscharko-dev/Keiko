@@ -1,4 +1,4 @@
-import { withSyncActivityLog } from "./syncActivityLog.test-support.js";
+import { withSyncActivityLog } from "../../../../tests/support/atlassian-sync-activity-log.js";
 import {
   expectActivityLogProof,
   singleActivityLogEventLine,
