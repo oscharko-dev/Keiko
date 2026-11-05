@@ -1447,8 +1447,7 @@
     },
     "packages/keiko-contracts/src/activity-log-loss.ts": {
       "anti-slop/no-known-value-widening": 1,
-      "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-runtime-typeof": 1
     },
     "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts": {
       "anti-slop/no-known-value-widening": 18,

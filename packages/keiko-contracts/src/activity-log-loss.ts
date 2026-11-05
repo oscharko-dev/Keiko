@@ -54,6 +54,8 @@ export type ActivityLogLossReason = (typeof ACTIVITY_LOG_LOSS_REASONS)[number];
 export type ActivityLogLossCounters = Readonly<Record<ActivityLogLossReason, number>>;
 
 function zeroCounters(): Record<ActivityLogLossReason, number> {
+  // SAFETY: Object.fromEntries creates one own entry for every member of the closed
+  // ACTIVITY_LOG_LOSS_REASONS tuple, so every key of the record is present and holds a number.
   return Object.fromEntries(ACTIVITY_LOG_LOSS_REASONS.map((reason) => [reason, 0])) as Record<
     ActivityLogLossReason,
     number
