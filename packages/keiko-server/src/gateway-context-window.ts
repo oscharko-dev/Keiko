@@ -583,10 +583,10 @@ export async function withAdoptedContextWindowRetry<T>(
     });
     try {
       return await attempt({ retrying: true, retryFollows: () => false });
-    } catch (retryFailure) {
-      const settled = await input.settleRetryFailure?.(retryFailure, error);
+    } catch (error_) {
+      const settled = await input.settleRetryFailure?.(error_, error);
       if (settled !== undefined) return settled;
-      throw retryFailure;
+      throw error_;
     }
   }
 }

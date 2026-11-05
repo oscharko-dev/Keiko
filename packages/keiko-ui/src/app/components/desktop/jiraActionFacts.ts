@@ -143,9 +143,10 @@ function managedFacts(
   t: OptionalWidgetTranslate,
   names: JiraNames,
 ): readonly Fact[] {
+  const family = key === "projectId" ? "projects" : "issueTypes";
   const known =
     (key === "projectId" || key === "issueTypeId") && typeof value === "string"
-      ? jiraNameOf(names, key === "projectId" ? "projects" : "issueTypes", value)
+      ? jiraNameOf(names, family, value)
       : undefined;
   return jiraFacts(key, known ?? value, t)
     .filter(
