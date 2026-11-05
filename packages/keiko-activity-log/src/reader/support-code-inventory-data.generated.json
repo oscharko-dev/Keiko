@@ -348,6 +348,7 @@
     "keiko-contracts/no-evidence-answer",
     "keiko-contracts/numeric",
     "keiko-contracts/observability",
+    "keiko-contracts/opencode-runtime-pins",
     "keiko-contracts/patch-limits",
     "keiko-contracts/pr-description",
     "keiko-contracts/pr-description-application",

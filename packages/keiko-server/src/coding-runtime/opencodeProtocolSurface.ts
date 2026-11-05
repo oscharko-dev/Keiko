@@ -1,7 +1,5 @@
 import { createHash } from "node:crypto";
 
-import { OPENCODE_PINNED_PROTOCOL_SURFACE_SHA256 } from "@oscharko-dev/keiko-contracts/runtime/opencode-runtime-pins";
-
 import { OPENCODE_APPROVED_ENDPOINTS } from "./opencodeProtocol.js";
 
 export const OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM = "keiko-opencode-protocol-surface-v1" as const;
@@ -10,7 +8,7 @@ export const OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256 =
 export const OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM =
   "keiko-opencode-protocol-surface-v2" as const;
 /** The current pin's structural digest, read from the one pin source. */
-export const OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256 = OPENCODE_PINNED_PROTOCOL_SURFACE_SHA256;
+export { OPENCODE_PINNED_PROTOCOL_SURFACE_SHA256 as OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256 } from "@oscharko-dev/keiko-contracts/runtime/opencode-runtime-pins";
 
 /**
  * The admitted operations as `METHOD path`. The complete service inventory

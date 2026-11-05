@@ -50,9 +50,14 @@ export function versionsBetween(tags, from, to) {
 
 /** The `#### title` entries of a release note's breaking section. */
 export function breakingChanges(notes) {
-  const section = /^### Breaking changes\s*$([\s\S]*?)(?=^### |(?![\s\S]))/mu.exec(notes);
-  if (section === null) return [];
-  return [...section[1].matchAll(/^#### (.+)$/gmu)].map((match) => match[1].trim());
+  const lines = notes.split("\n").map((line) => line.trim());
+  const start = lines.indexOf("### Breaking changes");
+  if (start === -1) return [];
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => line.startsWith("### "));
+  return (end === -1 ? rest : rest.slice(0, end))
+    .filter((line) => line.startsWith("#### "))
+    .map((line) => line.slice("#### ".length).trim());
 }
 
 function changedKeys(previous, next) {
@@ -97,16 +102,18 @@ export function admittedSurfaceDiff(previous, next) {
   };
 }
 
+const byCodePoint = (left, right) => (left < right ? -1 : Number(left > right));
+
 /** Added, removed and modified paths of two `git/trees` listings. */
 export function sourceTreeDiff(previous, next) {
   const before = new Map(previous.map((entry) => [entry.path, entry.sha]));
   const after = new Map(next.map((entry) => [entry.path, entry.sha]));
   return {
-    added: [...after.keys()].filter((path) => !before.has(path)).sort(),
-    removed: [...before.keys()].filter((path) => !after.has(path)).sort(),
+    added: [...after.keys()].filter((path) => !before.has(path)).sort(byCodePoint),
+    removed: [...before.keys()].filter((path) => !after.has(path)).sort(byCodePoint),
     modified: [...after.keys()]
       .filter((path) => before.has(path) && before.get(path) !== after.get(path))
-      .sort(),
+      .sort(byCodePoint),
   };
 }
 
