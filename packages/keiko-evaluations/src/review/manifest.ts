@@ -9,12 +9,13 @@ import type { ReviewEvaluationManifest } from "./types.js";
 
 export const REVIEW_EVALUATION_MANIFEST: ReviewEvaluationManifest = Object.freeze({
   schemaVersion: 1,
-  datasetPath: "packages/keiko-evaluations/src/review/fixtures/review-harvest-dataset.v1.json.gz",
-  datasetDigest: "sha256:c6dfbede99249e9fda874649d4a938e4d3e69b4b8fb8e70be0d3c099b486f194",
+  datasetPath: "packages/keiko-evaluations/src/review/fixtures/review-harvest-dataset.v2.json.gz",
+  datasetDigest: "sha256:376d45f51991cc68ec72c3d9ba40f29e0d93a9debf9cd47653cbb5aff481af8f",
   holdoutFromPullRequest: 3066,
   holdoutRule:
     "The smallest pull request number from which the most recent 30 % of merged pull requests " +
     "carrying at least one review thread are held out, fixed on 2026-10-30.",
   minimumActionableRate: 0.5,
   maximumFindingsPerPullRequest: REVIEW_PRESENTED_FINDINGS_MAX,
+  maximumNotCompleteShare: 0.2,
 });

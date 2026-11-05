@@ -13,7 +13,7 @@
 import type { ReviewFindingReport, ReviewRunSettlement } from "@oscharko-dev/keiko-contracts";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 
-import { matchReviewFinding } from "./labels.js";
+import { scoreReviewFindings, type ReviewFindingMatch } from "./labels.js";
 import { REVIEW_EVALUATION_MANIFEST } from "./manifest.js";
 import { measureReviewCase, resolveReviewModel, type ReviewModelOptions } from "./model.js";
 import {
@@ -25,6 +25,7 @@ import {
   type ReviewReplayPullRequestResult,
   type ReviewReplayPurpose,
   type ReviewReplayRun,
+  type ReviewReplaySelection,
 } from "./types.js";
 
 export type ReviewHoldoutViolationCode =
@@ -95,6 +96,32 @@ function assertHoldoutDiscipline(options: ReviewReplayOptions): void {
   }
 }
 
+function defaultSelection(
+  dataset: ReviewHarvestDataset,
+  split: ReviewEvaluationSplit,
+): readonly number[] {
+  return dataset.pullRequests
+    .filter((pullRequest) => reviewSplitOf(pullRequest.number) === split)
+    .filter((pullRequest) => pullRequest.threads.length > 0)
+    .map((pullRequest) => pullRequest.number);
+}
+
+/**
+ * `default` when `numbers` is exactly the split's default selection (every pull request of the
+ * split with a thread, each once, in any order), otherwise `subset` (R4130-011).
+ */
+export function reviewReplaySelectionOf(
+  dataset: ReviewHarvestDataset,
+  split: ReviewEvaluationSplit,
+  numbers: readonly number[],
+): ReviewReplaySelection {
+  const expected = defaultSelection(dataset, split);
+  const actual = [...numbers].sort((left, right) => left - right);
+  const same =
+    actual.length === expected.length && actual.every((number, i) => number === expected[i]);
+  return same ? "default" : "subset";
+}
+
 function selectPullRequests(options: ReviewReplayOptions): readonly ReviewHarvestPullRequest[] {
   const inSplit = options.dataset.pullRequests.filter(
     (pullRequest) => reviewSplitOf(pullRequest.number) === options.split,
@@ -108,12 +135,20 @@ function selectPullRequests(options: ReviewReplayOptions): readonly ReviewHarves
   return options.pullRequests.map((pr) => byNumber.get(pr)).filter((pr) => pr !== undefined);
 }
 
+const UNMATCHED: ReviewFindingMatch = { outcome: "unmatched", matchedThreadIds: [] };
+
+type ScorableFinding = Pick<
+  ReviewFindingReport,
+  "file" | "startLine" | "endLine" | "category" | "severity"
+>;
+
 function scoreFindings(
-  findings: readonly ReviewFindingReport[],
+  findings: readonly ScorableFinding[],
   pullRequest: ReviewHarvestPullRequest,
 ): readonly ReviewReplayFinding[] {
-  return findings.map((finding) => {
-    const match = matchReviewFinding(finding, pullRequest.threads);
+  const matches = scoreReviewFindings(findings, pullRequest.threads);
+  return findings.map((finding, index) => {
+    const match: ReviewFindingMatch = matches[index] ?? UNMATCHED;
     return {
       file: finding.file,
       startLine: finding.startLine,
@@ -165,8 +200,55 @@ export async function runReviewReplay(options: ReviewReplayOptions): Promise<Rev
     holdoutFromPullRequest: REVIEW_EVALUATION_MANIFEST.holdoutFromPullRequest,
     split: options.split,
     purpose: options.purpose,
+    selection: reviewReplaySelectionOf(
+      options.dataset,
+      options.split,
+      selected.map((pullRequest) => pullRequest.number),
+    ),
     tuningInputs: [...options.tuningInputs].sort((left, right) => left - right),
     modelId: options.model.modelId,
     pullRequests: results,
+  };
+}
+
+/** A stored run, possibly written before the selection was recorded. */
+export type ReviewReplayRescoreInput = Omit<ReviewReplayRun, "selection"> & {
+  readonly selection?: ReviewReplaySelection | undefined;
+};
+
+function storedPullRequest(
+  dataset: ReviewHarvestDataset,
+  run: ReviewReplayRescoreInput,
+  number: number,
+): ReviewHarvestPullRequest {
+  if (reviewSplitOf(number) !== run.split) {
+    throw new ReviewHoldoutViolationError("split-mismatch", [number]);
+  }
+  const pullRequest = dataset.pullRequests.find((entry) => entry.number === number);
+  if (pullRequest === undefined) {
+    throw new ReviewHoldoutViolationError("unknown-pull-request", [number]);
+  }
+  return pullRequest;
+}
+
+/**
+ * Scores a stored run again against `dataset`, as a pure function of the two: every finding's
+ * outcome comes from its recorded location under the current labeling and duplicate rules, and the
+ * selection and dataset digest are derived anew. Settlements, costs and finding locations are kept.
+ */
+export function rescoreReviewReplayRun(
+  run: ReviewReplayRescoreInput,
+  dataset: ReviewHarvestDataset,
+): ReviewReplayRun {
+  const pullRequests = run.pullRequests.map((result) => ({
+    ...result,
+    findings: scoreFindings(result.findings, storedPullRequest(dataset, run, result.number)),
+  }));
+  const numbers = pullRequests.map((result) => result.number);
+  return {
+    ...run,
+    datasetDigest: dataset.digest,
+    selection: reviewReplaySelectionOf(dataset, run.split, numbers),
+    pullRequests,
   };
 }
