@@ -2030,8 +2030,9 @@ describe("git route activity log (AGENTS.md §8 Rule 1)", () => {
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ available: false, reason: "not-a-repository" });
     expect(activity.events).toHaveLength(1);
+    // #4271: a folder without Git is a supported workspace, so the membership answer is routine.
     expect(activity.events[0]).toMatchObject({
-      level: "warn",
+      level: "info",
       category: "diagnostic",
       op: "git.process.failed",
       correlationId: "corr-membership-0001",

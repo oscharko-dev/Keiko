@@ -113,6 +113,29 @@ describe("logGitProcessOutcome", () => {
     expect(event.op).toBe("git.process.refused");
   });
 
+  // #4271: whether a folder is a repository is a routine question; a folder without Git is a
+  // supported workspace. The answer is still recorded, at info, and a command that needed a
+  // repository and met none keeps warning.
+  it("records the membership question in a folder without Git at info, a status there at warn", () => {
+    const log = captureActivityLog();
+    const notRepository = result({ exitCode: 128, stderr: "fatal: not a git repository" });
+
+    logGitProcessOutcome(
+      log.sink,
+      "corr-membership-0002",
+      ["rev-parse", "--show-toplevel", "--show-prefix"],
+      notRepository,
+      3,
+    );
+    logGitProcessOutcome(log.sink, "corr-membership-0003", STATUS_ARGS, notRepository, 3);
+
+    expect(log.events.map((event) => [event.level, event.extra?.subcommand])).toEqual([
+      ["info", "rev-parse"],
+      ["warn", "status"],
+    ]);
+    expect(log.events.every((event) => event.extra?.failureKind === "not-a-repository")).toBe(true);
+  });
+
   it.each([
     {
       label: "a missing git executable",
