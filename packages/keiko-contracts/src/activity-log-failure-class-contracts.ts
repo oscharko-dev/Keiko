@@ -10916,9 +10916,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProofOperations: ["review.run.rules-file"],
     requiredReplayProofIds: [],
     requiredResourceOperations: ["review.run.rules-file"],
-    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
-    requiredFrameOperations: [],
-    requiredCauseOperations: [],
+    // R4130-022: a failed rules read carries its error kind, frames and cause chain.
+    requiredEvidenceClasses: [
+      "closed-enum",
+      "completeness-state",
+      "count",
+      "digest",
+      "error-kind",
+      "loss-state",
+      "opaque-id",
+    ],
+    requiredFrameOperations: ["review.run.rules-file"],
+    requiredCauseOperations: ["review.run.rules-file"],
   },
   {
     contractKind: "activity-log-failure-class",

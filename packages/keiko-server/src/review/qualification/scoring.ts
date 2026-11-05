@@ -2,7 +2,13 @@
 // `ReviewSeedRunResult` from its presented findings and is scored with child 1's one rule,
 // `scoreReviewSeedRun`, both per case (for the case's own result) and for the whole corpus. A run
 // that did not settle `complete` or `incomplete` has no presented findings to score: the case is
-// `not-scored` and the qualification can only end `incomplete`, never qualified or failed.
+// `not-scored` and the qualification can only end `incomplete`, never qualified or failed. An
+// `incomplete` run proves only what it presented (ADR-0182 D8): a presented finding on the seed is
+// `found`, and one on a clean control is a `false-alarm`. Its absence proves nothing, because the
+// Reviewer may have failed or run out of time before reaching the seed (R4130-012), and the one
+// settlement reason can hide that failure or a counter-check that never presented the seed's own
+// candidate (R4130-034). Such a case is not scored, so a miss or a clean control is measured only
+// on a `complete` run.
 
 import type {
   ReviewFindingCategory,
@@ -15,13 +21,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { scoreReviewSeedRun } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-rules";
 
-/** The scoreable result of one case's settled run, or `undefined` when it cannot be scored. */
-export function seedRunResult(
-  seed: ReviewSeedCase,
-  view: ReviewRunView | undefined,
-): ReviewSeedRunResult | undefined {
-  const kind = view?.settlement?.kind;
-  if (view === undefined || (kind !== "complete" && kind !== "incomplete")) return undefined;
+function runResult(seed: ReviewSeedCase, view: ReviewRunView): ReviewSeedRunResult {
   return {
     caseId: seed.id,
     outcome: view.stale ? "stale" : "settled",
@@ -31,6 +31,24 @@ export function seedRunResult(
       endLine: report.endLine,
     })),
   };
+}
+
+/** Whether an incomplete run's presented findings decide the case on their own. */
+function decidedByPresentation(seed: ReviewSeedCase, result: ReviewSeedRunResult): boolean {
+  const score = scoreReviewSeedRun([seed], [result]);
+  return seed.cleanControl ? score.falseAlarms > 0 : score.found > 0;
+}
+
+/** The scoreable result of one case's settled run, or `undefined` when it cannot be scored. */
+export function seedRunResult(
+  seed: ReviewSeedCase,
+  view: ReviewRunView | undefined,
+): ReviewSeedRunResult | undefined {
+  const kind = view?.settlement?.kind;
+  if (view === undefined || (kind !== "complete" && kind !== "incomplete")) return undefined;
+  const result = runResult(seed, view);
+  if (kind === "complete" || decidedByPresentation(seed, result)) return result;
+  return undefined;
 }
 
 /** One case's result under the shared scoring rule. */

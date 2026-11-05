@@ -185,11 +185,18 @@ range must lie within that blob (`range-invalid`), and the report's location mus
 fingerprint from the head excerpt, accepts at most eight candidates per run (`limit-reached` after;
 each report reserves its slot before it is judged, so concurrent reports never exceed the cap),
 answers the model a closed acknowledgement so it can correct a report once, and logs
-`review.finding.reported` body-free. The rules reader (`rulesFile.ts`) resolves
+`review.finding.reported` body-free. A report whose fingerprint an accepted candidate already holds
+is answered `duplicate` with the accepted and remaining counts, adds no candidate, and is counted
+in the line's `duplicateCount` (R4130-025). The rules reader (`rulesFile.ts`) resolves
 `<baseSha>:<path>` through the hardened review runner (`readGitReviewPathObject`): a missing file is
 `absent`, more than 16 KiB `too-large`, undecodable or NUL-bearing content `not-utf8`, and a configured
 path that cannot name a file in the tree `path-invalid` (each logged as `review.run.rules-file`; all
-but `loaded` and `absent` settle `skipped/rules-file-invalid`).
+but `loaded` and `absent` settle `skipped/rules-file-invalid`). A base commit that cannot be read
+settles `rules-read-failed`; its line carries a closed `failureClass` (`cancelled`, `timeout`,
+`spawn-refused`, `git-failed`), the matching `errorKind`, frames and cause chain. Every rules-file
+line carries the review run's correlation id (R4130-022). The head-file reader caches successful
+reads and deterministic refusals for the run; a Git read that was aborted, timed out or failed to
+run is not cached, so the next report or verdict that cites the file reads it again (R4130-013).
 
 ### D5 — Two independent passes
 
@@ -283,6 +290,11 @@ until its own idle stop, and `release` does not end it) and a fresh instance is 
 recorded as `placement: beside-quarantined` on `review.run.runtime-started`. One review per
 repository at a time still holds. At most one quarantined instance per repository: a review that
 would need a second one is refused as `runtime-unavailable` and settles `skipped/model-unavailable`.
+Every instance that cannot be started is logged as `review.run.runtime-stopped` with trigger
+`start-failed` under the review's correlation and a closed `startFailure`: the coding runtime's
+activation reason, `host-unavailable`, or `quarantine-limit` (R4130-019). An out-of-range
+`KEIKO_REVIEW_RUN_MAX_*` value leaves the review runtime and the review run service uncomposed
+with one `review.runtime.budget` diagnostic; it never fails server start (R4130-018).
 The
 Reviewer's diff budget is sized so the task always fits the 64 KiB first-prompt bound beside the
 largest admitted rules file (the gateway estimator counts at least one token per 3.5 bytes); a
@@ -296,7 +308,9 @@ removes the run's worktree and frees the live slot instead of ending the process
 terminal `review.run.settled` line is written when its stored row settles: at settlement when a
 record was written, otherwise by that later recovery. Every run a stopped server left unsettled is
 settled `abandoned/interrupted` when the review service is composed at the next start, and child 3's
-startup sweep removes its worktree. The stale flag compares the reviewed head with the pull
+startup sweep removes its worktree. That sweep never removes a worktree a review is creating, and a
+directory it cannot delete is reported and counted without stopping the startup ref sweep or the
+daily retention timer (R4130-016, R4130-021). The stale flag compares the reviewed head with the pull
 request's current head from the read-only detail (cached 30 seconds), at settlement and on every
 read; it never changes the settlement.
 
@@ -351,7 +365,11 @@ decision record. Proven by Issue #4141.
 The finding fingerprint is content-derived and line-independent: a framed digest of the normalized
 file path, the category and the normalized code excerpt of the `defect` evidence. It ignores line
 numbers and model-written prose such as the title, so an identical finding keeps its identity when
-the code moves. Publication (D10) still anchors comments to exact lines of the reviewed commit.
+the code moves. When the same excerpt lines (each line NFC-normalized and trimmed) already occur
+above the defect in the head file, the preimage adds that occurrence ordinal as a fifth frame
+(`reviewDefectExcerptOccurrence`), so two separate defects on identical lines keep separate
+identities. The first occurrence keeps the four-frame preimage, so its fingerprint is unchanged
+(R4130-025). Publication (D10) still anchors comments to exact lines of the reviewed commit.
 
 ### D8 — Model roles
 
@@ -410,7 +428,13 @@ under `<stateDir>/review-qualification/<id>/` (hardened review runner, repositor
 reviewed as a `local-range` target under the qualification's correlation and removed afterwards;
 the results are scored with `scoreReviewSeedRun`. `seed-qualified` needs every required seed found;
 one missed required seed is `seed-failed` with the missed seed classes; a cancellation, the
-three-hour deadline or an unscored case ends `cancelled` or `incomplete` and records no status. One
+three-hour deadline or an unscored case ends `cancelled` or `incomplete` and records no status. A
+case is unscored when its run did not settle `complete` or `incomplete`. An `incomplete` run scores
+only what it presented: a finding on the seed is `found`, and a finding on a clean control is a
+false alarm. Otherwise the case is unscored, because the Reviewer may have failed or run out of time
+before reaching the seed, and the one settlement reason can hide that failure or a counter-check that
+never presented the seed's candidate. A missed seed and a clean control are measured only on a
+`complete` run (R4130-012, R4130-034). One
 qualification runs at a time; progress streams over the shared SSE helper; leftovers are swept at
 start.
 

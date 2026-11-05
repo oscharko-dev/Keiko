@@ -179,6 +179,7 @@ class ReviewServicesImpl implements ReviewServices {
   // follow the retention rule like every other review ref.
   private readonly pinned = new Map<string, PinnedRefs>();
   private timer: NodeJS.Timeout | undefined;
+  private disposed = false;
   private readonly inFlight = new Set<Promise<void>>();
 
   public constructor(private readonly deps: ReviewServicesDeps) {
@@ -303,13 +304,23 @@ class ReviewServicesImpl implements ReviewServices {
     return sweep;
   }
 
+  /**
+   * The worktree sweep's failure is reported and never stops ref retention: the startup ref sweep
+   * still runs and the daily timer is still armed (R4130-021, invariant 3's 30-day bound).
+   */
   private async startupSweep(correlationId: string | undefined): Promise<void> {
-    await this.worktrees.sweepOrphans(correlationId);
+    try {
+      await this.worktrees.sweepOrphans(correlationId);
+    } catch (error) {
+      reportReviewFailure("review.worktree.remove", correlationId, error, this.deps.diagnostics);
+    }
+    if (!this.disposed) {
+      this.timer ??= setInterval(() => {
+        this.dailySweep();
+      }, DAY_MS);
+      this.timer.unref();
+    }
     await this.sweepRefs("startup", correlationId);
-    this.timer ??= setInterval(() => {
-      this.dailySweep();
-    }, DAY_MS);
-    this.timer.unref();
   }
 
   private dailySweep(): void {
@@ -330,6 +341,7 @@ class ReviewServicesImpl implements ReviewServices {
   }
 
   public async dispose(correlationId?: string): Promise<void> {
+    this.disposed = true;
     if (this.timer !== undefined) clearInterval(this.timer);
     this.timer = undefined;
     // A shutdown that overtakes the startup sweep waits for it, so nothing writes into the state

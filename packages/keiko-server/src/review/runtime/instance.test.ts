@@ -9,7 +9,7 @@ import { createGitReviewProcessRunner } from "@oscharko-dev/keiko-git";
 import { createBufferedServerLogSink } from "../../../../../tests/support/buffered-server-log.js";
 import type { GovernedCodingToolPort } from "../../coding-runtime/codingToolGovernedDelegate.js";
 import { DiffFixtureRepository } from "../diff-package/diffFixtures.test-support.js";
-import type { ReviewRuntimeComposition } from "./composition.js";
+import type { ReviewRuntimeComposeRefusal, ReviewRuntimeComposition } from "./composition.js";
 import {
   createReviewRuntimeService,
   type ReviewRuntimeRunRequest,
@@ -102,8 +102,8 @@ function service(
     (
       instanceId: string,
       port: (runId: string) => GovernedCodingToolPort<"review-report"> | undefined,
-    ): ReviewRuntimeComposition | undefined => {
-      if (options.compose === false) return undefined;
+    ): ReviewRuntimeComposition | ReviewRuntimeComposeRefusal => {
+      if (options.compose === false) return { startFailure: "loopback-unavailable" };
       const scripted = scripts[Math.min(composed, scripts.length - 1)] ?? { reports: [] };
       composed += 1;
       return fakeReviewComposition(instanceId, port, scripted, observed);
@@ -239,17 +239,27 @@ describe("createReviewRuntimeService", () => {
       terminal: "recovery-required",
       reapUnproven: true,
     };
-    const { subject, compose, observed } = service([unproven, unproven, { reports: [] }]);
+    const { subject, compose, observed, log } = service([unproven, unproven, { reports: [] }]);
 
     await subject.run(request(repo, base, head));
     await subject.run(request(repo, base, head, { reviewRunId: "review-run-2" }));
-    const third = await subject.run(request(repo, base, head, { reviewRunId: "review-run-3" }));
+    const third = await subject.run(
+      request(repo, base, head, { reviewRunId: "review-run-3", correlationId: "corr-review-3" }),
+    );
 
     expect(third).toEqual({ ok: false, reason: "runtime-unavailable", rules: "absent" });
     expect(compose).toHaveBeenCalledTimes(2);
     expect(observed.starts).toHaveLength(2);
     expect(observed).toMatchObject({ shutdowns: 0, closes: 0 });
     expect(subject.instanceCount()).toBe(2);
+    // R4130-019: the refusal names its cause under the review's correlation.
+    const failed = log.events.filter((event) => event.op === "review.run.runtime-stopped");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({
+      correlationId: "corr-review-3",
+      level: "warn",
+      extra: { trigger: "start-failed", startFailure: "quarantine-limit", runCount: 0 },
+    });
   });
 
   it("unbinds the review worktree after the run and reuses the instance for the next review", async () => {
@@ -344,14 +354,77 @@ describe("createReviewRuntimeService", () => {
     expect(refused?.extra).toMatchObject({ reason: "native-profile" });
   });
 
-  it("answers runtime-unavailable when no runtime can be composed", async () => {
+  // R4130-019: a composition that failed returned `undefined` without a line, so every review
+  // settled `skipped/model-unavailable` and no line named the real cause.
+  it("answers runtime-unavailable and logs why no runtime can be composed", async () => {
     const { repo, base, head } = headRepository();
-    const { subject } = service({ reports: [] }, { compose: false });
+    const { subject, log } = service({ reports: [] }, { compose: false });
 
-    await expect(subject.run(request(repo, base, head))).resolves.toEqual({
+    await expect(
+      subject.run(request(repo, base, head, { correlationId: "corr-review-1" })),
+    ).resolves.toEqual({
       ok: false,
       reason: "runtime-unavailable",
       rules: "absent",
+    });
+    const failed = log.events.filter((event) => event.op === "review.run.runtime-stopped");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({
+      correlationId: "corr-review-1",
+      level: "warn",
+      extra: { trigger: "start-failed", startFailure: "loopback-unavailable", runCount: 0 },
+    });
+  });
+
+  // R4130-022: a rules-read failure logged only `read-failed`, under the run id instead of the
+  // run's correlation id, and without its cause, so a timeout and a Git error read the same.
+  it("logs a rules-read failure under the run's correlation with its cause", async () => {
+    const { repo, head } = headRepository();
+    const { subject, log } = service({ reports: [] });
+
+    await expect(
+      subject.run(request(repo, "a".repeat(40), head, { correlationId: "corr-review-rules" })),
+    ).resolves.toEqual({ ok: false, reason: "rules-read-failed" });
+    const rules = log.events.filter((event) => event.op === "review.run.rules-file");
+    expect(rules).toHaveLength(1);
+    expect(rules[0]).toMatchObject({
+      correlationId: "corr-review-rules",
+      level: "warn",
+      errorKind: "read-failed",
+      extra: { outcome: "read-failed", failureClass: "git-failed" },
+    });
+    expect(rules[0]?.extra?.frames).toEqual(expect.any(Array));
+    expect(rules[0]?.extra?.causeChain).toEqual(expect.any(Array));
+  });
+
+  it("tells a cancelled rules read apart from a failed one", async () => {
+    const { repo, base, head } = headRepository("Rules.\n");
+    const { subject, log } = service({ reports: [] });
+    const cancelled = new AbortController();
+    cancelled.abort();
+
+    await expect(
+      subject.run(
+        request(repo, base, head, { correlationId: "corr-review-c", signal: cancelled.signal }),
+      ),
+    ).resolves.toEqual({ ok: false, reason: "rules-read-failed" });
+    const rules = log.events.find((event) => event.op === "review.run.rules-file");
+    expect(rules).toMatchObject({
+      correlationId: "corr-review-c",
+      errorKind: "cancelled",
+      extra: { outcome: "read-failed", failureClass: "cancelled" },
+    });
+  });
+
+  it("logs a loaded rules file under the run's correlation", async () => {
+    const { repo, base, head } = headRepository("Rules.\n");
+    const { subject, log } = service({ reports: [] });
+
+    await subject.run(request(repo, base, head, { correlationId: "corr-review-loaded" }));
+    const rules = log.events.find((event) => event.op === "review.run.rules-file");
+    expect(rules).toMatchObject({
+      correlationId: "corr-review-loaded",
+      extra: { outcome: "loaded", byteCount: 7 },
     });
   });
 

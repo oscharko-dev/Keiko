@@ -8,6 +8,7 @@
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   ReviewFindingReport,
@@ -15,12 +16,45 @@ import type {
   ReviewReportAcknowledgement,
   ReviewRulesFileOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import type { CodingWorkbenchRuntimeUnavailableReason } from "@oscharko-dev/keiko-contracts";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import type { CodingToolAction } from "../../coding-runtime/codingToolIpc.js";
+import type { ReviewRulesReadFailure } from "./rulesFile.js";
 import type { ServerLogSink } from "../../observability/index.js";
 import { correlationIdOrUnknown } from "../../correlation.js";
 import { reviewEvidenceDigest } from "../activity-log.js";
 
 export type ReviewRuntimeStopTrigger = "idle" | "shutdown" | "start-failed";
+
+/**
+ * Why a review instance could not be started (R4130-019): the activation's closed unavailable
+ * reason, a runtime host that could not be created, or a repository that already holds its one
+ * quarantined instance.
+ */
+const REVIEW_RUNTIME_START_FAILURES = [
+  "runtime-disabled",
+  "platform-unqualified",
+  "dev-lane-refused",
+  "payload-missing",
+  "payload-unapproved",
+  "payload-tampered",
+  "secure-read-unavailable",
+  "loopback-unavailable",
+  "runtime-unqualified",
+  "host-unavailable",
+  "quarantine-limit",
+] as const;
+export type ReviewRuntimeStartFailure = (typeof REVIEW_RUNTIME_START_FAILURES)[number];
+
+/**
+ * An activation's unavailable reason as a start failure. The assignment type-checks only while the
+ * vocabulary above lists every reason the coding runtime can answer.
+ */
+export function activationStartFailure(
+  reason: CodingWorkbenchRuntimeUnavailableReason,
+): ReviewRuntimeStartFailure {
+  return reason;
+}
 /** Why an instance was composed when the repository already had one (#4136). */
 export type ReviewRuntimePlacement = "beside-quarantined";
 export type ReviewRuntimeRefusalLayer = "tool-facade" | "catalog-bridge" | "tool-bridge";
@@ -76,6 +110,13 @@ const REVIEW_RUN_RUNTIME_STOPPED = defineActivityLogOperation({
     },
     idleDurationMs: { type: "integer", dataClass: "duration", required: true },
     runCount: { type: "integer", dataClass: "count", required: true },
+    // R4130-019: present only on `start-failed`, naming why no instance could be started.
+    startFailure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: REVIEW_RUNTIME_START_FAILURES,
+    },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -130,6 +171,27 @@ const REVIEW_RUN_RULES_FILE = defineActivityLogOperation({
       values: ["loaded", "absent", "too-large", "not-utf8", "path-invalid", "read-failed"],
     },
     byteCount: { type: "integer", dataClass: "count", required: true },
+    // R4130-022: present only on `read-failed`, with the error's frames and cause chain.
+    failureClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["cancelled", "timeout", "spawn-refused", "git-failed"],
+    },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -207,9 +269,12 @@ const REVIEW_FINDING_REPORTED = defineActivityLogOperation({
         "range-invalid",
         "evidence-mismatch",
         "limit-reached",
+        "duplicate",
       ],
     },
     acceptedCount: { type: "integer", dataClass: "count", required: false },
+    // R4130-025: reports of this run so far that repeated an accepted candidate's fingerprint.
+    duplicateCount: { type: "integer", dataClass: "count", required: false },
     findingCategory: {
       type: "string",
       dataClass: "closed-enum",
@@ -267,6 +332,8 @@ export interface ReviewRuntimeStoppedLine {
   readonly trigger: ReviewRuntimeStopTrigger;
   readonly idleDurationMs: number;
   readonly runCount: number;
+  /** Only with `start-failed`: why the instance could not be started. */
+  readonly startFailure?: ReviewRuntimeStartFailure | undefined;
 }
 
 export function logReviewRuntimeStopped(
@@ -286,6 +353,7 @@ export function logReviewRuntimeStopped(
         trigger: line.trigger,
         idleDurationMs: Math.max(0, Math.round(line.idleDurationMs)),
         runCount: line.runCount,
+        ...(line.startFailure === undefined ? {} : { startFailure: line.startFailure }),
       },
     ),
   );
@@ -312,18 +380,51 @@ export function logReviewProfileRefused(
   );
 }
 
-export function logReviewRulesFile(
-  log: ServerLogSink,
-  runId: string,
-  outcome: ReviewRulesFileOutcome | "read-failed",
-  byteCount: number,
-): void {
+export interface ReviewRulesFileLine {
+  /** The review run's own correlation, which every line of the run carries. */
+  readonly correlationId: string | undefined;
+  readonly runId: string;
+  readonly outcome: ReviewRulesFileOutcome | "read-failed";
+  readonly byteCount: number;
+  /** Only with `read-failed`: the read's closed failure and the error behind it. */
+  readonly failure?: {
+    readonly failureClass: ReviewRulesReadFailure;
+    readonly error: unknown;
+  };
+}
+
+const RULES_READ_ERROR_KINDS: Readonly<Record<ReviewRulesReadFailure, ActivityLogErrorKind>> = {
+  cancelled: "cancelled",
+  timeout: "timeout",
+  "spawn-refused": "unavailable",
+  "git-failed": "read-failed",
+};
+
+export function logReviewRulesFile(log: ServerLogSink, line: ReviewRulesFileLine): void {
+  const { outcome, failure } = line;
   const level = outcome === "loaded" || outcome === "absent" ? "info" : "warn";
   log.write(
     activityLogEvent(
       REVIEW_RUN_RULES_FILE,
-      { level, correlationId: correlationIdOrUnknown(runId) },
-      { runDigest: reviewEvidenceDigest("run", runId), outcome, byteCount },
+      {
+        level,
+        correlationId: correlationIdOrUnknown(line.correlationId),
+        ...(failure === undefined
+          ? {}
+          : { errorKind: RULES_READ_ERROR_KINDS[failure.failureClass] }),
+      },
+      {
+        runDigest: reviewEvidenceDigest("run", line.runId),
+        outcome,
+        byteCount: line.byteCount,
+        ...(failure === undefined
+          ? {}
+          : {
+              failureClass: failure.failureClass,
+              frames: keikoStackFrames(failure.error),
+              causeChain: causeChain(failure.error),
+            }),
+      },
     ),
   );
 }
@@ -352,22 +453,27 @@ export function logReviewFindingReported(
   log: ServerLogSink,
   runId: string,
   acknowledgement: ReviewReportAcknowledgement,
-  accepted?: { readonly fingerprint: string; readonly report: ReviewFindingReport },
+  facts: {
+    /** The accepted candidate, or for a duplicate the candidate it repeats. */
+    readonly accepted?: { readonly fingerprint: string; readonly report: ReviewFindingReport };
+    readonly duplicateCount?: number;
+  } = {},
 ): void {
+  const { accepted, duplicateCount } = facts;
+  const counted = acknowledgement.status === "accepted" || acknowledgement.status === "duplicate";
   log.write(
     activityLogEvent(
       REVIEW_FINDING_REPORTED,
       {
-        level: acknowledgement.status === "accepted" ? "info" : "warn",
+        level: counted ? "info" : "warn",
         correlationId: correlationIdOrUnknown(runId),
       },
       {
         runDigest: reviewEvidenceDigest("run", runId),
         outcome:
           acknowledgement.status === "rejected" ? acknowledgement.reason : acknowledgement.status,
-        ...(acknowledgement.status === "accepted"
-          ? { acceptedCount: acknowledgement.accepted }
-          : {}),
+        ...(counted ? { acceptedCount: acknowledgement.accepted } : {}),
+        ...(duplicateCount === undefined ? {} : { duplicateCount }),
         ...(accepted === undefined
           ? {}
           : {

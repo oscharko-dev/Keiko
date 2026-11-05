@@ -17,6 +17,7 @@ import {
   type ReviewReportAcknowledgement,
   type ReviewReportRejectionReason,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import { reviewDefectExcerptOccurrence } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-rules";
 import { validateReviewFindingReport } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-validation";
 import { computeReviewFindingFingerprint } from "@oscharko-dev/keiko-security/review-finding-fingerprint";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
@@ -64,7 +65,22 @@ export interface ReviewFindingIntake {
 
 type HeadFile =
   | { readonly kind: "lines"; readonly lines: readonly string[] }
-  | { readonly kind: "refused"; readonly reason: "path-outside-worktree" | "range-invalid" };
+  | {
+      readonly kind: "refused";
+      readonly reason: "path-outside-worktree" | "range-invalid";
+      /**
+       * A Git read that did not answer (an abort, a timeout or a process failure), not a fact about
+       * the head commit. It is never cached: the next read of the path tries Git again (R4130-013).
+       */
+      readonly transient?: true;
+    };
+
+const TRANSIENT_OUTSIDE: HeadFile = {
+  kind: "refused",
+  reason: "path-outside-worktree",
+  transient: true,
+};
+const TRANSIENT_RANGE: HeadFile = { kind: "refused", reason: "range-invalid", transient: true };
 
 type Verdict =
   | { readonly ok: true; readonly candidate: ReviewCandidateFinding }
@@ -102,7 +118,13 @@ class HeadFileReader {
     if (this.files.size >= MAX_CACHED_FILES) {
       return Promise.resolve({ kind: "refused", reason: "range-invalid" });
     }
-    const pending = this.load(path, signal);
+    const pending: Promise<HeadFile> = this.load(path, signal).then((file) => {
+      // Only successful loads and deterministic refusals stay cached for the run.
+      if (file.kind === "refused" && file.transient === true && this.files.get(path) === pending) {
+        this.files.delete(path);
+      }
+      return file;
+    });
     this.files.set(path, pending);
     return pending;
   }
@@ -112,16 +134,16 @@ class HeadFileReader {
     const ctx = { runner: this.input.runner, timeoutMs: HEAD_READ_TIMEOUT_MS, abortSignal: signal };
     const cwd = this.input.worktreeRoot;
     const object = await readGitReviewPathObject(ctx, { cwd, sha: this.input.headSha, path });
-    if (!object.ok || object.value?.type !== "blob") {
-      return { kind: "refused", reason: "path-outside-worktree" };
-    }
+    // The head commit is held by the worktree's object store, so a failed lookup did not answer.
+    if (!object.ok) return TRANSIENT_OUTSIDE;
+    if (object.value?.type !== "blob") return { kind: "refused", reason: "path-outside-worktree" };
     // A file too large to verify cannot back a finding: its ranges are unverifiable.
     if (object.value.size > REVIEW_WORKTREE_DEFAULT_BLOB_LIMIT_BYTES) {
       return { kind: "refused", reason: "range-invalid" };
     }
     const maxBytes = Math.max(1, object.value.size);
     const blob = await readGitReviewBlob({ ...ctx, maxBytes }, { cwd, oid: object.value.oid });
-    if (!blob.ok) return { kind: "refused", reason: "range-invalid" };
+    if (!blob.ok) return TRANSIENT_RANGE;
     return { kind: "lines", lines: splitLines(blob.value) };
   }
 }
@@ -170,60 +192,95 @@ async function judge(
   if (file.kind === "refused") return { ok: false, reason: file.reason };
   const defectExcerpt = file.lines.slice(defect.startLine - 1, defect.endLine).join("\n");
   if (defectExcerpt.trim().length === 0) return { ok: false, reason: "evidence-mismatch" };
-  const fingerprint = computeReviewFindingFingerprint(report, defectExcerpt);
+  const occurrence = reviewDefectExcerptOccurrence(file.lines, defect.startLine, defect.endLine);
+  const fingerprint = computeReviewFindingFingerprint(report, defectExcerpt, occurrence);
   return { ok: true, candidate: { fingerprint, report, defectExcerpt } };
+}
+
+/** The run-bound state the intake keeps between reports. */
+interface IntakeState {
+  readonly input: ReviewFindingIntakeInput;
+  readonly accepted: ReviewCandidateFinding[];
+  readonly rejected: Record<ReviewReportRejectionReason, number>;
+  readonly max: number;
+  reserved: number;
+  duplicates: number;
+}
+
+function record(
+  state: IntakeState,
+  acknowledgement: ReviewReportAcknowledgement,
+  candidate?: ReviewCandidateFinding,
+): ReviewReportAcknowledgement {
+  logReviewFindingReported(state.input.activityLog, state.input.runId, acknowledgement, {
+    ...(candidate === undefined ? {} : { accepted: candidate }),
+    duplicateCount: state.duplicates,
+  });
+  return acknowledgement;
+}
+
+/**
+ * The acknowledgement of a report that passed the head-commit judgement. A report whose fingerprint
+ * an accepted candidate already holds adds nothing: it is answered `duplicate`, so the model knows
+ * it was not added, and counted (R4130-025).
+ */
+function acknowledgeCandidate(
+  state: IntakeState,
+  candidate: ReviewCandidateFinding,
+): ReviewReportAcknowledgement {
+  const known = state.accepted.find((entry) => entry.fingerprint === candidate.fingerprint);
+  if (known === undefined) state.accepted.push(candidate);
+  else state.duplicates += 1;
+  const counts = {
+    accepted: state.accepted.length,
+    remaining: Math.max(0, state.max - state.accepted.length),
+  };
+  return known === undefined
+    ? record(state, { status: "accepted", ...counts }, candidate)
+    : record(state, { status: "duplicate", ...counts }, known);
+}
+
+async function submitReport(
+  state: IntakeState,
+  reader: HeadFileReader,
+  value: unknown,
+  signal: AbortSignal | undefined,
+): Promise<ReviewReportAcknowledgement> {
+  // Up to eight reports may be judged at once: each reserves its slot synchronously before the
+  // head-commit judgement is awaited, so concurrent reports can never exceed the cap. The slot is
+  // released once the judgement settles; an accepted candidate then occupies it.
+  if (state.accepted.length + state.reserved >= state.max) {
+    state.rejected["limit-reached"] += 1;
+    return record(state, { status: "limit-reached" });
+  }
+  state.reserved += 1;
+  let verdict: Verdict;
+  try {
+    verdict = await judge(reader, value, signal);
+  } finally {
+    state.reserved -= 1;
+  }
+  if (verdict.ok) return acknowledgeCandidate(state, verdict.candidate);
+  state.rejected[verdict.reason] += 1;
+  return record(state, { status: "rejected", reason: verdict.reason });
 }
 
 /** Creates the intake of one review run. */
 export function createReviewFindingIntake(input: ReviewFindingIntakeInput): ReviewFindingIntake {
   const reader = new HeadFileReader(input);
-  const accepted: ReviewCandidateFinding[] = [];
-  const rejected = emptyRejections();
-  const max = input.maxCandidates ?? REVIEW_RUN_MAX_CANDIDATE_REPORTS;
-  let reserved = 0;
-  const record = (
-    acknowledgement: ReviewReportAcknowledgement,
-    candidate?: ReviewCandidateFinding,
-  ): void => {
-    logReviewFindingReported(input.activityLog, input.runId, acknowledgement, candidate);
+  const state: IntakeState = {
+    input,
+    accepted: [],
+    rejected: emptyRejections(),
+    max: input.maxCandidates ?? REVIEW_RUN_MAX_CANDIDATE_REPORTS,
+    reserved: 0,
+    duplicates: 0,
   };
   return {
     runId: input.runId,
-    async submit(value, signal): Promise<ReviewReportAcknowledgement> {
-      // Up to eight reports may be judged at once: each reserves its slot synchronously before the
-      // head-commit judgement is awaited, so concurrent reports can never exceed the cap. The slot
-      // is released once the judgement settles; an accepted candidate then occupies it.
-      if (accepted.length + reserved >= max) {
-        rejected["limit-reached"] += 1;
-        const limit: ReviewReportAcknowledgement = { status: "limit-reached" };
-        record(limit);
-        return limit;
-      }
-      reserved += 1;
-      let verdict: Awaited<ReturnType<typeof judge>>;
-      try {
-        verdict = await judge(reader, value, signal);
-      } finally {
-        reserved -= 1;
-      }
-      if (!verdict.ok) {
-        rejected[verdict.reason] += 1;
-        const refusal: ReviewReportAcknowledgement = { status: "rejected", reason: verdict.reason };
-        record(refusal);
-        return refusal;
-      }
-      const known = accepted.some((entry) => entry.fingerprint === verdict.candidate.fingerprint);
-      if (!known) accepted.push(verdict.candidate);
-      const acknowledgement: ReviewReportAcknowledgement = {
-        status: "accepted",
-        accepted: accepted.length,
-        remaining: Math.max(0, max - accepted.length),
-      };
-      record(acknowledgement, verdict.candidate);
-      return acknowledgement;
-    },
-    candidates: () => [...accepted],
-    rejections: () => ({ ...rejected }),
+    submit: (value, signal) => submitReport(state, reader, value, signal),
+    candidates: () => [...state.accepted],
+    rejections: () => ({ ...state.rejected }),
   };
 }
 

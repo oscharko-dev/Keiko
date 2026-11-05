@@ -12,7 +12,7 @@
 // Lifecycle: created → in-use → removing → removed; a worktree found on disk without a live run
 // (a crash) is `orphaned` and removed by the startup sweep.
 
-import { existsSync } from "node:fs";
+import { existsSync, type Dirent } from "node:fs";
 import { readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type {
@@ -228,6 +228,11 @@ interface Materialized {
 
 class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
   private readonly live = new Map<string, LiveWorktree>();
+  /**
+   * Leaves of worktrees being created: registered before the worktree exists and live only once it
+   * is accepted. The orphan sweep never removes one (R4130-016).
+   */
+  private readonly creating = new Set<string>();
 
   public constructor(private readonly deps: ReviewWorktreeManagerDeps) {}
 
@@ -251,6 +256,25 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
       throw new TypeError("invalid review worktree request");
     }
     if (this.live.has(input.runId)) throw new TypeError("review worktree already exists for run");
+    const leaf = reviewRunLeaf(input.runId);
+    if (this.creating.has(leaf)) throw new TypeError("review worktree already exists for run");
+    // Claimed synchronously, before the first await, so a sweep running now leaves it alone.
+    this.creating.add(leaf);
+    try {
+      return await this.createClaimed(input);
+    } finally {
+      this.creating.delete(leaf);
+    }
+  }
+
+  /** Whether a run owns this leaf: its worktree is live or being created right now. */
+  private owned(leaf: string): boolean {
+    if (this.creating.has(leaf)) return true;
+    for (const runId of this.live.keys()) if (reviewRunLeaf(runId) === leaf) return true;
+    return false;
+  }
+
+  private async createClaimed(input: ReviewWorktreeCreateInput): Promise<ReviewWorktreeCreation> {
     const startedMs = this.deps.now();
     const path = this.pathFor(input.runId);
     await ensureReviewRoot(this.deps.reviewRoot);
@@ -473,19 +497,17 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
   public async sweepOrphans(
     correlationId?: string,
   ): Promise<{ readonly removed: number; readonly failed: number }> {
-    const liveLeaves = new Set<string>();
-    for (const runId of this.live.keys()) liveLeaves.add(reviewRunLeaf(runId));
+    // Ownership is checked again right before each removal, never from a snapshot taken here: a
+    // review may start creating its worktree while the sweep walks the repositories (R4130-016).
     const snapshot = await this.deps.registry.read();
-    const outcomes = [
-      ...(await this.sweepRegisteredWorktrees(snapshot.worktrees, liveLeaves, correlationId)),
-    ];
+    const outcomes = [...(await this.sweepRegisteredWorktrees(snapshot.worktrees, correlationId))];
     const repositories = new Set<string>();
     for (const entry of [...snapshot.worktrees, ...snapshot.refs])
       repositories.add(entry.repositoryRoot);
     for (const repositoryRoot of repositories) {
-      outcomes.push(...(await this.sweepListedEntries(repositoryRoot, liveLeaves, correlationId)));
+      outcomes.push(...(await this.sweepListedEntries(repositoryRoot, correlationId)));
     }
-    outcomes.push(...(await this.sweepUnregisteredDirectories(liveLeaves)));
+    outcomes.push(...(await this.sweepUnregisteredDirectories(correlationId)));
     const removed = outcomes.filter(Boolean).length;
     const failed = outcomes.length - removed;
     logReviewWorktreeOrphanSwept(this.deps.activityLog, correlationId, removed, failed);
@@ -494,11 +516,11 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
 
   private async sweepRegisteredWorktrees(
     records: readonly { readonly leaf: string; readonly repositoryRoot: string }[],
-    liveLeaves: ReadonlySet<string>,
     correlationId: string | undefined,
   ): Promise<readonly boolean[]> {
     const outcomes: boolean[] = [];
-    for (const record of records.filter((entry) => !liveLeaves.has(entry.leaf))) {
+    for (const record of records) {
+      if (this.owned(record.leaf)) continue;
       const path = join(this.deps.reviewRoot, record.leaf);
       const removed = await this.removeOrReport(record.repositoryRoot, path, correlationId);
       if (removed) await this.unregister(record.leaf);
@@ -510,7 +532,6 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
   /** Locked `keiko-review` entries under the review root that no live run owns (a lost registry). */
   private async sweepListedEntries(
     repositoryRoot: string,
-    liveLeaves: ReadonlySet<string>,
     correlationId: string | undefined,
   ): Promise<readonly boolean[]> {
     if (!existsSync(repositoryRoot)) return [];
@@ -524,31 +545,47 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
         entry.lockReason === GIT_REVIEW_WORKTREE_LOCK_REASON &&
         dirname(entry.path) === this.deps.reviewRoot &&
         REVIEW_RUN_LEAF_PATTERN.test(leaf);
-      if (!ours || liveLeaves.has(leaf)) continue;
+      if (!ours || this.owned(leaf)) continue;
       results.push(await this.removeOrReport(repositoryRoot, entry.path, correlationId));
     }
     return results;
   }
 
-  /** Review directories with no registry record and no live run (a crash before registration). */
+  /**
+   * Review directories with no registry record and no live run (a crash before registration). A
+   * directory that cannot be listed or deleted is reported and counted as failed; it never ends the
+   * sweep, so the ref sweep and the retention timer behind it still run (R4130-021).
+   */
   private async sweepUnregisteredDirectories(
-    liveLeaves: ReadonlySet<string>,
+    correlationId: string | undefined,
   ): Promise<readonly boolean[]> {
     if (!existsSync(this.deps.reviewRoot)) return [];
-    const entries = await readdir(this.deps.reviewRoot, { withFileTypes: true });
+    let entries: readonly Dirent[];
+    try {
+      entries = await readdir(this.deps.reviewRoot, { withFileTypes: true });
+    } catch (error) {
+      reportReviewFailure("review.worktree.remove", correlationId, error);
+      return [false];
+    }
     const results: boolean[] = [];
     for (const entry of entries) {
-      if (
-        !entry.isDirectory() ||
-        !REVIEW_RUN_LEAF_PATTERN.test(entry.name) ||
-        liveLeaves.has(entry.name)
-      )
-        continue;
-      const path = join(this.deps.reviewRoot, entry.name);
-      await rm(path, { recursive: true, force: true });
-      results.push(!existsSync(path));
+      if (!entry.isDirectory() || !REVIEW_RUN_LEAF_PATTERN.test(entry.name)) continue;
+      if (this.owned(entry.name)) continue;
+      results.push(
+        await this.deleteOrReport(join(this.deps.reviewRoot, entry.name), correlationId),
+      );
     }
     return results;
+  }
+
+  /** Deletes one orphaned directory; a failure is reported with its error class and counted. */
+  private async deleteOrReport(path: string, correlationId: string | undefined): Promise<boolean> {
+    try {
+      await rm(path, { recursive: true, force: true });
+    } catch (error) {
+      reportReviewFailure("review.worktree.remove", correlationId, error);
+    }
+    return !existsSync(path);
   }
 }
 

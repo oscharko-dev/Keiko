@@ -707,6 +707,8 @@ export type ReviewReportRejectionReason = (typeof REVIEW_REPORT_REJECTION_REASON
 /** The model-facing acknowledgement of one `keiko_review_report` call. */
 export type ReviewReportAcknowledgement =
   | { readonly status: "accepted"; readonly accepted: number; readonly remaining: number }
+  /** The report repeats an accepted candidate (same fingerprint); nothing was added (R4130-025). */
+  | { readonly status: "duplicate"; readonly accepted: number; readonly remaining: number }
   | {
       readonly status: "rejected";
       readonly reason: Exclude<ReviewReportRejectionReason, "limit-reached">;
