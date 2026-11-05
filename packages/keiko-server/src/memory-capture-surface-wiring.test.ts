@@ -81,9 +81,7 @@ function fakeModel(content: string): ModelPort {
 }
 
 function modelFact(body: string): string {
-  return JSON.stringify([
-    { source: "user", body, type: "fact", confidence: 0.8, scope: "project", tags: ["surface"] },
-  ]);
+  return JSON.stringify([{ about: "self", body, evidence: body, type: "fact", tags: ["surface"] }]);
 }
 
 function context(): ConversationMemoryRuntimeContext {
@@ -137,7 +135,10 @@ function depsFor(
     memoryVault: vault,
     memoryAuthorization: {
       reviewerId: "local-operator" as MemoryReviewerId,
-      authorizedScopes: () => [{ kind: "project", projectId: ctx.projectId }],
+      authorizedScopes: () => [
+        { kind: "project", projectId: ctx.projectId },
+        { kind: "user", userId: ctx.userId },
+      ],
     },
     codingRuntimeDeploymentCeiling: "autonomous-delivery",
   };
@@ -221,11 +222,11 @@ describe("post-commit capture-surface attribution", () => {
   it("files a voice-declared desktop-chat turn under the voice audit surface", async () => {
     const evidenceStore = createInMemoryEvidenceStore();
     const vault = makeVault(evidenceStore);
-    const deps = depsFor(vault, evidenceStore, modelFact("The user prefers stand-ups at 9am."));
+    const deps = depsFor(vault, evidenceStore, modelFact("I prefer stand-ups at 9am."));
 
     runPostCommitConversationMemorySideEffects(
       deps,
-      sendRequest("The user prefers stand-ups at 9am.", "voice"),
+      sendRequest("I prefer stand-ups at 9am.", "voice"),
       context(),
       "gpt-test",
       EMPTY_MEMORY_RESULT,
@@ -239,11 +240,11 @@ describe("post-commit capture-surface attribution", () => {
   it("keeps an undeclared turn on the desktop audit surface", async () => {
     const evidenceStore = createInMemoryEvidenceStore();
     const vault = makeVault(evidenceStore);
-    const deps = depsFor(vault, evidenceStore, modelFact("The user's timezone is UTC+1."));
+    const deps = depsFor(vault, evidenceStore, modelFact("My timezone is UTC+1."));
 
     runPostCommitConversationMemorySideEffects(
       deps,
-      sendRequest("The user's timezone is UTC+1."),
+      sendRequest("My timezone is UTC+1."),
       context(),
       "gpt-test",
       EMPTY_MEMORY_RESULT,
@@ -257,7 +258,7 @@ describe("post-commit capture-surface attribution", () => {
   it("files a voice-declared canonical (grounded) turn under the voice audit surface", async () => {
     const evidenceStore = createInMemoryEvidenceStore();
     const vault = makeVault(evidenceStore);
-    const deps = depsFor(vault, evidenceStore, modelFact("The user ships on Fridays."));
+    const deps = depsFor(vault, evidenceStore, modelFact("I ship on Fridays."));
 
     runPostCommitCanonicalTurnMemorySideEffects(
       deps,
@@ -265,7 +266,7 @@ describe("post-commit capture-surface attribution", () => {
         chatId: "conversation-a",
         projectPath: "project-a",
         messages: [
-          { role: "user", content: "The user ships on Fridays." },
+          { role: "user", content: "I ship on Fridays." },
           { role: "assistant", content: "Noted." },
         ],
         modelId: "gpt-test",

@@ -62,7 +62,7 @@ import {
 // v11 = stable keyset traversal for the sealed tombstone vector ledger. The partial composite index
 // keeps each exact semantic-suppression page and each authorized audit page bounded without dropping
 // older refusals or exposing a plaintext vector sidecar.
-export const MEMORY_VAULT_SCHEMA_VERSION = 11;
+export const MEMORY_VAULT_SCHEMA_VERSION = 12;
 
 const ENCRYPTION_VERSION = 2;
 
@@ -241,6 +241,16 @@ CREATE INDEX IF NOT EXISTS idx_tombstones_scope_forgotten
   ON memory_tombstones(scope_kind, scope_coordinate, forgotten_at DESC, id ASC);
 `;
 
+// v12 = learned facts (#4212). A learned memory keeps the person's exact words it rests on and the
+// turns they came from; evidence_span is content and sealed like the body. memory_access gains
+// last_used_at: what an answer drew on is remembered for "Vergiss das" without counting as a
+// reinforcement, so a memory cannot strengthen itself by being repeated back.
+const V12_SQL = `
+ALTER TABLE memories ADD COLUMN evidence_span TEXT;
+ALTER TABLE memories ADD COLUMN source_message_ids_json TEXT;
+ALTER TABLE memory_access ADD COLUMN last_used_at INTEGER;
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through the package's public entry point, so no packaged surface change.
 export const MIGRATIONS: readonly Migration[] = [
@@ -254,6 +264,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 9, sql: V9_SQL },
   { version: 10, sql: V10_SQL },
   { version: 11, sql: V11_SQL },
+  { version: 12, sql: V12_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

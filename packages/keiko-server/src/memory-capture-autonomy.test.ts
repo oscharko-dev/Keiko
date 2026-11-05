@@ -46,43 +46,35 @@ import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics
 // A single durable public fact. Body carries no regex-capture trigger (no remember/forget/update/
 // correction/identity phrasing) so the deterministic regex path stays empty and the salience path
 // is the ONLY writer — this is what the "persisted exactly once" counts depend on.
-function publicFact(confidence: number): string {
-  return JSON.stringify([
-    {
-      source: "user",
-      body: "The platform team ships releases on a fortnightly cadence.",
-      type: "fact",
-      confidence,
-      scope: "project",
-      tags: ["release"],
-    },
-  ]);
-}
-
-const CONFIDENTIAL_FACT = JSON.stringify([
+const PUBLIC_FACT = JSON.stringify([
   {
-    source: "user",
-    body: "The escalation contact address is oncall@example.com.",
+    about: "self",
+    body: "I ship releases on a fortnightly cadence.",
+    evidence: "I ship releases on a fortnightly cadence.",
     type: "fact",
-    confidence: 0.7,
-    scope: "user",
-    tags: ["contact"],
   },
 ]);
 
-const SECRET_BODY = "The staging login uses password=FAKE-TEST-PLACEHOLDER-VALUE.";
+const CONFIDENTIAL_FACT = JSON.stringify([
+  {
+    about: "self",
+    body: "My escalation contact address is oncall@example.com.",
+    evidence: "My escalation contact address is oncall@example.com.",
+    type: "fact",
+  },
+]);
+
+const SECRET_BODY = "My staging login uses password=FAKE-TEST-PLACEHOLDER-VALUE.";
 const SECRET_TOKEN = "FAKE-TEST-PLACEHOLDER-VALUE";
 
 // A single credential-shaped item. The secret net drops it inside candidateBody before any mode
 // logic, so nothing is persisted in any mode.
 const SECRET_ONLY = JSON.stringify([
   {
-    source: "user",
+    about: "self",
     body: SECRET_BODY,
+    evidence: SECRET_BODY,
     type: "fact",
-    confidence: 0.8,
-    scope: "project",
-    tags: ["ops"],
   },
 ]);
 
@@ -90,8 +82,8 @@ const SECRET_ONLY = JSON.stringify([
 // trigger (deterministic path stays empty). Each accepted model body is an exact complete line from
 // this user turn, preserving the user-provenance boundary in the real salience extractor.
 const USER_TEXT = [
-  "The platform team ships releases on a fortnightly cadence.",
-  "The escalation contact address is oncall@example.com.",
+  "I ship releases on a fortnightly cadence.",
+  "My escalation contact address is oncall@example.com.",
 ].join("\n");
 
 const ALL_MODES: readonly CodingWorkbenchMode[] = [
@@ -408,7 +400,7 @@ describe("mode-aware memory capture journey", () => {
 
   it("keeps a routine public fact proposed under governed-assist (legacy default deps)", async () => {
     const vault = makeVault();
-    const deps = makeDeps({ vault, model: publicFact(0.7) });
+    const deps = makeDeps({ vault, model: PUBLIC_FACT });
     const ctx = context();
     await runTurn(deps, ctx, USER_TEXT);
     await waitForCount(vault, ctx, 1);
@@ -425,7 +417,7 @@ describe("mode-aware memory capture journey", () => {
 
   it("auto-accepts a routine public fact under supervised-coding (confidence >= promote floor)", async () => {
     const vault = makeVault();
-    const deps = makeDeps({ vault, model: publicFact(0.7), mode: "supervised-coding" });
+    const deps = makeDeps({ vault, model: PUBLIC_FACT, mode: "supervised-coding" });
     const ctx = context();
     const actions = await runTurn(deps, ctx, USER_TEXT);
     await waitForCount(vault, ctx, 1);
@@ -443,7 +435,7 @@ describe("mode-aware memory capture journey", () => {
 
   it("auto-accepts a routine public fact under autonomous-delivery", async () => {
     const vault = makeVault();
-    const deps = makeDeps({ vault, model: publicFact(0.7), mode: "autonomous-delivery" });
+    const deps = makeDeps({ vault, model: PUBLIC_FACT, mode: "autonomous-delivery" });
     const ctx = context();
     await runTurn(deps, ctx, USER_TEXT);
     await waitForCount(vault, ctx, 1);
@@ -457,7 +449,7 @@ describe("mode-aware memory capture journey", () => {
     const allowedVault = makeVault();
     const allowedDeps = makeDeps({
       vault: allowedVault,
-      model: publicFact(0.7),
+      model: PUBLIC_FACT,
       mode: "autonomous-delivery",
     });
     const allowedContext = context();
@@ -471,7 +463,7 @@ describe("mode-aware memory capture journey", () => {
     expect(readMemories(allowedVault, allowedContext)[0]?.status).toBe("accepted");
 
     const cappedVault = makeVault();
-    const cappedDeps = makeDeps({ vault: cappedVault, model: publicFact(0.7) });
+    const cappedDeps = makeDeps({ vault: cappedVault, model: PUBLIC_FACT });
     const cappedContext = context();
     await captureSalientFromTurn(
       cappedDeps,
@@ -483,16 +475,18 @@ describe("mode-aware memory capture journey", () => {
     expect(readMemories(cappedVault, cappedContext)[0]?.status).toBe("proposed");
   });
 
-  it("keeps a low-confidence public fact proposed under supervised-coding (shouldPromote gate holds)", async () => {
+  it("derives confidence from the person's words, never from what the model claims (#4212)", async () => {
     const vault = makeVault();
-    const deps = makeDeps({ vault, model: publicFact(0.3), mode: "supervised-coding" });
+    const claimed = JSON.stringify([
+      { ...(JSON.parse(PUBLIC_FACT) as object[])[0], confidence: 0.01 },
+    ]);
+    const deps = makeDeps({ vault, model: claimed, mode: "supervised-coding" });
     const ctx = context();
     await runTurn(deps, ctx, USER_TEXT);
     await waitForCount(vault, ctx, 1);
     const [record] = readMemories(vault, ctx);
-    expect(record?.status).toBe("proposed");
-    expect(readByStatus(vault, ctx, "proposed")).toHaveLength(1);
-    expect(readByStatus(vault, ctx, "accepted")).toHaveLength(0);
+    expect(record?.provenance.confidence).toBe(0.85);
+    expect(record?.status).toBe("accepted");
   });
 
   it.each(ALL_MODES)("keeps a confidential fact proposed under %s", async (mode) => {
@@ -537,7 +531,7 @@ describe("mode-aware memory capture journey", () => {
 
   it("holds a proposed fact out of retrieval AND does not re-propose it on the next turn", async () => {
     const vault = makeVault();
-    const deps = makeDeps({ vault, model: publicFact(0.7) }); // governed-assist (no ceiling)
+    const deps = makeDeps({ vault, model: PUBLIC_FACT }); // governed-assist (no ceiling)
     const ctx = context();
     const first = await captureSalientFromTurn(deps, salienceRequest(), ctx, "gpt-test", "ok");
     expect(first).toHaveLength(1);
@@ -557,7 +551,7 @@ describe("mode-aware memory capture journey", () => {
   it("does not re-propose a fact the operator rejected, and audits the refusal", async () => {
     const vault = makeVault();
     const evidence = capturingEvidenceStore();
-    const deps = makeDeps({ vault, model: publicFact(0.7), evidenceStore: evidence.store });
+    const deps = makeDeps({ vault, model: PUBLIC_FACT, evidenceStore: evidence.store });
     const ctx = context();
     await captureSalientFromTurn(deps, salienceRequest(), ctx, "gpt-test", "ok");
     const proposal = readMemories(vault, ctx)[0];
@@ -584,7 +578,7 @@ describe("mode-aware memory capture journey", () => {
 
   it("surfaces a supervised-accepted fact in the next turn's retrieval snapshot", async () => {
     const vault = makeVault();
-    const deps = makeDeps({ vault, model: publicFact(0.7), mode: "supervised-coding" });
+    const deps = makeDeps({ vault, model: PUBLIC_FACT, mode: "supervised-coding" });
     const ctx = context();
     const first = await captureSalientFromTurn(deps, salienceRequest(), ctx, "gpt-test", "ok");
     expect(first).toHaveLength(1);
@@ -603,7 +597,7 @@ describe("mode-aware memory capture journey", () => {
         return Promise.reject(new Error("model exploded"));
       },
     };
-    const deps = makeDeps({ vault, model: publicFact(0.7), mode: "autonomous-delivery" });
+    const deps = makeDeps({ vault, model: PUBLIC_FACT, mode: "autonomous-delivery" });
     const ctx = context();
     // collectMemoryActions returns synchronously well-formed (regex path is empty).
     const actions = await runTurn(
@@ -691,7 +685,7 @@ describe("explicit remember statement in chat", () => {
       const vault = makeVault();
       const ctx = context();
       const model = JSON.stringify([
-        { source: "user", body: content, type: "fact", confidence: 0.95, scope: "user" },
+        { about: "self", body: content, evidence: content, type: "fact", scope: "user" },
       ]);
       const deps = makeDeps({ vault, model, mode: "autonomous-delivery" });
       const request = { ...salienceRequest("autonomous-delivery"), content };
@@ -905,12 +899,11 @@ describe("explicit forget statement in chat", () => {
   ): Promise<UiHandlerDeps> {
     const content = JSON.stringify([
       {
-        source: "user",
-        body: "The platform team ships releases on a fortnightly cadence.",
+        about: "self",
+        body: "I ship releases on a fortnightly cadence.",
+        evidence: "I ship releases on a fortnightly cadence.",
         type: "fact",
-        confidence: 0.95,
         scope,
-        tags: ["release"],
       },
     ]);
     const deps = makeDeps({ vault, model: content, mode });
@@ -924,7 +917,7 @@ describe("explicit forget statement in chat", () => {
       const ctx = context();
       const statement = "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.";
       const content = JSON.stringify([
-        { source: "user", body: statement, type: "preference", confidence: 0.95, scope: "user" },
+        { about: "self", body: statement, evidence: statement, type: "preference", scope: "user" },
       ]);
       const deps = withPreviousStatement(makeDeps({ vault, model: content, mode }), statement);
       const sink = captureActivityLog();
@@ -1122,7 +1115,11 @@ describe("explicit forget statement in chat", () => {
     const ctx = context();
     const deps = await learnedFact(vault, ctx, "autonomous-delivery", "project");
 
-    await collectMemoryActions(deps, turnRequest("Vergiss, dass das Team fortnightly ships."), ctx);
+    await collectMemoryActions(
+      deps,
+      turnRequest("Vergiss, dass ich releases fortnightly ship."),
+      ctx,
+    );
 
     expect(readMemories(vault, ctx)).toHaveLength(0);
   });

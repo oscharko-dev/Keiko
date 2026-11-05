@@ -577,6 +577,71 @@ describe("atomic graph mutations", () => {
     vault.close();
   });
 
+  it("inserts a replacing memory in the one transaction or not at all (#4212)", () => {
+    const dir = freshDir();
+    const vault = openVault(dir, []);
+    const older = vault.insertMemory(makeMemory({ id: "m-older" as MemoryId, status: "accepted" }));
+    const newer = makeMemory({ id: "m-newer" as MemoryId, status: "accepted" });
+    const replace = (expectedUpdatedAt: number): void => {
+      vault.applyGraphMutation({
+        preconditions: [{ id: older.id, expectedStatus: older.status, expectedUpdatedAt }],
+        inserts: [newer],
+        updates: [
+          {
+            id: older.id,
+            patch: { status: "superseded" },
+            nowMs: older.updatedAt + 1,
+            expectedStatus: older.status,
+            expectedUpdatedAt,
+          },
+        ],
+        edges: [
+          {
+            id: "e-replaces" as MemoryEdgeId,
+            schemaVersion: "1",
+            fromMemoryId: older.id,
+            toMemoryId: newer.id,
+            kind: "supersedes",
+            createdAt: older.updatedAt + 1,
+          },
+        ],
+      });
+    };
+
+    expect(() => {
+      replace(older.updatedAt - 1);
+    }).toThrow();
+    expect(vault.getMemory(newer.id)).toBeUndefined();
+    expect(vault.getMemory(older.id)?.status).toBe("accepted");
+
+    replace(older.updatedAt);
+    expect(vault.getMemory(newer.id)?.status).toBe("accepted");
+    expect(vault.getMemory(older.id)?.status).toBe("superseded");
+    expect(vault.listOutgoingEdges(older.id).map((edge) => edge.kind)).toEqual(["supersedes"]);
+    vault.close();
+  });
+
+  it("remembers an answer's use without counting it as a reinforcement (#4212)", () => {
+    const dir = freshDir();
+    const vault = openVault(dir, []);
+    const memory = vault.insertMemory(makeMemory({ id: "m-used" as MemoryId, status: "accepted" }));
+
+    vault.recordUse([memory.id], 1_700_000_000_500);
+    expect(vault.getAccessStats([memory.id]).get(memory.id)).toMatchObject({
+      accessCount: 0,
+      lastUsedAt: 1_700_000_000_500,
+    });
+
+    vault.recordAccess([memory.id], 1_700_000_000_600);
+    vault.recordUse([memory.id], 1_700_000_000_700);
+    expect(vault.getAccessStats([memory.id]).get(memory.id)).toMatchObject({
+      accessCount: 1,
+      lastAccessedAt: 1_700_000_000_600,
+      lastUsedAt: 1_700_000_000_700,
+    });
+    vault.close();
+  });
+
   it("rejects a stale graph status precondition before mutation", () => {
     const dir = freshDir();
     const events: MemoryEvent[] = [];

@@ -11,10 +11,12 @@ export type {
   CaptureOutcome,
   CaptureStatementKind,
   CapturePolicyOptions,
-  MemoryScopeKindHint,
+  LearnedFactRelation,
   SalienceDiagnostic,
   SalienceDeps,
+  SalienceDropReason,
   SalienceInput,
+  SalienceOutcome,
   SalienceModelMessage,
   SalienceModelMessageRole,
   WorkflowOutcomeInput,
@@ -27,6 +29,17 @@ export {
   isMemoryForgetReference,
 } from "./intent-explicit.js";
 export { extractSalientMemories } from "./salience.js";
+export { FACT_DROP_REASONS } from "./fact-admission.js";
+export {
+  FACT_CHANGE_BASES,
+  FACT_RELATION_LABELS,
+  factReplacedByStatement,
+  statesChangedFact,
+  statesSameFact,
+  type FactChangeBasis,
+  type FactRelationLabel,
+  type KnownFact,
+} from "./fact-relation.js";
 export { memoryTextEgressRejectionReason } from "./capture-safety.js";
 export {
   memoryTextCaptureRejectionReason,

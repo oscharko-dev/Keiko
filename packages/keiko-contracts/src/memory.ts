@@ -158,3 +158,5 @@ export {
   isMemoryRecord,
   validateMemoryRecord,
 } from "./memory-record-validation.js";
+
+export { normalizeMemoryText, sameMemoryWord, tokenizeMemoryText } from "./memory-text.js";

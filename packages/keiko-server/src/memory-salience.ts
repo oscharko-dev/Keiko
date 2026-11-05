@@ -1,9 +1,9 @@
 // Server-side orchestration for model-assisted salience capture (Keiko "learns from experience").
 //
-// After a chat turn, this module asks the model to extract durable, salient facts the USER stated
-// in natural conversation and persists them as `proposed` memory candidates — IN ADDITION to the
-// regex intent path in chat-handlers.ts. The capture filter is intentionally LOW; a later
-// decay/consolidation pass prunes.
+// After a chat turn, this module asks the model to extract the durable facts the person stated
+// about themselves in natural conversation — IN ADDITION to the regex intent path in
+// chat-handlers.ts. The checks in keiko-memory-capture decide what is admitted; here the outcome
+// reaches the vault: a new fact, a confirmation of a known one, or the replacement of an older one.
 //
 // This is the model/IO boundary: the WHOLE body runs inside one try/catch so a model error, a
 // vault hiccup, or any other failure can NEVER throw into the chat path — it logs and returns [].
@@ -31,10 +31,12 @@ import {
   isExplicitMemoryStatement,
   memoryTextSecretEgressRejectionReason,
   type CaptureContext,
-  type CaptureOutcome,
+  type KnownFact,
+  type LearnedFactRelation,
   type RejectionReason,
   type SalienceDiagnostic,
   type SalienceDeps,
+  type SalienceOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { UiHandlerDeps } from "./deps.js";
@@ -45,7 +47,10 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
-import { insertSalienceMemoryWithNoveltyGate } from "./memory-embedding.js";
+import {
+  insertSalienceMemoryWithNoveltyGate,
+  type NoveltyInsertOptions,
+} from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import {
   emitServerDiagnostic,
@@ -66,6 +71,13 @@ import {
   SENSITIVE_MEMORY_ACTION_BODY,
   SENSITIVE_MEMORY_REJECTION_REASON,
 } from "./memory-capture-policy.js";
+import { applyLearnedSupersession } from "./memory-learned-facts.js";
+import {
+  logLearnedDrop,
+  logLearnedExtraction,
+  logLearnedRelation,
+  type LearnedRelationDecision,
+} from "./memory-learned-facts-log.js";
 import { exactCaptureSuppressionReason } from "./memory-suppression.js";
 
 // Mirror of chat-handlers' private scopeLabel (decision 3 — mirrored rather than exported to keep
@@ -85,8 +97,8 @@ function scopeLabel(scope: MemoryScope): string {
   }
 }
 
-// Bounds the dedup corpus so the Jaccard loop stays cheap even for a large vault.
-const MAX_EXISTING_BODIES = 200;
+// Bounds the comparison so it stays cheap even for a large vault.
+const MAX_KNOWN_FACTS = 200;
 const MAX_PENDING_SALIENCE_CAPTURES = 32;
 const SALIENCE_MODEL_ENV = "KEIKO_MEMORY_SALIENCE_MODEL_ID";
 const SALIENCE_DEFAULT_SEED = 204;
@@ -110,26 +122,14 @@ const SALIENCE_RESPONSE_FORMAT: ResponseFormat = {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["body", "type", "confidence", "scope", "source", "tags"],
+          required: ["body", "evidence", "about", "type", "relation", "related"],
           properties: {
             body: { type: "string", minLength: 1 },
-            type: {
-              type: "string",
-              enum: [
-                "identity",
-                "preference",
-                "fact",
-                "decision",
-                "constraint",
-                "goal",
-                "lesson",
-                "procedural",
-              ],
-            },
-            confidence: { type: "number", minimum: 0, maximum: 1 },
-            scope: { type: "string", enum: ["user", "project", "workspace"] },
-            source: { type: "string", enum: ["user"] },
-            tags: { type: "array", items: { type: "string" } },
+            evidence: { type: "string", minLength: 1 },
+            about: { type: "string", enum: ["self", "other", "unclear"] },
+            type: { type: "string", enum: ["preference", "fact", "decision", "procedural"] },
+            relation: { type: "string", enum: ["new", "same", "update", "contradiction"] },
+            related: { type: ["integer", "null"] },
           },
         },
       },
@@ -137,28 +137,24 @@ const SALIENCE_RESPONSE_FORMAT: ResponseFormat = {
   },
 };
 
-// Lexical dedup corpus for the extractor. It covers every LIVE record — accepted AND proposed —
-// because a proposal is a real record already occupying the review queue: re-deriving the same fact
-// next turn must not queue the operator a second copy of the same question. In the default "Ask for
-// approval" posture nothing is accepted at capture, so an accepted-only corpus was empty for every
-// newly learned fact and the extractor re-proposed it on every single turn. Refused bodies
-// (forgotten / rejected) are deliberately NOT here: they are handled by the suppression gate in
-// persistCandidate, which records the refusal as a capture-decision audit event instead of dropping
-// the candidate silently.
-function gatherExistingBodies(
+// What the learner compares a new fact with: every LIVE record — accepted AND proposed — because a
+// proposal is a real record already occupying the review queue, so re-deriving the same fact next
+// turn must not queue a second copy. A sensitive body is not shown to the model again. Refused bodies
+// (forgotten / rejected) are deliberately NOT here: they stay with the suppression gate in
+// persistCandidate, which records the refusal as a capture-decision audit event.
+function gatherKnownFacts(
   vault: MemoryVaultStore,
   context: ConversationMemoryRuntimeContext,
-): readonly string[] {
-  const seen = new Set<string>();
+): readonly KnownFact[] {
+  const known: KnownFact[] = [];
   for (const scope of conversationMemoryScopes(context)) {
     for (const record of vault.listMemoriesByScope(scope, { status: ["accepted", "proposed"] })) {
-      seen.add(record.body);
-      if (seen.size >= MAX_EXISTING_BODIES) {
-        return [...seen];
-      }
+      if (record.provenance.sensitivity !== "public") continue;
+      known.push({ id: record.id, body: record.body });
+      if (known.length >= MAX_KNOWN_FACTS) return known;
     }
   }
-  return [...seen];
+  return known;
 }
 
 function buildSalienceContext(context: ConversationMemoryRuntimeContext): CaptureContext {
@@ -260,7 +256,23 @@ function logSalienceDiagnostic(
   deps: UiHandlerDeps,
   modelId: string,
   correlationId: string,
+  sourceMessageCount: number,
 ): void {
+  if (diagnostic.kind === "extraction-summary") {
+    logLearnedExtraction(
+      {
+        rawItemCount: diagnostic.rawItemCount,
+        admittedCount: diagnostic.acceptedCount,
+        knownFactCount: diagnostic.knownFactCount,
+        sourceMessageCount,
+      },
+      correlationId,
+    );
+    return;
+  }
+  if (diagnostic.kind === "dropped-model-items") {
+    logLearnedDrop(diagnostic.reason, diagnostic.count, sourceMessageCount, correlationId);
+  }
   const responseFormatEnabled = salienceResponseFormatFor(deps, modelId) !== undefined;
   const detail =
     diagnostic.kind === "dropped-model-items"
@@ -309,6 +321,8 @@ function emitSalienceFailureDiagnostic(
 // unbuildable records) are not tallied.
 type CaptureDisposition = "accepted" | "proposed" | "rejected" | "merged" | "none";
 
+type LearnedCandidate = Extract<SalienceOutcome, { readonly kind: "candidate" }>;
+
 interface PersistedCandidate {
   readonly action: ConversationMemoryActionWire | null;
   readonly disposition: CaptureDisposition;
@@ -346,7 +360,7 @@ function recordCaptureDecision(
 
 function proposedDecisionReason(
   mode: CodingWorkbenchMode,
-  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  outcome: LearnedCandidate,
 ): MemoryCaptureDecisionReason {
   if (outcome.requiresApproval) return "sensitivity-requires-approval";
   return mode === "governed-assist" ? "mode-requires-approval" : "governance-promotion-deferred";
@@ -356,7 +370,7 @@ function recordPersistedCandidateDecision(
   deps: UiHandlerDeps,
   mode: CodingWorkbenchMode,
   surface: SalienceCaptureSurface,
-  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  outcome: LearnedCandidate,
   inserted: MemoryRecord,
 ): void {
   const accepted = inserted.status === "accepted";
@@ -374,7 +388,7 @@ function recordRejectedCandidateDecision(
   deps: UiHandlerDeps,
   mode: CodingWorkbenchMode,
   surface: SalienceCaptureSurface,
-  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  outcome: LearnedCandidate,
   reason: RejectionReason,
 ): void {
   recordCaptureDecision(deps, mode, surface, {
@@ -387,7 +401,7 @@ function recordRejectedCandidateDecision(
 }
 
 function candidateWireAction(
-  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  outcome: LearnedCandidate,
   inserted: MemoryRecord,
 ): ConversationMemoryActionWire {
   return {
@@ -409,55 +423,122 @@ function rejectedCandidate(
   deps: UiHandlerDeps,
   mode: CodingWorkbenchMode,
   surface: SalienceCaptureSurface,
-  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  outcome: LearnedCandidate,
   reason: RejectionReason,
 ): PersistedCandidate {
   recordRejectedCandidateDecision(deps, mode, surface, outcome, reason);
   return { action: { kind: "rejected", reason }, disposition: "rejected" };
 }
 
-// Persists one salience candidate and returns its wire action plus how it settled. Returns a null
-// action when the outcome is not a candidate, no record could be built, or the candidate was merged
-// into an existing semantic near-duplicate (#204, O-F1) instead of stored. Embed-on-capture happens
-// INSIDE the novelty gate: the body is embedded once, used to detect a near-duplicate, and stored
-// only when the record is actually inserted. Graceful when no embedding model is configured (plain
-// insert, no dedup). When the resolved mode makes the candidate auto-accept-eligible the record is
-// routed through governance promotion before insert; every existing gate stays untouched.
+function noveltyOptions(
+  vault: MemoryVaultStore,
+  relation: LearnedFactRelation,
+  onSuperseded: (decision: LearnedRelationDecision) => void,
+): NoveltyInsertOptions {
+  if (relation.kind === "same-unconfirmed") return { onlyConfirm: true };
+  if (relation.kind === "new") return {};
+  return {
+    replaces: relation.memoryId,
+    insert: (record) => {
+      const applied = applyLearnedSupersession(vault, record, relation.memoryId);
+      if (applied.pendingApproval) onSuperseded("supersession-proposed");
+      else if (applied.superseded !== undefined) onSuperseded("superseded");
+      return applied.record;
+    },
+  };
+}
+
+interface LearningTrace {
+  readonly surface: SalienceCaptureSurface;
+  readonly mode: CodingWorkbenchMode;
+  readonly correlationId: string;
+  readonly sourceMessageCount: number;
+}
+
+function recordRelation(
+  outcome: SalienceOutcome,
+  decision: LearnedRelationDecision,
+  trace: LearningTrace,
+): void {
+  const basis =
+    outcome.kind === "candidate" && outcome.relation.kind === "supersede"
+      ? outcome.relation.basis
+      : undefined;
+  logLearnedRelation(
+    {
+      label: outcome.relationLabel,
+      decision,
+      ...(basis === undefined ? {} : { basis }),
+      sourceMessageCount: trace.sourceMessageCount,
+    },
+    trace.correlationId,
+  );
+}
+
+// The person said it again: the existing memory records the confirmation, and nothing else changes.
+function confirmKnownFact(
+  vault: MemoryVaultStore,
+  outcome: Extract<SalienceOutcome, { readonly kind: "confirmation" }>,
+  trace: LearningTrace,
+): PersistedCandidate {
+  vault.recordAccess([outcome.memoryId], Date.now());
+  recordRelation(outcome, "confirmed", trace);
+  return { action: null, disposition: "merged" };
+}
+
+// Persists one learned candidate and returns its wire action plus how it settled. Returns a null
+// action when it merely confirmed a known fact. Embed-on-capture happens INSIDE the novelty gate: the
+// body is embedded once, used to detect a near-duplicate, and stored only when the record is actually
+// inserted. Graceful when no embedding model is configured (plain insert, no dedup). When the resolved
+// mode makes the candidate auto-accept-eligible the record is routed through governance promotion
+// before insert; every existing gate stays untouched.
 async function persistCandidate(
   deps: UiHandlerDeps,
-  outcome: CaptureOutcome,
+  outcome: SalienceOutcome,
   vault: MemoryVaultStore,
-  mode: CodingWorkbenchMode,
-  surface: SalienceCaptureSurface,
+  trace: LearningTrace,
 ): Promise<PersistedCandidate> {
-  if (outcome.kind !== "candidate") {
-    return { action: null, disposition: "none" };
-  }
-  if (!isPersistableMemoryCandidate(outcome)) {
-    return rejectedCandidate(deps, mode, surface, outcome, SENSITIVE_MEMORY_REJECTION_REASON);
-  }
+  if (outcome.kind === "confirmation") return confirmKnownFact(vault, outcome, trace);
+  const { mode, surface } = trace;
+  const refuse = (reason: RejectionReason): PersistedCandidate => {
+    recordRelation(outcome, "refused", trace);
+    return rejectedCandidate(deps, mode, surface, outcome, reason);
+  };
+  if (!isPersistableMemoryCandidate(outcome)) return refuse(SENSITIVE_MEMORY_REJECTION_REASON);
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
   const exactSuppression = exactCaptureSuppressionReason(vault, record);
-  if (exactSuppression !== null) {
-    return rejectedCandidate(deps, mode, surface, outcome, exactSuppression);
-  }
+  if (exactSuppression !== null) return refuse(exactSuppression);
   const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
     ? promoteEligibleMemoryRecord(record)
     : record;
-  const outcomeOfInsert = await insertSalienceMemoryWithNoveltyGate(deps, vault, candidate);
+  let decision: LearnedRelationDecision = "new";
+  const outcomeOfInsert = await insertSalienceMemoryWithNoveltyGate(
+    deps,
+    vault,
+    candidate,
+    noveltyOptions(vault, outcome.relation, (settled) => {
+      decision = settled;
+    }),
+  );
   if (outcomeOfInsert.kind === "suppressed") {
     // A PARAPHRASE of a fact the human already forgot or rejected. Nothing was stored and nothing
     // was reinforced — this is a refusal, so it is audited and tallied as one, exactly like the
     // exact-body suppression above.
-    return rejectedCandidate(deps, mode, surface, outcome, outcomeOfInsert.reason);
+    return refuse(outcomeOfInsert.reason);
+  }
+  if (outcomeOfInsert.kind === "unconfirmed") {
+    recordRelation(outcome, "unconfirmed-dropped", trace);
+    return { action: null, disposition: "none" };
   }
   if (outcomeOfInsert.kind === "merged") {
     // Near-duplicate of an existing in-scope memory: the canonical was reinforced, nothing new to
     // surface. Over-capture is bounded at the encode boundary rather than deferred to a decay pass.
+    recordRelation(outcome, "merged", trace);
     return { action: null, disposition: "merged" };
   }
   const inserted = outcomeOfInsert.record;
+  recordRelation(outcome, decision, trace);
   recordPersistedCandidateDecision(deps, mode, surface, outcome, inserted);
   return {
     action: candidateWireAction(outcome, inserted),
@@ -467,6 +548,8 @@ async function persistCandidate(
 
 interface SalienceTurnRequest {
   readonly content: string;
+  // The person's message the turn came from, when the caller has one.
+  readonly sourceMessageId?: string;
   readonly memory:
     { readonly enabled: boolean; readonly mode?: CodingWorkbenchMode | undefined } | undefined;
 }
@@ -556,7 +639,7 @@ export function scheduleMemorySalienceCapture(
 type TurnSalienceExtraction =
   | { readonly kind: "unavailable" }
   | { readonly kind: "refused"; readonly reason: RejectionReason }
-  | { readonly kind: "outcomes"; readonly outcomes: readonly CaptureOutcome[] };
+  | { readonly kind: "outcomes"; readonly outcomes: readonly SalienceOutcome[] };
 
 // The per-turn scalars `extractTurnSalienceOutcomes` and `runSalienceCapture` both thread through
 // unchanged, bundled into one parameter so neither function's positional-argument count crosses
@@ -585,11 +668,15 @@ async function extractTurnSalienceOutcomes(
   const policy = memoryCapturePolicyForDeps(deps);
   const refusalReason = memoryTextSecretEgressRejectionReason(request.content, policy);
   if (refusalReason !== null) return { kind: "refused", reason: refusalReason };
+  const sourceMessageCount = request.sourceMessageId === undefined ? 0 : 1;
   const outcomes = await extractSalientMemories(
     {
       userText: request.content,
       assistantText,
-      existingBodies: gatherExistingBodies(vault, context),
+      knownFacts: gatherKnownFacts(vault, context),
+      ...(request.sourceMessageId === undefined
+        ? {}
+        : { sourceMessageIds: [request.sourceMessageId] }),
       context: captureContext,
       policy,
     },
@@ -604,7 +691,7 @@ async function extractTurnSalienceOutcomes(
       newMemoryId: captureContext.newMemoryId,
       newProposalId: captureContext.newProposalId,
       onDiagnostic: (diagnostic) => {
-        logSalienceDiagnostic(diagnostic, deps, salienceModelId, correlationId);
+        logSalienceDiagnostic(diagnostic, deps, salienceModelId, correlationId, sourceMessageCount);
       },
     },
   );
@@ -668,14 +755,13 @@ interface SalienceCaptureResult {
 async function persistSalienceActions(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
-  outcomes: readonly CaptureOutcome[],
-  mode: CodingWorkbenchMode,
-  surface: SalienceCaptureSurface,
+  outcomes: readonly SalienceOutcome[],
+  trace: LearningTrace,
 ): Promise<SalienceCaptureResult> {
   const actions: ConversationMemoryActionWire[] = [];
   const summary = emptySalienceCaptureSummary();
   for (const outcome of outcomes) {
-    const { action, disposition } = await persistCandidate(deps, outcome, vault, mode, surface);
+    const { action, disposition } = await persistCandidate(deps, outcome, vault, trace);
     if (action !== null) actions.push(action);
     tallyDisposition(summary, disposition);
   }
@@ -737,7 +823,12 @@ async function runSalienceCapture(
     return [];
   }
   const { outcomes } = extraction;
-  const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, mode, surface);
+  const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, {
+    surface,
+    mode,
+    correlationId,
+    sourceMessageCount: request.sourceMessageId === undefined ? 0 : 1,
+  });
   if (outcomes.length > 0) logSalienceCaptureSummary(mode, summary, deps, correlationId);
   return actions;
 }

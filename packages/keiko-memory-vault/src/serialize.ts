@@ -37,7 +37,7 @@ import { MemoryStorageError } from "./errors.js";
 import type { MemoryContentCipher } from "./cipher.js";
 
 // Content-vs-metadata split (ADR-0035): only the columns that carry remembered TEXT are sealed —
-// body, payload_json, tags_json, capture_rationale, stale_reason. Every other column (ids, scope,
+// body, payload_json, tags_json, capture_rationale, stale_reason, evidence_span. Every other column (ids, scope,
 // status, sensitivity, pinned, confidence, all timestamps, source_*, model_*, retention_*) stays
 // cleartext so SQL indexes and the UI scope display keep working without a key. Crypto is confined
 // to the two wrapper functions below; the pure row↔record builders never see a key.
@@ -56,6 +56,7 @@ function decryptContentColumns(row: MemoryRow, cipher: MemoryContentCipher): Mem
     tags_json: cipher.openString(row.tags_json),
     capture_rationale: openNullable(cipher, row.capture_rationale),
     stale_reason: openNullable(cipher, row.stale_reason),
+    evidence_span: openNullable(cipher, row.evidence_span),
   };
 }
 
@@ -72,6 +73,7 @@ function encryptContentColumns(row: MemoryRowWrite, cipher: MemoryContentCipher)
     tags_json: cipher.sealString(row.tags_json),
     capture_rationale: sealNullable(cipher, row.capture_rationale),
     stale_reason: sealNullable(cipher, row.stale_reason),
+    evidence_span: sealNullable(cipher, row.evidence_span),
   };
 }
 
@@ -103,6 +105,8 @@ export interface MemoryRow {
   readonly retention_policy_key: string | null;
   readonly retention_retain_until: number | null;
   readonly retention_notes: string | null;
+  readonly evidence_span: string | null;
+  readonly source_message_ids_json: string | null;
   readonly created_at: number;
   readonly updated_at: number;
 }
@@ -138,6 +142,8 @@ function buildProvenanceFromRow(row: MemoryRow): MemoryProvenance {
     sourceEvidenceManifestId?: EvidenceManifestId;
     modelIdentity?: { provider: string; modelId: string; modelRevision?: string };
     captureRationale?: string;
+    evidenceSpan?: string;
+    sourceMessageIds?: readonly string[];
   } = {
     sourceKind: row.source_kind as MemorySourceKind,
     capturedAt: row.captured_at,
@@ -155,6 +161,10 @@ function buildProvenanceFromRow(row: MemoryRow): MemoryProvenance {
   }
   if (row.capture_rationale !== null) {
     base.captureRationale = row.capture_rationale;
+  }
+  if (row.evidence_span !== null) base.evidenceSpan = row.evidence_span;
+  if (row.source_message_ids_json !== null) {
+    base.sourceMessageIds = JSON.parse(row.source_message_ids_json) as readonly string[];
   }
   if (row.model_provider !== null && row.model_id !== null) {
     const identity: { provider: string; modelId: string; modelRevision?: string } = {
@@ -275,6 +285,8 @@ export interface MemoryRowWrite {
   readonly retention_policy_key: string | null;
   readonly retention_retain_until: number | null;
   readonly retention_notes: string | null;
+  readonly evidence_span: string | null;
+  readonly source_message_ids_json: string | null;
   readonly created_at: number;
   readonly updated_at: number;
 }
@@ -289,6 +301,8 @@ type ProvenanceRowFields = Pick<
   | "source_evidence_manifest_id"
   | "captured_at"
   | "capture_rationale"
+  | "evidence_span"
+  | "source_message_ids_json"
   | "model_provider"
   | "model_id"
   | "model_revision"
@@ -319,6 +333,9 @@ function provenanceFieldsToRow(prov: MemoryRecord["provenance"]): ProvenanceRowF
     source_evidence_manifest_id: prov.sourceEvidenceManifestId ?? null,
     captured_at: prov.capturedAt,
     capture_rationale: prov.captureRationale ?? null,
+    evidence_span: prov.evidenceSpan ?? null,
+    source_message_ids_json:
+      prov.sourceMessageIds === undefined ? null : JSON.stringify(prov.sourceMessageIds),
     ...modelIdentityFieldsToRow(prov.modelIdentity),
   };
 }

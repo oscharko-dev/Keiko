@@ -241,6 +241,8 @@ describe("openMemoryDatabase — memory-vault.store.encryption-migrated wiring",
     const db = new DatabaseSync(dbPath);
     insertMemoryRow(db, makeRecord({ id: memId("m1") }), TEST_CIPHER);
     db.prepare("UPDATE memories SET body = ? WHERE id = ?").run("plaintext body", "m1");
+    db.exec("ALTER TABLE memories DROP COLUMN evidence_span");
+    db.exec("ALTER TABLE memories DROP COLUMN source_message_ids_json");
     db.exec("DROP TABLE memory_access");
     db.exec("DROP TABLE memory_tombstones");
     db.exec(`

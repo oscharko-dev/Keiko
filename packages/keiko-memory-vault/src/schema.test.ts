@@ -79,6 +79,8 @@ describe("runMigrations", () => {
     // Simulate a genuine pre-v3 (encryption-era) database: the access table did not exist and the
     // version sat at the encryption head. Dropping the table + regressing the version reproduces
     // the on-disk shape a v2 DB actually has before this migration runs.
+    db.exec("ALTER TABLE memories DROP COLUMN evidence_span");
+    db.exec("ALTER TABLE memories DROP COLUMN source_message_ids_json");
     db.exec("DROP TABLE memory_access");
     db.exec("DROP INDEX idx_tombstones_scope");
     db.exec("DROP INDEX idx_tombstones_memory_id");

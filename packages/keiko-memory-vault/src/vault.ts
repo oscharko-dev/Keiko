@@ -66,6 +66,7 @@ import {
 import {
   getAccessStatsRows,
   recordAccessRows,
+  recordUseRows,
   recordOutcomeRows,
   type MemoryAccessStat,
 } from "./access.js";
@@ -750,13 +751,21 @@ function runGraphMutation(
   db: DatabaseSync,
   mutation: MemoryGraphMutation,
   opts: ResolvedOptions,
-): { readonly memories: readonly UpdatedMemory[]; readonly edges: readonly MemoryEdge[] } {
+): {
+  readonly inserted: readonly MemoryRecord[];
+  readonly memories: readonly UpdatedMemory[];
+  readonly edges: readonly MemoryEdge[];
+} {
+  const inserted = (mutation.inserts ?? []).map((record) => preparedForWrite(record, opts));
   const edges = mutation.edges.map((edge) => preparedEdgeForWrite(edge, opts));
   const memories: UpdatedMemory[] = [];
   db.exec("BEGIN IMMEDIATE");
   try {
     for (const precondition of mutation.preconditions ?? []) {
       assertGraphPrecondition(db, precondition, opts.cipher);
+    }
+    for (const record of inserted) {
+      insertMemoryRow(db, record, opts.cipher);
     }
     for (const update of mutation.updates) {
       memories.push(updateMemoryInPlace(db, update, opts));
@@ -769,7 +778,7 @@ function runGraphMutation(
     db.exec("ROLLBACK");
     throw error;
   }
-  return { memories, edges };
+  return { inserted, memories, edges };
 }
 
 function assertGraphPrecondition(
@@ -905,11 +914,18 @@ function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWri
     applyGraphMutation: (mutation: MemoryGraphMutation): MemoryGraphMutationResult => {
       return withSidecarHardening(opts, () => {
         const ready = runGraphMutation(db, mutation, opts);
+        for (const record of ready.inserted) {
+          opts.emit({ kind: "memory:inserted", record });
+        }
         emitUpdatedRecords(ready.memories, opts);
         for (const edge of ready.edges) {
           opts.emit({ kind: "edge:inserted", edge });
         }
-        return { memories: ready.memories.map((updated) => updated.record), edges: ready.edges };
+        return {
+          inserted: ready.inserted,
+          memories: ready.memories.map((updated) => updated.record),
+          edges: ready.edges,
+        };
       });
     },
     deleteMemory: (id: MemoryId, options: DeleteMemoryOptions): void => {
@@ -1058,6 +1074,7 @@ type TombstoneAndAccessOps = Pick<
   | "hasSemanticallySimilarForgetTombstone"
   | "purgeTombstonesByScopeBefore"
   | "recordAccess"
+  | "recordUse"
   | "recordOutcome"
   | "getAccessStats"
 >;
@@ -1252,6 +1269,11 @@ function buildTombstoneAndAccessOps(
     recordAccess: (ids: readonly MemoryId[], nowMs: number): void => {
       withSidecarHardening(opts, () => {
         recordAccessRows(db, ids, nowMs);
+      });
+    },
+    recordUse: (ids: readonly MemoryId[], nowMs: number): void => {
+      withSidecarHardening(opts, () => {
+        recordUseRows(db, ids, nowMs);
       });
     },
     recordOutcome: (ids: readonly MemoryId[], utility: number, nowMs: number): void => {

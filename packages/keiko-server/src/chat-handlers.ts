@@ -111,7 +111,7 @@ import {
   conversationFusionMode,
   semanticRetrievalGateForText,
 } from "./memory-retrieval-signals.js";
-import { reinforcementAccessIdsForAssistantUse } from "./memory-reinforcement.js";
+import { memoriesUsedInAnswer } from "./memory-answer-use.js";
 import {
   awaitAnyInitializedConversationReadyChatModel,
   awaitInitializedConversationReadiness,
@@ -1491,9 +1491,9 @@ export function recordConversationMemoryUse(
 ): void {
   const vault = deps.memoryVault;
   if (vault === undefined || memory.context.memories.length === 0) return;
-  const accessedIds = reinforcementAccessIdsForAssistantUse(memory.context.memories, assistantText);
-  if (accessedIds.length > 0) {
-    vault.recordAccess(accessedIds, Date.now());
+  const usedIds = memoriesUsedInAnswer(memory.context.memories, assistantText);
+  if (usedIds.length > 0) {
+    vault.recordUse(usedIds, Date.now());
   }
 }
 
@@ -1800,14 +1800,14 @@ function runPostCommitMemoryEffect(
 
 export function runPostCommitConversationMemorySideEffects(
   deps: UiHandlerDeps,
-  request: SendDesktopChatRequest,
+  request: SendDesktopChatRequest & { readonly sourceMessageId?: string },
   context: ConversationMemoryRuntimeContext | undefined,
   modelId: string,
   memory: ConversationMemoryResultWire,
   assistantText: string,
   correlationId: string,
 ): void {
-  runPostCommitMemoryEffect(deps, correlationId, "chat.memory.reinforcement", () => {
+  runPostCommitMemoryEffect(deps, correlationId, "chat.memory.answer-use", () => {
     recordConversationMemoryUse(deps, memory, assistantText);
   });
   if (context === undefined) return;
@@ -2847,7 +2847,7 @@ function commitBufferedTurn(
   );
   runPostCommitConversationMemorySideEffects(
     deps,
-    request,
+    { ...request, sourceMessageId: result.userMessage.id },
     memoryContext,
     modelId,
     memory,

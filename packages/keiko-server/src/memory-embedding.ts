@@ -2,6 +2,7 @@ import {
   memoryInputEmbeddingIdentity as inputIdentity,
   memoryStoredEmbeddingIdentity as rowIdentity,
 } from "./memory-embedding-identity.js";
+import { statesChangedFact } from "@oscharko-dev/keiko-memory-capture";
 import { cosineSimilarity } from "@oscharko-dev/keiko-memory-retrieval";
 import { normalizedEndpointFingerprint } from "./embedding-provider-identity.js";
 // Memory embeddings — the model/IO boundary for semantic memory (#204).
@@ -759,7 +760,33 @@ export type NoveltyInsertOutcome =
   | { readonly kind: "merged"; readonly mergedInto: MemoryId }
   // The local human already refused this fact (forgot or rejected it) and the candidate is a
   // PARAPHRASE of it: nothing was stored and nothing was reinforced.
-  | { readonly kind: "suppressed"; readonly reason: MemoryCaptureSuppressionReason };
+  | { readonly kind: "suppressed"; readonly reason: MemoryCaptureSuppressionReason }
+  // The model called it the same fact and no duplicate confirms that: nothing was stored.
+  | { readonly kind: "unconfirmed" };
+
+export interface NoveltyInsertOptions {
+  // Store nothing unless a semantic duplicate confirms the candidate.
+  readonly onlyConfirm?: boolean;
+  // The fact this candidate replaces: it is no duplicate of what it replaces.
+  readonly replaces?: MemoryId;
+  // How the record is stored. Defaults to a plain insert.
+  readonly insert?: (record: MemoryRecord) => MemoryRecord;
+}
+
+// A semantic near-duplicate that states a changed value or the opposite preference is a new fact,
+// however close the two vectors lie.
+function confirmedDuplicate(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  duplicateOf: MemoryId | null,
+  replaces: MemoryId | undefined,
+): MemoryId | null {
+  if (duplicateOf === null || duplicateOf === replaces) return null;
+  const existing = vault.getMemory(duplicateOf);
+  return existing !== undefined && statesChangedFact(existing.body, record.body)
+    ? null
+    : duplicateOf;
+}
 
 // Sealed vectors of the memories the local human has refused in this scope: forget tombstones
 // (deletion-grade, GEN-AI-MEMORY-003 / RB-4) plus records the operator rejected in the review queue.
@@ -859,6 +886,7 @@ export async function insertSalienceMemoryWithNoveltyGate(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   record: MemoryRecord,
+  options: NoveltyInsertOptions = {},
 ): Promise<NoveltyInsertOutcome> {
   const embedding = await embedMemoryText(deps, record.body, "document");
   const embedded = embedding !== null;
@@ -876,7 +904,12 @@ export async function insertSalienceMemoryWithNoveltyGate(
   }
   const neighbors = gatherScopeEmbeddings(vault, record.scope);
   const neighborCount = neighbors.size;
-  const duplicateOf = findSemanticDuplicate(embedding, neighbors, dedupThreshold);
+  const duplicateOf = confirmedDuplicate(
+    vault,
+    record,
+    findSemanticDuplicate(embedding, neighbors, dedupThreshold),
+    options.replaces,
+  );
   if (duplicateOf !== null) {
     vault.recordAccess([duplicateOf], Date.now());
     logNoveltyDecision(scopeKind, embedded, {
@@ -886,7 +919,8 @@ export async function insertSalienceMemoryWithNoveltyGate(
     });
     return { kind: "merged", mergedInto: duplicateOf };
   }
-  const inserted = vault.insertMemory(record);
+  if (options.onlyConfirm === true) return { kind: "unconfirmed" };
+  const inserted = options.insert?.(record) ?? vault.insertMemory(record);
   logNoveltyDecision(scopeKind, embedded, {
     outcome: "inserted",
     dedupThreshold,

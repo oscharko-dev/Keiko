@@ -70,6 +70,10 @@ export interface MemoryProvenance {
   // the shape. Carrying rationale here (and NOT inside `body`) keeps the searchable body
   // free of meta-commentary.
   readonly captureRationale?: string;
+  // The person's exact words a learned fact rests on, and the turns they came from. The body is
+  // normalized; this is what validation checked and what a person can be shown.
+  readonly evidenceSpan?: string;
+  readonly sourceMessageIds?: readonly string[];
 }
 
 // ─── Validity interval ────────────────────────────────────────────────────────

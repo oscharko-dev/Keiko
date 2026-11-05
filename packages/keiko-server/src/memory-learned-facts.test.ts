@@ -1,0 +1,514 @@
+// Issue #4212 acceptance on the real vault: what a person says replaces, confirms or leaves a learned
+// fact. Every scripted model reply goes through the real extractor, the real admission and relation
+// checks and the real store.
+
+import { Readable } from "node:stream";
+import { Socket } from "node:net";
+import type { IncomingMessage } from "node:http";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import type { CodingWorkbenchMode, NormalizedResponse } from "@oscharko-dev/keiko-contracts";
+import type {
+  ConversationId,
+  MemoryRecord,
+  ProjectId,
+  UserId,
+  WorkspaceId,
+} from "@oscharko-dev/keiko-contracts/memory";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import {
+  FACT_CHANGE_BASES,
+  FACT_DROP_REASONS,
+  FACT_RELATION_LABELS,
+} from "@oscharko-dev/keiko-memory-capture";
+import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  buildMemoryResult,
+  collectMemoryActions,
+  recordConversationMemoryUse,
+  type SendDesktopChatRequest,
+} from "./chat-handlers.js";
+import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import {
+  conversationMemoryScopes,
+  type ConversationMemoryRuntimeContext,
+} from "./memory-conversation-context.js";
+import { handleAcceptMemoryProposal } from "./memory-handlers.js";
+import {
+  MEMORY_LEARN_CHANGE_BASES,
+  MEMORY_LEARN_DROP_REASONS,
+  MEMORY_LEARN_RELATION_LABELS,
+} from "./memory-learned-facts-log.js";
+import { captureSalientFromTurn } from "./memory-salience.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import type { RouteContext } from "./routes.js";
+import { createInMemoryUiStore } from "./store/index.js";
+
+interface ScriptedItem {
+  readonly body: string;
+  readonly evidence?: string;
+  readonly about?: string;
+  readonly type?: string;
+  readonly relation?: string;
+  readonly related?: number | null;
+}
+
+let vaults: MemoryVaultStore[] = [];
+let directories: string[] = [];
+
+afterEach(() => {
+  for (const vault of vaults) vault.close();
+  for (const directory of directories) rmSync(directory, { recursive: true, force: true });
+  vaults = [];
+  directories = [];
+  resetServerLogger();
+});
+
+function temporaryDirectory(): string {
+  const directory = mkdtempSync(join(realpathSync(tmpdir()), "keiko-learned-facts-"));
+  directories.push(directory);
+  return directory;
+}
+
+function makeVault(): MemoryVaultStore {
+  const vault = createMemoryVault({
+    memoryDir: temporaryDirectory(),
+    redactString: (value) => value,
+  });
+  vaults.push(vault);
+  return vault;
+}
+
+function context(): ConversationMemoryRuntimeContext {
+  const path = temporaryDirectory();
+  return {
+    userId: "local-operator" as UserId,
+    workspaceId: path as WorkspaceId,
+    projectId: path as ProjectId,
+    conversationId: "chat-1" as ConversationId,
+  };
+}
+
+function scriptedModel(items: readonly ScriptedItem[]): ModelPort {
+  const content = JSON.stringify({
+    items: items.map((item) => ({
+      evidence: item.body,
+      about: "self",
+      type: "preference",
+      relation: "new",
+      related: null,
+      ...item,
+    })),
+  });
+  return {
+    call(request): Promise<NormalizedResponse> {
+      return Promise.resolve({
+        modelId: request.modelId,
+        content,
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId: "learned-facts-test",
+          promptTokens: 1,
+          completionTokens: 1,
+          latencyMs: 1,
+          costClass: "high",
+        },
+      });
+    },
+  };
+}
+
+function makeDeps(
+  vault: MemoryVaultStore,
+  items: readonly ScriptedItem[],
+  mode: CodingWorkbenchMode = "autonomous-delivery",
+): UiHandlerDeps {
+  return {
+    config: undefined,
+    configPresent: false,
+    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+    env: {},
+    redactor: buildRedactor({}),
+    registry: createRunRegistry(),
+    modelPortFactory: () => scriptedModel(items),
+    store: createInMemoryUiStore(),
+    memoryVault: vault,
+    codingRuntimeDeploymentCeiling: mode,
+  };
+}
+
+function say(
+  vault: MemoryVaultStore,
+  ctx: ConversationMemoryRuntimeContext,
+  content: string,
+  items: readonly ScriptedItem[],
+  mode?: CodingWorkbenchMode,
+): Promise<unknown> {
+  const request = { content, memory: { enabled: true } };
+  return captureSalientFromTurn(makeDeps(vault, items, mode), request, ctx, "gpt-test", "ok");
+}
+
+function stated(body: string): ScriptedItem {
+  return { body };
+}
+
+function recordsWith(
+  vault: MemoryVaultStore,
+  ctx: ConversationMemoryRuntimeContext,
+  status: MemoryRecord["status"],
+): readonly MemoryRecord[] {
+  return conversationMemoryScopes(ctx).flatMap((scope) =>
+    vault.listMemoriesByScope(scope, { status: [status], includeExpired: true }),
+  );
+}
+
+function liveBodies(
+  vault: MemoryVaultStore,
+  ctx: ConversationMemoryRuntimeContext,
+): readonly string[] {
+  return recordsWith(vault, ctx, "accepted").map((record) => record.body);
+}
+
+function acceptRoute(id: string): RouteContext {
+  return {
+    correlationId: undefined,
+    req: Readable.from([Buffer.from("{}")]) as unknown as IncomingMessage,
+    res: { socket: new Socket() } as unknown as RouteContext["res"],
+    params: { id },
+    url: new URL(`http://127.0.0.1/api/memory/proposals/${id}/accept`),
+  };
+}
+
+describe("a changed fact replaces the older one", () => {
+  it.each([
+    ["a reversed preference", "I prefer tabs over spaces", "I prefer spaces over tabs"],
+    [
+      "a reversed German preference",
+      "Ich bevorzuge Tabs über Spaces",
+      "Ich bevorzuge Spaces über Tabs",
+    ],
+    ["a changed number", "I use PostgreSQL 14", "I use PostgreSQL 16"],
+    ["a changed German number", "Ich nutze PostgreSQL 14", "Ich nutze PostgreSQL 16"],
+    ["a changed polarity", "Ich mag Tabellen", "Ich mag keine Tabellen"],
+  ])("supersedes on %s, with only the newer one retrievable", async (_name, older, newer) => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, older, [stated(older)]);
+    await say(vault, ctx, newer, [stated(newer)]);
+
+    expect(liveBodies(vault, ctx)).toEqual([newer]);
+    const [superseded] = recordsWith(vault, ctx, "superseded");
+    expect(superseded?.body).toBe(older);
+    expect(superseded?.validity?.validUntil).toBeDefined();
+    if (superseded === undefined) throw new Error("expected the older fact");
+    expect(vault.listOutgoingEdges(superseded.id).map((edge) => edge.kind)).toEqual(["supersedes"]);
+
+    const request = {
+      content: newer,
+      memory: { enabled: true, budgetTokens: 900, context: {} },
+    } as unknown as SendDesktopChatRequest;
+    const retrieved = await buildMemoryResult(request, makeDeps(vault, []), ctx);
+    expect(retrieved.context.text).toContain(newer);
+    expect(retrieved.context.text).not.toContain(older);
+  });
+
+  it.each([
+    ["German", "Ich bevorzuge Tabellen", "Ab jetzt lieber Listen", "Lieber Listen"],
+    ["German, normalized", "Ich bevorzuge Tabellen", "Ab jetzt lieber Listen", "Bevorzugt Listen"],
+    ["English", "I prefer tables", "From now on I prefer lists", "I prefer lists"],
+  ])("replaces on a stated change in %s", async (_language, older, said, body) => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, older, [stated(older)]);
+    await say(vault, ctx, said, [{ body, evidence: said, relation: "update", related: 1 }]);
+
+    expect(liveBodies(vault, ctx)).toEqual([body]);
+    expect(recordsWith(vault, ctx, "superseded").map((record) => record.body)).toEqual([older]);
+  });
+
+  it("leaves two alike statements about different things standing, whatever the model says", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const numbers = "Ich bevorzuge Tabellen für Zahlen";
+    const text = "Ich bevorzuge Listen für Texte";
+    await say(vault, ctx, numbers, [stated(numbers)]);
+    await say(vault, ctx, text, [{ body: text, relation: "contradiction", related: 1 }]);
+
+    expect([...liveBodies(vault, ctx)].sort()).toEqual([numbers, text].sort());
+    expect(recordsWith(vault, ctx, "superseded")).toEqual([]);
+  });
+
+  it("does not take an unconfirmed relation for a change", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, "Ich mag Tee", [stated("Ich mag Tee")]);
+    await say(vault, ctx, "Ich fahre Fahrrad", [
+      { body: "Ich fahre Fahrrad", relation: "contradiction", related: 1 },
+    ]);
+
+    expect(liveBodies(vault, ctx)).toHaveLength(2);
+  });
+
+  it("waits for the person's approval in Ask mode and then replaces through the correction path", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(
+      vault,
+      ctx,
+      "I use PostgreSQL 14",
+      [stated("I use PostgreSQL 14")],
+      "governed-assist",
+    );
+    const [older] = recordsWith(vault, ctx, "proposed");
+    if (older === undefined) throw new Error("expected the first proposal");
+    const accept = makeDeps(vault, [], "governed-assist");
+    expect((await handleAcceptMemoryProposal(acceptRoute(older.id), accept)).status).toBe(200);
+
+    await say(
+      vault,
+      ctx,
+      "I use PostgreSQL 16",
+      [stated("I use PostgreSQL 16")],
+      "governed-assist",
+    );
+
+    const [correction] = recordsWith(vault, ctx, "proposed");
+    if (correction === undefined) throw new Error("expected a correction proposal");
+    expect(correction.type).toBe("correction");
+    expect(liveBodies(vault, ctx)).toEqual(["I use PostgreSQL 14"]);
+    expect(vault.listOutgoingEdges(older.id).map((edge) => edge.kind)).toEqual(["corrects"]);
+
+    expect((await handleAcceptMemoryProposal(acceptRoute(correction.id), accept)).status).toBe(200);
+    expect(liveBodies(vault, ctx)).toEqual(["I use PostgreSQL 16"]);
+    expect(recordsWith(vault, ctx, "superseded").map((record) => record.body)).toEqual([
+      "I use PostgreSQL 14",
+    ]);
+  });
+
+  it("lets a newer clear statement win over an older learned fact", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, "Ich bevorzuge Tabs über Spaces", [
+      stated("Ich bevorzuge Tabs über Spaces"),
+    ]);
+
+    const request = {
+      content: "Merke dir: Ich bevorzuge Spaces über Tabs",
+      memory: { enabled: true },
+    } as unknown as SendDesktopChatRequest;
+    await collectMemoryActions(makeDeps(vault, []), request, ctx);
+
+    expect(recordsWith(vault, ctx, "superseded").map((record) => record.body)).toEqual([
+      "Ich bevorzuge Tabs über Spaces",
+    ]);
+    expect(liveBodies(vault, ctx)).toEqual(["Ich bevorzuge Spaces über Tabs"]);
+  });
+
+  it("keeps an earlier clear statement when a later clear one only reads alike", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps(vault, []);
+    for (const content of ["Merke dir: Ich mag Tee", "Merke dir: Ich mag Kaffee"]) {
+      const request = { content, memory: { enabled: true } } as unknown as SendDesktopChatRequest;
+      await collectMemoryActions(deps, request, ctx);
+    }
+
+    expect(liveBodies(vault, ctx)).toHaveLength(2);
+    expect(recordsWith(vault, ctx, "superseded")).toEqual([]);
+  });
+});
+
+describe("what the person repeats and what the answer repeats", () => {
+  it("stores a repeated fact once and records the confirmation", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const fact = "Ich bevorzuge Tabellen";
+    await say(vault, ctx, fact, [stated(fact)]);
+    await say(vault, ctx, fact, [{ body: fact, relation: "same", related: 1 }]);
+
+    const records = recordsWith(vault, ctx, "accepted");
+    expect(records.map((record) => record.body)).toEqual([fact]);
+    const [record] = records;
+    if (record === undefined) throw new Error("expected the fact");
+    expect(vault.getAccessStats([record.id]).get(record.id)?.accessCount).toBe(1);
+  });
+
+  it("does not strengthen a memory because an answer repeated it", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const fact = "Ich bevorzuge Tabellen";
+    await say(vault, ctx, fact, [stated(fact)]);
+    const [record] = recordsWith(vault, ctx, "accepted");
+    if (record === undefined) throw new Error("expected the fact");
+
+    recordConversationMemoryUse(
+      makeDeps(vault, []),
+      { context: { memories: [{ memoryId: record.id, bodyExcerpt: fact }] } } as never,
+      "Du bevorzugst Tabellen.",
+    );
+
+    const stats = vault.getAccessStats([record.id]).get(record.id);
+    expect(stats?.accessCount ?? 0).toBe(0);
+    expect(stats?.lastUsedAt).toBeGreaterThan(0);
+  });
+});
+
+describe("nothing the person did not write is stored", () => {
+  const SAID = "Heute war viel los. Ich arbeite gerne morgens.";
+
+  it.each([
+    ["invents a fact", { body: "Ich wohne in Hamburg", evidence: "Ich wohne in Hamburg" }],
+    [
+      "paraphrases the evidence",
+      { body: "Ich arbeite gerne morgens", evidence: "Ich arbeite am liebsten früh" },
+    ],
+    ["returns evidence not in the text", { body: "Ich mag Tee", evidence: "Ich mag Tee" }],
+    [
+      "adds words to the body",
+      { body: "Ich arbeite gerne morgens in Berlin", evidence: "Ich arbeite gerne morgens" },
+    ],
+    ["attributes it to someone else", { body: "Ich arbeite gerne morgens", about: "other" }],
+  ])("stores nothing when the model %s", async (_name, item) => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, SAID, [item]);
+    expect(recordsWith(vault, ctx, "accepted")).toEqual([]);
+    expect(recordsWith(vault, ctx, "proposed")).toEqual([]);
+  });
+
+  it("keeps a genuine fact inside a longer sentence as one body with its exact words", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, SAID, [
+      { body: "Ich arbeite gerne morgens", evidence: "Ich arbeite gerne morgens." },
+    ]);
+
+    const [record] = recordsWith(vault, ctx, "accepted");
+    expect(record?.body).toBe("Ich arbeite gerne morgens");
+    expect(record?.provenance.evidenceSpan).toBe("Ich arbeite gerne morgens.");
+    expect(record?.body).not.toContain("Heute");
+  });
+
+  it.each([
+    ["a German phone number", "Meine Nummer ist 0171 2345678"],
+    ["an international phone number", "My number is +1 415 555 0100"],
+    ["a North American phone number", "My number is (415) 555-0100"],
+    ["a German IBAN", "Meine IBAN ist DE89 3704 0044 0532 0130 00"],
+    ["a foreign IBAN", "My IBAN is GB82 WEST 1234 5698 7654 32"],
+    ["a customer number", "Meine Kundennummer ist 884213"],
+    ["a customer id", "My customer id is 884213"],
+    ["a credential", "My password=FAKE-TEST-PLACEHOLDER-VALUE"],
+  ])("never stores %s", async (_name, said) => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, said, [{ body: said, type: "fact" }]);
+    expect(
+      conversationMemoryScopes(ctx).flatMap((scope) => vault.listMemoriesByScope(scope)),
+    ).toEqual([]);
+  });
+});
+
+describe("what a fact keeps from the person's words", () => {
+  it("carries a decision's reason in the payload", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const said = "Ich habe mich für eine lokale Warteschlange entschieden, weil sie offline läuft.";
+    await say(vault, ctx, said, [
+      {
+        body: "Ich habe mich für eine lokale Warteschlange entschieden",
+        evidence: "Ich habe mich für eine lokale Warteschlange entschieden",
+        type: "decision",
+      },
+    ]);
+
+    const [record] = recordsWith(vault, ctx, "accepted");
+    expect(record?.payload).toEqual({
+      kind: "key-value",
+      entries: [
+        { key: "decision", value: "Ich habe mich für eine lokale Warteschlange entschieden" },
+        { key: "reason", value: "sie offline läuft" },
+      ],
+    });
+  });
+
+  it.each(["Ich nutze bis März Tabellen", "I use tables until March"])(
+    "closes the validity at a stated end: %s",
+    async (said) => {
+      const vault = makeVault();
+      const ctx = context();
+      await say(vault, ctx, said, [stated(said)]);
+
+      const [record] = recordsWith(vault, ctx, "accepted");
+      expect(record?.validity?.validUntil).toBeGreaterThan(Date.now());
+    },
+  );
+});
+
+describe("learning leaves body-free evidence", () => {
+  it("logs every reason capture can report", () => {
+    expect(MEMORY_LEARN_DROP_REASONS).toEqual(expect.arrayContaining([...FACT_DROP_REASONS]));
+    expect(MEMORY_LEARN_RELATION_LABELS).toEqual([...FACT_RELATION_LABELS]);
+    expect(MEMORY_LEARN_CHANGE_BASES).toEqual([...FACT_CHANGE_BASES]);
+  });
+
+  it("records extraction, drops and the relation with closed values only", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, "Ich nutze PostgreSQL 14", [stated("Ich nutze PostgreSQL 14")]);
+    await say(vault, ctx, "Ich nutze PostgreSQL 16", [
+      stated("Ich nutze PostgreSQL 16"),
+      { body: "Ich wohne in Hamburg", evidence: "Ich wohne in Hamburg" },
+    ]);
+
+    const event = (op: string, index = 0): Record<string, unknown> => {
+      const found = sink.events.filter((candidate) => candidate.op === op)[index];
+      if (found === undefined) throw new Error(`expected a ${op} line`);
+      return found as unknown as Record<string, unknown>;
+    };
+
+    expect(
+      expectActivityLogProof(
+        "memory.learn.extraction.line",
+        formatActivityLogProofLine(event("memory.learn.extraction", 1)),
+      ),
+    ).toMatchObject({
+      rawItemCount: 2,
+      admittedCount: 1,
+      knownFactCount: 1,
+      sourceMessageCount: 0,
+    });
+    expect(
+      expectActivityLogProof(
+        "memory.learn.dropped.line",
+        formatActivityLogProofLine(event("memory.learn.dropped")),
+      ),
+    ).toMatchObject({
+      reason: "evidence-not-verbatim",
+      count: 1,
+    });
+    expect(
+      expectActivityLogProof(
+        "memory.learn.relation.line",
+        formatActivityLogProofLine(event("memory.learn.relation", 1)),
+      ),
+    ).toMatchObject({
+      label: "new",
+      decision: "superseded",
+      basis: "number-changed",
+    });
+    const text = sink.lines().join("\n");
+    for (const word of ["PostgreSQL", "Hamburg"]) expect(text).not.toContain(word);
+  });
+});

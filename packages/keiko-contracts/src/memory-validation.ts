@@ -235,6 +235,27 @@ function validateModelIdentity(input: Record<string, unknown>, errors: string[])
   }
 }
 
+const MEMORY_SOURCE_MESSAGE_IDS_MAX = 16;
+const MEMORY_SOURCE_MESSAGE_ID_MAX_CHARS = 128;
+
+function validateLearnedEvidence(input: Record<string, unknown>, errors: string[]): void {
+  if (
+    input.evidenceSpan !== undefined &&
+    !isSafeText(input.evidenceSpan, MEMORY_RATIONALE_MAX_CHARS)
+  ) {
+    errors.push("provenance.evidenceSpan must be a bounded control-free string when set");
+  }
+  const ids = input.sourceMessageIds;
+  if (ids === undefined) return;
+  if (
+    !Array.isArray(ids) ||
+    ids.length > MEMORY_SOURCE_MESSAGE_IDS_MAX ||
+    !ids.every((id) => isSafeText(id, MEMORY_SOURCE_MESSAGE_ID_MAX_CHARS))
+  ) {
+    errors.push("provenance.sourceMessageIds must be a bounded list of ids when set");
+  }
+}
+
 export function validateMemoryProvenance(input: unknown): MemoryValidation<MemoryProvenance> {
   if (!isRecord(input)) {
     return { ok: false, errors: ["provenance must be an object"] };
@@ -266,6 +287,7 @@ export function validateMemoryProvenance(input: unknown): MemoryValidation<Memor
   ) {
     errors.push("provenance.captureRationale must be a bounded control-free string when set");
   }
+  validateLearnedEvidence(input, errors);
   if (errors.length > 0) {
     return { ok: false, errors };
   }

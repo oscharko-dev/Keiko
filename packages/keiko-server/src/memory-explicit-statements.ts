@@ -3,8 +3,12 @@
 // implementation in memory-handlers.ts.
 
 import type { ConversationMemoryActionWire } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type { MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
-import { isForgettableStatement, type CaptureOutcome } from "@oscharko-dev/keiko-memory-capture";
+import type { MemoryId, MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  factReplacedByStatement,
+  isForgettableStatement,
+  type CaptureOutcome,
+} from "@oscharko-dev/keiko-memory-capture";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 import type { UiHandlerDeps } from "./deps.js";
@@ -16,12 +20,16 @@ import {
   type PersistedCapturedMemory,
 } from "./memory-capture-persistence.js";
 import type { MemoryCaptureSuppressionReason } from "./memory-capture-policy.js";
-import { insertSalienceMemoryWithNoveltyGate } from "./memory-embedding.js";
+import {
+  insertSalienceMemoryWithNoveltyGate,
+  type NoveltyInsertOptions,
+} from "./memory-embedding.js";
 import {
   logExplicitMemoryForget,
   logExplicitMemoryRemember,
 } from "./memory-explicit-statement-log.js";
 import { forgetMemoryFromStatement, forgetStatementNotLearned } from "./memory-handlers.js";
+import { applyLearnedSupersession } from "./memory-learned-facts.js";
 
 type RejectedCaptureOutcome = Extract<CaptureOutcome, { readonly kind: "rejected" }>;
 
@@ -136,12 +144,36 @@ export function refusedCandidateAction(
   return statementRefused(reason);
 }
 
+// A newer clear statement wins over what Keiko learned earlier (#4212). Only a learned fact, marked by
+// its evidence, gives way: what the person stated clearly before stays until they change it clearly.
+function replacementOptions(
+  vault: MemoryVaultStore,
+  candidate: MemoryRecord,
+): NoveltyInsertOptions {
+  const learned = vault
+    .listMemoriesByScope(candidate.scope, { status: ["accepted", "proposed"] })
+    .filter((record) => record.provenance.evidenceSpan !== undefined)
+    .map((record) => ({ id: record.id, body: record.body }));
+  const replaced = factReplacedByStatement(candidate.body, learned);
+  if (replaced === null) return {};
+  const replaces = replaced.id as MemoryId;
+  return {
+    replaces,
+    insert: (record) => applyLearnedSupersession(vault, record, replaces).record,
+  };
+}
+
 async function storeUnlessKnownParaphrase(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   candidate: MemoryRecord,
 ): Promise<ExplicitStatementPersistence> {
-  const outcome = await insertSalienceMemoryWithNoveltyGate(deps, vault, candidate);
+  const outcome = await insertSalienceMemoryWithNoveltyGate(
+    deps,
+    vault,
+    candidate,
+    replacementOptions(vault, candidate),
+  );
   if (outcome.kind === "suppressed") return outcome;
   if (outcome.kind === "inserted") {
     return {
@@ -150,6 +182,8 @@ async function storeUnlessKnownParaphrase(
       confirmed: false,
     };
   }
+  if (outcome.kind === "unconfirmed")
+    throw new Error("A statement is never held for confirmation.");
   const existing = vault.getMemory(outcome.mergedInto);
   if (existing === undefined) throw new Error("Merged memory disappeared during capture.");
   return {

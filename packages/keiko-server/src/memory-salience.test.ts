@@ -31,28 +31,22 @@ import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 const ATLAS_FACTS = JSON.stringify([
   {
-    source: "user",
+    about: "self",
     body: "I'm building a fintech app called Atlas.",
+    evidence: "I'm building a fintech app called Atlas.",
     type: "fact",
-    confidence: 0.7,
-    scope: "project",
-    tags: ["atlas"],
   },
   {
-    source: "user",
-    body: "Atlas is written in Rust.",
+    about: "self",
+    body: "I write Atlas in Rust.",
+    evidence: "I write Atlas in Rust.",
     type: "fact",
-    confidence: 0.8,
-    scope: "project",
-    tags: ["rust"],
   },
   {
-    source: "user",
-    body: "My team is in Berlin.",
+    about: "self",
+    body: "I live in Berlin.",
+    evidence: "I live in Berlin.",
     type: "fact",
-    confidence: 0.6,
-    scope: "user",
-    tags: ["berlin"],
   },
 ]);
 
@@ -179,7 +173,7 @@ function context(): ConversationMemoryRuntimeContext {
 }
 
 const USER_TEXT =
-  "I'm building a fintech app called Atlas. Atlas is written in Rust. My team is in Berlin.";
+  "I'm building a fintech app called Atlas. I write Atlas in Rust. I live in Berlin.";
 
 function salienceConfig(
   modelId: string,
@@ -517,12 +511,10 @@ describe("captureSalientFromTurn", () => {
         fakeModel(
           JSON.stringify([
             {
-              source: "user",
-              body: "Hallo Keiko, ich bin Oliver.",
+              about: "self",
+              body: "Ich bin Oliver.",
+              evidence: "ich bin Oliver",
               type: "identity",
-              confidence: 0.9,
-              scope: "user",
-              tags: ["identity"],
             },
           ]),
         ),
@@ -537,7 +529,7 @@ describe("captureSalientFromTurn", () => {
     );
     expect(actions).toHaveLength(1);
     const records = readMemories(vault, ctx);
-    expect(records[0]?.body).toBe("Hallo Keiko, ich bin Oliver.");
+    expect(records[0]?.body).toBe("Ich bin Oliver.");
   });
 
   it("uses json_schema responseFormat only when the configured model supports it", async () => {
@@ -760,7 +752,7 @@ describe("captureSalientFromTurn", () => {
     expect(assistantMessage?.content).toContain("assistant-context-marker");
   });
 
-  it("persists records that carry tags and the salience captureRationale through validation", async () => {
+  it("persists learned records with the salience captureRationale through validation", async () => {
     // The vault runs gateMemoryRecord on insert, so reading the records back proves the full
     // round-trip (tags + provenance.captureRationale) survives contract validation.
     const vault = makeVault();
@@ -782,8 +774,6 @@ describe("captureSalientFromTurn", () => {
       expect(record.provenance.sourceKind).toBe("system-default");
       expect(record.status).toBe("proposed");
     }
-    const atlasRecord = records.find((r) => r.body.includes("Atlas"));
-    expect(atlasRecord?.tags).toContain("atlas");
   });
 
   it("captures nothing when memory is disabled", async () => {
@@ -976,12 +966,10 @@ describe("captureSalientFromTurn", () => {
         fakeModel(
           JSON.stringify([
             {
-              source: "user",
+              about: "self",
               body: "My private support email is developer@example.com.",
+              evidence: "My private support email is developer@example.com.",
               type: "fact",
-              confidence: 0.8,
-              scope: "user",
-              tags: ["support"],
             },
           ]),
         ),
@@ -1018,20 +1006,16 @@ describe("captureSalientFromTurn", () => {
         fakeModel(
           JSON.stringify([
             {
-              source: "user",
+              about: "self",
               body: "My contact email is private@example.com.",
+              evidence: "My contact email is private@example.com.",
               type: "fact",
-              confidence: 0.7,
-              scope: "user",
-              tags: ["contact"],
             },
             {
-              source: "user",
+              about: "self",
               body: "I work in the payments domain.",
+              evidence: "I work in the payments domain.",
               type: "fact",
-              confidence: 0.7,
-              scope: "user",
-              tags: ["payments"],
             },
           ]),
         ),
@@ -1071,20 +1055,16 @@ describe("captureSalientFromTurn", () => {
         fakeModel(
           JSON.stringify([
             {
-              source: "user",
+              about: "self",
               body: "Meine Telefonnummer ist +49 30 1234567.",
+              evidence: "Meine Telefonnummer ist +49 30 1234567.",
               type: "fact",
-              confidence: 0.7,
-              scope: "user",
-              tags: ["contact"],
             },
             {
-              source: "user",
+              about: "self",
               body: "Ich bevorzuge Vitest.",
+              evidence: "Ich bevorzuge Vitest.",
               type: "preference",
-              confidence: 0.8,
-              scope: "user",
-              tags: ["testing"],
             },
           ]),
         ),
@@ -1161,12 +1141,10 @@ describe("captureSalientFromTurn", () => {
         fakeModel(
           JSON.stringify([
             {
-              source: "user",
+              about: "self",
               body: "CustomerOmega requires SSO for releases.",
+              evidence: "CustomerOmega requires SSO for releases.",
               type: "fact",
-              confidence: 0.8,
-              scope: "project",
-              tags: ["customer"],
             },
           ]),
         ),

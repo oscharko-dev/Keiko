@@ -571,7 +571,7 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     await insertSalienceMemoryWithNoveltyGate(deps, vault, canonical);
     const before = vault.getAccessStats([canonical.id]).get(canonical.id)?.accessCount ?? 0;
 
-    const dup = makeRecord("the user's database is postgresql", "id-dup");
+    const dup = makeRecord("postgres is the database the user works with", "id-dup");
     const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, dup);
     expect(result).toEqual({ kind: "merged", mergedInto: canonical.id });
     expect(vault.getMemory(dup.id)).toBeUndefined();
@@ -663,7 +663,7 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     };
     await insertSalienceMemoryWithNoveltyGate(deps, vault, canonical);
 
-    const dup = makeRecord("the user's database is postgresql", "id-dup");
+    const dup = makeRecord("postgres is the database the user works with", "id-dup");
     const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, dup);
     expect(result).toEqual({ kind: "merged", mergedInto: canonical.id });
     expect(vault.getMemory(dup.id)).toBeUndefined();
@@ -677,7 +677,7 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     await insertSalienceMemoryWithNoveltyGate(deps, vault, canonical);
     vault.updateMemory(canonical.id, { status: "superseded" }, Date.now());
 
-    const dup = makeRecord("the user's database is postgresql", "id-dup");
+    const dup = makeRecord("postgres is the database the user works with", "id-dup");
     const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, dup);
     expectInserted(result, dup.id);
   });
@@ -934,7 +934,11 @@ describe("memory embedding activity log", () => {
     const sink = capture("info");
 
     await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("the user prefers postgres"));
-    await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("the user's db is postgres"));
+    await insertSalienceMemoryWithNoveltyGate(
+      deps,
+      vault,
+      makeRecord("postgres is the database the user works with"),
+    );
 
     const decisions = sink.events.filter((event) => event.op === "memory.capture.novelty-gate");
     expect(decisions.map((event) => event.extra?.outcome)).toEqual(["inserted", "merged"]);

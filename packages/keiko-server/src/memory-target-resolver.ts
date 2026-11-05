@@ -9,7 +9,8 @@ import type {
   MemoryScope,
   MemoryStatus,
 } from "@oscharko-dev/keiko-contracts/memory";
-import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { sameMemoryWord } from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryAccessStat, MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 const TARGETABLE_STATUSES: readonly MemoryStatus[] = [
   "accepted",
@@ -127,26 +128,15 @@ function lastTurnReachedMemory(statement: string | undefined): boolean {
   return statement.trimEnd().endsWith("?") || explicitStatementKind(statement) === "remember";
 }
 
-const MIN_SHARED_PREFIX_CHARS = 4;
-const MAX_INFLECTION_CHARS = 3;
-
-// A forget acts without a question, so a word must really be the same word: "Tabelle" reaches
-// "Tabellen", and "Java" does not reach "JavaScript".
-function sameWord(a: string, b: string): boolean {
-  if (a === b) return true;
-  const [shorter, longer] = a.length < b.length ? [a, b] : [b, a];
-  return (
-    shorter.length >= MIN_SHARED_PREFIX_CHARS &&
-    longer.length - shorter.length <= MAX_INFLECTION_CHARS &&
-    longer.startsWith(shorter)
-  );
+function lastReachedAt(stat: MemoryAccessStat | undefined): number {
+  return Math.max(stat?.lastAccessedAt ?? 0, stat?.lastUsedAt ?? 0);
 }
 
 function namesRecord(target: string, record: MemoryRecord): boolean {
   const body = tokenize(`${record.body} ${record.tags.join(" ")}`);
   const words = tokenize(target);
   return (
-    words.length > 0 && words.every((word) => body.some((candidate) => sameWord(word, candidate)))
+    words.length > 0 && words.every((word) => body.some((candidate) => sameMemoryWord(word, candidate)))
   );
 }
 
@@ -169,7 +159,7 @@ function referredRecords(
   const stats = vault.getAccessStats(records.map((record) => record.id));
   const reached = records.filter(
     (record) =>
-      !left.includes(record) && (stats.get(record.id)?.lastAccessedAt ?? 0) >= lastTurnStartedAt,
+      !left.includes(record) && lastReachedAt(stats.get(record.id)) >= lastTurnStartedAt,
   );
   return [...left, ...reached];
 }
