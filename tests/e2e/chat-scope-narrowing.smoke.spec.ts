@@ -264,14 +264,23 @@ test("Files navigation follows each visible selection and discards restored fold
 });
 
 async function expectDraftRecoveryUsable(chat: ReturnType<Page["getByRole"]>): Promise<void> {
+  const composer = chat.getByRole("textbox");
+  await expect(composer).toBeVisible();
+  await expect(composer).toBeEditable();
+  await expect(composer).toHaveText("");
+  await expect(chat.getByRole("alert")).toHaveCount(0);
+  // An unpaired browser needs recovery only after a real local edit.
+  const draft = "Review this selected scope.";
+  await composer.fill(draft);
   const retry = chat.getByRole("button", {
     name: /Retry draft save|Erneut speichern/u,
   });
   await expect(retry).toBeVisible();
   const warning = chat.getByRole("alert").filter({
-    hasText: /Draft not saved|Entwurf nicht gespeichert/u,
+    hasText: /This draft has not been saved\.|Dieser Entwurf ist noch nicht gespeichert\./u,
   });
   await expect(warning).toBeVisible();
+  await expect(composer).toHaveText(draft);
   const geometry = await warning.evaluate((node) => {
     const action = node.querySelector("button")?.getBoundingClientRect();
     const window = node.closest(".window")?.getBoundingClientRect();
