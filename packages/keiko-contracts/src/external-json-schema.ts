@@ -48,6 +48,11 @@ interface Budget {
   nodes: number;
   readonly ancestors: Set<object>;
 }
+/** The nesting depth and node count of one schema subgraph. */
+interface SchemaCost {
+  readonly depth: number;
+  readonly work: number;
+}
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -228,8 +233,8 @@ function finiteSchemaGraph(root: Record<string, unknown>, graph: SchemaGraph): b
     graph.set(schema, [...children, target]);
   }
   const seen = new Set<object>();
-  const costs = new Map<object, { depth: number; work: number }>();
-  const cost = (value: unknown): { depth: number; work: number } => {
+  const costs = new Map<object, SchemaCost>();
+  const cost = (value: unknown): SchemaCost => {
     if (typeof value === "boolean") return { depth: 0, work: 1 };
     if (!object(value) || seen.has(value)) return { depth: Infinity, work: Infinity };
     const known = costs.get(value);
