@@ -30,7 +30,7 @@ import {
   type SecurityLogSink,
 } from "./log-port.js";
 
-const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
+export const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
 
 const SECURITY_KEYCHAIN_FALLBACK_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -62,6 +62,20 @@ const SECURITY_KEYCHAIN_FALLBACK_OPERATION = defineActivityLogOperation({
  * tier, never a requirement, so waiting longer buys nothing.
  */
 export const KEYCHAIN_SPAWN_TIMEOUT_MS = 2_000;
+
+/**
+ * The login keychain is machine-wide state shared with every real Keiko on the machine. A test that
+ * opens a vault without an injected key would read that installation's key or store another, and a
+ * home without a keychain makes macOS raise a modal on the person's desktop. No test needs it, so a
+ * process under vitest never gets it, whatever its configuration. A lane that starts a whole product
+ * process with its own environment says so with `KEIKO_OS_KEYCHAIN=off`. The tier then answers like
+ * a platform without one and the keyfile tier takes over; a fake `executable` is unaffected.
+ */
+export function realKeychainWithheld(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  return env.VITEST !== undefined || env.KEIKO_OS_KEYCHAIN === "off";
+}
 
 export interface MacosKeychainOptions {
   /** Test seam. Production always uses the fixed system path. */
@@ -95,7 +109,7 @@ function positiveTimeout(value: number | undefined): number | undefined {
 }
 
 interface ResolvedSpawn {
-  readonly darwin: boolean;
+  readonly reachable: boolean;
   readonly executable: string;
   readonly timeout: number;
   readonly killSignal: "SIGKILL";
@@ -104,9 +118,12 @@ interface ResolvedSpawn {
 // One place resolves every default, so the read and the write cannot drift apart and a caller
 // supplying no options is exercising exactly the production configuration.
 function resolveSpawn(options: MacosKeychainOptions): ResolvedSpawn {
+  const executable = options.executable ?? MACOS_SECURITY_EXECUTABLE;
   return {
-    darwin: (options.platform ?? process.platform) === "darwin",
-    executable: options.executable ?? MACOS_SECURITY_EXECUTABLE,
+    reachable:
+      (options.platform ?? process.platform) === "darwin" &&
+      !(executable === MACOS_SECURITY_EXECUTABLE && realKeychainWithheld()),
+    executable,
     // Only a positive finite override is honoured. `execFileSync` reads `timeout: 0` as "no
     // timeout", so accepting a caller's 0 would silently restore the unbounded spawn this module
     // exists to prevent — a bound that any caller can switch off is not a bound.
@@ -201,7 +218,7 @@ export function readMacosKeychainSecret(
   options: MacosKeychainOptions = {},
 ): MacosKeychainRead {
   const spawn = resolveSpawn(options);
-  if (!spawn.darwin) return { kind: "unavailable" };
+  if (!spawn.reachable) return { kind: "unavailable" };
   const elapsedMs = startSecurityLogTimer();
   try {
     const secret = execFileSync(
@@ -233,7 +250,7 @@ export function writeMacosKeychainSecret(
   options: MacosKeychainOptions = {},
 ): boolean {
   const spawn = resolveSpawn(options);
-  if (!spawn.darwin) return false;
+  if (!spawn.reachable) return false;
   try {
     // The secret goes over stdin, never in the argument vector: `ps` exposes a process's arguments
     // to every process of the same user, which is precisely the audience this tier exists to keep

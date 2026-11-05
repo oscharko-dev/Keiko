@@ -449,6 +449,9 @@ sent back.
   readiness, a reachable positive control, and cleanup in `finally`. `await` a condition instead of
   sleeping. Fixtures are deterministic and self-contained; separately authorized live-provider
   qualification records its actual environment and never masquerades as a hermetic unit test.
+  The real login keychain is out of reach for every test: `realKeychainWithheld` in `keiko-security`
+  withholds it under vitest, and an end-to-end server or lab instance sets `KEIKO_OS_KEYCHAIN=off`.
+  A test of that tier injects a fake `executable`.
 - **A behavioural change is documented where decisions live.** If it changes an architectural
   decision, add or update an ADR (and the index). If it's release-impacting, update the
   release-impact catalog / issue metadata.

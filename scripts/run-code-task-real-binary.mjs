@@ -1087,6 +1087,7 @@ function currentSourceHead() {
 function realBinaryJourneyEnvironment(context) {
   return {
     ...process.env,
+    KEIKO_OS_KEYCHAIN: "off",
     KEIKO_E2E_STATE_DIR: context.stateDir,
     KEIKO_STATE_DIR: join(context.stateDir, "activity"),
     KEIKO_E2E_REAL_BINARY: "1",
