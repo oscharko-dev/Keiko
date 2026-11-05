@@ -1,3 +1,4 @@
+import { ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS } from "./activity-line-fields.js";
 import { gatewaySpendRejectionReason } from "./gateway-spend-budget.js";
 import { CodingRuntimeLaunchRejectedError } from "./coding-runtime/launchFailure.js";
 import {
@@ -665,20 +666,7 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
     // The Keiko-code frames and cause classes of the failure, when the turn failed on an error
     // (PR #3617 review): a model-answer failure writes no error-level diagnostic, so this line is
     // where its frames live.
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },

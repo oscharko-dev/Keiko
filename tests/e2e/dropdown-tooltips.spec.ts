@@ -134,21 +134,27 @@ async function expectTooltipOffsetFromOption(page: Page, optionName: string): Pr
 
 test("model dropdown overflow tooltips appear from row hover and clear consistently", async ({
   page,
+  request,
 }) => {
   const assertNoPageErrors = collectPageErrors(page);
-  await mockModelList(page);
-  await openChatModelDropdown(page);
-  await expectTooltipOffsetFromOption(page, OVERFLOW_MODEL_ID);
+  const removeProjectFixture = await createProjectFixture(request);
+  try {
+    await mockModelList(page);
+    await openChatModelDropdown(page);
+    await expectTooltipOffsetFromOption(page, OVERFLOW_MODEL_ID);
 
-  const shortOption = page.getByRole("option", { name: "gpt-4o-2024-08-06" });
-  await shortOption.hover({ position: { x: 6, y: 6 } });
-  await expect(page.getByRole("tooltip")).toBeHidden();
+    const shortOption = page.getByRole("option", { name: "gpt-4o-2024-08-06" });
+    await shortOption.hover({ position: { x: 6, y: 6 } });
+    await expect(page.getByRole("tooltip")).toBeHidden();
 
-  await expectTooltipOffsetFromOption(page, OVERFLOW_MODEL_ID);
+    await expectTooltipOffsetFromOption(page, OVERFLOW_MODEL_ID);
 
-  await page.mouse.move(1, 1);
-  await expect(page.getByRole("tooltip")).toBeHidden();
-  assertNoPageErrors();
+    await page.mouse.move(1, 1);
+    await expect(page.getByRole("tooltip")).toBeHidden();
+    assertNoPageErrors();
+  } finally {
+    removeProjectFixture();
+  }
 });
 
 test("fresh chats remain distinct and reopening a model picker refetches its catalog", async ({

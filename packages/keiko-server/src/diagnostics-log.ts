@@ -1,3 +1,4 @@
+import { ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS } from "./activity-line-fields.js";
 import { DECLARED_MODEL_MODES } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   activityLogErrorKindOr,
@@ -183,20 +184,7 @@ const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
     },
     promptTokens: { type: "integer", dataClass: "count", required: false },
     completionTokens: { type: "integer", dataClass: "count", required: false },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
