@@ -477,7 +477,7 @@ describe("the subagents and skills a prompt may mention (#3906)", () => {
     expect(lines(h)).toMatchObject([{ outcome: "refused", reason, agentMentionCount: agents }]);
   });
 
-  // The pinned 2.1.4 answers the first read of a location that is still loading with an empty
+  // The pinned answers the first read of a location that is still loading with an empty
   // listing (original executable); the mention is decided once the location has loaded.
   it("reads a location that is still loading again before deciding, a bounded number of times", async () => {
     const pauses: number[] = [];

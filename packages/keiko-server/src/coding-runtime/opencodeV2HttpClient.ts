@@ -72,7 +72,7 @@ export interface OpenCodeV2PromptDisplay {
 }
 
 /**
- * One file attached to a prompt (`PromptInput.FileAttachment` of the pinned 2.1.4 schema, reduced to
+ * One file attached to a prompt (`PromptInput.FileAttachment` of the pinned schema, reduced to
  * the two fields Keiko sends): the absolute `file://` URI the runtime reads and the name it shows the
  * model. Which file may be named is decided before this client (`opencodePromptInputs.ts`); the
  * client only keeps the wire shape closed.
@@ -95,7 +95,7 @@ export interface OpenCodeV2PromptInputs {
   readonly delivery?: CodingWorkbenchPromptDelivery | undefined;
   readonly files?: readonly OpenCodeV2PromptFile[] | undefined;
   /**
-   * The message's own id (`Session.Message.ID` of the pinned 2.1.4 schema, the prompt body's `id`).
+   * The message's own id (`Session.Message.ID` of the pinned schema, the prompt body's `id`).
    * The producer stores one input per id and answers a repeated post with the receipt it holds, so a
    * caller that resends the id after a lost acknowledgement does not create a second input. The
    * receipt must name this id, or the post fails with `OpenCodeV2ReceiptMismatchError`.
@@ -115,7 +115,7 @@ export interface OpenCodeV2PromptInputs {
 export const OPENCODE_TURN_ORIGIN_METADATA = "keikoTurnOriginV1";
 
 /**
- * One slash command the runtime lists (`Command.Info` of the pinned 2.1.4 schema): its name and the
+ * One slash command the runtime lists (`Command.Info` of the pinned schema): its name and the
  * one-line description it gives, both untrusted display text. The command's template stays with the
  * runtime; Keiko never reads it.
  */
@@ -132,7 +132,7 @@ const MAX_COMMANDS = 256;
 const COMMAND_DESCRIPTION_MAX_CHARS = 1_024;
 
 /**
- * A subagent the runtime lists (`Agent.Info` of the pinned 2.1.4 schema, mode `subagent` or `all`,
+ * A subagent the runtime lists (`Agent.Info` of the pinned schema, mode `subagent` or `all`,
  * not hidden), by the id a prompt mentions it with, and a skill (`Skill.Info`) by its id and name.
  * Only these closed fields are kept: an agent's system prompt and permissions and a skill's path and
  * content never leave the client.
@@ -158,7 +158,7 @@ export interface OpenCodeV2PromptMentions {
 const MAX_MENTIONABLES = 256;
 
 /**
- * One entry of a session's inbox (`Session.Inbox.Info` of the pinned 2.1.4 schema), reduced to the
+ * One entry of a session's inbox (`Session.Inbox.Info` of the pinned schema), reduced to the
  * three fields Keiko reads: the input's own message id, whether it is an operator message (`user`,
  * the only kind Keiko delivers) or something else the runtime queued itself, and how it will be
  * delivered. The payload (the text, the attachments, the metadata) is never copied.
@@ -269,7 +269,7 @@ export interface OpenCodeV2StagedRevert {
 }
 
 /**
- * The session `session.fork` created (`Session.Info` of the pinned 2.1.4 schema, reduced to what
+ * The session `session.fork` created (`Session.Info` of the pinned schema, reduced to what
  * Keiko checks): its id, the directory the runtime placed it in, the session it was forked from and
  * the boundary the copy ended at. `before` ends it just ahead of a message, `through` at the last one.
  */

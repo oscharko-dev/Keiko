@@ -498,7 +498,7 @@ describe("OpenCode safe-activity normalization", () => {
     expect(normalized).toEqual({ signals: [], dropped: 2 });
   });
 
-  // #3897: the pinned 2.1.4 runtime ships the merged `todo` plan tool; it is the same governed
+  // #3897: the pinned runtime ships the merged `todo` plan tool; it is the same governed
   // plan surface as `todowrite`: a completed part projects as a plan, a call never as a tool.
   it("projects the native todo carrier as a plan and keeps its call dead", () => {
     const todos = [{ content: "Read the entry point", status: "in_progress", priority: "high" }];

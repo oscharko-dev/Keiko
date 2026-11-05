@@ -161,6 +161,10 @@ import {
 } from "./opencodeRuntimeAdapter.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import {
+  OPENCODE_PINNED_VERSION,
+  OPENCODE_RUNTIME_VERSION_PINS,
+} from "./opencodeRuntimeVersions.js";
+import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   projectOpenCodeV2ProtocolSurface,
 } from "./opencodeProtocolSurface.js";
@@ -222,13 +226,16 @@ const TOOL_CAPABILITY = "t".repeat(43);
 // `toolFacadeUrl` from in production, fixed here since this suite never binds a real BFF port.
 const TOOL_FACADE_ORIGIN = "http://127.0.0.1:4391/api/coding-sidecar/tool";
 const FIXTURE_RUN_ID = "run-2254";
-const OPENCODE_VERSION = "2.1.4";
+const OPENCODE_VERSION = OPENCODE_PINNED_VERSION;
 const FIXED_SESSION_TITLE = "Keiko governed runtime";
-const OPENCODE_SCHEMA_SHA256 = "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9";
-// Captured structural projection from OpenCode 2.1.4's actual OpenAPI document.
+const OPENCODE_SCHEMA_SHA256 = OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "";
+// Captured structural projection from the pinned OpenCode's actual OpenAPI document.
 const OPENAPI: unknown = JSON.parse(
   readFileSync(
-    new URL("./opencodeProtocolSurface.opencode-2.1.4.fixture.json", import.meta.url),
+    new URL(
+      `./opencodeProtocolSurface.opencode-${OPENCODE_PINNED_VERSION}.fixture.json`,
+      import.meta.url,
+    ),
     "utf8",
   ),
 );

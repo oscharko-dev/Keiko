@@ -100,7 +100,7 @@ export interface OpenCodeCommandsRunPortDeps {
 }
 
 /**
- * The pinned 2.1.4 loads a location's agents and skills on its first touch, and answers that first
+ * The pinned runtime loads a location's agents and skills on its first touch, and answers that first
  * read with an empty listing (proven on the original executable). Its built-in subagents are always
  * listed once it has loaded, so an empty agent listing means "not loaded yet": it is read again, a
  * bounded number of times, before anything is decided from it.

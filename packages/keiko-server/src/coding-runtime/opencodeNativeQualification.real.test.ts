@@ -1509,7 +1509,7 @@ describe("pinned native OpenCode plan tool (T19)", () => {
           .map(({ name, parameters }) => ({ name, parameters }))
           .sort((left, right) => left.name.localeCompare(right.name));
         const fixture = new URL(
-          "./opencodeToolSchemas.opencode-2.1.4-advertised.fixture.json",
+          `./opencodeToolSchemas.opencode-${OPENCODE_PINNED_VERSION}-advertised.fixture.json`,
           import.meta.url,
         );
         if (process.env.KEIKO_WRITE_OPENCODE_TOOL_SCHEMAS === "1")
@@ -1539,7 +1539,7 @@ describe("pinned native OpenCode plan tool (T19)", () => {
           .map(({ name, parameters }) => ({ name, parameters }))
           .sort((left, right) => left.name.localeCompare(right.name));
         const fixture = new URL(
-          "./opencodeToolSchemas.opencode-2.1.4-direct-advertised.fixture.json",
+          `./opencodeToolSchemas.opencode-${OPENCODE_PINNED_VERSION}-direct-advertised.fixture.json`,
           import.meta.url,
         );
         if (process.env.KEIKO_WRITE_OPENCODE_TOOL_SCHEMAS === "1")

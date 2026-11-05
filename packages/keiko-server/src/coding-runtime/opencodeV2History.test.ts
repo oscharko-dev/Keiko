@@ -280,7 +280,7 @@ describe("OpenCode V2 native tool history", () => {
     },
   );
 
-  // A runtime whose history grows by suffix between pulls. The pinned 2.0.10 persists a streamed part
+  // A runtime whose history grows by suffix between pulls. OpenCode 2.0.10 persists a streamed part
   // only empty and then complete, so this is the contract for a history that does grow, not what that
   // runtime produces: what it streams in between is pinned under "OpenCode V2 live streamed text".
   it("emits only new characters from a text part whose history grows by suffix", () => {
@@ -412,7 +412,7 @@ describe("OpenCode V2 native tool history", () => {
 
 // #3878: OpenCode records the model's reasoning (`reasoning_content`) as a `reasoning` content
 // part. It reaches the live timeline as its own growing signal and never Coding History. The pulls
-// below model a history that grows by suffix; the pinned 2.0.10 persists the part empty and then
+// below model a history that grows by suffix; OpenCode 2.0.10 persists the part empty and then
 // complete, and its stream in between is pinned under "OpenCode V2 live streamed text".
 describe("OpenCode V2 native reasoning history", () => {
   function reasoningHistory(

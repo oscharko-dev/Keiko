@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { OPENCODE_PERSISTENCE_SCHEMAS } from "./opencodePersistenceContract.js";
 import {
   auditDatabase,
@@ -29,7 +30,7 @@ import {
 
 const SESSION_ID = "ses_retained_1";
 const WORKSPACE = "/work/space";
-const VERSION = "2.1.4";
+const VERSION = OPENCODE_PINNED_VERSION;
 const NOW = 1_800_000_000_000;
 const WORKSPACE_KEY = createHash("sha256").update("workspace").digest("hex");
 

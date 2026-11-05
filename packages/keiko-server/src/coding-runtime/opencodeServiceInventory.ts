@@ -456,7 +456,7 @@ function flatten<D>(
 }
 
 /**
- * Every 2.1.4 HTTP operation Keiko does not admit, by `operationId`. Admitted operations are not
+ * Every pinned HTTP operation Keiko does not admit, by `operationId`. Admitted operations are not
  * listed: `openCodeServiceDisposition` derives them from the pinned protocol surface, so this table
  * cannot restate (and drift from) it.
  */
@@ -671,7 +671,7 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten<
 ]);
 
 /**
- * Every 2.1.4 CLI leaf command (`opencode --help`, walked recursively), by command path. `serve` is
+ * Every pinned CLI leaf command (`opencode --help`, walked recursively), by command path. `serve` is
  * the one surface Keiko starts; the rest are reached, if at all, through Keiko's own operations.
  */
 export const OPENCODE_CLI_DISPOSITIONS = flatten<OpenCodeServiceDispositionEntry["disposition"]>([
@@ -745,7 +745,7 @@ export const OPENCODE_CLI_DISPOSITIONS = flatten<OpenCodeServiceDispositionEntry
 ]);
 
 /**
- * Every setting path of the 2.1.4 configuration schema, by name. `keiko-set` is exactly what the
+ * Every setting path of the pinned configuration schema, by name. `keiko-set` is exactly what the
  * native profile composes (the inventory test derives it from `createFixedOpenCodeV2Config` and the
  * MCP admission, so this table cannot claim a setting the runtime is not given). A refused setting
  * keeps the producer's own default: the runtime loads no configuration layer that could set it
@@ -1100,7 +1100,7 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
 ]);
 
 /**
- * Every built-in plugin of the pinned 2.1.4 producer, by id. Every provider plugin but the one that
+ * Every built-in plugin of the pinned producer, by id. Every provider plugin but the one that
  * loads the gateway binding's own SDK package (`opencode.provider.dynamic`) serves a provider the
  * gateway-only provider policy refuses (`OPENCODE_GATEWAY_PROVIDER_POLICIES`). The workspace's
  * Claude-compatible skill directories are not read by the runtime under the launch profile; Keiko

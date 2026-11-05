@@ -318,7 +318,7 @@ function assertIdleErrorShape(value: unknown): void {
 }
 
 /**
- * `Session.StructuredError`, the one error shape every 2.1.4 message uses (a failed compaction
+ * `Session.StructuredError`, the one error shape every current message uses (a failed compaction
  * carries it as well as an idle message). 2.0.10's error was the `type`, `message` and `status`
  * subset of it, so one check serves both layouts.
  */

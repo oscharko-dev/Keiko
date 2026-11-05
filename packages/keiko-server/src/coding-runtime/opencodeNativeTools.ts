@@ -39,8 +39,8 @@ export const OPENCODE_NATIVE_TOOL_CONTRACT_MAX_TOTAL_BYTES =
   GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS.maxTotalBytes;
 
 /**
- * Captured from `ctx.tool.list()` of a plugin loaded by `opencode serve` 2.1.4 (commit 68bc26b7);
- * `opencodeNativeTools.opencode-2.1.4.fixture.json` is the same capture, and the owning test pins
+ * Captured from `ctx.tool.list()` of a plugin loaded by the pinned `opencode serve`;
+ * `opencodeNativeTools.opencode-<version>.fixture.json` is the same capture, and the owning test pins
  * both to each other so neither can drift from the producer unnoticed.
  */
 export const OPENCODE_NATIVE_TOOL_DEFINITIONS: readonly OpenCodeNativeToolDefinition[] =

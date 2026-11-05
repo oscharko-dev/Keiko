@@ -612,7 +612,7 @@ describe("the pointer from the shell to the delivery tools", () => {
   });
 
   // The producer evaluates no permission for a plugin tool in the native profile (measured on the
-  // pinned 2.1.4 in opencodeNativeDelivery.real.test.ts), so a delivery tool never reaches the
+  // pinned in opencodeNativeDelivery.real.test.ts), so a delivery tool never reaches the
   // hook. A permission that did arrive under a tool's name would be unclassified: it stays a
   // fail-closed refusal, never a second path to delivery authority.
   it("treats a permission asserted under a delivery tool's name as unclassified", () => {

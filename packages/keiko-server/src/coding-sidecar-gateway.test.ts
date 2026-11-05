@@ -8,6 +8,7 @@ import {
   initializeLiteLlmCodingReadiness,
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
+import { OPENCODE_PINNED_VERSION } from "./coding-runtime/opencodeRuntimeVersions.js";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -372,7 +373,7 @@ function authenticatedContext(body: unknown, origin?: string): RouteContext {
 const PINNED_MODEL_VISIBLE_TOOLS = JSON.parse(
   readFileSync(
     new URL(
-      "./coding-runtime/opencodeToolSchemas.opencode-2.1.4-direct-advertised.fixture.json",
+      `./coding-runtime/opencodeToolSchemas.opencode-${OPENCODE_PINNED_VERSION}-direct-advertised.fixture.json`,
       import.meta.url,
     ),
     "utf8",

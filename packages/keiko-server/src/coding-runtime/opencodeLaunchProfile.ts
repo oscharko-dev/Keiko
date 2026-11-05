@@ -147,7 +147,7 @@ export const OPENCODE_RUNTIME_PROVIDER_ID = "keiko-runtime";
 
 /**
  * The producer's own provider policy, fixed on every V2 profile: only the gateway-bound provider may
- * be used. Without it the pinned 2.1.4 runtime lists OpenCode's hosted free models and discovers
+ * be used. Without it the pinned runtime lists OpenCode's hosted free models and discovers
  * local servers such as Ollama on their default loopback ports (original executable), each a model
  * route that bypasses the Model Gateway. Statements are ordered; the last match wins.
  */

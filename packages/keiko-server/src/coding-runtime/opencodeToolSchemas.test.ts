@@ -97,12 +97,12 @@ interface RealAdvertisedTool {
 }
 
 /**
- * Live capture: the pinned OpenCode 2.1.4 binary's actual direct-profile `tools` advertisement,
+ * Live capture: the pinned OpenCode binary's actual direct-profile `tools` advertisement,
  * recorded by opencodeNativeQualification.real.test.ts.
  */
 function realAdvertisementFixture(): readonly RealAdvertisedTool[] {
   const path = new URL(
-    "./opencodeToolSchemas.opencode-2.1.4-direct-advertised.fixture.json",
+    `./opencodeToolSchemas.opencode-${OPENCODE_PINNED_VERSION}-direct-advertised.fixture.json`,
     import.meta.url,
   );
   const parsed = JSON.parse(readFileSync(path, "utf8")) as readonly {
@@ -1090,12 +1090,15 @@ describe("createOpenCodeNativeToolAdvertisement (#3897)", () => {
     expect(isGatewayNativeToolAdvertisement(advertisement)).toBe(true);
   });
 
-  // #3908 AC4: the committed capture of the pinned 2.1.4 producer's model-visible tools, which the
+  // #3908 AC4: the committed capture of the pinned producer's model-visible tools, which the
   // real-binary qualification compares against the live advertisement on every pinned run.
-  it("admits the pinned 2.1.4 producer's captured tools, each native one a classified tool", () => {
+  it("admits the pinned producer's captured tools, each native one a classified tool", () => {
     const captured = JSON.parse(
       readFileSync(
-        new URL("./opencodeToolSchemas.opencode-2.1.4-advertised.fixture.json", import.meta.url),
+        new URL(
+          `./opencodeToolSchemas.opencode-${OPENCODE_PINNED_VERSION}-advertised.fixture.json`,
+          import.meta.url,
+        ),
         "utf8",
       ),
     ) as readonly RealAdvertisedTool[];
