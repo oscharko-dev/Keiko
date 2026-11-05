@@ -290,7 +290,8 @@ const NATIVE_LOOPBACK_ONLY_NETWORK_RULES =
  * the workspace and the private state, whose `tmp` is the runtime's TMPDIR; credential stores,
  * credential files and Keiko's state unreadable), the service escape surfaces and the process
  * boundary (signals and process information reach the tree's own sandbox only, never another
- * process of the same OS user). Network follows the run's mode: loopback only below Full access;
+ * process of the same OS user; one exception no profile can close is `sysctl(KERN_PROCARGS2)`, which
+ * shows the exec environment of any process of that user, see ADR-0137 D10). Network follows the run's mode: loopback only below Full access;
  * inherited at Full access, where the per-action permission policy and the accepted Authority
  * Envelope bound it.
  */

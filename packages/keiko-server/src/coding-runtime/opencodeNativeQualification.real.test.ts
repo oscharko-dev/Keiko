@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -790,6 +790,15 @@ const liveCount = (marker: string): number => processesCarrying(marker).length;
  * A loopback HTTP server that records its port in the workspace, the shape of a dev server. macOS
  * ships the Ruby it runs on; the kernel proofs in `runtime-gateway.test.ts` rely on it as well.
  */
+/** `sysctl(KERN_PROCARGS2)`, syscall 202 with `{CTL_KERN, 49, pid}`: what any process may call. */
+const READ_PROCESS_ARGUMENTS = [
+  'my $mib = pack("i3", 1, 49, $ARGV[0] + 0);',
+  'my $answer = "\\0" x (1024 * 1024);',
+  'my $size = pack("Q", length $answer);',
+  'syscall(202, $mib, 3, $answer, $size, 0, 0) == 0 or die "sysctl: $!";',
+  'print substr($answer, 0, unpack("Q", $size));',
+].join(" ");
+
 function loopbackServerCommand(marker: string): string {
   const program = [
     's=TCPServer.new("127.0.0.1",0);',
@@ -1553,6 +1562,40 @@ describe("pinned native OpenCode plan tool (T19)", () => {
 
   // The producer runs a model's `bash` call as its `shell` tool when no tool has that name, so the
   // alias must reach the same mode decision as an ordinary `shell` call.
+  it.skipIf(skip)(
+    "leaves no launch secret readable in the runtime's exec environment",
+    async () => {
+      const control = "launch-secrets-positive-control";
+      await withRun({ env: { LAUNCH_SECRETS_CONTROL: control } }, async (run) => {
+        expect(run.child.pid).toBeDefined();
+        // `/api/plugin` lists the required plugin active only after its read-back passed.
+        const readable = (): string =>
+          execFileSync("/usr/bin/perl", ["-e", READ_PROCESS_ARGUMENTS, String(run.child.pid)], {
+            encoding: "utf8",
+            maxBuffer: 8 * 1_024 * 1_024,
+          });
+        await expect
+          .poll(
+            async () => {
+              const plugins = await run.client.plugins();
+              return plugins.find(({ id }) => id === "keiko.launch-secrets")?.state;
+            },
+            { timeout: 20_000 },
+          )
+          .toMatchObject({ status: "active" });
+        await expect.poll(readable, { timeout: 20_000 }).not.toContain(run.password);
+        const environment = readable();
+        // The kernel call does show this process's environment: the control is still there.
+        expect(environment).toContain(control);
+        for (const secret of [GATEWAY_CAPABILITY, FACADE_CAPABILITY])
+          expect(environment).not.toContain(secret);
+        // The runtime keeps working from its own copy of the password.
+        expect((await run.client.info()).version).toBe(OPENCODE_PINNED_VERSION);
+      });
+    },
+    120_000,
+  );
+
   it.skipIf(skip)(
     "governs a model's bash alias as the shell tool it runs, in every mode",
     async () => {

@@ -2638,3 +2638,19 @@ ADR-0129, ADR-0138), the hard denials (ADR-0129 D3), Git delivery as a Keiko pro
 with signed commits and bounded refs (ADR-0135, ADR-0087), evidence redaction (D7) and the one
 attested loopback origin for gateway and facade (D4).
 
+**Launch secrets leave the exec environment (#4271).** macOS answers `sysctl(KERN_PROCARGS2)` for
+any process of the same user, reading its argument and environment strings from its stack, and no
+Seatbelt rule gates the call: a default-deny profile, `process-info*` and `sysctl-read` name filters
+were each proved not to stop it on the pinned runtime. The runtime can only receive its API password
+and the server-owned binding through that environment, and the password opens routes of its API that
+`permission.evaluate` never sees. A generated plugin, required for readiness, therefore overwrites
+those values and the run's two capabilities in place before any shell exists, then reads the same
+kernel answer back and fails the run's readiness if one survived. The runtime keeps its own copy, so
+nothing else changes. A port denial was tried first and rejected: Seatbelt resolves a `localhost:*`
+allow against a `*:<port>` denial nondeterministically (about half of the ports, measured over 72
+connections per form), `require-not` does not apply to network filters, and macOS refuses a second
+`sandbox_apply` with another profile. The MCP bindings, which carry relay capabilities, stay out of
+the configuration file the shell can read. This boundary does not extend to other processes of the
+same user: a shell child can read the exec environment of any non-platform process, so an operator
+must not export credentials into the environment that starts Keiko.
+

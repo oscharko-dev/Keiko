@@ -269,7 +269,7 @@ export function buildOpenCodeLaunchProfile(
     executable: input.executable,
     args: ["serve", "--hostname", "127.0.0.1", "--port", "0"],
     env: launchEnvironment(input, formatter, configValue, secret),
-    config: JSON.stringify(configValue),
+    config: JSON.stringify(materializedConfiguration(input, configValue)),
     configValue,
     ...nativeFormatterFacts(input, formatter),
   };
@@ -714,6 +714,20 @@ function openCodeNativeReferences(
       { path, description: "Read-only external reference the operator accepted for this run." },
     ]),
   );
+}
+
+/**
+ * The configuration file sits in the run's private state, which a shell child can read, and a
+ * relayed MCP server's binding carries that run's capability. The native profile therefore keeps
+ * the MCP servers in the server-owned binding alone, whose copy in the exec environment the
+ * launch-secrets plugin overwrites; the runtime merges that binding after this file.
+ */
+function materializedConfiguration(
+  input: OpenCodeLaunchProfileInput,
+  config: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  if (input.toolProfile !== "native") return config;
+  return Object.fromEntries(Object.entries(config).filter(([key]) => key !== "mcp"));
 }
 
 /**
