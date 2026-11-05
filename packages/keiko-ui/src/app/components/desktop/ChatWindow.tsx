@@ -4925,11 +4925,68 @@ function MemoryActionRejectedCard({
   const t = useTranslate();
   return (
     <article className="chat-memory-action">
-      <div className="chat-memory-action-head">
-        <strong>{t("chat.memory.proposalDeclined")}</strong>
-      </div>
-      <p>{action.reason !== "" ? action.reason : t("chat.memory.noReason")}</p>
+      <p>{t(memoryRefusalSentenceKey(action.reason))}</p>
     </article>
+  );
+}
+
+type MemoryRefusalSentenceKey = Parameters<I18nTranslate>[0];
+
+const MEMORY_REFUSAL_SENTENCE_KEYS: Readonly<Record<string, MemoryRefusalSentenceKey>> = {
+  "ambiguous-forget": "chat.memory.refusal.whichMemory",
+  "ambiguous-update": "chat.memory.refusal.whichMemory",
+  "forget-not-applied": "chat.memory.refusal.forgetFailed",
+  "suppressed-by-forget": "chat.memory.refusal.forgotten",
+  "suppressed-by-rejection": "chat.memory.refusal.forgotten",
+  "credential-shape": "chat.memory.refusal.secret",
+  "private-credential-path": "chat.memory.refusal.secret",
+  "provider-base-url": "chat.memory.refusal.secret",
+  "customer-identifier": "chat.memory.refusal.sensitive",
+  "denied-category": "chat.memory.refusal.sensitive",
+  "restricted-sensitivity": "chat.memory.refusal.sensitive",
+  "sensitive-memory-requires-approval": "chat.memory.refusal.sensitive",
+};
+
+// The closed reason stays in the Activity Log; the person reads one plain sentence.
+function memoryRefusalSentenceKey(reason: string): MemoryRefusalSentenceKey {
+  return MEMORY_REFUSAL_SENTENCE_KEYS[reason] ?? "chat.memory.refusal.notSaved";
+}
+
+function memoryStatementSentenceKey(
+  action: ConversationMemoryActionWire,
+): MemoryRefusalSentenceKey | undefined {
+  if (action.kind === "forget" && action.forgotten === true) {
+    return "chat.memory.forgottenStatement";
+  }
+  if (action.kind === "rejected" && action.explicitStatement === true) {
+    return memoryRefusalSentenceKey(action.reason);
+  }
+  if (action.kind === "candidate" && action.status === "accepted" && action.explicitStatement) {
+    return "chat.memory.rememberedStatement";
+  }
+  return undefined;
+}
+
+// What a clear "Merke dir" or "Vergiss das" did. The person said it in the chat, so the answer is
+// in the chat, not behind the memory disclosure.
+function MemoryStatementResults({
+  actions,
+}: {
+  readonly actions: readonly ConversationMemoryActionWire[];
+}): ReactNode {
+  const t = useTranslate();
+  const keys = [...new Set(actions.map((action) => memoryStatementSentenceKey(action)))].filter(
+    (key) => key !== undefined,
+  );
+  if (keys.length === 0) return null;
+  return (
+    <section className="chat-memory-panel" aria-label={t("chat.memory.panel")}>
+      {keys.map((key) => (
+        <p key={key} className="chat-memory-summary">
+          <output>{t(key)}</output>
+        </p>
+      ))}
+    </section>
   );
 }
 
@@ -4981,6 +5038,13 @@ function MemoryActionCard({
   }
   if (action.kind === "update") {
     return <MemoryActionUpdateCard action={action} />;
+  }
+  if (action.kind === "forget" && action.forgotten === true) {
+    return (
+      <article className="chat-memory-action">
+        <p>{t("chat.memory.forgottenStatement")}</p>
+      </article>
+    );
   }
   if (action.kind === "forget") {
     return (
@@ -5214,7 +5278,7 @@ function MemoryPanelImpl({
   readonly disclosure: MemoryDisclosureState;
 }): ReactNode {
   const t = useTranslate();
-  if (!disclosure.open) return null;
+  if (!disclosure.open) return <MemoryStatementResults actions={latestMemory?.actions ?? []} />;
 
   return (
     <section className="chat-memory-panel" aria-label={t("chat.memory.panel")}>

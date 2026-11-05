@@ -469,6 +469,8 @@
   "memory.embedding.invalidated": "memory-knowledge",
   "memory.embedding.invalidation-failed": "memory-knowledge",
   "memory.embedding.store-rejected": "memory-knowledge",
+  "memory.explicit.forget": "memory-knowledge",
+  "memory.explicit.remember": "memory-knowledge",
   "native-file-dialog.selection.projected": "ui",
   "portable.normal-startup-recovery.completed": "runtime-packages",
   "portable.normal-startup-recovery.required": "runtime-packages",

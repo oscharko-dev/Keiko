@@ -32,7 +32,7 @@ describe("extractCandidatesFromUserText", () => {
   it("returns exceeds-length-limit on oversize input", () => {
     const huge = "remember that " + "x".repeat(5000);
     expect(extractCandidatesFromUserText(huge, ctx())).toEqual([
-      { kind: "rejected", reason: "exceeds-length-limit" },
+      { kind: "rejected", reason: "exceeds-length-limit", statement: "remember" },
     ]);
   });
 
@@ -41,7 +41,7 @@ describe("extractCandidatesFromUserText", () => {
       extractCandidatesFromUserText("remember dark mode", ctx(), {
         defaultSensitivity: "restricted",
       }),
-    ).toEqual([{ kind: "rejected", reason: "restricted-sensitivity" }]);
+    ).toEqual([{ kind: "rejected", reason: "restricted-sensitivity", statement: "remember" }]);
   });
 
   it("emits a remember candidate for a 'remember that' phrase", () => {
@@ -105,7 +105,11 @@ describe("extractCandidatesFromUserText", () => {
   it("rejects with credential-shape for credential bodies", () => {
     const shape = "AKIA" + "ABCDEFGHIJKLMNOP";
     const result = extractCandidatesFromUserText(`remember that ${shape}`, ctx());
-    expect(result[0]).toEqual({ kind: "rejected", reason: "credential-shape" });
+    expect(result[0]).toEqual({
+      kind: "rejected",
+      reason: "credential-shape",
+      statement: "remember",
+    });
   });
 
   it("rejects provider base URLs before creating a candidate", () => {
@@ -113,14 +117,22 @@ describe("extractCandidatesFromUserText", () => {
       "remember that our provider base URL is https://llm.internal.example.com/v1",
       ctx(),
     );
-    expect(result[0]).toEqual({ kind: "rejected", reason: "provider-base-url" });
+    expect(result[0]).toEqual({
+      kind: "rejected",
+      reason: "provider-base-url",
+      statement: "remember",
+    });
   });
 
   it("rejects a configured category before creating an explicit candidate", () => {
     const result = extractCandidatesFromUserText("remember that my medical record changed", ctx(), {
       deniedCategoryMatchers: [{ category: "health-data", matchers: [/\bmedical record\b/iu] }],
     });
-    expect(result[0]).toEqual({ kind: "rejected", reason: "denied-category" });
+    expect(result[0]).toEqual({
+      kind: "rejected",
+      reason: "denied-category",
+      statement: "remember",
+    });
   });
 
   it("priority: forget wins over remember when both could match", () => {
@@ -180,6 +192,28 @@ describe("extractCandidatesFromWorkflowOutcome", () => {
     };
     expect(extractCandidatesFromWorkflowOutcome(outcome, ctx())).toEqual([
       { kind: "rejected", reason: "raw-log-content" },
+    ]);
+  });
+});
+
+describe("extractCandidatesFromUserText attributes a rejection to its statement (#4211)", () => {
+  it("names the statement that was refused", () => {
+    expect(extractCandidatesFromUserText("Merke dir: Passwort: hunter2", ctx())).toEqual([
+      { kind: "rejected", reason: "credential-shape", statement: "remember" },
+    ]);
+  });
+
+  it("names a clear statement refused before any extractor ran", () => {
+    const text = `Merke dir: ${"x".repeat(5000)}`;
+    expect(extractCandidatesFromUserText(text, ctx())).toEqual([
+      { kind: "rejected", reason: "exceeds-length-limit", statement: "remember" },
+    ]);
+  });
+
+  it("names no statement for an ordinary long message", () => {
+    const text = `Bitte fasse das zusammen: ${"x".repeat(5000)}`;
+    expect(extractCandidatesFromUserText(text, ctx())).toEqual([
+      { kind: "rejected", reason: "exceeds-length-limit" },
     ]);
   });
 });

@@ -7899,6 +7899,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "memory-explicit-statement",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["memory.explicit.forget", "memory.explicit.remember"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: [],
+    requiredLossOperations: [],
+    requiredProofOperations: ["memory.explicit.forget", "memory.explicit.remember"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["memory.explicit.forget", "memory.explicit.remember"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "memory-embedding-invalidation",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

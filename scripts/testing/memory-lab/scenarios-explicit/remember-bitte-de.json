@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "remember-bitte-de",
+  "language": "de",
+  "class": "preference",
+  "difficulty": "plain",
+  "description": "\"Merke dir bitte: ...\" stores the stated fact only, not the filler and not the rest of the message.",
+  "truth": [
+    {
+      "key": "format-preference",
+      "seed": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "must": true,
+      "private": true,
+      "terms": [["Tabelle*"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Merke dir bitte: Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst. Und was steht heute an?",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Wie sollst du mir Zahlen zeigen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Tabelle*"]]
+      }
+    }
+  ]
+}

@@ -28,6 +28,7 @@ import { redact } from "@oscharko-dev/keiko-security";
 import { findConfiguredCapability, type ResponseFormat } from "@oscharko-dev/keiko-model-gateway";
 import {
   extractSalientMemories,
+  isExplicitMemoryStatement,
   memoryTextSecretEgressRejectionReason,
   type CaptureContext,
   type CaptureOutcome,
@@ -755,7 +756,7 @@ export async function captureSalientFromTurn(
   correlationId: string = randomUUID(),
 ): Promise<readonly ConversationMemoryActionWire[]> {
   const vault = activeSalienceVault(deps, request);
-  if (vault === undefined) return [];
+  if (vault === undefined || isExplicitMemoryStatement(request.content)) return [];
   try {
     return await runSalienceCapture(deps, vault, request, context, {
       modelId,

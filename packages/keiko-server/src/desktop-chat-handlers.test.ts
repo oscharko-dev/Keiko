@@ -1835,7 +1835,8 @@ describe("desktop chat routes", () => {
       const memoryIdsAfterFailure = memoriesAfterFailure.map((memory) => memory.id);
       expect(failed.status).toBe(500);
       expect(memoryIdsAfterFailure.length).toBeGreaterThan(0);
-      expect(memoriesAfterFailure.every((memory) => memory.status === "proposed")).toBe(true);
+      // A clear statement is accepted at once in every mode (ADR-0146 D4b).
+      expect(memoriesAfterFailure.every((memory) => memory.status === "accepted")).toBe(true);
       expect(store.listMessages(created.chat.id)).toHaveLength(1);
 
       await restartWithDeps(
@@ -2406,7 +2407,8 @@ describe("desktop chat routes", () => {
     const proposalId = body.memory?.actions[0]?.proposalId;
     expect(proposalId).toBeDefined();
     if (proposalId !== undefined) {
-      expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
+      // A clear statement is accepted at once in every mode (ADR-0146 D4b).
+      expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("accepted");
     }
     expect(memoryVault.getAccessStats([recalled.id]).get(recalled.id)?.accessCount ?? 0).toBe(0);
     memoryVault.close();
@@ -2591,7 +2593,9 @@ describe("desktop chat routes", () => {
     const body = (await sendRes.json()) as {
       memory?: { actions: { kind: string; reason?: string }[] };
     };
-    expect(body.memory?.actions).toEqual([{ kind: "rejected", reason: "customer-identifier" }]);
+    expect(body.memory?.actions).toEqual([
+      { kind: "rejected", reason: "customer-identifier", explicitStatement: true },
+    ]);
     expect(listAllMemories(memoryVault, { includeExpired: true })).toEqual([]);
     memoryVault.close();
   });
@@ -2857,7 +2861,8 @@ describe("desktop chat routes", () => {
         chatId: created.chat.id,
         projectPath: projectDir,
         modelId: CHAT_MODEL,
-        content: "remember that we deploy after the green CI run",
+        // Names the project: a statement without a scope stays private (ADR-0146 D4b).
+        content: "remember about this project: we deploy after the green CI run",
         memory: {
           enabled: true,
           context: {

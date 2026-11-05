@@ -18,6 +18,7 @@
 import { MEMORY_BODY_MAX_CHARS_DEFAULT } from "./_constants.js";
 import { tryExtractAmbientIdentity } from "./intent-ambient.js";
 import {
+  explicitStatementKind,
   tryExtractCorrection,
   tryExtractForget,
   tryExtractRemember,
@@ -27,6 +28,7 @@ import { extractWorkflowOutcomeCandidates } from "./intent-workflow.js";
 import type {
   CaptureContext,
   CaptureOutcome,
+  CaptureStatementKind,
   CapturePolicyOptions,
   WorkflowOutcomeInput,
 } from "./types.js";
@@ -39,13 +41,20 @@ type Extractor = (
 
 // Priority order is intentional: forget > update > correction > remember > ambient identity.
 // The most action-bearing intent wins so "forget about X" is never mis-extracted as a remember.
-const EXTRACTORS: readonly Extractor[] = [
-  tryExtractForget,
-  tryExtractUpdate,
-  tryExtractCorrection,
-  tryExtractRemember,
-  tryExtractAmbientIdentity,
+const EXTRACTORS: readonly {
+  readonly statement: CaptureStatementKind;
+  readonly extract: Extractor;
+}[] = [
+  { statement: "forget", extract: tryExtractForget },
+  { statement: "update", extract: tryExtractUpdate },
+  { statement: "correction", extract: tryExtractCorrection },
+  { statement: "remember", extract: tryExtractRemember },
+  { statement: "ambient", extract: tryExtractAmbientIdentity },
 ];
+
+function attributed(outcome: CaptureOutcome, statement: CaptureStatementKind): CaptureOutcome {
+  return outcome.kind === "rejected" ? { ...outcome, statement } : outcome;
+}
 
 // Pre-flight guard: returns a rejection outcome when the input is empty or oversize, otherwise
 // null. Shared by the user-text and workflow-text entry points so both paths enforce the same
@@ -72,12 +81,13 @@ export function extractCandidatesFromUserText(
 ): readonly CaptureOutcome[] {
   const preflight = preflightText(text, policy);
   if (preflight !== null) {
-    return [preflight];
+    const stated = explicitStatementKind(text);
+    return [stated === null ? preflight : attributed(preflight, stated)];
   }
-  for (const extractor of EXTRACTORS) {
-    const outcome = extractor(text, context, policy);
+  for (const { statement, extract } of EXTRACTORS) {
+    const outcome = extract(text, context, policy);
     if (outcome !== null) {
-      return [outcome];
+      return [attributed(outcome, statement)];
     }
   }
   return [];

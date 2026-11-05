@@ -3787,6 +3787,7 @@ async function attachGroundedMemory(
       {
         retrievalContent: prepared.input.content,
         precomputedMemory: memoryPreparation.result,
+        correlationId: prepared.correlationId,
       },
     );
     return memory === undefined ? markedResult : { ...markedResult, body: { ...body, memory } };
