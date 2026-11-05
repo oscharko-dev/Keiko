@@ -1090,6 +1090,25 @@ describe("auditing a database directly", () => {
       }),
     ).toEqual({ ok: false, reason: "schema-unknown", check: "audit-unreadable" });
   });
+
+  // The pinned runtime's API answers `C:\work`, and its `session_v2` row holds `C:/work`: comparing
+  // the two literally refused every real retain on Windows, proven in the real-runtime suite (#4068).
+  it.each([
+    ["a drive path in the host's spelling", "C:/work/repo", String.raw`C:\work\repo`, true],
+    ["a drive path already in the row's spelling", "C:/work/repo", "C:/work/repo", true],
+    ["another drive path", "C:/work/repo", String.raw`C:\work\other`, false],
+    ["the same path on another drive", "C:/work/repo", String.raw`D:\work\repo`, false],
+    ["a row that kept the backslashes", String.raw`C:\work\repo`, String.raw`C:\work\repo`, false],
+    ["a POSIX name holding a backslash", String.raw`/work/a\b`, String.raw`/work/a\b`, true],
+    ["a POSIX backslash as a separator", "/work/a/b", String.raw`/work/a\b`, false],
+  ])("compares %s with the runtime's spelling", (_label, stored, directory, accepted) => {
+    const path = join(tempRoot(), "a.db");
+    runtimeDatabase(path, { messages: 2, session: { directory: stored } });
+
+    expect(auditDatabase(path, { sessionId: SESSION_ID, directory, version: VERSION })).toEqual(
+      accepted ? { ok: true, messageCount: 2 } : { ok: false, reason: "session-mismatch" },
+    );
+  });
 });
 
 // Node's mode bits say nothing on Windows, so the retained state is judged by its real DACL. The

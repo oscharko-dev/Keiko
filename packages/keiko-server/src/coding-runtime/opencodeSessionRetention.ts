@@ -895,13 +895,22 @@ function sameMembers(actual: readonly string[], expected: readonly string[] | un
   return new Set(actual).size === actual.length && actual.every((name) => known.has(name));
 }
 
+/**
+ * The spelling the runtime's database keeps a directory in. Its API answers `C:\work`, and its
+ * `session_v2` row holds `C:/work`. A backslash is an ordinary file name character on POSIX, so only
+ * a drive path is respelled.
+ */
+function persistedDirectory(directory: string): string {
+  return /^[A-Za-z]:[\\/]/u.test(directory) ? directory.replaceAll("\\", "/") : directory;
+}
+
 function sessionRefusal(
   session: SessionRow,
   expected: AuditExpectation,
 ): RetentionRefusal | undefined {
   if (
     session.id !== expected.sessionId ||
-    session.directory !== expected.directory ||
+    session.directory !== persistedDirectory(expected.directory) ||
     session.version !== expected.version ||
     session.parent_id !== null ||
     session.workspace_id !== null ||

@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { resolveGitExecutable } from "@oscharko-dev/keiko-git";
 import {
   buildRuntimeGatewaySeatbeltCommand,
   buildWrappedCommand,
@@ -66,6 +67,7 @@ import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
  * its actual protocol digest and persistence schema must match that version's own contracts.
  * KEIKO_OPENCODE_REAL_TOOL_PROFILE selects the governed mapped profiles on Linux; their existing
  * namespace gateway wrapper is used, while the unqualified native Linux profile stays refused.
+ * On Windows it selects the mapped profile too, and the runtime starts without a wrapper.
  */
 const RUNTIME_VERSION = process.env.KEIKO_OPENCODE_REAL_VERSION ?? OPENCODE_PINNED_VERSION;
 const TOOL_PROFILE = fixtureToolProfile();
@@ -86,7 +88,19 @@ function fixtureToolProfile(): "native" | "direct" | "code-mode" {
 }
 
 function fixtureGitExecutable(): string {
-  return process.platform === "darwin" ? resolveDarwinGitExecutable().path : "/usr/bin/git";
+  if (process.platform === "darwin") return resolveDarwinGitExecutable().path;
+  if (process.platform !== "win32") return "/usr/bin/git";
+  const git = resolveGitExecutable(process.env, tmpdir());
+  if (!git.ok) throw new Error(`fixture-git-unavailable:${git.reason}`);
+  return git.path;
+}
+
+/** What the runtime needs from the host beyond its profile; the supervisor pins SystemRoot itself. */
+function fixtureHostEnvironment(git: string): Record<string, string> {
+  if (process.platform !== "win32") return { PATH: `${dirname(git)}:/usr/bin:/bin` };
+  const systemRoot = process.env.SystemRoot;
+  if (systemRoot === undefined) throw new Error("fixture-system-root-missing");
+  return { PATH: dirname(git), SystemRoot: systemRoot };
 }
 
 function fixtureCommand(
@@ -241,11 +255,14 @@ function committedRepository(root: string, workspace: string): void {
   mkdirSync(workspace, { recursive: true });
   writeFileSync(join(workspace, "notes.txt"), "resume fixture\n");
   const git = fixtureGitExecutable();
+  // An empty file rather than the null device: Git for Windows cannot open `\\.\nul` as a config.
+  const globalConfig = join(root, "empty.gitconfig");
+  writeFileSync(globalConfig, "");
   const env = {
     HOME: root,
     PATH: dirname(git),
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_GLOBAL: globalConfig,
   };
   const identity = ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid"];
   for (const args of [
@@ -301,25 +318,35 @@ function launch(
   for (const [name, source] of Object.entries(createGeneratedOpenCodeV2Plugins(TOOL_PROFILE)))
     writeFileSync(join(configRoot, "plugins", `${name}.ts`), source, { mode: 0o600 });
   const git = fixtureGitExecutable();
-  const policy = createRuntimeGatewayConfinement({
-    gatewayUrl: `http://127.0.0.1:${String(stubs.gateway.port)}/v1`,
-    runId: "run-native-resume",
-    treeBindingId: "a".repeat(64),
-    envelopeDigest: "b".repeat(64),
-    runtimeArtifactDigest: "c".repeat(64),
-    modelProfileDigest: "d".repeat(64),
-    profile: TOOL_PROFILE === "native" ? "keiko-native" : "keiko-gateway",
-    filesystem: {
-      workspaceRoot: fixture.workspace,
-      workspaceAccess: TOOL_PROFILE === "native" ? "read-write" : "read-only",
-      privateStateRoot: stateRoot,
-      runtimeReadRoot: runtimeRoot,
-      ...(TOOL_PROFILE === "native"
-        ? { protectedWriteRoots: [openCodeConfigDirectory(stateRoot)] }
-        : {}),
-    },
-  });
-  const command = fixtureCommand(policy, binary, [...profile.args, "--stdio"], fixture.workspace);
+  const args = [...profile.args, "--stdio"];
+  // Windows confinement needs the installed gateway service (ADR-0043 D18), which this fixture does
+  // not have. This run proves persistence against a text-only stub, and no boundary on that host.
+  const command: WrappedCommand =
+    process.platform === "win32"
+      ? { command: binary, args }
+      : fixtureCommand(
+          createRuntimeGatewayConfinement({
+            gatewayUrl: `http://127.0.0.1:${String(stubs.gateway.port)}/v1`,
+            runId: "run-native-resume",
+            treeBindingId: "a".repeat(64),
+            envelopeDigest: "b".repeat(64),
+            runtimeArtifactDigest: "c".repeat(64),
+            modelProfileDigest: "d".repeat(64),
+            profile: TOOL_PROFILE === "native" ? "keiko-native" : "keiko-gateway",
+            filesystem: {
+              workspaceRoot: fixture.workspace,
+              workspaceAccess: TOOL_PROFILE === "native" ? "read-write" : "read-only",
+              privateStateRoot: stateRoot,
+              runtimeReadRoot: runtimeRoot,
+              ...(TOOL_PROFILE === "native"
+                ? { protectedWriteRoots: [openCodeConfigDirectory(stateRoot)] }
+                : {}),
+            },
+          }),
+          binary,
+          args,
+          fixture.workspace,
+        );
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
   if (password === undefined) throw new Error("fixture-password-missing");
   return {
@@ -328,7 +355,7 @@ function launch(
       cwd: fixture.workspace,
       env: {
         ...profile.env,
-        PATH: `${dirname(git)}:/usr/bin:/bin`,
+        ...fixtureHostEnvironment(git),
         KEIKO_MODEL_GATEWAY_URL: `http://127.0.0.1:${String(stubs.gateway.port)}/v1`,
         KEIKO_MODEL_GATEWAY_CAPABILITY: GATEWAY_CAPABILITY,
         KEIKO_TOOL_FACADE_URL: `http://127.0.0.1:${String(stubs.gateway.port)}/facade/native-policy`,
@@ -452,8 +479,8 @@ async function withRuntime(
 async function withWorld(body: (world: World) => Promise<void>): Promise<void> {
   if (BINARY === undefined || RESOURCE_ROOT === undefined)
     throw new Error("fixture-binary-missing");
-  expect(["darwin", "linux"]).toContain(process.platform);
-  if (process.platform === "linux") expect(TOOL_PROFILE).not.toBe("native");
+  expect(["darwin", "linux", "win32"]).toContain(process.platform);
+  if (process.platform !== "darwin") expect(TOOL_PROFILE).not.toBe("native");
   const fixture = createFixture();
   const [gateway, facade] = [await startGateway(), await startFacade()];
   try {
