@@ -2575,6 +2575,19 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
     ]);
   });
 
+  // #4271: a command the runtime killed reports no exit status at all, only how it ended.
+  it.each([
+    ["ran out of its timeout", { status: "completed", truncated: false, timeout: true }],
+    ["was killed by a signal", { status: "completed", truncated: false, signal: "SIGKILL" }],
+  ])("projects a command that %s as a failed call without an exit status", (_name, metadata) => {
+    const [signal] = toolSignals(
+      shellHistory({ status: "completed", input: { command: "npm test" }, metadata }),
+    );
+    expect(signal).toEqual(expect.objectContaining({ callId: "call_shell", state: "failed" }));
+    expect(signal).not.toHaveProperty("exitCode");
+    expect(signal).not.toHaveProperty("exitStatusCheck");
+  });
+
   it("projects a command that exited zero as succeeded with its exit status", () => {
     expect(toolSignals(shellHistory(completed(0)))).toEqual([
       expect.objectContaining({ state: "succeeded", exitCode: 0 }),

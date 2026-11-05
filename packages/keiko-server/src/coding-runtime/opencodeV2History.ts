@@ -34,7 +34,7 @@ import {
 } from "./opencodeToolSchemas.js";
 import {
   isAdmissibleOpenCodeToolName,
-  isOpenCodeCodeModeExecutionFailure,
+  isOpenCodeToolExecutionFailure,
 } from "./opencodeNativeTools.js";
 import { openCodeNativeVerificationKind } from "./opencodeNativePolicy.js";
 import { OPENCODE_PLAN_CARRIER_TOOLS } from "./opencodeProtocol.js";
@@ -651,16 +651,12 @@ function toolState(
   assertToolInput(part, state);
   if (!historyToolAdmitted(name, profile)) throw new Error("opencode-v2-tool-invalid");
   const exit = name === "shell" ? shellExitEvidence(state) : {};
-  // The runtime completes a shell call whatever its command returned (`metadata.exit`); a command
-  // that exited non-zero failed, which the timeline and the run's evidence both say (#3901).
-  const mapped =
-    exit.exitCode !== undefined && exit.exitCode !== 0 ? "failed" : displayToolState(name, state);
   return {
     kind: "tool",
     messageId,
     callId: id,
     tool: name,
-    state: mapped,
+    state: displayToolState(name, state),
     occurredAt: toolOccurredAt(part),
     ...exit,
   };
@@ -711,8 +707,7 @@ function shellExitCode(state: Readonly<Record<string, unknown>>): number | undef
   return typeof exit === "number" && Number.isInteger(exit) ? exit : undefined;
 }
 
-// A completed part is a succeeded tool, except a Code Mode `execute` whose program failed: the
-// producer returns that as a completed part carrying its own `metadata.error` flag (#3897).
+// A completed part is a succeeded tool unless its own metadata says the work failed.
 function displayToolState(
   name: string,
   state: Readonly<Record<string, unknown>>,
@@ -720,7 +715,7 @@ function displayToolState(
   const status = state.status;
   if (status === "streaming") return "pending";
   if (status === "completed")
-    return isOpenCodeCodeModeExecutionFailure(name, state) ? "failed" : "succeeded";
+    return isOpenCodeToolExecutionFailure(name, state) ? "failed" : "succeeded";
   if (status === "error") return "failed";
   if (status === "running") return "running";
   throw new Error("opencode-v2-tool-state-invalid");

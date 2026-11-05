@@ -27,7 +27,7 @@ import {
 } from "./opencodeLaunchProfile.js";
 import {
   OPENCODE_NATIVE_TOOL_DEFINITIONS,
-  isOpenCodeCodeModeExecutionFailure,
+  isOpenCodeToolExecutionFailure,
 } from "./opencodeNativeTools.js";
 import { realNativeRuntime } from "../tool-catalog/__fixtures__/nativeEffectRuntimeFixture.js";
 import { createCodingToolNativeEffectFacet } from "./codingToolNativeEffect.js";
@@ -1480,11 +1480,11 @@ describe("pinned native OpenCode Code Mode semantics", () => {
         await probedTurn(run, executeCall('throw new Error("SYNTHETIC-CODE-MODE-FAILURE");'));
         const [thrown] = await executeStates();
         expect(object(thrown)?.status).toBe("completed");
-        expect(isOpenCodeCodeModeExecutionFailure("execute", thrown)).toBe(true);
+        expect(isOpenCodeToolExecutionFailure("execute", thrown)).toBe(true);
         await probedTurn(run, executeCall("return 1 + 1;"));
         const states = await executeStates();
         expect(states).toHaveLength(2);
-        expect(isOpenCodeCodeModeExecutionFailure("execute", states[1])).toBe(false);
+        expect(isOpenCodeToolExecutionFailure("execute", states[1])).toBe(false);
       });
     },
     120_000,

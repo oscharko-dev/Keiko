@@ -56,6 +56,9 @@ const MAX_MESSAGE_PAGES = 64;
 const MAX_MESSAGES = 4096;
 const MAX_TAIL_PAGES = Math.ceil(MAX_MESSAGES / TAIL_PAGE_SIZE) + 1;
 const MAX_EVENT_FRAME_BYTES = 1024 * 1024;
+// The runtime sends a heartbeat comment every 15 s on an otherwise silent stream, so three missed
+// ones mean it stopped answering (#4271). The monitor then reconnects within its failure budget.
+const DEFAULT_EVENT_IDLE_TIMEOUT_MS = 45_000;
 const MAX_DIFF_FILES = 4096;
 const MAX_DIFF_PATH_CHARS = 4096;
 
@@ -64,6 +67,7 @@ export interface OpenCodeV2HttpClientOptions {
   readonly password: string;
   readonly fetch?: typeof globalThis.fetch | undefined;
   readonly timeoutMs?: number | undefined;
+  readonly eventIdleTimeoutMs?: number | undefined;
 }
 
 export interface OpenCodeV2PromptDisplay {
@@ -1104,24 +1108,35 @@ function parseEventFrame(frame: string): Readonly<Record<string, unknown>> | und
   return event;
 }
 
+function assertEventFrameBound(frame: string): void {
+  if (Buffer.byteLength(frame, "utf8") > MAX_EVENT_FRAME_BYTES) {
+    throw new Error("opencode-v2-event-oversized");
+  }
+}
+
+// The bound is per frame: one read can carry many small frames, and only what stays pending after
+// they are taken is a frame still growing. An oversized frame ends this subscription, and the
+// monitor's reconnect reads the history, which is complete, so the event's content is not lost.
 async function* readEventFrames(
   body: ReadableStream<Uint8Array>,
+  onChunk: () => void,
 ): AsyncIterable<Readonly<Record<string, unknown>>> {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let pending = "";
   for await (const chunk of body) {
+    onChunk();
     pending += decoder.decode(chunk, { stream: true });
     pending = pending.replaceAll("\r\n", "\n");
-    if (Buffer.byteLength(pending, "utf8") > MAX_EVENT_FRAME_BYTES) {
-      throw new Error("opencode-v2-event-oversized");
-    }
     let boundary = pending.indexOf("\n\n");
     while (boundary >= 0) {
-      const event = parseEventFrame(pending.slice(0, boundary));
+      const frame = pending.slice(0, boundary);
+      assertEventFrameBound(frame);
+      const event = parseEventFrame(frame);
       pending = pending.slice(boundary + 2);
       if (event !== undefined) yield event;
       boundary = pending.indexOf("\n\n");
     }
+    assertEventFrameBound(pending);
   }
   if (pending.length > 0) throw new Error("opencode-v2-event-truncated");
 }
@@ -1131,21 +1146,40 @@ async function* openEvents(
   authorization: string,
   fetchFn: typeof globalThis.fetch,
   signal: AbortSignal,
+  idleTimeoutMs: number,
 ): AsyncIterable<Readonly<Record<string, unknown>>> {
-  const response = await fetchFn(new URL("/api/event", endpoint), {
-    method: "GET",
-    redirect: "manual",
-    signal,
-    headers: { Authorization: authorization, Accept: "text/event-stream" },
-  });
-  if (
-    !response.ok ||
-    response.headers.get("content-type")?.startsWith("text/event-stream") !== true ||
-    response.body === null
-  ) {
-    throw new Error("opencode-v2-event-unavailable");
+  // One deadline for connecting and for every read, renewed by each chunk, heartbeats included. A
+  // runtime that accepts the connection and then stops answering keeps its process alive, so
+  // nothing else would ever end this wait.
+  const watchdog = new AbortController();
+  const abort = (): void => {
+    watchdog.abort(new Error("opencode-v2-event-idle"));
+  };
+  if (signal.aborted) abort();
+  else signal.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(abort, idleTimeoutMs);
+  timer.unref();
+  try {
+    const response = await fetchFn(new URL("/api/event", endpoint), {
+      method: "GET",
+      redirect: "manual",
+      signal: watchdog.signal,
+      headers: { Authorization: authorization, Accept: "text/event-stream" },
+    });
+    if (
+      !response.ok ||
+      response.headers.get("content-type")?.startsWith("text/event-stream") !== true ||
+      response.body === null
+    ) {
+      throw new Error("opencode-v2-event-unavailable");
+    }
+    yield* readEventFrames(response.body, () => {
+      timer.refresh();
+    });
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", abort);
   }
-  yield* readEventFrames(response.body);
 }
 
 // The runtime pages its session list (50 rows by default). A session-tree proof that read only the
@@ -1318,7 +1352,13 @@ export function createOpenCodeV2HttpClient(
     info: (signal) => request("GET", "/api/info", undefined, signal),
     document: (signal) => request("GET", "/openapi.json", undefined, signal),
     events: (signal) =>
-      openEvents(endpoint, authorization, options.fetch ?? globalThis.fetch, signal),
+      openEvents(
+        endpoint,
+        authorization,
+        options.fetch ?? globalThis.fetch,
+        signal,
+        options.eventIdleTimeoutMs ?? DEFAULT_EVENT_IDLE_TIMEOUT_MS,
+      ),
     createSession: async (directory, signal): Promise<Readonly<Record<string, unknown>>> => {
       if (!directory.startsWith("/")) throw new Error("opencode-v2-directory-invalid");
       return objectEnvelope(
