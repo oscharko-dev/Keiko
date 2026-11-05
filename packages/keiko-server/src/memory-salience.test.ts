@@ -1056,8 +1056,8 @@ describe("captureSalientFromTurn", () => {
           JSON.stringify([
             {
               about: "self",
-              body: "Meine Telefonnummer ist +49 30 1234567.",
-              evidence: "Meine Telefonnummer ist +49 30 1234567.",
+              body: "Meine E-Mail ist paul@example.com.",
+              evidence: "Meine E-Mail ist paul@example.com.",
               type: "fact",
             },
             {
@@ -1073,7 +1073,7 @@ describe("captureSalientFromTurn", () => {
     const actions = await captureSalientFromTurn(
       deps,
       {
-        content: "Meine Telefonnummer ist +49 30 1234567. Ich bevorzuge Vitest.",
+        content: "Meine E-Mail ist paul@example.com. Ich bevorzuge Vitest.",
         memory: { enabled: true },
       },
       ctx,

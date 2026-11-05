@@ -167,9 +167,9 @@ describe("tryExtractForget", () => {
     expect(outcome.requiresConfirmation).toBe(false);
   });
 
-  it("returns null when resolver finds no match", () => {
+  it("asks about a named fact nothing matches, because a clear request is never ignored", () => {
     const outcome = tryExtractForget("forget about nothing", ctx(), { resolver: () => [] });
-    expect(outcome).toBeNull();
+    expect(outcome).toEqual({ kind: "rejected", reason: "ambiguous-forget" });
   });
 
   it("returns null when no resolver supplied (cannot identify a target)", () => {

@@ -1,6 +1,7 @@
 import {
   explicitStatementKind,
   isMemoryForgetReference,
+  sameFactWord,
   type CaptureMemoryResolver,
 } from "@oscharko-dev/keiko-memory-capture";
 import type {
@@ -9,7 +10,6 @@ import type {
   MemoryScope,
   MemoryStatus,
 } from "@oscharko-dev/keiko-contracts/memory";
-import { sameMemoryWord } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryAccessStat, MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 const TARGETABLE_STATUSES: readonly MemoryStatus[] = [
@@ -167,7 +167,7 @@ function namesRecord(target: string, record: MemoryRecord): boolean {
   const words = tokenize(target);
   return (
     words.length > 0 &&
-    words.every((word) => body.some((candidate) => sameMemoryWord(word, candidate)))
+    words.every((word) => body.some((candidate) => sameFactWord(word, candidate)))
   );
 }
 

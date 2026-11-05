@@ -40,11 +40,9 @@ const MONTHS: Readonly<Record<string, number>> = {
 
 const END_OF_MONTH_RE =
   /(?:^|[^\p{L}])(?:bis(?:\s+(?:ende|zum\s+ende))?|until(?:\s+the\s+end\s+of)?|till|through)\s+(\p{L}+)(?:\s+(\d{4}))?(?![\p{L}])/iu;
-const GERMAN_DATE_RE =
-  /(?:^|[^\p{L}])bis(?:\s+zum)?\s+(\d{1,2})\.(\d{1,2})\.(\d{4})?(?!\d)/iu;
+const GERMAN_DATE_RE = /(?:^|[^\p{L}])bis(?:\s+zum)?\s+(\d{1,2})\.(\d{1,2})\.(\d{4})?(?!\d)/iu;
 const ISO_DATE_RE = /(?:^|[^\p{L}])(?:bis|until|till|through)\s+(\d{4})-(\d{2})-(\d{2})(?!\d)/iu;
-const REASON_RE =
-  /(?:^|[^\p{L}])(?:weil|denn|da|because|since)\s+([^.!?…\n]{3,300})/iu;
+const REASON_RE = /(?:^|[^\p{L}])(?:weil|denn|da|because|since)\s+([^.!?…\n]{3,300})/iu;
 
 function endOfDay(year: number, month: number, day: number): number | null {
   const end = Date.UTC(year, month, day, 23, 59, 59, 999);
@@ -88,6 +86,15 @@ function isoDateEnd(sentence: string): number | null {
 export function statedValidUntil(sentence: string, nowMs: number): number | null {
   const end = isoDateEnd(sentence) ?? germanDateEnd(sentence, nowMs) ?? monthEnd(sentence, nowMs);
   return end !== null && end > nowMs ? end : null;
+}
+
+// Whether the sentence names an end that has passed, with its year: "bis Dezember 2019". A date
+// without a year means its next occurrence, so it never counts as passed.
+export function statedEndPassed(sentence: string, nowMs: number): boolean {
+  const year = /\b\d{4}\b/u.test(sentence);
+  if (!year) return false;
+  const end = isoDateEnd(sentence) ?? germanDateEnd(sentence, nowMs) ?? monthEnd(sentence, nowMs);
+  return end !== null && end <= nowMs;
 }
 
 export function statedReason(sentence: string): string | null {

@@ -455,7 +455,193 @@ describe("what a fact keeps from the person's words", () => {
   );
 });
 
+describe("what stays out of the way of a learned fact", () => {
+  it("admits the person's own clause beside someone else's", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const clause = "ich führe meine Zahlen immer im Wiki";
+    await say(vault, ctx, `Frau Ostrander rechnet alles in Excel, ${clause}.`, [stated(clause)]);
+
+    expect(liveBodies(vault, ctx)).toEqual([clause]);
+  });
+
+  it("keeps a fact in the person's own scope, whatever scope the model names", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const fact = "Ich nutze Tabellen";
+    const item = { ...stated(fact), scope: "project" } as ScriptedItem;
+    await say(vault, ctx, fact, [item]);
+
+    expect(recordsWith(vault, ctx, "accepted").map((record) => record.scope.kind)).toEqual([
+      "user",
+    ]);
+  });
+
+  it("leaves a thin fact with no subject waiting for approval when supervised", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, "Ich bevorzuge Tabellen", [stated("Ich bevorzuge Tabellen")]);
+    const change = "Ab jetzt lieber Listen in allen langen Berichten";
+    await say(
+      vault,
+      ctx,
+      change,
+      [{ body: "Bevorzugt Listen", evidence: change, relation: "update", related: 1 }],
+      "supervised-coding",
+    );
+
+    const [waiting] = recordsWith(vault, ctx, "proposed");
+    expect(waiting?.body).toBe("Bevorzugt Listen");
+    expect(waiting?.provenance.confidence).toBe(0.4);
+    expect(liveBodies(vault, ctx)).toContain("Ich bevorzuge Tabellen");
+  });
+
+  it("does not replace what the person stated clearly or what lies outside their scope", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps(vault, []);
+    await collectMemoryActions(
+      deps,
+      {
+        chatId: "chat-1",
+        content: "Merke dir, dass ich Jira nutze.",
+        memory: { enabled: true },
+      } as never,
+      ctx,
+    );
+    const clear = liveBodies(vault, ctx);
+    expect(clear).toHaveLength(1);
+    await say(vault, ctx, "Ich nutze kein Jira", [stated("Ich nutze kein Jira")]);
+
+    expect(liveBodies(vault, ctx)).toEqual(
+      expect.arrayContaining([...clear, "Ich nutze kein Jira"]),
+    );
+    expect(recordsWith(vault, ctx, "superseded")).toEqual([]);
+  });
+
+  it("does not learn a fact the person forgot while the capture was still running", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const statement = "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.";
+    vault.recordForgottenStatements(
+      conversationMemoryScopes(ctx).map((scope) => ({
+        scope,
+        body: statement,
+        forgetterSurface: "chat-statement",
+        reviewerId: "local-operator",
+        reason: "explicit-user-request",
+        nowMs: Date.now(),
+      })) as never,
+    );
+    await say(vault, ctx, statement, [
+      { body: "Bevorzugt Tabellen", evidence: "Ich bevorzuge Tabellen" },
+    ]);
+
+    expect(liveBodies(vault, ctx)).toEqual([]);
+  });
+
+  it("keeps a correction and its link to the older fact together", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, "Ich nutze PostgreSQL 14", [stated("Ich nutze PostgreSQL 14")]);
+    const faulty: MemoryVaultStore = {
+      ...vault,
+      applyGraphMutation: (): never => {
+        throw new Error("storage refused");
+      },
+    };
+    await say(
+      faulty,
+      ctx,
+      "Ich nutze PostgreSQL 16",
+      [stated("Ich nutze PostgreSQL 16")],
+      "governed-assist",
+    ).catch(() => undefined);
+
+    expect(recordsWith(vault, ctx, "proposed")).toEqual([]);
+  });
+});
+
+describe("a replacement that cannot complete", () => {
+  async function replaceWith(
+    fault: (vault: MemoryVaultStore) => MemoryVaultStore,
+  ): Promise<{ vault: MemoryVaultStore; ctx: ConversationMemoryRuntimeContext; failures: number }> {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, "Ich nutze PostgreSQL 14", [stated("Ich nutze PostgreSQL 14")]);
+    let failures = 0;
+    const deps: UiHandlerDeps = {
+      ...makeDeps(fault(vault), [stated("Ich nutze PostgreSQL 16")]),
+      diagnostics: {
+        record: (): void => {
+          failures += 1;
+        },
+      },
+    };
+    await captureSalientFromTurn(
+      deps,
+      { content: "Ich nutze PostgreSQL 16", memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "ok",
+    );
+    return { vault, ctx, failures };
+  }
+
+  it("keeps the older fact and reports the failure when the transaction throws", async () => {
+    const { vault, ctx, failures } = await replaceWith((real) => ({
+      ...real,
+      applyGraphMutation: (): never => {
+        throw new Error("storage refused");
+      },
+    }));
+
+    expect(liveBodies(vault, ctx)).toEqual(["Ich nutze PostgreSQL 14"]);
+    expect(recordsWith(vault, ctx, "superseded")).toEqual([]);
+    expect(failures).toBeGreaterThan(0);
+  });
+
+  it("keeps the fact that changed in between instead of overwriting it", async () => {
+    const { vault, ctx, failures } = await replaceWith((real) => ({
+      ...real,
+      getMemory: (id): MemoryRecord | undefined => {
+        const record = real.getMemory(id);
+        return record === undefined ? undefined : { ...record, updatedAt: record.updatedAt - 1 };
+      },
+    }));
+
+    expect(liveBodies(vault, ctx)).toEqual(["Ich nutze PostgreSQL 14"]);
+    expect(failures).toBeGreaterThan(0);
+  });
+});
+
 describe("learning leaves body-free evidence", () => {
+  it("counts the person's message the fact came from", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const vault = makeVault();
+    const ctx = context();
+    const fact = "Ich nutze Tabellen";
+    await captureSalientFromTurn(
+      makeDeps(vault, [stated(fact)]),
+      { content: fact, sourceMessageId: "message-7", memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "ok",
+    );
+
+    const extraction = sink.events.find((event) => event.op === "memory.learn.extraction");
+    if (extraction === undefined) throw new Error("expected an extraction line");
+    expect(
+      expectActivityLogProof(
+        "memory.learn.extraction.line",
+        formatActivityLogProofLine(extraction),
+      ),
+    ).toMatchObject({ sourceMessageCount: 1 });
+    const [record] = recordsWith(vault, ctx, "accepted");
+    expect(record?.provenance.sourceMessageIds).toEqual(["message-7"]);
+  });
+
   it("logs every reason capture can report", () => {
     expect(MEMORY_LEARN_DROP_REASONS).toEqual(expect.arrayContaining([...FACT_DROP_REASONS]));
     expect(MEMORY_LEARN_RELATION_LABELS).toEqual([...FACT_RELATION_LABELS]);

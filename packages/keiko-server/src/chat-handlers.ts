@@ -4341,7 +4341,7 @@ export function runPostCommitCanonicalTurnMemorySideEffects(
   assistantText: string,
   correlationId: string,
 ): void {
-  runPostCommitMemoryEffect(deps, correlationId, "grounded.memory.reinforcement", () => {
+  runPostCommitMemoryEffect(deps, correlationId, "grounded.memory.answer-use", () => {
     recordConversationMemoryUse(deps, memory, assistantText, context);
   });
   runPostCommitMemoryEffect(deps, correlationId, "grounded.memory.salience", () => {

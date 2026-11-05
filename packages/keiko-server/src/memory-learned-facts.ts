@@ -77,17 +77,23 @@ function proposeCorrection(
   record: MemoryRecord,
   predecessor: MemoryRecord,
 ): LearnedSupersession {
-  const inserted = vault.insertMemory({ ...record, type: "correction" });
-  vault.insertEdge({
-    id: randomUUID() as MemoryEdgeId,
-    schemaVersion: "1",
-    fromMemoryId: predecessor.id,
-    toMemoryId: inserted.id,
-    kind: "corrects",
-    createdAt: record.createdAt,
-    provenanceSummary: LEARNED_SUPERSESSION_REASON,
+  const correction: MemoryRecord = { ...record, type: "correction" };
+  const mutation = vault.applyGraphMutation({
+    inserts: [correction],
+    updates: [],
+    edges: [
+      {
+        id: randomUUID() as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: predecessor.id,
+        toMemoryId: correction.id,
+        kind: "corrects",
+        createdAt: record.createdAt,
+        provenanceSummary: LEARNED_SUPERSESSION_REASON,
+      },
+    ],
   });
-  return { record: inserted, pendingApproval: true };
+  return { record: mutation.inserted[0] ?? correction, pendingApproval: true };
 }
 
 export function applyLearnedSupersession(
@@ -103,4 +109,3 @@ export function applyLearnedSupersession(
     ? replaceInOneTransaction(vault, record, predecessor)
     : proposeCorrection(vault, record, predecessor);
 }
-

@@ -8,6 +8,7 @@ import {
   hasWord,
   isNegated,
   isNumberWord,
+  isSingleValuePredicate,
   isPredicateWord,
   sameFactWord,
 } from "./fact-text.js";
@@ -32,6 +33,9 @@ export type FactChangeBasis = (typeof FACT_CHANGE_BASES)[number];
 export interface KnownFact {
   readonly id: string;
   readonly body: string;
+  // A fact a learned one may confirm and never replace: what the person stated clearly, and anything
+  // outside their private scope.
+  readonly fixed?: boolean;
 }
 
 export type FactRelationDecision =
@@ -136,7 +140,11 @@ export function compareFacts(a: string, b: string): FactComparison {
   const shared = wordsA.length - onlyA.length;
   if (shared === 0 || onlyA.length !== onlyB.length) return "different";
   if ([...onlyA, ...onlyB].every(isNumberWord)) return "number-changed";
-  return onlyA.length <= MAX_SLOT_WORDS ? "slot-changed" : "different";
+  // A shared "bevorzugt" does not make "Tabellen" and "Tee" two values of one fact.
+  const sameSlot = wordsA.some(
+    (word) => hasWord(wordsB, word) && (!isPredicateWord(word) || isSingleValuePredicate(word)),
+  );
+  return sameSlot && onlyA.length <= MAX_SLOT_WORDS ? "slot-changed" : "different";
 }
 
 // Whether two bodies state one fact. A changed value or a reversed preference is never the same
@@ -221,7 +229,20 @@ export interface FactRelationInput {
   readonly known: readonly KnownFact[];
 }
 
+function keepingFixedFacts(
+  decision: FactRelationDecision,
+  known: readonly KnownFact[],
+): FactRelationDecision {
+  if (decision.kind !== "supersede") return decision;
+  const fixed = known.some((fact) => fact.id === decision.factId && fact.fixed === true);
+  return fixed ? { kind: "new" } : decision;
+}
+
 export function decideFactRelation(input: FactRelationInput): FactRelationDecision {
+  return keepingFixedFacts(relationOf(input), input.known);
+}
+
+function relationOf(input: FactRelationInput): FactRelationDecision {
   const { body, evidence, label, related, known } = input;
   const certain = deterministicRelation(body, known);
   if (certain !== null) return certain;

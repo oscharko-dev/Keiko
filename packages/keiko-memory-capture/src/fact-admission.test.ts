@@ -6,7 +6,12 @@ function admit(text: string, evidence: string, body = evidence, about = "self") 
   return admitProposedFact({ body, evidence, about }, text);
 }
 
-function reasonOf(text: string, evidence: string, body = evidence, about = "self"): FactDropReason | null {
+function reasonOf(
+  text: string,
+  evidence: string,
+  body = evidence,
+  about = "self",
+): FactDropReason | null {
   const admission = admit(text, evidence, body, about);
   return admission.admitted ? null : admission.reason;
 }
@@ -14,10 +19,19 @@ function reasonOf(text: string, evidence: string, body = evidence, about = "self
 describe("admitProposedFact", () => {
   it.each([
     ["Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.", "Ich bevorzuge Tabellen"],
-    ["Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.", "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst."],
+    [
+      "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+    ],
     ["Can you help? Ich bevorzuge Tabellen. Thanks.", "Ich bevorzuge Tabellen."],
-    ["Frau Ostrander rechnet alles in Excel, ich führe meine Zahlen immer im Wiki.", "ich führe meine Zahlen immer im Wiki"],
-    ["If I preferred tables, I would have told you. I actually like plain text.", "I actually like plain text"],
+    [
+      "Frau Ostrander rechnet alles in Excel, ich führe meine Zahlen immer im Wiki.",
+      "ich führe meine Zahlen immer im Wiki",
+    ],
+    [
+      "If I preferred tables, I would have told you. I actually like plain text.",
+      "I actually like plain text",
+    ],
     ["Ab jetzt bevorzuge ich Listen.", "Ab jetzt bevorzuge ich Listen"],
     ["I'm a data engineer.", "I'm a data engineer"],
     ["Ich bin Team Lead im Controlling.", "Ich bin Team Lead im Controlling"],
@@ -30,36 +44,144 @@ describe("admitProposedFact", () => {
     ["no span", "Ich mag Tabellen.", "", "no-evidence"],
     ["a span elsewhere", "Ich mag Tabellen.", "Ich mag Listen", "evidence-not-verbatim"],
     ["a different case", "Ich mag Tabellen.", "ich mag tabellen", "evidence-not-verbatim"],
-    ["a span over two sentences", "Ich mag Tabellen. Ich mag Listen.", "Ich mag Tabellen. Ich mag Listen", "not-clause-boundary"],
+    [
+      "a span over two sentences",
+      "Ich mag Tabellen. Ich mag Listen.",
+      "Ich mag Tabellen. Ich mag Listen",
+      "not-clause-boundary",
+    ],
     ["half a clause", "Ich mag Tabellen nicht.", "Ich mag Tabellen", "not-clause-boundary"],
     ["a start inside a clause", "Heute mag ich Tabellen.", "ich Tabellen", "not-clause-boundary"],
     ["a question", "Ich mag Tabellen, oder?", "Ich mag Tabellen", "question"],
     ["a quote", 'Er schrieb: "Ich mag Tabellen" in die Mail.', "Ich mag Tabellen", "quoted"],
     ["a German quote", "Der Satz „Ich mag Tabellen“ steht dort.", "Ich mag Tabellen", "quoted"],
-    ["a hypothetical", "If I preferred tables, I would have told you.", "I would have told you", "hypothetical"],
-    ["a German hypothetical", "Wenn ich Tabellen mag, sage ich es.", "Wenn ich Tabellen mag", "hypothetical"],
+    [
+      "a hypothetical",
+      "If I preferred tables, I would have told you.",
+      "I would have told you",
+      "hypothetical",
+    ],
+    [
+      "a German hypothetical",
+      "Wenn ich Tabellen mag, sage ich es.",
+      "Wenn ich Tabellen mag",
+      "hypothetical",
+    ],
     ["a subjunctive", "Ich würde Tabellen nehmen.", "Ich würde Tabellen nehmen", "hypothetical"],
-    ["irony", "Klar, ich liebe es ja total, wenn Besprechungen um sieben Uhr anfangen.", "ich liebe es ja total", "ironic"],
+    [
+      "irony",
+      "Klar, ich liebe es ja total, wenn Besprechungen um sieben Uhr anfangen.",
+      "ich liebe es ja total",
+      "ironic",
+    ],
     ["a joke marker", "Ich liebe Montage, haha.", "Ich liebe Montage", "ironic"],
-    ["doubt", "For minutes I always use Word, although no, I never use Word for that, I honestly do not know.", "For minutes I always use Word", "uncertain"],
+    [
+      "doubt",
+      "For minutes I always use Word, although no, I never use Word for that, I honestly do not know.",
+      "For minutes I always use Word",
+      "uncertain",
+    ],
     ["a denial", "Es stimmt nicht, dass ich Tabellen mag.", "ich Tabellen mag", "negated-context"],
     ["reported speech", "Er sagte, ich mag Tabellen.", "ich mag Tabellen", "negated-context"],
+    [
+      "a polite request",
+      "Erklaere mir bitte kurz, was Apache Kafka ist.",
+      "Erklaere mir bitte kurz",
+      "request",
+    ],
+    [
+      "an English request",
+      "Please give me a short summary.",
+      "Please give me a short summary",
+      "request",
+    ],
+    ["a bare German request", "Zeig mir die Zahlen.", "Zeig mir die Zahlen", "request"],
+    ["a bare English request", "Show me the numbers.", "Show me the numbers", "request"],
+    [
+      "an opinion about others",
+      "Ich glaube, Kunden lieben Tabellen.",
+      "Kunden lieben Tabellen",
+      "uncertain",
+    ],
+    [
+      "a past habit",
+      "Früher habe ich Excel genutzt.",
+      "Früher habe ich Excel genutzt",
+      "past-statement",
+    ],
+    ["a German perfect", "Ich habe Excel genutzt.", "Ich habe Excel genutzt", "past-statement"],
+    ["an English past", "I used to work in Berlin.", "I used to work in Berlin", "past-statement"],
+    ["someone beside me", "Anna und ich nutzen Jira.", "Anna und ich nutzen Jira", "we-statement"],
+    ["a pronoun", "Ich weiss, sie mag Tabellen.", "Ich weiss, sie mag Tabellen", "third-party"],
+    [
+      "a bare relation",
+      "Ich schreibe Kunden immer formell.",
+      "Ich schreibe Kunden immer formell",
+      "third-party",
+    ],
     ["a group", "Wir nutzen Tabellen.", "Wir nutzen Tabellen", "we-statement"],
-    ["an English group", "We decided to release on Tuesdays.", "We decided to release on Tuesdays", "we-statement"],
-    ["no first person", "Sie beginnen immer mit einer Zusammenfassung.", "Sie beginnen immer mit einer Zusammenfassung", "no-first-person"],
-    ["a titled person", "Frau Ostrander rechnet und ich auch.", "Frau Ostrander rechnet und ich auch", "third-party"],
-    ["a relation", "Mein Kollege Peter bevorzugt Tabellen.", "Mein Kollege Peter bevorzugt Tabellen", "third-party"],
+    [
+      "an English group",
+      "We decided to release on Tuesdays.",
+      "We decided to release on Tuesdays",
+      "we-statement",
+    ],
+    [
+      "no first person",
+      "Sie beginnen immer mit einer Zusammenfassung.",
+      "Sie beginnen immer mit einer Zusammenfassung",
+      "no-first-person",
+    ],
+    [
+      "a titled person",
+      "Frau Ostrander rechnet und ich auch.",
+      "Frau Ostrander rechnet und ich auch",
+      "third-party",
+    ],
+    [
+      "a relation",
+      "Mein Kollege Peter bevorzugt Tabellen.",
+      "Mein Kollege Peter bevorzugt Tabellen",
+      "third-party",
+    ],
     ["an English relation", "My wife prefers tables.", "My wife prefers tables", "third-party"],
   ])("drops %s", (_case, text, evidence, reason) => {
     expect(reasonOf(text, evidence)).toBe(reason);
   });
 
+  it.each([
+    ["hate", "Ich hasse Excel.", "Ich hasse Excel", "Nutzt Excel"],
+    ["avoid", "I avoid Excel.", "I avoid Excel", "Uses Excel"],
+    ["without", "Ich nutze Jira ohne Plugins.", "Ich nutze Jira ohne Plugins", "Nutzt Plugins"],
+  ])("does not let a body invert %s", (_case, text, evidence, body) => {
+    expect(reasonOf(text, evidence, body)).toBe("polarity-changed");
+  });
+
+  it("reads a decomposed umlaut like the composed one", () => {
+    const text = "Ich wu\u0308rde Tabellen nehmen.";
+    expect(reasonOf(text, "Ich wu\u0308rde Tabellen nehmen")).toBe("hypothetical");
+  });
+
+  it("does not judge a sentence-ending fact by the sentence after it", () => {
+    const text = "Ich mag Tabellen. Meinst du das ernst?";
+    expect(reasonOf(text, "Ich mag Tabellen.")).toBeNull();
+  });
+
+  it("keeps a person's own role and a change they made", () => {
+    expect(reasonOf("Ich bin Manager.", "Ich bin Manager")).toBeNull();
+    expect(reasonOf("Ich habe zu Listen gewechselt.", "Ich habe zu Listen gewechselt")).toBeNull();
+  });
+
   it.each(["other", "unclear", "", "SELF?"])("drops a fact labelled %s", (about) => {
-    expect(reasonOf("Ich mag Tabellen.", "Ich mag Tabellen", "Mag Tabellen", about)).toBe("not-self");
+    expect(reasonOf("Ich mag Tabellen.", "Ich mag Tabellen", "Mag Tabellen", about)).toBe(
+      "not-self",
+    );
   });
 
   it("accepts the label in any case", () => {
-    expect(admit("Ich mag Tabellen.", "Ich mag Tabellen", "Mag Tabellen", " Self ").admitted).toBe(true);
+    expect(admit("Ich mag Tabellen.", "Ich mag Tabellen", "Mag Tabellen", " Self ").admitted).toBe(
+      true,
+    );
   });
 
   it.each([
@@ -83,11 +205,17 @@ describe("admitProposedFact", () => {
   });
 
   it("allows a predicate word the person did not use", () => {
-    expect(admit("Ich will Tabellen.", "Ich will Tabellen", "Bevorzugt Tabellen").admitted).toBe(true);
+    expect(admit("Ich will Tabellen.", "Ich will Tabellen", "Bevorzugt Tabellen").admitted).toBe(
+      true,
+    );
   });
 
   it("marks a change without a subject, and gives it less confidence", () => {
-    const subjectless = admit("Ab jetzt lieber Listen.", "Ab jetzt lieber Listen", "Bevorzugt Listen");
+    const subjectless = admit(
+      "Ab jetzt lieber Listen.",
+      "Ab jetzt lieber Listen",
+      "Bevorzugt Listen",
+    );
     const stated = admit("Ich bevorzuge Listen.", "Ich bevorzuge Listen", "Bevorzugt Listen");
     expect(subjectless).toMatchObject({ admitted: true, subjectless: true });
     expect(stated).toMatchObject({ admitted: true, subjectless: false });

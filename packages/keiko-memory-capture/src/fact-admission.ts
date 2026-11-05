@@ -11,6 +11,8 @@ export const FACT_DROP_REASONS = [
   "evidence-too-long",
   "not-clause-boundary",
   "question",
+  "request",
+  "past-statement",
   "quoted",
   "hypothetical",
   "ironic",
@@ -96,9 +98,6 @@ const RELATION_WORDS = [
   String.raw`vorgesetzte[rn]?`,
   String.raw`kund(?:e|en|in|innen)`,
   String.raw`mandant(?:en|in)?`,
-  String.raw`partner(?:in)?`,
-  "mann",
-  "frau",
   "sohn",
   "tochter",
   "bruder",
@@ -108,12 +107,9 @@ const RELATION_WORDS = [
   String.raw`freund(?:in)?`,
   String.raw`nachbar(?:in)?`,
   String.raw`mitarbeiter(?:in)?`,
-  "team",
   String.raw`colleagues?`,
   String.raw`coworkers?`,
-  "manager",
   "boss",
-  String.raw`clients?`,
   String.raw`customers?`,
   "wife",
   "husband",
@@ -127,8 +123,18 @@ const RELATION_WORDS = [
   String.raw`neighbou?rs?`,
   String.raw`employees?`,
 ];
+// These also name things ("desktop client", "Teamleiter"), so they only count behind a possessive.
+const POSSESSIVE_ONLY_RELATION_WORDS = [
+  String.raw`partner(?:in)?`,
+  "mann",
+  "frau",
+  "team",
+  "manager",
+  String.raw`clients?`,
+];
+const BARE_RELATION_RE = anyWordPattern(RELATION_WORDS);
 const RELATION_RE = anyWordPattern([
-  String.raw`(?:mein(?:e|em|en|er|es)?|my|unser(?:e|em|en|er|es)?|our)\s+(?:\p{L}+\s+)?(?:${RELATION_WORDS.join("|")})`,
+  String.raw`(?:mein(?:e|em|en|er|es)?|my|unser(?:e|em|en|er|es)?|our)\s+(?:\p{L}+\s+)?(?:${[...RELATION_WORDS, ...POSSESSIVE_ONLY_RELATION_WORDS].join("|")})`,
 ]);
 
 const HYPOTHETICAL_RE = anyWordPattern([
@@ -186,7 +192,59 @@ const UNCERTAIN_RE = anyWordPattern([
   "don['’]t know",
   "no idea",
   "although no",
+  "glaube",
+  "denke",
+  "vermute",
+  "schätze",
+  "schaetze",
+  "i think",
+  "i believe",
+  "i guess",
+  "i suppose",
 ]);
+const PAST_RE = anyWordPattern([
+  "früher",
+  "frueher",
+  "damals",
+  "ehemals",
+  "hatte",
+  "war",
+  "waren",
+  "formerly",
+  "previously",
+  "used to",
+  "in the past",
+  "back then",
+  "had",
+  "was",
+  "were",
+]);
+const PERFECT_AUXILIARY_RE = anyWordPattern(["habe"]);
+// "Ich habe Excel genutzt" is over; "Ich habe zu Listen gewechselt" is the change itself.
+const PAST_PARTICIPLE_RE = anyWordPattern([String.raw`ge(?!wechselt)\p{L}{2,30}t`]);
+// "Anna und ich nutzen Jira" speaks for two.
+const ME_AND_OTHER_RE =
+  /(?:^|[^\p{L}])(?:\p{L}+\s+(?:und|and)\s+(?:ich|i)|(?:ich|i)\s+(?:und|and)\s+\p{L}+)(?![\p{L}\p{N}])/iu;
+const OTHER_PERSON_PRONOUN_RE = anyWordPattern([
+  "er",
+  "sie",
+  "ihm",
+  "ihn",
+  "ihr",
+  "ihnen",
+  "he",
+  "she",
+  "him",
+  "her",
+  "they",
+  "them",
+]);
+// The person's own role names a relation word without being about anyone else: "Ich bin Manager".
+const OWN_ROLE_RE = /(?:^|[^\p{L}])(?:ich bin|i am|i['’]m)\s+(?:(?:an?|ein|eine)\s+)?\p{L}+/giu;
+// A person asking for something states no fact about themselves, even when the request names them:
+// "Erkläre mir bitte Kafka", "Give me a summary". "Tabellen gefallen mir" keeps its object at the end.
+const POLITE_REQUEST_RE = anyWordPattern(["bitte", "please"]);
+const IMPERATIVE_TO_ME_RE = /^\s*\p{L}+\s+(?:mir|mich|me)(?![\p{L}\p{N}])/iu;
 const CONTEXT_NEGATION_RE = anyWordPattern([
   "nicht",
   String.raw`kein(?:e|en|er|em)?`,
@@ -212,6 +270,7 @@ const REPORTED_SPEECH_RE = anyWordPattern([
 function sentenceAround(text: string, start: number, end: number): { from: number; to: number } {
   let from = start;
   while (from > 0 && !SENTENCE_END_RE.test(text.charAt(from - 1))) from -= 1;
+  if (end > start && SENTENCE_END_RE.test(text.charAt(end - 1))) return { from, to: end };
   let to = end;
   while (to < text.length && !SENTENCE_END_RE.test(text.charAt(to))) to += 1;
   return { from, to: Math.min(text.length, to + 1) };
@@ -265,24 +324,41 @@ function isDeniedByPrefix(prefix: string): boolean {
   return CONTEXT_NEGATION_RE.test(prefix.split(CLAUSE_SPLIT_RE).at(-1) ?? "");
 }
 
+function isPast(evidence: string): boolean {
+  if (PAST_RE.test(evidence)) return true;
+  return PERFECT_AUXILIARY_RE.test(evidence) && PAST_PARTICIPLE_RE.test(evidence);
+}
+
+// Whether a text names someone other than the person. Private memory holds nothing about others.
+export function namesOtherPerson(text: string): boolean {
+  if (TITLED_PERSON_RE.test(text) || RELATION_RE.test(text)) return true;
+  return BARE_RELATION_RE.test(text.replace(OWN_ROLE_RE, " "));
+}
+
 function contextDropReason(
   evidence: string,
   sentence: string,
   prefix: string,
 ): FactDropReason | null {
   if (sentence.trimEnd().endsWith("?") || evidence.includes("?")) return "question";
+  if (POLITE_REQUEST_RE.test(evidence) || IMPERATIVE_TO_ME_RE.test(evidence)) return "request";
   if (isHypothetical(evidence, prefix)) return "hypothetical";
   if (IRONY_RE.test(sentence) || IRONIC_OPENING_RE.test(sentence)) return "ironic";
   if (UNCERTAIN_RE.test(sentence)) return "uncertain";
+  if (isPast(evidence)) return "past-statement";
   return isDeniedByPrefix(prefix) ? "negated-context" : null;
 }
 
 function subjectDropReason(about: string, evidence: string): FactDropReason | null {
   if (about.trim().toLowerCase() !== "self") return "not-self";
   if (TITLED_PERSON_RE.test(evidence) || RELATION_RE.test(evidence)) return "third-party";
-  if (WE_RE.test(evidence)) return "we-statement";
-  if (FIRST_PERSON_RE.test(evidence) || CHANGE_WITHOUT_SUBJECT_RE.test(evidence)) return null;
-  return "no-first-person";
+  if (WE_RE.test(evidence) || ME_AND_OTHER_RE.test(evidence)) return "we-statement";
+  if (!FIRST_PERSON_RE.test(evidence) && !CHANGE_WITHOUT_SUBJECT_RE.test(evidence)) {
+    return "no-first-person";
+  }
+  return namesOtherPerson(evidence) || OTHER_PERSON_PRONOUN_RE.test(evidence)
+    ? "third-party"
+    : null;
 }
 
 function entailmentDropReason(body: string, evidence: string): FactDropReason | null {
@@ -298,14 +374,15 @@ function entailmentDropReason(body: string, evidence: string): FactDropReason | 
 
 // Derived from what the checks saw, never taken from the model, so results stay comparable across
 // models. The explicit path's 1.0 stays out of reach; repetition raises strength, not this number.
+// A thin fact with no subject stays below the promotion gate, so it waits for approval when asked.
 function derivedConfidence(body: string, evidence: string, subjectless: boolean): number {
   const bodyWords = factWords(body);
   const evidenceWords = factWords(evidence);
   const covered = evidenceWords.filter((word) => hasWord(bodyWords, word)).length;
   const coverage = evidenceWords.length === 0 ? 0 : covered / evidenceWords.length;
-  const subjectBonus = subjectless ? 0 : 0.15;
-  const coverageBonus = coverage >= 0.5 ? 0.1 : 0;
-  return 0.6 + subjectBonus + coverageBonus;
+  const subjectBonus = subjectless ? 0 : 0.3;
+  const coverageBonus = coverage >= 0.5 ? 0.15 : 0;
+  return 0.4 + subjectBonus + coverageBonus;
 }
 
 function spanDropReason(evidence: string, text: string): FactDropReason | null {
@@ -319,8 +396,10 @@ function dropped(reason: FactDropReason): FactAdmission {
   return { admitted: false, reason };
 }
 
-export function admitProposedFact(fact: ProposedFact, userText: string): FactAdmission {
-  const evidence = fact.evidence.trim();
+export function admitProposedFact(fact: ProposedFact, spokenText: string): FactAdmission {
+  // A decomposed "würde" must read like the composed one to every check below.
+  const userText = spokenText.normalize("NFC");
+  const evidence = fact.evidence.normalize("NFC").trim();
   const spanReason = spanDropReason(evidence, userText);
   if (spanReason !== null) return dropped(spanReason);
   const start = userText.indexOf(evidence);

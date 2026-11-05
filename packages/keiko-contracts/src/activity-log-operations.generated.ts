@@ -32017,6 +32017,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "evidence-too-long",
           "not-clause-boundary",
           "question",
+          "request",
+          "past-statement",
           "quoted",
           "hypothetical",
           "ironic",

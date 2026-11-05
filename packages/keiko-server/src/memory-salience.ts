@@ -150,7 +150,12 @@ function gatherKnownFacts(
   for (const scope of conversationMemoryScopes(context)) {
     for (const record of vault.listMemoriesByScope(scope, { status: ["accepted", "proposed"] })) {
       if (record.provenance.sensitivity !== "public") continue;
-      known.push({ id: record.id, body: record.body });
+      known.push({
+        id: record.id,
+        body: record.body,
+        // Only what Keiko learned, in the person's own scope, gives way to what it learns next.
+        fixed: record.provenance.evidenceSpan === undefined || record.scope.kind !== "user",
+      });
       if (known.length >= MAX_KNOWN_FACTS) return known;
     }
   }
@@ -454,6 +459,8 @@ interface LearningTrace {
   readonly correlationId: string;
   readonly sourceMessageCount: number;
   readonly conversationId: string;
+  // What the person said in the turn, which they may have forgotten while this capture was running.
+  readonly statement: string;
 }
 
 function recordRelation(
@@ -508,7 +515,9 @@ async function persistCandidate(
   if (!isPersistableMemoryCandidate(outcome)) return refuse(SENSITIVE_MEMORY_REJECTION_REASON);
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
-  const exactSuppression = exactCaptureSuppressionReason(vault, record);
+  const exactSuppression =
+    exactCaptureSuppressionReason(vault, record) ??
+    exactCaptureSuppressionReason(vault, { ...record, body: trace.statement });
   if (exactSuppression !== null) return refuse(exactSuppression);
   const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
     ? promoteEligibleMemoryRecord(record)
@@ -830,6 +839,7 @@ async function runSalienceCapture(
     correlationId,
     sourceMessageCount: request.sourceMessageId === undefined ? 0 : 1,
     conversationId: context.conversationId,
+    statement: request.content,
   });
   if (outcomes.length > 0) logSalienceCaptureSummary(mode, summary, deps, correlationId);
   return actions;

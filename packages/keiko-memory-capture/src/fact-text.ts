@@ -72,7 +72,40 @@ const NEGATION_WORDS = new Set([
   "niemals",
   "no",
   "not",
+  "ohne",
+  "nichts",
+  "niemand",
+  "weder",
+  "without",
+  "nobody",
+  "none",
+  "neither",
+  "nor",
+  // A verb that rejects its object: a body must not turn "Ich hasse Excel" into "Nutzt Excel".
+  "hasse",
+  "hasst",
+  "vermeide",
+  "vermeidet",
+  "meide",
+  "meidet",
+  "hate",
+  "hates",
+  "avoid",
+  "avoids",
+  "dislike",
+  "dislikes",
 ]);
+
+// A person has one of these at a time, so a new value can replace the old one. Someone uses or likes
+// many things at once, so those need a stated change.
+const SINGLE_VALUE_PREDICATES: readonly string[] = [
+  "arbeitet",
+  "heisst",
+  "live",
+  "named",
+  "work",
+  "wohnt",
+];
 
 // A normalized body may name the kind of fact in a word the person did not use: "Bevorzugt Tabellen"
 // for "Ich mag Tabellen lieber". Every other word of a body must come from the person's own words.
@@ -104,8 +137,16 @@ const HAS_DIGIT_RE = /\p{N}/u;
 // "bevorzuge" and "bevorzugt" are one word; a stem this short could be two.
 const MIN_SHARED_STEM = 4;
 
+// "C#" and "C++" are different languages and "3.3" is not "3", so they stay one word.
+function keepingValueMarks(text: string): string {
+  return text
+    .replace(/(\p{L}[\p{L}\p{N}]*)\+\+/gu, "$1plusplus")
+    .replace(/(\p{L}[\p{L}\p{N}]*)#/gu, "$1sharp")
+    .replace(/(\p{N})\.(?=\p{N})/gu, "$1point");
+}
+
 export function factWords(text: string): readonly string[] {
-  return tokenizeMemoryText(text).filter(
+  return tokenizeMemoryText(keepingValueMarks(text)).filter(
     (word) => !FRAME_WORDS.has(word) && !NEGATION_WORDS.has(word),
   );
 }
@@ -128,6 +169,10 @@ function sharedPrefixLength(a: string, b: string): number {
 
 export function isPredicateWord(word: string): boolean {
   return PREDICATE_WORDS.some((predicate) => sameFactWord(word, predicate));
+}
+
+export function isSingleValuePredicate(word: string): boolean {
+  return SINGLE_VALUE_PREDICATES.some((predicate) => sameFactWord(word, predicate));
 }
 
 // A word of one list as a pattern that does not match inside a longer word.

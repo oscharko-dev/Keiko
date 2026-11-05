@@ -60,6 +60,8 @@ export const MEMORY_LEARN_DROP_REASONS = [
   "evidence-too-long",
   "not-clause-boundary",
   "question",
+  "request",
+  "past-statement",
   "quoted",
   "hypothetical",
   "ironic",

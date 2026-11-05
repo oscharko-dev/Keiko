@@ -29,6 +29,7 @@ export {
   isMemoryForgetReference,
 } from "./intent-explicit.js";
 export { extractSalientMemories } from "./salience.js";
+export { sameFactWord } from "./fact-text.js";
 export { FACT_DROP_REASONS } from "./fact-admission.js";
 export {
   FACT_CHANGE_BASES,

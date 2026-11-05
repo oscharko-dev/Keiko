@@ -25,7 +25,11 @@ describe("compareFacts", () => {
     ["Bevorzugt Tabellen für Zahlen", "Bevorzugt Listen für Zahlen", "slot-changed"],
     ["Arbeitet bei Acme", "Arbeitet bei Globex", "slot-changed"],
     ["Bevorzugt Tabellen für Zahlen", "Wohnt in Bonn", "different"],
-    ["Bevorzugt Tabellen und Listen und Grafiken", "Bevorzugt Kaffee und Tee und Wasser", "different"],
+    [
+      "Bevorzugt Tabellen und Listen und Grafiken",
+      "Bevorzugt Kaffee und Tee und Wasser",
+      "different",
+    ],
     ["", "Bevorzugt Tabellen", "different"],
   ])("%s / %s reads %s", (a, b, expected) => {
     expect(compareFacts(a, b)).toBe(expected);
@@ -65,7 +69,9 @@ function decide(
 describe("decideFactRelation", () => {
   it("confirms a repeat, whatever the model calls it", () => {
     for (const label of ["new", "update", "same", "contradiction"] as const) {
-      expect(decide("Bevorzugt Tabellen", "Ich bevorzuge Tabellen", label, "Bevorzugt Tabellen")).toEqual({
+      expect(
+        decide("Bevorzugt Tabellen", "Ich bevorzuge Tabellen", label, "Bevorzugt Tabellen"),
+      ).toEqual({
         kind: "confirm",
         factId: "old",
       });
@@ -73,7 +79,15 @@ describe("decideFactRelation", () => {
   });
 
   it("replaces on a reversal, a number or a negation, whatever the model calls it", () => {
-    expect(decide("I prefer spaces over tabs", "I prefer spaces over tabs", "new", "I prefer tabs over spaces", false)).toEqual({
+    expect(
+      decide(
+        "I prefer spaces over tabs",
+        "I prefer spaces over tabs",
+        "new",
+        "I prefer tabs over spaces",
+        false,
+      ),
+    ).toEqual({
       kind: "supersede",
       factId: "old",
       basis: "reversed",
@@ -117,14 +131,21 @@ describe("decideFactRelation", () => {
   });
 
   it("does not replace on a label alone", () => {
-    expect(decide("Wohnt in Bonn", "Ich wohne in Bonn", "contradiction", "Bevorzugt Tabellen")).toEqual({
+    expect(
+      decide("Wohnt in Bonn", "Ich wohne in Bonn", "contradiction", "Bevorzugt Tabellen"),
+    ).toEqual({
       kind: "new",
     });
   });
 
   it("holds an unconfirmed claim of sameness back only when the facts share a content word", () => {
     expect(
-      decide("Mag Tabellen sehr", "Ich mag Tabellen sehr", "same", "Bevorzugt Tabellen in Berichten"),
+      decide(
+        "Mag Tabellen sehr",
+        "Ich mag Tabellen sehr",
+        "same",
+        "Bevorzugt Tabellen in Berichten",
+      ),
     ).toEqual({ kind: "same-unconfirmed" });
     expect(decide("Wohnt in Bonn", "Ich wohne in Bonn", "same", "Bevorzugt Tabellen")).toEqual({
       kind: "new",
@@ -139,9 +160,35 @@ describe("mostSimilarFacts", () => {
       { id: "b", body: "Bevorzugt Tabellen" },
       { id: "c", body: "Bevorzugt Tabellen für Zahlen" },
     ];
-    expect(
-      mostSimilarFacts("Ich bevorzuge Tabellen", known, 2).map((fact) => fact.id),
-    ).toEqual(["b", "c"]);
+    expect(mostSimilarFacts("Ich bevorzuge Tabellen", known, 2).map((fact) => fact.id)).toEqual([
+      "b",
+      "c",
+    ]);
     expect(mostSimilarFacts("", known, 2)).toEqual([]);
+  });
+
+  it("does not read two unrelated preferences as one slot", () => {
+    expect(compareFacts("Bevorzugt Tabellen", "Bevorzugt Tee")).toBe("different");
+  });
+
+  it("reads a new home as a new value of one slot", () => {
+    expect(compareFacts("Wohnt in Berlin", "Wohnt in Hamburg")).toBe("slot-changed");
+  });
+
+  it("tells languages and versions apart", () => {
+    expect(compareFacts("Nutzt C#", "Nutzt C++")).not.toBe("same");
+    expect(compareFacts("Nutzt Python 3.3", "Nutzt Python 3")).toBe("number-changed");
+  });
+
+  it("never replaces a fixed fact, however certain the change", () => {
+    const known = [{ id: "m1", body: "Nutzt Jira", fixed: true }];
+    expect(
+      decideFactRelation({
+        body: "Nutzt kein Jira",
+        evidence: "Ich nutze kein Jira",
+        label: "update",
+        known,
+      }),
+    ).toEqual({ kind: "new" });
   });
 });

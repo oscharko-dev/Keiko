@@ -579,6 +579,42 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expect(after).toBe(before + 1);
   });
 
+  it("keeps a changed value in the same slot apart from a semantic near-duplicate (#4212)", async () => {
+    // okAdapter returns one fixed vector for every input, so only the fact check can tell them apart.
+    const deps = makeDeps();
+    const vault = makeVault();
+    const known = makeRecord("the user runs postgres 14", "id-known");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, known);
+
+    const changed = makeRecord("the user runs postgres 16", "id-changed");
+    expectInserted(await insertSalienceMemoryWithNoveltyGate(deps, vault, changed), changed.id);
+  });
+
+  it("does not take the fact a candidate replaces for its duplicate (#4212)", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const known = makeRecord("the user prefers postgres", "id-known");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, known);
+
+    const replacement = makeRecord("postgres is the database the user works with", "id-new");
+    const outcome = await insertSalienceMemoryWithNoveltyGate(deps, vault, replacement, {
+      replaces: known.id,
+    });
+    expectInserted(outcome, replacement.id);
+  });
+
+  it("stores nothing for a claim of sameness that nothing confirms (#4212)", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const claim = makeRecord("the user prefers postgres", "id-claim");
+
+    const outcome = await insertSalienceMemoryWithNoveltyGate(deps, vault, claim, {
+      onlyConfirm: true,
+    });
+    expect(outcome).toEqual({ kind: "unconfirmed" });
+    expect(vault.getMemory(claim.id)).toBeUndefined();
+  });
+
   it("RB-4 (GEN-AI-MEMORY-003): suppresses a PARAPHRASED re-capture of a forgotten memory (semantic, not exact-hash)", async () => {
     // Keyed embedding: any "dark" text → V_DARK; anything else → an orthogonal V_OTHER. The original
     // and its paraphrase both embed to V_DARK (cosine 1.0); the unrelated capture embeds to V_OTHER.

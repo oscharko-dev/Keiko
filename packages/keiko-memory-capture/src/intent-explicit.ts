@@ -483,16 +483,16 @@ export function tryExtractForget(
   if (!scopeResolution.ok) {
     return scopeResolution.outcome;
   }
-  const resolved = resolveTarget(
-    policy.forgetResolver ?? policy.resolver,
-    target,
-    scopeResolution.scope,
-  );
+  const resolver = policy.forgetResolver ?? policy.resolver;
+  if (resolver === undefined) return null;
+  const resolved = resolveTarget(resolver, target, scopeResolution.scope);
   if (resolved.kind === "none") {
-    // A bare "Vergiss das" is a clear request about something unnamed: never ignore it.
-    return isMemoryForgetReference(target)
-      ? { kind: "rejected", reason: "forget-reference-unresolved" }
-      : null;
+    // A clear request to forget is never ignored: a bare "Vergiss das" falls back to the last
+    // statement, and a named fact nothing matches is asked about, or the fact would stay unnoticed.
+    return {
+      kind: "rejected",
+      reason: isMemoryForgetReference(target) ? "forget-reference-unresolved" : "ambiguous-forget",
+    };
   }
   if (resolved.kind === "ambiguous") {
     return { kind: "rejected", reason: "ambiguous-forget" };

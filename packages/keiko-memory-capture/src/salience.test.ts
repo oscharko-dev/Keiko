@@ -112,10 +112,12 @@ describe("SALIENCE_SYSTEM_PROMPT", () => {
 
 describe("extractSalientMemories", () => {
   it("captures a fact inside a longer sentence as a normalized body with its verbatim evidence", async () => {
-    const text = "Hallo Keiko, ich bevorzuge Tabellen für Zahlen. Kannst du mir das Quartal zeigen?";
+    const text =
+      "Hallo Keiko, ich bevorzuge Tabellen für Zahlen. Kannst du mir das Quartal zeigen?";
     const outcomes = await extractSalientMemories(
       input(text, { sourceMessageIds: ["message-1"] }),
-      harness(reply(fact("Bevorzugt Tabellen für Zahlen", "ich bevorzuge Tabellen für Zahlen"))).deps,
+      harness(reply(fact("Bevorzugt Tabellen für Zahlen", "ich bevorzuge Tabellen für Zahlen")))
+        .deps,
     );
     const [learned] = candidates(outcomes);
     expect(learned?.proposal.body).toBe("Bevorzugt Tabellen für Zahlen");
@@ -136,9 +138,7 @@ describe("extractSalientMemories", () => {
   });
 
   it("never treats an assistant claim as a fact about the person", async () => {
-    const { deps, diagnostics } = harness(
-      reply(fact("Bevorzugt Listen", "ich bevorzuge Listen")),
-    );
+    const { deps, diagnostics } = harness(reply(fact("Bevorzugt Listen", "ich bevorzuge Listen")));
     const outcomes = await extractSalientMemories(
       input("Danke dir.", { assistantText: "Du sagtest, ich bevorzuge Listen." }),
       deps,
@@ -193,7 +193,9 @@ describe("extractSalientMemories", () => {
 
   it("uses the deps clock and ids and records the rationale", async () => {
     const [learned] = candidates(
-      await learn("Ich bevorzuge Tabellen.", [fact("Bevorzugt Tabellen", "Ich bevorzuge Tabellen")]),
+      await learn("Ich bevorzuge Tabellen.", [
+        fact("Bevorzugt Tabellen", "Ich bevorzuge Tabellen"),
+      ]),
     );
     expect(learned?.proposal.proposedAt).toBe(FIXED_NOW);
     expect(learned?.proposal.proposalId).toBe("pr-0");
@@ -202,13 +204,16 @@ describe("extractSalientMemories", () => {
 
   it("carries the reason of a decision in the payload", async () => {
     const [learned] = candidates(
-      await learn("Ich habe mich für eine lokale Warteschlange entschieden, weil sie offline läuft.", [
-        fact(
-          "Entscheidung: lokale Warteschlange",
-          "Ich habe mich für eine lokale Warteschlange entschieden",
-          { type: "decision" },
-        ),
-      ]),
+      await learn(
+        "Ich habe mich für eine lokale Warteschlange entschieden, weil sie offline läuft.",
+        [
+          fact(
+            "Entscheidung: lokale Warteschlange",
+            "Ich habe mich für eine lokale Warteschlange entschieden",
+            { type: "decision" },
+          ),
+        ],
+      ),
     );
     expect(learned?.proposal.type).toBe("decision");
     expect(learned?.proposal.payload).toEqual({
@@ -242,8 +247,18 @@ describe("extractSalientMemories", () => {
   });
 
   it.each([
-    ["Ich nutze Slack bis März 2027.", "ich nutze Slack", "Ich nutze Slack", Date.UTC(2027, 2, 31, 23, 59, 59, 999)],
-    ["I use Slack until March 2027.", "uses Slack", "I use Slack", Date.UTC(2027, 2, 31, 23, 59, 59, 999)],
+    [
+      "Ich nutze Slack bis März 2027.",
+      "ich nutze Slack",
+      "Ich nutze Slack",
+      Date.UTC(2027, 2, 31, 23, 59, 59, 999),
+    ],
+    [
+      "I use Slack until March 2027.",
+      "uses Slack",
+      "I use Slack",
+      Date.UTC(2027, 2, 31, 23, 59, 59, 999),
+    ],
   ])("closes validity at a stated end: %s", async (text, body, evidence, validUntil) => {
     const [learned] = candidates(await learn(text, [fact(body, evidence)]));
     expect(learned?.proposal.validity).toEqual({ validFrom: FIXED_NOW, validUntil });
@@ -251,7 +266,11 @@ describe("extractSalientMemories", () => {
 
   it.each([
     ["a credential", "Mein Passwort ist hunter22 und bleibt so.", "Mein Passwort ist hunter22"],
-    ["an API key", "Mein Schlüssel ist sk-lab-a1b2a1b2a1b2a1b2a1b2a1b2.", "Mein Schlüssel ist sk-lab-a1b2a1b2a1b2a1b2a1b2a1b2"],
+    [
+      "an API key",
+      "Mein Schlüssel ist sk-lab-a1b2a1b2a1b2a1b2a1b2a1b2.",
+      "Mein Schlüssel ist sk-lab-a1b2a1b2a1b2a1b2a1b2a1b2",
+    ],
   ])("stores no %s", async (_case, text, evidence) => {
     const { deps, diagnostics } = harness(reply(fact(evidence, evidence)));
     expect(await extractSalientMemories(input(text), deps)).toEqual([]);
@@ -263,7 +282,9 @@ describe("extractSalientMemories", () => {
   });
 
   it("drops a fact matching a configured denied category without naming it", async () => {
-    const { deps, diagnostics } = harness(reply(fact("Nutzt Projekt Rot", "Ich nutze Projekt Rot")));
+    const { deps, diagnostics } = harness(
+      reply(fact("Nutzt Projekt Rot", "Ich nutze Projekt Rot")),
+    );
     const outcomes = await extractSalientMemories(
       input("Ich nutze Projekt Rot.", {
         policy: { deniedCategoryMatchers: [{ category: "internal", matchers: [/projekt rot/iu] }] },
@@ -316,8 +337,12 @@ describe("extractSalientMemories", () => {
   });
 
   it("strips code fences before parsing", async () => {
-    const fenced = "```json\n" + reply(fact("Bevorzugt Tabellen", "Ich bevorzuge Tabellen")) + "\n```";
-    const outcomes = await extractSalientMemories(input("Ich bevorzuge Tabellen."), harness(fenced).deps);
+    const fenced =
+      "```json\n" + reply(fact("Bevorzugt Tabellen", "Ich bevorzuge Tabellen")) + "\n```";
+    const outcomes = await extractSalientMemories(
+      input("Ich bevorzuge Tabellen."),
+      harness(fenced).deps,
+    );
     expect(bodies(outcomes)).toEqual(["Bevorzugt Tabellen"]);
   });
 
@@ -379,13 +404,15 @@ describe("extractSalientMemories", () => {
         { knownFacts: known("Bevorzugt Tabellen") },
       );
       expect(learned).toMatchObject({
-        relation: { kind: "supersede", memoryId: "old", basis: "slot-changed" },
+        relation: { kind: "supersede", memoryId: "old", basis: "stated-change" },
       });
     });
 
     it("a subjectless change with nothing to change is not a fact about the person", async () => {
       expect(
-        await learn("Ab jetzt lieber Listen.", [fact("Bevorzugt Listen", "Ab jetzt lieber Listen")]),
+        await learn("Ab jetzt lieber Listen.", [
+          fact("Bevorzugt Listen", "Ab jetzt lieber Listen"),
+        ]),
       ).toEqual([]);
     });
 
@@ -461,9 +488,9 @@ describe("parseSalienceItems", () => {
   });
 
   it("reads an unknown relation as new", () => {
-    expect(parseSalienceItems(JSON.stringify([fact("a", "b", { relation: "maybe" })]))[0]?.relation).toBe(
-      "new",
-    );
+    expect(
+      parseSalienceItems(JSON.stringify([fact("a", "b", { relation: "maybe" })]))[0]?.relation,
+    ).toBe("new");
   });
 
   it.each([

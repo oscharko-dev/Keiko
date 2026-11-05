@@ -13,7 +13,7 @@
 import { MEMORY_BODY_MAX_CHARS_DEFAULT } from "./_constants.js";
 import { buildProposal } from "./_envelopes.js";
 import { memoryTextCaptureRejectionReason } from "./capture-safety.js";
-import { admitProposedFact } from "./fact-admission.js";
+import { admitProposedFact, namesOtherPerson } from "./fact-admission.js";
 import {
   decideFactRelation,
   FACT_RELATION_LABELS,
@@ -24,7 +24,8 @@ import {
 } from "./fact-relation.js";
 import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
-import { statedReason, statedValidUntil } from "./stated-validity.js";
+import { looksLikePersonalIdentifier } from "./secret-patterns.js";
+import { statedEndPassed, statedReason, statedValidUntil } from "./stated-validity.js";
 import type {
   CaptureContext,
   CapturePolicyOptions,
@@ -311,7 +312,12 @@ function decisionPayload(
 ): MemoryStructuredPayload | undefined {
   if (type !== "decision") return undefined;
   const reason = statedReason(sentence);
-  if (reason === null || memoryTextCaptureRejectionReason(reason, policy) !== null) {
+  if (
+    reason === null ||
+    namesOtherPerson(reason) ||
+    looksLikePersonalIdentifier(reason) ||
+    memoryTextCaptureRejectionReason(reason, policy) !== null
+  ) {
     return undefined;
   }
   return {
@@ -340,7 +346,10 @@ interface AdmittedFact {
   readonly confidence: number;
 }
 
-function admitItem(item: RawSalienceItem, turn: LearningTurn): (AdmittedFact & { subjectless: boolean }) | null {
+function admitItem(
+  item: RawSalienceItem,
+  turn: LearningTurn,
+): (AdmittedFact & { subjectless: boolean }) | null {
   const type = mapType(item.type);
   if (type === null) {
     turn.drop("unknown-type");
@@ -355,6 +364,10 @@ function admitItem(item: RawSalienceItem, turn: LearningTurn): (AdmittedFact & {
   const admission = admitProposedFact(item, turn.input.userText);
   if (!admission.admitted) {
     turn.drop(admission.reason);
+    return null;
+  }
+  if (statedEndPassed(admission.sentence, turn.context.nowMs)) {
+    turn.drop("past-statement");
     return null;
   }
   if (isDeniedContent(item, turn.policy)) {
@@ -431,10 +444,18 @@ function outcomeForItem(item: RawSalienceItem, turn: LearningTurn): SalienceOutc
     return null;
   }
   if (decision.kind === "confirm") {
-    return { kind: "confirmation", memoryId: decision.factId as MemoryId, relationLabel: item.relation };
+    return {
+      kind: "confirmation",
+      memoryId: decision.factId as MemoryId,
+      relationLabel: item.relation,
+    };
   }
   if (decision.kind === "supersede") {
-    const relation = { kind: "supersede", memoryId: decision.factId as MemoryId, basis: decision.basis } as const;
+    const relation = {
+      kind: "supersede",
+      memoryId: decision.factId as MemoryId,
+      basis: decision.basis,
+    } as const;
     return learnedCandidate(fact, relation, turn);
   }
   return learnedCandidate(fact, { kind: decision.kind }, turn);
