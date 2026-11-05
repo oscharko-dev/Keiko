@@ -302,8 +302,6 @@ const SESSION_CONTINUITY_OPERATION = defineActivityLogOperation({
     messageCount: { type: "integer", dataClass: "count", required: false },
     entryCount: { type: "integer", dataClass: "count", required: false },
     prunedCount: { type: "integer", dataClass: "count", required: false },
-    // Entries a pruning left in place because a process holds them open; the next pruning retries.
-    blockedCount: { type: "integer", dataClass: "count", required: false },
     ageMs: { type: "integer", dataClass: "duration", required: false },
     frames: {
       type: "string-array",
@@ -319,6 +317,8 @@ const SESSION_CONTINUITY_OPERATION = defineActivityLogOperation({
       maxLength: 128,
       maxItems: 5,
     },
+    // Entries a pruning left in place because a process holds them open; the next pruning retries.
+    blockedCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
