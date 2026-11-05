@@ -20876,6 +20876,7 @@
     "tests/scripts/dev-runner-readiness.test.ts": {
       "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-runtime-typeof": 2,
+      "anti-slop/no-unknown-parameters": 1,
       "anti-slop/require-safety-comment-for-type-assertion": 2
     },
     "tests/scripts/keiko-script.test.ts": {
