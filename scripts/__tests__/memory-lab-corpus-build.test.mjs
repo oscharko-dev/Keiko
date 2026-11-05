@@ -168,6 +168,23 @@ describe("corpus build", () => {
     expect(existsSync(built.out)).toBe(false);
   });
 
+  it("keeps completed scenarios on interruption and resumes without regenerating them (#4247)", async () => {
+    const built = options("interrupted");
+    await expect(
+      runBuild(built, () => {
+        throw new Error("interrupted");
+      }),
+    ).rejects.toThrow("interrupted");
+    expect(existsSync(join(built.out, ".progress", "manifest.json"))).toBe(true);
+    expect(existsSync(join(built.out, "manifest.json"))).toBe(false);
+    const lines = [];
+    const resumed = await runBuild({ ...built, resume: true }, (line) => lines.push(line));
+    expect(resumed.count).toBe(2);
+    expect(lines.join("\n")).not.toContain("generated en-fixture-01-m100:");
+    const fresh = await runBuild(options("fresh"), quiet);
+    expect(resumed.setDigest).toBe(fresh.setDigest);
+  });
+
   it("refuses an empty blueprint directory", async () => {
     const empty = join(root, "none");
     mkdirSync(empty);

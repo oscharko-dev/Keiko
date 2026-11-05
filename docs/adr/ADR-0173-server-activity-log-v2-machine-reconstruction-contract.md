@@ -704,6 +704,12 @@ including completeness and loss fields, remains within the existing 48-field lim
 the underlying recognized cause of `WorkspaceNotFoundError`, with error kind, frames and cause
 chain when available. It no longer substitutes a constant root-not-found label for every cause.
 
+Expected Memory capability states and salience extraction/capture summaries use the registered
+`server.diagnostic.observation` timeline at info, without an error kind or automatic failure incident
+(#4247). Producers explicitly declare `diagnosticOutcome: "routine"`; unclassified diagnostics and
+real model, vault or vector-index failures retain the failure channel. Shutdown start is info even
+with work in flight; faulted cleanup retains its warning and failure evidence.
+
 ### D7 — Process lifecycle events give the log a subject
 
 Before this contract, the log recorded what happened but never which process, running which

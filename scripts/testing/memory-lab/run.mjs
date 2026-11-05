@@ -9,7 +9,7 @@
 // timing file, the manifest and one JSON per run. The last line is the deterministic harness
 // result; a product verdict is read from the summary, never from the exit code.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { URL, fileURLToPath } from "node:url";
@@ -19,14 +19,16 @@ import { writeContinuityJson } from "../coding-workbench-lab/chat-continuity-cam
 import { assertOutsideCheckout } from "./anchor/private-files.mjs";
 import {
   holdoutManifest,
+  holdoutProgressCodec,
   holdoutScenarioName,
   maskHoldoutResult,
   openSealedHoldout,
 } from "./corpus/holdout.mjs";
+import { openProgress } from "./progress.mjs";
 import { ARMS, runScenario } from "./driver.mjs";
 import { SCAN_FILE, scanEvidence, secretsOfConfig } from "./evidence-scan.mjs";
 import { CEILINGS, pendingGatewayCalls, startLabInstance } from "./instance.mjs";
-import { instrumentDigest, productDistDigest } from "./instrument.mjs";
+import { digestFiles, instrumentDigest, productDistDigest } from "./instrument.mjs";
 import { conversationTextInLog } from "./log-text.mjs";
 import {
   LabConfigurationError,
@@ -68,6 +70,7 @@ const OPTIONS = {
   ceiling: { type: "string", default: "autonomous-delivery" },
   "budget-tokens": { type: "string", default: "1200" },
   keep: { type: "boolean", default: false },
+  resume: { type: "boolean", default: false },
   "allow-folded-env": { type: "boolean", default: false },
   "subject-root": { type: "string" },
   "generated-at": { type: "string", default: "0" },
@@ -93,6 +96,7 @@ function usage() {
     `  --memory-mode ${MEMORY_MODES.join("|")}  --ceiling ${CEILINGS.join("|")}  --budget-tokens N`,
     "    (both default to autonomous-delivery; the Ask for approval configuration is measured explicitly, #4209)",
     "  --keep (retain instance state; refused for real conversations)  --subject-root <checkout>  --generated-at <epoch-ms>",
+    "  --resume  continue settled units with identical inputs, configuration and built product",
     "  --allow-folded-env  measure even though the repository .env would fold KEIKO_* keys into an instance",
     "  --retain-bodies / --no-retain-bodies (bodies of real-conversation scenarios are never retained)",
     "  --label-pass  the labelling run: retain the stored bodies of anchor scenarios in the run files (real text; private directory)",
@@ -203,6 +207,7 @@ export function normalizeOptions(raw) {
     ceiling: oneOf(values.ceiling, CEILINGS, "--ceiling"),
     budgetTokens: integer(values["budget-tokens"], "--budget-tokens"),
     keep: values.keep === true,
+    resume: values.resume === true,
     allowFoldedEnv: values["allow-folded-env"] === true,
     subjectRoot: optionalPath(values["subject-root"]),
     generatedAt: integer(values["generated-at"], "--generated-at"),
@@ -467,6 +472,16 @@ function timingRows(results, sealed) {
 
 function writeEvidence(options, corpus, results, gateway) {
   const manifest = corpus.manifest;
+  if (!corpus.sealed)
+    for (const result of results)
+      writeContinuityJson(
+        join(
+          options.out,
+          "runs",
+          `${result.scenario}.${result.arm}.r${String(result.repetition)}.json`,
+        ),
+        result,
+      );
   const summary = summarizeLabRun(results, { sealed: corpus.sealed });
   const metadata = {
     mode: options.mode,
@@ -524,6 +539,7 @@ function loadCorpus(options) {
   return {
     scenarios,
     sealed: true,
+    progressCodec: holdoutProgressCodec(maskingKey),
     label: (scenario) => holdoutScenarioName(scenario, maskingKey),
     manifest: holdoutManifest(scenarios, maskingKey),
   };
@@ -574,13 +590,18 @@ function sealedLine(result, ordinal) {
   return isFailedUnit(result) ? `${head} failed (${result.error.name})` : `${head} done`;
 }
 
-async function runAll(options, corpus, stateRoot, log) {
-  const results = [];
+async function runAll(options, corpus, stateRoot, log, progress) {
+  const results = progress.results;
+  const completed = results.length;
+  let ordinal = 0;
   for (let repetition = 0; repetition < options.repetitions; repetition += 1)
     for (const scenario of corpus.scenarios)
       for (const arm of options.arms) {
+        if (ordinal++ < completed) continue;
+        if (ending) throw new Error("the run is ending");
         const result = await runOne(scenario, arm, repetition, options, stateRoot, corpus);
-        results.push(result);
+        if (ending) throw new Error("the run is ending");
+        progress.append(result);
         if (!corpus.sealed)
           writeContinuityJson(
             join(options.out, "runs", `${scenario.id}.${arm}.r${String(repetition)}.json`),
@@ -603,13 +624,63 @@ function prepareOutput(options, corpus) {
   return join(options.out, "state");
 }
 
+function matchesRunInput(result, index, options, corpus) {
+  const arm = options.arms[index % options.arms.length];
+  const scenarioIndex = Math.floor(index / options.arms.length) % corpus.scenarios.length;
+  const scenario = corpus.scenarios[scenarioIndex];
+  const repetition = Math.floor(index / (options.arms.length * corpus.scenarios.length));
+  return (
+    result?.scenario === corpus.label(scenario) &&
+    result.arm === arm &&
+    result.repetition === repetition &&
+    result.language === scenario.language &&
+    result.class === scenario.class &&
+    result.difficulty === scenario.difficulty
+  );
+}
+
+function runProgress(options, corpus, gateway) {
+  const { out, resume, subjectRoot } = options;
+  const settings = {
+    ...options,
+    out: undefined,
+    resume: undefined,
+    scenarios: undefined,
+    holdout: undefined,
+    configPath: undefined,
+    subjectRoot: undefined,
+  };
+  const envFile = join(subjectRoot ?? REPO_ROOT, ".env");
+  return openProgress({
+    out,
+    resume,
+    codec: corpus.progressCodec,
+    validate: (result, index) => matchesRunInput(result, index, options, corpus),
+    total: corpus.scenarios.length * options.arms.length * options.repetitions,
+    identity: {
+      kind: "lab-run",
+      settings,
+      corpus: corpus.manifest,
+      gateway: gateway.digest,
+      instrument: instrumentDigest(),
+      product: productDistDigest(subjectRoot ?? REPO_ROOT),
+      productHead: productHead(subjectRoot),
+      node: process.version,
+      environment: digestFiles(["repo-env"], () =>
+        existsSync(envFile) ? readFileSync(envFile) : "absent",
+      ),
+    },
+  });
+}
+
 /** Runs the lab with validated options and returns the summary; writes evidence under `out`. */
 export async function runLab(options, log = console.log) {
-  if (existsSync(join(options.out, "scorecard.json")))
+  if (existsSync(join(options.out, "scorecard.json")) && !options.resume)
     throw new Error(`refusing to overwrite an existing run in ${options.out}`);
   const gateway = gatewayEvidence(options);
   const corpus = loadCorpus(options);
   assertKeepAllowed(corpus.scenarios, options.keep);
+  const progress = runProgress(options, corpus, gateway);
   const stateRoot = prepareOutput(options, corpus);
   activeStateRoot = corpus.sealed || !options.keep ? stateRoot : undefined;
   let results;
@@ -619,6 +690,7 @@ export async function runLab(options, log = console.log) {
       corpus,
       stateRoot,
       log,
+      progress,
     );
   } finally {
     removeStateRoot();
@@ -629,6 +701,7 @@ export async function runLab(options, log = console.log) {
   });
   writeContinuityJson(join(options.out, SCAN_FILE), scan);
   const scanned = { ...summary, evidenceFindings: scan.findings.length };
+  progress.clear();
   log(passFailLine(scanned));
   return scanned;
 }

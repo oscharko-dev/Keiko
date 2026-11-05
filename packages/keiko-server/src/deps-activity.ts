@@ -379,7 +379,7 @@ export function logRuntimeShutdown(
     activityLogEvent(
       SERVER_RUNTIME_SHUTDOWN_OPERATION,
       {
-        level: evidence.state === "started" || cleanupFaulted ? "warn" : "info",
+        level: cleanupFaulted ? "warn" : "info",
         correlationId: correlationIdOrUnknown(correlationId),
         ...(cleanupFaulted ? { errorKind: "internal" as const } : {}),
       },

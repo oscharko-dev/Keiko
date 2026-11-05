@@ -500,6 +500,42 @@ describe("a sealed run against the real product", () => {
   }
 
   it(
+    "resumes a sealed run after interruption without exposing or repeating a unit (#4247)",
+    async () => {
+      const scenarios = join(root, "input");
+      mkdirSync(scenarios);
+      writeFileSync(join(scenarios, "leak.json"), JSON.stringify(leakScenario()));
+      const file = join(root, "holdout.json");
+      const keyFile = join(root, "holdout.key");
+      sealHoldout({ scenarios, out: file, keyFile });
+      const options = runOptions("interrupted", {
+        holdout: file,
+        "key-file": keyFile,
+        arms: "off,product",
+      });
+      await expect(
+        runLab(options, () => {
+          throw new Error("interrupted");
+        }),
+      ).rejects.toThrow("interrupted");
+      expect(leaks(options.out)).toEqual([]);
+      const checkpoint = readFileSync(join(options.out, ".progress", "00000000.json"), "utf8");
+      expect(JSON.parse(checkpoint).algorithm).toBe("aes-256-gcm");
+      expect(checkpoint).not.toContain("holdout:");
+      const lines = [];
+      const summary = await runLab({ ...options, resume: true }, (line) => lines.push(line));
+      expect(summary.runs).toBe(2);
+      expect(summary.failedUnits).toBe(0);
+      expect(lines.filter((line) => line.startsWith("holdout unit"))).toEqual([
+        "holdout unit 2 done",
+      ]);
+      expect(leaks(options.out)).toEqual([]);
+      expect(existsSync(join(options.out, ".progress"))).toBe(false);
+    },
+    RUN_TIMEOUT_MS,
+  );
+
+  it(
     "leaves aggregates under masked names and no text of the holdout in any file",
     async () => {
       const scenarios = join(root, "scenarios");

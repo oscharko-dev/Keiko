@@ -41475,10 +41475,10 @@
       "failureClass": "server-diagnostic",
       "requirementContract": "server-diagnostic",
       "productSurfaces": ["keiko-server"],
-      "lifecycleTransitions": ["failure"],
+      "lifecycleTransitions": ["failure", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": [],
+        "state": ["server.diagnostic.observation"],
         "end": [],
         "failure": ["server.diagnostic.failure"],
         "loss": []
@@ -41487,10 +41487,14 @@
         {
           "op": "server.diagnostic.failure",
           "mode": "correlation"
+        },
+        {
+          "op": "server.diagnostic.observation",
+          "mode": "correlation"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": [],
+      "resourceSignals": ["server.diagnostic.observation"],
       "replayReferences": [],
       "operations": [
         {
@@ -41739,6 +41743,60 @@
             "causeChain": true
           },
           "proofIds": ["server.diagnostic.failure.activity-log-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "server.diagnostic.observation",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "code",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "diagnosticErrorClass",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": true
+            },
+            {
+              "name": "diagnosticOperation",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": true
+            },
+            {
+              "name": "semanticCandidateCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "source",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["server.diagnostic.observation.activity-log-line"],
           "replayReferences": [],
           "missingObligations": []
         }

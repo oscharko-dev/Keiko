@@ -63,6 +63,7 @@ const DIAGNOSTIC_OUTCOMES = [
   "source-skipped",
   "request-refused",
   "provider-busy",
+  "routine",
 ] as const;
 
 const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
@@ -204,6 +205,36 @@ const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
   analyzerProjection: "failure-cluster",
   failureClasses: ["server-diagnostic"],
   proofIds: ["server.diagnostic.failure.activity-log-line"],
+  releaseImpact: "patch",
+});
+
+// Expected capability states and per-turn summaries are observations, never failure clusters.
+const SERVER_DIAGNOSTIC_OBSERVATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "server.diagnostic.observation",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "diagnostics-log.diagnosticObservationEvent",
+  fields: {
+    diagnosticOperation: { type: "string", dataClass: "opaque-id", required: true, maxLength: 160 },
+    diagnosticErrorClass: {
+      type: "string",
+      dataClass: "error-kind",
+      required: true,
+      maxLength: 64,
+    },
+    source: { type: "string", dataClass: "opaque-id", required: true, maxLength: 160 },
+    code: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    semanticCandidateCount: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["server-diagnostic"],
+  proofIds: ["server.diagnostic.observation.activity-log-line"],
   releaseImpact: "patch",
 });
 
@@ -518,7 +549,27 @@ function activityLogDiagnosticOperation(operation: string): string {
   return label.replace(" ", ":");
 }
 
+function diagnosticObservationEvent(record: ServerDiagnosticRecord): ServerLogEvent {
+  const code = boundedDiagnosticCode(record.code);
+  return activityLogEvent(
+    SERVER_DIAGNOSTIC_OBSERVATION_OPERATION,
+    { level: "info", correlationId: record.correlationId },
+    {
+      diagnosticOperation: activityLogDiagnosticOperation(record.operation),
+      diagnosticErrorClass: record.errorClass,
+      source: record.source,
+      ...(code === undefined ? {} : { code }),
+      ...(record.semanticCandidateCount === undefined
+        ? {}
+        : { semanticCandidateCount: record.semanticCandidateCount }),
+      completeness: "complete",
+      loss: "none",
+    },
+  );
+}
+
 function diagnosticActivityLogEvent(record: ServerDiagnosticRecord): ServerLogEvent {
+  if (record.diagnosticOutcome === "routine") return diagnosticObservationEvent(record);
   const fields = {
     diagnosticOperation: activityLogDiagnosticOperation(record.operation),
     diagnosticErrorClass: record.errorClass,

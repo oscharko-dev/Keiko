@@ -30,6 +30,7 @@ import {
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 import { inspectGroundedPack } from "./grounded-pack-validation.js";
 import { closeFileServerLogSinks } from "./observability/index.js";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { listSupportIncidents } from "@oscharko-dev/keiko-activity-log";
 
 describe("server.diagnostic.failure activity log proof (#3532)", () => {
@@ -50,6 +51,47 @@ describe("server.diagnostic.failure activity log proof (#3532)", () => {
     vi.unstubAllEnvs();
     rmSync(stateDir, { recursive: true, force: true });
   });
+  it("keeps routine memory observations out of failure clusters and incident reservations (#4247)", () => {
+    setSupportIncidentTriggerForTests(true);
+    defaultServerDiagnosticSink.record({
+      correlationId: "routine-memory-proof",
+      timestamp: new Date().toISOString(),
+      operation: "memory.salience",
+      source: "memory-salience.logSalienceDiagnostic",
+      errorClass: "SalienceExtractionDiagnostic",
+      message: "salience-extraction-diagnostic",
+      diagnosticOutcome: "routine",
+      code: "kind=parse-or-empty-output:rawItemCount=0",
+    });
+    drainSupportIncidentCandidates();
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "server.diagnostic.observation",
+    );
+    expect(lines).toHaveLength(1);
+    const line = expectActivityLogProof(
+      "server.diagnostic.observation.activity-log-line",
+      lines[0] ?? "",
+    );
+    expect(line).toMatchObject({
+      level: "info",
+      correlationId: "routine-memory-proof",
+      diagnosticOperation: "memory.salience",
+    });
+    expect(line).not.toHaveProperty("errorKind");
+    const analyzed = analyzeLogText(readPersistedActivityLog(stateDir));
+    expect(analyzed.malformedLineCount).toBe(0);
+    const timeline = analyzed.timelines.find(
+      (entry) => entry.correlationId === "routine-memory-proof",
+    );
+    expect(timeline?.errorKinds).toEqual([]);
+    expect(timeline?.lines).toContainEqual(
+      expect.objectContaining({ op: "server.diagnostic.observation", level: "info" }),
+    );
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
+    expect(supportIncidentReservationsForTests(stateDir)).toEqual([]);
+  });
+
   it.each(["request-refused", "request-failed"] as const)(
     "retains %s evidence and reserves incident storage only for a real failure",
     (diagnosticOutcome) => {

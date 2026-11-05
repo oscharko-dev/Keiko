@@ -37,6 +37,7 @@ const DEFAULTS = Object.freeze({
   maxAttempts: 3,
   retryDelayMs: 1000,
   temperature: 0.9,
+  reasoningTokens: 8192,
 });
 
 function chatUrl(endpoint) {
@@ -56,7 +57,7 @@ function requestInit(settings, prompt, maxTokens) {
     body: JSON.stringify({
       model: settings.model,
       temperature: settings.temperature,
-      max_tokens: maxTokens,
+      max_tokens: maxTokens + settings.reasoningTokens,
       stream: false,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
@@ -90,7 +91,16 @@ async function attemptOnce(settings, prompt, maxTokens) {
   } catch (error) {
     throw new Transient("the response was not JSON", { cause: error });
   }
-  const content = body?.choices?.[0]?.message?.content;
+  return answerContent(body?.choices?.[0]);
+}
+
+function answerContent(choice) {
+  const content = choice?.message?.content;
+  if (
+    choice?.finish_reason === "length" &&
+    (typeof content !== "string" || content.trim().length === 0)
+  )
+    throw new Transient("finish_reason=length with no answer (output budget exhausted)");
   if (typeof content !== "string") throw new Transient("the response held no message");
   return content;
 }
@@ -127,14 +137,28 @@ export function parseJsonArray(content) {
   }
 }
 
+function recordRefusal(refusals, reason) {
+  refusals[reason] = (refusals[reason] ?? 0) + 1;
+}
+
+function refusalSummary(refusals) {
+  return Object.entries(refusals)
+    .map(([kind, count]) => `${kind}=${String(count)}`)
+    .toSorted()
+    .join(",");
+}
+
 // A request whose answer does not parse into the wanted shape is asked again, a bounded number of times.
-async function requestList(settings, prompt, maxTokens, accept, attempt = 1) {
+async function requestList(settings, prompt, maxTokens, accept, refusals = {}, attempt = 1) {
   const items = parseJsonArray(await complete(settings, prompt, maxTokens));
+  if (items === undefined) recordRefusal(refusals, "invalid-json-array");
   const accepted = items === undefined ? [] : accept(items);
   if (accepted.length > 0) return accepted;
   if (attempt >= settings.maxAttempts)
-    throw new CorpusError("the generator model returned no usable items");
-  return requestList(settings, prompt, maxTokens, accept, attempt + 1);
+    throw new CorpusError(
+      `the generator model returned no usable items (refusals: ${refusalSummary(refusals) || "item-shape"})`,
+    );
+  return requestList(settings, prompt, maxTokens, accept, refusals, attempt + 1);
 }
 
 function topicHint(random) {
@@ -155,15 +179,27 @@ function exchangePrompt(request) {
     .join("\n");
 }
 
-function cleanExchange(item, isClean) {
-  const user = typeof item?.user === "string" ? item.user.trim() : "";
-  const assistant = typeof item?.assistant === "string" ? item.assistant.trim() : "";
-  if (user.length === 0 || assistant.length === 0) return undefined;
-  return isClean(user) && isClean(assistant) ? { user, assistant } : undefined;
+function exchangeText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function cleanExchange(item, request, refusals) {
+  const user = exchangeText(item?.user);
+  const assistant = exchangeText(item?.assistant);
+  if (user.length === 0 || assistant.length === 0) {
+    recordRefusal(refusals, "missing-message");
+    return undefined;
+  }
+  for (const text of [user, assistant]) {
+    if (request.isClean(text)) continue;
+    recordRefusal(refusals, request.refusalClass?.(text) ?? "filtered-text");
+    return undefined;
+  }
+  return { user, assistant };
 }
 
 // Collects clean exchanges until `count` are there, asking again for the shortfall.
-async function collectExchanges(settings, request, collected = [], round = 1) {
+async function collectExchanges(settings, request, collected = [], round = 1, refusals = {}) {
   const wanted = request.count - collected.length;
   const fresh = await requestList(
     settings,
@@ -171,14 +207,17 @@ async function collectExchanges(settings, request, collected = [], round = 1) {
     Math.min(4096, 200 + 140 * wanted),
     (items) =>
       items
-        .map((item) => cleanExchange(item, request.isClean))
+        .map((item) => cleanExchange(item, request, refusals))
         .filter((exchange) => exchange !== undefined),
+    refusals,
   );
   const all = [...collected, ...fresh];
   if (all.length >= request.count) return all.slice(0, request.count);
   if (round >= settings.maxAttempts)
-    throw new CorpusError("the generator model did not return enough clean exchanges");
-  return collectExchanges(settings, request, all, round + 1);
+    throw new CorpusError(
+      `the generator model did not return enough clean exchanges (accepted=${String(all.length)}, wanted=${String(request.count)}; refusals: ${refusalSummary(refusals)})`,
+    );
+  return collectExchanges(settings, request, all, round + 1, refusals);
 }
 
 function paragraphPrompt(request) {
@@ -238,7 +277,16 @@ function pooled(settings, key, produce) {
 function drawClean(pool, request, textOf) {
   const usable = pool.filter((item) => request.isClean(textOf(item)));
   if (usable.length === 0)
-    throw new CorpusError("every pooled text states a fact of the blueprint");
+    throw new CorpusError(
+      "every pooled text states a fact of the blueprint (refusals: " +
+        refusalSummary(
+          pool.reduce((counts, item) => {
+            recordRefusal(counts, request.refusalClass?.(textOf(item)) ?? "filtered-text");
+            return counts;
+          }, {}),
+        ) +
+        ")",
+    );
   return request.random.pick(usable);
 }
 

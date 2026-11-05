@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f64523054c7bdf3403063aaa183b463dc447d9d822b027db28e008d75aef37bb"
+    "catalogDigest": "971387a0d719b97b787b878d133b64b14df101d7ee5a4c37f525ef2efafa66e1"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 629,
-    "proofCount": 651,
-    "resolvedProofCount": 651,
+    "operationCount": 630,
+    "proofCount": 652,
+    "resolvedProofCount": 652,
     "failureClassCount": 388,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -149,6 +149,7 @@
         "runs.apply.settled",
         "runs.patch.refused",
         "server.diagnostic.failure",
+        "server.diagnostic.observation",
         "skills.library.operation",
         "skills.workflow.attached",
         "sse.run-events.resume",
@@ -2880,6 +2881,9 @@
       "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts",
       "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
       "packages/keiko-server/src/grounded-qa-multi-source.test.ts"
+    ],
+    "server.diagnostic.observation.activity-log-line": [
+      "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts"
     ],
     "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],
     "skills.library.operation.lifecycle": [

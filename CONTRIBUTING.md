@@ -116,6 +116,12 @@ evaluates the complete registered inventory by composing `check:op-catalog`,
 `arch:check`, `arch:check:negative`, and `check:release-impact`; it takes no changed-file input, so
 a narrower change set never narrows what it proves.
 
+Expected Memory capability states and salience extraction/capture summaries use the registered
+`server.diagnostic.observation` timeline at info, without an error kind or automatic failure incident
+(#4247). Producers explicitly declare `diagnosticOutcome: "routine"`; unclassified diagnostics and
+real model, vault or vector-index failures retain the failure channel. Shutdown start is info even
+with work in flight; faulted cleanup retains its warning and failure evidence.
+
 `client.citation.activated` records a citation click and its source selection under the
 activation correlation. `reason` describes the source fingerprint: `matched` (one root),
 `unmatched`, `absent`, `malformed`, or `ambiguous` (several matches). `outcome` records

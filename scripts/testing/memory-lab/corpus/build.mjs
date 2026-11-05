@@ -12,15 +12,17 @@
 // class the report groups by. Generated mass lives outside the repository: `<out>/scenarios/*.json`
 // holds the scenarios and `<out>/manifest.json` the versions and digests, the generator, its share,
 // the counts per class and language and the variety figures of the set. The manifest is written last,
-// so its presence marks a complete corpus, and an existing manifest is never overwritten. Nothing is
-// written when any conversation fails its validation.
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
+// so its presence marks a complete corpus, and an existing manifest is never overwritten. No corpus is
+// published until every conversation validates; completed jobs survive in a resumable journal.
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { URL, fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { writeContinuityJson } from "../../coding-workbench-lab/chat-continuity-campaign.mjs";
 import { runMain } from "../../coding-workbench-lab/lab-common.mjs";
-import { scenarioSetManifest } from "../scenario.mjs";
+import { digestFiles, instrumentDigest } from "../instrument.mjs";
+import { openProgress } from "../progress.mjs";
+import { scenarioSetManifest, validateScenario } from "../scenario.mjs";
 import { blueprintDigest, loadBlueprintDirectory } from "./blueprint.mjs";
 import { classCounts, coverageSection } from "./coverage.mjs";
 import {
@@ -61,6 +63,7 @@ const OPTIONS = {
   "api-key-env": { type: "string", default: "KEIKO_LAB_GENERATOR_API_KEY" },
   "generator-label": { type: "string" },
   "timeout-ms": { type: "string", default: "120000" },
+  resume: { type: "boolean", default: false },
   help: { type: "boolean", default: false },
 };
 
@@ -80,6 +83,7 @@ function usage() {
     `  --writer ${WRITERS.join("|")}   scripted is the deterministic floor; model needs the options below`,
     "  --endpoint <url> --model <id> [--api-key-env NAME] [--timeout-ms N]",
     "  --generator-label <text> recorded in every scenario and the manifest",
+    "  --resume   continue completed scenarios with identical inputs and writer settings",
   ].join("\n");
 }
 
@@ -140,6 +144,7 @@ export function normalizeBuildOptions(raw) {
     seeds,
     focused,
     writer,
+    resume: values.resume === true,
     timeoutMs: integer(values["timeout-ms"], "--timeout-ms", 1),
     generatorLabel:
       values["generator-label"] === undefined
@@ -228,21 +233,28 @@ function buildManifest(options, blueprints, results, writer) {
   };
 }
 
-function assertFreshOutput(out, results) {
+function assertFreshOutput(out, results, resume = false) {
   const directory = join(out, "scenarios");
   const present = existsSync(directory) ? new Set(readdirSync(directory)) : new Set();
   const ids = results.map((result) => result.scenario.id);
   if (new Set(ids).size !== ids.length) throw new Error("two scenarios share one id");
-  const clash = ids.find((id) => present.has(`${id}.json`));
+  const clash = results.find(({ scenario }) => {
+    if (!present.has(`${scenario.id}.json`)) return false;
+    if (!resume) return true;
+    const existing = readFileSync(join(directory, `${scenario.id}.json`), "utf8");
+    return existing !== JSON.stringify(scenario, null, 2);
+  })?.scenario.id;
   if (clash !== undefined) throw new Error(`refusing to overwrite the scenario ${clash} in ${out}`);
 }
 
 function writeCorpus(options, blueprints, results, writer) {
-  assertFreshOutput(options.out, results);
+  assertFreshOutput(options.out, results, options.resume);
   const directory = join(options.out, "scenarios");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  for (const { scenario } of results)
-    writeContinuityJson(join(directory, `${scenario.id}.json`), scenario);
+  for (const { scenario } of results) {
+    const path = join(directory, `${scenario.id}.json`);
+    if (!existsSync(path)) writeContinuityJson(path, scenario);
+  }
   const manifest = buildManifest(options, blueprints, results, writer);
   writeContinuityJson(join(options.out, "manifest.json"), manifest);
   return manifest;
@@ -295,6 +307,39 @@ function focusedJobs(blueprints, options) {
   return blueprints.flatMap((blueprint) => blueprintJobs(blueprint, options));
 }
 
+function validateCompletedScenario(result, blueprints) {
+  if (!blueprints.some((blueprint) => blueprint.id === result?.meta?.blueprintId)) return false;
+  try {
+    validateScenario(result.scenario);
+    return true;
+  } catch {
+    throw new Error("a completed corpus scenario no longer validates");
+  }
+}
+
+function buildProgress(options, blueprints, writer, total) {
+  const { out, resume, ...settings } = options;
+  const directory = fileURLToPath(new URL("./", import.meta.url));
+  const sources = readdirSync(directory, { recursive: true })
+    .filter((name) => /\.(?:mjs|json)$/u.test(name))
+    .toSorted();
+  return openProgress({
+    out,
+    resume,
+    total,
+    validate: (result) => validateCompletedScenario(result, blueprints),
+    identity: {
+      kind: "corpus-build",
+      generatorVersion: GENERATOR_VERSION,
+      settings,
+      blueprints: blueprints.map(blueprintDigest),
+      writer: writer.id,
+      code: digestFiles(sources, (name) => readFileSync(join(directory, name))),
+      instrument: instrumentDigest(),
+    },
+  });
+}
+
 /**
  * Builds a corpus with validated options. `dependencies` (for tests): `createWriter(options)` replaces
  * the writer, `env` replaces the environment the API key is read from. Returns the manifest.
@@ -311,8 +356,12 @@ export async function runBuild(options, log = console.log, dependencies = {}) {
     dependencies.env ?? process.env,
   );
   const jobs = options.focused ? focusedJobs(blueprints, options) : personJobs(blueprints, options);
-  const results = await mapSequential(jobs, async (job, index) => {
+  const progress = buildProgress(options, blueprints, writer, jobs.length);
+  const completed = progress.results.length;
+  await mapSequential(jobs.slice(completed), async (job, offset) => {
+    const index = completed + offset;
     const { scenario, meta } = await job.run(writer);
+    progress.append({ scenario, meta });
     if (!options.focused || (index + 1) % PROGRESS_EVERY === 0 || index + 1 === jobs.length)
       log(
         options.focused
@@ -321,7 +370,8 @@ export async function runBuild(options, log = console.log, dependencies = {}) {
       );
     return { scenario, meta };
   });
-  const manifest = writeCorpus(options, blueprints, results, writer);
+  const manifest = writeCorpus(options, blueprints, progress.results, writer);
+  progress.clear();
   log(
     `PASS memory-lab-corpus scenarios=${String(manifest.count)} version=${manifest.corpusVersion} nearDuplicateRate=${String(manifest.variety.nearDuplicate.rate)}`,
   );
