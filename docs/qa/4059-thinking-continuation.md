@@ -6,6 +6,14 @@ prior assistant reasoning. No customer outage or live-provider compatibility is 
 Delivery is consolidated in PR #4267 with the other audited bugs. The signed implementation
 history from the initial PR #4269 is retained in that branch.
 
+Review follow-through makes deterministic `ResponseRedactionError` terminal (HTTP 400 or an SSE
+error with code 400), while timeouts remain retryable. Answer-round tool calls normalize absent,
+null and empty arrays; malformed or non-empty values still refuse readiness. The two owning suites
+pass 451 tests, with 13 additional independent controls. Structural cases pin the rejecting round
+and actual request count; spend controls compare each reservation's accumulated messages with the
+wire request. Three minimal readiness fixtures now supply their required `env` field; their 45
+tests pass without assertion changes or a production secret-collection fallback.
+
 ## Implementation and work plan
 
 1. Select the protocol only through explicit provider configuration

@@ -8,6 +8,7 @@ import {
   type ModelProviderConfig,
 } from "@oscharko-dev/keiko-model-gateway";
 import { probeGatewayToolCalling } from "./gateway-tool-calling-probe.js";
+import * as spendBudget from "./gateway-spend-budget.js";
 import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
@@ -441,6 +442,147 @@ describe("thinking continuation readiness (#4059)", () => {
     ) as typeof fetch;
     expect(await probeGatewayToolCalling(config, provider, fetchImpl)).not.toBe("verified");
     expect(calls).toBe(3); // The existing bounded output-token compatibility retry also fails.
+  });
+
+  it.each([{ calls: undefined }, { calls: null }, { calls: [] }])(
+    "normalizes absent answer-round tool calls (%j)",
+    async ({ calls }) => {
+      let round = 0;
+      const fetchImpl = vi.fn(() => {
+        const index = round++;
+        return Promise.resolve(
+          jsonResponse({
+            choices: [
+              {
+                finish_reason: index === 2 ? "stop" : "tool_calls",
+                message: index === 2 ? { ...message(index), tool_calls: calls } : message(index),
+              },
+            ],
+          }),
+        );
+      }) as typeof fetch;
+      await expect(probeGatewayToolCalling(config, provider, fetchImpl)).resolves.toBe("verified");
+      expect(fetchImpl).toHaveBeenCalledTimes(4);
+      const history = requestBodyAt(fetchImpl, 3).messages as Record<string, unknown>[];
+      expect(history.filter((entry) => entry.role === "assistant")[2]).not.toHaveProperty(
+        "tool_calls",
+      );
+    },
+  );
+
+  function continuationChoice(round: number): {
+    finish_reason: string;
+    message: Record<string, unknown>;
+  } {
+    return { finish_reason: round === 2 ? "stop" : "tool_calls", message: message(round) };
+  }
+
+  function malformedChoice(kind: string, round: number): ReturnType<typeof continuationChoice> {
+    const choice = continuationChoice(round);
+    const calls = message(0).tool_calls as Record<string, unknown>[];
+    switch (kind) {
+      case "whitespace":
+        return { ...choice, message: { ...choice.message, reasoning_content: " \n " } };
+      case "missing":
+        delete choice.message.reasoning_content;
+        return choice;
+      case "empty-id":
+        return { ...choice, message: { ...choice.message, tool_calls: [{ ...calls[0], id: "" }] } };
+      case "multiple-tools":
+        return {
+          ...choice,
+          message: {
+            ...choice.message,
+            tool_calls: [...calls, { ...calls[0], id: "second-call" }],
+          },
+        };
+      case "unexpected-tool":
+        return continuationChoice(0);
+      case "unexpected-answer":
+        return continuationChoice(2);
+      case "empty-answer":
+        return { ...choice, message: { ...choice.message, content: "" } };
+      case "object-calls":
+        return { ...choice, message: { ...choice.message, tool_calls: {} } };
+      case "string-calls":
+        return { ...choice, message: { ...choice.message, tool_calls: "invalid" } };
+      default:
+        throw new TypeError("Unknown malformed continuation fixture");
+    }
+  }
+
+  it.each([
+    ["whitespace", 0],
+    ["empty-id", 0],
+    ["multiple-tools", 1],
+    ["unexpected-tool", 2],
+    ["unexpected-answer", 0],
+    ["unexpected-answer", 1],
+    ["empty-answer", 2],
+    ["object-calls", 2],
+    ["string-calls", 2],
+    ["missing", 3],
+  ] as const)("rejects %s at continuation round %s", async (kind, rejectingRound) => {
+    let calls = 0;
+    const fetchImpl = vi.fn(() => {
+      const round = calls++;
+      const choice =
+        round === rejectingRound ? malformedChoice(kind, round) : continuationChoice(round);
+      return Promise.resolve(jsonResponse({ choices: [choice] }));
+    }) as typeof fetch;
+    await expect(probeGatewayToolCalling(config, provider, fetchImpl)).resolves.toBe("unverified");
+    expect(fetchImpl).toHaveBeenCalledTimes(rejectingRound + 1);
+  });
+
+  it("reserves spend against every accumulated continuation request", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-continuation-probe-budget-"));
+    const reserve = vi.spyOn(spendBudget, "reserveGatewaySpendForAttempt");
+    let round = 0;
+    const fetchImpl = vi.fn(() => {
+      const index = round++;
+      return Promise.resolve(
+        jsonResponse({
+          choices: [
+            {
+              finish_reason: index === 2 ? "stop" : "tool_calls",
+              message: message(index),
+            },
+          ],
+        }),
+      );
+    }) as typeof fetch;
+    try {
+      await expect(
+        probeGatewayToolCalling(config, provider, fetchImpl, undefined, {
+          env: {
+            [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "1",
+            [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
+          },
+          capability: CAPABILITY,
+          correlationId: "continuation-spend-probe",
+        }),
+      ).resolves.toBe("verified");
+      expect(reserve).toHaveBeenCalledTimes(4);
+      expect(reserve.mock.calls.map((call) => call[2].messages.length)).toEqual([2, 4, 6, 8]);
+      for (const [index, call] of reserve.mock.calls.entries()) {
+        const wire = requestBodyAt(fetchImpl, index).messages as Record<string, unknown>[];
+        expect(call[2].messages.map((entry) => entry.role)).toEqual(
+          wire.map((entry) => entry.role),
+        );
+        expect(
+          call[2].messages
+            .filter((entry) => entry.role === "assistant")
+            .map((entry) => entry.reasoningContent),
+        ).toEqual(
+          wire
+            .filter((entry) => entry.role === "assistant")
+            .map((entry) => entry.reasoning_content),
+        );
+      }
+    } finally {
+      reserve.mockRestore();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it.each(["missing", "conflicting", "exhausted"])("refuses %s reasoning state", async (kind) => {

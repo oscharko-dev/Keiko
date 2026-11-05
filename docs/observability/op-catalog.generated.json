@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a138cd1256c8e33f649931f9313f9322aad95f660986f74f0d22b386927aab5a",
+    "catalogDigest": "9820c3270da2e4d17984c354eca40bd83b2945b671dfff403a5485d77fd64b36",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -16475,7 +16475,7 @@
         "proofIds": ["coding-sidecar.gateway.readiness-insufficient.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-sidecar-gateway.ts:391",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:4967"]
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:4968"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -16712,7 +16712,7 @@
         "proofIds": ["coding-sidecar.gateway.request-validated.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-sidecar-gateway.ts:317",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5698"]
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5699"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -16853,7 +16853,7 @@
         "proofIds": ["coding-sidecar.gateway.skill-attached.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/coding-sidecar-gateway.ts:366",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5631"]
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:5632"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -17136,7 +17136,7 @@
         "proofIds": ["coding-sidecar.gateway.usage-settled.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-sidecar-gateway.ts:768",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:4386"]
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-gateway.ts:4387"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -107713,28 +107713,28 @@
     {
       "op": "POST /api/coding-sidecar/gateway/chat/completions",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:2872",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:2873",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/coding-sidecar/gateway/chat/completions",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:3063",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:3064",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/coding-sidecar/gateway/chat/completions",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:3129",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:3130",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/coding-sidecar/gateway/chat/completions",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:3281",
+      "site": "packages/keiko-server/src/coding-sidecar-gateway.ts:3282",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

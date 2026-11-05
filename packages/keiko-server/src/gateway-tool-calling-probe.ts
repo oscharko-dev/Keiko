@@ -285,7 +285,9 @@ function continuationProbeMessage(
     choice.finish_reason === "stop" &&
     typeof message.content === "string" &&
     message.content.trim().length > 0 &&
-    message.tool_calls === undefined
+    (message.tool_calls === undefined ||
+      message.tool_calls === null ||
+      (Array.isArray(message.tool_calls) && message.tool_calls.length === 0))
   )
     return {
       role: "assistant",

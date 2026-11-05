@@ -2781,6 +2781,7 @@ function runtimeRetryFor(
 ): RuntimeRetry {
   if (gatewaySpendRejectionReason(error) !== undefined) return "refused";
   if (error instanceof BoundSkillAttemptRefused) return "refused";
+  if (error instanceof ResponseRedactionError) return "refused";
   if (repairFailedAgain(error, failureCode)) return "refused";
   // The gateway already owns bounded schema/transport correction. Repeating the identical
   // malformed turn in OpenCode adds no correction and can loop without an attempt limit.

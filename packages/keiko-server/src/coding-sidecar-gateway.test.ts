@@ -5495,21 +5495,21 @@ describe("coding sidecar gateway turn failure projection", () => {
   });
 
   it.each([
-    [new ProviderError("synthetic unavailable", 503), "provider-failed"],
-    [new ProviderError("empty assistant stream", 200), "stream-incomplete"],
+    [new ProviderError("synthetic unavailable", 503), "provider-failed", 503],
+    [new ProviderError("empty assistant stream", 200), "stream-incomplete", 503],
     // #3591 (1.1.7): the budget ran out before any content — a budget to raise, not a broken stream.
-    [new ProviderOutputExhaustedError("coding"), "output-exhausted"],
+    [new ProviderOutputExhaustedError("coding"), "output-exhausted", 503],
     // #3610: the provider answered with neither content nor a tool call — not a broken stream.
-    [new ProviderEmptyAnswerError("coding"), "empty-answer"],
+    [new ProviderEmptyAnswerError("coding"), "empty-answer", 503],
     // 1.1.8 lab run: the model's tool call never matched its schema — not a provider rejection.
-    [new MalformedToolCallError("tool call has non-JSON arguments"), "invalid-tool-call"],
+    [new MalformedToolCallError("tool call has non-JSON arguments"), "invalid-tool-call", 400],
     // PR #3617 review: the gateway's own redaction refused an answer nested too deep, tool call or
     // not. A Workbench guard rejected the turn; it keeps its diagnostic.
-    [new ResponseRedactionError("synthetic redaction depth"), "turn-rejected"],
-    [new TimeoutError("synthetic timeout"), "stream-incomplete"],
-    [new ContextOverflowError("synthetic context limit"), "turn-rejected"],
-    [new CallerAttemptAdmissionError("synthetic caller grant"), "turn-rejected"],
-  ] as const)("projects %s as %s without exposing provider text", async (error, code) => {
+    [new ResponseRedactionError("synthetic redaction depth"), "turn-rejected", 400],
+    [new TimeoutError("synthetic timeout"), "stream-incomplete", 503],
+    [new ContextOverflowError("synthetic context limit"), "turn-rejected", 503],
+    [new CallerAttemptAdmissionError("synthetic caller grant"), "turn-rejected", 503],
+  ] as const)("projects %s as %s without exposing provider text", async (error, code, status) => {
     const sink = captureServerLog("warn");
     const eventHub = new CodingRuntimeEventHub();
     const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
@@ -5525,7 +5525,7 @@ describe("coding sidecar gateway turn failure projection", () => {
       routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
       deps,
     );
-    expect(result).toMatchObject({ status: code === "invalid-tool-call" ? 400 : 503 });
+    expect(result).toMatchObject({ status });
     const replay = eventHub.replay("run-gateway-test");
     expect(replay.ok && replay.events).toMatchObject([{ failureCode: code }]);
     expect(JSON.stringify(replay)).not.toContain(error.message);
@@ -11538,8 +11538,9 @@ describe("configured thinking continuation (#4059)", () => {
           if (typeof result === "symbol") {
             expect(response.body()).not.toContain('"finish_reason":"stop"');
             expect(response.body()).not.toContain('"finish_reason":"tool_calls"');
-            expect(response.body()).toMatch(/"finish_reason":"error"|invalid_request_error/u);
-          } else expect(result.status).not.toBe(200);
+            expect(response.body()).toContain('"code":400');
+          } else expect(result.status).toBe(400);
+          expect(vi.mocked(fetch)).toHaveBeenCalledOnce();
         } finally {
           deps.store.close();
           resetGatewayInstanceCacheForTests();
