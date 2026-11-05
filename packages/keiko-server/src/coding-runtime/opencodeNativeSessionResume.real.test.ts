@@ -10,19 +10,23 @@ import {
 } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { resolveGitExecutable } from "@oscharko-dev/keiko-git";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   buildRuntimeGatewaySeatbeltCommand,
   buildWrappedCommand,
   type RuntimeGatewayConfinement,
   type WrappedCommand,
   createRuntimeGatewayConfinement,
-  resolveDarwinGitExecutable,
 } from "@oscharko-dev/keiko-sandbox";
+import {
+  fixtureGitEnvironment,
+  fixtureGitExecutable,
+  fixtureHostEnvironment,
+} from "./opencodeRealRuntimeFixture/_support.js";
 import {
   buildOpenCodeLaunchProfile,
   openCodeConfigDirectory,
@@ -38,6 +42,7 @@ import {
   retainSettledRun,
   seedContinuation,
   withoutBaseline,
+  type ContinuedRunLocation,
   type RunContinuation,
   type SessionContinuationContext,
 } from "./opencodeSessionContinuation.js";
@@ -85,22 +90,6 @@ function fixtureToolProfile(): "native" | "direct" | "code-mode" {
     throw new TypeError("fixture-tool-profile-invalid");
   }
   return value;
-}
-
-function fixtureGitExecutable(): string {
-  if (process.platform === "darwin") return resolveDarwinGitExecutable().path;
-  if (process.platform !== "win32") return "/usr/bin/git";
-  const git = resolveGitExecutable(process.env, tmpdir());
-  if (!git.ok) throw new Error(`fixture-git-unavailable:${git.reason}`);
-  return git.path;
-}
-
-/** What the runtime needs from the host beyond its profile; the supervisor pins SystemRoot itself. */
-function fixtureHostEnvironment(git: string): Record<string, string> {
-  if (process.platform !== "win32") return { PATH: `${dirname(git)}:/usr/bin:/bin` };
-  const systemRoot = process.env.SystemRoot;
-  if (systemRoot === undefined) throw new Error("fixture-system-root-missing");
-  return { PATH: dirname(git), SystemRoot: systemRoot };
 }
 
 function fixtureCommand(
@@ -255,15 +244,7 @@ function committedRepository(root: string, workspace: string): void {
   mkdirSync(workspace, { recursive: true });
   writeFileSync(join(workspace, "notes.txt"), "resume fixture\n");
   const git = fixtureGitExecutable();
-  // An empty file rather than the null device: Git for Windows cannot open `\\.\nul` as a config.
-  const globalConfig = join(root, "empty.gitconfig");
-  writeFileSync(globalConfig, "");
-  const env = {
-    HOME: root,
-    PATH: dirname(git),
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: globalConfig,
-  };
+  const env = fixtureGitEnvironment(root, git);
   const identity = ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid"];
   for (const args of [
     ["init", "-q", workspace],
@@ -319,8 +300,6 @@ function launch(
     writeFileSync(join(configRoot, "plugins", `${name}.ts`), source, { mode: 0o600 });
   const git = fixtureGitExecutable();
   const args = [...profile.args, "--stdio"];
-  // Windows confinement needs the installed gateway service (ADR-0043 D18), which this fixture does
-  // not have. This run proves persistence against a text-only stub, and no boundary on that host.
   const command: WrappedCommand =
     process.platform === "win32"
       ? { command: binary, args }
@@ -417,6 +396,8 @@ async function stopChild(child: ChildProcessByStdio<Writable, Readable, Readable
 }
 
 interface Runtime {
+  /** Ends the runtime the way a crash does: no shutdown of its own, whatever it was doing. */
+  readonly kill: () => Promise<void>;
   readonly compact: (sessionId: string) => Promise<number>;
   readonly client: OpenCodeV2HttpClient;
   readonly gateway: Stub;
@@ -454,6 +435,11 @@ async function withRuntime(
       gateway: world.gateway,
       stateRoot,
       database,
+      kill: async (): Promise<void> => {
+        const exited = new Promise((resolve) => launched.child.once("exit", resolve));
+        launched.child.kill("SIGKILL");
+        await exited;
+      },
       compact: async (sessionId: string): Promise<number> => {
         const response = await fetch(
           new URL(`/api/session/${encodeURIComponent(sessionId)}/compact`, endpoint),
@@ -773,6 +759,82 @@ describe("native session continuity on the pinned OpenCode runtime", () => {
       });
     },
     120_000,
+  );
+
+  // A cancelled turn is one the runtime was asked to stop. This one it never finished, because the
+  // process died mid-stream. What it left pending must not come back, nothing stale may survive for
+  // the task, and the killed process must leave no lock on the state or the workspace.
+  it.skipIf(skip)(
+    "refuses what a runtime killed mid-turn left pending, and the task starts fresh",
+    async () => {
+      await withWorld(async (world) => {
+        const { sessionId, context: settled } = await terminalHistoryRun(world, "succeeded");
+        const events: ServerLogEvent[] = [];
+        const context: SessionContinuationContext = {
+          ...settled,
+          activityLog: { write: (event) => void events.push(event) },
+        };
+        const location = (name: string, runId: string): ContinuedRunLocation => ({
+          runId,
+          runRoot: join(world.fixture.root, name),
+          workspaceRoot: world.fixture.workspace,
+        });
+
+        const killed = location("killed-run", "run-100000002");
+        const marker = "FIXTURE-CANCELLED-TERMINAL-TURN";
+        context.service.declare(killed.runId, { kind: "resume", taskId: TASK_ID });
+        let continued: RunContinuation | undefined;
+        await withRuntime(
+          world,
+          "killed-run",
+          () => {
+            continued = seedContinuation(context, killed);
+          },
+          async ({ client, gateway, kill }) => {
+            if (continued === undefined) throw new Error("fixture-session-not-retained");
+            expect(
+              await bindContinuedSession(client, continued, world.fixture.workspace, undefined),
+            ).toMatchObject({ ok: true, sessionId });
+            await client.prompt(sessionId, marker);
+            await expect.poll(() => userTexts(gateway.requests.at(-1)).at(-1)).toBe(marker);
+            await kill();
+          },
+        );
+
+        retainSettledRun(context, { ...killed, sessionId }, "failed");
+        expect(events.map((event) => event.extra)).toContainEqual(
+          expect.objectContaining({
+            runId: killed.runId,
+            action: "retain",
+            outcome: "refused",
+            reason: "pending-input",
+          }),
+        );
+        expect(existsSync(join(world.fixture.root, "retained", retainedSessionKey(TASK_ID)))).toBe(
+          false,
+        );
+
+        const next = location("after-the-crash", "run-100000003");
+        context.service.declare(next.runId, { kind: "resume", taskId: TASK_ID });
+        await withRuntime(
+          world,
+          "after-the-crash",
+          () => {
+            expect(seedContinuation(context, next)).toBeUndefined();
+          },
+          async ({ client, gateway }) => {
+            const fresh = String((await client.createSession(world.fixture.workspace)).id);
+            await turn(client, fresh, "AFTER-THE-CRASH");
+            expect(userTexts(gateway.requests.at(-1))).toEqual(["AFTER-THE-CRASH"]);
+          },
+        );
+        expect(context.service.outcome(next.runId)).toEqual({
+          kind: "fresh",
+          reason: "no-retained-state",
+        });
+      });
+    },
+    240_000,
   );
 
   it.skipIf(skip)(
