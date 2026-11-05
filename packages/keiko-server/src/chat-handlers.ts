@@ -1745,10 +1745,11 @@ function previousContent(
   messages: readonly { readonly role: string; readonly content: string }[],
   ordinal: number,
 ): string | undefined {
-  return messages
-    .slice(0, ordinal)
-    .filter((message) => message.role === "user")
-    .at(-1)?.content;
+  for (let index = Math.min(ordinal, messages.length) - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "user") return message.content;
+  }
+  return undefined;
 }
 
 function captureActionsFromOutcomes(

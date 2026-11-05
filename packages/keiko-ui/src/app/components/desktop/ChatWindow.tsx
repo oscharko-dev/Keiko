@@ -4973,15 +4973,15 @@ function MemoryStatementResults({
   readonly actions: readonly ConversationMemoryActionWire[];
 }): ReactNode {
   const t = useTranslate();
-  const keys = [...new Set(actions.map(memoryStatementSentenceKey))].filter(
+  const keys = [...new Set(actions.map((action) => memoryStatementSentenceKey(action)))].filter(
     (key) => key !== undefined,
   );
   if (keys.length === 0) return null;
   return (
     <section className="chat-memory-panel" aria-label={t("chat.memory.panel")}>
       {keys.map((key) => (
-        <p key={key} className="chat-memory-summary" role="status">
-          {t(key)}
+        <p key={key} className="chat-memory-summary">
+          <output>{t(key)}</output>
         </p>
       ))}
     </section>
