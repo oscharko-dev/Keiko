@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 388,
-  "completeClassCount": 388,
+  "supportedClassCount": 389,
+  "completeClassCount": 389,
   "completeness": "complete",
   "classes": [
     {

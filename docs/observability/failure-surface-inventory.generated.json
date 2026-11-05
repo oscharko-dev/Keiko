@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8ee946ff23630040edfae55e9df1648aa4523a918f0caa96bf40ace03cf395ca"
+    "catalogDigest": "67a3b6bd121c6dd1e08481fdcb265442166501d41095ba2962e3ab47ea199690"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 631,
-    "proofCount": 653,
-    "resolvedProofCount": 653,
-    "failureClassCount": 388,
+    "operationCount": 633,
+    "proofCount": 655,
+    "resolvedProofCount": 655,
+    "failureClassCount": 389,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -565,6 +565,8 @@
         "memory.embedding.invalidated",
         "memory.embedding.invalidation-failed",
         "memory.embedding.store-rejected",
+        "memory.explicit.forget",
+        "memory.explicit.remember",
         "repository.fingerprint-diff.completed",
         "search.answer.assessed",
         "search.citations.reconciled",
@@ -1097,6 +1099,7 @@
     "chat-content-policy": ["lifecycle-crash.dependency-failure"],
     "memory-audit-state-cache": ["lifecycle-crash.dependency-failure"],
     "memory-capture-novelty": ["memory-knowledge.dependency-failure"],
+    "memory-explicit-statement": ["memory-knowledge.dependency-failure"],
     "memory-embedding-invalidation": ["memory-knowledge.dependency-failure"],
     "memory-embedding-request": ["memory-knowledge.dependency-failure"],
     "memory-embedding-storage": ["memory-knowledge.rejection"],
@@ -2592,6 +2595,8 @@
       "packages/keiko-server/src/memory-embedding.test.ts"
     ],
     "memory.embedding.store-rejected.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
+    "memory.explicit.forget.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
+    "memory.explicit.remember.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
     "native-file-dialog.selection.projected.counts": [
       "packages/keiko-server/src/native-file-dialog/route.test.ts"
     ],
