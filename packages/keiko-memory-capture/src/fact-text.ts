@@ -96,8 +96,8 @@ const NEGATION_WORDS = new Set([
   "dislikes",
 ]);
 
-// A person has one of these at a time, so a new value can replace the old one. Someone uses or likes
-// many things at once, so those need a stated change.
+// Predicates that name different facts, never rewordings of each other: where a person lives, works
+// and what they are called. Whether a new value replaces the old one is the slot's preposition.
 const SINGLE_VALUE_PREDICATES: readonly string[] = [
   "arbeitet",
   "heisst",
@@ -183,7 +183,10 @@ export function anyWordPattern(words: readonly string[]): RegExp {
 export function isNegated(text: string): boolean {
   const normalized = normalizeMemoryText(text);
   if (CONTRACTED_NEGATION_RE.test(normalized)) return true;
-  return normalized.split(/[^\p{L}\p{N}]+/u).some((word) => NEGATION_WORDS.has(word));
+  // A hyphenated compound is one word: "no-code" and "Nicht-Raucher" deny nothing.
+  return normalized
+    .split(/[^\p{L}\p{N}-]+/u)
+    .some((word) => NEGATION_WORDS.has(word.replace(/^-+|-+$/gu, "")));
 }
 
 export function hasWord(words: readonly string[], word: string): boolean {

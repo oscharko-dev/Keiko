@@ -225,6 +225,18 @@ describe("extractSalientMemories", () => {
     });
   });
 
+  it.each([
+    "Ich habe mich für Jira entschieden, weil Anna es wollte.",
+    "I decided on Jira because they asked for it.",
+  ])("keeps a reason that is someone else's wish out of the payload: %s", async (text) => {
+    const evidence = text.slice(0, text.search(/,? (?:weil|because)/u));
+    const [learned] = candidates(
+      await learn(text, [fact("Entscheidung: Jira", evidence, { type: "decision" })]),
+    );
+    expect(learned?.proposal.type).toBe("decision");
+    expect(learned?.proposal.payload).toBeUndefined();
+  });
+
   it("carries an English decision's reason and leaves other types without a payload", async () => {
     const [decision] = candidates(
       await learn("I decided on a local queue because it works offline.", [

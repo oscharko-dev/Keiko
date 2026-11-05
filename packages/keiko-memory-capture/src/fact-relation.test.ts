@@ -171,6 +171,24 @@ describe("mostSimilarFacts", () => {
     expect(compareFacts("Bevorzugt Tabellen", "Bevorzugt Tee")).toBe("different");
   });
 
+  it.each([
+    ["Arbeitet mit Excel", "Arbeitet mit Word"],
+    ["Works with Python", "Works with Go"],
+    ["Wohnt in Berlin", "Arbeitet in Berlin"],
+    ["Lives in Bonn", "Works in Bonn"],
+  ])("does not read %s and %s as one value replacing another", (a, b) => {
+    expect(compareFacts(a, b)).toBe("different");
+    expect(compareFacts(b, a)).toBe("different");
+  });
+
+  it.each([
+    ["Arbeitet bei Acme", "Arbeitet für Globex"],
+    ["Works at Acme", "Works at Globex"],
+    ["Heißt Alex", "Heisst Sam"],
+  ])("reads %s and %s as one single-value slot", (a, b) => {
+    expect(compareFacts(a, b)).toBe("slot-changed");
+  });
+
   it("reads a new home as a new value of one slot", () => {
     expect(compareFacts("Wohnt in Berlin", "Wohnt in Hamburg")).toBe("slot-changed");
   });

@@ -2,6 +2,8 @@
 // checks confirm it, because a wrong replacement would quietly lose a true fact and nobody approves
 // learned facts. A check that cannot confirm a change leaves both facts standing.
 
+import { normalizeMemoryText } from "@oscharko-dev/keiko-contracts/memory";
+
 import {
   anyWordPattern,
   factWords,
@@ -128,11 +130,47 @@ function equalWordsComparison(
   return COMPARATOR_RE.test(a) && !keepsOrder(wordsA, wordsB) ? "reversed" : "same";
 }
 
-// A shared "bevorzugt" does not make "Tabellen" and "Tee" two values of one fact.
-function sharesSlot(wordsA: readonly string[], wordsB: readonly string[]): boolean {
-  return wordsA.some(
-    (word) => hasWord(wordsB, word) && (!isPredicateWord(word) || isSingleValuePredicate(word)),
-  );
+// A person has one of these at a time, so a new value replaces the old one. The preposition decides:
+// "Arbeitet bei Acme" names one employer, "Arbeitet mit Excel" one of many tools.
+const SINGLE_VALUE_SLOT_RES: readonly RegExp[] = [
+  /(?:^|[^\p{L}])arbeite\p{L}*\s+(?:bei|fur|fuer)\s/u,
+  /(?:^|[^\p{L}])works?\s+(?:at|for)\s/u,
+  /(?:^|[^\p{L}])wohn\p{L}*\s+in\s/u,
+  /(?:^|[^\p{L}])lives?\s+in\s/u,
+  /(?:^|[^\p{L}])heiss\p{L}*\s/u,
+  /(?:^|[^\p{L}])(?:named|called)\s/u,
+];
+
+function sharesSingleValueSlot(a: string, b: string): boolean {
+  const textA = `${normalizeMemoryText(a)} `;
+  const textB = `${normalizeMemoryText(b)} `;
+  return SINGLE_VALUE_SLOT_RES.some((slot) => slot.test(textA) && slot.test(textB));
+}
+
+// A shared "bevorzugt" does not make "Tabellen" and "Tee" two values of one fact; a shared content
+// word or a shared single-value slot does.
+function sharesSlot(
+  a: string,
+  b: string,
+  wordsA: readonly string[],
+  wordsB: readonly string[],
+): boolean {
+  if (sharesSingleValueSlot(a, b)) return true;
+  return wordsA.some((word) => hasWord(wordsB, word) && !isPredicateWord(word));
+}
+
+// Only the wording differs: "Mag Tabellen" and "Bevorzugt Tabellen". Living somewhere and working
+// there are two facts, so a differing single-value predicate never reads as a rewording.
+function predicateOnlyComparison(
+  a: string,
+  b: string,
+  wordsA: readonly string[],
+  wordsB: readonly string[],
+  differing: readonly string[],
+): FactComparison {
+  return differing.some(isSingleValuePredicate)
+    ? "different"
+    : equalWordsComparison(a, b, wordsA, wordsB);
 }
 
 export function compareFacts(a: string, b: string): FactComparison {
@@ -141,13 +179,14 @@ export function compareFacts(a: string, b: string): FactComparison {
   const onlyA = unmatched(wordsA, wordsB);
   const onlyB = unmatched(wordsB, wordsA);
   if (wordsA.length === 0 || wordsB.length === 0) return "different";
-  if (onlyA.length === 0 && onlyB.length === 0) return equalWordsComparison(a, b, wordsA, wordsB);
-  if ([...onlyA, ...onlyB].every(isPredicateWord))
-    return equalWordsComparison(a, b, wordsA, wordsB);
+  const differing = [...onlyA, ...onlyB];
+  if (differing.every(isPredicateWord)) {
+    return predicateOnlyComparison(a, b, wordsA, wordsB, differing);
+  }
   const shared = wordsA.length - onlyA.length;
   if (shared === 0 || onlyA.length !== onlyB.length) return "different";
-  if ([...onlyA, ...onlyB].every(isNumberWord)) return "number-changed";
-  return sharesSlot(wordsA, wordsB) && onlyA.length <= MAX_SLOT_WORDS
+  if (differing.every(isNumberWord)) return "number-changed";
+  return sharesSlot(a, b, wordsA, wordsB) && onlyA.length <= MAX_SLOT_WORDS
     ? "slot-changed"
     : "different";
 }

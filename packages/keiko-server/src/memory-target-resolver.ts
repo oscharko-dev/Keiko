@@ -149,17 +149,20 @@ function reachedInLastTurn(
 }
 
 // What the last turn left behind. A learned fact names the turn it came from, so a slow capture of
-// an earlier turn that finishes later is not "das". Only a record without that provenance falls
-// back to its creation time.
+// an earlier turn that finishes later is not "das". Only an explicit record without that provenance
+// falls back to its creation time.
 function leftByLastTurn(
   record: MemoryRecord,
   previousMessageId: string | undefined,
   startedAt: number,
 ): boolean {
   const sources = record.provenance.sourceMessageIds;
-  return sources === undefined
-    ? record.createdAt >= startedAt
-    : previousMessageId !== undefined && sources.includes(previousMessageId);
+  if (sources !== undefined) {
+    return previousMessageId !== undefined && sources.includes(previousMessageId);
+  }
+  // A learned fact is written whenever learning runs, so its time says nothing about which turn it
+  // came from; without its source message it is no "das". An explicit record is written by its turn.
+  return record.provenance.evidenceSpan === undefined && record.createdAt >= startedAt;
 }
 
 function namesRecord(target: string, record: MemoryRecord): boolean {

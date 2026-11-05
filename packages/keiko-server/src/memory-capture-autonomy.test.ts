@@ -900,6 +900,8 @@ describe("explicit forget statement in chat", () => {
     ctx: ConversationMemoryRuntimeContext,
     mode: CodingWorkbenchMode,
     scope: "user" | "project",
+    // The turn the fact came from, as the chat handlers pass it: "m1" is the last statement.
+    sourceMessageId?: string,
   ): Promise<UiHandlerDeps> {
     const content = JSON.stringify([
       {
@@ -911,7 +913,13 @@ describe("explicit forget statement in chat", () => {
       },
     ]);
     const deps = makeDeps({ vault, model: content, mode });
-    await captureSalientFromTurn(deps, salienceRequest(mode), ctx, "fake-model", "ok");
+    await captureSalientFromTurn(
+      deps,
+      { ...salienceRequest(mode), ...(sourceMessageId === undefined ? {} : { sourceMessageId }) },
+      ctx,
+      "fake-model",
+      "ok",
+    );
     return deps;
   }
 
@@ -1052,7 +1060,7 @@ describe("explicit forget statement in chat", () => {
   it.each(ALL_MODES)("forgets the conversation's memory in %s", async (mode) => {
     const vault = makeVault();
     const ctx = context();
-    const learned = await learnedFact(vault, ctx, mode, "user");
+    const learned = await learnedFact(vault, ctx, mode, "user", "m1");
     const deps = withPreviousStatement(learned, USER_TEXT, Date.now() - 60_000);
     expect(readMemories(vault, ctx)).toHaveLength(1);
 
@@ -1155,7 +1163,7 @@ describe("explicit forget statement in chat", () => {
   it("forgets what the last turn left behind on a bare reference in a grounded turn", async () => {
     const vault = makeVault();
     const ctx = context();
-    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "project");
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "project", "m1");
     const deps = withPreviousStatement(learned, USER_TEXT, Date.now() - 60_000);
 
     await groundedForget(deps, ctx);
@@ -1215,32 +1223,39 @@ describe("explicit forget statement in chat", () => {
   it.each([
     ["an earlier turn stays", "turn-before", 1],
     ["the last turn goes", "m1", 0],
-  ])("binds a late learned fact to the turn it came from: %s", async (_, sourceMessageId, left) => {
-    const vault = makeVault();
-    const ctx = context();
-    const lastTurnStartedAt = Date.now() - 1;
-    const fact = "I ship releases on a fortnightly cadence.";
-    const content = JSON.stringify([
-      { about: "self", body: fact, evidence: fact, type: "fact", scope: "user" },
-    ]);
-    const deps = makeDeps({ vault, model: content, mode: "autonomous-delivery" });
-    await captureSalientFromTurn(
-      deps,
-      { ...salienceRequest("autonomous-delivery"), sourceMessageId },
-      ctx,
-      "fake-model",
-      "ok",
-    );
-    expect(readMemories(vault, ctx)).toHaveLength(1);
+    ["an unknown turn stays", undefined, 1],
+  ] as const)(
+    "binds a late learned fact to the turn it came from: %s",
+    async (_, sourceMessageId, left) => {
+      const vault = makeVault();
+      const ctx = context();
+      const lastTurnStartedAt = Date.now() - 1;
+      const fact = "I ship releases on a fortnightly cadence.";
+      const content = JSON.stringify([
+        { about: "self", body: fact, evidence: fact, type: "fact", scope: "user" },
+      ]);
+      const deps = makeDeps({ vault, model: content, mode: "autonomous-delivery" });
+      await captureSalientFromTurn(
+        deps,
+        {
+          ...salienceRequest("autonomous-delivery"),
+          ...(sourceMessageId === undefined ? {} : { sourceMessageId }),
+        },
+        ctx,
+        "fake-model",
+        "ok",
+      );
+      expect(readMemories(vault, ctx)).toHaveLength(1);
 
-    await collectMemoryActions(
-      withPreviousStatement(deps, "Ich mag Kaffee.", lastTurnStartedAt),
-      turnRequest("Vergiss das."),
-      ctx,
-    );
+      await collectMemoryActions(
+        withPreviousStatement(deps, "Ich mag Kaffee.", lastTurnStartedAt),
+        turnRequest("Vergiss das."),
+        ctx,
+      );
 
-    expect(readMemories(vault, ctx)).toHaveLength(left);
-  });
+      expect(readMemories(vault, ctx)).toHaveLength(left);
+    },
+  );
 
   it("does not take a touch without a known chat for this chat's 'das'", async () => {
     const vault = makeVault();
@@ -1279,7 +1294,7 @@ describe("explicit forget statement in chat", () => {
   it("does not relearn the fact it forgot", async () => {
     const vault = makeVault();
     const ctx = context();
-    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "project");
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "project", "m1");
     const deps = withPreviousStatement(learned, USER_TEXT, Date.now() - 60_000);
     await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
 

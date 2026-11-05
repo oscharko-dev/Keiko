@@ -114,9 +114,9 @@ describe("admitProposedFact", () => {
     ["someone beside me", "Anna und ich nutzen Jira.", "Anna und ich nutzen Jira", "we-statement"],
     ["a pronoun", "Ich weiss, sie mag Tabellen.", "Ich weiss, sie mag Tabellen", "third-party"],
     [
-      "a bare relation",
-      "Ich schreibe Kunden immer formell.",
-      "Ich schreibe Kunden immer formell",
+      "a role pointing at one person",
+      "Ich schreibe dem Kunden immer formell.",
+      "Ich schreibe dem Kunden immer formell",
       "third-party",
     ],
     ["a group", "Wir nutzen Tabellen.", "Wir nutzen Tabellen", "we-statement"],
@@ -236,5 +236,48 @@ describe("admitProposedFact", () => {
     expect(admit(text, "nicht da").admitted).toBe(false);
     expect(admit(text, "ich ich").admitted).toBe(false);
     expect(performance.now() - started).toBeLessThan(2000);
+  });
+
+  it.each([
+    ["a reason about things", "Ich nutze Tabellen, weil sie übersichtlich sind."],
+    ["an English reason about things", "I use spreadsheets because they are consistent."],
+    ["a reason about a tool", "Ich nutze Vim, weil er schneller ist."],
+    ["the formal address", "Ich schicke Ihnen meine Zahlen immer als Tabelle."],
+    ["a kind of work", "Ich arbeite mit Kunden."],
+    ["a style toward a kind of person", "Ich schreibe Kunden immer formell."],
+    ["a decision made", "I decided on a local queue."],
+    ["a switch made", "I switched to Linux."],
+    ["a compound role", "I work on customer tickets."],
+    ["a noun that starts like a participle", "Ich habe ein Gerät mit Touch."],
+    ["a habit", "Ich habe eine Gewohnheit, morgens zu planen."],
+    ["an earlier time inside the reason", "Ich nutze Excel, weil es früher schneller war."],
+    ["a hyphenated compound", "Ich nutze no-code Werkzeuge."],
+    ["a present verb ending like a past one", "Ich arbeite mit Excel."],
+    ["a present verb that keeps its stem", "Ich verwalte die Budgets."],
+    ["a wish of the person", "Ich nutze Jira, weil ich es so will."],
+  ])("keeps a genuine fact with %s", (_, text) => {
+    const evidence = text.slice(0, -1);
+    expect(reasonOf(text, evidence)).toBeNull();
+  });
+
+  it.each<[string, string, FactDropReason]>([
+    ["a pronoun in the claim", "Ich arbeite gern mit ihr.", "third-party"],
+    ["a claim-opening pronoun", "Er hilft mir bei Excel.", "third-party"],
+    ["an English pronoun in the claim", "I work with her on reports.", "third-party"],
+    ["a pointed role", "Ich telefoniere jeden Tag mit dem Kunden.", "third-party"],
+    ["a family word without a possessive", "Ich hole Tochter jeden Tag ab.", "third-party"],
+    ["someone else's wish", "Ich nutze Jira, weil Anna es wollte.", "third-party"],
+    ["the German simple past", "Ich nutzte Excel.", "past-statement"],
+    ["an inverted simple past", "Damals verwendete ich Excel.", "past-statement"],
+    ["a weak simple past", "Ich arbeitete mit Excel.", "past-statement"],
+    ["the English simple past", "I used Excel for reports.", "past-statement"],
+    ["an English irregular past", "I wrote my notes in Word.", "past-statement"],
+    ["a perfect", "Ich habe Excel genutzt.", "past-statement"],
+  ])("drops %s", (_, text, reason) => {
+    expect(reasonOf(text, text.slice(0, -1))).toBe(reason);
+  });
+
+  it("does not read a present need as a past", () => {
+    expect(reasonOf("I need tables for numbers.", "I need tables for numbers")).toBeNull();
   });
 });
