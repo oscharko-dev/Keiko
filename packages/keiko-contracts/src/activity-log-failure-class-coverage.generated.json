@@ -26091,6 +26091,7 @@
         "state": [
           "gateway.conversation.admission",
           "gateway.readiness.automatic.joined",
+          "gateway.readiness.automatic.withheld",
           "gateway.readiness.busy-retained"
         ],
         "end": ["gateway.readiness.automatic.completed", "gateway.readiness.completed"],
@@ -26115,6 +26116,10 @@
           "mode": "correlation"
         },
         {
+          "op": "gateway.readiness.automatic.withheld",
+          "mode": "correlation"
+        },
+        {
           "op": "gateway.readiness.busy-retained",
           "mode": "correlation"
         },
@@ -26133,6 +26138,7 @@
         "gateway.readiness.automatic.completed",
         "gateway.readiness.automatic.joined",
         "gateway.readiness.automatic.started",
+        "gateway.readiness.automatic.withheld",
         "gateway.readiness.busy-retained",
         "gateway.readiness.completed",
         "gateway.readiness.started"
@@ -26329,6 +26335,36 @@
             "causeChain": false
           },
           "proofIds": ["gateway.readiness.automatic.started.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "gateway.readiness.automatic.withheld",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "modelIdDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["gateway.readiness.automatic.withheld.line"],
           "replayReferences": [],
           "missingObligations": []
         },

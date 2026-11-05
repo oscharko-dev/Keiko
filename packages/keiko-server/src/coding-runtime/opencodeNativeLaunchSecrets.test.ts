@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { createGeneratedOpenCodeLaunchSecretsPlugin } from "./opencodeNativeLaunchSecrets.js";
 import { OPENCODE_NATIVE_REQUIRED_PLUGINS } from "./opencodeNativePluginReadiness.js";
@@ -26,6 +27,42 @@ describe("launch secrets plugin source", () => {
     expect(source).toContain("withholdFromChildren();");
     expect(source).toContain("throw new Error('launch-secret-inherited')");
     expect(source).toContain("name.startsWith('KEIKO_')");
+  });
+
+  // A plugin set reloads from its first changed revision and a new location loads its own, so setup
+  // can run twice in one runtime. The runtime reads these names again when it reloads its
+  // configuration: a second setup must not lose them, and they must stay hidden from a spread.
+  it("keeps every withheld binding readable by name across a second setup", () => {
+    const script = [
+      "Object.defineProperty(process, 'platform', { value: 'linux' });",
+      source.replace(/^import .*bun:ffi.*$/mu, "").replace("export default {", "const plugin = {"),
+      "await plugin.setup();",
+      "await plugin.setup();",
+      "console.log(JSON.stringify({",
+      "  byName: [process.env.OPENCODE_SERVER_PASSWORD, process.env.KEIKO_EXAMPLE],",
+      "  spread: Object.keys({ ...process.env }),",
+      "  ordinary: process.env.ORDINARY,",
+      "}));",
+    ].join("\n");
+    const run = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      encoding: "utf8",
+      env: {
+        OPENCODE_SERVER_PASSWORD: "synthetic-password",
+        KEIKO_EXAMPLE: "synthetic-binding",
+        ORDINARY: "kept",
+      },
+    });
+    expect(run.status).toBe(0);
+    const answer = JSON.parse(run.stdout) as {
+      readonly byName: readonly string[];
+      readonly spread: readonly string[];
+      readonly ordinary: string;
+    };
+    expect(answer.byName).toEqual(["synthetic-password", "synthetic-binding"]);
+    expect(answer.ordinary).toBe("kept");
+    expect(answer.spread).toContain("ORDINARY");
+    expect(answer.spread).not.toContain("OPENCODE_SERVER_PASSWORD");
+    expect(answer.spread).not.toContain("KEIKO_EXAMPLE");
   });
 
   it("is required for a native run to become ready", () => {

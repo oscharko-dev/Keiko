@@ -344,6 +344,25 @@ const GATEWAY_READINESS_AUTOMATIC_JOINED_OPERATION = defineActivityLogOperation(
   releaseImpact: "patch",
 });
 
+const GATEWAY_READINESS_AUTOMATIC_WITHHELD_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.automatic.withheld",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logAutomaticReadinessWithheld",
+  fields: {
+    ...GATEWAY_READINESS_MODEL_ID_FIELDS,
+    reason: { type: "string", dataClass: "closed-enum", required: true, values: ["live-run"] },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.automatic.withheld.line"],
+  releaseImpact: "patch",
+});
+
 /** Who started a non-automatic readiness check: the settings dialog. */
 type GatewayReadinessTrigger = "settings";
 
@@ -592,6 +611,20 @@ function logAutomaticReadinessCompleted(
 
 function inconclusiveProbeCount(report: GatewayReadinessReport): number {
   return report.probes.filter(probeInconclusive).length;
+}
+
+function logAutomaticReadinessWithheld(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId: string,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_AUTOMATIC_WITHHELD_OPERATION,
+      { correlationId },
+      { ...modelIdEvidence(modelId), reason: "live-run" },
+    ),
+  );
 }
 
 function logAutomaticReadinessJoined(
@@ -2319,6 +2352,7 @@ interface WorkbenchProbeEntry {
   readonly perform: () => Promise<void>;
   readonly holder: UiHandlerDeps["gatewayConfig"];
   readonly cancelQueued: () => void;
+  readonly withhold: () => boolean;
   prioritized: boolean;
   running: boolean;
   at: number;
@@ -2596,7 +2630,7 @@ function enqueueWorkbenchProbe(
     known.prioritized ||= prioritized;
     return known.promise;
   }
-  const entry = createWorkbenchProbeEntry(deps, target, correlationId, trigger, prioritized);
+  const entry = createWorkbenchProbeEntry(deps, target, correlationId, trigger, prioritized, key);
   workbenchProbes.set(key, entry);
   startWorkbenchProbeQueue();
   return entry.promise;
@@ -2608,6 +2642,7 @@ function createWorkbenchProbeEntry(
   correlationId: string,
   trigger: WorkbenchProbeTrigger,
   prioritized: boolean,
+  key: string,
 ): WorkbenchProbeEntry {
   let finish: () => void = (): void => undefined;
   const promise = new Promise<void>((resolve) => {
@@ -2620,6 +2655,15 @@ function createWorkbenchProbeEntry(
       if (entry.running || entry.settled) return;
       entry.settled = true;
       finish();
+    },
+    // A live run needs the gateway, which may serve one model at a time. A proof of a model nobody
+    // chose gives way and leaves no verdict, so the next read after the run proves it.
+    withhold: (): boolean => {
+      if (entry.prioritized || deps.codingRuntimeOrchestrator?.hasLiveRun() !== true) return false;
+      workbenchProbes.delete(key);
+      entry.cancelQueued();
+      logAutomaticReadinessWithheld(deps, target.modelId, correlationId);
+      return true;
     },
     perform: async (): Promise<void> => {
       const controlled =
@@ -2695,6 +2739,10 @@ function performNextWorkbenchProbe(resolve: () => void, reject: (error: unknown)
   const entry = nextWorkbenchProbe();
   if (entry === undefined) {
     resolve();
+    return;
+  }
+  if (entry.withhold()) {
+    performNextWorkbenchProbe(resolve, reject);
     return;
   }
   entry.running = true;

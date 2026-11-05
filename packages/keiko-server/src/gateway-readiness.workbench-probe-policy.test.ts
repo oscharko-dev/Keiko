@@ -4,6 +4,11 @@
 // Workbench out with no operator remedy but a restart. These pin the repaired policy.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { TimeoutError, TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type {
   GatewayConfig,
@@ -259,6 +264,102 @@ function workbenchDeps(
   } as unknown as UiHandlerDeps;
   return { deps, calls: () => calls };
 }
+
+describe("automatic Workbench probes — a live run keeps the gateway", () => {
+  // The chat gate and the long-context probe.
+  const CALLS_PER_MODEL = 2;
+
+  afterEach(() => {
+    resetCodingWorkbenchContextWindowProbesForTests();
+  });
+
+  function twoModelDeps(): {
+    readonly deps: UiHandlerDeps;
+    readonly calls: () => number;
+    readonly setLive: (live: boolean) => void;
+    readonly events: ServerLogEvent[];
+  } {
+    let live = false;
+    const events: ServerLogEvent[] = [];
+    const { deps, calls } = workbenchDeps(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ choices: [{ message: { content: "OK KEIKO_LONG_CONTEXT_SENTINEL" } }] }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const config = deps.gatewayConfig?.current();
+    if (config === undefined) throw new TypeError("Expected a gateway config");
+    const [firstProvider] = config.providers;
+    const [firstCapability] = config.capabilities;
+    if (firstProvider === undefined || firstCapability === undefined) {
+      throw new TypeError("Expected a configured model");
+    }
+    Object.assign(config, {
+      providers: [firstProvider, { ...firstProvider, modelId: "other-chat" }],
+      capabilities: [firstCapability, { ...firstCapability, id: "other-chat" }],
+    });
+    Object.assign(deps, {
+      codingRuntimeOrchestrator: { hasLiveRun: (): boolean => live },
+      activityLog: {
+        write: (event: ServerLogEvent): void => {
+          events.push(event);
+        },
+      },
+    });
+    return { deps, calls, events, setLive: (next): void => void (live = next) };
+  }
+
+  it("proves the elected model during a run and withholds the one nobody chose", async () => {
+    const { deps, calls, events, setLive } = twoModelDeps();
+    setLive(true);
+    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+    await codingWorkbenchProbesSettledForTests();
+    expect(calls()).toBe(CALLS_PER_MODEL);
+    const withheld = events.filter((event) => event.op === "gateway.readiness.automatic.withheld");
+    expect(withheld).toHaveLength(1);
+    const [event] = withheld;
+    if (event === undefined) throw new TypeError("Expected a withheld line");
+    expect(
+      expectActivityLogProof(
+        "gateway.readiness.automatic.withheld.line",
+        formatActivityLogProofLine(event),
+      ),
+    ).toMatchObject({ reason: "live-run" });
+    expect(event.extra).not.toHaveProperty("modelId");
+  });
+
+  it("proves the withheld model on the next read after the run", async () => {
+    const { deps, calls, setLive } = twoModelDeps();
+    setLive(true);
+    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+    await codingWorkbenchProbesSettledForTests();
+    setLive(false);
+    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+    await codingWorkbenchProbesSettledForTests();
+    expect(calls()).toBe(2 * CALLS_PER_MODEL);
+  });
+
+  it("proves every model when no run is live", async () => {
+    const { deps, calls, events } = twoModelDeps();
+    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+    await codingWorkbenchProbesSettledForTests();
+    expect(calls()).toBe(2 * CALLS_PER_MODEL);
+    expect(events.some((event) => event.op === "gateway.readiness.automatic.withheld")).toBe(false);
+  });
+
+  it("still proves a model chosen during a run", async () => {
+    const { deps, calls, setLive } = twoModelDeps();
+    setLive(true);
+    await ensureCodingWorkbenchContextWindows(deps, "other-chat");
+    await codingWorkbenchProbesSettledForTests();
+    expect(calls()).toBe(CALLS_PER_MODEL);
+    const config = deps.gatewayConfig?.current();
+    if (config === undefined) throw new TypeError("Expected a gateway config");
+    expect(isCodingWorkbenchProbePending(config, "hosted-chat")).toBe(false);
+  });
+});
 
 describe("automatic Workbench probes — an unanswered run is retried when someone asks", () => {
   it.each([false, true])(

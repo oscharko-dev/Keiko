@@ -86,7 +86,7 @@ export function createGeneratedOpenCodeLaunchSecretsPlugin(): string {
     "const isWithheld = (name) => INHERITED.has(name) || name.startsWith('KEIKO_');",
     "function withholdFromChildren() {",
     "  const environment = {};",
-    "  for (const name of Object.keys(process.env)) {",
+    "  for (const name of Object.getOwnPropertyNames(process.env)) {",
     "    const enumerable = !isWithheld(name);",
     "    Object.defineProperty(environment, name, { value: process.env[name], enumerable, writable: true, configurable: true });",
     "  }",

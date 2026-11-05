@@ -1165,7 +1165,9 @@ that finished serving renews that same-generation success too (`readinessRenewal
 at startup; nothing renews or recovers a model on a timer. A conversation request, a
 coding run start, a Workbench model choice (`check=1`), opening the Workbench or a model list, or a page load checks a model that is not
 ready now; only an observed failure waits out the 30 s not-ready cooldown. Other Workbench reads
-never start a check. The Workbench profile describes the model chosen in its picker (`modelId`):
+never start a check. While a coding run is live, a background proof of a model nobody chose gives way
+and leaves no verdict (`gateway.readiness.automatic.withheld`, closed `reason` `live-run`), so a
+gateway serving one model at a time keeps the run's model loaded; the next read after the run proves it. The Workbench profile describes the model chosen in its picker (`modelId`):
 `model-verification-pending` only while a check of that model runs, an expired or unknown answer
 usable with `verification: "unverified"`, and its `verification` is that model's own observation,
 not the gateway-wide state (customer 1.3.4). The Workbench's tool-calling probe that the gateway never answered is no verdict (`tool-calling-unverified`) and is retried only when someone asks: startup, a page load or a `check=1` read when the Workbench opens or a model is chosen; a stale proof runs again once. See
