@@ -440,9 +440,50 @@ function seedRejectedManualSummary(store: KnowledgeStore): ReturnType<typeof cre
   return capsule;
 }
 
-async function proveManualSummaryTransportLoss(stateDir: string): Promise<void> {
-  // A dropped primary has no retained registered-failure record. The human report uses the
-  // existing unattributed incident path and honestly retains loss and the missing primary.
+// Builds and re-analyzes the support report of a recorded incident; every queried event is
+// retained and the evidence is classified as supported.
+function analyzeIncidentReport(
+  stateDir: string,
+  record: Parameters<typeof supportIncidentSegmentFiles>[1],
+  query: ReturnType<typeof executeSupportQuery>["result"],
+): {
+  readonly report: ReturnType<typeof buildSupportReport>;
+  readonly analyzed: ReturnType<typeof analyzeSupportReport>;
+} {
+  const incident = supportIncidentPrivateProjection(
+    resolveSupportIncident(record, supportIncidentSegmentFiles(stateDir, record), stateDir),
+  );
+  const report = buildSupportReport(incident, query);
+  const analyzed = analyzeSupportReport(serializeSupportReport(report));
+  expect(report.evidence.recordCount).toBe(query.events.length);
+  expect(analyzed.analysis.evidence.classification).toBe("supported");
+  return { report, analyzed };
+}
+
+// The correlation alone, with no surrounding context events, already selects complete evidence.
+async function expectCompleteWithoutContext(
+  stateDir: string,
+  correlationId: string,
+): Promise<ReturnType<typeof executeSupportQuery>["result"]> {
+  const selection = await resolveSupportSelection({ correlationId, filter: {} }, stateDir);
+  const query = executeSupportQuery(
+    stateDir,
+    selection,
+    { ...DEFAULT_SUPPORT_QUERY_LIMITS, contextMs: 0, maxContextEvents: 0 },
+    { trigger: "query" },
+  ).result;
+  expect(query.metrics.contextEventCount).toBe(0);
+  expect(query.diagnosticSufficiency).toMatchObject({ status: "complete", reasons: [] });
+  return query;
+}
+
+// A dropped primary has no retained registered-failure record. The human report uses the existing
+// unattributed incident path and honestly retains loss and the missing primary; `ops` names the
+// loss evidence the query must still hold.
+async function proveUnattributedTransportLoss(
+  stateDir: string,
+  ops: readonly string[],
+): Promise<void> {
   const creation = recordUserReportedIncident(stateDir);
   if (creation.status === "rejected" || creation.record === undefined)
     throw new TypeError("Expected real selective-loss incident");
@@ -453,17 +494,7 @@ async function proveManualSummaryTransportLoss(stateDir: string): Promise<void> 
   const query = executeSupportQuery(stateDir, selection, DEFAULT_SUPPORT_QUERY_LIMITS, {
     trigger: "query",
   }).result;
-  const incident = supportIncidentPrivateProjection(
-    resolveSupportIncident(
-      creation.record,
-      supportIncidentSegmentFiles(stateDir, creation.record),
-      stateDir,
-    ),
-  );
-  const report = buildSupportReport(incident, query);
-  const analyzed = analyzeSupportReport(serializeSupportReport(report));
-  expect(report.evidence.recordCount).toBe(query.events.length);
-  expect(analyzed.analysis.evidence.classification).toBe("supported");
+  const { analyzed } = analyzeIncidentReport(stateDir, creation.record, query);
   expect(analyzed.analysis.sufficiency.status).toBe("degraded");
   expect(analyzed.analysis.sufficiency.classes).toEqual(
     expect.arrayContaining([
@@ -479,11 +510,7 @@ async function proveManualSummaryTransportLoss(stateDir: string): Promise<void> 
     reasons: ["no-registered-failure", "evidence-not-retained"],
   });
   expect(query.events.map((event) => event.parsed.view.op)).toEqual(
-    expect.arrayContaining([
-      "knowledge.log.sink-failed",
-      "activity-log.loss",
-      "activity-log.readiness",
-    ]),
+    expect.arrayContaining([...ops]),
   );
 }
 
@@ -630,7 +657,11 @@ describe("Activity Log scenario: memory-knowledge", () => {
         writer: "production-file",
         reasons: [],
       });
-      await proveManualSummaryTransportLoss(stateDir);
+      await proveUnattributedTransportLoss(stateDir, [
+        "knowledge.log.sink-failed",
+        "activity-log.loss",
+        "activity-log.readiness",
+      ]);
       const raw = readPersistedActivityLog(stateDir);
       expect(
         persistedActivityLogLines(raw, "knowledge.manual-refresh-summary.rejected"),
@@ -688,15 +719,7 @@ describe("Activity Log scenario: memory-knowledge", () => {
         "memory-request-two",
         "memory-background-run",
       ]) {
-        const selection = await resolveSupportSelection({ correlationId, filter: {} }, stateDir);
-        const query = executeSupportQuery(
-          stateDir,
-          selection,
-          { ...DEFAULT_SUPPORT_QUERY_LIMITS, contextMs: 0, maxContextEvents: 0 },
-          { trigger: "query" },
-        ).result;
-        expect(query.metrics.contextEventCount).toBe(0);
-        expect(query.diagnosticSufficiency).toMatchObject({ status: "complete", reasons: [] });
+        const query = await expectCompleteWithoutContext(stateDir, correlationId);
         expect(
           query.events.some((event) => event.parsed.view.op === "memory-vault.write.rejected"),
         ).toBe(true);
@@ -773,7 +796,10 @@ describe("Activity Log scenario: memory-knowledge", () => {
       expect(persistedActivityLogLines(raw, "memory-vault.write.rejected")).toHaveLength(0);
       expect(persistedActivityLogLines(raw, "memory-vault.log.sink-failed")).toHaveLength(1);
       checkActivityLogReadiness({ stateDir });
-      await proveMemoryWriteTransportLoss(stateDir);
+      await proveUnattributedTransportLoss(stateDir, [
+        "memory-vault.log.sink-failed",
+        "activity-log.loss",
+      ]);
       expect(persistedActivityLogLines(raw, "activity-log.loss")).toHaveLength(1);
       expect(raw).not.toContain("private-memory-log-loss-canary");
       expect(raw).not.toContain("private-memory-refusal-canary");
@@ -819,15 +845,7 @@ describe("Activity Log scenario: memory-knowledge", () => {
       });
       expect(trace.failureClasses).toContain("memory-write-validation");
       for (const { correlationId } of invocations) {
-        const selection = await resolveSupportSelection({ correlationId, filter: {} }, stateDir);
-        const query = executeSupportQuery(
-          stateDir,
-          selection,
-          { ...DEFAULT_SUPPORT_QUERY_LIMITS, contextMs: 0, maxContextEvents: 0 },
-          { trigger: "query" },
-        ).result;
-        expect(query.metrics.contextEventCount).toBe(0);
-        expect(query.diagnosticSufficiency).toMatchObject({ status: "complete", reasons: [] });
+        await expectCompleteWithoutContext(stateDir, correlationId);
       }
       const raw = readPersistedActivityLog(stateDir);
       const lines = persistedActivityLogLines(raw, "memory-vault.write.rejected");
@@ -913,15 +931,7 @@ describe("Activity Log scenario: memory-knowledge", () => {
     });
     expect(trace.failureClasses).toContain("memory-write-capture");
     for (const correlationId of ["physical-capture-one", "physical-capture-two"]) {
-      const selection = await resolveSupportSelection({ correlationId, filter: {} }, stateDir);
-      const query = executeSupportQuery(
-        stateDir,
-        selection,
-        { ...DEFAULT_SUPPORT_QUERY_LIMITS, contextMs: 0, maxContextEvents: 0 },
-        { trigger: "query" },
-      ).result;
-      expect(query.metrics.contextEventCount).toBe(0);
-      expect(query.diagnosticSufficiency).toMatchObject({ status: "complete", reasons: [] });
+      await expectCompleteWithoutContext(stateDir, correlationId);
     }
     const raw = readPersistedActivityLog(stateDir);
     const lines = persistedActivityLogLines(raw, "memory-vault.write.capture-failed");
@@ -992,7 +1002,10 @@ describe("Activity Log scenario: memory-knowledge", () => {
       expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
       expect(persistActivityLogLossSummary("heartbeat")).toBe("persisted");
       checkActivityLogReadiness({ stateDir });
-      await proveMemoryWriteTransportLoss(stateDir);
+      await proveUnattributedTransportLoss(stateDir, [
+        "memory-vault.log.sink-failed",
+        "activity-log.loss",
+      ]);
       const raw = readPersistedActivityLog(stateDir);
       expect(persistedActivityLogLines(raw, "memory-vault.write.capture-failed")).toHaveLength(0);
       expect(persistedActivityLogLines(raw, "memory-vault.log.sink-failed")).toHaveLength(1);
@@ -1026,46 +1039,6 @@ function refusedMemoryRecord(): MemoryRecord {
   };
 }
 
-async function proveMemoryWriteTransportLoss(stateDir: string): Promise<void> {
-  const creation = recordUserReportedIncident(stateDir);
-  if (creation.status === "rejected" || creation.record === undefined)
-    throw new TypeError("Expected selective Memory loss incident");
-  const selection = await resolveSupportSelection(
-    { incidentId: creation.incidentId, filter: {} },
-    stateDir,
-  );
-  const query = executeSupportQuery(stateDir, selection, DEFAULT_SUPPORT_QUERY_LIMITS, {
-    trigger: "query",
-  }).result;
-  const incident = supportIncidentPrivateProjection(
-    resolveSupportIncident(
-      creation.record,
-      supportIncidentSegmentFiles(stateDir, creation.record),
-      stateDir,
-    ),
-  );
-  const report = buildSupportReport(incident, query);
-  const analyzed = analyzeSupportReport(serializeSupportReport(report));
-  expect(analyzed.analysis.evidence.classification).toBe("supported");
-  expect(analyzed.analysis.sufficiency.status).toBe("degraded");
-  expect(analyzed.analysis.sufficiency.classes).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        failureClass: "activity-log-sink",
-        status: "degraded",
-        reasons: ["activity-log-loss"],
-      }),
-    ]),
-  );
-  expect(query.diagnosticSufficiency).toMatchObject({
-    status: "insufficient",
-    reasons: ["no-registered-failure", "evidence-not-retained"],
-  });
-  expect(query.events.map((event) => event.parsed.view.op)).toEqual(
-    expect.arrayContaining(["memory-vault.log.sink-failed", "activity-log.loss"]),
-  );
-}
-
 async function proveUnknownMemoryWriteCorrelation(stateDir: string): Promise<void> {
   const creation = recordRegisteredFailureIncident(stateDir, {
     op: "memory-vault.write.rejected",
@@ -1090,17 +1063,7 @@ async function proveUnknownMemoryWriteCorrelation(stateDir: string): Promise<voi
   );
   const expected = { status: "degraded", reasons: ["correlation-unknown"] };
   expect(query.diagnosticSufficiency).toMatchObject(expected);
-  const incident = supportIncidentPrivateProjection(
-    resolveSupportIncident(
-      creation.record,
-      supportIncidentSegmentFiles(stateDir, creation.record),
-      stateDir,
-    ),
-  );
-  const report = buildSupportReport(incident, query);
-  const analyzed = analyzeSupportReport(serializeSupportReport(report));
-  expect(report.evidence.recordCount).toBe(query.events.length);
-  expect(analyzed.analysis.evidence.classification).toBe("supported");
+  const { report, analyzed } = analyzeIncidentReport(stateDir, creation.record, query);
   expect(report.selection).toMatchObject(expected);
   expect(analyzed.selection).toMatchObject(expected);
   expect(analyzed.selection.reasons).toEqual(report.selection.reasons);
@@ -1203,17 +1166,7 @@ async function provePhysicalCaptureDegraded(
     { trigger: "query" },
   ).result;
   expect(query.metrics.contextEventCount).toBe(0);
-  const incident = supportIncidentPrivateProjection(
-    resolveSupportIncident(
-      creation.record,
-      supportIncidentSegmentFiles(stateDir, creation.record),
-      stateDir,
-    ),
-  );
-  const report = buildSupportReport(incident, query);
-  const analyzed = analyzeSupportReport(serializeSupportReport(report));
-  expect(report.evidence.recordCount).toBe(query.events.length);
-  expect(analyzed.analysis.evidence.classification).toBe("supported");
+  const { analyzed } = analyzeIncidentReport(stateDir, creation.record, query);
   expect(analyzed.selection).toMatchObject({ status: "degraded", reasons });
   expect(analyzed.analysis.sufficiency.classes).toEqual(
     expect.arrayContaining([
