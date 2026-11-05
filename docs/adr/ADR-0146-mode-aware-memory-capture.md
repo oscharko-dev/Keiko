@@ -235,7 +235,13 @@ D2 lets a fact through.
   a titled person, a relation behind a possessive or genitive, a family word, a role a determiner
   points at ("dem Kunden", but not "mit Kunden" or "die Kunden-Tickets"), a partner, another
   person's pronoun in the claim, or a reason in which someone else wants, says or recommends
-  something ("weil Anna es so will"). "Wir" and "X und ich" wait for project memory. Two limits are
+  something ("weil Anna es so will"). A fact labelled `team` ("We decided as a team to release on
+  Tuesdays") is the team's own: it needs "wir" or "we", passes every person check above, and is
+  stored only in the project scope, never outside a project; "X und ich" names a person and is
+  dropped. A leading pronoun ("Sie beginnen immer mit einer Zusammenfassung") counts as the person's
+  own thing only when the body names it with a first-person possessive and the person's previous
+  message in the same chat named it so ("meine Berichte"); that message reaches the learner as
+  context, never as a source, and a person's pronoun stays a third party. Two limits are
   accepted: a bare first name outside these forms cannot be told from a German noun, and an English
   role behind a determiner ("the customer database") is treated as a person, because privacy
   outranks recall. Credentials, IBANs, phone numbers and customer identifiers are refused. Every body word comes from the span
