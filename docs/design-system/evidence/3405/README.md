@@ -205,7 +205,6 @@ reconnecting-state captures changed. The unchanged updater freshness gate, 287 C
 producer/freshness tests and both Editor bundle gates pass. No numerical ceiling, exception or suppression
 changed. This remains updater fixture evidence; it does not prove native installation or MCP/Jira effects.
 
-
 ## Current source-bound regeneration — 2026-10-29
 
 The original nine-case Chromium producer was rerun with tracked evidence enabled on the exact
@@ -272,10 +271,27 @@ numerical ceiling changed.
 Moving hard-coded English texts into the message catalogs (PR #4198) changes the digests of the
 declared UI sources `i18n-messages.{en,de}.ts` and `i18n-messages.optional.{en,de}.ts`. The original
 producer ran with tracked evidence enabled on Windows 11 (Node 24.21.0, Playwright Chromium headless
-shell build 1248) after merging `dev` (1.4.0). Eight of the nine cases passed; the ninth, "routes
-default updater JSON and PNG evidence into one untracked output root", asserts the default routing
-and fails by construction while `KEIKO_WRITE_TRACKED_EVIDENCE=1` is set. All 17 declared artifacts
+shell build 1248) after merging `dev` (1.4.0). That Windows run recorded eight passes and one
+failure in "routes default updater JSON and PNG evidence into one untracked output root" while
+tracked evidence was enabled. It did not establish a nine-case pass. All 17 declared artifacts
 were rewritten. The recorded source digests hash LF line endings, as CI does, because a Windows
 checkout may hold CRLF copies. This is Windows rendering, not the Linux Liberation-font set used for
 earlier captures, so the 14 PNGs differ in bytes from that set; the update window itself did not
 change. A Linux regeneration remains preferable if byte-comparable captures are wanted.
+
+## Source-bound Linux artifact refresh — 2026-11-04
+
+The complete original nine-case producer ran on the exact signed source commit
+`db8d4bc4d5cf3a776be135a37d1c278ba61a5db8` in an isolated Linux arm64 checkout, using Node 24.18.0,
+npm 11.16.0, Playwright 1.64.1, Chromium build 1248 and Liberation Sans. All nine cases passed in
+2.0 minutes, including the real-BFF stop/restart and default evidence-routing cases. The original
+producer regenerated all 17 artifacts. All 14 PNGs differ from the preceding Windows set at unchanged
+dimensions and were visually inspected; the three JSON records bind all 25 declared UI sources and
+nine harness inputs. The unchanged freshness gate and all 65 updater/editor evidence contracts pass.
+
+The same actual Linux production export regenerated the Editor B1/B2/B3 record through the original
+producer, and its unchanged gate passes. The initial JavaScript totals 349,126 B gzip across 22
+scripts against the unchanged 349,184 B ceiling, leaving 58 B. This artifact run used a 2-CPU quota
+and a 20-GiB memory limit. It qualifies updater presentation and the declared BFF recovery fixture,
+not D12, workspace or native-runtime performance, native update installation, or final integrated-head
+acceptance.

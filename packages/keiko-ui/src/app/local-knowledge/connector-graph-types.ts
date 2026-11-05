@@ -2,7 +2,6 @@
 
 import type {
   KnowledgeCapsuleId,
-  KnowledgePodModelUsePolicy,
   CapsuleLifecycleState,
   CapsuleSetId,
 } from "@oscharko-dev/keiko-contracts";
@@ -57,10 +56,7 @@ export interface ConnectorGraphState {
   readonly handleCancelIndexing: (id: KnowledgeCapsuleId) => void;
   readonly handleDisconnect: (id: KnowledgeCapsuleId) => void;
   readonly handleOpenHealth: (id: KnowledgeCapsuleId) => void;
-  readonly handleCreateCapsule: (
-    name: string,
-    modelUsePolicy: KnowledgePodModelUsePolicy,
-  ) => Promise<void>;
+  readonly handleCreateCapsule: (name: string) => Promise<void>;
   readonly capsuleSetActionBusy: CapsuleSetId | null;
   readonly capsuleSetActionError: string | null;
   readonly clearCapsuleSetActionError: () => void;

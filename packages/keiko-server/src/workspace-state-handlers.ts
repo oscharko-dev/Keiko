@@ -1,7 +1,9 @@
 import type { IncomingMessage } from "node:http";
+import { createHash } from "node:crypto";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { errorBody } from "./routes.js";
+import type { UiStore } from "./store/index.js";
 
 const MAX_WORKSPACE_STATE_BODY_BYTES = 256_000;
 const MAX_WORKSPACE_WINDOWS = 128;
@@ -20,6 +22,8 @@ let workspaceState: WorkspaceStateSnapshot = {
   connections: [],
   updatedAtMs: 0,
 };
+let storeSnapshots = new WeakMap<UiStore, WorkspaceStateSnapshot>();
+let storageIdentities = new WeakMap<UiStore, string>();
 // Durable layout belongs to browser localStorage (ADR-0027); the BFF only coordinates revisions.
 
 class InvalidWorkspaceState extends Error {
@@ -110,40 +114,118 @@ function headerValues(req: IncomingMessage, name: "if-match" | "if-none-match"):
     .filter((item) => item.length > 0);
 }
 
-function requestMatchesWorkspaceState(req: IncomingMessage): boolean {
+function requestMatchesWorkspaceState(
+  req: IncomingMessage,
+  state: WorkspaceStateSnapshot,
+): boolean {
   const values = headerValues(req, "if-none-match");
   if (values.length === 0) return false;
-  const current = workspaceStateEtag(workspaceState.revision);
+  const current = workspaceStateEtag(state.revision);
   return values.some((item) => item === current || item === "*");
 }
 
-function requestHasWorkspaceWritePrecondition(req: IncomingMessage): boolean {
+function requestHasWorkspaceWritePrecondition(
+  req: IncomingMessage,
+  state: WorkspaceStateSnapshot,
+): boolean {
   const values = headerValues(req, "if-match");
   if (values.length === 0) return false;
-  const current = workspaceStateEtag(workspaceState.revision);
+  const current = workspaceStateEtag(state.revision);
   return values.includes(current);
 }
 
 function workspacePayloadMatches(
   windows: readonly unknown[],
   connections: readonly unknown[],
+  state: WorkspaceStateSnapshot,
 ): boolean {
   return (
-    JSON.stringify(workspaceState.windows) === JSON.stringify(windows) &&
-    JSON.stringify(workspaceState.connections) === JSON.stringify(connections)
+    JSON.stringify(state.windows) === JSON.stringify(windows) &&
+    JSON.stringify(state.connections) === JSON.stringify(connections)
   );
 }
 
-export function handleGetWorkspaceState(
+type WorkspaceStateDeps = Pick<UiHandlerDeps, "env"> & Partial<Pick<UiHandlerDeps, "store">>;
+
+/** Reuse the UI database's existing installation identity; this digest grants no authority. */
+export function workspaceLayoutStorageId(store: UiStore): string | undefined {
+  const cached = storageIdentities.get(store);
+  if (cached !== undefined) return cached;
+  const installationId = store.browserApprovals?.installationId();
+  if (installationId === undefined) return undefined;
+  const identity = createHash("sha256")
+    .update("keiko-workspace-layout-v1\u0000")
+    .update(installationId)
+    .digest("hex");
+  storageIdentities.set(store, identity);
+  return identity;
+}
+
+function currentWorkspaceState(deps: WorkspaceStateDeps | undefined): WorkspaceStateSnapshot {
+  return deps?.store === undefined
+    ? workspaceState
+    : (storeSnapshots.get(deps.store) ?? emptyWorkspaceState());
+}
+
+function workspaceStateBody(
+  deps: WorkspaceStateDeps | undefined,
+  state: WorkspaceStateSnapshot,
+): unknown {
+  return {
+    workspace: {
+      ...state,
+      ...(deps?.store === undefined ? {} : { storageId: workspaceLayoutStorageId(deps.store) }),
+    },
+  };
+}
+
+function workspaceStorageMismatch(
   ctx: RouteContext,
-  _deps?: Pick<UiHandlerDeps, "env">,
-): RouteResult {
-  const etag = workspaceStateEtag(workspaceState.revision);
+  deps: WorkspaceStateDeps | undefined,
+): RouteResult | undefined {
+  const supplied = ctx.req.headers["x-keiko-workspace-storage"];
+  if (supplied === undefined && ctx.req.method === "PUT" && deps?.store !== undefined) {
+    return {
+      status: 428,
+      body: errorBody(
+        "PRECONDITION_REQUIRED",
+        "Workspace updates require their data store identity.",
+      ),
+    };
+  }
+  if (
+    supplied === undefined ||
+    (deps?.store !== undefined && supplied === workspaceLayoutStorageId(deps.store))
+  )
+    return undefined;
+  return {
+    status: 409,
+    body: errorBody(
+      "WORKSPACE_STORAGE_CHANGED",
+      "The saved workspace belongs to another data store.",
+    ),
+  };
+}
+
+export function handleGetWorkspaceState(ctx: RouteContext, deps?: WorkspaceStateDeps): RouteResult {
+  if (deps?.store !== undefined && workspaceLayoutStorageId(deps.store) === undefined) {
+    return {
+      status: 503,
+      body: errorBody(
+        "WORKSPACE_STORAGE_UNAVAILABLE",
+        "Workspace layout ownership is unavailable.",
+      ),
+    };
+  }
+  const mismatch = workspaceStorageMismatch(ctx, deps);
+  if (mismatch !== undefined) return mismatch;
+  const state = currentWorkspaceState(deps);
+  const etag = workspaceStateEtag(state.revision);
   const headers = { ETag: etag, "Cache-Control": "no-store" };
-  if (requestMatchesWorkspaceState(ctx.req)) {
+  if (requestMatchesWorkspaceState(ctx.req, state)) {
     return { status: 304, body: null, headers };
   }
-  return { status: 200, body: { workspace: workspaceState }, headers };
+  return { status: 200, body: workspaceStateBody(deps, state), headers };
 }
 
 // Evaluates the If-Match / stale-revision / no-op-payload preconditions for a workspace write.
@@ -153,6 +235,7 @@ function workspaceWritePreconditionResult(
   ctx: RouteContext,
   windows: readonly unknown[],
   connections: readonly unknown[],
+  state: WorkspaceStateSnapshot,
 ): RouteResult | undefined {
   if (headerValues(ctx.req, "if-match").length === 0) {
     return {
@@ -163,18 +246,18 @@ function workspaceWritePreconditionResult(
       ),
     };
   }
-  if (!requestHasWorkspaceWritePrecondition(ctx.req)) {
+  if (!requestHasWorkspaceWritePrecondition(ctx.req, state)) {
     return {
       status: 412,
       body: errorBody("PRECONDITION_FAILED", "Workspace state revision is stale."),
-      headers: { ETag: workspaceStateEtag(workspaceState.revision) },
+      headers: { ETag: workspaceStateEtag(state.revision) },
     };
   }
-  if (workspacePayloadMatches(windows, connections)) {
+  if (workspacePayloadMatches(windows, connections, state)) {
     return {
       status: 200,
-      body: { workspace: workspaceState },
-      headers: { ETag: workspaceStateEtag(workspaceState.revision) },
+      body: { workspace: state },
+      headers: { ETag: workspaceStateEtag(state.revision) },
     };
   }
   return undefined;
@@ -182,24 +265,29 @@ function workspaceWritePreconditionResult(
 
 export async function handlePutWorkspaceState(
   ctx: RouteContext,
-  _deps?: Pick<UiHandlerDeps, "env">,
+  deps?: WorkspaceStateDeps,
 ): Promise<RouteResult> {
+  const mismatch = workspaceStorageMismatch(ctx, deps);
+  if (mismatch !== undefined) return mismatch;
   try {
     const body = await readJsonObject(ctx.req);
     const windows = requireArray(body, "windows", MAX_WORKSPACE_WINDOWS);
     const connections = requireArray(body, "connections", MAX_WORKSPACE_CONNECTIONS);
-    const precondition = workspaceWritePreconditionResult(ctx, windows, connections);
+    const state = currentWorkspaceState(deps);
+    const precondition = workspaceWritePreconditionResult(ctx, windows, connections, state);
     if (precondition !== undefined) return precondition;
-    workspaceState = {
-      revision: workspaceState.revision + 1,
+    const updated = {
+      revision: state.revision + 1,
       windows,
       connections,
       updatedAtMs: Date.now(),
     };
+    if (deps?.store === undefined) workspaceState = updated;
+    else storeSnapshots.set(deps.store, updated);
     return {
       status: 200,
-      body: { workspace: workspaceState },
-      headers: { ETag: workspaceStateEtag(workspaceState.revision) },
+      body: workspaceStateBody(deps, updated),
+      headers: { ETag: workspaceStateEtag(updated.revision) },
     };
   } catch (error) {
     if (error instanceof WorkspaceStateBodyTooLarge) {
@@ -217,4 +305,6 @@ export async function handlePutWorkspaceState(
 
 export function resetWorkspaceStateForTests(): void {
   workspaceState = emptyWorkspaceState();
+  storeSnapshots = new WeakMap();
+  storageIdentities = new WeakMap();
 }

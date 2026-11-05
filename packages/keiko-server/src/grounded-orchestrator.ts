@@ -1122,6 +1122,8 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
 // ─── Public types ─────────────────────────────────────────────────────────────
 
 export interface GroundedAnswerOptions {
+  /** The existing context-window owner decides whether this attempt must stay open. */
+  readonly retryFollows?: ((error: unknown) => boolean) | undefined;
   /** Actual fitted source count, supplied by the existing hybrid prompt owner. */
   readonly sourceEvidenceCount?: number | undefined;
   readonly modelInputTokensMax?: number | undefined;

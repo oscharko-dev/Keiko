@@ -11,6 +11,7 @@ import * as tls from "node:tls";
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogFieldContract,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   classifyOutboundHost,
@@ -18,7 +19,6 @@ import {
   outboundAddressBlockedReason,
   outboundTargetBlockedReason,
 } from "./egress-policy.js";
-import type { OutboundTargetClass } from "./egress-policy.js";
 import {
   activityLogErrorKind,
   logCorrelationId,
@@ -50,6 +50,22 @@ export const MAX_RESPONSE_BYTES = 10_000_000;
 const HTTPS_PROXY_TUNNEL_IDLE_TTL_MS = 30_000;
 const MAX_IDLE_HTTPS_PROXY_TUNNELS_PER_KEY = 2;
 
+const HTTP_ENDPOINT_CLASS_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: false,
+  values: [
+    "hostname",
+    "public",
+    "loopback",
+    "private",
+    "link-local",
+    "metadata",
+    "multicast",
+    "unspecified",
+  ],
+} as const satisfies ActivityLogFieldContract;
+
 const HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -58,12 +74,7 @@ const HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.tlsTrustFailure",
   fields: {
-    endpointClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
-    },
+    endpointClass: HTTP_ENDPOINT_CLASS_FIELD,
     afterCaBundleFallback: {
       type: "boolean",
       dataClass: "closed-enum",
@@ -86,12 +97,7 @@ const HTTP_GATEWAY_TLS_CA_FALLBACK_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.fetchDirectWithCaFallback",
   fields: {
-    endpointClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
-    },
+    endpointClass: HTTP_ENDPOINT_CLASS_FIELD,
   },
   causal: "none",
   lifecycle: "state",
@@ -109,23 +115,13 @@ const HTTP_GATEWAY_EGRESS_PLANNED_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.planGatewayProxy",
   fields: {
-    endpointClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
-    },
+    endpointClass: HTTP_ENDPOINT_CLASS_FIELD,
     proxied: {
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
     },
-    proxyEndpointClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
-    },
+    proxyEndpointClass: HTTP_ENDPOINT_CLASS_FIELD,
     transport: {
       type: "string",
       dataClass: "closed-enum",
@@ -149,12 +145,7 @@ const HTTP_GATEWAY_FETCH_STARTED_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.logFetchStarted",
   fields: {
-    endpointClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
-    },
+    endpointClass: HTTP_ENDPOINT_CLASS_FIELD,
     method: { type: "string", dataClass: "opaque-id", required: true, maxLength: 32 },
     requestBytes: { type: "integer", dataClass: "count", required: false },
     timeoutMs: { type: "number", dataClass: "duration", required: false },
@@ -175,12 +166,7 @@ const HTTP_GATEWAY_FETCH_COMPLETED_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.logFetchCompleted",
   fields: {
-    endpointClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
-    },
+    endpointClass: HTTP_ENDPOINT_CLASS_FIELD,
   },
   causal: "none",
   lifecycle: "end",
@@ -198,12 +184,7 @@ const HTTP_GATEWAY_FETCH_FAILED_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.gatewayFetch",
   fields: {
-    endpointClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
-    },
+    endpointClass: HTTP_ENDPOINT_CLASS_FIELD,
     policyReason: {
       type: "string",
       dataClass: "closed-enum",
@@ -219,7 +200,7 @@ const HTTP_GATEWAY_FETCH_FAILED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-type LogEndpointClass = OutboundTargetClass | "hostname";
+type LogEndpointClass = (typeof HTTP_ENDPOINT_CLASS_FIELD.values)[number];
 
 function logEndpointClass(url: string | URL | undefined): LogEndpointClass | undefined {
   if (url === undefined) return undefined;
@@ -826,7 +807,7 @@ async function enforceOutboundTargetPolicy(
   const literalReason = outboundTargetBlockedReason(target, egress);
   if (literalReason !== undefined) throw blockedTargetError(literalReason);
   if (!options.resolveDns) return undefined;
-  const addresses = await boundedDnsLookup(target.hostname, options.signal);
+  const addresses = await boundedDnsLookup(normalizeHost(target.hostname), options.signal);
   for (const address of addresses) {
     const reason = outboundAddressBlockedReason(
       address.address,
@@ -886,7 +867,7 @@ function joinDnsLookup(hostname: string): PendingDnsLookup {
   return pending;
 }
 
-async function boundedDnsLookup(
+export async function boundedDnsLookup(
   hostname: string,
   signal: AbortSignal | undefined,
 ): Promise<LookupAddress[]> {

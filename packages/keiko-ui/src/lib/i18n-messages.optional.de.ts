@@ -2,6 +2,60 @@ import { DE_AUTONOMY_MODE_LABELS } from "@/lib/autonomy-mode-labels";
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
   ...DE_AUTONOMY_MODE_LABELS,
+  // File preview is loaded with the Files and Editor window bodies.
+  "filePreview.showSource": "Quellenvorschau anzeigen",
+  "filePreview.linesAdded": "{count} Zeilen hinzugefügt.",
+  "filePreview.revealedLine": "Quellenzeile {line}.",
+  "filePreview.revealedPartialRange":
+    "Quellenzeilen {start}–{end} angezeigt. Weitere referenzierte Zeilen liegen außerhalb dieses Ausschnitts.",
+  "filePreview.revealedRange": "Quellenzeilen {start}–{end}.",
+  "filePreview.revealOutsideContent":
+    "Die referenzierte Zeile {line} liegt außerhalb dieser Datei ({count} Zeilen).",
+  "filePreview.deniedMessage":
+    "Diese Datei ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen (entspricht einem Sperrmuster wie .env, *.pem, node_modules, .git, …).",
+  "filePreview.searchableDocument":
+    "{format}-Dateien bis 2 MB sind in der Repository-Suche über eine begrenzte Textextraktion durchsuchbar, wenn sie explizit mit einem Chat verbunden sind. Verschlüsselte, gescannte oder größere Dokumente werden nicht extrahiert – nutzen Sie dafür Local Knowledge. Für dieses Format ist hier keine Inline-Vorschau verfügbar.",
+  "filePreview.error.loadFailed": "Die Datei konnte nicht geladen werden. Versuchen Sie es erneut.",
+  "filePreview.error.unreadable": "Diese Datei kann nicht gelesen werden.",
+  "filePreview.binary.tooLarge": "Vorschau deaktiviert, da diese Datei {maxBytes} überschreitet.",
+  "filePreview.binary.unsupported":
+    "Für diesen Dateityp ist keine sichere Text- oder Bildvorschau verfügbar.",
+  "filePreview.metadata.type": "Typ",
+  "filePreview.metadata.size": "Größe",
+  "filePreview.metadata.modified": "Geändert",
+  "filePreview.metadata.extension": "Erweiterung",
+  "filePreview.metadata.extensionNone": "keine",
+  "filePreview.backToFiles": "Zurück zu den Dateien",
+  "filePreview.copyFileName": "Dateiname kopieren",
+  "filePreview.copyFilePath": "Dateipfad kopieren",
+  "filePreview.copyStatus.nameCopied": "Dateiname kopiert",
+  "filePreview.copyStatus.pathCopied": "Dateipfad kopiert",
+  "filePreview.copyStatus.clipboardFailed": "Zugriff auf die Zwischenablage fehlgeschlagen.",
+  "filePreview.refresh": "Vorschau aktualisieren",
+  "filePreview.refreshing": "Vorschau wird aktualisiert",
+  "filePreview.refreshStatus.refreshing": "Wird aktualisiert …",
+  "filePreview.refreshStatus.reloaded": "Neu geladen",
+  "filePreview.refreshStatus.failed": "Aktualisierung fehlgeschlagen",
+  "filePreview.openInEditor": "Im Editor öffnen",
+  "filePreview.closePreview": "Vorschau schließen",
+  "filePreview.loadingState": "Vorschau wird geladen…",
+  "filePreview.retry": "Erneut versuchen",
+  "filePreview.truncatedBanner":
+    "Vorschau bei {maxBytes} abgeschnitten. Größere Dateien können hier nicht vollständig angezeigt werden.",
+  "filePreview.syntaxHighlightDisabled": "Syntaxhervorhebung für große Vorschauen deaktiviert.",
+  "filePreview.previewRegionLabel": "Dateivorschau: {name}",
+  "filePreview.showMoreLines": "{count} weitere Zeilen anzeigen",
+  "filePreview.showPreviousLines": "{count} vorherige Zeilen anzeigen",
+  "filePreview.readOnlyBanner":
+    "Schreibgeschützte Quellenvorschau. Diese Datei kann hier nicht bearbeitet werden.",
+  "filePreview.hiddenFile": "Verborgene Datei",
+  "filePreview.previewUnavailable": "Vorschau nicht verfügbar",
+  "filePreview.headerLoading": "Vorschau wird geladen",
+  "filePreview.lang.denied": "verweigert",
+  "filePreview.lang.error": "fehler",
+  "filePreview.lang.loading": "lädt",
+  "filePreview.lang.text": "text",
+  "filePreview.lang.binary": "binär",
   "atlassianConnectors.live.rename": "Pod umbenennen",
   "atlassianConnectors.live.renameTitle": "Jira-Pod umbenennen",
   "atlassianConnectors.live.rotateTitle": "Jira-Token ersetzen",
@@ -145,6 +199,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "browserApproval.close": "Schließen",
   "browserApproval.notice":
     "Verbinde diesen Browser, um private Entwürfe zu speichern und geschützte Funktionen zu verwenden.",
+  "browserApproval.launchNotice": "Keiko öffnet ein verbundenes Fenster in diesem Browser.",
+  "browserApproval.launchFailed":
+    "Keiko konnte diesen Browser nicht verbinden. Versuche es erneut oder öffne Keiko über den Starter.",
   "browserApproval.open": "Browser verbinden",
   "browserApproval.description":
     "Gib diesen Browser über einen Browser frei, der bereits mit dieser Keiko-Installation verbunden ist.",
@@ -227,12 +284,17 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.draft.unsaved": "Die Änderungen am Entwurf sind noch nicht gespeichert.",
   "chat.draft.saving": "Entwurf wird gespeichert…",
   "chat.draft.unavailable":
-    "Entwurf nicht gespeichert. Verbinde diesen Browser über den Browser-Hinweis oben oder öffne Keiko über den Launcher. Lass dieses Fenster geöffnet.",
+    "Dieser Entwurf ist noch nicht gespeichert. Lass dieses Fenster geöffnet.",
+  "chat.draft.loadFailed":
+    "Der gespeicherte Entwurf konnte nicht geladen werden. Versuche es erneut.",
+  "chat.draft.loadFailedUnsaved":
+    "Der gespeicherte Entwurf konnte nicht geladen werden. Deine Änderungen sind noch nicht gespeichert. Lass dieses Fenster geöffnet und versuche es erneut.",
   "chat.draft.failed":
     "Dieser Entwurf konnte nicht gespeichert werden. Lass dieses Fenster geöffnet und versuche es erneut.",
   "chat.draft.conflict":
     "Ein anderes Fenster hat den gespeicherten Entwurf geändert. Behalte diesen Entwurf, um ihn zu ersetzen, oder ersetze diesen Text durch den gespeicherten Entwurf.",
   "chat.draft.retry": "Erneut speichern",
+  "chat.draft.retryLoad": "Entwurf erneut laden",
   "chat.draft.keepLocal": "Diesen Entwurf behalten",
   "chat.draft.useSaved": "Gespeicherten Entwurf verwenden",
   "chat.skills.sendBlocked":
@@ -250,7 +312,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.author.generationError":
     "Es wurde kein vollständiger Skill-Entwurf geliefert. Prüfe das gewählte Modell und den Gateway, kürze bei Bedarf den Quelltext und versuche es erneut.",
   "chat.skills.author.review":
-    "Prüfe den vollständigen Entwurf, besonders Vorschläge, Widersprüche und offene Entscheidungen. Speichern oder Herunterladen aktiviert den Skill noch nicht.",
+    "Prüfe den vollständigen Entwurf, besonders Vorschläge, Widersprüche und offene Entscheidungen. Normale Skills wirken erst nach der Auswahl im Chat. Jira-Vorlagen gelten bereits ab dem Speichern; Herunterladen aktiviert nichts.",
   "chat.skills.author.draft": "Skill-Entwurf (Markdown)",
   "chat.skills.author.save": "Geprüften Skill speichern",
 
@@ -298,7 +360,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Öffne Keiko über den Launcher, um private Skills zu verwalten. Chat bleibt ohne Skill verfügbar.",
   "chat.skills.close": "Skills schließen",
   "chat.skills.description":
-    "Markdown-Datei hochladen und für diesen Chat auswählen. Hochladen allein aktiviert keinen Skill.",
+    "Normale Skills musst du nach dem Hochladen für diesen Chat auswählen. Gespeicherte Jira-Vorlagen gelten für die darin angegebenen Projekte, Vorgangstypen und Aktionen.",
   "chat.skills.protected":
     "Gilt für jede neue Nachricht. Skill-Anweisungen zählen zum Kontext und bleiben beim Kompaktieren des Gesprächs vollständig erhalten.",
   "chat.skills.remove": "Skill aus diesem Chat entfernen",
@@ -2074,6 +2136,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.model.search": "Modelle suchen...",
   "chat.model.searchEmpty": "Keine passenden Modelle.",
   "chat.model.loading": "Modelle werden geladen…",
+  "chat.model.unavailable": "Modellliste nicht verfügbar",
   "chat.model.noEligible": "Kein dialogfähiges Modell",
   "chat.model.change": "Modell wechseln",
   "chat.noModelAlert":

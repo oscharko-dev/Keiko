@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Browser, type Locator, type Page, type Route } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -331,6 +332,11 @@ function harnessProvenanceHashes(): JsonObject {
     "tests/e2e/fixtures/keiko.e2e.config.json",
     "tests/e2e/support/evidence.ts",
     "tests/e2e/support/update-bff-outage-3405.mjs",
+    "tests/e2e/support/workspace-storage.ts",
+    "scripts/lib/d12-baseline.mjs",
+    "scripts/lib/workspace-storage-fixture.mjs",
+    "scripts/lib/workspace-storage-fixture.d.mts",
+    "packages/keiko-ui/src/app/components/desktop/hooks/workspace-storage.ts",
   ];
   return Object.fromEntries(paths.map((path) => [path, sourceSha256(path)]));
 }
@@ -792,14 +798,15 @@ async function seedSettingsWindow(
   page: Page,
   mode: ModeCaptureCase,
   locale: "en" | "de" = "en",
+  origin: string = APP_ORIGIN,
 ): Promise<void> {
   await page.addInitScript(
-    ({ theme, highContrast, nextLocale }) => {
+    ({ argument: { theme, highContrast, nextLocale }, storageKeys }) => {
       window.localStorage.setItem("keiko.theme", theme);
       window.localStorage.setItem("keiko.locale", nextLocale);
-      window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "issue-1696-settings",
@@ -814,11 +821,11 @@ async function seedSettingsWindow(
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
       if (highContrast) document.documentElement.dataset.hc = "more";
       else document.documentElement.removeAttribute("data-hc");
     },
-    { ...mode, nextLocale: locale },
+    await workspaceStorageArgs(page, { ...mode, nextLocale: locale }, origin),
   );
 }
 
@@ -828,15 +835,15 @@ async function seedStartupOnly(
   highContrast = false,
 ): Promise<void> {
   await page.addInitScript(
-    ({ nextTheme, nextHighContrast }) => {
+    ({ argument: { nextTheme, nextHighContrast }, storageKeys }) => {
       window.localStorage.setItem("keiko.theme", nextTheme);
-      window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
-      window.localStorage.removeItem("keiko.workspace.v4");
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.removeItem(storageKeys.workspace);
+      window.localStorage.removeItem(storageKeys.connections);
       if (nextHighContrast) document.documentElement.dataset.hc = "more";
       else document.documentElement.removeAttribute("data-hc");
     },
-    { nextTheme: theme, nextHighContrast: highContrast },
+    await workspaceStorageArgs(page, { nextTheme: theme, nextHighContrast: highContrast }),
   );
 }
 
@@ -1896,11 +1903,16 @@ test("@real-bff-outage preserves accepted update progress and reconnects to dura
       "Exercises update recovery across a real local BFF outage.",
     );
 
-    await seedSettingsWindow(page, {
-      file: "01-update-window-dark.png",
-      mode: "dark",
-      theme: "dark",
-    });
+    await seedSettingsWindow(
+      page,
+      {
+        file: "01-update-window-dark.png",
+        mode: "dark",
+        theme: "dark",
+      },
+      "en",
+      harness.origin,
+    );
     const settings = await openSettingsGeneral(page, harness.origin);
     const updateWindow = await openUpdateFromSettings(page, settings, /Update available/u);
     await updateWindow.getByRole("button", { name: "Install update" }).click();

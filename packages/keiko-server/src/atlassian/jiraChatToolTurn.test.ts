@@ -610,6 +610,14 @@ function expectUnchangedJiraOffer(calls: readonly GatewayCallRequest[]): void {
   expect(second.projection).toEqual(first.projection);
   expect(second.offered.toolRefs).toEqual(first.offered.toolRefs);
 }
+function expectJiraDraftUnionOffered(calls: readonly GatewayCallRequest[]): void {
+  const offered = calls[0]?.toolCatalog;
+  if (offered?.kind !== "bound") throw new Error("Missing real Chat catalog offer");
+  expect(offered.projection.tools).toHaveLength(19);
+  expect(
+    offered.projection.tools.find((tool) => tool.alias === "jira_draft")?.inputSchema.oneOf,
+  ).toHaveLength(2);
+}
 
 // The Jira rules every tool shares reach the model once per round, in the system instruction.
 function expectSharedGuidanceOncePerRound(calls: readonly GatewayCallRequest[]): void {
@@ -736,6 +744,7 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
     const f = fixture();
     const completed = await send(f, "human-turn-one");
     expect(completed.status).toBe(200);
+    expectJiraDraftUnionOffered(f.calls);
     expect((completed.body as DesktopChatSendResponse).messages[0]?.turnState).toBe("completed");
     expect(f.requests()).toBe(1);
     // The Pod connection is the consent: the grant is recorded granted and no human decides.

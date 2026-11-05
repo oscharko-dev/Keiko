@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -169,7 +170,7 @@ async function fulfillApi(route: Route): Promise<void> {
 
 async function seedWorkspace(page: Page, theme: (typeof THEMES)[number]): Promise<void> {
   await page.addInitScript(
-    ({ key, selectedTheme, runId }) => {
+    ({ argument: { key, selectedTheme, runId } }) => {
       window.localStorage.setItem("keiko.locale", "en");
       window.localStorage.setItem("keiko.theme", selectedTheme);
       window.localStorage.setItem(
@@ -200,7 +201,7 @@ async function seedWorkspace(page: Page, theme: (typeof THEMES)[number]): Promis
         ]),
       );
     },
-    { key: WORKSPACE_KEY, selectedTheme: theme, runId: RUN_ID },
+    await workspaceStorageArgs(page, { key: WORKSPACE_KEY, selectedTheme: theme, runId: RUN_ID }),
   );
 }
 

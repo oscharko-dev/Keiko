@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
@@ -68,9 +69,9 @@ async function addSecondRoot(page: Page, actorRoot: string, projectPath: string)
 
 async function seedIssueWindows(page: Page, root: string): Promise<void> {
   await page.addInitScript(
-    ({ key, projectRoot }) => {
+    ({ argument: { key, projectRoot }, storageKeys }) => {
       window.localStorage.setItem("keiko.theme", "dark");
-      window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
       window.localStorage.setItem(
         key,
         JSON.stringify([
@@ -99,7 +100,7 @@ async function seedIssueWindows(page: Page, root: string): Promise<void> {
         ]),
       );
     },
-    { key: WORKSPACE_KEY, projectRoot: root },
+    await workspaceStorageArgs(page, { key: WORKSPACE_KEY, projectRoot: root }),
   );
 }
 
@@ -247,7 +248,12 @@ async function verifyExplicitCommandRoot(
     "true",
   );
   await expect
-    .poll(() => page.evaluate((key) => window.localStorage.getItem(key) ?? "", WORKSPACE_KEY))
+    .poll(async () =>
+      page.evaluate(
+        ({ argument: key }) => window.localStorage.getItem(key) ?? "",
+        await workspaceStorageArgs(page, WORKSPACE_KEY),
+      ),
+    )
     .toContain(rootB);
 }
 

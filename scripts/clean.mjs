@@ -3,13 +3,13 @@
 //
 // Per-package emit conventions:
 //   - keiko-* tsc packages emit to dist/
-//   - keiko-ui (Next.js) emits to .next/ and out/
+//   - keiko-ui emits tsc output to dist/ and Next.js output to .next/ and out/
 
 import { lstat, realpath, rm } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const ROOT_TARGETS = ["dist", "coverage"];
-const UI_TARGETS = [".next", "out"];
+const UI_TARGETS = ["dist", ".next", "out"];
 
 import { collectWorkspacePackages } from "./workspace-graph.mjs";
 

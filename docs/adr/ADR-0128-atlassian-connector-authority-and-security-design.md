@@ -240,23 +240,39 @@ gateway's *DNS-resolved* address re-check (`enforceOutboundTargetPolicy` with `r
 additionally requires `egress.pinProxiedConnectTarget` when this connector's traffic is proxied
 (ADR-0038 D6) — proxied deployments are first-class for this lane (below).
 
-**Exact Data Center admission (#4082, 2026-10-26).** The file-owned
-`atlassian.privateTargets` block may admit at most 64 canonical HTTPS base URLs, including
-port and context path, with an explicit `private` or `loopback` address class. It applies only
-to explicitly selected Jira Data Center connections. Setup request bodies, environment variables
-and global permissive egress flags cannot create this admission; setup saves preserve the
-operator block. Every request rechecks the current entry. DNS results must all match the declared
-class, and direct/proxied connects retain address pinning. Metadata/link-local targets and the
-active BFF listener port stay denied. Request paths must remain inside the configured context
-path; noncanonical paths, encoded traversal/separators and fragments fail before credentials
-are resolved. Safe configuration projections omit private target addresses.
+**Saved Data Center target admission (owner correction, 2026-11-04; #4082).**
+The canonical HTTPS base URL explicitly saved through the authenticated Jira Data Center
+connection form is the target authority. A second entry in `atlassian.privateTargets` is
+not required. That legacy configuration block remains readable for compatibility but no
+longer grants or revokes connector access; setup cannot turn it into a broader egress grant.
+
+On the first explicit verification, the server derives and privately persists one address
+class (`public`, `private`, or `loopback`) beside the existing credential metadata. No new
+form field, confirmation or configuration-file edit is involved. DNS names may bind only
+to a uniform public or private answer set. Loopback is admitted only for an explicitly
+entered loopback IP or `localhost`, never by a DNS name resolving to a local service.
+The class and canonical URL including port and context path remain bound to the saved
+connection across restart and credential rotation. Concurrent or stale verification cannot
+change this binding or recreate a removed credential. New bindings are established by
+explicit verification, not ordinary Chat or tool requests.
+
+Every request still validates the exact saved origin and context path before credential
+resolution, rechecks current metadata identity and listener ports, validates every DNS
+answer against the retained class, and pins direct and proxied connects to those vetted
+addresses. Mixed DNS classes, later class changes, metadata/link-local/multicast targets,
+and active BFF loopback ports stay denied. TLS trust, manual redirects, bounded bodies,
+timeouts and last-moment credential-generation checks remain mandatory. Noncanonical paths,
+encoded traversal/separators, URL credentials and fragments fail before credentials are
+resolved. The private address-class map is excluded from credential API projections, logs
+and support exports. The Activity Log records only the admission source, closed outcome
+and address class, making policy refusal distinguishable from a remote connection failure.
 
 **Correction (#3156, 2026-08-15).** The platform-level default for `pinProxiedConnectTarget` stays
 off for a generic `gatewayFetch` caller (ADR-0038 D6: a caller must construct it explicitly, exactly
 like `denyLoopback`) — nothing about that default changes here. This connector is one such caller,
 and it opts in on every call: `connectorEgressConfig` in `httpPort.ts` unconditionally sets
-`pinProxiedConnectTarget` to `true`. `denyLoopback` is also true except for the exact operator-owned
-Data Center admission described below, so a proxied connector's DNS-resolved address is independently re-validated after
+`pinProxiedConnectTarget` to `true`. `denyLoopback` is also true except for the exact saved-connection
+Data Center admission described above, so a proxied connector's DNS-resolved address is independently re-validated after
 resolution against the same loopback/private/link-local/metadata policy as the direct path, not
 merely covered by the literal-shape check. This text previously said the connector left that
 opt-in off in v1, covering a proxied deployment's resolved address by the literal check alone; two
@@ -267,8 +283,7 @@ connectors at internal reverse proxies.
 The accepted trade-off is that a corporate proxy filtering CONNECT by hostname rather than by
 resolved address could reject the now-pinned, IP-literal CONNECT authority; that is an
 operator-visible, diagnosable failure, weighed as preferable to a silent internal-address bypass for
-a lane whose target is already a single, operator-configured host. See `httpPort.ts`'s comment above
-`isBlockedLoopbackTarget` for the full reasoning and ADR-0038 D6 for what the two flags do and do
+a lane whose target is already a single, human-selected saved host. See `httpPort.ts`'s `connectorEgressConfig` guard for the current implementation and ADR-0038 D6 for what the two flags do and do
 not permit individually.
 
 **Transport:** the concrete adapter is built from `gatewayFetch` (ADR-0038), reusing its existing

@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./workspace-storage.js";
 // #3390 — the git-to-chat-connect-refine-apply scenario. Connects the controlled repository's
 // real external pull request (branch `docs/usage-section`, already open) to a real Chat through
 // the Git window's own "Connect to Chat" flow (Frozen Product Decision 5: the Git window only
@@ -250,17 +251,20 @@ async function chatWindowDiagnosis(page: Page): Promise<string> {
     .then((texts) => texts.map((text) => text.trim()).filter((text) => text.length > 0))
     .catch(() => [] as string[]);
   const layout = await page
-    .evaluate(() => {
-      const raw = localStorage.getItem("keiko.workspace.v4");
-      if (raw === null) return "no layout";
-      const windows = JSON.parse(raw) as readonly {
-        type?: string;
-        cfg?: Record<string, unknown>;
-      }[];
-      return JSON.stringify(
-        windows.filter((entry) => entry.type === "chat").map((entry) => entry.cfg ?? {}),
-      );
-    })
+    .evaluate(
+      ({ storageKeys }) => {
+        const raw = localStorage.getItem(storageKeys.workspace);
+        if (raw === null) return "no layout";
+        const windows = JSON.parse(raw) as readonly {
+          type?: string;
+          cfg?: Record<string, unknown>;
+        }[];
+        return JSON.stringify(
+          windows.filter((entry) => entry.type === "chat").map((entry) => entry.cfg ?? {}),
+        );
+      },
+      await workspaceStorageArgs(page, undefined),
+    )
     .catch(() => "layout unreadable");
   return `window: "${windowText.slice(0, 300)}"; alerts: ${JSON.stringify(alerts)}; chat window cfg: ${layout}`;
 }

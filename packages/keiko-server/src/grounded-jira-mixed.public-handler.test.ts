@@ -49,6 +49,8 @@ import {
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import * as groundedOrchestrator from "./grounded-orchestrator.js";
+import * as gatewayWindow from "./gateway-context-window.js";
 
 const MODEL = "mixed-chat-proof";
 // The former fixed coding-harness caps (30 calls, 300 s), now supplied as the turn's Authority
@@ -1552,6 +1554,98 @@ function assertPreservedWriteContinuation(requests: readonly string[]): void {
   expect(outputCap(requests[2] ?? "{}")).toBeLessThanOrEqual(outputCap(requests[1] ?? "{}"));
 }
 
+function boundCallerSynthesisInput(grant: number): void {
+  const run = groundedOrchestrator.runGroundedExploration;
+  vi.spyOn(groundedOrchestrator, "runGroundedExploration").mockImplementation((input, deps) =>
+    run(input, {
+      ...deps,
+      answerer: {
+        ...deps.answerer,
+        answer: (question, pack, options) =>
+          deps.answerer.answer(question, pack, { ...options, modelInputTokensMax: grant }),
+      },
+    }),
+  );
+}
+
+function beforeAdoptedGroundedRetry(beforeRetry: () => Promise<void>): void {
+  const run = gatewayWindow.withAdoptedContextWindowRetry;
+  vi.spyOn(gatewayWindow, "withAdoptedContextWindowRetry").mockImplementation(
+    <T>(
+      deps: UiHandlerDeps,
+      input: gatewayWindow.ContextWindowRetryInput<T>,
+      attempt: (context: gatewayWindow.ContextWindowAttempt) => Promise<T>,
+    ): Promise<T> =>
+      run(deps, input, async (context) => {
+        if (context.retrying && input.surface === "grounded") await beforeRetry();
+        return attempt(context);
+      }),
+  );
+}
+
+it.each([
+  { grant: 1625, calls: 2 },
+  { grant: 2000, calls: 2 },
+  { grant: 2500, calls: 2 },
+  { grant: 6808, calls: 3 },
+  { grant: 7808, calls: 3 },
+])(
+  "settles an adopted retry inside the original positive input grant $grant",
+  async ({ grant, calls }) => {
+    const f = runtime(true);
+    boundCallerSynthesisInput(grant);
+    const requests = provider(["write", "overflow", "answer", "answer"]);
+    const body = {
+      chatId: f.chatId,
+      projectPath: f.root,
+      content: "Explain src/Feature.ts and add the Jira comment.",
+      modelId: MODEL,
+      clientTurnId: `mixed-positive-input-${String(grant)}`,
+    };
+    const response = await handleSendDesktopChat(context(body), f.deps);
+    expect(response.status).toBe(200);
+    expect(requests).toHaveLength(calls);
+    expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+    const messages = f.deps.store.listMessages(f.chatId);
+    expect(messages).toHaveLength(2);
+    expect(messages[0]?.turnState).toBe("completed");
+    expect(messages[0]?.toolTranscript?.exchanges[0]?.mutationOutcome).toBe("succeeded");
+    expect((await handleSendDesktopChat(context(body), f.deps)).status).toBe(200);
+    expect(requests).toHaveLength(calls);
+    expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+    expect(f.deps.store.listMessages(f.chatId)).toEqual(messages);
+  },
+);
+
+it.each(["cancel", "scope"] as const)(
+  "keeps a %s interruption before the adopted retry's preflight terminal",
+  async (kind) => {
+    const f = runtime(true);
+    boundCallerSynthesisInput(1625);
+    beforeAdoptedGroundedRetry(async () => {
+      if (kind === "scope") await changeOwnedMode(f, f.chatId);
+      else interruptChatGenerations(f.deps, f.chatId);
+    });
+    const requests = provider(["write", "overflow", "answer"]);
+    const response = await handleSendDesktopChat(
+      context({
+        chatId: f.chatId,
+        projectPath: f.root,
+        content: "Explain src/Feature.ts and add the Jira comment.",
+        modelId: MODEL,
+        clientTurnId: `mixed-preflight-${kind}`,
+      }),
+      f.deps,
+    );
+    expect(response.status).toBe(499);
+    expect(requests).toHaveLength(2);
+    expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+    const messages = f.deps.store.listMessages(f.chatId);
+    expect(messages.some(({ role }) => role === "assistant")).toBe(false);
+    expect(messages[0]?.toolTranscript?.exchanges[0]?.mutationOutcome).toBe("succeeded");
+  },
+);
+
 it.each(["answer", "uncited"] as const)(
   "retains a committed mutation across context overflow and bounded %s synthesis",
   async (answer) => {
@@ -1586,6 +1680,92 @@ it.each(["answer", "uncited"] as const)(
     expect(f.deps.store.listMessages(f.chatId)).toEqual(messages);
   },
 );
+
+it("keeps a committed mutation's deadline answer when an overflow arrives after authority expires", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  const f = runtime(true);
+  Object.assign(f.deps, { chatToolTurnBudget: THIRTY_CALL_BUDGET });
+  const startedAt = Date.now();
+  const requests = provider(["write", "overflow", "answer"], undefined, undefined, {
+    onRequest: (_body, index) => {
+      if (index === 2) vi.setSystemTime(startedAt + THIRTY_CALL_BUDGET.maxRuntimeMs + 1);
+    },
+  });
+  const response = await handleSendDesktopChat(
+    context({
+      chatId: f.chatId,
+      projectPath: f.root,
+      content: "Explain src/Feature.ts and add the Jira comment.",
+      modelId: MODEL,
+      clientTurnId: "mixed-write-expired-overflow",
+    }),
+    f.deps,
+  );
+  expect(response.status).toBe(200);
+  expect(requests).toHaveLength(2);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  expect(JSON.stringify(response.body)).toContain("this turn reached its time limit");
+  expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("completed");
+});
+
+it("keeps the already sent empty-answer correction on its existing adopted-window retry", async () => {
+  const f = runtime();
+  f.deps.store.updateChat(f.chatId, { connectedScope: null });
+  const requests = provider(["tool", "empty", "overflow", "answer"]);
+  const response = await startOwnedTurn(f, f.chatId);
+  expect(response.status).toBe(200);
+  expect(requests).toHaveLength(4);
+  expect(requests[2]).toContain(EMPTY_ANSWER_CORRECTED);
+  expect(requests[3]).toContain(EMPTY_ANSWER_CORRECTED);
+  expect(f.jiraRequests).toEqual(["GET"]);
+});
+
+it("keeps the first grounded answer when its fixed correction overflows after the synthesis grant ends", async () => {
+  const f = runtime();
+  const original = "Feature returns true [src/Feature.ts:1]. Jira tool result: SYN-99 is ready.";
+  const requests = provider(["tool", "answer", "overflow", "answer"], original);
+  const response = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      content: "Explain src/Feature.ts and list Jira projects.",
+      modelId: MODEL,
+    }),
+    f.deps,
+  );
+  expect(response.status).toBe(200);
+  expect(requests).toHaveLength(3);
+  expect(requests[2]).toContain("Your answer names 1 issue key(s)");
+  expect((response.body as GroundedAnswer).content).toContain(original);
+  expect(f.jiraRequests).toEqual(["GET"]);
+});
+
+it("settles a second context overflow from its committed mutation without another retry or write", async () => {
+  const f = runtime(true);
+  const requests = provider(["write", "overflow", "overflow", "answer"]);
+  const body = {
+    chatId: f.chatId,
+    projectPath: f.root,
+    content: "Explain src/Feature.ts and add the Jira comment.",
+    modelId: MODEL,
+    clientTurnId: "mixed-write-second-overflow",
+  };
+  const response = await handleSendDesktopChat(context(body), f.deps);
+  expect(response.status).toBe(200);
+  expect(requests).toHaveLength(3);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  expect(JSON.stringify(response.body)).toContain("context window");
+  const messages = f.deps.store.listMessages(f.chatId);
+  expect(messages[0]?.toolTranscript?.exchanges[0]).toMatchObject({
+    call: { id: "mixed-call-1", name: "jira_comment" },
+    mutationOutcome: "succeeded",
+    result: { status: "completed" },
+  });
+  assertPreservedWriteContinuation(requests);
+  expect((await handleSendDesktopChat(context(body), f.deps)).status).toBe(200);
+  expect(requests).toHaveLength(3);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  expect(f.deps.store.listMessages(f.chatId)).toEqual(messages);
+});
 
 it("falls back before admission and replays the same mixed canonical turn without a second write", async () => {
   const f = runtime(true);
@@ -1659,6 +1839,37 @@ it("uses the existing local Data-Pod evidence pack with Jira and keeps its numer
 
 // S12 and S17 of epic #4173: a citation repair after the turn ended, or one its grant cannot fund,
 // must not cost the answer. It answered with HTTP 403 after the turn had already done its work.
+it("retains a Data-Pod turn's committed write across the existing adopted-window retry", async () => {
+  const f = runtime(true);
+  await connectDataPod(f, "Feature returns true. Feature is a function.");
+  const requests = provider(
+    ["write", "overflow", "answer", "answer"],
+    "Feature returns true [1]. Jira tool result: the comment was added.",
+  );
+  const body = {
+    chatId: f.chatId,
+    content: "What does Feature return? Also add the Jira comment.",
+    modelId: MODEL,
+    clientTurnId: "pod-write-window-retry",
+  };
+  const response = await handleGroundedAsk(context(body), f.deps);
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  expect((response.body as GroundedAnswer).groundingKind).toBe("local-knowledge");
+  expect(requests).toHaveLength(3);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  assertPreservedWriteContinuation(requests);
+  const messages = f.deps.store.listMessages(f.chatId);
+  expect(messages[0]?.toolTranscript?.exchanges[0]).toMatchObject({
+    call: { id: "mixed-call-1", name: "jira_comment" },
+    mutationOutcome: "succeeded",
+    result: { status: "completed" },
+  });
+  expect((await handleGroundedAsk(context(body), f.deps)).status).toBe(200);
+  expect(requests).toHaveLength(3);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  expect(f.deps.store.listMessages(f.chatId)).toEqual(messages);
+});
+
 it("keeps a Data-Pod turn's transcript answer without another model call after the model failed", async () => {
   const f = runtime();
   await connectDataPod(f, "Feature returns true. Feature is a function.");

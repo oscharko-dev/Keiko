@@ -46,7 +46,6 @@ const raw = {
     contextWindow: 32768,
     maxOutputTokens: 2048,
   })),
-  atlassian: { privateTargets: [{ baseUrl: transport.baseUrl, addressClass: "loopback" }] },
   egress: { caBundlePath: transport.caPath },
 };
 const verdict = await probeGatewayToolCalling(parseGatewayConfig(raw), providers[0]);

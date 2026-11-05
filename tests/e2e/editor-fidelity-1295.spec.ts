@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
   existsSync,
@@ -425,12 +426,12 @@ async function stubInlineCompletionRoutes(page: Page): Promise<{
 
 async function seedFilesWindow(page: Page, projectPath: string, mode: ThemeMode): Promise<void> {
   await page.addInitScript(
-    ({ root, themeMode }) => {
+    ({ argument: { root, themeMode }, storageKeys }) => {
       const theme = themeMode === "light" ? "light" : "dark";
       window.localStorage.setItem("keiko.theme", theme);
-      window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: `issue-1295-editor-${themeMode}`,
@@ -447,9 +448,9 @@ async function seedFilesWindow(page: Page, projectPath: string, mode: ThemeMode)
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { root: projectPath, themeMode: mode },
+    await workspaceStorageArgs(page, { root: projectPath, themeMode: mode }),
   );
 }
 
@@ -460,12 +461,12 @@ async function seedEditorWindow(
   seed: WorkspaceWindowSeed,
 ): Promise<void> {
   await page.addInitScript(
-    ({ root, themeMode, windowSeed, openFiles }) => {
+    ({ argument: { root, themeMode, windowSeed, openFiles }, storageKeys }) => {
       const theme = themeMode === "light" ? "light" : "dark";
       window.localStorage.setItem("keiko.theme", theme);
-      window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: `issue-1424-editor-resize-${themeMode}`,
@@ -484,14 +485,14 @@ async function seedEditorWindow(
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    {
+    await workspaceStorageArgs(page, {
       root: projectPath,
       themeMode: mode,
       windowSeed: seed,
       openFiles: [...EDITOR_RESIZE_OPEN_FILES],
-    },
+    }),
   );
 }
 

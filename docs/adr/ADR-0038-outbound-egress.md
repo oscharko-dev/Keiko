@@ -64,6 +64,11 @@ single-credential posture: the proxy layer may not introduce additional secrets.
    direct path. Literal-IP, loopback, and private/metadata checks remain local and fail closed.
    Research egress never inherits this acknowledgement, so acknowledgement alone cannot relax its
    stricter proxied posture.
+   IPv6 literals and DNS answers are classified from their decoded address, including compressed,
+   expanded and dotted IPv4-mapped/NAT64 forms. Unspecified IPv4/IPv6 destinations and their mapped
+   forms are always blocked, independently of private-network and metadata opt-ins. Loopback aliases
+   retain the same loopback/listener-port restrictions. Literal IPv6 brackets are removed before
+   DNS resolution; the vetted address is still pinned on direct and opted-in proxy paths.
    **Correction (#3327, 2026-08-29).** This decision previously also listed "redirect-hop checks"
    among the guarantees that remain local and fail closed. `gatewayFetch` never validates a 3xx
    `Location` header, because it never follows one: `redirect: "manual"` is forced non-overridably

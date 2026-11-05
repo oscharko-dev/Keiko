@@ -437,6 +437,11 @@ async function streamAndPersist(
 // Plans the prompt from the CURRENT context profile and streams it. When the provider's overflow
 // answer taught Keiko the real window before any token reached the client, the whole attempt runs
 // once more against the adopted window (gateway-context-window.ts).
+interface StreamWindowResult {
+  readonly assembly: ReturnType<typeof buildGatewayAssembly>;
+  readonly turn: StreamedTurn | undefined;
+}
+
 function streamWithWindowRetry(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -444,38 +449,131 @@ function streamWithWindowRetry(
   memory: ConversationMemoryResultWire,
   controller: AbortController,
   termination: StreamTermination,
-): Promise<{
-  readonly assembly: ReturnType<typeof buildGatewayAssembly>;
-  readonly turn: StreamedTurn | undefined;
-}> {
+): Promise<StreamWindowResult> {
   const { modelId } = admitted.prepared;
+  let retainedAssembly: ReturnType<typeof buildGatewayAssembly> | undefined;
   const retry = {
     modelId,
     surface: "chat-stream" as const,
     correlationId: ctx.correlationId,
     retryable: (): boolean => termination.tokenFrames === 0,
+    settleRetryFailure: (
+      error: unknown,
+      originalFailure: unknown,
+    ): Promise<StreamWindowResult | undefined> =>
+      settleStreamWindowFailure(ctx, deps, admitted, {
+        controller,
+        termination,
+        assembly: retainedAssembly,
+        error,
+        originalFailure,
+      }),
   };
-  return withAdoptedContextWindowRetry(deps, retry, async (attempt) => {
-    const assembly = await buildPreparedStreamAssembly(ctx, deps, admitted, memory, {
-      signal: controller.signal,
+  return withAdoptedContextWindowRetry(deps, retry, (attempt) =>
+    streamWindowAttempt(ctx, deps, admitted, memory, {
+      controller,
+      termination,
       attempt,
-    });
-    const stream = admitted.callStream(
-      protectMarkdownSkillRequest(
-        {
-          modelId,
-          messages: assembly.messages,
-          ...gatewayAssemblyOutputAllocation(assembly),
-          logContext: { correlationId: ctx.correlationId },
-        },
-        deps.store.markdownSkills,
-        admitted.gatewayTurn.currentUserMessageId,
-        deps.markdownSkillAuthority,
-      ),
-      controller.signal,
-    );
-    return { assembly, turn: await streamConversation(ctx, deps, stream, controller, termination) };
+      observeAssembly: (assembly) => {
+        if (!attempt.retrying) retainedAssembly = assembly;
+      },
+    }),
+  );
+}
+
+async function streamWindowAttempt(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  admitted: AdmittedDesktopChatStream,
+  memory: ConversationMemoryResultWire,
+  run: {
+    readonly controller: AbortController;
+    readonly termination: StreamTermination;
+    readonly attempt: ContextWindowAttempt;
+    readonly observeAssembly: (assembly: ReturnType<typeof buildGatewayAssembly>) => void;
+  },
+): Promise<StreamWindowResult> {
+  const assembly = await buildPreparedStreamAssembly(ctx, deps, admitted, memory, {
+    signal: run.controller.signal,
+    attempt: run.attempt,
   });
+  run.observeAssembly(assembly);
+  const request = protectMarkdownSkillRequest(
+    {
+      modelId: admitted.prepared.modelId,
+      messages: assembly.messages,
+      ...gatewayAssemblyOutputAllocation(assembly),
+      logContext: { correlationId: ctx.correlationId },
+    },
+    deps.store.markdownSkills,
+    admitted.gatewayTurn.currentUserMessageId,
+    deps.markdownSkillAuthority,
+  );
+  const stream =
+    admitted.toolTurn === undefined
+      ? admitted.callStream(request, run.controller.signal)
+      : admitted.toolTurn.stream(
+          admitted.callStream,
+          request,
+          run.controller.signal,
+          run.attempt.retryFollows,
+        );
+  return {
+    assembly,
+    turn: await streamConversation(ctx, deps, stream, run.controller, run.termination),
+  };
+}
+
+async function settleStreamWindowFailure(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  admitted: AdmittedDesktopChatStream,
+  failure: {
+    readonly controller: AbortController;
+    readonly termination: StreamTermination;
+    readonly assembly: ReturnType<typeof buildGatewayAssembly> | undefined;
+    readonly error: unknown;
+    readonly originalFailure: unknown;
+  },
+): Promise<StreamWindowResult | undefined> {
+  if (failure.assembly === undefined) return undefined;
+  const response = admitted.toolTurn?.settleRetryFailure(
+    failure.error,
+    failure.originalFailure,
+    admitted.prepared.modelId,
+    failure.controller.signal,
+  );
+  if (response === undefined) return undefined;
+  return {
+    assembly: failure.assembly,
+    turn: await streamConversation(
+      ctx,
+      deps,
+      settledRetryStream(response),
+      failure.controller,
+      failure.termination,
+    ),
+  };
+}
+
+function settledRetryStream(
+  response: StreamedTurn["response"],
+): AsyncIterable<import("@oscharko-dev/keiko-model-gateway").GatewayStreamChunk> {
+  function* chunks(): Generator<import("@oscharko-dev/keiko-model-gateway").GatewayStreamChunk> {
+    if (response.content.length > 0) yield { type: "delta", token: response.content };
+    yield { type: "done", response };
+  }
+  return {
+    [Symbol.asyncIterator](): AsyncIterator<
+      import("@oscharko-dev/keiko-model-gateway").GatewayStreamChunk
+    > {
+      const iterator = chunks();
+      return {
+        next: () => Promise.resolve(iterator.next()),
+        return: () => Promise.resolve(iterator.return(undefined)),
+      };
+    },
+  };
 }
 
 async function buildPreparedStreamAssembly(
@@ -911,11 +1009,7 @@ async function prepareDesktopChatProviderStream(
     legacyCall ?? resolveDesktopChatStreamCall(prepared, executionAdmission, deps, correlationId);
   if (typeof callStream === "function")
     return {
-      callStream:
-        toolTurn === undefined
-          ? callStream
-          : (request, signal): ReturnType<StreamCall> =>
-              toolTurn.stream(callStream, request, signal),
+      callStream,
       memory,
       toolTurn,
       deps,

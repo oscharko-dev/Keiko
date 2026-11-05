@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 // Issue #2246 (Epic #2238) — the BROADER cross-connector governance smoke, one continuous flow:
 // register connector → verify → scope → sync → grounded ask citing connector content → trigger a
 // governed write in Ask-for-approval mode → approve → typed result. Drives the real desktop UI
@@ -246,9 +247,9 @@ const GROUNDED_ASSISTANT_MSG = {
 
 async function seedGroundedChatWindow(page: Page): Promise<void> {
   await page.addInitScript(
-    ({ chatId, title }) => {
+    ({ argument: { chatId, title }, storageKeys }) => {
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "e2e-grounded-chat",
@@ -263,9 +264,9 @@ async function seedGroundedChatWindow(page: Page): Promise<void> {
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { chatId: GROUNDED_CHAT_ID, title: GROUNDED_CHAT.title },
+    await workspaceStorageArgs(page, { chatId: GROUNDED_CHAT_ID, title: GROUNDED_CHAT.title }),
   );
 }
 

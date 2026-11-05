@@ -1761,11 +1761,7 @@ async function gatewayGroundedAnswer(
   const remainingBefore = ctx.synthesis.remaining();
   const reservedBefore = ctx.synthesis.reservedOutputTokens();
   const completedBefore = ctx.synthesis.completed();
-  const attempt = await withAdoptedContextWindowRetry(
-    ctx.deps,
-    { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
-    () => groundedGatewayAttempt(ctx, question, pack, options),
-  );
+  const attempt = await groundedGatewayWindowAttempt(ctx, question, pack, options);
   if (attempt.response === undefined)
     return {
       content: connectedSearchNoEvidenceAnswer(options.currentQuestion ?? question),
@@ -1789,6 +1785,48 @@ async function gatewayGroundedAnswer(
       currentContextProfileForModel(ctx.deps, ctx.modelId),
     ),
   };
+}
+
+interface GroundedGatewayAttemptResult {
+  readonly sent: SentGroundedPrompt;
+  readonly response?: NormalizedResponse;
+}
+
+function groundedGatewayWindowAttempt(
+  ctx: GroundedGatewayAnswerContext,
+  question: string,
+  pack: ConnectedContextPack,
+  options: GroundedAnswerOptions,
+): Promise<GroundedGatewayAttemptResult> {
+  let sent: SentGroundedPrompt | undefined;
+  return withAdoptedContextWindowRetry(
+    ctx.deps,
+    {
+      modelId: ctx.modelId,
+      surface: "grounded",
+      correlationId: ctx.correlationId,
+      settleRetryFailure: (error, originalFailure) => {
+        if (sent === undefined) return undefined;
+        const response = ctx.deps.chatToolTurn?.settleRetryFailure(
+          error,
+          originalFailure,
+          ctx.modelId,
+          ctx.signal,
+        );
+        return response === undefined ? undefined : { sent, response };
+      },
+    },
+    (attempt) =>
+      groundedGatewayAttempt(
+        ctx,
+        question,
+        pack,
+        { ...options, retryFollows: attempt.retryFollows },
+        (selected) => {
+          if (!attempt.retrying) sent = selected;
+        },
+      ),
+  );
 }
 
 function settledSynthesisFields(
@@ -1832,7 +1870,8 @@ async function groundedGatewayAttempt(
   question: string,
   pack: ConnectedContextPack,
   options: GroundedAnswerOptions,
-): Promise<{ readonly sent: SentGroundedPrompt; readonly response?: NormalizedResponse }> {
+  observeSent: (sent: SentGroundedPrompt) => void,
+): Promise<GroundedGatewayAttemptResult> {
   if (ctx.synthesis.remaining() <= 0)
     throw new CallerAttemptAdmissionError("Grounded synthesis attempt allowance exhausted");
   const remaining = groundedRemainingOptions(ctx, pack, options);
@@ -1847,6 +1886,7 @@ async function groundedGatewayAttempt(
     requiredEvidenceAtomIds: assistantReferenceExcerptIds(pack, ctx.assistantReferences),
     callerInputTokensMax: remaining.modelInputTokensMax ?? pack.budget.modelInputTokensMax,
   });
+  observeSent(sent);
   if (!requiredEvidenceSent(sent, options.requiredEvidencePaths)) return { sent };
   if (
     sent.sentReferenceCount === 0 &&
@@ -1879,6 +1919,7 @@ async function dispatchGroundedSynthesis(
     outputTokensMax: original.modelOutputTokensMax ?? pack.budget.modelOutputTokensMax,
     signal: ctx.signal,
     deadlineAtMs: original.deadlineAtMs,
+    retryFollows: original.retryFollows,
   });
   const promptTokens = countGatewayPromptTokens({ messages: sent.messages }, ctx.tokenAccounting);
   try {

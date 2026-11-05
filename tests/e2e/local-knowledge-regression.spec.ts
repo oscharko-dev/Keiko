@@ -1,4 +1,5 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
@@ -14,11 +15,51 @@ import {
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { basename, join } from "node:path";
+import type { AtlassianCredentialPublicMetadata } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { KnowledgeCapsule } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
 import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 import { evidenceArtifactPath, evidenceScreenshotPath } from "./support/evidence.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
+const JIRA_LAYOUT_POD: AtlassianCredentialPublicMetadata = {
+  schemaVersion: "1",
+  authRef: "atlassian-cred:AAAAAAAAAAAAAAAAAAAAAA",
+  provider: "jira",
+  deployment: "data-center",
+  authScheme: "bearer-pat",
+  generation: 1,
+  displayName: "Layout Jira Pod",
+  baseUrl: "https://jira.example.invalid",
+  createdAt: 1000,
+  livePod: {
+    kind: "jira-live",
+    podId: "b0e5678a-2974-4a6b-a56c-9e74fc989a85",
+    authenticationGeneration: 1,
+    verificationRevision: 1,
+    verificationInProgress: false,
+    verificationStatus: "ok",
+    capabilities: ["live-read", "live-write"],
+  },
+};
+const EXPECTED_POD_ROW_LAYOUT = {
+  rowHeight: 54,
+  paddingTop: 10,
+  paddingRight: 12,
+  paddingBottom: 10,
+  paddingLeft: 12,
+  iconWidth: 32,
+  iconHeight: 32,
+  iconRadius: "8px",
+  glyphWidth: 15,
+  glyphHeight: 15,
+  glyphOffsetX: 8.5,
+  glyphOffsetY: 8.5,
+  gap: 10,
+  fontSize: "13px",
+  fontWeight: "500",
+};
 const CORPUS_ROOT =
   process.env.KEIKO_LK_E2E_CORPUS ?? "/Users/oscharko-dev/Keiko-Test-Data/Local-Knowledge-E2E";
 const CORPUS_DATA_ROOT = join(CORPUS_ROOT, "fixtures");
@@ -717,10 +758,13 @@ async function resetWorkspaceState(page: Page): Promise<void> {
   // those 404 (ADR-0114 D1), a console error this pass must not produce. The session cookie then
   // carries every later navigation and reload of the pass.
   await page.goto(`/${editorM11PairingFragment("local-knowledge-regression")}`);
-  await page.evaluate(() => {
-    window.localStorage.removeItem("keiko.workspace.v4");
-    window.localStorage.removeItem("keiko.conns.v1");
-  });
+  await page.evaluate(
+    ({ storageKeys }) => {
+      window.localStorage.removeItem(storageKeys.workspace);
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, undefined),
+  );
 }
 
 async function captureGroundingCatalogEvidence(
@@ -789,18 +833,229 @@ async function captureGroundingCatalogEvidence(
   );
 }
 
-async function uiCreateCapsule(page: Page, displayName: string): Promise<void> {
+async function uiCreateCapsule(page: Page, displayName: string): Promise<KnowledgeCapsule> {
   await page.getByRole("button", { name: "Create Knowledge Pod", exact: true }).click();
   const createDialog = page.getByRole("dialog", { name: "Create Knowledge Pod" });
+  await expect(createDialog.getByRole("textbox")).toHaveCount(1);
+  await expect(createDialog.getByRole("radio")).toHaveCount(0);
+  await expect(createDialog.getByRole("checkbox")).toHaveCount(0);
+  await expect(createDialog.getByRole("combobox")).toHaveCount(0);
+  await expect(createDialog.getByRole("group")).toHaveCount(0);
   await createDialog.getByRole("button", { name: "Create Knowledge Pod" }).click();
-  await expect(page.getByText("Pod display name is required.")).toBeVisible();
-  await page.getByLabel("Knowledge Pod display name").fill(displayName);
+  await expect(createDialog.getByRole("alert")).toHaveText("Pod display name is required.");
+  await createDialog.getByLabel("Knowledge Pod display name").fill(displayName);
+  const responsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === "/api/local-knowledge/capsules",
+  );
   await createDialog.getByRole("button", { name: "Create Knowledge Pod" }).click();
-  await expect(page.getByRole("article", { name: `Knowledge Pod: ${displayName}` })).toBeVisible();
+  const response = await responsePromise;
+  expect(response.status()).toBe(201);
+  expect(response.request().postDataJSON()).toEqual({ displayName: displayName.trim() });
+  const body = (await response.json()) as { readonly capsule: KnowledgeCapsule };
+  const { capsule } = body;
+  expect(capsule).toMatchObject({
+    id: expect.any(String),
+    displayName: displayName.trim(),
+    modelUsePolicy: standardPodModelUsePolicy(),
+  });
+  await expect(
+    page.getByRole("article", { name: `Knowledge Pod: ${displayName.trim()}` }),
+  ).toBeVisible();
+  return capsule;
+}
+
+async function uiOpenCapsuleMenu(page: Page, displayName: string): Promise<Locator> {
+  const row = page.getByRole("article", { name: `Knowledge Pod: ${displayName}` });
+  await row.getByRole("button", { name: `Actions for Knowledge Pod ${displayName}` }).click();
+  return row.getByRole("menu", { name: `Actions for Knowledge Pod ${displayName}` });
+}
+
+async function uiOpenCapsuleDetails(page: Page, displayName: string): Promise<void> {
+  const menu = await uiOpenCapsuleMenu(page, displayName);
+  await menu
+    .getByRole("menuitem", { name: `Open details for Knowledge Pod ${displayName}`, exact: true })
+    .click();
+}
+
+async function expectPodRowFits(row: Locator, width: number): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        row.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          const contained = Array.from(
+            element.querySelectorAll("button, .lk-capsule-name, .acx-card-title, .acx-empty, h2"),
+          ).every((child) => {
+            const control = child.getBoundingClientRect();
+            return (
+              control.left >= bounds.left - 1 &&
+              control.right <= bounds.right + 1 &&
+              control.top >= bounds.top - 1 &&
+              control.bottom <= bounds.bottom + 1
+            );
+          });
+          return {
+            contained,
+            overflow: element.scrollWidth > element.clientWidth + 1,
+          };
+        }),
+      { message: `Pod content fits its row at ${String(width)}px` },
+    )
+    .toEqual({ contained: true, overflow: false });
+}
+
+function podRowGeometry(element: Element): Record<string, number | string> | null {
+  const icon = element.querySelector(".lk-capsule-icon");
+  const glyph = icon?.firstElementChild;
+  const info = element.querySelector(".lk-capsule-info");
+  const name = element.querySelector(".lk-capsule-name");
+  if (icon === null || glyph === null || glyph === undefined || info === null || name === null)
+    return null;
+  const round = (value: number): number => Math.round(value * 100) / 100;
+  const row = element.getBoundingClientRect();
+  const iconBox = icon.getBoundingClientRect();
+  const glyphBox = glyph.getBoundingClientRect();
+  const nameBox = name.getBoundingClientRect();
+  const rowStyle = getComputedStyle(element);
+  const nameStyle = getComputedStyle(name);
+  return {
+    rowHeight: round(row.height),
+    paddingTop: Number.parseFloat(rowStyle.paddingTop),
+    paddingRight: Number.parseFloat(rowStyle.paddingRight),
+    paddingBottom: Number.parseFloat(rowStyle.paddingBottom),
+    paddingLeft: Number.parseFloat(rowStyle.paddingLeft),
+    iconWidth: round(iconBox.width),
+    iconHeight: round(iconBox.height),
+    iconRadius: getComputedStyle(icon).borderRadius,
+    glyphWidth: round(glyphBox.width),
+    glyphHeight: round(glyphBox.height),
+    glyphOffsetX: round(glyphBox.left - iconBox.left),
+    glyphOffsetY: round(glyphBox.top - iconBox.top),
+    gap: round(info.getBoundingClientRect().left - iconBox.right),
+    fontSize: nameStyle.fontSize,
+    fontWeight: nameStyle.fontWeight,
+    iconX: round(iconBox.left),
+    glyphX: round(glyphBox.left),
+    nameX: round(nameBox.left),
+  };
+}
+
+async function expectPodRowsMatch(page: Page, knowledgeRow: Locator): Promise<void> {
+  const jiraSection = page.getByRole("region", { name: "Jira Live Pods", exact: true });
+  const jiraRow = jiraSection.getByTestId("acx-connector");
+  await expect
+    .poll(async () => {
+      const knowledge = await knowledgeRow.evaluate(podRowGeometry);
+      const jira = await jiraRow.evaluate(podRowGeometry);
+      if (knowledge === null || jira === null) return null;
+      const {
+        iconX: knowledgeIconX,
+        glyphX: knowledgeGlyphX,
+        nameX: knowledgeNameX,
+        ...knowledgeLayout
+      } = knowledge;
+      const { iconX: jiraIconX, glyphX: jiraGlyphX, nameX: jiraNameX, ...jiraLayout } = jira;
+      const knowledgeGap = await knowledgeRow.evaluate((element) => {
+        const header = element.closest(".lk-page")?.querySelector(".lk-header");
+        return header === null || header === undefined
+          ? null
+          : element.getBoundingClientRect().top - header.getBoundingClientRect().bottom;
+      });
+      const jiraGap = await jiraSection.evaluate((element) => {
+        const header = element.querySelector(".lk-header");
+        const row = element.querySelector(".acx-card");
+        return header === null || row === null
+          ? null
+          : row.getBoundingClientRect().top - header.getBoundingClientRect().bottom;
+      });
+      return {
+        knowledge: knowledgeLayout,
+        jira: jiraLayout,
+        aligned:
+          knowledgeIconX === jiraIconX &&
+          knowledgeGlyphX === jiraGlyphX &&
+          knowledgeNameX === jiraNameX,
+        equalHeaderSpacing:
+          knowledgeGap !== null && jiraGap !== null && Math.abs(knowledgeGap - jiraGap) < 0.1,
+      };
+    })
+    .toEqual({
+      knowledge: EXPECTED_POD_ROW_LAYOUT,
+      jira: EXPECTED_POD_ROW_LAYOUT,
+      aligned: true,
+      equalHeaderSpacing: true,
+    });
+}
+
+async function expectJiraPodSection(page: Page, healthy: boolean, width: number): Promise<void> {
+  const section = page.getByRole("region", { name: "Jira Live Pods", exact: true });
+  await expect(section.getByRole("heading")).toHaveCount(1);
+  const toolbar = section.locator("header");
+  await expect(toolbar.getByRole("heading", { name: "Jira Live Pods", exact: true })).toBeVisible();
+  const createJira = toolbar.getByRole("button", { name: "Create Jira Pod", exact: true });
+  await expect(createJira).toBeVisible();
+  await expect
+    .poll(async () =>
+      Math.abs(
+        (await createJira.evaluate((element) => element.getBoundingClientRect().width)) -
+          (await page
+            .getByRole("button", { name: "Create Knowledge Pod", exact: true })
+            .evaluate((element) => element.getBoundingClientRect().width)),
+      ),
+    )
+    .toBeLessThan(0.1);
+  await expectPodRowFits(section, width);
+  if (!healthy) {
+    const empty = section.getByText("No Jira Pods yet.", { exact: true });
+    await expect(empty).toBeVisible();
+    await expect
+      .poll(() => empty.evaluate((element) => Math.round(element.getBoundingClientRect().height)))
+      .toBe(54);
+    expect(
+      await toolbar.evaluate((element) => {
+        const empty = element.parentElement?.querySelector(".acx-empty");
+        return (
+          empty !== null &&
+          empty !== undefined &&
+          (element.compareDocumentPosition(empty) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+        );
+      }),
+    ).toBe(true);
+    return;
+  }
+  const card = section.getByTestId("acx-connector");
+  await expect(card.locator(".lk-capsule-name")).toHaveText(JIRA_LAYOUT_POD.displayName);
+  await expect
+    .poll(() =>
+      card
+        .getByRole("img", { name: "Jira", exact: true })
+        .evaluate(
+          (element) =>
+            element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0,
+        ),
+    )
+    .toBe(true);
+  await expect(card.getByText(JIRA_LAYOUT_POD.baseUrl, { exact: true })).toHaveCount(0);
+  await expect(card.getByTestId("acx-pod-state")).toHaveCount(0);
+  await expect(card.locator(".acx-hint")).toHaveCount(0);
+  await expect(card.getByRole("button")).toHaveCount(2);
+  await expect(card.getByRole("button", { name: "Add to workspace", exact: true })).toBeVisible();
+  await expectPodRowFits(card, width);
+  const actions = card.getByRole("button", {
+    name: `More actions: ${JIRA_LAYOUT_POD.displayName}`,
+  });
+  await actions.click();
+  await expect(
+    card.getByRole("menuitem", { name: "Verify connection", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(actions).toBeFocused();
 }
 
 async function uiRenameCapsule(page: Page, fromName: string, toName: string): Promise<void> {
-  await page.getByRole("button", { name: `Open details for Knowledge Pod ${fromName}` }).click();
+  await uiOpenCapsuleDetails(page, fromName);
   await expect(page.getByRole("heading", { name: fromName })).toBeVisible();
   await page.getByRole("button", { name: `Rename Knowledge Pod ${fromName}` }).click();
   await page.getByRole("button", { name: "Cancel" }).click();
@@ -861,7 +1116,7 @@ async function stubNativeFileDialog(page: Page, smallFilesRoot: string): Promise
 
 async function uiExercisePicker(page: Page, capsuleName: string): Promise<void> {
   const smallFilesRoot = join(CORPUS_DATA_ROOT, "small-files");
-  await page.getByRole("button", { name: `Open details for Knowledge Pod ${capsuleName}` }).click();
+  await uiOpenCapsuleDetails(page, capsuleName);
   // The limit summary sits in the maintenance disclosure. #3687 (501e8d199) pinned the shared byte
   // presenter to exactly one fraction digit ("1.0 GB"; capsule-actions.test.tsx and format.test.ts
   // hold the same pin), superseding the "1 GB" spelling #2155 had produced.
@@ -891,7 +1146,7 @@ async function uiExercisePicker(page: Page, capsuleName: string): Promise<void> 
 }
 
 async function uiDeleteCapsule(page: Page, displayName: string): Promise<void> {
-  await page.getByRole("button", { name: `Open details for Knowledge Pod ${displayName}` }).click();
+  await uiOpenCapsuleDetails(page, displayName);
   await openMaintenanceSection(page);
   await page.getByRole("button", { name: `Delete Knowledge Pod ${displayName}` }).click();
   await expect(page.getByRole("dialog", { name: "Delete Knowledge Pod" })).toBeVisible();
@@ -1107,8 +1362,12 @@ async function runRegressionPass(
   const disconnectId = await createCapsule(request, `E2E Pass ${passLabel} Disconnect`);
   await connectFolder(request, disconnectId, corpus.smallFiles);
   await openLocalKnowledge(page);
-  await page
-    .getByRole("button", { name: `Disconnect Knowledge Pod E2E Pass ${passLabel} Disconnect` })
+  const disconnectMenu = await uiOpenCapsuleMenu(page, `E2E Pass ${passLabel} Disconnect`);
+  await disconnectMenu
+    .getByRole("menuitem", {
+      name: `Disconnect Knowledge Pod E2E Pass ${passLabel} Disconnect`,
+      exact: true,
+    })
     .click();
   await expect(page.getByRole("dialog", { name: "Disconnect Knowledge Pod" })).toBeVisible();
   await page.getByRole("button", { name: "Disconnect", exact: true }).click();
@@ -1148,6 +1407,149 @@ async function runRegressionPass(
     tableCounts,
   });
 }
+
+test("creates a Knowledge Pod from its name with the normal model-use policy", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(60_000);
+  let healthyJira = false;
+  let jiraDisplayName = JIRA_LAYOUT_POD.displayName;
+  let unexpectedJiraRequests = 0;
+  await page.route("**/api/atlassian-connectors/**", async (route) => {
+    const request = route.request();
+    if (
+      request.method() === "GET" &&
+      new URL(request.url()).pathname === "/api/atlassian-connectors/credentials"
+    ) {
+      await route.fulfill({
+        json: {
+          credentials: healthyJira ? [{ ...JIRA_LAYOUT_POD, displayName: jiraDisplayName }] : [],
+        },
+      });
+      return;
+    }
+    unexpectedJiraRequests += 1;
+    await route.abort("blockedbyclient");
+  });
+  await ensureProject(request);
+  await resetWorkspaceState(page);
+  await openLocalKnowledge(page);
+  await expect(page.getByRole("button", { name: "Add HTML manual", exact: true })).toHaveCount(0);
+  const capsule = await uiCreateCapsule(page, "  Name-only Knowledge Pod  ");
+  try {
+    expect(capsule.displayName).toBe("Name-only Knowledge Pod");
+    expect(capsule.lifecycleState).toBe("draft");
+    expect(capsule.sourceIds).toEqual([]);
+    const persisted = await apiJson<{ readonly capsule: KnowledgeCapsule }>(
+      request,
+      "get",
+      `/api/local-knowledge/capsules/${encodeURIComponent(capsule.id)}`,
+    );
+    expect(persisted.capsule.modelUsePolicy).toEqual(standardPodModelUsePolicy());
+    expect(
+      sqlScalar(
+        `SELECT COUNT(*) FROM capsule_audit_events WHERE capsule_id = ${sqlQuote(capsule.id)} AND kind = 'capsule-created' AND details_json IS NULL;`,
+      ),
+    ).toBe(1);
+    await page.reload();
+    await expect(
+      page.getByRole("article", { name: "Knowledge Pod: Name-only Knowledge Pod" }),
+    ).toBeVisible();
+    const row = page.getByRole("article", { name: "Knowledge Pod: Name-only Knowledge Pod" });
+    await expect(row).toHaveAccessibleDescription("");
+    const name = row.getByRole("button", {
+      name: "Drag Knowledge Pod Name-only Knowledge Pod to the workspace",
+      exact: true,
+    });
+    await expect(name).toHaveText("Name-only Knowledge Pod");
+    await expect(
+      row.getByRole("button", { name: /^(?:Start indexing|Cancel indexing)/u }),
+    ).toHaveCount(0);
+    const addToWorkspace = row.getByRole("button", {
+      name: "Add Knowledge Pod Name-only Knowledge Pod to workspace",
+    });
+    const actions = row.getByRole("button", {
+      name: "Actions for Knowledge Pod Name-only Knowledge Pod",
+    });
+    const menu = row.getByRole("menu", {
+      name: "Actions for Knowledge Pod Name-only Knowledge Pod",
+    });
+    const details = menu.getByRole("menuitem", {
+      name: "Open details for Knowledge Pod Name-only Knowledge Pod",
+      exact: true,
+    });
+    const desktopViewport = page.viewportSize();
+    if (desktopViewport === null) throw new TypeError("Expected a configured browser viewport.");
+    try {
+      for (const healthy of [false, true]) {
+        healthyJira = healthy;
+        if (healthy) await page.reload();
+        for (const width of [1029, 640]) {
+          await page.setViewportSize({ ...desktopViewport, width });
+          await expect(name).toBeVisible();
+          await expect(addToWorkspace).toBeVisible();
+          await expect(actions).toBeVisible();
+          await expect(
+            page.getByRole("button", { name: "Add HTML manual", exact: true }),
+          ).toHaveCount(0);
+          await expectPodRowFits(row, width);
+          await actions.click();
+          await expect(details).toBeFocused();
+          await page.keyboard.press("Escape");
+          await expect(actions).toBeFocused();
+          await expectJiraPodSection(page, healthy, width);
+        }
+      }
+    } finally {
+      await page.setViewportSize(desktopViewport);
+    }
+    await expectPodRowsMatch(page, row);
+    const connectorWindows = page.locator('.window[data-window-id^="connector-"]');
+    const connectorWindowsBefore = await connectorWindows.count();
+    const jiraSection = page.getByRole("region", { name: "Jira Live Pods", exact: true });
+    await jiraSection
+      .getByTestId("acx-connector")
+      .getByRole("button", { name: "Add to workspace", exact: true })
+      .click();
+    await expect(connectorWindows).toHaveCount(connectorWindowsBefore + 1);
+    const jiraNode = connectorWindows.last().getByTestId("knowledge-connector-node");
+    await expect(jiraNode.getByText(JIRA_LAYOUT_POD.displayName, { exact: true })).toBeVisible();
+    await expect(jiraNode.getByText("Verified Jira Pod", { exact: true })).toBeVisible();
+    jiraDisplayName = "Renamed Layout Jira Pod";
+    await page.reload();
+    await expect(connectorWindows).toHaveCount(connectorWindowsBefore + 1);
+    await expect(jiraNode.getByText(jiraDisplayName, { exact: true })).toBeVisible();
+    await expect(jiraNode.getByText("Verified Jira Pod", { exact: true })).toBeVisible();
+    await expect(jiraNode.getByText("Live Jira tools", { exact: true })).toBeVisible();
+    await expect(jiraNode.getByText(JIRA_LAYOUT_POD.displayName, { exact: true })).toHaveCount(0);
+    await page.getByRole("heading", { name: "Knowledge Pods", level: 1, exact: true }).click();
+    await addToWorkspace.focus();
+    await page.keyboard.press("Tab");
+    await expect(actions).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(details).toBeFocused();
+    await expect(details).toHaveText("Details");
+    await expect(
+      menu.getByRole("menuitem", {
+        name: "Disconnect Knowledge Pod Name-only Knowledge Pod",
+        exact: true,
+      }),
+    ).toHaveText("Disconnect");
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("heading", { name: "Name-only Knowledge Pod", exact: true }),
+    ).toBeVisible();
+    expect(unexpectedJiraRequests).toBe(0);
+  } finally {
+    await apiJson(
+      request,
+      "delete",
+      `/api/local-knowledge/capsules/${encodeURIComponent(capsule.id)}`,
+      {},
+    );
+  }
+});
 
 test.describe.serial("Local Knowledge full regression campaign", () => {
   let corpus: CorpusPaths;
@@ -1192,9 +1594,9 @@ test.describe.serial("Local Knowledge full regression campaign", () => {
       201,
     );
     await page.addInitScript(
-      ({ chatId, title }) => {
+      ({ argument: { chatId, title }, storageKeys }) => {
         window.localStorage.setItem(
-          "keiko.workspace.v4",
+          storageKeys.workspace,
           JSON.stringify([
             {
               id: "local-knowledge-catalog-refresh-chat",
@@ -1209,9 +1611,9 @@ test.describe.serial("Local Knowledge full regression campaign", () => {
             },
           ]),
         );
-        window.localStorage.removeItem("keiko.conns.v1");
+        window.localStorage.removeItem(storageKeys.connections);
       },
-      { chatId: chat.chat.id, title: chat.chat.title },
+      await workspaceStorageArgs(page, { chatId: chat.chat.id, title: chat.chat.title }),
     );
     await page.goto("/");
 
