@@ -37,6 +37,9 @@ usual reasons are:
 - `workspace-changed`, `version-changed`, `window-shrunk`: the task now points at another workspace,
   the runtime was upgraded, or the selected model has a smaller input window than the one the
   history was built under.
+- `model-route-changed`: required thinking continuation was produced by a different deployment/model
+  route, or the retained legacy entry has no route provenance. The task starts fresh; no opaque
+  provider state is transplanted. The old entry can still serve its original route.
 - `grant-present`, `credential-present`, `pending-input`, `revert-staged`, `integrity-failed`,
   `schema-unknown`, `session-mismatch`: the retained database failed its audit and was removed.
 - `database-oversized`, `history-oversized`: the session exceeds the retention bounds (128 MiB or

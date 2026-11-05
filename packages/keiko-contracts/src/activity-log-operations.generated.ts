@@ -14305,6 +14305,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "version-changed",
           "workspace-changed",
           "window-shrunk",
+          "model-route-changed",
           "schema-unknown",
           "grant-present",
           "credential-present",
@@ -15783,6 +15784,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "input-messages-exceeded",
           "prompt-tokens-exceeded",
           "invalid-model",
+          "reasoning-continuation-invalid",
           "tool-contract-drift",
           "tool-contract-missing",
           "tool-contract-empty",
@@ -15940,6 +15942,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       toolCallTextMessageCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      reasoningContinuationMessages: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      reasoningContinuationBytes: {
         type: "integer",
         dataClass: "count",
         required: false,

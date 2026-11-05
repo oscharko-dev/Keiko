@@ -52,6 +52,29 @@ function malformedToolCallMessage(payload: unknown): string {
 }
 
 describe("normalizeChatResponse", () => {
+  it.each(["aborted", "insufficient_system_resource"])(
+    "keeps interrupted provider finish %s as error",
+    (finishReason) => {
+      const result = normalizeChatResponse(
+        chatPayload({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "Partial answer",
+                reasoning_content: "Partial state",
+              },
+              finish_reason: finishReason,
+            },
+          ],
+        }),
+        "model",
+        BASE_USAGE,
+      );
+      expect(result.finishReason).toBe("error");
+    },
+  );
+
   it("normalises a well-formed chat response with populated usage", () => {
     const result = normalizeChatResponse(chatPayload(), "example-chat-model", BASE_USAGE);
     expect(result.content).toBe("hello there");

@@ -1355,6 +1355,7 @@ function rawProviderFromCurrent(
     ...(provider.outputTokenParameter === undefined
       ? {}
       : { outputTokenParameter: provider.outputTokenParameter }),
+    reasoningContinuation: provider.reasoningContinuation,
     ...tokenCounterMetadata(provider.tokenCounter),
     ...(provider.realtimeAuthMode === undefined
       ? {}
@@ -2675,6 +2676,9 @@ function discoveredProviderConfig(
         ...(connection.outputTokenParameter === undefined
           ? {}
           : { outputTokenParameter: connection.outputTokenParameter }),
+        ...(connection.reasoningContinuation === undefined
+          ? {}
+          : { reasoningContinuation: connection.reasoningContinuation }),
       },
     ],
     circuitBreaker: config.circuitBreaker,
@@ -6764,6 +6768,7 @@ function storedDedicatedProviderRaw(
     ...(provider.outputTokenParameter === undefined
       ? {}
       : { outputTokenParameter: provider.outputTokenParameter }),
+    reasoningContinuation: provider.reasoningContinuation,
     timeoutMs: provider.timeoutMs,
     maxRetries: provider.maxRetries,
     retryBaseDelayMs: provider.retryBaseDelayMs,

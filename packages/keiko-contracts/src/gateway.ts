@@ -733,6 +733,8 @@ export type ChatMessageContentPart =
   ChatMessageTextContentPart | ChatMessageImageUrlContentPart | ChatMessageFileContentPart;
 
 export interface ChatMessage {
+  /** Provider continuation state; separate from answer/presentation, admitted by the server. */
+  readonly reasoningContent?: string | undefined;
   readonly role: "system" | "user" | "assistant" | "tool";
   readonly content: string;
   readonly contentParts?: readonly ChatMessageContentPart[] | undefined;

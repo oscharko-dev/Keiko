@@ -16377,6 +16377,18 @@
               "required": false
             },
             {
+              "name": "reasoningContinuationBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "reasoningContinuationMessages",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "runId",
               "type": "string",
               "dataClass": "opaque-id",

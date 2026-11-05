@@ -58,13 +58,50 @@ export function createGeneratedOpenCodeNativeContextPlugin(
   const guidance = openCodeNativeContextGuidance(profile);
   return [
     `const guidance = ${JSON.stringify(guidance)};`,
+    ...continuationProjectionSource(),
     "export default {",
     "  id: 'keiko.native-context',",
     "  async setup(ctx) {",
     "    await ctx.session.hook('context', (event) => {",
     "      event.system.push({ type: 'text', text: guidance });",
+    "      if (requiresContinuation(event.model)) return projectContinuation(ctx, event);",
     "    });",
     "  },",
     "};",
   ].join("\n");
+}
+
+/** The pinned producer exposes raw terminal states through session.context, before AI lowering
+ * has converted aborted reasoning into text. Keep the comparison inside that existing owner. */
+function continuationProjectionSource(): readonly string[] {
+  return [
+    "function requiresContinuation(model) {",
+    "  if (!model || typeof process === 'undefined') return false;",
+    "  const raw = process.env.OPENCODE_CONFIG_CONTENT;",
+    "  if (raw === undefined) return false;",
+    "  const binding = JSON.parse(raw).providers?.[model.providerID]?.models?.[model.id];",
+    "  return binding?.compatibility?.reasoningField === 'reasoning_content' && binding.compatibility.requireReasoning === true;",
+    "}",
+    "function unfinished(message, model) {",
+    "  if (message.error !== undefined || message.finish === 'error' || message.finish === 'content-filter') return true;",
+    "  if (!Number.isFinite(message.time?.completed)) return true;",
+    "  if (message.model?.providerID !== model.providerID || message.model?.id !== model.id) return true;",
+    "  return message.content.some(part => part.type === 'reasoning' ? !Number.isFinite(part.time?.completed) :",
+    "    part.type === 'tool' && part.state?.status !== 'completed' && part.state?.status !== 'error');",
+    "}",
+    "async function projectContinuation(ctx, event) {",
+    "  let native;",
+    "  try { native = await ctx.session.context({ sessionID: event.sessionID }); }",
+    "  catch { throw new Error('Required model continuation history is unavailable.'); }",
+    "  if (!Array.isArray(native)) throw new TypeError('Required model continuation history is invalid.');",
+    "  const excluded = native.filter(message => message.type === 'assistant' && unfinished(message, event.model));",
+    "  const messageIds = new Set(excluded.map(message => message.id));",
+    "  const callIds = new Set(excluded.flatMap(message => message.content.filter(part => part.type === 'tool').map(part => part.id)));",
+    "  event.messages = event.messages.filter(message => !messageIds.has(message.id)).flatMap(message => {",
+    "    if (message.role !== 'tool') return [message];",
+    "    const content = message.content.filter(part => !callIds.has(part.id));",
+    "    return content.length === 0 ? [] : [{ ...message, content }];",
+    "  });",
+    "}",
+  ];
 }

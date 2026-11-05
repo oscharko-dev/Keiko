@@ -106,7 +106,7 @@ async function fetchTokenCount(
     },
     body: JSON.stringify({
       model: request.modelId,
-      messages: request.messages.map(openAiCompatiblePromptMessage),
+      messages: request.messages.map((message) => openAiCompatiblePromptMessage(message)),
       ...(request.tools === undefined ? {} : { tools: openAiCompatiblePromptTools(request.tools) }),
     }),
     signal,

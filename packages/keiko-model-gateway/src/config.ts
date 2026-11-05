@@ -6,7 +6,6 @@
 import { readFileSync } from "node:fs";
 import { parseAtlassianNetworkConfig } from "./atlassian-network-config.js";
 import { isIP } from "node:net";
-import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   DEFAULT_GROUNDING_LIMITS,
@@ -62,21 +61,8 @@ import type {
   VoiceProviderLocality,
 } from "./types.js";
 
-export function toolCallingConfigurationFingerprint(provider: ModelProviderConfig): string {
-  // Credential header spelling controls authentication transport, not the provider protocol or its
-  // tool-call semantics. Deliberately exclude it: hashing a request-supplied header name creates a
-  // misleading password-hash dataflow and cannot make a capability verdict more authoritative.
-  const binding = [
-    provider.modelId,
-    provider.baseUrl,
-    provider.endpointStyle ?? "openai-compatible",
-    provider.apiVersion ?? "",
-    // The deployment the gateway reports behind the alias (#3905). Appended only once observed, so
-    // a provider whose discovery never saw one keeps the digest its earlier proofs were issued for.
-    ...(provider.deploymentIdentitySha256 === undefined ? [] : [provider.deploymentIdentitySha256]),
-  ];
-  return sha256Hex(canonicalise(binding));
-}
+export { toolCallingConfigurationFingerprint } from "./provider-identity.js";
+import { toolCallingConfigurationFingerprint } from "./provider-identity.js";
 
 // #3591: raised from 30s so an unconfigured provider's default already tolerates the field
 // customer's slow LiteLLM/vLLM proxy instead of relying solely on the gateway's own silence/budget
@@ -1861,6 +1847,7 @@ function parseProviderConfig(
     ...(apiVersion === undefined ? {} : { apiVersion }),
     ...(realtimeAuthMode === undefined ? {} : { realtimeAuthMode }),
     ...outputTokenParameterConfig(raw.outputTokenParameter, path),
+    ...reasoningContinuationConfig(raw.reasoningContinuation, path),
     ...tokenCounterConfig(raw.tokenCounter, path),
     ...deploymentIdentityConfig(raw.deploymentIdentitySha256, path),
     ...catalogOriginConfig(raw.catalogOrigin, path),
@@ -1873,6 +1860,21 @@ function parseProviderConfig(
     ...(voiceProfiles === undefined ? {} : { voiceProfiles }),
     ...(circuitBreaker === undefined ? {} : { circuitBreaker }),
   };
+}
+
+function reasoningContinuationConfig(
+  value: unknown,
+  path: string,
+): Pick<ModelProviderConfig, "reasoningContinuation"> {
+  return value === undefined
+    ? {}
+    : {
+        reasoningContinuation: requireEnum<"required-with-tools">(
+          value,
+          `${path}.reasoningContinuation`,
+          ["required-with-tools"],
+        ),
+      };
 }
 
 function providerCredentialReference(

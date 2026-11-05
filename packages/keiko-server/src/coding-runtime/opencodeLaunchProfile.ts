@@ -70,6 +70,8 @@ export interface OpenCodeAgentModelsInput {
 }
 
 export interface OpenCodeContextGeometry {
+  readonly reasoningContinuation?: "required-with-tools" | undefined;
+  readonly continuationRouteDigest?: string | undefined;
   readonly contextWindowTokens: number;
   readonly maxInputTokens: number;
   readonly maxOutputTokens: number;
@@ -276,7 +278,8 @@ function launchEnvironment(
     // private discovery directory (`codingRuntimeRepositoryItems.ts`), which this switch does
     // not touch.
     OPENCODE_DISABLE_PROJECT_CONFIG: "true",
-    ...(input.toolProfile === "native"
+    ...(input.toolProfile === "native" ||
+    input.contextGeometry?.reasoningContinuation === "required-with-tools"
       ? { OPENCODE_CONFIG_CONTENT: JSON.stringify(nativeServerOwnedBinding(configValue)) }
       : {}),
     ...packageManagerEnvironment(input, formatter),
@@ -324,9 +327,33 @@ function nativeFormatterFacts(
   };
 }
 
+function validContinuationMetadata(metadata: {
+  readonly continuationRouteDigest?: unknown;
+  readonly reasoningContinuation?: unknown;
+}): boolean {
+  const { continuationRouteDigest: digest, reasoningContinuation: policy } = metadata;
+  if (digest !== undefined && (typeof digest !== "string" || !/^[a-f0-9]{64}$/u.test(digest)))
+    return false;
+  return policy === undefined || (policy === "required-with-tools" && digest !== undefined);
+}
+
+function continuationGeometryFields(
+  metadata: CodingWorkbenchSidecarGatewayRunMetadata,
+): Pick<OpenCodeContextGeometry, "reasoningContinuation" | "continuationRouteDigest"> {
+  return {
+    ...(metadata.reasoningContinuation === undefined
+      ? {}
+      : { reasoningContinuation: metadata.reasoningContinuation }),
+    ...(metadata.continuationRouteDigest === undefined
+      ? {}
+      : { continuationRouteDigest: metadata.continuationRouteDigest }),
+  };
+}
+
 export function resolveOpenCodeContextGeometry(
   metadata: CodingWorkbenchSidecarGatewayRunMetadata,
 ): OpenCodeContextGeometry | undefined {
+  if (!validContinuationMetadata(metadata)) return undefined;
   const { maxPromptTokens, maxOutputTokens, maxRequestBytes } = metadata;
   if (
     ![maxPromptTokens, maxOutputTokens, maxRequestBytes, metadata.maxInputMessages].every(
@@ -349,6 +376,7 @@ export function resolveOpenCodeContextGeometry(
   if (!Number.isSafeInteger(maxInputTokens)) return undefined;
   if (maxInputTokens <= 0) return undefined;
   return {
+    ...continuationGeometryFields(metadata),
     contextWindowTokens: maxInputTokens + maxOutputTokens,
     maxInputTokens,
     maxOutputTokens,
@@ -733,6 +761,9 @@ function providerModel(
 ): Readonly<Record<string, unknown>> {
   return {
     name,
+    ...(geometry.reasoningContinuation === "required-with-tools"
+      ? { compatibility: { reasoningField: "reasoning_content", requireReasoning: true } }
+      : {}),
     capabilities: {
       tools: true,
       input: ["text", ...(media.image ? ["image"] : []), ...(media.pdf ? ["pdf"] : [])],

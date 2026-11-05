@@ -226,11 +226,13 @@ export interface GatewayCallRequest extends GatewayRequest {
    * The explicit reasoning delivery of a call whose surface displays the model's reasoning (#3878,
    * #3873 F23); local, never serialized into a provider request body. `forward` hands the model's
    * reasoning to the caller beside its answer (as `reasoning` chunks and `NormalizedResponse.reasoning`),
-   * while the configuration's `codingReasoningDisplay` is not `"off"`. Only the coding sidecar route
-   * sets it; every other call, whatever latency profile it borrows, receives its answer without the
+   * while display is enabled, or privately for a provider requiring exact continuation state.
+   * Only the coding sidecar route sets it; every other call, whatever latency profile it borrows, receives its answer without the
    * reasoning, which the gateway still parses and counts.
    */
   readonly reasoningDelivery?: "forward" | undefined;
+  /** Server-private credential floor for opaque continuation; never serialized or logged. */
+  readonly reasoningStateSecrets?: readonly string[];
   /**
    * The explicit answer repair of an autonomous coding turn (#3873, F17, F23); local, never
    * serialized into a provider request body. `steered` gives an answer the model could not use (it
@@ -902,6 +904,14 @@ function noteDelivered(state: PreparedStream, chunk: GatewayStreamChunk): void {
 
 function resumableAfterReasoning(state: PreparedStream, error: unknown): error is GatewayError {
   if (!(error instanceof GatewayError)) return false;
+  // Opaque continuation state belongs to one physical attempt. A second passage cannot replace
+  // bytes already delivered into the native assistant record.
+  if (
+    state.attempts.reasoningDelivered &&
+    state.prepared.reasoningDelivery === "forward" &&
+    state.route.provider.reasoningContinuation === "required-with-tools"
+  )
+    return false;
   const repairable =
     state.prepared.answerRepair === "steered" &&
     state.outputRepair.steered === undefined &&
@@ -1710,12 +1720,16 @@ export class Gateway {
 
   // #3878: only a call that asks for reasoning delivery (`reasoningDelivery: "forward"`, set by the
   // coding sidecar route alone) forwards the model's reasoning, so the Coding Workbench can show it,
-  // and only while the operator has not switched `codingReasoningDisplay` off. Every other surface
+  // or privately for required provider continuation even when live presentation is hidden. Every other surface
   // keeps today's answer: the reasoning is parsed and discarded — including a surface that borrows
   // the coding-workbench latency profile for its timeout floors, which selects timeouts only (the
   // commit draft received the reasoning with it until #3873, F23).
   private forwardsReasoning(request: GatewayCallRequest): boolean {
-    return request.reasoningDelivery === "forward" && this.config.codingReasoningDisplay !== "off";
+    return (
+      request.reasoningDelivery === "forward" &&
+      (this.config.codingReasoningDisplay !== "off" ||
+        this.providers.get(request.modelId)?.reasoningContinuation === "required-with-tools")
+    );
   }
 
   private async prepareStream(request: GatewayCallRequest): Promise<PreparedStream> {
