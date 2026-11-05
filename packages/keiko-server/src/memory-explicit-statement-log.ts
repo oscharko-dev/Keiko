@@ -8,18 +8,25 @@ import {
 
 import { getServerLogger } from "./observability/index.js";
 
-const MEMORY_EXPLICIT_FORGET_OUTCOMES = ["forgotten", "ambiguous", "refused", "failed"] as const;
-
-export type MemoryExplicitForgetOutcome = (typeof MEMORY_EXPLICIT_FORGET_OUTCOMES)[number];
-
-const MEMORY_EXPLICIT_FORGET_OPERATION = defineActivityLogOperation({
+const MEMORY_EXPLICIT_OPERATION_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
   owner: "keiko-server",
   causal: "none",
   releaseImpact: "patch",
-  op: "memory.explicit.forget",
   category: "memory",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["memory-explicit-statement"],
+} as const;
+
+const MEMORY_EXPLICIT_FORGET_OUTCOMES = ["forgotten", "ambiguous", "refused", "failed"] as const;
+
+export type MemoryExplicitForgetOutcome = (typeof MEMORY_EXPLICIT_FORGET_OUTCOMES)[number];
+
+const MEMORY_EXPLICIT_FORGET_OPERATION = defineActivityLogOperation({
+  ...MEMORY_EXPLICIT_OPERATION_BASE,
+  op: "memory.explicit.forget",
   emitter: "memory-explicit-statement-log.logExplicitMemoryForget",
   fields: {
     outcome: {
@@ -29,9 +36,6 @@ const MEMORY_EXPLICIT_FORGET_OPERATION = defineActivityLogOperation({
       values: MEMORY_EXPLICIT_FORGET_OUTCOMES,
     },
   },
-  lifecycle: "state",
-  analyzerProjection: "timeline",
-  failureClasses: ["memory-explicit-statement"],
   proofIds: ["memory.explicit.forget.line"],
 });
 
@@ -55,13 +59,8 @@ const MEMORY_EXPLICIT_REMEMBER_OUTCOMES = [
 export type MemoryExplicitRememberOutcome = (typeof MEMORY_EXPLICIT_REMEMBER_OUTCOMES)[number];
 
 const MEMORY_EXPLICIT_REMEMBER_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  owner: "keiko-server",
-  causal: "none",
-  releaseImpact: "patch",
+  ...MEMORY_EXPLICIT_OPERATION_BASE,
   op: "memory.explicit.remember",
-  category: "memory",
   emitter: "memory-explicit-statement-log.logExplicitMemoryRemember",
   fields: {
     outcome: {
@@ -71,9 +70,6 @@ const MEMORY_EXPLICIT_REMEMBER_OPERATION = defineActivityLogOperation({
       values: MEMORY_EXPLICIT_REMEMBER_OUTCOMES,
     },
   },
-  lifecycle: "state",
-  analyzerProjection: "timeline",
-  failureClasses: ["memory-explicit-statement"],
   proofIds: ["memory.explicit.remember.line"],
 });
 

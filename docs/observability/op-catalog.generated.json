@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9c6fdb3c05000e4ed7e49106d5cc19c1133196c9ede1d5ba8580409f86e625f8",
+    "catalogDigest": "783c9aa37f9c12e01eb6db6bec7d70d1a27c8fb4c97e3104ff9e820d9605e52e",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -33255,8 +33255,11 @@
         "owner": "keiko-server",
         "causal": "none",
         "releaseImpact": "patch",
-        "op": "memory.explicit.forget",
         "category": "memory",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["memory-explicit-statement"],
+        "op": "memory.explicit.forget",
         "emitter": "memory-explicit-statement-log.logExplicitMemoryForget",
         "fields": {
           "completeness": {
@@ -33276,12 +33279,9 @@
             "values": ["forgotten", "ambiguous", "refused", "failed"]
           }
         },
-        "lifecycle": "state",
-        "analyzerProjection": "timeline",
-        "failureClasses": ["memory-explicit-statement"],
         "proofIds": ["memory.explicit.forget.line"],
-        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:15",
-        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:43"]
+        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:27",
+        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:47"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33289,8 +33289,11 @@
         "owner": "keiko-server",
         "causal": "none",
         "releaseImpact": "patch",
-        "op": "memory.explicit.remember",
         "category": "memory",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["memory-explicit-statement"],
+        "op": "memory.explicit.remember",
         "emitter": "memory-explicit-statement-log.logExplicitMemoryRemember",
         "fields": {
           "completeness": {
@@ -33310,12 +33313,9 @@
             "values": ["stored", "confirmed", "replayed", "suppressed", "refused"]
           }
         },
-        "lifecycle": "state",
-        "analyzerProjection": "timeline",
-        "failureClasses": ["memory-explicit-statement"],
         "proofIds": ["memory.explicit.remember.line"],
-        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:57",
-        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:85"]
+        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:61",
+        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:81"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -107653,7 +107653,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1849",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1858",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -108236,7 +108236,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2212",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2221",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -108328,7 +108328,7 @@
     {
       "op": "chat.memory.auto-maintenance",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1481",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1482",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111067,7 +111067,7 @@
     {
       "op": "memory.explicit.forget",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:21",
+      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:29",
       "package": "keiko-server"
     },
     {

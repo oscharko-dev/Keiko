@@ -108,6 +108,8 @@ export interface WorkflowOutcomeInput {
 // Discriminated outcome union. Every kind carries the minimum payload the next layer needs.
 // `kind:"candidate"` always carries `requiresApproval` so the BFF route can immediately decide
 // whether to display a confirmation prompt without re-reading the proposal's sensitivity.
+export type CaptureStatementKind = "forget" | "update" | "correction" | "remember" | "ambient";
+
 export type CaptureOutcome =
   | {
       readonly kind: "candidate";
@@ -121,7 +123,13 @@ export type CaptureOutcome =
       readonly requiresConfirmation: boolean;
     }
   | { readonly kind: "supersession"; readonly operation: MemorySupersession }
-  | { readonly kind: "rejected"; readonly reason: RejectionReason };
+  | {
+      readonly kind: "rejected";
+      readonly reason: RejectionReason;
+      // Which statement was refused. Absent when the text was no statement at all, such as an
+      // ordinary message over the length limit.
+      readonly statement?: CaptureStatementKind;
+    };
 
 // ─── Salience capture (model-assisted) ───────────────────────────────────────
 // The scope-kind hints the salience model is allowed to express. A narrower subset of

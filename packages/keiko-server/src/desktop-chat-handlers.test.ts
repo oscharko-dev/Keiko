@@ -2593,7 +2593,9 @@ describe("desktop chat routes", () => {
     const body = (await sendRes.json()) as {
       memory?: { actions: { kind: string; reason?: string }[] };
     };
-    expect(body.memory?.actions).toEqual([{ kind: "rejected", reason: "customer-identifier" }]);
+    expect(body.memory?.actions).toEqual([
+      { kind: "rejected", reason: "customer-identifier", explicitStatement: true },
+    ]);
     expect(listAllMemories(memoryVault, { includeExpired: true })).toEqual([]);
     memoryVault.close();
   });

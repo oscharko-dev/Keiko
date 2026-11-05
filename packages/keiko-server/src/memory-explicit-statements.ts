@@ -4,11 +4,7 @@
 
 import type { ConversationMemoryActionWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
-import {
-  isForgettableStatement,
-  type CaptureOutcome,
-  type RejectionReason,
-} from "@oscharko-dev/keiko-memory-capture";
+import { isForgettableStatement, type CaptureOutcome } from "@oscharko-dev/keiko-memory-capture";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 import type { UiHandlerDeps } from "./deps.js";
@@ -26,6 +22,8 @@ import {
   logExplicitMemoryRemember,
 } from "./memory-explicit-statement-log.js";
 import { forgetMemoryFromStatement, forgetStatementNotLearned } from "./memory-handlers.js";
+
+type RejectedCaptureOutcome = Extract<CaptureOutcome, { readonly kind: "rejected" }>;
 
 export interface ExplicitStatementContext {
   readonly scopes: readonly MemoryScope[];
@@ -53,6 +51,10 @@ export function previousUserMessage(
   return newest?.content === content ? messages.at(-2) : newest;
 }
 
+function statementRefused(reason: string): ConversationMemoryActionWire {
+  return { kind: "rejected", reason, explicitStatement: true };
+}
+
 function forgotAction(memoryId: string): ConversationMemoryActionWire {
   return { kind: "forget", memoryId, requiresConfirmation: false, forgotten: true };
 }
@@ -68,7 +70,7 @@ export function forgetActionFromOutcome(
   logExplicitMemoryForget(result, correlationId);
   return result === "forgotten"
     ? forgotAction(String(memoryId))
-    : { kind: "rejected", reason: "forget-not-applied" };
+    : statementRefused("forget-not-applied");
 }
 
 // "Vergiss das" with no memory it could mean: the statement before it, which nothing was stored from.
@@ -81,7 +83,7 @@ async function forgetPreviousStatement(
   const body = statement.previousStatement();
   if (body === undefined || deps.memoryVault === undefined || !isForgettableStatement(body)) {
     logExplicitMemoryForget("ambiguous", correlationId);
-    return { kind: "rejected", reason: "ambiguous-forget" };
+    return statementRefused("ambiguous-forget");
   }
   const result = await forgetStatementNotLearned(
     deps,
@@ -93,18 +95,45 @@ async function forgetPreviousStatement(
   logExplicitMemoryForget(result, correlationId);
   return result === "forgotten"
     ? forgotAction(correlationId)
-    : { kind: "rejected", reason: "forget-not-applied" };
+    : statementRefused("forget-not-applied");
 }
 
+function logRefusedStatement(outcome: RejectedCaptureOutcome, correlationId: string): void {
+  if (outcome.statement === "forget") {
+    logExplicitMemoryForget(
+      outcome.reason === "ambiguous-forget" ? "ambiguous" : "refused",
+      correlationId,
+    );
+  } else if (outcome.statement === "remember") {
+    logExplicitMemoryRemember("refused", correlationId);
+  }
+}
+
+// A person's own statement gets its answer in the chat. A refusal of what was only learned, or of
+// an ordinary message, stays out of it.
 export async function rejectedActionFromOutcome(
-  reason: RejectionReason,
+  outcome: RejectedCaptureOutcome,
   deps: UiHandlerDeps,
   statement: ExplicitStatementContext,
 ): Promise<ConversationMemoryActionWire> {
-  if (reason === "forget-reference-unresolved") return forgetPreviousStatement(deps, statement);
-  if (reason === "ambiguous-forget") logExplicitMemoryForget("ambiguous", statement.correlationId);
-  else logExplicitMemoryRemember("refused", statement.correlationId);
-  return { kind: "rejected", reason };
+  if (outcome.reason === "forget-reference-unresolved") {
+    return forgetPreviousStatement(deps, statement);
+  }
+  logRefusedStatement(outcome, statement.correlationId);
+  return outcome.statement === undefined || outcome.statement === "ambient"
+    ? { kind: "rejected", reason: outcome.reason }
+    : statementRefused(outcome.reason);
+}
+
+// A candidate the capture pipeline accepted and the server then refuses.
+export function refusedCandidateAction(
+  reason: string,
+  explicit: boolean,
+  correlationId: string,
+): ConversationMemoryActionWire {
+  if (!explicit) return { kind: "rejected", reason };
+  logExplicitMemoryRemember("refused", correlationId);
+  return statementRefused(reason);
 }
 
 async function storeUnlessKnownParaphrase(

@@ -459,6 +459,8 @@ describe("explicit German forget and remember statements (#4211)", () => {
     ["Forget that I like tables.", "I like tables"],
     ["Vergiss, dass ich Tabellen nicht mag", "ich Tabellen nicht mag"],
     ["Lösche bitte die Erinnerung an den Bericht", "den Bericht"],
+    ["Vergiss, dass ich Tabellen mag. Zeig mir jetzt eine Zahl.", "ich Tabellen mag"],
+    ["Vergiss das. Und zeig mir Tabellen", "das"],
   ])("takes the fact out of %j", (text, target) => {
     const { targets, resolver } = captured();
     expect(tryExtractForget(text, ctx(), { resolver })?.kind).toBe("forget");
@@ -508,6 +510,16 @@ describe("explicit German forget and remember statements (#4211)", () => {
     ],
     ["Merke dir: Ich nutze z. B. Tabellen. Was ist Rekursion?", "Ich nutze z. B. Tabellen."],
     ["Merke dir: Ich bevorzuge Tabellen\nWas ist Rekursion?", "Ich bevorzuge Tabellen"],
+    ["Merke dir: Ich mag es. Zeig mir eine Zahl.", "Ich mag es."],
+    ["Merke dir: Ich bin 42! Zeig mir eine Zahl.", "Ich bin 42!"],
+    [
+      "Merke dir: Ich nutze Tabellen vs. Listen. Zeig mir eine Zahl.",
+      "Ich nutze Tabellen vs. Listen.",
+    ],
+    ["Merke dir: Ich nutze z.B. Tabellen. Zeig mir eine Zahl.", "Ich nutze z.B. Tabellen."],
+    ["Merke dir: Ich nutze e.g. Tabellen. Zeig mir eine Zahl.", "Ich nutze e.g. Tabellen."],
+    ["Merke dir: Ich nutze Node.js. Zeig mir eine Zahl.", "Ich nutze Node.js."],
+    ["Merke dir: Ich bin am 3. Mai geboren. Zeig mir eine Zahl.", "Ich bin am 3. Mai geboren."],
   ])("stores only the stated fact of %j", (text, body) => {
     const outcome = tryExtractRemember(text, ctx());
     expect(outcome?.kind === "candidate" && outcome.proposal.body).toBe(body);
@@ -544,19 +556,23 @@ describe("what is not a remember statement (#4211)", () => {
     expect(isExplicitMemoryStatement("Vergiss es")).toBe(false);
   });
 
-  it.each(["Merke dir: mein Passwort ist hunter2hunter2", "Remember: the password is hunter2"])(
-    "refuses a credential in plain words in %j",
-    (text) => {
-      expect(tryExtractRemember(text, ctx(), { scopeKind: "user" })).toEqual({
-        kind: "rejected",
-        reason: "credential-shape",
-      });
-    },
-  );
+  it.each([
+    "Merke dir: mein Passwort ist hunter2hunter2",
+    "Remember: the password is hunter2",
+    "Merke dir: Passwort: hunter2",
+    "Merke dir: Kennwort = hunter2",
+    "Merke dir: Passphrase: hunter2",
+  ])("refuses a credential in plain words in %j", (text) => {
+    expect(tryExtractRemember(text, ctx(), { scopeKind: "user" })).toEqual({
+      kind: "rejected",
+      reason: "credential-shape",
+    });
+  });
 
   it("does not leave a tombstone for a question or a pasted document", () => {
     expect(isForgettableStatement("Ich mag Tabellen.")).toBe(true);
     expect(isForgettableStatement("Wie zeigst du mir Zahlen?")).toBe(false);
     expect(isForgettableStatement("x".repeat(4097))).toBe(false);
+    expect(isForgettableStatement("Vergiss das.")).toBe(false);
   });
 });

@@ -9,6 +9,7 @@ export type {
   CaptureContext,
   CaptureMemoryResolver,
   CaptureOutcome,
+  CaptureStatementKind,
   CapturePolicyOptions,
   MemoryScopeKindHint,
   SalienceDiagnostic,
@@ -20,6 +21,7 @@ export type {
 } from "./types.js";
 export { extractCandidatesFromUserText, extractCandidatesFromWorkflowOutcome } from "./capture.js";
 export {
+  explicitStatementKind,
   isExplicitMemoryStatement,
   isForgettableStatement,
   isMemoryForgetReference,

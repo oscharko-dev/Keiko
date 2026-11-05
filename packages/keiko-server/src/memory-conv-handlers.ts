@@ -456,6 +456,7 @@ function persistCandidateOutcome(
   mode: CodingWorkbenchMode,
   outcome: CaptureOutcome,
 ): PersistedCaptureOutcome {
+  if (outcome.kind === "rejected") return { kind: "rejected", reason: outcome.reason };
   if (outcome.kind !== "candidate") return outcome;
   if (!isPersistableMemoryCandidate(outcome)) {
     return { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON };

@@ -1,5 +1,5 @@
 import {
-  isExplicitMemoryStatement,
+  explicitStatementKind,
   isMemoryForgetReference,
   type CaptureMemoryResolver,
 } from "@oscharko-dev/keiko-memory-capture";
@@ -124,7 +124,7 @@ export interface MemoryForgetResolverContext {
 // "das" is the statement, not whatever the answer happened to draw on.
 function lastTurnReachedMemory(statement: string | undefined): boolean {
   if (statement === undefined) return false;
-  return statement.trimEnd().endsWith("?") || isExplicitMemoryStatement(statement);
+  return statement.trimEnd().endsWith("?") || explicitStatementKind(statement) === "remember";
 }
 
 const MIN_SHARED_PREFIX_CHARS = 4;

@@ -400,7 +400,9 @@ describe("mode-aware memory capture journey", () => {
 
     const actions = await collectMemoryActions(deps, request, ctx);
 
-    expect(actions).toEqual([{ kind: "rejected", reason: "suppressed-by-forget" }]);
+    expect(actions).toEqual([
+      { kind: "rejected", reason: "suppressed-by-forget", explicitStatement: true },
+    ]);
     expect(readMemories(vault, ctx)).toHaveLength(0);
   });
 
@@ -775,7 +777,9 @@ describe("explicit remember statement in chat", () => {
       ctx,
     );
 
-    expect(actions).toEqual([{ kind: "rejected", reason: "instruction-override" }]);
+    expect(actions).toEqual([
+      { kind: "rejected", reason: "instruction-override", explicitStatement: true },
+    ]);
     expect(readMemories(vault, ctx)).toHaveLength(0);
   });
 
@@ -831,8 +835,60 @@ describe("explicit remember statement in chat", () => {
       ctx,
     );
 
-    expect(actions).toEqual([{ kind: "rejected", reason: "credential-shape" }]);
+    expect(actions).toEqual([
+      { kind: "rejected", reason: "credential-shape", explicitStatement: true },
+    ]);
     expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
+  it("marks only a person's own statement as one the chat answers", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "autonomous-delivery" });
+
+    const [stated] = await collectMemoryActions(
+      deps,
+      turnRequest("Merke dir: Ich bevorzuge Tabellen"),
+      ctx,
+    );
+    const [learned] = await collectMemoryActions(deps, turnRequest("My name is Ada Lovelace"), ctx);
+    const [longMessage] = await collectMemoryActions(
+      deps,
+      turnRequest(`Bitte fasse das zusammen: ${"x".repeat(5000)}`),
+      ctx,
+    );
+
+    expect(stated).toEqual(expect.objectContaining({ kind: "candidate", explicitStatement: true }));
+    expect(learned?.kind).toBe("candidate");
+    expect(learned).not.toHaveProperty("explicitStatement");
+    expect(longMessage).toEqual({ kind: "rejected", reason: "exceeds-length-limit" });
+  });
+
+  it("records a refusal as remember only when a remember statement was refused", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "autonomous-delivery" });
+    const sink = captureActivityLog();
+
+    await collectMemoryActions(
+      deps,
+      turnRequest(`Bitte fasse das zusammen: ${"x".repeat(5000)}`),
+      ctx,
+      "request-1",
+    );
+    expect(sink.events.filter((e) => e.op === "memory.explicit.remember")).toEqual([]);
+
+    await collectMemoryActions(
+      deps,
+      turnRequest(`Merke dir: ${"x".repeat(5000)}`),
+      ctx,
+      "request-1",
+    );
+    expect(
+      sink.events
+        .filter((event) => event.op === "memory.explicit.remember")
+        .map((line) => line.extra?.outcome),
+    ).toEqual(["refused"]);
   });
 });
 
@@ -919,6 +975,34 @@ describe("explicit forget statement in chat", () => {
     expect(readMemories(vault, ctx)).toHaveLength(1);
   });
 
+  it("asks instead of forgetting when the bare reference is said again", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "user");
+    const asked = Date.now() + 60_000;
+    const [record] = readMemories(vault, ctx);
+    if (record === undefined) throw new Error("expected a memory");
+    vault.recordAccess([record.id], asked + 1);
+    const said = { role: "user", content: "Vergiss das." } as ChatMessage;
+    const deps = {
+      ...learned,
+      store: {
+        ...learned.store,
+        listMessages: () => [
+          { ...said, id: "m1", timestamp: asked },
+          { ...said, id: "m2", timestamp: asked + 2 },
+        ],
+      },
+    };
+
+    const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+    expect(actions).toEqual([
+      { kind: "rejected", reason: "ambiguous-forget", explicitStatement: true },
+    ]);
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+  });
+
   it.each(["Wie soll ich dir Zahlen zeigen?", "Merke dir, dass ich Tabellen bevorzuge"])(
     'forgets the older memory the last turn reached when it said "%s"',
     async (statement) => {
@@ -950,7 +1034,9 @@ describe("explicit forget statement in chat", () => {
 
       const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
 
-      expect(actions).toEqual([{ kind: "rejected", reason: "ambiguous-forget" }]);
+      expect(actions).toEqual([
+        { kind: "rejected", reason: "ambiguous-forget", explicitStatement: true },
+      ]);
     },
   );
 
@@ -961,7 +1047,9 @@ describe("explicit forget statement in chat", () => {
 
     const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
 
-    expect(actions).toEqual([{ kind: "rejected", reason: "ambiguous-forget" }]);
+    expect(actions).toEqual([
+      { kind: "rejected", reason: "ambiguous-forget", explicitStatement: true },
+    ]);
   });
 
   it.each(ALL_MODES)("forgets the conversation's memory in %s", async (mode) => {
@@ -1063,7 +1151,9 @@ describe("explicit forget statement in chat", () => {
 
     const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
 
-    expect(actions).toEqual([{ kind: "rejected", reason: "ambiguous-forget" }]);
+    expect(actions).toEqual([
+      { kind: "rejected", reason: "ambiguous-forget", explicitStatement: true },
+    ]);
     expect(readMemories(vault, ctx)).toHaveLength(2);
   });
 
@@ -1075,7 +1165,9 @@ describe("explicit forget statement in chat", () => {
 
     const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), other);
 
-    expect(actions).toEqual([{ kind: "rejected", reason: "ambiguous-forget" }]);
+    expect(actions).toEqual([
+      { kind: "rejected", reason: "ambiguous-forget", explicitStatement: true },
+    ]);
     expect(readMemories(vault, ctx)).toHaveLength(1);
   });
 });

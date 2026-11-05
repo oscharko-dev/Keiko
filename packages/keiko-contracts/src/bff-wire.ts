@@ -1027,6 +1027,9 @@ export type ConversationMemoryActionWire =
       // Server-owned persistence result. UI consumers must never infer reviewability from mode or
       // requiresApproval: an accepted candidate has already passed the unattended promotion gate.
       readonly status: Extract<MemoryStatus, "proposed" | "accepted">;
+      // True for a person's own clear statement, which the chat answers. Anything learned stays
+      // invisible, even when its status is the same.
+      readonly explicitStatement?: true;
     }
   | {
       readonly kind: "update";
@@ -1040,7 +1043,12 @@ export type ConversationMemoryActionWire =
       // True when the server has already forgotten the memory, so nothing is left to confirm.
       readonly forgotten?: boolean;
     }
-  | { readonly kind: "rejected"; readonly reason: string };
+  | {
+      readonly kind: "rejected";
+      readonly reason: string;
+      // True when a person's own clear statement was refused, so the chat answers it.
+      readonly explicitStatement?: true;
+    };
 
 export type ConversationMemoryCaptureOutcomeWire =
   | {

@@ -4955,11 +4955,13 @@ function memoryRefusalSentenceKey(reason: string): MemoryRefusalSentenceKey {
 function memoryStatementSentenceKey(
   action: ConversationMemoryActionWire,
 ): MemoryRefusalSentenceKey | undefined {
-  if (action.kind === "rejected") return memoryRefusalSentenceKey(action.reason);
   if (action.kind === "forget" && action.forgotten === true) {
     return "chat.memory.forgottenStatement";
   }
-  if (action.kind === "candidate" && action.status === "accepted") {
+  if (action.kind === "rejected" && action.explicitStatement === true) {
+    return memoryRefusalSentenceKey(action.reason);
+  }
+  if (action.kind === "candidate" && action.status === "accepted" && action.explicitStatement) {
     return "chat.memory.rememberedStatement";
   }
   return undefined;

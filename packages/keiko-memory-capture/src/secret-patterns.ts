@@ -45,7 +45,7 @@ const CREDENTIAL_SHAPE_PATTERNS: readonly RegExp[] = [
   /\bhttps?:\/\/[^\s/:@]+:[^\s/:@]+@/i,
   // Form-encoded credential assignments. Each is a single non-nested capture; the value run
   // stops at whitespace or common delimiters so the quantifier can't backtrack.
-  /\bpassword\s*[=:]\s*[^\s,;"'`&]+/i,
+  /\b(?:passwor[dt]|kennwort|passphrase)\s*[=:]\s*[^\s,;"'`&]+/i,
   /\bsecret\s*[=:]\s*[^\s,;"'`&]+/i,
   /\bapi[_-]?key\s*[=:]\s*[^\s,;"'`&]+/i,
   /\btoken\s*[=:]\s*[^\s,;"'`&]+/i,

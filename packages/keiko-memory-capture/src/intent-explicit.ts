@@ -176,7 +176,7 @@ function forgetTargetOf(text: string): string | null {
   if (prefixMatch === null) return null;
   const body = bodyAfterPrefix(prefixMatch, text);
   if (body === null || firstSentence(body).endsWith("?")) return null;
-  const target = trimForgetTarget(body);
+  const target = trimForgetTarget(firstSentence(body));
   return target === "" || NEVER_MIND_TARGETS.has(target.toLowerCase()) ? null : target;
 }
 
@@ -200,9 +200,21 @@ function bodyAfterPrefix(prefixMatch: RegExpExecArray, text: string): string | n
 // An explicit statement stores what was stated, not the request that follows it in one message.
 const SENTENCE_MARKS_RE = /[.!?…]+/gu;
 const STARTS_UPPERCASE_RE = /^\p{Lu}/u;
-// One or two letters before a period read as an abbreviation such as "z. B." or "e.g.".
-const WORD_BEFORE_SENTENCE_END_RE = /\p{L}{3}$/u;
-const WORD_TAIL_CHARS = 3;
+const ENDS_IN_NUMBER_RE = /\p{N}$/u;
+const SHORT_FORM_PART_CHARS = 2;
+const ABBREVIATIONS = new Set("bzw ca dr etc evtl ggf inkl nr prof sog usw vgl vs zzgl".split(" "));
+
+// Only a period can belong to its word. "z. B.", "e.g." and "bzw." are abbreviations, and a number
+// stays with what follows, because "am 3. Mai" reads the same as "Ich bin 42." and cutting a date
+// loses the fact. A longer word with a period inside is a name such as "Node.js".
+function periodBelongsToWord(line: string, index: number): boolean {
+  const word = line.slice(line.lastIndexOf(" ", index - 1) + 1, index);
+  if (ENDS_IN_NUMBER_RE.test(word) || ABBREVIATIONS.has(word.toLowerCase())) return true;
+  const parts = word.split(".");
+  return parts.length > 1
+    ? parts.every((part) => part.length <= SHORT_FORM_PART_CHARS)
+    : [...word].length === 1;
+}
 
 function nextSentenceStartsAt(line: string, index: number): boolean {
   const rest = line.slice(index);
@@ -213,10 +225,8 @@ function nextSentenceStartsAt(line: string, index: number): boolean {
 function firstSentence(line: string): string {
   for (const match of line.matchAll(SENTENCE_MARKS_RE)) {
     const end = match.index + match[0].length;
-    const before = line.slice(Math.max(0, match.index - WORD_TAIL_CHARS), match.index);
-    if (nextSentenceStartsAt(line, end) && WORD_BEFORE_SENTENCE_END_RE.test(before)) {
-      return line.slice(0, end);
-    }
+    const abbreviated = match[0] === "." && periodBelongsToWord(line, match.index);
+    if (!abbreviated && nextSentenceStartsAt(line, end)) return line.slice(0, end);
   }
   return line;
 }
@@ -439,14 +449,23 @@ export function tryExtractRemember(
 // What "Vergiss das" can leave a tombstone for: a fact said in a sentence. A question states nothing,
 // and a pasted document is not what "das" means. Its tombstone would suppress later facts near it.
 export function isForgettableStatement(text: string): boolean {
-  return text.length <= MEMORY_BODY_MAX_CHARS_DEFAULT && !text.trimEnd().endsWith("?");
+  return (
+    text.length <= MEMORY_BODY_MAX_CHARS_DEFAULT &&
+    !text.trimEnd().endsWith("?") &&
+    forgetTargetOf(text) === null
+  );
 }
 
 // A message the explicit path owns. The learner must not read it as well: it would store the
 // statement itself, "Vergiss, dass ..." included.
 export function isExplicitMemoryStatement(text: string): boolean {
+  return explicitStatementKind(text) !== null;
+}
+
+export function explicitStatementKind(text: string): "forget" | "remember" | null {
+  if (forgetTargetOf(text) !== null) return "forget";
   const remembered = execFirst(REMEMBER_ABOUT_PATTERNS, text) ?? execFirst(REMEMBER_PATTERNS, text);
-  return forgetTargetOf(text) !== null || remembered !== null;
+  return remembered === null ? null : "remember";
 }
 
 // ─── tryExtractForget ────────────────────────────────────────────────────────

@@ -204,6 +204,10 @@ mean several memories, or there is nothing it could mean, the person is asked in
 and nothing is deleted. Each decision is recorded body-free as `memory.explicit.forget` or
 `memory.explicit.remember`.
 
+Only such a statement gets an answer in the chat, because the person asked. `explicitStatement` on the
+candidate or rejected action carries that; what is only learned, or a refusal of an ordinary message,
+stays out of the chat even with the same status.
+
 ### D5 — Capture stays failure-contained and diagnostics stay content-free
 
 Mode resolution cannot throw (it delegates to the total canonical clamp helper) and

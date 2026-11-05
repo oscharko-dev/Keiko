@@ -186,6 +186,7 @@ import {
   forgetActionFromOutcome,
   persistExplicitStatement,
   previousUserMessage,
+  refusedCandidateAction,
   rejectedActionFromOutcome,
   type ExplicitStatementContext,
   type ExplicitStatementPersistence,
@@ -1685,13 +1686,14 @@ async function candidateActionFromOutcome(
   correlationId: string,
 ): Promise<ConversationMemoryActionWire | null> {
   if (deps.memoryVault === undefined) return null;
+  const explicit = outcome.proposal.provenance.sourceKind === "explicit-user-instruction";
   if (!isPersistableMemoryCandidate(outcome)) {
-    return { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON };
+    return refusedCandidateAction(SENSITIVE_MEMORY_REJECTION_REASON, explicit, correlationId);
   }
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
   if (isSuppressedByForgetTombstone(deps.memoryVault, record)) {
-    return { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON };
+    return refusedCandidateAction(FORGOTTEN_MEMORY_SUPPRESSION_REASON, explicit, correlationId);
   }
   const candidate = captureCandidateForMode(record, mode, outcome);
   const result = await persistCandidateRecord(
@@ -1702,7 +1704,13 @@ async function candidateActionFromOutcome(
     canonicalCapture,
     correlationId,
   );
-  if (result.kind === "suppressed") return { kind: "rejected", reason: result.reason };
+  if (result.kind === "suppressed") {
+    return {
+      kind: "rejected",
+      reason: result.reason,
+      ...(explicit ? { explicitStatement: true as const } : {}),
+    };
+  }
   const { persisted } = result;
   const inserted = persisted.memory;
   if ((persisted.inserted || persisted.promoted) && inserted.status === "accepted") {
@@ -1715,6 +1723,7 @@ async function candidateActionFromOutcome(
     scopeLabel: scopeLabel(inserted.scope),
     requiresApproval: outcome.requiresApproval,
     status: inserted.status === "accepted" ? "accepted" : "proposed",
+    ...(explicit ? { explicitStatement: true as const } : {}),
   };
 }
 
@@ -1745,7 +1754,7 @@ async function captureActionFromOutcome(
     case "forget":
       return forgetActionFromOutcome(outcome, deps, statement.correlationId);
     case "rejected":
-      return rejectedActionFromOutcome(outcome.reason, deps, statement);
+      return rejectedActionFromOutcome(outcome, deps, statement);
     case "supersession":
       return null;
   }

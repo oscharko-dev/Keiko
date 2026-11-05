@@ -5292,7 +5292,10 @@ describe("ChatWindow MemoryActionCard rejected kind (#28)", () => {
       { kind: "forget", memoryId: "m1", requiresConfirmation: false, forgotten: true },
       "Forgotten.",
     ],
-    [{ kind: "rejected", reason: "ambiguous-forget" }, "Which memory do you mean?"],
+    [
+      { kind: "rejected", reason: "ambiguous-forget", explicitStatement: true },
+      "Which memory do you mean?",
+    ],
     [
       {
         kind: "candidate",
@@ -5301,6 +5304,7 @@ describe("ChatWindow MemoryActionCard rejected kind (#28)", () => {
         scopeLabel: "user",
         requiresApproval: false,
         status: "accepted",
+        explicitStatement: true,
       },
       "Saved.",
     ],
@@ -5326,6 +5330,38 @@ describe("ChatWindow MemoryActionCard rejected kind (#28)", () => {
       expect(screen.queryByRole("textbox", { name: /forget/i })).not.toBeInTheDocument();
     },
   );
+
+  it.each([
+    [
+      {
+        kind: "candidate",
+        proposalId: "p1",
+        body: "Tables",
+        scopeLabel: "user",
+        requiresApproval: false,
+        status: "accepted",
+      },
+      "Saved.",
+    ],
+    [{ kind: "rejected", reason: "exceeds-length-limit" }, "I did not save this."],
+  ] as const)("keeps what the person did not state out of the chat", (action, sentence) => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "",
+            memories: [],
+            budget: { tokens: 1200, used: 0 },
+          },
+          actions: [action],
+        },
+      }),
+    );
+
+    expect(screen.queryByText(sentence)).not.toBeInTheDocument();
+  });
 
   it("renders the general sentence for a reason without its own", async () => {
     const user = userEvent.setup();
