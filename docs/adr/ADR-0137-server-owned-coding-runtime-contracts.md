@@ -2589,6 +2589,22 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   - **Not done.** The mapped (non-native) profile retains nothing; `session.update` (rename) stays
     refused; a fork inside the run the timeline shows is offered only as a whole-task fork.
 
+- **OpenCode 2.2.5 (2026-11-05, #4271).** Paragraphs above that name an earlier pinned version record
+  when they were decided; the real-binary suites re-proved their behaviour on this pin.
+  - **New built-in plugins are withheld.** `OPENCODE_WITHHELD_BUILT_IN_PLUGINS` removes the browser,
+    goal, Claude Agent provider, artifact, image generation and schedule plugins through the
+    producer's own `plugins` setting, on both profiles. Their `experimental` switches stay off. A
+    filter behind the producer cannot do this: the browser plugin appends an agent rule after Keiko's
+    and so keeps a denied native tool advertised. `/goal` starts model turns on its own and stays out
+    until it has its own proof.
+  - **Changed producer contracts.** The producer repairs a model's `bash` call into `shell`, which
+    the policy decides as `shell`. A Code Mode `fetch` asserts `webfetch`. `GET /api/agent` waits for
+    plugins and answers 503 after five seconds: Keiko reads it again within the existing location
+    bound, and `coding-runtime.location.activation-wait` records the outcome and the number of those
+    answers, never a name.
+  - **Persistence.** The retained-session contract binds this version's schema. `job` and `blob` rows
+    refuse retention as unknown state, and a `schedule` row as pending input.
+
 What this amendment does not change: the three modes and the Authority Envelope (ADR-0124,
 ADR-0129, ADR-0138), the hard denials (ADR-0129 D3), Git delivery as a Keiko product operation
 with signed commits and bounded refs (ADR-0135, ADR-0087), evidence redaction (D7) and the one
