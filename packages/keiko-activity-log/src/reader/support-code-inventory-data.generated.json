@@ -1650,6 +1650,7 @@
     "keiko-server/gitDelivery/journeyRoutes",
     "keiko-server/gitDelivery/lineDiff",
     "keiko-server/gitDelivery/localMutationRoutes",
+    "keiko-server/gitDelivery/managedGitWorktree.test-support",
     "keiko-server/gitDelivery/mergeExecution",
     "keiko-server/gitDelivery/mergeRoutes",
     "keiko-server/gitDelivery/mutationEvidenceLedger",
