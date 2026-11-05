@@ -631,6 +631,20 @@ const NESTED_REPOSITORY_ASKING_SUBCOMMANDS: ReadonlySet<string> = new Set([
 ]);
 const NESTED_REPOSITORY_ISOLATION_ARGS: readonly string[] = ["--ignore-submodules=dirty"];
 const NESTED_REPOSITORY_REOPENING_FLAG = /^--(?:ignore-submodules|submodule)(?:=|$)/u;
+// A caller may still name a value that asks no nested repository anything: `dirty` and `all` skip
+// the work-tree question, and `short` only prints the recorded commit, which the superproject holds.
+const NESTED_REPOSITORY_ISOLATED_FLAGS: ReadonlySet<string> = new Set([
+  "--ignore-submodules=dirty",
+  "--ignore-submodules=all",
+  "--submodule=short",
+]);
+
+function nestedRepositoryReopeningFlag(args: readonly string[]): string | undefined {
+  return args.find(
+    (arg) =>
+      NESTED_REPOSITORY_REOPENING_FLAG.test(arg) && !NESTED_REPOSITORY_ISOLATED_FLAGS.has(arg),
+  );
+}
 
 function withNestedRepositoriesIsolated(args: readonly string[]): readonly string[] {
   const index = findSubcommandIndex(args);
@@ -682,7 +696,7 @@ const localGitProcessRunner = createGitProcessRunnerWithFixedArgs(gitEnv, LOCAL_
 export const defaultGitProcessRunner: GitProcessRunner = async (args, options) => {
   if (!FILTER_APPLYING_SUBCOMMANDS.has(gitSubcommand(args) ?? ""))
     return await localGitProcessRunner(args, options);
-  const reopening = args.find((arg) => NESTED_REPOSITORY_REOPENING_FLAG.test(arg));
+  const reopening = nestedRepositoryReopeningFlag(args);
   if (reopening !== undefined) return refusedOptionResult(reopening, "config-override");
   return await runFilterNeutralized(withNestedRepositoriesIsolated(args), options);
 };

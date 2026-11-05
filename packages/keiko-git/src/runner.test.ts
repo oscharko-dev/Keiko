@@ -1143,18 +1143,42 @@ describe("repository-local filter drivers (#4271)", () => {
     }
   });
 
-  it.each([["--ignore-submodules=none"], ["--ignore-submodules"], ["--submodule=diff"]])(
-    "refuses %s, which reopens a nested repository",
+  it.each([
+    ["--ignore-submodules=none"],
+    ["--ignore-submodules=untracked"],
+    ["--ignore-submodules"],
+    ["--submodule=diff"],
+    ["--submodule=log"],
+    ["--submodule"],
+  ])("refuses %s, which reopens a nested repository", async (flag) => {
+    const { repo, marker, dirty } = nestedFilteredRepository();
+    try {
+      dirty();
+      const result = await defaultGitProcessRunner([...GIT_BASE_ARGS, "diff", flag], {
+        cwd: repo,
+        timeoutMs: 10_000,
+        maxBytes: 65_536,
+      });
+      expect(result.refusal).toBe("config-override");
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it.each([["--ignore-submodules=dirty"], ["--ignore-submodules=all"], ["--submodule=short"]])(
+    "admits %s, which asks a nested repository nothing",
     async (flag) => {
       const { repo, marker, dirty } = nestedFilteredRepository();
       try {
         dirty();
-        const result = await defaultGitProcessRunner([...GIT_BASE_ARGS, "diff", flag], {
+        const result = await defaultGitProcessRunner([...GIT_BASE_ARGS, "diff", flag, "--stat"], {
           cwd: repo,
           timeoutMs: 10_000,
           maxBytes: 65_536,
         });
-        expect(result.refusal).toBe("config-override");
+        expect(result.refusal).toBeUndefined();
+        expect(result.exitCode).toBe(0);
         expect(existsSync(marker)).toBe(false);
       } finally {
         rmSync(repo, { recursive: true, force: true });
