@@ -265,7 +265,7 @@ the product head and the options. Its `metadata` records `sealed` (true for a `-
 the judge requires of the holdout part), `allowFoldedEnv`, `foldedKeys`, `budgetTokens`,
 `brokenLearner` and `configDigest`: the SHA-256 of the gateway configuration file in live mode,
 `offline` otherwise. It also records the **instrument**: `instrumentDigest`, a SHA-256 over the lab
-sources that decide what a run measures (`INSTRUMENT_FILES` in `instrument.mjs`: `corpus/holdout.mjs`, `corpus/sequence.mjs`,
+sources that decide what a run measures (`INSTRUMENT_FILES` in `instrument.mjs`: `../jira-chat-lab/requirements/work-project-lock.mjs`, `corpus/holdout.mjs`, `corpus/sequence.mjs`,
 `corpus/values.mjs`, `driver.mjs`, `evidence-scan.mjs`, `gateway-calls.mjs`, `instance.mjs`,
 `isolation.mjs`, `log-text.mjs`, `progress.mjs`, `report.mjs`, `run.mjs`, `scenario.mjs`, `score.mjs`,
 `scripted-model.mjs`, `set-files.mjs`, `unit-failure.mjs`), beside
@@ -567,12 +567,14 @@ The model writer posts a plain HTTP request per block (no provider SDK, ADR-0019
 only filler and the words around the facts, is never sent a fact, and the generator inserts every fact
 sentence itself, so a model cannot rewrite or drop a truth. One request yields a block of ten filler
 exchanges or a pool of paragraphs or sentences; each request has an answer allowance of at most
-4,096 tokens plus 8,192 reasoning tokens, a timeout (`--timeout-ms`, default 120 s) and three attempts. Text that states a fact, holds a
+4,096 tokens plus the reasoning allowance (`--reasoning-tokens`, default 8,192; set 0 for a
+nonreasoning endpoint with a smaller output ceiling, maximum 65,536), a timeout (`--timeout-ms`, default 120 s) and three attempts. Text that states a fact, holds a
 value-shaped string, opens with a memory command or breaks the marker contract is dropped and asked
 for again; an error names an HTTP status or an error class and never echoes a response body.
 An empty answer with `finish_reason=length` is reported as an exhausted output budget.
 Filter failures report closed refusal classes and counts (`blueprint-fact`, `forbidden-value`,
-`memory-command`, `reserved-marker`, `missing-message`, or `invalid-json-array`), never rejected text.
+`memory-command`, `reserved-marker`, `missing-message`, `invalid-json-array`, `filtered-text`, or
+`item-shape`), never rejected text.
 Without the key variable a request carries no authorization header.
 
 ### Variety

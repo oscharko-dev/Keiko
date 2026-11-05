@@ -41773,6 +41773,12 @@
               "required": true
             },
             {
+              "name": "parentCorrelationId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
               "name": "semanticCandidateCount",
               "type": "integer",
               "dataClass": "count",

@@ -21,6 +21,7 @@ import { parseArgs } from "node:util";
 import { writeContinuityJson } from "../../coding-workbench-lab/chat-continuity-campaign.mjs";
 import { runMain } from "../../coding-workbench-lab/lab-common.mjs";
 import { digestFiles, instrumentDigest } from "../instrument.mjs";
+import { withExclusiveProcessLock } from "../../jira-chat-lab/requirements/work-project-lock.mjs";
 import { openProgress } from "../progress.mjs";
 import { scenarioSetManifest, validateScenario } from "../scenario.mjs";
 import { blueprintDigest, loadBlueprintDirectory } from "./blueprint.mjs";
@@ -36,7 +37,11 @@ import { assertOutsideCheckout } from "./paths.mjs";
 import { deriveSeed } from "./random.mjs";
 import { mapSequential } from "./sequence.mjs";
 import { varietyReport } from "./variety.mjs";
-import { createModelWriter } from "./writer-model.mjs";
+import {
+  createModelWriter,
+  DEFAULT_REASONING_TOKENS,
+  normalizeReasoningTokens,
+} from "./writer-model.mjs";
 import { createScriptedWriter } from "./writer-scripted.mjs";
 import { compareStrings } from "../../../lib/compare-strings.mjs";
 
@@ -63,6 +68,7 @@ const OPTIONS = {
   "api-key-env": { type: "string", default: "KEIKO_LAB_GENERATOR_API_KEY" },
   "generator-label": { type: "string" },
   "timeout-ms": { type: "string", default: "120000" },
+  "reasoning-tokens": { type: "string", default: String(DEFAULT_REASONING_TOKENS) },
   resume: { type: "boolean", default: false },
   help: { type: "boolean", default: false },
 };
@@ -83,6 +89,7 @@ function usage() {
     `  --writer ${WRITERS.join("|")}   scripted is the deterministic floor; model needs the options below`,
     "  --endpoint <url> --model <id> [--api-key-env NAME] [--timeout-ms N]",
     "  --generator-label <text> recorded in every scenario and the manifest",
+    "  --reasoning-tokens N   extra output allowance, 0..65536 (default 8192; 0 for capped nonreasoning models)",
     "  --resume   continue completed scenarios with identical inputs and writer settings",
   ].join("\n");
 }
@@ -146,6 +153,7 @@ export function normalizeBuildOptions(raw) {
     writer,
     resume: values.resume === true,
     timeoutMs: integer(values["timeout-ms"], "--timeout-ms", 1),
+    reasoningTokens: normalizeReasoningTokens(values["reasoning-tokens"]),
     generatorLabel:
       values["generator-label"] === undefined
         ? undefined
@@ -162,6 +170,7 @@ function createWriter(options, env) {
     model: options.model,
     apiKey: apiKey ? apiKey : undefined,
     timeoutMs: options.timeoutMs,
+    reasoningTokens: options.reasoningTokens,
   });
 }
 
@@ -219,7 +228,9 @@ function buildManifest(options, blueprints, results, writer) {
       kind: options.writer,
       id: writer.id,
       label: options.generatorLabel ?? writer.id,
-      ...(options.writer === "model" ? { model: options.model } : {}),
+      ...(options.writer === "model"
+        ? { model: options.model, reasoningTokens: options.reasoningTokens }
+        : {}),
     },
     blueprints: blueprints.map((blueprint) => blueprintSummary(blueprint)),
     counts,
@@ -317,7 +328,7 @@ function validateCompletedScenario(result, blueprints) {
   }
 }
 
-function buildProgress(options, blueprints, writer, total) {
+function buildProgress(options, blueprints, writer, total, assertOwned) {
   const { out, resume, ...settings } = options;
   const directory = fileURLToPath(new URL("./", import.meta.url));
   const sources = readdirSync(directory, { recursive: true })
@@ -327,6 +338,7 @@ function buildProgress(options, blueprints, writer, total) {
     out,
     resume,
     total,
+    assertOwned,
     validate: (result) => validateCompletedScenario(result, blueprints),
     identity: {
       kind: "corpus-build",
@@ -344,7 +356,13 @@ function buildProgress(options, blueprints, writer, total) {
  * Builds a corpus with validated options. `dependencies` (for tests): `createWriter(options)` replaces
  * the writer, `env` replaces the environment the API key is read from. Returns the manifest.
  */
-export async function runBuild(options, log = console.log, dependencies = {}) {
+export function runBuild(options, log = console.log, dependencies = {}) {
+  return withExclusiveProcessLock(options.out, "memory-lab-corpus", (assertOwned) =>
+    runBuildExclusive(options, log, dependencies, assertOwned),
+  );
+}
+
+async function runBuildExclusive(options, log, dependencies, assertOwned) {
   if (existsSync(join(options.out, "manifest.json")))
     throw new Error(`refusing to overwrite an existing corpus in ${options.out}`);
   const blueprints = loadBlueprintDirectory(options.blueprints);
@@ -356,7 +374,7 @@ export async function runBuild(options, log = console.log, dependencies = {}) {
     dependencies.env ?? process.env,
   );
   const jobs = options.focused ? focusedJobs(blueprints, options) : personJobs(blueprints, options);
-  const progress = buildProgress(options, blueprints, writer, jobs.length);
+  const progress = buildProgress(options, blueprints, writer, jobs.length, assertOwned);
   const completed = progress.results.length;
   await mapSequential(jobs.slice(completed), async (job, offset) => {
     const index = completed + offset;
@@ -370,6 +388,7 @@ export async function runBuild(options, log = console.log, dependencies = {}) {
       );
     return { scenario, meta };
   });
+  progress.assertOwned();
   const manifest = writeCorpus(options, blueprints, progress.results, writer);
   progress.clear();
   log(

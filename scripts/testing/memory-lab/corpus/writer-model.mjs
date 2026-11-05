@@ -32,13 +32,21 @@ const RULES =
   "The user only asks or requests; the user never states preferences, habits, decisions, a job title, an employer or anything about other people. No names of people, companies or products. No numbers that look like accounts, phone numbers, e-mail addresses or keys. No message may start with a command such as remember, forget, note or save.";
 const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 const POOL_SIZE = 10;
+export const DEFAULT_REASONING_TOKENS = 8192;
 const DEFAULTS = Object.freeze({
   timeoutMs: 120000,
   maxAttempts: 3,
   retryDelayMs: 1000,
   temperature: 0.9,
-  reasoningTokens: 8192,
+  reasoningTokens: DEFAULT_REASONING_TOKENS,
 });
+
+export function normalizeReasoningTokens(value) {
+  const tokens = Number(value);
+  if (!Number.isSafeInteger(tokens) || tokens < 0 || tokens > 65536)
+    throw new RangeError("reasoning tokens must be an integer from 0 through 65536");
+  return tokens;
+}
 
 function chatUrl(endpoint) {
   let end = endpoint.length;
@@ -303,6 +311,7 @@ export function createModelWriter(options) {
     ...options,
     url: chatUrl(options.endpoint),
     pools: new Map(),
+    reasoningTokens: normalizeReasoningTokens(options.reasoningTokens ?? DEFAULT_REASONING_TOKENS),
   };
   return {
     id: `model:${options.model}`,

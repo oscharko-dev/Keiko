@@ -1,5 +1,6 @@
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -57,6 +58,26 @@ describe("completed lab jobs (#4247)", () => {
     rmSync(path);
     writeFileSync(join(out, ".progress", "00000001.json"), JSON.stringify(entry));
     expect(() => openProgress({ ...options(), resume: true })).toThrow(/missing or unknown job/u);
+  });
+
+  it.each([null, 42, []])("refuses a malformed manifest root %j", (value) => {
+    openProgress(options()).append({ scenario: "one" });
+    writeFileSync(join(out, ".progress", "manifest.json"), JSON.stringify(value));
+    expect(() => openProgress({ ...options(), resume: true })).toThrow(/manifest is malformed/u);
+  });
+
+  it.each([null, 42, []])("refuses a malformed job root %j", (value) => {
+    openProgress(options()).append({ scenario: "one" });
+    writeFileSync(join(out, ".progress", "00000000.json"), JSON.stringify(value));
+    expect(() => openProgress({ ...options(), resume: true })).toThrow(/job is malformed/u);
+  });
+
+  it.each(["manifest.json", "00000000.json"])("refuses non-regular progress path %s", (name) => {
+    openProgress(options()).append({ scenario: "one" });
+    const path = join(out, ".progress", name);
+    rmSync(path);
+    mkdirSync(path);
+    expect(() => openProgress({ ...options(), resume: true })).toThrow(/regular file/u);
   });
 
   it("refuses a restored job whose input does not match the current plan", () => {

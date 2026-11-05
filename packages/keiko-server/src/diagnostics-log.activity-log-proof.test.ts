@@ -55,6 +55,7 @@ describe("server.diagnostic.failure activity log proof (#3532)", () => {
     setSupportIncidentTriggerForTests(true);
     defaultServerDiagnosticSink.record({
       correlationId: "routine-memory-proof",
+      parentCorrelationId: "routine-memory-parent",
       timestamp: new Date().toISOString(),
       operation: "memory.salience",
       source: "memory-salience.logSalienceDiagnostic",
@@ -77,6 +78,7 @@ describe("server.diagnostic.failure activity log proof (#3532)", () => {
       level: "info",
       correlationId: "routine-memory-proof",
       diagnosticOperation: "memory.salience",
+      parentCorrelationId: "routine-memory-parent",
     });
     expect(line).not.toHaveProperty("errorKind");
     const analyzed = analyzeLogText(readPersistedActivityLog(stateDir));

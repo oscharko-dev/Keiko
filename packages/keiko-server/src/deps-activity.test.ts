@@ -175,6 +175,19 @@ describe("logRuntimeShutdown — Activity Log proof", () => {
     },
   );
 
+  it("keeps a faulted runtime at warn even when cleanup succeeds", () => {
+    const sink = createBufferedServerLogSink();
+    logRuntimeShutdown(sink, "req-runtime-shutdown-runtime-fault", {
+      state: "completed",
+      openSseStreamCount: 0,
+      activeRunCount: 0,
+      durationMs: 12,
+      runtimeShutdown: "faulted",
+      cleanup: "completed",
+    });
+    expect(sink.events[0]).toMatchObject({ level: "warn", errorKind: "internal" });
+  });
+
   it("keeps a faulted cleanup at warn with its failure classification", () => {
     const sink = createBufferedServerLogSink();
     logRuntimeShutdown(sink, "req-runtime-shutdown-failed", {

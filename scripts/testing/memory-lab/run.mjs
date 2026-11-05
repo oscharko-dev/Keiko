@@ -24,6 +24,7 @@ import {
   maskHoldoutResult,
   openSealedHoldout,
 } from "./corpus/holdout.mjs";
+import { withExclusiveProcessLock } from "../jira-chat-lab/requirements/work-project-lock.mjs";
 import { openProgress } from "./progress.mjs";
 import { ARMS, runScenario } from "./driver.mjs";
 import { SCAN_FILE, scanEvidence, secretsOfConfig } from "./evidence-scan.mjs";
@@ -639,7 +640,7 @@ function matchesRunInput(result, index, options, corpus) {
   );
 }
 
-function runProgress(options, corpus, gateway) {
+function runProgress(options, corpus, gateway, assertOwned) {
   const { out, resume, subjectRoot } = options;
   const settings = {
     ...options,
@@ -655,6 +656,7 @@ function runProgress(options, corpus, gateway) {
     out,
     resume,
     codec: corpus.progressCodec,
+    assertOwned,
     validate: (result, index) => matchesRunInput(result, index, options, corpus),
     total: corpus.scenarios.length * options.arms.length * options.repetitions,
     identity: {
@@ -674,13 +676,19 @@ function runProgress(options, corpus, gateway) {
 }
 
 /** Runs the lab with validated options and returns the summary; writes evidence under `out`. */
-export async function runLab(options, log = console.log) {
+export function runLab(options, log = console.log) {
+  return withExclusiveProcessLock(options.out, "memory-lab-run", (assertOwned) =>
+    runLabExclusive(options, log, assertOwned),
+  );
+}
+
+async function runLabExclusive(options, log, assertOwned) {
   if (existsSync(join(options.out, "scorecard.json")) && !options.resume)
     throw new Error(`refusing to overwrite an existing run in ${options.out}`);
   const gateway = gatewayEvidence(options);
   const corpus = loadCorpus(options);
   assertKeepAllowed(corpus.scenarios, options.keep);
-  const progress = runProgress(options, corpus, gateway);
+  const progress = runProgress(options, corpus, gateway, assertOwned);
   const stateRoot = prepareOutput(options, corpus);
   activeStateRoot = corpus.sealed || !options.keep ? stateRoot : undefined;
   let results;
@@ -695,6 +703,7 @@ export async function runLab(options, log = console.log) {
   } finally {
     removeStateRoot();
   }
+  progress.assertOwned();
   const summary = writeEvidence(options, corpus, results, gateway);
   const scan = scanEvidence(options.out, {
     secrets: options.mode === "live" ? secretsOfConfig(options.configPath) : [],

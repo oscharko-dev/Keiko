@@ -225,6 +225,12 @@ const SERVER_DIAGNOSTIC_OBSERVATION_OPERATION = defineActivityLogOperation({
       maxLength: 64,
     },
     source: { type: "string", dataClass: "opaque-id", required: true, maxLength: 160 },
+    parentCorrelationId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
     code: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
     semanticCandidateCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -558,6 +564,9 @@ function diagnosticObservationEvent(record: ServerDiagnosticRecord): ServerLogEv
       diagnosticOperation: activityLogDiagnosticOperation(record.operation),
       diagnosticErrorClass: record.errorClass,
       source: record.source,
+      ...(record.parentCorrelationId === undefined
+        ? {}
+        : { parentCorrelationId: record.parentCorrelationId }),
       ...(code === undefined ? {} : { code }),
       ...(record.semanticCandidateCount === undefined
         ? {}

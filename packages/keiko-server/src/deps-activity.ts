@@ -374,7 +374,9 @@ export function logRuntimeShutdown(
   correlationId: string | undefined,
   evidence: RuntimeShutdownEvidence,
 ): void {
-  const cleanupFaulted = evidence.state === "completed" && evidence.cleanup === "faulted";
+  const cleanupFaulted =
+    evidence.state === "completed" &&
+    (evidence.cleanup === "faulted" || evidence.runtimeShutdown === "faulted");
   sink.write(
     activityLogEvent(
       SERVER_RUNTIME_SHUTDOWN_OPERATION,

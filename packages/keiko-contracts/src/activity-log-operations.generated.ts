@@ -37859,6 +37859,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 160,
       },
+      parentCorrelationId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
+      },
       code: {
         type: "string",
         dataClass: "opaque-id",

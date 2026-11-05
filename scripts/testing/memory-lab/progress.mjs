@@ -14,8 +14,19 @@ function jobName(index) {
   return `${String(index).padStart(8, "0")}.json`;
 }
 
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readProgressObject(path, label) {
+  if (!lstatSync(path).isFile()) throw new TypeError(`${label} must be a regular file`);
+  const value = readJsonFile(path, label);
+  if (!isObject(value)) throw new TypeError(`${label} is malformed`);
+  return value;
+}
+
 function readResults(directory, identityDigest, total, codec, validate) {
-  const manifest = readJsonFile(join(directory, "manifest.json"), "the progress manifest");
+  const manifest = readProgressObject(join(directory, "manifest.json"), "the progress manifest");
   if (
     manifest.schemaVersion !== 1 ||
     manifest.identityDigest !== identityDigest ||
@@ -29,10 +40,10 @@ function readResults(directory, identityDigest, total, codec, validate) {
   return names.map((name, index) => {
     if (name !== jobName(index)) throw new Error("the progress has a missing or unknown job");
     const path = join(directory, name);
-    if (!lstatSync(path).isFile())
-      throw new Error("a completed progress job must be a regular file");
-    const envelope = readJsonFile(path, "a completed progress job");
+    const envelope = readProgressObject(path, "a completed progress job");
     const entry = codec === undefined ? envelope : codec.decode(envelope);
+    if (!isObject(entry) || !Object.hasOwn(entry, "value"))
+      throw new TypeError("a completed progress job is malformed");
     if (
       entry.identityDigest !== identityDigest ||
       entry.index !== index ||
@@ -46,7 +57,15 @@ function readResults(directory, identityDigest, total, codec, validate) {
 }
 
 /** Opens a fresh journal or explicitly resumes an identical job plan. Writes are atomic and private. */
-export function openProgress({ out, resume = false, identity, total, codec, validate }) {
+export function openProgress({
+  out,
+  resume = false,
+  identity,
+  total,
+  codec,
+  validate,
+  assertOwned = () => undefined,
+}) {
   const directory = join(out, ".progress");
   const identityDigest = digest(identity);
   const present = existsSync(directory);
@@ -58,7 +77,9 @@ export function openProgress({ out, resume = false, identity, total, codec, vali
   const results = present ? readResults(directory, identityDigest, total, codec, validate) : [];
   return {
     results,
+    assertOwned,
     append(value) {
+      assertOwned();
       if (results.length >= total) throw new Error("the progress already holds every job");
       if (!existsSync(directory)) {
         mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -75,6 +96,7 @@ export function openProgress({ out, resume = false, identity, total, codec, vali
       results.push(value);
     },
     clear() {
+      assertOwned();
       rmSync(directory, { recursive: true, force: true });
     },
   };

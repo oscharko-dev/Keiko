@@ -165,7 +165,8 @@ describe("corpus build", () => {
     await expect(runBuild(built, quiet, { createWriter: () => dropping })).rejects.toThrow(
       /fact marker/u,
     );
-    expect(existsSync(built.out)).toBe(false);
+    expect(existsSync(join(built.out, "manifest.json"))).toBe(false);
+    expect(existsSync(join(built.out, ".progress"))).toBe(false);
   });
 
   it("keeps completed scenarios on interruption and resumes without regenerating them (#4247)", async () => {
@@ -266,6 +267,7 @@ describe("corpus build with a model writer", () => {
       id: "model:lab-model-a",
       label: "lab-model-a@4000",
       model: "lab-model-a",
+      reasoningTokens: 8192,
     });
     expect(manifest.variety.generators[0].generator).toBe("lab-model-a@4000");
     const [scenario] = loadScenarioDirectory(join(built.out, "scenarios"));
@@ -273,6 +275,27 @@ describe("corpus build with a model writer", () => {
     const text = readFileSync(join(built.out, "manifest.json"), "utf8");
     expect(text).not.toContain("secret-key-123");
     expect(text).not.toContain("127.0.0.1");
+  });
+
+  it("can opt out of reasoning allowance for a capped nonreasoning endpoint", async () => {
+    const calls = [];
+    const fetchImpl = fakeFetch(calls);
+    vi.stubGlobal("fetch", async (url, init) => {
+      if (JSON.parse(init.body).max_tokens > 4096) return { ok: false, status: 400 };
+      return fetchImpl(url, init);
+    });
+    const built = normalizeBuildOptions({
+      blueprints: fixtureDirectory(root),
+      out: join(root, "capped"),
+      sizes: "100",
+      writer: "model",
+      endpoint: "http://127.0.0.1:4000/v1",
+      model: "capped-model",
+      "reasoning-tokens": "0",
+    });
+    const manifest = await runBuild(built, quiet);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(manifest.writer.reasoningTokens).toBe(0);
   });
 
   it("works without a key and accepts an injected writer", async () => {
@@ -299,6 +322,15 @@ describe("corpus build options", () => {
     root = mkdtempSync(join(tmpdir(), "memory-lab-build-options-"));
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it.each(["-1", "1.5", "65537", "NaN", "Infinity"])(
+    "refuses invalid reasoning allowance %s",
+    (value) => {
+      expect(() =>
+        normalizeBuildOptions({ out: join(root, "out"), "reasoning-tokens": value }),
+      ).toThrow(/reasoning tokens/u);
+    },
+  );
 
   it("accepts a complete scripted configuration with defaults", () => {
     const built = normalizeBuildOptions({ out: join(root, "out") });
