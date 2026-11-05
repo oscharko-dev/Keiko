@@ -96,7 +96,9 @@ export interface RuntimeMutationActions {
     taskIntent: string,
     inputs?: CodingWorkbenchFollowUpInputs,
   ) => Promise<void>;
+  /** Undo the run's newest turn or restore an undo (B3, S04). */
   readonly revert: (action: CodingWorkbenchRuntimeRevertAction) => Promise<void>;
+  /** Withdraw a message waiting for the running turn, or change a queued one to Send now (S07). */
   readonly inboxAction: (
     action: CodingWorkbenchRuntimeInboxAction,
     itemId: string,
