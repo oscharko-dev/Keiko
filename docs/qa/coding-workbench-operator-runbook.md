@@ -235,7 +235,7 @@ block is refused. Limits: 16
 agents, 32 commands and 16 skills of at most 32 KiB each; names lowercase with hyphens and not a
 built-in (`build`, `plan`, `general`, `explore`, `init`, `review`, `opencode`, `report`, ...).
 
-Global JSONC shares the project configuration parser and the existing owner-private descriptor reader. Both admitted producers (2.0.10 and 2.1.4) merge `opencode.json` followed by `opencode.jsonc`; neither loads `config.json`. Malformed JSONC is refused as a whole. Objects with parser-created non-standard prototypes are refused at every depth.
+Global JSONC shares the project configuration parser and the existing owner-private descriptor reader. Every admitted producer merges `opencode.json` followed by `opencode.jsonc` and none loads `config.json`. Malformed JSONC is refused as a whole. Objects with parser-created non-standard prototypes are refused at every depth.
 
 It is on by default. An operator sets `KEIKO_CODING_REPOSITORY_ITEMS_ENABLED=false` before starting
 the server to disable it; any value other than `true` disables it. Each native run records one

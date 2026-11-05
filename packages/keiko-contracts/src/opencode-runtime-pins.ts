@@ -22,8 +22,9 @@ if (CURRENT_PIN === undefined) {
 }
 
 /**
- * Current pin first. Each later entry is a version published npm runtime packages still carry; it
- * stays admissible, with its own digests, until packages built from the current pin are selected.
+ * Current pin first. A later entry is a version published npm runtime packages carry. This names
+ * what the integration knows about that version; whether a package may run is decided separately by
+ * its digests in the npm lane approvals, which admit only the current and the previous package.
  */
 export const OPENCODE_RUNTIME_VERSION_PINS: readonly OpenCodeRuntimeVersionPin[] = deepFreeze(
   pinData.pins,

@@ -533,27 +533,42 @@ describe("the subagents and skills a prompt may mention (#3906)", () => {
     });
   });
 
-  it("joins the wait to its run and proves the emitted line", async () => {
-    const sink = createBufferedServerLogSink();
-    let reads = 0;
-    await expect(
-      readOnceLocationActivated(
+  it.each([
+    { outcome: "recovered", level: "info", answers: 1, final: () => Promise.resolve("listed") },
+    { outcome: "exhausted", level: "warn", answers: 6, final: undefined },
+    {
+      outcome: "failed",
+      level: "warn",
+      answers: 1,
+      final: () => Promise.reject(new Error("socket hang up")),
+    },
+  ])(
+    "joins a $outcome wait to its run and proves the emitted line",
+    async ({ outcome, level, answers, final }) => {
+      const sink = createBufferedServerLogSink();
+      let reads = 0;
+      const read = (): Promise<string> => {
+        reads += 1;
+        return reads <= answers || final === undefined
+          ? Promise.reject(new OpenCodeV2HttpStatusError(503))
+          : final();
+      };
+      await readOnceLocationActivated(
         { activityLog: sink, pause: () => Promise.resolve() },
         "run-activation-wait",
-        () => {
-          reads += 1;
-          return reads < 2
-            ? Promise.reject(new OpenCodeV2HttpStatusError(503))
-            : Promise.resolve("listed");
-        },
-      ),
-    ).resolves.toBe("listed");
-    expect(sink.events[0]?.correlationId).toBe("run-activation-wait");
-    expectActivityLogProof(
-      "coding-runtime.location.activation-wait.emitted-line",
-      formatActivityLogProofLine(sink.events[0] ?? {}),
-    );
-  });
+        read,
+      ).catch(() => undefined);
+
+      expect(sink.events).toHaveLength(1);
+      expect(sink.events[0]).toMatchObject({ level, correlationId: "run-activation-wait" });
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.location.activation-wait.emitted-line",
+          formatActivityLogProofLine(sink.events[0] ?? {}),
+        ),
+      ).toMatchObject({ outcome, activatingAnswerCount: answers });
+    },
+  );
 
   it("stops reading a location that never activates and refuses the mention", async () => {
     let reads = 0;

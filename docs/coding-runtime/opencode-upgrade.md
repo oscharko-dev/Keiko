@@ -65,7 +65,10 @@ Run them in a clean checkout of the branch that carries the bump.
 6. Classify every table of the new persistence schema in `opencodePersistenceContract.ts`, and add
    a retention check when a new table can hold state a retained copy must not carry.
 7. Run every `opencode*.real.test.ts` suite again without the write flags. They cover the native
-   tools, boundaries, revert, prompt inputs, retention and offline search.
+   tools, boundaries, revert, prompt inputs, retention and offline search. Set
+   `KEIKO_OPENCODE_PREVIOUS_REAL_BINARY` to the previous runtime, which an installed npm runtime
+   package carries, so `opencodeServiceInventory.real.test.ts` proves it still starts under the new
+   profile.
 8. Run the ordinary gates of AGENTS.md section 3: `typecheck`, `lint`, `format:check`, `test`,
    `gates:sonar`. `check:package-surface:assembled` when a contracts export changed. Commit, then
    measure the performance evidence above, last. `check:activity-log` includes the tool-catalog

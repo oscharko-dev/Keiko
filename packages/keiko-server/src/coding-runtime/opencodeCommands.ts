@@ -131,7 +131,7 @@ const LOCATION_ACTIVATION_WAIT_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["exhausted", "recovered"],
+      values: ["exhausted", "failed", "recovered"],
     },
     // How many times the runtime answered that the location's plugins were still activating.
     activatingAnswerCount: { type: "integer", dataClass: "count", required: true },
@@ -147,14 +147,14 @@ const LOCATION_ACTIVATION_WAIT_OPERATION = defineActivityLogOperation({
 function recordLocationActivationWait(
   activityLog: ServerLogSink | undefined,
   runId: string,
-  outcome: "exhausted" | "recovered",
+  outcome: "exhausted" | "failed" | "recovered",
   activatingAnswerCount: number,
 ): void {
   (activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       LOCATION_ACTIVATION_WAIT_OPERATION,
       {
-        level: outcome === "exhausted" ? "warn" : "info",
+        level: outcome === "recovered" ? "info" : "warn",
         correlationId: correlationIdOrUnknown(runId),
       },
       { runId, outcome, activatingAnswerCount },
@@ -162,10 +162,15 @@ function recordLocationActivationWait(
   );
 }
 
+function isLocationActivatingAnswer(error: unknown): boolean {
+  return error instanceof OpenCodeV2HttpStatusError && error.status === LOCATION_ACTIVATING_STATUS;
+}
+
 /**
  * Reads a listing that waits for the location's plugins. Their late activation is a state of the
  * location, not a failed listing, so only that answer is read again; every other failure and the
  * last activating answer reach the caller, which refuses as it does for any listing it cannot read.
+ * A wait that began always leaves its line, so a different failure after it stays reconstructable.
  */
 export function readOnceLocationActivated<T>(
   deps: LocationActivationWaitDeps,
@@ -182,8 +187,12 @@ export function readOnceLocationActivated<T>(
       }
       return value;
     } catch (error) {
-      if (!(error instanceof OpenCodeV2HttpStatusError)) throw error;
-      if (error.status !== LOCATION_ACTIVATING_STATUS) throw error;
+      if (!isLocationActivatingAnswer(error)) {
+        if (activatingAnswers > 0) {
+          recordLocationActivationWait(deps.activityLog, runId, "failed", activatingAnswers);
+        }
+        throw error;
+      }
       const answers = activatingAnswers + 1;
       if (answers >= LOCATION_LOAD_READS) {
         recordLocationActivationWait(deps.activityLog, runId, "exhausted", answers);

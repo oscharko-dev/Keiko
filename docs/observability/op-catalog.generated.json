@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "21eb9e310e041fe553182d12e066ed8c47377b6f4d87ce3f6491b15947f59068",
+    "catalogDigest": "5395cf4672c67850d4818ea9b42ecf6b0e117b6fa31ea6273d78f4c8071eba25",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -8733,8 +8733,8 @@
         "failureClasses": ["coding-runtime-prompt-inputs"],
         "proofIds": ["coding-runtime.commands.listed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeCommands.ts:216",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeCommands.ts:276"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeCommands.ts:225",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeCommands.ts:285"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -10714,7 +10714,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["exhausted", "recovered"]
+            "values": ["exhausted", "failed", "recovered"]
           },
           "activatingAnswerCount": {
             "type": "integer",
@@ -11108,8 +11108,8 @@
         "failureClasses": ["coding-runtime-prompt-inputs"],
         "proofIds": ["coding-runtime.mentions.listed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeCommands.ts:299",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeCommands.ts:362"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeCommands.ts:308",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeCommands.ts:371"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -108762,7 +108762,7 @@
     {
       "op": "coding-runtime.commands.listed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeCommands.ts:219",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeCommands.ts:228",
       "package": "keiko-server"
     },
     {
@@ -108992,7 +108992,7 @@
     {
       "op": "coding-runtime.mentions.listed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeCommands.ts:302",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeCommands.ts:311",
       "package": "keiko-server"
     },
     {

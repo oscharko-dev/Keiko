@@ -315,7 +315,7 @@ Publication order is explicit:
 
 1. Qualify the private native candidates with the staged product, including a bounded read beyond
    64 KiB, the existing `init` → project start script → authenticated browser journey, cold model
-   discovery and reload. Keep the approved 1.1.3 helper compatibility path.
+   discovery and reload. Keep the helper compatibility path of the previous approved packages.
 2. Publish both exact native tarballs through npm Trusted Publishing (#3898 AC8), as described in
    "Publishing the npm coding-runtime packages" below. The root package's binding does not cover
    these package names; each has its own binding to `coding-runtime-publish.yml`.
@@ -362,9 +362,10 @@ same change.
 
 The 1.1.4 runtime packages carry OpenCode 2.1.4 and address F18's one-MiB secure-read helper.
 `coding-runtime-publish.yml` published both on 2026-10-26 (#3898 AC8), and the root optional
-dependency pins and `package-lock.json` name 1.1.4 since that date (step 3). Public 1.1.3 remains
-capped at 64 KiB even when the updated server accepts it; an installation that still holds it keeps
-working until it updates. The final fresh npm/Yarn installation validation against the next
+dependency pins and `package-lock.json` name 1.1.4 since that date (step 3). Public 1.1.3 stays capped
+at 64 KiB and has left the approvals with the OpenCode 2.2.5 bump (#4271): an installation that still
+holds it reports `payload-unapproved` until it updates, while 1.1.4 stays approved as the previous
+entry until packages built from the current pin are selected. The final fresh npm/Yarn installation validation against the next
 product release remains pending (#3898 AC9). The existing Yarn qualification uses the `node-modules`
 linker and does not prove Plug'n'Play support. Linux and Windows npm runtime availability is
 unchanged; their coding engines remain on the packaged lanes described by ADR-0140.

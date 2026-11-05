@@ -1554,7 +1554,7 @@ describe("pinned native OpenCode plan tool (T19)", () => {
   // The producer runs a model's `bash` call as its `shell` tool when no tool has that name, so the
   // alias must reach the same mode decision as an ordinary `shell` call.
   it.skipIf(skip)(
-    "governs a model's bash alias as the shell tool it runs, in the strictest and the widest mode",
+    "governs a model's bash alias as the shell tool it runs, in every mode",
     async () => {
       const aliased = { name: "bash", arguments: { command: "touch ALIASED" } };
       await withRun({ mode: "governed-assist", approveAsks: false }, async (run) => {
@@ -1564,6 +1564,20 @@ describe("pinned native OpenCode plan tool (T19)", () => {
           expect.objectContaining({ permission: "shell", effect: "ask" }),
         ]);
       });
+      const supervisedDecisions = async (call: typeof aliased): Promise<unknown[]> => {
+        let decisions: unknown[] = [];
+        await withRun({ mode: "supervised-coding", approveAsks: false }, async (run) => {
+          await scriptedTurn(run, call);
+          decisions = run.facade.decisions.map(({ permission, effect }) => ({
+            permission,
+            effect,
+          }));
+        });
+        return decisions;
+      };
+      const supervised = await supervisedDecisions(aliased);
+      expect(supervised).toEqual([expect.objectContaining({ permission: "shell" })]);
+      expect(supervised).toEqual(await supervisedDecisions({ ...aliased, name: "shell" }));
       await withRun({ mode: "autonomous-delivery" }, async (run) => {
         const result = await scriptedTurn(run, aliased);
         expect(existsSync(join(run.fixture.workspace, "ALIASED"))).toBe(true);

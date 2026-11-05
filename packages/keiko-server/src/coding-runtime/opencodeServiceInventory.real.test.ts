@@ -14,7 +14,10 @@ import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   projectOpenCodeV2ProtocolSurface,
 } from "./opencodeProtocolSurface.js";
-import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
+import {
+  OPENCODE_PINNED_VERSION,
+  OPENCODE_RUNTIME_VERSION_PINS,
+} from "./opencodeRuntimeVersions.js";
 import {
   extractOpenCodeBuiltinPlugins,
   extractOpenCodeConfigurationPaths,
@@ -39,6 +42,8 @@ import {
  */
 const BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
 const RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
+/** The binary of the second pin; the packaged runtime an npm installation still holds. */
+const PREVIOUS_BINARY = process.env.KEIKO_OPENCODE_PREVIOUS_REAL_BINARY;
 const WRITE_FIXTURE = process.env.KEIKO_WRITE_OPENCODE_SERVICE_INVENTORY_FIXTURE === "1";
 const STARTUP_TIMEOUT_MS = 20_000;
 const HELP_TIMEOUT_MS = 60_000;
@@ -181,10 +186,15 @@ async function loadedBuiltinPlugins(
 async function offeredByConfiguration(
   binary: string,
   withholdPlugins: boolean,
-): Promise<{ readonly plugins: readonly string[]; readonly commands: readonly string[] }> {
+): Promise<{
+  readonly plugins: readonly string[];
+  readonly commands: readonly string[];
+  readonly agents: readonly string[];
+}> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-withheld-plugins-")));
   prepareIsolatedRoot(root);
   const launched = launchService(binary, root, withholdPlugins);
+  const workspace = join(root, "workspace");
   try {
     const client = createOpenCodeV2HttpClient({
       endpoint: await childEndpoint(launched.child),
@@ -192,7 +202,8 @@ async function offeredByConfiguration(
     });
     const plugins = await loadedBuiltinPlugins(client);
     const commands = (await client.commands()).map((command) => command.name);
-    return { plugins, commands };
+    const agents = (await client.agents(workspace)).map((agent) => agent.name);
+    return { plugins, commands, agents };
   } finally {
     await stopChild(launched.child);
     rmSync(root, { recursive: true, force: true });
@@ -212,12 +223,34 @@ describe("pinned OpenCode complete service inventory", () => {
         governed.plugins.filter((id) => OPENCODE_WITHHELD_BUILT_IN_PLUGINS.includes(id)),
       ).toEqual([]);
       expect(governed.commands).not.toContain("goal");
+      expect(governed.agents).toEqual(expect.arrayContaining(["explore", "general"]));
 
       const control = await offeredByConfiguration(binary, false);
       expect(control.plugins).toEqual(
         expect.arrayContaining([...OPENCODE_WITHHELD_BUILT_IN_PLUGINS]),
       );
       expect(control.commands).toContain("goal");
+    },
+    180_000,
+  );
+
+  // The published runtime packages keep the previous pin until new ones are selected, and the
+  // profile names settings only the current pin knows. A producer that refused them would never start.
+  it.skipIf(PREVIOUS_BINARY === undefined)(
+    "starts the previous approved runtime under the current profile",
+    async () => {
+      if (PREVIOUS_BINARY === undefined) throw new Error("fixture-binary-missing");
+      const previous = OPENCODE_RUNTIME_VERSION_PINS[1]?.version;
+      const binary = realpathSync(PREVIOUS_BINARY);
+      const reported = spawnSync(binary, ["--version"], { encoding: "utf8" }).stdout.trim();
+      expect(reported).toBe(`opencode v${String(previous)}`);
+      const offered = await offeredByConfiguration(binary, true);
+      expect(offered.plugins.length).toBeGreaterThan(0);
+      expect(offered.agents).toEqual(expect.arrayContaining(["explore", "general"]));
+      expect(
+        offered.plugins.filter((id) => OPENCODE_WITHHELD_BUILT_IN_PLUGINS.includes(id)),
+      ).toEqual([]);
+      expect(offered.commands).not.toContain("goal");
     },
     180_000,
   );

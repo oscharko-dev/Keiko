@@ -10285,7 +10285,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["exhausted", "recovered"],
+        values: ["exhausted", "failed", "recovered"],
       },
       activatingAnswerCount: {
         type: "integer",
