@@ -14,6 +14,7 @@ import {
   type MemoryScope,
 } from "@oscharko-dev/keiko-contracts/memory";
 
+import { MEMORY_BODY_MAX_CHARS_DEFAULT } from "./_constants.js";
 import { buildForget, buildProposal, buildUpdate } from "./_envelopes.js";
 import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
@@ -84,9 +85,13 @@ function execFirst(patterns: readonly RegExp[], text: string): RegExpExecArray |
 const REMEMBER_PATTERNS: readonly RegExp[] = [
   /^\s*(?:please\s+)?remember(?:\s+that)?[:,]?\s+/iu,
   /^\s*(?:bitte\s+)?(?:merk|merke)\s+dir(?:\s+bitte)?(?:,?\s+dass)?[:,]?\s+/iu,
-  /^\s*(?:bitte\s+)?speicher(?:e)?(?:\s+bitte)?(?:,?\s+dass)?[:,]?\s+/iu,
-  /^\s*(?:bitte\s+)?notier(?:e)?(?:\s+bitte)?(?:,?\s+dass)?[:,]?\s+/iu,
+  // Bare "Speichere die Datei" or "Notiere die Zahlen" is a task, not a memory statement.
+  /^\s*(?:bitte\s+)?speicher(?:e)?(?:\s+bitte)?(?:\s+dir)?(?:,?\s+dass|:)\s+/iu,
+  /^\s*(?:bitte\s+)?notier(?:e)?(?:\s+bitte)?(?:\s+dir)?(?:,?\s+dass|:)\s+/iu,
 ];
+// "Merke dir nicht, ..." asks for the opposite, and "Remember when ..." recalls instead of stating.
+const NOT_A_FACT_START_RE =
+  /^(?:nicht|nie|niemals|not|never|when|how|if|why|what|where|who|wann|wie|ob|warum|was|wo|wer)\b/iu;
 // Each branch carries its own copy of the trailing "this project/workspace:" scope hint (rather
 // than factoring it into a second matching stage) so a single execFirst pass still yields the
 // complete prefix length bodyAfterPrefix needs — matching the original REMEMBER_ABOUT_RE shape.
@@ -108,13 +113,28 @@ const FORGET_PATTERNS: readonly RegExp[] = [
   /^\s*vergiss(?:\s+bitte)?,?\s+dass\s+/iu,
   /^\s*vergiss(?:\s+bitte)?\s+(?:alles\s+)?(?:über|ueber|zu|an)\s+/iu,
   /^\s*vergiss(?:\s+bitte)?\s+/iu,
-  /^\s*lösche(?:\s+bitte)?(?:\s+die\s+erinnerung\s+(?:an|zu|über|ueber))?\s+/iu,
+  // Bare "Lösche die Datei" is a task. It must never reach a memory.
+  /^\s*lösche(?:\s+bitte)?\s+die\s+erinnerung\s+(?:an|zu|über|ueber)\s+/iu,
 ];
-// "Vergiss nicht, ..." means the opposite of forgetting, so it is no forget at all.
-const VERGISS_NICHT_RE = /^\s*vergiss\s+(?:es\s+|das\s+)?(?:bitte\s+)?nicht\b/iu;
+// "Vergiss nicht, ..." and "Vergiss nie, ..." mean the opposite of forgetting, so they are no forget.
+const VERGISS_NICHT_RE = /^\s*vergiss\s+(?:es\s+|das\s+)?(?:bitte\s+)?(?:nicht|nie|niemals)\b/iu;
+const VERGISS_RE = /^\s*vergiss\b/iu;
+const DASS_RE = /\bdass\b/iu;
+const NEGATED_ENDINGS: readonly string[] = [" nicht", " nie", " niemals"];
+// "Vergiss es" and "Forget it" mean "never mind", so they name nothing to forget.
+const NEVER_MIND_TARGETS: ReadonlySet<string> = new Set(["es", "it"]);
+
+// "Vergiss den Bericht nicht" keeps the negation for the end. "Vergiss, dass ich das nicht mag"
+// is a real forget: its "nicht" belongs to the fact.
+function endsNegated(text: string): boolean {
+  if (!VERGISS_RE.test(text) || DASS_RE.test(text)) return false;
+  const lower = trimForgetTarget(text.trim()).toLowerCase();
+  return NEGATED_ENDINGS.some((ending) => lower.endsWith(ending));
+}
 
 function forgetPrefixMatch(text: string): RegExpExecArray | null {
-  return VERGISS_NICHT_RE.test(text) ? null : execFirst(FORGET_PATTERNS, text);
+  if (VERGISS_NICHT_RE.test(text) || endsNegated(text)) return null;
+  return execFirst(FORGET_PATTERNS, text);
 }
 
 // A whole statement that takes back what was just said, without naming it.
@@ -127,10 +147,8 @@ const FORGET_REFERENCE_WORDS: ReadonlySet<string> = new Set([
   "das",
   "dies",
   "dieses",
-  "es",
   "that",
   "this",
-  "it",
 ]);
 const FORGET_TARGET_END_MARKS = new Set([" ", "\t", ".", "!", "?", "…"]);
 const FORGET_TARGET_POLITE_TAILS: readonly string[] = [" bitte", " please"];
@@ -157,8 +175,9 @@ function forgetTargetOf(text: string): string | null {
   const prefixMatch = forgetPrefixMatch(text);
   if (prefixMatch === null) return null;
   const body = bodyAfterPrefix(prefixMatch, text);
-  const target = body === null ? "" : trimForgetTarget(body);
-  return target === "" ? null : target;
+  if (body === null || firstSentence(body).endsWith("?")) return null;
+  const target = trimForgetTarget(body);
+  return target === "" || NEVER_MIND_TARGETS.has(target.toLowerCase()) ? null : target;
 }
 
 // Any of the four ECMAScript line-terminator code points. `.` (used by the single-regex-capture
@@ -205,7 +224,8 @@ function firstSentence(line: string): string {
 function statedFactAfterPrefix(prefixMatch: RegExpExecArray, text: string): string | null {
   const firstLine = text.slice(prefixMatch[0].length).trim().split(LINE_TERMINATOR_RE, 1)[0];
   const body = firstLine === undefined ? "" : firstSentence(firstLine.trim());
-  return body === "" ? null : body;
+  if (body === "" || body.endsWith("?") || NOT_A_FACT_START_RE.test(body)) return null;
+  return body;
 }
 
 const UPDATE_KEYWORD_PATTERNS: readonly RegExp[] = [
@@ -416,14 +436,17 @@ export function tryExtractRemember(
   return { kind: "candidate", proposal, requiresApproval: decision.requiresApproval };
 }
 
+// What "Vergiss das" can leave a tombstone for: a fact said in a sentence. A question states nothing,
+// and a pasted document is not what "das" means. Its tombstone would suppress later facts near it.
+export function isForgettableStatement(text: string): boolean {
+  return text.length <= MEMORY_BODY_MAX_CHARS_DEFAULT && !text.trimEnd().endsWith("?");
+}
+
 // A message the explicit path owns. The learner must not read it as well: it would store the
 // statement itself, "Vergiss, dass ..." included.
 export function isExplicitMemoryStatement(text: string): boolean {
-  return (
-    forgetTargetOf(text) !== null ||
-    execFirst(REMEMBER_ABOUT_PATTERNS, text) !== null ||
-    execFirst(REMEMBER_PATTERNS, text) !== null
-  );
+  const remembered = execFirst(REMEMBER_ABOUT_PATTERNS, text) ?? execFirst(REMEMBER_PATTERNS, text);
+  return forgetTargetOf(text) !== null || remembered !== null;
 }
 
 // ─── tryExtractForget ────────────────────────────────────────────────────────

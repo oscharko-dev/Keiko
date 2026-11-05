@@ -1664,9 +1664,10 @@ async function persistCandidateRecord(
   vault: MemoryVaultStore,
   candidate: MemoryRecord,
   canonicalCapture: boolean,
+  correlationId: string,
 ): Promise<ExplicitStatementPersistence> {
   if (outcome.proposal.provenance.sourceKind === "explicit-user-instruction") {
-    return persistExplicitStatement(deps, vault, candidate, canonicalCapture);
+    return persistExplicitStatement(deps, vault, candidate, canonicalCapture, correlationId);
   }
   const persisted = persistCapturedMemory(vault, candidate, canonicalCapture);
   // Best-effort embed-on-capture (#204): swallowed on failure / no model — never breaks capture.
@@ -1681,6 +1682,7 @@ async function candidateActionFromOutcome(
   mode: CodingWorkbenchMode,
   surface: ConversationMemoryCaptureSurfaceWire,
   canonicalCapture: boolean,
+  correlationId: string,
 ): Promise<ConversationMemoryActionWire | null> {
   if (deps.memoryVault === undefined) return null;
   if (!isPersistableMemoryCandidate(outcome)) {
@@ -1698,6 +1700,7 @@ async function candidateActionFromOutcome(
     deps.memoryVault,
     candidate,
     canonicalCapture,
+    correlationId,
   );
   if (result.kind === "suppressed") return { kind: "rejected", reason: result.reason };
   const { persisted } = result;
@@ -1725,7 +1728,14 @@ async function captureActionFromOutcome(
 ): Promise<ConversationMemoryActionWire | null> {
   switch (outcome.kind) {
     case "candidate":
-      return candidateActionFromOutcome(outcome, deps, mode, surface, canonicalCapture);
+      return candidateActionFromOutcome(
+        outcome,
+        deps,
+        mode,
+        surface,
+        canonicalCapture,
+        statement.correlationId,
+      );
     case "update":
       return {
         kind: "update",
@@ -1733,7 +1743,7 @@ async function captureActionFromOutcome(
         bodyPatch: outcome.operation.bodyPatch,
       };
     case "forget":
-      return forgetActionFromOutcome(outcome, deps);
+      return forgetActionFromOutcome(outcome, deps, statement.correlationId);
     case "rejected":
       return rejectedActionFromOutcome(outcome.reason, deps, statement);
     case "supersession":
@@ -1779,6 +1789,7 @@ function captureMemoryActions(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
   context: ConversationMemoryRuntimeContext,
+  correlationId: string,
 ): Promise<readonly ConversationMemoryActionWire[]> {
   if (request.memory === undefined || !request.memory.enabled || deps.memoryVault === undefined) {
     return Promise.resolve([]);
@@ -1796,6 +1807,7 @@ function captureMemoryActions(
           scopes: conversationMemoryScopes(context),
           conversationId: context.conversationId,
           lastTurnStartedAt: () => previousMessage()?.timestamp,
+          previousStatement: () => previousMessage()?.content,
         }),
       }),
     },
@@ -1811,6 +1823,7 @@ function captureMemoryActions(
     {
       scopes: conversationMemoryScopes(context),
       previousStatement: () => previousMessage()?.content,
+      correlationId,
     },
   );
 }
@@ -1819,11 +1832,12 @@ export async function collectMemoryActions(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   memoryContext: ConversationMemoryRuntimeContext | undefined,
+  correlationId: string = UNKNOWN_CORRELATION_ID,
 ): Promise<readonly ConversationMemoryActionWire[]> {
   if (memoryContext === undefined) {
     return [];
   }
-  return captureMemoryActions(request, deps, memoryContext);
+  return captureMemoryActions(request, deps, memoryContext, correlationId);
 }
 
 function recordPostCommitMemoryFailure(
@@ -2845,7 +2859,14 @@ async function finalizeAndRecordBufferedTurn(
   abortSignal: AbortSignal,
   compaction: BufferedCompactionContext,
 ): Promise<RouteResult> {
-  const finalized = await finalizeBufferedTurn(deps, turn, memory, result, abortSignal);
+  const finalized = await finalizeBufferedTurn(
+    deps,
+    turn,
+    memory,
+    result,
+    abortSignal,
+    compaction.correlationId,
+  );
   if (finalized.status === 200) {
     recordChatCompaction(deps, {
       compaction: compaction.assembly.compaction,
@@ -2923,13 +2944,19 @@ async function finalizeBufferedTurn(
     response: Pick<NormalizedResponse, "content"> & { usage?: NormalizedResponse["usage"] };
   },
   abortSignal: AbortSignal,
+  correlationId: string | undefined,
 ): Promise<RouteResult> {
   const { request, modelId, memoryContext } = turn;
   // Issue #631 — redact the model's raw content before persisting and before returning it to the
   // browser, mirroring the grounded-QA path which already applies deps.redactor here.
   const redactedContent = currentContentRedactor(deps)(result.response.content) as string;
   assertUsableAssistantContent(redactedContent, modelId);
-  const memoryActions = await collectMemoryActions(deps, request, memoryContext);
+  const memoryActions = await collectMemoryActions(
+    deps,
+    request,
+    memoryContext,
+    correlationId ?? UNKNOWN_CORRELATION_ID,
+  );
   if (requestSignalAborted(abortSignal)) {
     failDesktopChatTurn(deps, request, "cancelled");
     return requestCancelledResult();
@@ -3187,21 +3214,16 @@ async function completeGitChangeDescriptionTurn(
     failDesktopChatTurn(deps, prepared.request);
     return gitChangeGenerationFailure("snapshot-unavailable");
   }
-  const result = await finalizeBufferedTurn(
-    deps,
-    prepared,
-    memory,
-    {
-      userMessage: admission.userMessage,
-      response: descriptionTurnResponse(generated.artifact.markdown, generated.usage),
-    },
-    abortSignal,
-  );
-  if (result.status !== 200) {
+  const turn = {
+    userMessage: admission.userMessage,
+    response: descriptionTurnResponse(generated.artifact.markdown, generated.usage),
+  };
+  const done = await finalizeBufferedTurn(deps, prepared, memory, turn, abortSignal, correlationId);
+  if (done.status !== 200) {
     held.service?.invalidate();
     updateChatDescriptionScope(deps, prepared.chat.id, scope, { status: "blocked" });
   }
-  return result;
+  return done;
 }
 
 export async function handleCreateDesktopChat(
@@ -4142,46 +4164,64 @@ function canonicalTurnAsSendRequest(
   };
 }
 
+function canonicalMessageMemoryActions(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  request: CanonicalTurnMemoryRequest,
+  context: ConversationMemoryRuntimeContext,
+  message: { readonly content: string; readonly ordinal: number },
+  correlationId: string,
+): Promise<ConversationMemoryActionWire[]> {
+  const scopes = conversationMemoryScopes(context);
+  const previousStatement = (): string | undefined =>
+    previousContent(request.messages, message.ordinal);
+  const outcomes = extractCandidatesFromUserText(
+    message.content,
+    buildCaptureContext(context, request.clientTurnId, message.ordinal),
+    memoryCapturePolicyForDeps(deps, {
+      resolver: createMemoryTargetResolver(vault),
+      rememberScopeKind: "user",
+      forgetResolver: createMemoryForgetResolver(vault, {
+        scopes,
+        conversationId: context.conversationId,
+        lastTurnStartedAt: () => undefined,
+        previousStatement,
+      }),
+    }),
+  );
+  return captureActionsFromOutcomes(
+    outcomes,
+    deps,
+    resolveMemoryCaptureAutonomyMode(deps, request.memory?.mode),
+    request.memory?.surface ?? "desktop",
+    request.clientTurnId !== undefined,
+    { scopes, previousStatement, correlationId },
+  );
+}
+
 function collectCanonicalTurnLocalMemoryActions(
   deps: UiHandlerDeps,
   request: CanonicalTurnMemoryRequest,
   context: ConversationMemoryRuntimeContext | undefined,
+  correlationId: string,
 ): Promise<readonly ConversationMemoryActionWire[]> {
-  if (context === undefined || request.memory?.enabled !== true) {
-    return Promise.resolve([]);
-  }
   const vault = deps.memoryVault;
-  if (vault === undefined) {
+  if (context === undefined || request.memory?.enabled !== true || vault === undefined) {
     return Promise.resolve([]);
   }
-  const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
-  const surface = request.memory.surface ?? "desktop";
-  const scopes = conversationMemoryScopes(context);
   return request.messages.reduce<Promise<ConversationMemoryActionWire[]>>(
-    async (previous, message, messageOrdinal) => {
+    async (previous, message, ordinal) => {
       const actions = await previous;
       if (message.role !== "user") return actions;
-      const outcomes = extractCandidatesFromUserText(
-        message.content,
-        buildCaptureContext(context, request.clientTurnId, messageOrdinal),
-        memoryCapturePolicyForDeps(deps, {
-          resolver: createMemoryTargetResolver(vault),
-          rememberScopeKind: "user",
-          forgetResolver: createMemoryForgetResolver(vault, {
-            scopes,
-            conversationId: context.conversationId,
-            lastTurnStartedAt: () => undefined,
-          }),
-        }),
-      );
+      const current = { content: message.content, ordinal };
       actions.push(
-        ...(await captureActionsFromOutcomes(
-          outcomes,
+        ...(await canonicalMessageMemoryActions(
           deps,
-          mode,
-          surface,
-          request.clientTurnId !== undefined,
-          { scopes, previousStatement: () => previousContent(request.messages, messageOrdinal) },
+          vault,
+          request,
+          context,
+          current,
+          correlationId,
         )),
       );
       return actions;
@@ -4359,6 +4399,7 @@ export async function buildCanonicalTurnMemoryResult(
   options: {
     readonly retrievalContent?: string | undefined;
     readonly precomputedMemory?: ConversationMemoryResultWire | undefined;
+    readonly correlationId?: string | undefined;
   } = {},
 ): Promise<ConversationMemoryResultWire | undefined> {
   if (request.memory === undefined) {
@@ -4373,7 +4414,12 @@ export async function buildCanonicalTurnMemoryResult(
   const memory =
     options.precomputedMemory ??
     (await buildMemoryResult(canonicalTurnAsSendRequest(request, content), deps, memoryContext));
-  const actions = await collectCanonicalTurnLocalMemoryActions(deps, request, memoryContext);
+  const actions = await collectCanonicalTurnLocalMemoryActions(
+    deps,
+    request,
+    memoryContext,
+    options.correlationId ?? UNKNOWN_CORRELATION_ID,
+  );
   return { ...memory, actions };
 }
 

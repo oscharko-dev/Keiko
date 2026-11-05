@@ -1,4 +1,5 @@
 import {
+  isExplicitMemoryStatement,
   isMemoryForgetReference,
   type CaptureMemoryResolver,
 } from "@oscharko-dev/keiko-memory-capture";
@@ -114,13 +115,47 @@ export interface MemoryForgetResolverContext {
   // When the turn before this statement began. "Das" means what that turn left behind. Read only
   // for a bare reference, so an ordinary turn costs no history read.
   readonly lastTurnStartedAt: () => number | undefined;
+  // What the person said in that turn.
+  readonly previousStatement: () => string | undefined;
 }
 
-// What a bare "Vergiss das" refers to: what the last turn of this conversation left behind. When it
-// left nothing, "das" is the last statement itself, not an older memory, and the caller handles that
-// statement. More than one record stays more than one: the caller asks instead of guessing. Another
-// conversation's memory is never "das".
+// A memory the last turn only touched counts when that turn was about memory: its answer drew on
+// the memory to answer a question, or the person said the fact again. After any other statement,
+// "das" is the statement, not whatever the answer happened to draw on.
+function lastTurnReachedMemory(statement: string | undefined): boolean {
+  if (statement === undefined) return false;
+  return statement.trimEnd().endsWith("?") || isExplicitMemoryStatement(statement);
+}
+
+const MIN_SHARED_PREFIX_CHARS = 4;
+const MAX_INFLECTION_CHARS = 3;
+
+// A forget acts without a question, so a word must really be the same word: "Tabelle" reaches
+// "Tabellen", and "Java" does not reach "JavaScript".
+function sameWord(a: string, b: string): boolean {
+  if (a === b) return true;
+  const [shorter, longer] = a.length < b.length ? [a, b] : [b, a];
+  return (
+    shorter.length >= MIN_SHARED_PREFIX_CHARS &&
+    longer.length - shorter.length <= MAX_INFLECTION_CHARS &&
+    longer.startsWith(shorter)
+  );
+}
+
+function namesRecord(target: string, record: MemoryRecord): boolean {
+  const body = tokenize(`${record.body} ${record.tags.join(" ")}`);
+  const words = tokenize(target);
+  return (
+    words.length > 0 && words.every((word) => body.some((candidate) => sameWord(word, candidate)))
+  );
+}
+
+// What a bare "Vergiss das" refers to: what the last turn of this conversation left behind or drew
+// on. When there is nothing, "das" is the last statement itself, not an older memory, and the caller
+// handles that statement. More than one record stays more than one: the caller asks instead of
+// guessing. Another conversation's memory is only "das" when the last turn reached it.
 function referredRecords(
+  vault: MemoryVaultStore,
   records: readonly MemoryRecord[],
   context: MemoryForgetResolverContext,
 ): readonly MemoryRecord[] {
@@ -129,7 +164,14 @@ function referredRecords(
   );
   const lastTurnStartedAt = context.lastTurnStartedAt();
   if (lastTurnStartedAt === undefined) return ofConversation;
-  return ofConversation.filter((record) => record.createdAt >= lastTurnStartedAt);
+  const left = ofConversation.filter((record) => record.createdAt >= lastTurnStartedAt);
+  if (!lastTurnReachedMemory(context.previousStatement())) return left;
+  const stats = vault.getAccessStats(records.map((record) => record.id));
+  const reached = records.filter(
+    (record) =>
+      !left.includes(record) && (stats.get(record.id)?.lastAccessedAt ?? 0) >= lastTurnStartedAt,
+  );
+  return [...left, ...reached];
 }
 
 function recordsInScopes(
@@ -156,8 +198,8 @@ export function createMemoryForgetResolver(
   return (target) => {
     const records = recordsInScopes(vault, context.scopes);
     const matches = isMemoryForgetReference(target)
-      ? referredRecords(records, context)
-      : records.filter((record) => matchesTarget(target, record));
+      ? referredRecords(vault, records, context)
+      : records.filter((record) => namesRecord(target, record));
     return matches.map((record) => record.id);
   };
 }

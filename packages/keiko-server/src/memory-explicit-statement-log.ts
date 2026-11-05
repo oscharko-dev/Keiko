@@ -44,7 +44,13 @@ export function logExplicitMemoryForget(
   );
 }
 
-const MEMORY_EXPLICIT_REMEMBER_OUTCOMES = ["stored", "confirmed", "suppressed"] as const;
+const MEMORY_EXPLICIT_REMEMBER_OUTCOMES = [
+  "stored",
+  "confirmed",
+  "replayed",
+  "suppressed",
+  "refused",
+] as const;
 
 export type MemoryExplicitRememberOutcome = (typeof MEMORY_EXPLICIT_REMEMBER_OUTCOMES)[number];
 

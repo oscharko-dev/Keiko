@@ -9,6 +9,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts/memory";
 
 import {
+  isExplicitMemoryStatement,
+  isForgettableStatement,
   isMemoryForgetReference,
   tryExtractCorrection,
   tryExtractForget,
@@ -435,6 +437,16 @@ describe("explicit German forget and remember statements (#4211)", () => {
     "Vergiss bitte nicht den Bericht",
     "vergiss es nicht",
     "Forget not the report",
+    "Vergiss nie, dass ich Tabellen mag",
+    "Vergiss mich nicht",
+    "Vergiss den Bericht nicht.",
+    "Vergiss es",
+    "Vergiss es bitte!",
+    "Forget it",
+    "Vergisst du manchmal Dinge?",
+    "Vergiss du den Bericht?",
+    "Lösche die Datei config.yml",
+    "Lösche den Cache",
   ])("does not treat %j as a forget", (text) => {
     const { targets, resolver } = captured();
     expect(tryExtractForget(text, ctx(), { resolver })).toBeNull();
@@ -445,6 +457,8 @@ describe("explicit German forget and remember statements (#4211)", () => {
     ["Vergiss, dass ich Tabellen mag", "ich Tabellen mag"],
     ["Vergiss bitte, dass ich Tabellen mag.", "ich Tabellen mag"],
     ["Forget that I like tables.", "I like tables"],
+    ["Vergiss, dass ich Tabellen nicht mag", "ich Tabellen nicht mag"],
+    ["Lösche bitte die Erinnerung an den Bericht", "den Bericht"],
   ])("takes the fact out of %j", (text, target) => {
     const { targets, resolver } = captured();
     expect(tryExtractForget(text, ctx(), { resolver })?.kind).toBe("forget");
@@ -456,7 +470,6 @@ describe("explicit German forget and remember statements (#4211)", () => {
     ["vergiss das", "das"],
     ["Vergiss das bitte!", "das"],
     ["Forget that.", "that"],
-    ["Forget it", "it"],
     ["Das stimmt nicht mehr.", "das"],
     ["That is no longer true.", "that"],
   ])("hands the reference in %j to the resolver", (text, target) => {
@@ -498,5 +511,52 @@ describe("explicit German forget and remember statements (#4211)", () => {
   ])("stores only the stated fact of %j", (text, body) => {
     const outcome = tryExtractRemember(text, ctx());
     expect(outcome?.kind === "candidate" && outcome.proposal.body).toBe(body);
+  });
+});
+
+describe("what is not a remember statement (#4211)", () => {
+  it.each([
+    "Speichere die Datei unter foo.txt",
+    "Speichere das in meinem Notizbuch",
+    "Notiere die Zahlen 1 bis 10",
+    "Merke dir bitte nicht, dass ich Tabellen mag",
+    "Merke dir nicht, dass ich Tabellen mag",
+    "Remember when we talked about the report?",
+    "Remember what I said",
+    "Merke dir das?",
+  ])("leaves %j alone", (text) => {
+    expect(tryExtractRemember(text, ctx())).toBeNull();
+  });
+
+  it.each([
+    ["Speichere: Ich bevorzuge Tabellen", "Ich bevorzuge Tabellen"],
+    ["Notiere dir: Deployments sind dienstags", "Deployments sind dienstags"],
+    ["Merke dir: Ich bevorzuge Tabellen. Was steht heute an?", "Ich bevorzuge Tabellen."],
+  ])("still reads %j", (text, body) => {
+    const outcome = tryExtractRemember(text, ctx(), { scopeKind: "user" });
+    expect(outcome?.kind).toBe("candidate");
+    if (outcome?.kind === "candidate") expect(outcome.proposal.body).toBe(body);
+  });
+
+  it("keeps the learner off a statement that declines to be remembered", () => {
+    expect(isExplicitMemoryStatement("Merke dir nicht, dass ich Tabellen mag")).toBe(true);
+    expect(isExplicitMemoryStatement("Speichere die Datei unter foo.txt")).toBe(false);
+    expect(isExplicitMemoryStatement("Vergiss es")).toBe(false);
+  });
+
+  it.each(["Merke dir: mein Passwort ist hunter2hunter2", "Remember: the password is hunter2"])(
+    "refuses a credential in plain words in %j",
+    (text) => {
+      expect(tryExtractRemember(text, ctx(), { scopeKind: "user" })).toEqual({
+        kind: "rejected",
+        reason: "credential-shape",
+      });
+    },
+  );
+
+  it("does not leave a tombstone for a question or a pasted document", () => {
+    expect(isForgettableStatement("Ich mag Tabellen.")).toBe(true);
+    expect(isForgettableStatement("Wie zeigst du mir Zahlen?")).toBe(false);
+    expect(isForgettableStatement("x".repeat(4097))).toBe(false);
   });
 });

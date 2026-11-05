@@ -19,7 +19,11 @@ export type {
   WorkflowOutcomeInput,
 } from "./types.js";
 export { extractCandidatesFromUserText, extractCandidatesFromWorkflowOutcome } from "./capture.js";
-export { isExplicitMemoryStatement, isMemoryForgetReference } from "./intent-explicit.js";
+export {
+  isExplicitMemoryStatement,
+  isForgettableStatement,
+  isMemoryForgetReference,
+} from "./intent-explicit.js";
 export { extractSalientMemories } from "./salience.js";
 export { memoryTextEgressRejectionReason } from "./capture-safety.js";
 export {

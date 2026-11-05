@@ -180,13 +180,23 @@ conversation stays under D2. Capture-from-conversation remains a review surface 
 Such a statement lands in the private user scope unless it names a project or workspace, and the
 learner does not read its turn, so it cannot store the statement itself.
 
+Only a clear statement acts this way, because it changes memory with no question. "Merke dir" and
+"Remember" count, "Speichere" and "Notiere" only with "dass" or a colon, and "Lösche" only with
+"die Erinnerung an". "Speichere die Datei" and "Lösche den Cache" are tasks and never reach a memory.
+A negation ("Merke dir nicht", "Vergiss den Bericht nicht"), a question, and the idioms "Vergiss es"
+and "Forget it" state nothing to store or forget. A named forget reaches a memory only through the
+same word or an inflection of it, so "Java" does not reach "JavaScript".
+
 Saying a statement again confirms the existing memory through `recordAccess` instead of storing a
 second record: in the same words without an embedder, and as a paraphrase through the existing
 novelty gate with one. A paraphrase of a forgotten fact is suppressed the same way.
 
 "Vergiss das" reaches what the last turn left behind, in any scope of the conversation and
 including a parked proposal, and goes through the one forget implementation with its audit preflight
-and tombstone. If that turn left nothing, "das" is the statement before it, not an older memory:
+and tombstone. It also reaches an older memory the last turn drew on, when that turn asked a question
+or said the fact again. After any other sentence the memory an answer happened to use is not "das".
+If that turn left nothing, "das" is the statement before it, not an older memory; a question or a
+pasted document is no such statement, so the person is asked:
 `recordForgottenStatements` writes a tombstone in each scope of the conversation, so a later
 learning pass stores nothing from it. The statement's text is never written, and a statement that
 carries a credential keeps only its hash and never reaches the embedding endpoint. When "das" could

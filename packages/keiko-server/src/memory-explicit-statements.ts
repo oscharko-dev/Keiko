@@ -2,11 +2,13 @@
 // at once in every mode (ADR-0146 D4b). Everything destructive goes through the one forget
 // implementation in memory-handlers.ts.
 
-import { randomUUID } from "node:crypto";
-
 import type { ConversationMemoryActionWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
-import type { CaptureOutcome, RejectionReason } from "@oscharko-dev/keiko-memory-capture";
+import {
+  isForgettableStatement,
+  type CaptureOutcome,
+  type RejectionReason,
+} from "@oscharko-dev/keiko-memory-capture";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 import type { UiHandlerDeps } from "./deps.js";
@@ -28,6 +30,7 @@ import { forgetMemoryFromStatement, forgetStatementNotLearned } from "./memory-h
 export interface ExplicitStatementContext {
   readonly scopes: readonly MemoryScope[];
   readonly previousStatement: () => string | undefined;
+  readonly correlationId: string;
 }
 
 export type ExplicitStatementPersistence =
@@ -57,10 +60,10 @@ function forgotAction(memoryId: string): ConversationMemoryActionWire {
 export function forgetActionFromOutcome(
   outcome: Extract<CaptureOutcome, { readonly kind: "forget" }>,
   deps: UiHandlerDeps,
+  correlationId: string,
 ): ConversationMemoryActionWire | null {
   if (deps.memoryVault === undefined) return null;
   const { memoryId } = outcome.operation;
-  const correlationId = randomUUID();
   const result = forgetMemoryFromStatement(deps, deps.memoryVault, memoryId, correlationId);
   logExplicitMemoryForget(result, correlationId);
   return result === "forgotten"
@@ -74,9 +77,9 @@ async function forgetPreviousStatement(
   deps: UiHandlerDeps,
   statement: ExplicitStatementContext,
 ): Promise<ConversationMemoryActionWire> {
-  const correlationId = randomUUID();
+  const { correlationId } = statement;
   const body = statement.previousStatement();
-  if (body === undefined || deps.memoryVault === undefined) {
+  if (body === undefined || deps.memoryVault === undefined || !isForgettableStatement(body)) {
     logExplicitMemoryForget("ambiguous", correlationId);
     return { kind: "rejected", reason: "ambiguous-forget" };
   }
@@ -99,7 +102,8 @@ export async function rejectedActionFromOutcome(
   statement: ExplicitStatementContext,
 ): Promise<ConversationMemoryActionWire> {
   if (reason === "forget-reference-unresolved") return forgetPreviousStatement(deps, statement);
-  if (reason === "ambiguous-forget") logExplicitMemoryForget("ambiguous", randomUUID());
+  if (reason === "ambiguous-forget") logExplicitMemoryForget("ambiguous", statement.correlationId);
+  else logExplicitMemoryRemember("refused", statement.correlationId);
   return { kind: "rejected", reason };
 }
 
@@ -141,8 +145,10 @@ export async function persistExplicitStatement(
   vault: MemoryVaultStore,
   candidate: MemoryRecord,
   canonicalCapture: boolean,
+  correlationId: string,
 ): Promise<ExplicitStatementPersistence> {
   if (canonicalCapture && vault.getMemory(candidate.id) !== undefined) {
+    logExplicitMemoryRemember("replayed", correlationId);
     return {
       kind: "persisted",
       persisted: persistCapturedMemory(vault, candidate, true),
@@ -154,6 +160,6 @@ export async function persistExplicitStatement(
     restated === undefined
       ? await storeUnlessKnownParaphrase(deps, vault, candidate)
       : { kind: "persisted", persisted: restated, confirmed: true };
-  logExplicitMemoryRemember(rememberOutcome(result), randomUUID());
+  logExplicitMemoryRemember(rememberOutcome(result), correlationId);
   return result;
 }

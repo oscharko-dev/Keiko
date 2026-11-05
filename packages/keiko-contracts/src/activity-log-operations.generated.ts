@@ -31882,7 +31882,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["stored", "confirmed", "suppressed"],
+        values: ["stored", "confirmed", "replayed", "suppressed", "refused"],
       },
     },
     causal: "none",

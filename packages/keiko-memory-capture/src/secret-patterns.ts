@@ -49,6 +49,8 @@ const CREDENTIAL_SHAPE_PATTERNS: readonly RegExp[] = [
   /\bsecret\s*[=:]\s*[^\s,;"'`&]+/i,
   /\bapi[_-]?key\s*[=:]\s*[^\s,;"'`&]+/i,
   /\btoken\s*[=:]\s*[^\s,;"'`&]+/i,
+  // The same assignment in plain words: "mein Passwort ist ...", "the password is ...".
+  /\b(?:passwor[dt]|kennwort|passphrase)\s+(?:ist|lautet|is)\s+\S/iu,
 ];
 
 // ─── Credential-store file paths ─────────────────────────────────────────────
