@@ -1067,13 +1067,21 @@ describe("CodingRuntimeOrchestrator", () => {
       expect((await f.orchestrator.start(start)).ok).toBe(true);
     });
 
+    // The client leaves while the start is still in progress, once the run is being minted: the run
+    // stays, because the client can then find it and a reload must not end it.
     it("keeps a run that exists when the client leaves afterwards", async () => {
       const f = fixture();
       const client = new AbortController();
-      const running = f.orchestrator.start(start, undefined, client.signal);
-      const result = await running;
-      client.abort();
+      const resolve = f.launchResolver.resolve.getMockImplementation();
+      if (resolve === undefined) throw new Error("expected a launch resolver");
+      f.launchResolver.resolve.mockImplementation((input) => {
+        client.abort();
+        return resolve(input);
+      });
+      const result = await f.orchestrator.start(start, undefined, client.signal);
+      expect(client.signal.aborted).toBe(true);
       expect(result.ok).toBe(true);
+      expect(f.manager.start).toHaveBeenCalledOnce();
       expect(f.orchestrator.status().state).not.toBe("idle");
     });
   });
