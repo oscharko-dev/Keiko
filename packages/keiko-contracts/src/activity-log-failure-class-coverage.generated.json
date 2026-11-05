@@ -41215,10 +41215,10 @@
       "failureClass": "security-keychain-access",
       "requirementContract": "security-keychain-access",
       "productSurfaces": ["keiko-security"],
-      "lifecycleTransitions": ["failure"],
+      "lifecycleTransitions": ["failure", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": [],
+        "state": ["security.keychain.withheld"],
         "end": [],
         "failure": ["security.keychain.fallback"],
         "loss": []
@@ -41227,10 +41227,14 @@
         {
           "op": "security.keychain.fallback",
           "mode": "none"
+        },
+        {
+          "op": "security.keychain.withheld",
+          "mode": "none"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": [],
+      "resourceSignals": ["security.keychain.withheld"],
       "replayReferences": [],
       "operations": [
         {
@@ -41260,6 +41264,30 @@
             "causeChain": false
           },
           "proofIds": ["security.keychain.fallback.bounded-exit"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "security.keychain.withheld",
+          "owner": "keiko-security",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["security.keychain.withheld.line"],
           "replayReferences": [],
           "missingObligations": []
         }

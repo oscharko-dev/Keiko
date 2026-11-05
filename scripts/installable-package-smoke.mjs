@@ -2805,6 +2805,7 @@ async function assertPackagedUi(tmp) {
   const stderrChunks = [];
   const child = spawn(process.execPath, [bin, "ui", "--port", String(port)], {
     cwd: tmp,
+    env: { ...process.env, KEIKO_OS_KEYCHAIN: "off" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout?.on("data", (chunk) => stdoutChunks.push(String(chunk)));

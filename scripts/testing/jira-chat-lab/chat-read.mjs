@@ -452,6 +452,7 @@ function createLiveDeps(root, session, secret, retainState, restoring = false, m
     uiDbPath: join(root, "ui.db"),
     env: {
       ...modelEnv,
+      KEIKO_OS_KEYCHAIN: "off",
       [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: secret,
       KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: credentialKey,
     },

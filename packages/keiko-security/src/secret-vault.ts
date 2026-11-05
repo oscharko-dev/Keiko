@@ -54,7 +54,9 @@ import { chmodIfPresent, ensureDirHardened, FILE_MODE } from "./fs-hardening.js"
 import {
   emitKeychainFallback,
   KEYCHAIN_SPAWN_TIMEOUT_MS,
+  emitKeychainWithheld,
   keychainItemNotFound,
+  keychainWithheldReason,
   MACOS_SECURITY_EXECUTABLE,
   realKeychainWithheld,
 } from "./macos-keychain.js";
@@ -465,10 +467,16 @@ export function createKeychainVaultKeyAccess(
   keychainService: string,
   runCommand: KeychainCommandRunner = defaultKeychainCommandRunner,
   sink?: SecurityLogSink,
+  env?: Readonly<Record<string, string | undefined>>,
 ): LocalVaultKeychainAccess {
   return (): Buffer | undefined => {
     if (process.platform !== "darwin") return undefined;
-    if (runCommand === defaultKeychainCommandRunner && realKeychainWithheld()) return undefined;
+    const withheld =
+      runCommand === defaultKeychainCommandRunner ? keychainWithheldReason(env) : undefined;
+    if (withheld !== undefined) {
+      emitKeychainWithheld(sink, withheld);
+      return undefined;
+    }
     const account = userInfo().username;
     const elapsedMs = startSecurityLogTimer();
     let found: string;
@@ -576,7 +584,7 @@ function computeLocalVaultKey(options: ResolveLocalVaultKeyOptions): ResolvedLoc
   if (fromEnv !== undefined) return { key: fromEnv, source: "env" };
   const keychainAccess =
     options.keychainAccess ??
-    createKeychainVaultKeyAccess(options.keychainService, undefined, options.sink);
+    createKeychainVaultKeyAccess(options.keychainService, undefined, options.sink, options.env);
   const fromKeychain = keychainAccess();
   if (fromKeychain !== undefined) return { key: fromKeychain, source: "keychain" };
   return { key: keyFromKeyfile(options.vaultDir, options.keyfileName), source: "keyfile" };

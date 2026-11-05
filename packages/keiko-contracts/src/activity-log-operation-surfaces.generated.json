@@ -531,6 +531,7 @@
   "security.fs.atomic-rename-failed": "runtime-packages",
   "security.fs.atomic-rename-retried": "runtime-packages",
   "security.keychain.fallback": "runtime-packages",
+  "security.keychain.withheld": "runtime-packages",
   "security.log.sink-failed": "runtime-packages",
   "security.portable-tree-attestation.failed": "runtime-packages",
   "security.vault.entries-delete-failed": "runtime-packages",

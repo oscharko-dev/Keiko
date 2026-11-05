@@ -36741,6 +36741,38 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "security.keychain.withheld",
+    category: "security",
+    owner: "keiko-security",
+    emitter: "macos-keychain.emitKeychainWithheld",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["test-process", "operator-off"],
+      },
+    },
+    causal: "none",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["security-keychain-access"],
+    proofIds: ["security.keychain.withheld.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "security.log.sink-failed",
     category: "diagnostic",
     owner: "keiko-security",

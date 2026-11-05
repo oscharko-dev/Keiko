@@ -434,7 +434,7 @@ function resolveCipherWithSource(
   }
   const memoryDir = resolveMemoryDir(opts?.memoryDir, env);
   const resolved = resolveVaultKey(env, memoryDir, () =>
-    keyFromKeychain({ sink: securityLogSink }),
+    keyFromKeychain({ sink: securityLogSink, env }),
   );
   return { cipher: createMemoryContentCipher(resolved.key), keySource: resolved.source };
 }

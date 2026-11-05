@@ -56,6 +56,29 @@ const SECURITY_KEYCHAIN_FALLBACK_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const SECURITY_KEYCHAIN_WITHHELD_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.keychain.withheld",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "macos-keychain.emitKeychainWithheld",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["test-process", "operator-off"],
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["security-keychain-access"],
+  proofIds: ["security.keychain.withheld.line"],
+  releaseImpact: "patch",
+});
+
 /**
  * Generous next to a healthy `security` call, which answers in tens of milliseconds, and short next
  * to a person deciding whether to unlock a keychain. The tier is an optimisation over the keyfile
@@ -68,13 +91,38 @@ export const KEYCHAIN_SPAWN_TIMEOUT_MS = 2_000;
  * opens a vault without an injected key would read that installation's key or store another, and a
  * home without a keychain makes macOS raise a modal on the person's desktop. No test needs it, so a
  * process under vitest never gets it, whatever its configuration. A lane that starts a whole product
- * process with its own environment says so with `KEIKO_OS_KEYCHAIN=off`. The tier then answers like
- * a platform without one and the keyfile tier takes over; a fake `executable` is unaffected.
+ * process says so with `KEIKO_OS_KEYCHAIN=off`, in the process environment or in the environment it
+ * hands a vault. The tier then answers like a platform without one and the keyfile tier takes over,
+ * which is weaker custody and cannot open data sealed under a keychain key, so the choice is logged.
+ * A fake `executable` is unaffected.
  */
-export function realKeychainWithheld(
-  env: Readonly<Record<string, string | undefined>> = process.env,
-): boolean {
-  return env.VITEST !== undefined || env.KEIKO_OS_KEYCHAIN === "off";
+export type KeychainWithheldReason = "test-process" | "operator-off";
+
+type EnvironmentView = Readonly<Record<string, string | undefined>>;
+
+function withheldBy(env: EnvironmentView): KeychainWithheldReason | undefined {
+  if (env.VITEST !== undefined) return "test-process";
+  return env.KEIKO_OS_KEYCHAIN === "off" ? "operator-off" : undefined;
+}
+
+export function keychainWithheldReason(
+  env: EnvironmentView = process.env,
+): KeychainWithheldReason | undefined {
+  return withheldBy(process.env) ?? withheldBy(env);
+}
+
+export function realKeychainWithheld(env: EnvironmentView = process.env): boolean {
+  return keychainWithheldReason(env) !== undefined;
+}
+
+export function emitKeychainWithheld(
+  sink: SecurityLogSink | undefined,
+  reason: KeychainWithheldReason,
+): void {
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(SECURITY_KEYCHAIN_WITHHELD_OPERATION, {}, { reason }),
+  );
 }
 
 export interface MacosKeychainOptions {
@@ -84,6 +132,8 @@ export interface MacosKeychainOptions {
   readonly timeoutMs?: number | undefined;
   /** Test seam, so the tier's behaviour is assertable on a non-darwin host. */
   readonly platform?: NodeJS.Platform | undefined;
+  /** The environment the vault was handed, which can withhold the real keychain. */
+  readonly env?: Readonly<Record<string, string | undefined>> | undefined;
   /**
    * Optional activity-log seam (ADR-0019; see `log-port.ts`). When wired, a spawn failure that
    * collapses to `{ kind: "unavailable" }` emits one `security.keychain.fallback` event instead of
@@ -109,7 +159,8 @@ function positiveTimeout(value: number | undefined): number | undefined {
 }
 
 interface ResolvedSpawn {
-  readonly reachable: boolean;
+  readonly darwin: boolean;
+  readonly withheld: KeychainWithheldReason | undefined;
   readonly executable: string;
   readonly timeout: number;
   readonly killSignal: "SIGKILL";
@@ -120,9 +171,9 @@ interface ResolvedSpawn {
 function resolveSpawn(options: MacosKeychainOptions): ResolvedSpawn {
   const executable = options.executable ?? MACOS_SECURITY_EXECUTABLE;
   return {
-    reachable:
-      (options.platform ?? process.platform) === "darwin" &&
-      !(executable === MACOS_SECURITY_EXECUTABLE && realKeychainWithheld()),
+    darwin: (options.platform ?? process.platform) === "darwin",
+    withheld:
+      executable === MACOS_SECURITY_EXECUTABLE ? keychainWithheldReason(options.env) : undefined,
     executable,
     // Only a positive finite override is honoured. `execFileSync` reads `timeout: 0` as "no
     // timeout", so accepting a caller's 0 would silently restore the unbounded spawn this module
@@ -218,7 +269,11 @@ export function readMacosKeychainSecret(
   options: MacosKeychainOptions = {},
 ): MacosKeychainRead {
   const spawn = resolveSpawn(options);
-  if (!spawn.reachable) return { kind: "unavailable" };
+  if (!spawn.darwin) return { kind: "unavailable" };
+  if (spawn.withheld !== undefined) {
+    emitKeychainWithheld(options.sink, spawn.withheld);
+    return { kind: "unavailable" };
+  }
   const elapsedMs = startSecurityLogTimer();
   try {
     const secret = execFileSync(
@@ -250,7 +305,7 @@ export function writeMacosKeychainSecret(
   options: MacosKeychainOptions = {},
 ): boolean {
   const spawn = resolveSpawn(options);
-  if (!spawn.reachable) return false;
+  if (!spawn.darwin || spawn.withheld !== undefined) return false;
   try {
     // The secret goes over stdin, never in the argument vector: `ps` exposes a process's arguments
     // to every process of the same user, which is precisely the audience this tier exists to keep

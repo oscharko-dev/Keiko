@@ -404,6 +404,7 @@ function executeMissingPayloadProbe(stateDir) {
     cwd: repoRoot,
     env: {
       ...process.env,
+      KEIKO_OS_KEYCHAIN: "off",
       KEIKO_E2E_STATE_DIR: stateDir,
       KEIKO_2483_EXPECT_UNAVAILABLE_REASON: "payload-missing",
     },
