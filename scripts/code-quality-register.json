@@ -3941,7 +3941,7 @@
     "packages/keiko-local-knowledge/src/_support.ts": {
       "anti-slop/no-conditional-empty-object-spread": 5,
       "anti-slop/no-known-value-widening": 2,
-      "anti-slop/require-safety-comment-for-type-assertion": 3
+      "anti-slop/require-safety-comment-for-type-assertion": 4
     },
     "packages/keiko-local-knowledge/src/bounded-document-extraction.timeout.test.ts": {
       "anti-slop/no-known-value-widening": 1,
@@ -4037,7 +4037,7 @@
       "anti-slop/require-safety-comment-for-type-assertion": 2
     },
     "packages/keiko-local-knowledge/src/connector-pod.test.ts": {
-      "anti-slop/require-safety-comment-for-type-assertion": 9
+      "anti-slop/require-safety-comment-for-type-assertion": 8
     },
     "packages/keiko-local-knowledge/src/connector-pod.ts": {
       "anti-slop/no-array-filter-map": 1,
@@ -4525,7 +4525,7 @@
       "anti-slop/no-chained-type-assertions": 5,
       "anti-slop/no-known-value-widening": 2,
       "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 13
+      "anti-slop/require-safety-comment-for-type-assertion": 12
     },
     "packages/keiko-local-knowledge/src/repository-pod.ts": {
       "anti-slop/no-chained-type-assertions": 1,

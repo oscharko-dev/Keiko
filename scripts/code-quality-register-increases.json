@@ -5106,20 +5106,20 @@
       "issue": 3918
     },
     {
+      "path": "packages/keiko-local-knowledge/src/_support.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 3,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-local-knowledge/src/bounded-ooxml-package.ts",
       "rule": "anti-slop/no-conditional-empty-object-spread",
       "from": 0,
       "to": 1,
       "reason": "dev-cutoff-sync",
       "issue": 3914
-    },
-    {
-      "path": "packages/keiko-local-knowledge/src/connector-pod.test.ts",
-      "rule": "anti-slop/require-safety-comment-for-type-assertion",
-      "from": 8,
-      "to": 9,
-      "reason": "test-witness",
-      "issue": 3918
     },
     {
       "path": "packages/keiko-local-knowledge/src/conversation/grounded-answer-runner.ts",
@@ -5288,14 +5288,6 @@
       "to": 17,
       "reason": "dev-cutoff-sync",
       "issue": 3914
-    },
-    {
-      "path": "packages/keiko-local-knowledge/src/repository-pod.test.ts",
-      "rule": "anti-slop/require-safety-comment-for-type-assertion",
-      "from": 12,
-      "to": 13,
-      "reason": "test-witness",
-      "issue": 3918
     },
     {
       "path": "packages/keiko-mcp/src/host.test.ts",
