@@ -340,13 +340,14 @@ describe("extractSalientMemories", () => {
     });
   });
 
-  it("returns [] on malformed output and says so", async () => {
-    for (const output of ["I could not find anything.", "[{broken", '{"items": "nope"}']) {
+  it.each(["I could not find anything.", "[{broken", '{"items": "nope"}'])(
+    "returns [] on malformed output %j and says so",
+    async (output) => {
       const { deps, diagnostics } = harness(output);
       expect(await extractSalientMemories(input("Ich bevorzuge Tabellen."), deps)).toEqual([]);
       expect(diagnostics).toContainEqual({ kind: "parse-or-empty-output", rawItemCount: 0 });
-    }
-  });
+    },
+  );
 
   it("strips code fences before parsing", async () => {
     const fenced =

@@ -318,10 +318,14 @@ describe("a changed fact replaces the older one", () => {
     const vault = makeVault();
     const ctx = context();
     const deps = makeDeps(vault, []);
-    for (const content of ["Merke dir: Ich mag Tee", "Merke dir: Ich mag Kaffee"]) {
-      const request = { content, memory: { enabled: true } } as unknown as SendDesktopChatRequest;
-      await collectMemoryActions(deps, request, ctx);
-    }
+    const say = (content: string): ReturnType<typeof collectMemoryActions> =>
+      collectMemoryActions(
+        deps,
+        { content, memory: { enabled: true } } as unknown as SendDesktopChatRequest,
+        ctx,
+      );
+    await say("Merke dir: Ich mag Tee");
+    await say("Merke dir: Ich mag Kaffee");
 
     expect(liveBodies(vault, ctx)).toHaveLength(2);
     expect(recordsWith(vault, ctx, "superseded")).toEqual([]);

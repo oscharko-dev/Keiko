@@ -794,11 +794,16 @@ async function persistSalienceActions(
 ): Promise<SalienceCaptureResult> {
   const actions: ConversationMemoryActionWire[] = [];
   const summary = emptySalienceCaptureSummary();
-  for (const outcome of outcomes) {
+  // One outcome after the other: a supersession must see what the previous outcome stored.
+  const persistFrom = async (index: number): Promise<void> => {
+    const outcome = outcomes[index];
+    if (outcome === undefined) return;
     const { action, disposition } = await persistCandidate(deps, outcome, vault, trace);
     if (action !== null) actions.push(action);
     tallyDisposition(summary, disposition);
-  }
+    await persistFrom(index + 1);
+  };
+  await persistFrom(0);
   return { actions, summary };
 }
 
