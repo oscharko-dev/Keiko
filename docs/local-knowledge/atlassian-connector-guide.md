@@ -54,12 +54,14 @@ Cloud connectors retain their existing sync and action workflows. See
 ### Create and connect a Pod
 
 In the Knowledge Pods hub, select **Create Jira Pod**, enter a name, the HTTPS Jira base URL
-(including any context path), and a PAT, then select **Create Jira Pod** in the form and
-**Verify connection**. Verification checks
+(including any context path), and a PAT, then select **Create Jira Pod** once. Keiko saves the
+connection and verifies it automatically before closing the form. Verification checks
 bounded REST-v2 `serverInfo` and `myself` responses and the active identity. A successful check is
-required before Chat can use the Pod. For a private Jira address, the operator must configure
-exact target admission and the trusted CA through the existing network configuration; the token
-form cannot grant private-network access. See [ADR-0128 D3](../adr/ADR-0128-atlassian-connector-authority-and-security-design.md#d3--governed-egress-single-host-allowlist-shared-transport-fail-closed-redirects).
+required before Chat can use the Pod. The saved Data Center URL supplies the exact target;
+verification automatically determines and privately retains its address class. No separate
+`privateTargets` configuration or global private-network switch is needed. A private certificate
+authority still needs the normal runtime trust configuration, such as `egress.caBundlePath`;
+certificate validation stays enabled. See [ADR-0128 D3](../adr/ADR-0128-atlassian-connector-authority-and-security-design.md#d3--governed-egress-single-host-allowlist-shared-transport-fail-closed-redirects).
 
 Open **Connectors** in the Chat composer and switch the verified Pod on. The same menu lists every
 centrally configured MCP server; switch off what this Chat should not use. A switched-off server or
@@ -121,9 +123,9 @@ citations and retrieval limits; Jira results and issue links remain separately a
 results. Jira text is not presented as a local grounding citation. Tool orchestration and final
 answering share the turn's existing time, token and tool budgets.
 
-Each Pod card shows its status (**Ready**, **Not verified yet**, **Status unknown** or the failure)
-and **Add to workspace**. When the Pod needs attention, the card shows the one action that resolves
-it. The **⋯** menu holds **Verify connection**, **Refresh status**, **Rename Pod**, **Replace token**
+The Knowledge Hub shows a healthy Pod's name, **Add to workspace** and **⋯**. Connector settings
+retain the address and detailed status. When a Pod needs attention, its Hub row shows the status
+and the one action that resolves it. The **⋯** menu holds **Verify connection**, **Refresh status**, **Rename Pod**, **Replace token**
 and **Remove Pod**. Rename preserves the connection. Replacing a token preserves the Pod identity and
 Chat association, advances the credential generation and revokes current access and pending
 permissions. Verify again before continuing. Removal deletes the saved

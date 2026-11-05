@@ -2498,6 +2498,7 @@ interface BufferedAssemblyAttempt {
   readonly signal: AbortSignal;
   readonly correlationId: string | undefined;
   readonly attempt: ContextWindowAttempt;
+  readonly observeAssembly?: ((assembly: GatewayPromptAssembly) => void) | undefined;
 }
 
 async function prepareBufferedGatewayAssembly(
@@ -2549,7 +2550,10 @@ function callPreparedAssembly(
   signal: AbortSignal,
   correlationId: string | undefined,
   toolTurn: ChatToolTurnPort | undefined,
-  chatId: string,
+  continuation: {
+    readonly chatId: string;
+    readonly retryFollows: ContextWindowAttempt["retryFollows"];
+  },
 ): Promise<NormalizedResponse> {
   const request = {
     modelId,
@@ -2557,11 +2561,11 @@ function callPreparedAssembly(
     ...gatewayAssemblyOutputAllocation(assembly),
     stream: false,
     logContext: { correlationId },
-    reasoningScope: `chat:${chatId}`,
+    reasoningScope: `chat:${continuation.chatId}`,
   };
   return toolTurn === undefined
     ? model.call(request, signal)
-    : toolTurn.call(model, request, signal);
+    : toolTurn.call(model, request, signal, undefined, continuation.retryFollows);
 }
 
 // One assembled attempt: plans the prompt from the CURRENT context profile, re-checks the provider
@@ -2587,6 +2591,7 @@ async function assembleAndCallBuffered(
     snapshot,
     run,
   );
+  run.observeAssembly?.(assembly);
   const model = bufferedModelAtProviderBoundary(
     deps,
     modelId,
@@ -2610,7 +2615,7 @@ async function assembleAndCallBuffered(
     abortSignal,
     correlationId,
     run.toolTurn,
-    prepared.chat.id,
+    { chatId: prepared.chat.id, retryFollows: run.attempt.retryFollows },
   );
   return { assembly, response };
 }
@@ -2701,17 +2706,7 @@ async function executePreparedBufferedModelTurn(
   },
   run: PreparedBufferedRun,
 ): Promise<RouteResult> {
-  const called = await withAdoptedContextWindowRetry(
-    deps,
-    { modelId: prepared.modelId, surface: "chat-buffered", correlationId: run.correlationId },
-    (attempt) =>
-      assembleAndCallBuffered(deps, prepared, run.memory, outcome, run.snapshot, {
-        signal: run.abortSignal,
-        correlationId: run.correlationId,
-        attempt,
-        toolTurn: run.toolTurn,
-      }),
-  );
+  const called = await callBufferedWithinWindow(deps, prepared, outcome, run);
   if (isRouteResult(called)) return called;
   const { assembly, response } = called;
   const cancelledAfterCall = bufferedTurnCancellationResult(deps, prepared, run.abortSignal);
@@ -2729,6 +2724,46 @@ async function executePreparedBufferedModelTurn(
       historyPrefix: gatewayHistoryPrefix(run.snapshot),
       correlationId: run.correlationId,
     },
+  );
+}
+
+function callBufferedWithinWindow(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  outcome: {
+    readonly admitted: AdmittedTurnHandle;
+    readonly executionAdmission: DesktopChatExecutionAdmission;
+  },
+  run: PreparedBufferedRun,
+): Promise<{ assembly: GatewayPromptAssembly; response: NormalizedResponse } | RouteResult> {
+  let retainedAssembly: GatewayPromptAssembly | undefined;
+  return withAdoptedContextWindowRetry(
+    deps,
+    {
+      modelId: prepared.modelId,
+      surface: "chat-buffered",
+      correlationId: run.correlationId,
+      settleRetryFailure: (error, originalFailure) => {
+        if (retainedAssembly === undefined) return undefined;
+        const response = run.toolTurn?.settleRetryFailure(
+          error,
+          originalFailure,
+          prepared.modelId,
+          run.abortSignal,
+        );
+        return response === undefined ? undefined : { assembly: retainedAssembly, response };
+      },
+    },
+    (attempt) =>
+      assembleAndCallBuffered(deps, prepared, run.memory, outcome, run.snapshot, {
+        signal: run.abortSignal,
+        correlationId: run.correlationId,
+        attempt,
+        toolTurn: run.toolTurn,
+        observeAssembly: (assembly) => {
+          if (!attempt.retrying) retainedAssembly = assembly;
+        },
+      }),
   );
 }
 

@@ -128,7 +128,7 @@ export async function runBrowserWrite({
 }) {
   const outcomeLabel = OUTCOME_LABELS.get(expectedMutationOutcome);
   assert.ok(outcomeLabel, "Unsupported browser qualification outcome");
-  const { browser, page } = await openBrowser(chat);
+  const { browser, page } = await openBrowser(chat, context.origin);
   try {
     const fragment = encodeCodingAppSessionPairingFragment(
       mintLauncherPairingAttestation({

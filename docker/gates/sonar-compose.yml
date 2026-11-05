@@ -28,6 +28,7 @@ services:
     # Digest-pinned like every GitHub Action in this repository: a floating tag would silently
     # change the analyzer, and with it which findings a pre-push scan can see.
     image: sonarqube@sha256:160bd2f6a3485bd09b655ef22dd63c02bd1fa7ba82aa5d9973fd010b8bcca0b3 # 26.7.0.124771-community
+    cpus: 2
     environment:
       # This server is reachable only from the loopback interface of the developer machine and holds
       # no secret, no customer data and no production evidence. Disabling the bundled Elasticsearch
@@ -44,6 +45,7 @@ services:
 
   scanner:
     image: sonarsource/sonar-scanner-cli@sha256:23ca0f137965d9dff2198074043fd48d386280bc5d0ccac8c8349cea4cf096a9 # 12.1
+    cpus: 2
     depends_on:
       sonarqube:
         condition: service_started

@@ -21,7 +21,6 @@ import {
   startAtlassianConnectorSync,
 } from "./atlassian-connectors-api.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
-import type { AtlassianNetworkConfig } from "@oscharko-dev/keiko-contracts";
 import { responseCorrelationIdOf } from "./bff-correlation.js";
 import { I18nProvider, loadLocaleMessages } from "./i18n.js";
 import { loadOptionalWidgetMessages } from "./optional-widget-i18n.js";
@@ -31,6 +30,21 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 
+const { fixtureDnsLookup } = vi.hoisted(() => ({
+  fixtureDnsLookup: vi.fn(async (hostname: string) => {
+    if (hostname !== "jira.example" && hostname !== "cloud.example")
+      throw Object.assign(new Error("Unexpected synthetic DNS target"), { code: "ENOTFOUND" });
+    return [{ address: "203.0.113.10", family: 4 }];
+  }),
+}));
+
+// The saved Data Center hostname now passes real address-class admission before the fake HTTP
+// response is used. Stub only these synthetic DNS answers; custody and admission remain real.
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:dns/promises")>();
+  return { ...actual, default: { ...actual, lookup: fixtureDnsLookup }, lookup: fixtureDnsLookup };
+});
+
 const syntheticToken = (): string => ["fixture", "jira", "token", "4082"].join("-");
 let configDir: string;
 let configPath: string;
@@ -38,7 +52,6 @@ let close: (() => Promise<void>) | undefined;
 let events: ServerLogEvent[];
 let responses: (Response | Error)[];
 let outbound: { url: string; authorization: string | null }[];
-let networkConfig: AtlassianNetworkConfig | undefined;
 let listenerPort = 0;
 
 function fixtureFetch(input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {
@@ -67,7 +80,6 @@ function dependencies(): UiHandlerDeps {
       configPath,
       env: { KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: randomBytes(32).toString("base64") },
       egress: () => undefined,
-      networkConfig: () => networkConfig,
       fetchImpl: fixtureFetch,
       activityLog: {
         write: (event): void => {
@@ -79,7 +91,7 @@ function dependencies(): UiHandlerDeps {
 }
 
 beforeEach(async () => {
-  networkConfig = undefined;
+  fixtureDnsLookup.mockClear();
   events = [];
   responses = [];
   outbound = [];
@@ -118,9 +130,8 @@ beforeEach(async () => {
   );
 });
 
-it("refuses the actual BFF listener even if a loopback target is operator-admitted", async () => {
+it("refuses the actual BFF listener after the owner saves an explicit loopback URL", async () => {
   const baseUrl = `https://127.0.0.1:${String(listenerPort)}/jira`;
-  networkConfig = { privateTargets: [{ baseUrl, addressClass: "loopback" }] };
   const created = await createAtlassianConnector({
     provider: "jira",
     deployment: "data-center",
@@ -228,6 +239,10 @@ describe("Atlassian browser client through the real credential route (#4082)", (
       Response.json({ name: "fixture-user", key: "fixture-key", active: true }),
     );
     expect(await verifyAtlassianConnector(metadata.authRef)).toMatchObject({ status: "ok" });
+    expect(fixtureDnsLookup).toHaveBeenCalledWith("jira.example", {
+      all: true,
+      verbatim: true,
+    });
     expect(outbound.map((request) => request.url)).toEqual([
       "https://jira.example/context/rest/api/2/serverInfo",
       "https://jira.example/context/rest/api/2/myself",

@@ -88,6 +88,34 @@ Existing linked decisions and executable gates remain the source to check before
 
 ## Lessons recorded since the migration
 
+- **A window retry must preserve the existing turn's terminal settlement (#4244).**
+  - Scope and symptom: a provider context-window overflow after a confirmed tool write can be
+    swallowed into an early answer, or a later retry preflight can fail outside the tool turn and
+    report failure despite the committed write.
+  - Cause and correction: carry the existing bounded retry owner's decision through every active
+    consumer, retain correction state only while that retry remains valid, and route a refused
+    second preflight through the existing answer/transcript settlement. Read existing grants and
+    liveness; do not reset budgets or infer retry fit from the previous prompt size.
+  - Evidence and validation: on 2026-11-04, the failure-first public-handler, window-owner and turn
+    regressions passed in 13 suites (650 tests), including tight-grant refusals, successful retries,
+    canonical replay and stop/scope changes. See `grounded-jira-mixed.public-handler.test.ts`,
+    `gateway-context-window.test.ts` and ADR-0181.
+  - Retirement trigger: revisit when the window owner, synthesis grants or tool-turn terminal
+    settlement changes.
+
+- **Commit a complete runtime source checkpoint before HEAD-bound qualification (#4244).**
+  - Scope and symptom: after adding runtime imports, the real owned-source digest test in
+    `scripts/__tests__/tool-catalog-conformance.test.mjs` can reject an otherwise valid dirty tree
+    with `Git source inventory does not match the owned source set`.
+  - Cause and correction: the collector follows current runtime imports, while the digest reads
+    those files from the specified Git commit. Commit every new runtime file on the feature branch
+    before running HEAD-bound qualification; preserve the fail-closed digest check.
+  - Evidence and validation: on 2026-11-04, four newly imported runtime files were absent from the
+    base commit. The unchanged conformance suite passed 73/73 on source checkpoint
+    `95d18d8d8004f479263a871106aaf18a0b36b5e6`; no test or gate change was needed.
+  - Retirement trigger: revisit if the owned-source collector stops deriving its inventory from
+    current runtime imports, or qualification gains an explicit immutable source-snapshot input.
+
 - **Root `package.json` is a SHA-pinned source of the #1300 design-evidence proofs.** Adding an npm
   script, even an alias for repository tooling, changes its digest and turns the keiko-ui coverage
   suite red (`globals.css.test.ts`, "pins the complete shared producer, fixture and stylesheet input

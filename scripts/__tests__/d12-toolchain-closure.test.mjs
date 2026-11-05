@@ -280,9 +280,12 @@ describe("the D12 digest covers every local module its producers and measuring f
     for (const path of [
       "scripts/check-runtime-toolchain.mjs",
       "scripts/lib/compare-strings.mjs",
+      "scripts/lib/d12-baseline.mjs",
       "scripts/lib/git-changed-paths.mjs",
       "scripts/lib/host-executable.mjs",
       "scripts/lib/json.mjs",
+      "scripts/lib/workspace-storage-fixture.mjs",
+      "tests/e2e/support/workspace-storage.ts",
       "tests/e2e/support/editor-chord.ts",
       "tests/e2e/support/editorWorkspace.ts",
       "tests/e2e/support/debugSessionStartCapture.ts",

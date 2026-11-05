@@ -17,7 +17,7 @@ function read(name: string, items: readonly unknown[], status = "completed"): Ch
     result: { status, page: { truncated: false, reason: "none", cursor: null }, data: { items } },
   } as unknown as ChatToolExchange;
 }
-const approval: ChatToolWriteApprovalView = {
+const approval: Extract<ChatToolWriteApprovalView, { kind: "jira-chat-write" }> = {
   kind: "jira-chat-write",
   approvalId: "approval-1",
   chatId: "chat-1",
@@ -56,7 +56,22 @@ function draft(issuetype: string): ChatToolExchange {
   };
 }
 function transcript(...exchanges: readonly ChatToolExchange[]): ChatToolTranscript {
-  return { schemaVersion: 1, exchanges };
+  return {
+    schemaVersion: 1,
+    exchanges,
+    readGrant: {
+      kind: "jira-chat-read",
+      grantId: "grant-1",
+      chatId: approval.chatId,
+      podId: approval.podId,
+      bindingGeneration: approval.bindingGeneration,
+      authenticationGeneration: approval.authenticationGeneration,
+      state: "granted",
+      disclosureVersion: "jira-chat-read-v1",
+      requestedAt: 1,
+      expiresAt: 2,
+    },
+  };
 }
 function renderInChat(...turns: readonly ChatToolTranscript[]): void {
   render(

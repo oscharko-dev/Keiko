@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -247,7 +248,8 @@ function installWorkspacePerfHarness({ windows, connections, keys }: SeedPayload
     value: string,
   ): void {
     if (this === window.localStorage) {
-      store.storageWrites[key] = (store.storageWrites[key] ?? 0) + 1;
+      const metric = Object.entries(keys).find(([, storageKey]) => storageKey === key)?.[0] ?? key;
+      store.storageWrites[metric] = (store.storageWrites[metric] ?? 0) + 1;
     }
     originalSetItem.call(this, key, value);
   };
@@ -283,15 +285,20 @@ async function installSeededWorkspace(
   connections: readonly SeedConnection[] = seedConnections(),
 ): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 860 });
-  await page.addInitScript(installWorkspacePerfHarness, {
-    windows,
-    connections,
-    keys: {
-      workspace: WORKSPACE_STORAGE_KEY,
-      connections: CONNECTION_STORAGE_KEY,
-      view: VIEW_STORAGE_KEY,
-    },
-  });
+  await page.addInitScript(
+    installWorkspacePerfHarness,
+    (
+      await workspaceStorageArgs(page, {
+        windows,
+        connections,
+        keys: {
+          workspace: WORKSPACE_STORAGE_KEY,
+          connections: CONNECTION_STORAGE_KEY,
+          view: VIEW_STORAGE_KEY,
+        },
+      })
+    ).argument,
+  );
 }
 
 async function resetBrowserCounters(page: Page): Promise<void> {
@@ -396,8 +403,8 @@ function summarizeGesture(
     longTaskObserverInstalled: capture.longTaskObserverInstalled,
     longTaskCount: capture.longTasks.length,
     maxLongTaskMs: Math.round(Math.max(0, ...capture.longTasks)),
-    viewWrites: capture.storageWrites[VIEW_STORAGE_KEY] ?? 0,
-    workspaceWrites: capture.storageWrites[WORKSPACE_STORAGE_KEY] ?? 0,
+    viewWrites: capture.storageWrites.view ?? 0,
+    workspaceWrites: capture.storageWrites.workspace ?? 0,
     workspacePuts: capture.workspacePuts,
   };
 }
@@ -793,15 +800,20 @@ test.describe("workspace scale + low-end tier", () => {
   }, testInfo) => {
     test.setTimeout(240_000);
     await page.setViewportSize({ width: 1400, height: 900 });
-    await page.addInitScript(installWorkspacePerfHarness, {
-      windows: seedWindowsN(SCALE_WINDOWS),
-      connections: seedConnectionsN(SCALE_WINDOWS),
-      keys: {
-        workspace: WORKSPACE_STORAGE_KEY,
-        connections: CONNECTION_STORAGE_KEY,
-        view: VIEW_STORAGE_KEY,
-      },
-    });
+    await page.addInitScript(
+      installWorkspacePerfHarness,
+      (
+        await workspaceStorageArgs(page, {
+          windows: seedWindowsN(SCALE_WINDOWS),
+          connections: seedConnectionsN(SCALE_WINDOWS),
+          keys: {
+            workspace: WORKSPACE_STORAGE_KEY,
+            connections: CONNECTION_STORAGE_KEY,
+            view: VIEW_STORAGE_KEY,
+          },
+        })
+      ).argument,
+    );
 
     const throttleRate = Number.parseInt(process.env.KEIKO_PERF_CPU_THROTTLE ?? "0", 10);
     if (throttleRate >= 2 && testInfo.project.name === "chromium") {

@@ -36,6 +36,11 @@ function job(state: HtmlManualPodJob["state"]): HtmlManualPodJob {
   };
 }
 
+function beginRefresh(): void {
+  fireEvent.click(screen.getByRole("button", { name: /refresh manual/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^refresh manual$/i }));
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -128,5 +133,88 @@ describe("HtmlManualPodRefresh", () => {
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
     });
+  });
+
+  // These shared-poller proofs originally lived with the retired manual-create form.
+  it("keeps polling a running refresh and completes exactly once", async () => {
+    const getJobImpl = vi
+      .fn()
+      .mockResolvedValueOnce(job("running"))
+      .mockResolvedValue(job("succeeded"));
+    const onRefreshComplete = vi.fn();
+    render(
+      <HtmlManualPodRefresh
+        capsuleId={CAP}
+        sourceId="src-1"
+        startRefreshImpl={vi.fn().mockResolvedValue(job("running"))}
+        getJobImpl={getJobImpl}
+        onRefreshComplete={onRefreshComplete}
+        pollIntervalMs={5}
+      />,
+    );
+    beginRefresh();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/Manual refreshed/i));
+    expect(getJobImpl).toHaveBeenCalledTimes(2);
+    expect(onRefreshComplete).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces a polling failure without reporting a completed refresh", async () => {
+    const onRefreshComplete = vi.fn();
+    render(
+      <HtmlManualPodRefresh
+        capsuleId={CAP}
+        sourceId="src-1"
+        startRefreshImpl={vi.fn().mockResolvedValue(job("running"))}
+        getJobImpl={vi.fn().mockRejectedValue(new Error("poll failure"))}
+        onRefreshComplete={onRefreshComplete}
+        pollIntervalMs={5}
+      />,
+    );
+    beginRefresh();
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(onRefreshComplete).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed refresh job as a terminal failure", async () => {
+    render(
+      <HtmlManualPodRefresh
+        capsuleId={CAP}
+        sourceId="src-1"
+        startRefreshImpl={vi.fn().mockResolvedValue(job("running"))}
+        getJobImpl={vi.fn().mockResolvedValue(job("failed"))}
+        pollIntervalMs={5}
+      />,
+    );
+    beginRefresh();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/Refresh failed/i));
+  });
+
+  it.each(["resolve", "reject"] as const)("drops a late poll %s after unmount", async (outcome) => {
+    let finish: ((value: HtmlManualPodJob) => void) | undefined;
+    let fail: ((error: unknown) => void) | undefined;
+    const late = new Promise<HtmlManualPodJob>((resolve, reject) => {
+      finish = resolve;
+      fail = reject;
+    });
+    const getJobImpl = vi.fn().mockReturnValue(late);
+    const onRefreshComplete = vi.fn();
+    const { unmount } = render(
+      <HtmlManualPodRefresh
+        capsuleId={CAP}
+        sourceId="src-1"
+        startRefreshImpl={vi.fn().mockResolvedValue(job("running"))}
+        getJobImpl={getJobImpl}
+        onRefreshComplete={onRefreshComplete}
+        pollIntervalMs={5}
+      />,
+    );
+    beginRefresh();
+    await waitFor(() => expect(getJobImpl).toHaveBeenCalledOnce());
+    unmount();
+    if (outcome === "resolve") finish?.(job("succeeded"));
+    else fail?.(new Error("late poll"));
+    await late.catch(() => undefined);
+    expect(onRefreshComplete).not.toHaveBeenCalled();
+    expect(getJobImpl).toHaveBeenCalledOnce();
   });
 });

@@ -493,6 +493,24 @@ function validatePublicPort() {
   }
 }
 
+// Ask the running launcher to deliver proof directly through the OS opener. The response is
+// content-free and contains no launcher secret, attestation, or session cookie.
+export async function reopenDevBrowser(port, fetchFn = globalThis.fetch) {
+  const origin = publicBrowserUrl(port);
+  try {
+    const response = await fetchFn(`${origin}/api/coding-workbench/app-session/open-browser`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1", Origin: origin },
+      body: JSON.stringify({ origin }),
+      signal: globalThis.AbortSignal.timeout(10_000),
+    });
+    return response.ok && (await response.json())?.state === "opened";
+  } catch {
+    return false;
+  }
+}
+
 async function restartExistingRunnerIfNeeded() {
   const state = readState();
   if (state === undefined || !isAlive(state.runnerPid)) return;
@@ -506,10 +524,11 @@ async function restartExistingRunnerIfNeeded() {
       )}).`,
     );
     if (openBrowserRequested) {
-      // The running BFF's pairing secret is private to its own launch, so no fresh attestation
-      // can be minted here (fail closed): re-pairing needs a restart through this launcher.
+      const opened = await reopenDevBrowser(runningPort);
       console.log(
-        "Pairing: the running dev UI keeps its existing app session; run `npm run dev:stop && npm run dev:start` to pair a fresh browser window.",
+        opened
+          ? "[dev:start] opened a connected browser through the running launcher."
+          : "[dev:start] browser connection unavailable; restart Keiko to open a connected browser.",
       );
     }
     process.exit(0);

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ad15673741fda86a8bb04fcf0786fecec44d99a34fa309423e1cdb823d44aaca"
+    "catalogDigest": "128bc8a035fa9d94fd6b437e108e706cf7f68812eea777f9a81b9ee76f7a2507"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 630,
-    "proofCount": 652,
-    "resolvedProofCount": 652,
+    "operationCount": 632,
+    "proofCount": 654,
+    "resolvedProofCount": 654,
     "failureClassCount": 388,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -107,6 +107,7 @@
         "atlassian.credential.updated",
         "atlassian.jira-draft",
         "atlassian.jira-report",
+        "atlassian.target.admission",
         "chat.compaction.facts.classified",
         "chat.compaction.summary.work",
         "chat.context.failed",
@@ -328,6 +329,7 @@
       "ports": ["ManagedMcpLogPort", "ServerLogSink"],
       "operations": [
         "coding-app-session.browser-approval.state",
+        "coding-app-session.browser-open",
         "coding-app-session.channel.closed",
         "coding-app-session.channel.opened",
         "coding-app-session.expired",
@@ -1281,6 +1283,9 @@
       "packages/keiko-server/src/atlassian/jiraReportRoutes.test.ts",
       "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
     ],
+    "atlassian.target.admission.line": [
+      "packages/keiko-server/src/atlassian/wiring.target-admission.test.ts"
+    ],
     "chat.compaction.facts.classified.line": [
       "packages/keiko-server/src/chat-compaction-model-summary.test.ts"
     ],
@@ -1519,6 +1524,9 @@
     ],
     "coding-app-session.browser-approval.state.line": [
       "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.test.ts"
+    ],
+    "coding-app-session.browser-open.outcome": [
+      "packages/keiko-server/src/coding-app-session/launcherBrowserRoutes.test.ts"
     ],
     "coding-app-session.channel.closed.duration": [
       "packages/keiko-server/src/coding-app-session/sessionStreamLifecycle.test.ts"

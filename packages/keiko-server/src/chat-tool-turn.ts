@@ -52,6 +52,8 @@ import {
 import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   findConfiguredCapability,
+  ContextOverflowError,
+  GatewayError,
   GatewayToolCatalogError,
   toolCallingConfigurationFingerprint,
   type GatewayCallRequest,
@@ -70,7 +72,8 @@ import {
 } from "./store/chatToolTranscript.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ManagedProviderCatalog } from "./tool-catalog/managedProviderCatalog.js";
-import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
+import { CatalogDispatchFault, requireDispatch } from "./tool-catalog/catalogToolErrors.js";
+import { isGatewayAdmissionRefusal } from "./grounded-gateway-error-status.js";
 
 const TOOL_TURN_RULES =
   "When the user requests an operation supported by an offered tool, invoke the matching tool. If the Chat's mode requires an action approval, Keiko presents the approval control and waits for the decision before the effect; asking for permission in prose does not replace it. Invoke modifying tools only when the user has actually requested that change. Server authority, mode, approval and budget checks remain binding.";
@@ -459,6 +462,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     callStream: NonNullable<ModelPort["callStream"]>,
     request: GatewayCallRequest,
     signal: AbortSignal,
+    retryFollows?: (error: unknown) => boolean,
   ): AsyncIterable<GatewayStreamChunk> {
     const response = await this.call(
       {
@@ -467,6 +471,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       },
       request,
       signal,
+      undefined,
+      retryFollows,
     );
     // A deadline answer is already built from the stored transcript and admits no further work.
     requireDispatch(
@@ -510,6 +516,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     request: GatewayCallRequest,
     signal: AbortSignal,
     observeRound?: (response: NormalizedResponse) => void,
+    retryFollows?: (error: unknown) => boolean,
   ): Promise<NormalizedResponse> {
     const cancel = (): void => {
       this.abortController.abort();
@@ -519,17 +526,46 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const { deps, message } = this.options;
     const release = onChatScopeInterruption(deps, message.chatId, () => this.endForScopeChange());
     try {
-      return await this.runRounds(model, request, signal, observeRound);
+      return await this.runRounds(model, request, signal, observeRound, retryFollows);
     } catch (error) {
-      const uncorrected = this.answerBeforeCorrection(signal);
-      if (uncorrected !== undefined) return uncorrected;
-      const partial = this.partialAnswer(error, request.modelId, signal);
+      // The owning window retry keeps this same turn and its settled effects open.
+      if (this.retryKeepsTurnOpen(signal) && retryFollows?.(error) === true) throw error;
+      const partial = this.failedAnswer(error, request.modelId, signal);
       if (partial === undefined) throw error;
       return partial;
     } finally {
       release();
       signal.removeEventListener("abort", cancel);
     }
+  }
+
+  /** A refusal belongs to this adopted retry only; ordinary caller refusals keep their contract. */
+  public settleRetryFailure(
+    error: unknown,
+    originalFailure: unknown,
+    modelId: string,
+    signal: AbortSignal,
+  ): NormalizedResponse | undefined {
+    if (
+      !(originalFailure instanceof ContextOverflowError) ||
+      originalFailure.reportedContextWindowTokens === undefined ||
+      (!(error instanceof GatewayError) && !(error instanceof CatalogDispatchFault))
+    )
+      return undefined;
+    return this.failedAnswer(
+      isGatewayAdmissionRefusal(error) ? originalFailure : error,
+      modelId,
+      signal,
+    );
+  }
+
+  private failedAnswer(
+    error: unknown,
+    modelId: string,
+    signal: AbortSignal,
+  ): NormalizedResponse | undefined {
+    this.clearCorrection();
+    return this.answerBeforeCorrection(signal) ?? this.partialAnswer(error, modelId, signal);
   }
 
   /**
@@ -544,6 +580,18 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.scopeChangeEnded = true;
     this.abortController.abort();
     return true;
+  }
+
+  private retryKeepsTurnOpen(signal: AbortSignal): boolean {
+    return (
+      this.endedAnswer === undefined &&
+      !this.uncertainBudget &&
+      this.counters.modelCalls < this.limits.maxModelCalls &&
+      this.counters.iterations < this.limits.maxIterations &&
+      !signal.aborted &&
+      !this.context.signal.aborted &&
+      Date.now() < Date.parse(this.context.authorityExpiresAt)
+    );
   }
 
   private transcriptExchangeCount(): number {
@@ -690,12 +738,13 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     request: GatewayCallRequest,
     signal: AbortSignal,
     observeRound?: (response: NormalizedResponse) => void,
+    retryFollows?: (error: unknown) => boolean,
   ): Promise<NormalizedResponse> {
     while (this.counters.iterations < this.limits.maxIterations) {
       this.admitRound(request.modelId, signal);
       const offered = this.binder.offer();
       const round = this.roundRequest(request, offered);
-      const response = await this.callRound(model, round); // NOSONAR typescript:S9382 -- each round depends on the previous round's results
+      const response = await this.callRound(model, round, signal, retryFollows); // NOSONAR typescript:S9382 -- each round depends on the previous round's results
       if (response === undefined) continue;
       observeRound?.(response);
       this.chargeUsage(response);
@@ -809,17 +858,18 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private async callRound(
     model: ModelPort,
     round: GatewayCallRequest,
+    signal: AbortSignal,
+    retryFollows?: (error: unknown) => boolean,
   ): Promise<NormalizedResponse | undefined> {
     try {
       const response = await model.call(round, this.context.signal);
-      this.correction = undefined;
-      this.correctionAdmissionPending = false;
+      this.clearCorrection();
       return response;
     } catch (error) {
+      if (this.retryKeepsTurnOpen(signal) && retryFollows?.(error) === true) throw error;
       const correction = this.correctedSinceProgress ? undefined : unusableRoundCorrection(error);
       // The turn ends here: a later synthesis pass that reuses it never inherits the correction.
-      this.correction = undefined;
-      this.correctionAdmissionPending = false;
+      this.clearCorrection();
       if (correction === undefined || this.context.signal.aborted) throw error;
       this.correction = { role: "system", content: correction.content };
       this.correctedSinceProgress = true;
@@ -832,6 +882,11 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       });
       return undefined;
     }
+  }
+
+  private clearCorrection(): void {
+    this.correction = undefined;
+    this.correctionAdmissionPending = false;
   }
 }
 
@@ -876,6 +931,7 @@ export type ChatToolTurnPort = Pick<
   | "answersAtDeadline"
   | "answersAfterScopeChange"
   | "endedEarly"
+  | "settleRetryFailure"
 >;
 
 /** Source-specific authority adapters use the same catalog/log/budget and invocation registry wiring. */

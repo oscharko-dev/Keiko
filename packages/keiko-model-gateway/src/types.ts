@@ -162,7 +162,7 @@ export interface OutboundHttpEgressConfig {
   // Narrow, non-config-file, non-env-mapped opt-in set ONLY by the model-gateway setup route
   // after its own dedicated KEIKO_ALLOW_LINK_LOCAL_GATEWAY-gated check has already approved the
   // exact submitted baseUrl (AUDIT-SEC-002 follow-up). Unlike `allowPrivateNetwork`, this may
-  // re-permit the "metadata"/"link-local" target classes -- never "multicast", and never via a
+  // re-permit the "metadata"/"link-local" target classes -- never "multicast"/"unspecified", and never via a
   // generic env var, so it cannot silently widen the crawler/manual-fetcher SSRF surface.
   readonly allowLinkLocalAndMetadata?: boolean | undefined;
   // Set ONLY by the #2387 research-egress config. "loopback" is permitted by default because

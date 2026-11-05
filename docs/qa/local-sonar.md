@@ -102,6 +102,9 @@ npm run gates:sonar:stop     # stop the server, keep its cache
 ./docker/gates/run-sonar.sh --base main   # diff against another base
 ```
 
+Both local containers are limited to 2 CPUs each from startup (up to 4 CPUs combined) for controlled
+load without performance qualification.
+
 The local runner gives the SonarJS bridge 4.5 GiB and caps the scanner coordinator at 768 MiB. This
 keeps enough analyzer headroom while leaving space for the concurrently required SonarQube service
 inside Docker Desktop's common 8 GiB VM; the scanner's automatic heap choice can otherwise exceed

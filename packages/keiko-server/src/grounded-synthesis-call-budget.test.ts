@@ -12,6 +12,35 @@ import {
 } from "./grounded-answer.js";
 
 describe("factory-owned physical synthesis allowance", () => {
+  it("keeps retry decisions read-only and refuses the caller's ended deadline or signal", () => {
+    const budget = createGroundedSynthesisCallBudget();
+    const controller = new AbortController();
+    let now = 1;
+    const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+      inputTokensMax: 220,
+      outputTokensMax: 80,
+      signal: controller.signal,
+      deadlineAtMs: 100,
+      nowMs: () => now,
+      retryFollows: () => true,
+    });
+    tracker
+      .admission({ promptTokens: 100, maxOutputTokens: 80 })
+      ?.settle({ promptTokens: 100, completionTokens: 0 }, true, "none");
+    const failure = new Error("Synthetic owner-confirmed retry");
+    expect(tracker.retryFollows?.(failure)).toBe(true);
+    expect(tracker.retryFollows?.(failure)).toBe(true);
+    expect(budget.remaining()).toBe(1);
+    expect(budget.pendingUsage()).toEqual({ promptTokens: 100, completionTokens: 0 });
+    now = 100;
+    expect(tracker.retryFollows?.(failure)).toBe(false);
+    now = 99;
+    controller.abort();
+    expect(tracker.retryFollows?.(failure)).toBe(false);
+    expect(budget.remaining()).toBe(1);
+    expect(budget.pendingUsage()).toEqual({ promptTokens: 100, completionTokens: 0 });
+  });
+
   it("does not charge provider usage for a readiness refusal before dispatch", async () => {
     const budget = createGroundedSynthesisCallBudget();
     const tracker = createGroundedSynthesisAttemptAdmission(budget, {

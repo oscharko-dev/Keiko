@@ -2,6 +2,7 @@
 
 import {
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -73,6 +74,7 @@ import { correlationIdOf } from "@/lib/client-error-summary";
 import { bffRequestErrorKind } from "@/lib/http";
 import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
 import { protectWorkspaceLayout, useWorkspaceLayoutLock } from "./useWorkspaceLayoutLock";
+import { WorkspaceStorageScopeContext, workspaceStorageKey } from "./workspace-storage";
 
 export type { AppWindow, View };
 export type { UseWorkspaceResult, ViewportWorld };
@@ -120,10 +122,10 @@ function clampViewPan(value: number): number {
   return Math.max(-MAX_VIEW_PAN, Math.min(MAX_VIEW_PAN, value));
 }
 
-function readView(): View {
+function readView(storageScope: string | undefined): View {
   if (typeof window === "undefined") return { zoom: 1, x: 0, y: 0 };
   try {
-    const raw = window.localStorage.getItem(VIEW_LS);
+    const raw = window.localStorage.getItem(workspaceStorageKey(VIEW_LS, storageScope));
     if (raw === null) return { zoom: 1, x: 0, y: 0 };
     const parsed: unknown = JSON.parse(raw);
     if (
@@ -179,9 +181,9 @@ function topZ(ws: readonly AppWindow[]): AppWindow | null {
   return best;
 }
 
-function persistList<T>(key: string, value: T): void {
+function persistList<T>(key: string, value: T, storageScope: string | undefined): void {
   try {
-    window.localStorage.setItem(key, JSON.stringify(value));
+    window.localStorage.setItem(workspaceStorageKey(key, storageScope), JSON.stringify(value));
   } catch {
     /* ignore */
   }
@@ -327,6 +329,7 @@ function focusedWindowId(): string | null {
 }
 
 interface UsePanZoomArgs {
+  readonly storageScope: string | undefined;
   readonly layoutLocked: boolean;
   readonly isLayoutLocked: () => boolean;
   readonly wsRef: RefObject<HTMLElement | null>;
@@ -597,6 +600,7 @@ function interpolateView(from: View, to: View, progress: number): View {
 }
 
 function usePanZoom({
+  storageScope,
   layoutLocked,
   isLayoutLocked,
   wsRef,
@@ -622,8 +626,10 @@ function usePanZoom({
   viewPersistDebounceRef.current ??= createTrailingDebounce(PERSIST_DEBOUNCE_MS);
 
   const scheduleViewPersist = useCallback((): void => {
-    viewPersistDebounceRef.current?.schedule(() => persistList(VIEW_LS, viewRef.current));
-  }, []);
+    viewPersistDebounceRef.current?.schedule(() =>
+      persistList(VIEW_LS, viewRef.current, storageScope),
+    );
+  }, [storageScope]);
 
   useEffect(() => {
     if (!layoutLocked) return;
@@ -892,6 +898,7 @@ function usePanZoom({
 }
 
 interface UseHydrateArgs {
+  readonly storageScope: string | undefined;
   readonly retireAutomaticGeometry: () => void;
   readonly worldVP: () => ViewportWorld | null;
   readonly wsRef: RefObject<HTMLElement | null>;
@@ -941,11 +948,37 @@ function readPersistedArray(key: string): readonly unknown[] {
   return [];
 }
 
-function readPersistedWorkspaceSnapshot(): {
+function readPersistedWorkspaceSnapshot(storageScope: string | undefined): {
   readonly wins: AppWindow[];
   readonly conns: Connection[];
 } {
-  return snapshotFromRaw(readPersistedArray(WS_LS), readPersistedArray(CONN_LS));
+  return snapshotFromRaw(
+    readPersistedArray(workspaceStorageKey(WS_LS, storageScope)),
+    readPersistedArray(workspaceStorageKey(CONN_LS, storageScope)),
+  );
+}
+
+function reportWorkspaceRestoration(
+  snapshot: WorkspaceSnapshot,
+  storageScope: string | undefined,
+): void {
+  if (storageScope === undefined) return;
+  let activity:
+    "workspace-layout-restored" | "workspace-layout-empty" | "workspace-layout-unowned" =
+    snapshot.wins.length > 0 ? "workspace-layout-restored" : "workspace-layout-empty";
+  try {
+    if (
+      window.localStorage.getItem(workspaceStorageKey(WS_LS, storageScope)) === null &&
+      window.localStorage.getItem(WS_LS) !== null
+    )
+      activity = "workspace-layout-unowned";
+  } catch {
+    reportClientDiagnostic("Workspace layout storage is unavailable.", {
+      kind: "other",
+      errorKind: "unavailable",
+    });
+  }
+  reportClientDiagnostic("Workspace layout restoration settled.", { composerActivity: activity });
 }
 
 function workspaceStateEtag(revision: number): string {
@@ -960,11 +993,13 @@ function revisionFromWorkspaceEtag(value: string | null): number | null {
 
 async function fetchServerWorkspaceSnapshot(
   knownRevision: number,
+  storageScope: string | undefined,
 ): Promise<ServerWorkspaceSnapshot | null> {
   if (typeof fetch !== "function") return null;
   try {
     const headers: Record<string, string> = { Accept: "application/json" };
     headers["If-None-Match"] = workspaceStateEtag(knownRevision);
+    if (storageScope !== undefined) headers["X-Keiko-Workspace-Storage"] = storageScope;
     const response = await fetch(WORKSPACE_STATE_API, { headers });
     if (response.status === 304) {
       noteWorkspaceSyncRecovered();
@@ -1115,6 +1150,10 @@ function noteWorkspaceSyncRecovered(): void {
   workspaceSyncFailureSurfaced = false;
 }
 
+function workspaceStorageHeaders(scope: string | undefined): Readonly<Record<string, string>> {
+  return scope === undefined ? {} : { "X-Keiko-Workspace-Storage": scope };
+}
+
 async function putServerWorkspaceSnapshot(
   wins: readonly AppWindow[],
   conns: readonly Connection[],
@@ -1122,6 +1161,7 @@ async function putServerWorkspaceSnapshot(
     readonly baseRevision: number;
     readonly signal?: AbortSignal;
     readonly keepalive?: boolean;
+    readonly storageScope?: string | undefined;
   },
 ): Promise<
   | { readonly kind: "ok"; readonly revision: number }
@@ -1151,6 +1191,7 @@ async function putServerWorkspaceSnapshot(
         "Content-Type": "application/json",
         "If-Match": workspaceStateEtag(opts.baseRevision),
         "X-Keiko-CSRF": "1",
+        ...workspaceStorageHeaders(opts.storageScope),
       },
       body: serializedBody,
       // keepalive lets the final flush survive page unload; disabled above when the
@@ -1298,6 +1339,7 @@ function applyPersistedWorkspaceSnapshot(
 }
 
 function useHydrate({
+  storageScope,
   retireAutomaticGeometry,
   worldVP,
   wsRef,
@@ -1311,17 +1353,28 @@ function useHydrate({
     if (el === null) return;
     // M1 (#532) — no seeded windows on first launch; the empty-state "New window" button
     // in Workspace.tsx and the FAB (+) are always reachable even when `wins` is [].
-    const snapshot = readPersistedWorkspaceSnapshot();
+    const snapshot = readPersistedWorkspaceSnapshot(storageScope);
+    reportWorkspaceRestoration(snapshot, storageScope);
     // GEN-PERF-PERSISTENCE-001 — seed the applied-serialization baseline from the
     // hydrated snapshot so an immediate cross-tab storage event echoing this exact
     // value is recognised as a no-op (before the debounced local persist runs).
     lastAppliedSerializedRef.current = serializePersistedSnapshot(snapshot);
     retireAutomaticGeometry();
     applyPersistedWorkspaceSnapshot(snapshot, setWins, setConns, zc, worldVP());
-  }, [wsRef, worldVP, setWins, setConns, zc, lastAppliedSerializedRef, retireAutomaticGeometry]);
+  }, [
+    wsRef,
+    worldVP,
+    setWins,
+    setConns,
+    zc,
+    lastAppliedSerializedRef,
+    retireAutomaticGeometry,
+    storageScope,
+  ]);
 }
 
 interface UseStorageSyncArgs {
+  readonly storageScope: string | undefined;
   readonly worldVP: () => ViewportWorld | null;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
@@ -1345,6 +1398,7 @@ function serializePersistedSnapshot(snapshot: {
 }
 
 function useWorkspaceStorageSync({
+  storageScope,
   worldVP,
   setWins,
   setConns,
@@ -1356,8 +1410,12 @@ function useWorkspaceStorageSync({
   useEffect(() => {
     const onStorage = (event: StorageEvent): void => {
       if (event.storageArea !== null && event.storageArea !== window.localStorage) return;
-      if (event.key !== WS_LS && event.key !== CONN_LS) return;
-      const snapshot = readPersistedWorkspaceSnapshot();
+      if (
+        event.key !== workspaceStorageKey(WS_LS, storageScope) &&
+        event.key !== workspaceStorageKey(CONN_LS, storageScope)
+      )
+        return;
+      const snapshot = readPersistedWorkspaceSnapshot(storageScope);
       // GEN-PERF-PERSISTENCE-001 — a cross-tab storage event unconditionally
       // re-applied the whole snapshot with brand-new object identities (defeating
       // every WindowFrame memo and bumping useLinkRevision) even when the incoming
@@ -1386,10 +1444,12 @@ function useWorkspaceStorageSync({
     beforeApplyRemote,
     lastAppliedSerializedRef,
     suppressNextLocalPersistRef,
+    storageScope,
   ]);
 }
 
 interface UseServerSyncArgs {
+  readonly storageScope: string | undefined;
   readonly retireAutomaticGeometry: () => void;
   readonly worldVP: () => ViewportWorld | null;
   readonly wins: AppWindow[] | null;
@@ -1401,6 +1461,7 @@ interface UseServerSyncArgs {
 }
 
 function useWorkspaceServerSync({
+  storageScope,
   retireAutomaticGeometry,
   worldVP,
   wins,
@@ -1440,50 +1501,54 @@ function useWorkspaceServerSync({
   // One sanitize+PUT of the LATEST snapshot (read from refs so a debounced/flush run
   // never sends stale geometry). Supersedes any in-flight PUT via AbortController and
   // advances the revision monotonically (issue #1580).
-  const runServerPut = useCallback((keepalive: boolean): void => {
-    const latestWins = winsRef.current;
-    if (latestWins === null) return;
-    const snapshot = buildServerWorkspaceSnapshot(latestWins, connsRef.current);
-    if (snapshot.serialized === lastAcknowledgedSnapshotRef.current) {
-      localDirtyRef.current = false;
-      return;
-    }
-    putAbortRef.current?.abort();
-    const controller = typeof AbortController === "function" ? new AbortController() : null;
-    putAbortRef.current = controller;
-    const baseRevision = revisionRef.current;
-    void putServerWorkspaceSnapshot(snapshot.wins, snapshot.conns, {
-      baseRevision,
-      ...(controller !== null ? { signal: controller.signal } : {}),
-      keepalive,
-    }).then((result) => {
-      if (result?.kind === "conflict") {
-        // A 412 is a handled concurrency signal: adopt a usable conflict revision when doing so is
-        // safe, and ALWAYS schedule the bounded retry — the send uses the freshest adopted revision
-        // at fire time, so a stale, equal, restart-reset, or missing conflict ETag never parks the
-        // dirty snapshot. The per-snapshot marker and the unmount guard inside the scheduler bound
-        // the attempt; no revision comparison is needed for loop safety.
-        adoptConflictRevision(result.revision, baseRevision, revisionRef);
-        scheduleWorkspaceConflictRetry(
-          snapshot.serialized,
-          localDirtyRef,
-          serverSyncStoppedRef,
-          conflictRetriedSnapshotRef,
-          putDebounceRef,
-          runServerPutRef,
-        );
+  const runServerPut = useCallback(
+    (keepalive: boolean): void => {
+      const latestWins = winsRef.current;
+      if (latestWins === null) return;
+      const snapshot = buildServerWorkspaceSnapshot(latestWins, connsRef.current);
+      if (snapshot.serialized === lastAcknowledgedSnapshotRef.current) {
+        localDirtyRef.current = false;
         return;
       }
-      if (result?.kind !== "ok") return;
-      lastAcknowledgedSnapshotRef.current = snapshot.serialized;
-      localDirtyRef.current = false;
-      // An acknowledged save ends the conflict sequence: re-arm the one-retry cap so a LATER
-      // conflict of the same serialization (state B, then back to byte-identical A) gets its
-      // retry instead of being parked by a marker from a long-finished sequence.
-      conflictRetriedSnapshotRef.current = null;
-      if (result.revision > revisionRef.current) revisionRef.current = result.revision;
-    });
-  }, []);
+      putAbortRef.current?.abort();
+      const controller = typeof AbortController === "function" ? new AbortController() : null;
+      putAbortRef.current = controller;
+      const baseRevision = revisionRef.current;
+      void putServerWorkspaceSnapshot(snapshot.wins, snapshot.conns, {
+        storageScope,
+        baseRevision,
+        ...(controller !== null ? { signal: controller.signal } : {}),
+        keepalive,
+      }).then((result) => {
+        if (result?.kind === "conflict") {
+          // A 412 is a handled concurrency signal: adopt a usable conflict revision when doing so is
+          // safe, and ALWAYS schedule the bounded retry — the send uses the freshest adopted revision
+          // at fire time, so a stale, equal, restart-reset, or missing conflict ETag never parks the
+          // dirty snapshot. The per-snapshot marker and the unmount guard inside the scheduler bound
+          // the attempt; no revision comparison is needed for loop safety.
+          adoptConflictRevision(result.revision, baseRevision, revisionRef);
+          scheduleWorkspaceConflictRetry(
+            snapshot.serialized,
+            localDirtyRef,
+            serverSyncStoppedRef,
+            conflictRetriedSnapshotRef,
+            putDebounceRef,
+            runServerPutRef,
+          );
+          return;
+        }
+        if (result?.kind !== "ok") return;
+        lastAcknowledgedSnapshotRef.current = snapshot.serialized;
+        localDirtyRef.current = false;
+        // An acknowledged save ends the conflict sequence: re-arm the one-retry cap so a LATER
+        // conflict of the same serialization (state B, then back to byte-identical A) gets its
+        // retry instead of being parked by a marker from a long-finished sequence.
+        conflictRetriedSnapshotRef.current = null;
+        if (result.revision > revisionRef.current) revisionRef.current = result.revision;
+      });
+    },
+    [storageScope],
+  );
   runServerPutRef.current = runServerPut;
 
   const applyServerSnapshot = useCallback(
@@ -1506,7 +1571,7 @@ function useWorkspaceServerSync({
     if (!serverSyncEnabled) return;
     let stopped = false;
     const pull = async (): Promise<void> => {
-      const serverSnapshot = await fetchServerWorkspaceSnapshot(revisionRef.current);
+      const serverSnapshot = await fetchServerWorkspaceSnapshot(revisionRef.current, storageScope);
       if (stopped || serverSnapshot === null) return;
       if (serverSnapshot.revision <= revisionRef.current) return;
       if (
@@ -1538,7 +1603,7 @@ function useWorkspaceServerSync({
       poller.stop();
       document.removeEventListener("visibilitychange", poller.sync);
     };
-  }, [applyServerSnapshot, serverSyncEnabled]);
+  }, [applyServerSnapshot, serverSyncEnabled, storageScope]);
 
   // Debounced server PUT (issue #1580): an uncoalesced drag previously fired one
   // full-snapshot PUT per pointer frame. The echo-suppression flag is consumed
@@ -1904,6 +1969,7 @@ export interface UseWorkspaceOptions extends Pick<
   | "onGitChangeBind"
   | "onGitChangeUnbind"
 > {
+  readonly storageScope?: string | undefined;
   readonly cameraSmoothness?: number | undefined;
   readonly onWindowLimitReached?: ((limit: number) => void) | undefined;
 }
@@ -2105,6 +2171,8 @@ export function useWorkspace(
   wsRef: RefObject<HTMLElement | null>,
   opts: UseWorkspaceOptions = {},
 ): UseWorkspaceResult {
+  const inheritedStorageScope = useContext(WorkspaceStorageScopeContext);
+  const storageScope = opts.storageScope ?? inheritedStorageScope;
   const { setWins, wins, winsReadyRef, winsRef } = useWorkspaceWindowState();
   const automaticSizing = useAutomaticWindowSizing(wins);
   const [selection, setSelection] = useState<WorkspaceUiSelectionState>({
@@ -2122,7 +2190,7 @@ export function useWorkspace(
   const [conns, setConns] = useState<Connection[]>([]);
   const [connecting, setConnecting] = useState<ConnectingState | null>(null);
   const [connectionOutcome, setConnectionOutcome] = useState<ConnectionOutcome>();
-  const [view, setView] = useState<View>(readView);
+  const [view, setView] = useState<View>(() => readView(storageScope));
   // Issue #1580 — destructure the optional scope-bind callbacks so the memoized
   // action factories below depend on their (stable) identities rather than on the
   // `opts` object, which defaults to a fresh `{}` every render and would otherwise
@@ -2298,6 +2366,7 @@ export function useWorkspace(
   const snapChordRef = useRef<SnapChordActions | null>(null);
 
   const { viewRef, worldVP, zoomTo, fitView, resetView, panBy, rect } = usePanZoom({
+    storageScope,
     layoutLocked,
     isLayoutLocked,
     wsRef,
@@ -2309,6 +2378,7 @@ export function useWorkspace(
   });
 
   useHydrate({
+    storageScope,
     wsRef,
     worldVP,
     setWins,
@@ -2318,6 +2388,7 @@ export function useWorkspace(
     retireAutomaticGeometry: automaticSizing.retire,
   });
   useWorkspaceStorageSync({
+    storageScope,
     worldVP,
     setWins,
     setConns,
@@ -2327,6 +2398,7 @@ export function useWorkspace(
     suppressNextLocalPersistRef,
   });
   useWorkspaceServerSync({
+    storageScope,
     retireAutomaticGeometry: automaticSizing.retire,
     worldVP,
     wins,
@@ -2365,15 +2437,15 @@ export function useWorkspace(
       return;
     }
     const persisted = sanitizePersistedWorkspace(wins, conns);
-    persistList(WS_LS, persisted.wins);
-    persistList(CONN_LS, persisted.conns);
+    persistList(WS_LS, persisted.wins, storageScope);
+    persistList(CONN_LS, persisted.conns, storageScope);
     // Track what is now durably applied so a cross-tab storage event echoing this
     // exact value is recognised as a no-op (PERSISTENCE-001 equality guard).
     lastAppliedSerializedRef.current = JSON.stringify({
       windows: persisted.wins,
       connections: persisted.conns,
     });
-  }, [conns, wins]);
+  }, [conns, wins, storageScope]);
 
   useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef: snapChordRef, isLayoutLocked });
   useFitMaximized({ wsRef, viewRef, setWins, automatic: automaticSizing });

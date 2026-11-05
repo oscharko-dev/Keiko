@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./workspace-storage.js";
 // #3390 — shared driver for the real-model production-composition journey
 // (`coding-issue-journey.spec.ts`). Generalizes the pairing/readiness/issue-intake steps the
 // original single test already established (blockers A/B documented there) so every scenario
@@ -347,17 +348,20 @@ export async function pairLiveSession(page: Page): Promise<void> {
  * pair) must not open it, since its gateway-profile read is one of the effect boundaries the
  * connected-chat observer forbids. */
 export async function openLiveDesktop(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    localStorage.setItem("keiko.theme", "dark");
-    // #3390: pin the interface language. Every control this lane clicks and every sentence it
-    // reads is named in English, while the product resolves its locale from `navigator.language`
-    // when nothing is stored -- so on a runner whose browser reports any other language the whole
-    // lane would fail on its first control lookup, for a reason that has nothing to do with the
-    // product. `keiko.locale` is the product's own preference key, set exactly as the operator's
-    // own language choice sets it.
-    localStorage.setItem("keiko.locale", "en");
-    localStorage.removeItem("keiko.conns.v1");
-  });
+  await page.addInitScript(
+    ({ storageKeys }) => {
+      localStorage.setItem("keiko.theme", "dark");
+      // #3390: pin the interface language. Every control this lane clicks and every sentence it
+      // reads is named in English, while the product resolves its locale from `navigator.language`
+      // when nothing is stored -- so on a runner whose browser reports any other language the whole
+      // lane would fail on its first control lookup, for a reason that has nothing to do with the
+      // product. `keiko.locale` is the product's own preference key, set exactly as the operator's
+      // own language choice sets it.
+      localStorage.setItem("keiko.locale", "en");
+      localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, undefined),
+  );
   await pairLiveSession(page);
 }
 

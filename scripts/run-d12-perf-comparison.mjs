@@ -28,8 +28,9 @@ import {
 } from "./d12-measurement-toolchain.mjs";
 import { createD12RuntimeEnvironment } from "./d12-runtime-environment.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { BASELINE_COMMIT } from "./lib/d12-baseline.mjs";
 
-export const BASELINE_COMMIT = "18750d079e2a61c7d7044f3f6ec977a104b9884f";
+export { BASELINE_COMMIT } from "./lib/d12-baseline.mjs";
 const FULL_COMMIT = /^[0-9a-f]{40}$/u;
 const SHA_256 = /^[0-9a-f]{64}$/u;
 const REVISIONS = ["baseline", "candidate"];

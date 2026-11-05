@@ -137,6 +137,33 @@ pairing port is never itself client attestation: an absent, forged, revoked or e
 mint a new session. The launcher fragment is redeemed only by the existing single-use `/pair`
 endpoint. Valid-cookie reloads remain automatic and do not widen authority.
 
+#### Simple local browser connection (owner decision, 2026-11-04)
+
+The normal launcher still opens an authenticated browser automatically. An unpaired desktop offers
+one **Connect browser** action instead of a comparison-code dialog. Its content-free POST asks the
+running trusted launcher to open Keiko in the matching installed browser. The launcher creates the
+existing fresh, single-use attestation and delivers it **only to the native OS browser opener** in
+the existing fragment flow. The requester receives a closed outcome, never an attestation, cookie,
+redirect, public-key approval, or content. It remains unauthenticated until that browser independently
+redeems the attestation. Other tabs in the same browser profile then observe the verified cookie.
+After a server restart the same action reconnects; `dev:start` can also request this handoff from an
+already running server without restarting it or recovering its private secret.
+
+The destination is an exact HTTP loopback origin on the server-owned public UI port; no supplied
+URL, path, executable, principal or additional arguments are admitted. Browser selection uses a
+closed target list and fixed native application identifiers/commands with no shell. Calls are
+serialized and limited to one per ten seconds per server graph, and native launch is bounded to
+five seconds. Child processes receive only desktop environment fields. Native errors and proof-bearing
+arguments never enter responses or logs; the Activity Log records the closed handoff outcome.
+A local HTTP client can at most cause a bounded browser window to open: it cannot obtain that
+browser's proof or read authority. Missing launcher configuration, unsupported browser, opener
+failure and blocked profile delivery leave protected APIs closed and present a retry. Private or
+nondefault browser profiles may require reopening Keiko through their normal launcher profile.
+
+The older explicit cross-browser approval protocol below remains available to its existing
+management/renewal consumers, but the ordinary desktop entry point does not invoke it. Remembering
+is still opt-in; this change does not silently persist browser keys or extend any session lifetime.
+
 #### Explicit browser approval (#4043)
 
 The same channel and session registry support approval of another browser by an already approved
@@ -144,8 +171,8 @@ local session. The requester supplies only a public P-256 point and an explicit 
 choice. A bounded five-minute request carries a random identifier and an eight-digit comparison
 code. The human compares that code in the requesting browser and in the authenticated approval
 surface. Merely knowing the request identifier or comparison code cannot issue a session: completion
-also proves possession of the exact approved private key. There is no unauthenticated launcher
-invocation, fallback bearer, browser-supplied principal, or grant of task/autonomy authority.
+also proves possession of the exact approved private key. This protocol grants no fallback bearer, browser-supplied principal, or task/autonomy authority.
+The separate native-open request above is content-free and cannot approve a posted key.
 
 Completion and remembered renewal use distinct, single-use challenges valid for at most sixty
 seconds. Domain-separated signed bytes bind the installation, current server instance, exact
@@ -190,8 +217,7 @@ and retires only matching completion/renewal challenges. The existing approval A
 pending-request, session-only and remembered counts without identities, public points or bearers.
 
 The browser keeps a session-only private key in its mounted request controller and remembers an
-explicitly approved, nonextractable private CryptoKey only in origin-scoped IndexedDB. The desktop
-notice starts an explicit request; Settings → Security owns comparison, session-only or remembered
+explicitly approved, nonextractable private CryptoKey only in origin-scoped IndexedDB. The legacy approval controller starts an explicit request; Settings → Security owns comparison, session-only or remembered
 approval, expiry, last-use display and revocation. Remembering defaults off, requires both human
 choices, and is reported successful only after the IndexedDB transaction commits. Request success
 alone is insufficient; abort, blocked storage and quota failure retain an honest unconfirmed result

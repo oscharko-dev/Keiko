@@ -19,9 +19,12 @@ export const D12_MEASUREMENT_TOOLCHAIN_PATHS = Object.freeze([
   "scripts/editor-bundle-size.mjs",
   "scripts/editor-release-evidence.mjs",
   "scripts/lib/compare-strings.mjs",
+  "scripts/lib/d12-baseline.mjs",
   "scripts/lib/git-changed-paths.mjs",
   "scripts/lib/host-executable.mjs",
   "scripts/lib/json.mjs",
+  "scripts/lib/workspace-storage-fixture.mjs",
+  "scripts/lib/workspace-storage-fixture.d.mts",
   "scripts/run-d12-perf-comparison.mjs",
   "tests/e2e/config/playwright.editor-performance.config.ts",
   "tests/e2e/config/playwright.issue-2348-editor-debugging.config.ts",
@@ -42,6 +45,8 @@ export const D12_MEASUREMENT_TOOLCHAIN_PATHS = Object.freeze([
   "tests/e2e/support/editor-chord.ts",
   "tests/e2e/support/editorWorkspace.ts",
   "tests/e2e/support/window-chrome.ts",
+  "tests/e2e/support/workspace-storage.ts",
+  "packages/keiko-ui/src/app/components/desktop/hooks/workspace-storage.ts",
 ]);
 
 function updateDigest(hash, path, contents) {

@@ -142,6 +142,12 @@ formats. Defaults remain annotations; validation never inserts defaults, coerces
 properties or prunes constraints. Gateway projections retain the admitted schema. Existing managed
 OpenCode built-in projections retain their lossless closed/required-field invariant.
 
+The server-owned `jira.draft` declaration also explicitly selects this existing standard dialect
+to express its two closed input forms: either nonempty `items` alone or `draftId` and
+`draftDigest` together. The same bounded compiler, argument validator and lossless gateway
+projection apply; this does not add composition keywords to the internal subset. Stored draft
+ownership, existence and current digest remain handler checks.
+
 External schemas are untrusted metadata. Before either catalog compilation or the external MCP
 SDK's argument/result validation, the shared contracts guard bounds the schema to 64 KiB, JSON
 depth 16, 128 entries per container, 2,048 JSON nodes, 256 schema nodes and 2,048 expanded reference
