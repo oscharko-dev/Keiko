@@ -4211,6 +4211,7 @@
     "review.bootstrap",
     "review.pair-qualification.startup-sweep",
     "review.retention",
+    "review.runtime.budget",
     "review.runtime.compose",
     "review.services.compose",
     "review.worktree.refs-sweep",

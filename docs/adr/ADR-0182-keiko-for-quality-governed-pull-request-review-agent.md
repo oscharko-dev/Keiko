@@ -90,7 +90,12 @@ governed-tools plugin (which registers exactly the four tools) and the context p
 gateway's `hasExactOpenCodeVisibleToolContract(tools, "review")`, which pins their projected schemas
 by digest; layer 3 is the review authority (`workspace-read` alone, `governed-assist`, review
 purpose), checked by the tool authority port on every call, whose relaxed planning paths now also
-require `workspace-write`; layer 4 is `reviewRuntimeGuard.ts`. Its purpose is the composition's own:
+require `workspace-write`. Skills, skill discovery, child agents and Git reads need only
+`workspace-read`, so the class check alone would admit them. The port therefore admits only read,
+discover, search and the report for an authority that carries `workspace-read` alone, and no
+approval lifts that refusal. Its denial line on `coding-runtime.tool-authority.denied` carries
+`readOnlyAuthority: true` (R4130-009). Every Coding Workbench mode carries `workspace-write`, so
+this rule does not reach them; layer 4 is `reviewRuntimeGuard.ts`. Its purpose is the composition's own:
 a runtime composed with the `review` tool profile hands every run's tool facade, catalog bridge and
 tool bridge the review purpose itself (`composedRuntimePurpose`), never copied from the minted
 context, so layer 4 still refuses when the authority of layer 3 is absent or wrong. The tool facade
@@ -130,6 +135,22 @@ and head SHA; Keiko fetches `refs/pull/<n>/head` with the hardened Git runner an
 (`skipped/target-changed`) when the fetched head differs from the head the provider reported. A
 local-range target reviews a local branch against its base without a hosting provider.
 
+The diff starts at the merge base of the two commits, the commit the head branched from, as
+GitHub's own "Files changed" view does. It never starts at the base branch's newer tip, which would
+show the base's later changes as reverted or deleted by the head. Once both commits are present, a
+fixed-argv review operation (`resolveGitReviewMergeBase`, `git merge-base --end-of-options <base>
+<head>`) names it, for pull request and local-range targets alike. The target keeps the reported
+base SHA, and the review-rules file of D4 is read from that base. The run record keeps the merge
+base, so its per-file diff view shows the reviewed diff, and a local-range dry run estimates the
+changes from the same merge base (R4130-035). Without a merge base, the resolver asks Git whether
+the repository is shallow (`gitReviewRepositoryIsShallow`, `git rev-parse --is-shallow-repository`).
+A shallow clone may hide the fork point behind its boundary, so it refuses as `shallow-history`; a
+complete repository whose two commits share no history refuses as `no-merge-base` (R4130-036).
+Keiko never deepens the user's clone: that would rewrite `.git/shallow`, and the private ref stays
+the only repository change. Both reasons settle `skipped/worktree-failed`, never
+`skipped/target-changed`, because the target did not move. `review.target.resolved` records the
+merge base as a digest (R4130-008).
+
 Keiko creates a dedicated, detached review worktree at the head SHA. The user's own checkout and
 branches are never modified. Hooks, filter drivers (including Git LFS smudge), `core.symlinks` and
 fsmonitor are neutralized for that worktree, symbolic links are checked out as plain files, and
@@ -164,11 +185,18 @@ range must lie within that blob (`range-invalid`), and the report's location mus
 fingerprint from the head excerpt, accepts at most eight candidates per run (`limit-reached` after;
 each report reserves its slot before it is judged, so concurrent reports never exceed the cap),
 answers the model a closed acknowledgement so it can correct a report once, and logs
-`review.finding.reported` body-free. The rules reader (`rulesFile.ts`) resolves
+`review.finding.reported` body-free. A report whose fingerprint an accepted candidate already holds
+is answered `duplicate` with the accepted and remaining counts, adds no candidate, and is counted
+in the line's `duplicateCount` (R4130-025). The rules reader (`rulesFile.ts`) resolves
 `<baseSha>:<path>` through the hardened review runner (`readGitReviewPathObject`): a missing file is
 `absent`, more than 16 KiB `too-large`, undecodable or NUL-bearing content `not-utf8`, and a configured
 path that cannot name a file in the tree `path-invalid` (each logged as `review.run.rules-file`; all
-but `loaded` and `absent` settle `skipped/rules-file-invalid`).
+but `loaded` and `absent` settle `skipped/rules-file-invalid`). A base commit that cannot be read
+settles `rules-read-failed`; its line carries a closed `failureClass` (`cancelled`, `timeout`,
+`spawn-refused`, `git-failed`), the matching `errorKind`, frames and cause chain. Every rules-file
+line carries the review run's correlation id (R4130-022). The head-file reader caches successful
+reads and deterministic refusals for the run; a Git read that was aborted, timed out or failed to
+run is not cached, so the next report or verdict that cites the file reads it again (R4130-013).
 
 ### D5 — Two independent passes
 
@@ -188,8 +216,9 @@ bounded harness session over a caller-supplied catalog, reserved profile and too
 configurable wall time. `keiko_child_agent` keeps its reserved `child@1` profile and behaviour on
 the same two functions. The counter-check (`review/counter-check/`) uses its own reserved profile,
 `review-counter-check@1` (ADR-0175 D2): `keiko_counter_check_read`, `keiko_counter_check_discover`,
-`keiko_counter_check_search` (a fixed-string `git grep -F` over the head commit, `grepGitReviewTree`)
-and `keiko_counter_check_verdict`. Every read is served from the Git objects of the reviewed head
+`keiko_counter_check_search` (a fixed-string `git grep -F` over the head commit, `grepGitReviewTree`;
+the literal is one `-e<literal>` token, so an option-shaped literal such as `-cp` is searched,
+never refused as an option, R4130-026) and `keiko_counter_check_verdict`. Every read is served from the Git objects of the reviewed head
 commit in the run's review worktree (never a working tree), behind the sensitive-path deny list.
 Each candidate gets a fresh session with the Counter-checker model whose only input is the candidate
 task: location, category, condition, mechanism, consequence and evidence locations as nonce-bound
@@ -233,7 +262,7 @@ most consequential names it (`model-failed`, `budget-exhausted`, `deadline-excee
 `files-unprocessed`). The building blocks' closed refusals map as follows (`mapping.ts`): a target
 that moved or no longer resolves (`target-changed`, `not-found`, `ref-invalid`) is
 `skipped/target-changed`, a target Keiko cannot fetch (no provider access, no GitHub remote, rate
-limit, failed fetch) and every worktree refusal but cancellation `skipped/worktree-failed`; the
+limit, failed fetch) or diff (`no-merge-base`, `shallow-history`) and every worktree refusal but cancellation `skipped/worktree-failed`; the
 review runtime's `rules-file-invalid` is `skipped/rules-file-invalid`, `task-too-large`
 `skipped/diff-too-large`, `runtime-unavailable` and a Reviewer run the orchestrator refused
 `skipped/model-unavailable`, a failed read-only self-check `skipped/policy-invalid`, and a failed
@@ -261,25 +290,43 @@ until its own idle stop, and `release` does not end it) and a fresh instance is 
 recorded as `placement: beside-quarantined` on `review.run.runtime-started`. One review per
 repository at a time still holds. At most one quarantined instance per repository: a review that
 would need a second one is refused as `runtime-unavailable` and settles `skipped/model-unavailable`.
+Every instance that cannot be started is logged as `review.run.runtime-stopped` with trigger
+`start-failed` under the review's correlation and a closed `startFailure`: the coding runtime's
+activation reason, `host-unavailable`, or `quarantine-limit` (R4130-019). An out-of-range
+`KEIKO_REVIEW_RUN_MAX_*` value leaves the review runtime and the review run service uncomposed
+with one `review.runtime.budget` diagnostic; it never fails server start (R4130-018).
 The
 Reviewer's diff budget is sized so the task always fits the 64 KiB first-prompt bound beside the
 largest admitted rules file (the gateway estimator counts at least one token per 3.5 bytes); a
 larger task is refused, never truncated. A record that cannot be written (a full disk) settles the
-run `abandoned/interrupted` with nothing presented; every run a stopped server left unsettled is
+run `abandoned/interrupted` with nothing presented. The service then writes a minimal record without
+findings that settles the stored row the same way, so one failed write does not hold the
+repository's active-run slot. When the minimal write fails too, the row stays unsettled, and the
+next start or cancel for that repository settles it `abandoned/interrupted` once no live run owns it
+(`recoverOrphan`, #4251). A store failure anywhere in settling announces `abandoned/interrupted`,
+removes the run's worktree and frees the live slot instead of ending the process. The run's one
+terminal `review.run.settled` line is written when its stored row settles: at settlement when a
+record was written, otherwise by that later recovery. Every run a stopped server left unsettled is
 settled `abandoned/interrupted` when the review service is composed at the next start, and child 3's
-startup sweep removes its worktree. The stale flag compares the reviewed head with the pull
+startup sweep removes its worktree. That sweep never removes a worktree a review is creating, and a
+directory it cannot delete is reported and counted without stopping the startup ref sweep or the
+daily retention timer (R4130-016, R4130-021). The stale flag compares the reviewed head with the pull
 request's current head from the read-only detail (cached 30 seconds), at settlement and on every
 read; it never changes the settlement.
 
-The run records live in the server store (migrations 59 and 60, after the released migrations 55 to 58 of 1.4.0): `review_runs` (one row per run; a partial
-unique index allows one unsettled run per repository, and the repository id and client request id
-are unique, so a repeated start returns the same run), `review_coverage` (path, list, closed reason)
-and `review_findings` (fingerprint, report, verdict, verdict evidence, head anchoring, presented
+The run records live in the server store (migrations 59, 60 and 61, after the released migrations
+55 to 58 of 1.4.0): `review_runs` (one row per run; a partial unique index allows one unsettled run
+per repository, and the repository id and client request id are unique, so a repeated start returns
+the same run), `review_coverage` (path, list, closed reason, and since migration 61 the nullable
+`previous_path` of a renamed or copied file) and `review_findings` (fingerprint, report, verdict,
+verdict evidence, head anchoring, presented
 flag and rank). The routes are `POST /api/git-review/runs` (with `dryRun`), `GET
 /api/git-review/runs/{runId}`, `GET /api/git-review/runs?repositoryId=…&pullRequestNumber=…`, `GET
 /api/git-review/review-states?repositoryId=…`, `GET /api/git-review/runs/{runId}/diff` (from the
-Git objects the run's private refs retain; `objects-unavailable` once the sweep removed them, which
-keeps refs a recorded run references), `GET /api/git-review/runs/{runId}/events` (SSE through the
+Git objects the run's private refs retain; a renamed file's base side is read under its
+`previous_path`; `objects-unavailable` once the sweep removed them, which keeps refs a recorded run
+references, and for a stored path the hardened Git reads refuse, such as one with a control
+character), `GET /api/git-review/runs/{runId}/events` (SSE through the
 shared flow control: phases and counts only, then one `settled` event) and `POST
 /api/git-review/runs/{runId}/cancel`. The start route addresses the repository by the Git window's
 selected `root` through the registered-project authority, like every Git read; reads address
@@ -318,7 +365,11 @@ decision record. Proven by Issue #4141.
 The finding fingerprint is content-derived and line-independent: a framed digest of the normalized
 file path, the category and the normalized code excerpt of the `defect` evidence. It ignores line
 numbers and model-written prose such as the title, so an identical finding keeps its identity when
-the code moves. Publication (D10) still anchors comments to exact lines of the reviewed commit.
+the code moves. When the same excerpt lines (each line NFC-normalized and trimmed) already occur
+above the defect in the head file, the preimage adds that occurrence ordinal as a fifth frame
+(`reviewDefectExcerptOccurrence`), so two separate defects on identical lines keep separate
+identities. The first occurrence keeps the four-frame preimage, so its fingerprint is unchanged
+(R4130-025). Publication (D10) still anchors comments to exact lines of the reviewed commit.
 
 ### D8 — Model roles
 
@@ -377,7 +428,13 @@ under `<stateDir>/review-qualification/<id>/` (hardened review runner, repositor
 reviewed as a `local-range` target under the qualification's correlation and removed afterwards;
 the results are scored with `scoreReviewSeedRun`. `seed-qualified` needs every required seed found;
 one missed required seed is `seed-failed` with the missed seed classes; a cancellation, the
-three-hour deadline or an unscored case ends `cancelled` or `incomplete` and records no status. One
+three-hour deadline or an unscored case ends `cancelled` or `incomplete` and records no status. A
+case is unscored when its run did not settle `complete` or `incomplete`. An `incomplete` run scores
+only what it presented: a finding on the seed is `found`, and a finding on a clean control is a
+false alarm. Otherwise the case is unscored, because the Reviewer may have failed or run out of time
+before reaching the seed, and the one settlement reason can hide that failure or a counter-check that
+never presented the seed's candidate. A missed seed and a clean control are measured only on a
+`complete` run (R4130-012, R4130-034). One
 qualification runs at a time; progress streams over the shared SSE helper; leftovers are swept at
 start.
 
@@ -401,6 +458,40 @@ The holdout boundary is the constant `holdoutFromPullRequest` of the review eval
 pull request #3066, fixed by Issue #4132 from the recorded baseline
 (`docs/qa/review-agent-baseline-2026-10-30.md`); the replay refuses a run that tunes on the holdout.
 Definitions and labeling rules are in `docs/qa/review-agent-measurement.md`.
+
+Offline scoring. The owner made four decisions on 2026-11-04 during the epic branch review:
+
+1. The gated actionable rate is hits / (hits + false alarms + undecided) over the replayed findings
+   matched to historical threads (R4130-006). A finding matched to a thread that nobody answered
+   or acted on counts against the agent. Hits / (hits + false alarms) is reported as the
+   acceptance rate and never gated.
+2. The scoring findings R4130-007, R4130-010, R4130-011 and R4130-014 are fixed before anyone reads
+   the holdout rate.
+3. The review behaviour fixes land after the holdout run, and the seed gates run again on them.
+4. The gate keeps `maximumNotCompleteShare = 0.2` as a condition: it fails when more than 20 % of a
+   holdout run's reviews settle other than `complete`, and the holdout run is still finished. The
+   owner made this decision with the holdout's settlement counts known and its rate unknown,
+   knowing that most stored holdout reviews settled other than `complete`. That holdout therefore
+   fails on coverage while its rate is still measured and reported.
+
+The implementation chose these rules under decisions 1 and 2. They are not owner decisions:
+
+- A matched thread credits one hit per pull request (R4130-014). Further findings on that thread
+  are duplicates: they add no hit, count in the actionable rate's denominator and are reported as a
+  duplicate count.
+- Replayed findings sit at the pull request's head commit, so they are matched only against
+  right-side anchors carried to that commit (R4130-007). The harvest stores the carried head range
+  in dataset schema 2. A deletion shrinks the carried anchor to its surviving lines, and an anchor
+  is not carried across a binary change or once the changes deleted every anchored line, in one
+  commit or across several, the file's deletion included (R4130-032, R4130-037). A finding that may lie under such
+  an anchor scores `unmeasured`, never a hit.
+- The loader recomputes the dataset's content digest and refuses a mismatch with its stored field
+  (R4130-010).
+- The verdict counts only for a holdout evaluation over the default selection; any other run is
+  `unmeasured` (R4130-011). The report prints the not-complete share on every run.
+
+The 50 % threshold, the Wilson interval reported next to every rate and the limit of three findings
+per pull request are unchanged.
 
 ### D10 — Publication boundary
 

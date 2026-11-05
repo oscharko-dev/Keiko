@@ -39,6 +39,10 @@ const TARGET_REFUSALS: Readonly<Record<ReviewTargetRefusalReason, PreparationSet
   "no-github-remote": SKIPPED_WORKTREE_FAILED,
   "fetch-failed": SKIPPED_WORKTREE_FAILED,
   "rate-limited": SKIPPED_WORKTREE_FAILED,
+  // R4130-036: no usable merge base leaves no diff to prepare. The target did not change, so the
+  // run never says it did; the closed resolver reason on `review.target.refused` names the cause.
+  "no-merge-base": SKIPPED_WORKTREE_FAILED,
+  "shallow-history": SKIPPED_WORKTREE_FAILED,
 };
 
 export function targetRefusalSettlement(reason: ReviewTargetRefusalReason): PreparationSettlement {

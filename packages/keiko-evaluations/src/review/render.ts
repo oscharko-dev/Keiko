@@ -4,6 +4,8 @@
 import type { WilsonInterval } from "@oscharko-dev/keiko-contracts";
 
 import type { ReviewBaseline, ReviewProducerBaseline } from "./baseline.js";
+import { REVIEW_EVALUATION_MANIFEST } from "./manifest.js";
+import { reviewNotCompleteShare } from "./precision-gate.js";
 import type {
   ReviewOutcomeCounts,
   ReviewPrecisionGateResult,
@@ -62,6 +64,7 @@ function producerRow(entry: ReviewProducerBaseline): string[] {
     String(entry.unmeasured),
     `${String(entry.refutations.total)} (${String(entry.refutations.confirmed)} confirmed, ${String(entry.refutations.contradicted)} contradicted)`,
     `${String(entry.hits)} / ${String(entry.falseAlarms)} / ${String(entry.undecided)}`,
+    formatWilson(entry.actionableRate),
     formatWilson(entry.acceptanceRate),
   ];
 }
@@ -78,6 +81,7 @@ export function renderReviewBaseline(baseline: ReviewBaseline): string {
       "Region unmeasured",
       "Refutations",
       "Hits / false alarms / undecided",
+      "Actionable rate",
       "Acceptance rate",
     ],
     baseline.producers.map(producerRow),
@@ -91,10 +95,20 @@ function outcomeRow(name: string, counts: ReviewOutcomeCounts): string[] {
     String(counts.hit),
     String(counts.falseAlarm),
     String(counts.undecided),
+    String(counts.duplicate),
     String(counts.unmeasured),
     String(counts.unmatched),
     formatWilson(counts.actionableRate),
+    formatWilson(counts.acceptanceRate),
   ];
+}
+
+function notCompleteLine(summary: ReviewPrecisionSummary): string {
+  const share = reviewNotCompleteShare(summary);
+  const notComplete = summary.pullRequests - summary.settlements.complete;
+  const ceiling = percent(REVIEW_EVALUATION_MANIFEST.maximumNotCompleteShare);
+  const measured = share === null ? "—" : percent(share);
+  return `- Reviews not settled complete: ${String(notComplete)} of ${String(summary.pullRequests)} (${measured}; ceiling ${ceiling})`;
 }
 
 /** The precision gate report: verdict, overall and per-category/per-severity counts, cost. */
@@ -108,9 +122,11 @@ export function renderReviewPrecision(
     "Hits",
     "False alarms",
     "Undecided",
+    "Duplicates",
     "Unmeasured",
     "Unmatched (hand-graded)",
-    "Actionable rate",
+    "Actionable rate (gated)",
+    "Acceptance rate",
   ];
   const rows = [
     outcomeRow("All", summary.overall),
@@ -123,7 +139,8 @@ export function renderReviewPrecision(
   ];
   return [
     verdictLine(gate.verdict, gate.reasons),
-    `- Split: ${summary.split} (${summary.purpose}), holdout from #${String(summary.holdoutFromPullRequest)}`,
+    `- Split: ${summary.split} (${summary.purpose}, ${summary.selection} selection), holdout from #${String(summary.holdoutFromPullRequest)}`,
+    notCompleteLine(summary),
     `- Model: ${summary.modelId}; pull requests: ${String(summary.pullRequests)}`,
     `- Findings per pull request: mean ${ratio(summary.findingsPerPullRequest.mean)}, max ${String(summary.findingsPerPullRequest.max)}`,
     `- Cost per pull request: ${ratio(summary.cost.inputTokens.meanPerPullRequest)} input tokens, ${ratio(summary.cost.outputTokens.meanPerPullRequest)} output tokens, ${ratio(summary.cost.wallTimeMs.meanPerPullRequest)} ms wall time`,

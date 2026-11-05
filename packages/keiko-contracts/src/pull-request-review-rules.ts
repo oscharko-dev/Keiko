@@ -45,22 +45,67 @@ function frame(value: string): string {
  * The framed preimage of a finding fingerprint: the normalized file path, the category and the
  * normalized `defect` excerpt. Line numbers and model-written prose (title, condition, ...) are
  * deliberately excluded, so an identical finding keeps its identity when the code moves or the
- * wording changes. This leaf package cannot hash; `computeReviewFindingFingerprint` in
+ * wording changes. A later occurrence of the same excerpt in the same file
+ * (`reviewDefectExcerptOccurrence` above 0) adds its ordinal as a fifth frame, so two separate
+ * defects on identical lines keep separate identities; the first occurrence's preimage is the
+ * four-frame one (R4130-025). This leaf package cannot hash; `computeReviewFindingFingerprint` in
  * keiko-security applies SHA-256 to this preimage.
  */
 export function reviewFindingFingerprintPreimage(input: {
   readonly file: string;
   readonly category: ReviewFindingCategory;
   readonly defectExcerpt: string;
+  readonly occurrence?: number | undefined;
 }): string {
+  const occurrence = input.occurrence ?? 0;
+  if (!Number.isSafeInteger(occurrence) || occurrence < 0) {
+    throw new RangeError("occurrence must be a non-negative integer");
+  }
   return [
     REVIEW_FINDING_FINGERPRINT_DOMAIN,
     input.file.normalize("NFC"),
     input.category,
     normalizeReviewDefectExcerpt(input.defectExcerpt),
+    ...(occurrence === 0 ? [] : [String(occurrence)]),
   ]
     .map(frame)
     .join("");
+}
+
+function windowMatches(
+  trimmed: readonly string[],
+  start: number,
+  target: number,
+  length: number,
+): boolean {
+  for (let offset = 0; offset < length; offset += 1) {
+    if (trimmed[start + offset] !== trimmed[target + offset]) return false;
+  }
+  return true;
+}
+
+/**
+ * How many times the lines `startLine..endLine` (1-based, inclusive) of a file already occur above
+ * that range, comparing each line NFC-normalized and trimmed. The first occurrence is 0. The
+ * ordinal survives re-indentation and code moving down the file; it changes only when another copy
+ * of the same lines is added or removed above the defect.
+ */
+export function reviewDefectExcerptOccurrence(
+  lines: readonly string[],
+  startLine: number,
+  endLine: number,
+): number {
+  const length = endLine - startLine + 1;
+  const target = startLine - 1;
+  if (target < 0 || length < 1 || endLine > lines.length) {
+    throw new RangeError("excerpt range must lie inside the file");
+  }
+  const trimmed = lines.map((line) => line.normalize("NFC").trim());
+  let occurrence = 0;
+  for (let start = 0; start < target; start += 1) {
+    if (windowMatches(trimmed, start, target, length)) occurrence += 1;
+  }
+  return occurrence;
 }
 
 // ─── Role eligibility ────────────────────────────────────────────────────────

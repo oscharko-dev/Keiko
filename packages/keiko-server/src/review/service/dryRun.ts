@@ -1,13 +1,18 @@
 // The dry run of a review start (Issue #4136): the models were validated by the caller; this reads
 // the target without fetching, creating refs or a worktree, and returns the estimate. A pull
-// request's change size comes from its read-only detail; a local range is resolved and listed with
-// the hardened review runner.
+// request's change size comes from its read-only detail, which GitHub counts from the merge base; a
+// local range is resolved and listed from its merge base with the hardened review runner, as the
+// run itself diffs it (R4130-035).
 
 import type {
   ReviewRunEstimate,
   ReviewTargetRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
-import { listGitReviewChanges, resolveGitReviewCommit } from "@oscharko-dev/keiko-git";
+import {
+  listGitReviewChanges,
+  resolveGitReviewCommit,
+  resolveGitReviewMergeBase,
+} from "@oscharko-dev/keiko-git";
 
 import type { ReviewServices } from "../services.js";
 import { estimateReviewRun, reviewDiffBudgetTokens } from "./budget.js";
@@ -47,16 +52,20 @@ async function localRangeTarget(
   if (!base.ok || !head.ok || base.value === undefined || head.value === undefined) {
     return undefined;
   }
+  const commits = { baseSha: base.value, headSha: head.value };
+  const mergeBase = await resolveGitReviewMergeBase(ctx, { cwd: repositoryRoot, ...commits });
+  // No merge base: the run would refuse this target, so the dry run estimates nothing.
+  if (!mergeBase.ok || mergeBase.value === undefined) return undefined;
   const changes = await listGitReviewChanges(
     { ...ctx, maxBytes: 16 * 1024 * 1024 },
-    { cwd: repositoryRoot, baseSha: base.value, headSha: head.value },
+    { cwd: repositoryRoot, baseSha: mergeBase.value, headSha: head.value },
   );
   if (!changes.ok) return undefined;
   const changedLines = changes.value.reduce(
     (sum, change) => sum + (change.addedLines ?? 0) + (change.removedLines ?? 0),
     0,
   );
-  return { baseSha: base.value, headSha: head.value, changedLines };
+  return { baseSha: mergeBase.value, headSha: head.value, changedLines };
 }
 
 /** The estimate of a dry run, or `undefined` when the target cannot be read. */

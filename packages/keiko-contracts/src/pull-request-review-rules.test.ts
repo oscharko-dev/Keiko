@@ -12,6 +12,7 @@ import {
   normalizeReviewDefectExcerpt,
   reviewDiffCoverageSettlement,
   reviewDiffPackageFailureSettlement,
+  reviewDefectExcerptOccurrence,
   reviewFindingFingerprintPreimage,
   scoreReviewSeedRun,
 } from "./pull-request-review-rules.js";
@@ -91,6 +92,16 @@ describe("reviewFindingFingerprintPreimage", () => {
     const left = reviewFindingFingerprintPreimage({ ...base, file: "src/a", defectExcerpt: "bc" });
     const right = reviewFindingFingerprintPreimage({ ...base, file: "src/ab", defectExcerpt: "c" });
     expect(left).not.toBe(right);
+  });
+
+  // R4130-025: two separate defects with the same file, category and excerpt line shared one
+  // fingerprint, so the second was dropped. The excerpt's occurrence ordinal tells them apart.
+  it("keeps the first occurrence's preimage and frames a later occurrence's ordinal", () => {
+    const first = reviewFindingFingerprintPreimage(base);
+    expect(reviewFindingFingerprintPreimage({ ...base, occurrence: 0 })).toBe(first);
+    const second = reviewFindingFingerprintPreimage({ ...base, occurrence: 1 });
+    expect(second).toBe(`${first}1:1`);
+    expect(reviewFindingFingerprintPreimage({ ...base, occurrence: 2 })).not.toBe(second);
   });
 
   it("normalizes composed and decomposed Unicode identically", () => {
@@ -355,5 +366,30 @@ describe("review diff coverage settlement (Issue #4134)", () => {
       kind: "abandoned",
       reason: "interrupted",
     });
+  });
+});
+
+describe("reviewDefectExcerptOccurrence", () => {
+  const lines = [
+    "function a() {",
+    "  const data = JSON.parse(body);",
+    "}",
+    "function b() {",
+    "\tconst data = JSON.parse(body);\r",
+    "}",
+    "  const data = JSON.parse(body);",
+  ];
+
+  it("counts the earlier occurrences of the same trimmed lines", () => {
+    expect(reviewDefectExcerptOccurrence(lines, 2, 2)).toBe(0);
+    expect(reviewDefectExcerptOccurrence(lines, 5, 5)).toBe(1);
+    expect(reviewDefectExcerptOccurrence(lines, 7, 7)).toBe(2);
+  });
+
+  it("matches multi-line excerpts as a whole and ignores where the code moved", () => {
+    expect(reviewDefectExcerptOccurrence(lines, 2, 3)).toBe(0);
+    expect(reviewDefectExcerptOccurrence(lines, 5, 6)).toBe(1);
+    expect(reviewDefectExcerptOccurrence(["", "", ...lines], 7, 8)).toBe(1);
+    expect(reviewDefectExcerptOccurrence(lines, 1, 1)).toBe(0);
   });
 });

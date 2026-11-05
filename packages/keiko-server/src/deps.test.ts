@@ -1432,6 +1432,37 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(JSON.stringify(records)).not.toContain(stateDir);
   });
 
+  // R4130-018: an out-of-range review budget threw a RangeError out of deps assembly, because the
+  // review run service computed the budget a second time outside the guarded composition. Keiko
+  // then did not start at all, even with reviews disabled.
+  it("keeps the server up and the review area unavailable when a review budget is out of range", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    const stateDir = tmp("review-budget-diagnostic-");
+
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("review-budget-diagnostic-evidence-"),
+      env: { KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS: "999999999999" },
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      diagnostics,
+    });
+    try {
+      expect(deps.reviewServices).toBeDefined();
+      expect(deps.reviewRuntime).toBeUndefined();
+      expect(deps.reviewRunService).toBeUndefined();
+      const budget = records.filter((record) => record.operation === "review.runtime.budget");
+      expect(budget).toHaveLength(1);
+      expect(budget[0]?.source).toBe("review.bootstrap");
+    } finally {
+      await deps.dispose?.();
+    }
+  });
+
   it("diagnoses a DAP production composition failure instead of only marking it unavailable", () => {
     const records: ServerDiagnosticRecord[] = [];
     const diagnostics: ServerDiagnosticSink = {

@@ -10,16 +10,20 @@ import { sha256Hex } from "./hashing.js";
  * The content-derived, line-independent fingerprint of a finding: SHA-256 over the framed
  * normalized file path, category and `defect` excerpt. `defectExcerpt` is the code the finding's
  * `defect` evidence names in the reviewed commit, read by the caller from the Git object.
+ * `occurrence` is that excerpt's `reviewDefectExcerptOccurrence` in the file; the first occurrence
+ * (0, the default) keeps the four-frame identity.
  */
 export function computeReviewFindingFingerprint(
   report: Pick<ReviewFindingReport, "file" | "category">,
   defectExcerpt: string,
+  occurrence = 0,
 ): string {
   return sha256Hex(
     reviewFindingFingerprintPreimage({
       file: report.file,
       category: report.category,
       defectExcerpt,
+      occurrence,
     }),
   );
 }

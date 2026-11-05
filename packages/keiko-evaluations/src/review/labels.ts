@@ -30,14 +30,30 @@ export function labelReviewThread(thread: ReviewHarvestThread): ReviewThreadLabe
   return { label: refuted ? "false-alarm" : "undecided", refuted, refutationContradicted: false };
 }
 
-/** Whether a finding lands on a thread's anchor: same file and overlapping range (file-level: any). */
+/**
+ * Where a finding at the head commit lands relative to one thread (R4130-007). Only right-side
+ * threads take part: a base-side anchor has no head coordinates. A file-level thread overlaps any
+ * range in its file. A line anchor is compared in head line numbers; one whose carry to head failed
+ * is `unknown`, which a match reports as unmeasured rather than as apart or overlapping.
+ */
+export function threadOverlap(
+  finding: ReviewCodeLocation,
+  thread: ReviewHarvestThread,
+): "overlap" | "apart" | "unknown" {
+  if (thread.side !== "right" || finding.file !== thread.path) return "apart";
+  if (thread.fileLevel) return "overlap";
+  if (thread.headStartLine === null || thread.headEndLine === null) return "unknown";
+  const overlaps =
+    finding.startLine <= thread.headEndLine && finding.endLine >= thread.headStartLine;
+  return overlaps ? "overlap" : "apart";
+}
+
+/** Whether a finding at head lands on a thread's head anchor (file-level: anywhere in its file). */
 export function findingOverlapsThread(
   finding: ReviewCodeLocation,
   thread: ReviewHarvestThread,
 ): boolean {
-  if (finding.file !== thread.path) return false;
-  if (thread.fileLevel || thread.startLine === null || thread.endLine === null) return true;
-  return finding.startLine <= thread.endLine && finding.endLine >= thread.startLine;
+  return threadOverlap(finding, thread) === "overlap";
 }
 
 // When several threads overlap one finding, the strongest evidence decides: a changed region is the
@@ -54,14 +70,56 @@ export interface ReviewFindingMatch {
   readonly matchedThreadIds: readonly string[];
 }
 
-/** Scores one replayed finding against one pull request's labeled threads. */
+function hitThreadIds(
+  finding: ReviewCodeLocation,
+  match: ReviewFindingMatch,
+  threads: readonly ReviewHarvestThread[],
+): readonly string[] {
+  const matched = new Set(match.matchedThreadIds);
+  return threads
+    .filter((thread) => matched.has(thread.id) && labelReviewThread(thread).label === "hit")
+    .filter((thread) => threadOverlap(finding, thread) === "overlap")
+    .map((thread) => thread.id);
+}
+
+/**
+ * Scores one pull request's presented findings in order. A matched thread credits one hit per pull
+ * request (R4130-014): a later finding whose hit threads were all credited already is a
+ * `duplicate`, which adds no hit and still counts against the actionable rate.
+ */
+export function scoreReviewFindings(
+  findings: readonly ReviewCodeLocation[],
+  threads: readonly ReviewHarvestThread[],
+): readonly ReviewFindingMatch[] {
+  const credited = new Set<string>();
+  return findings.map((finding) => {
+    const match = matchReviewFinding(finding, threads);
+    if (match.outcome !== "hit") return match;
+    const hits = hitThreadIds(finding, match, threads);
+    if (hits.every((id) => credited.has(id))) return { ...match, outcome: "duplicate" };
+    for (const id of hits) credited.add(id);
+    return match;
+  });
+}
+
+/**
+ * Scores one replayed finding at head against one pull request's labeled threads. A right-side line
+ * thread whose anchor could not be carried to head may lie under the finding, so it contributes
+ * `unmeasured`; it is listed in `matchedThreadIds` but never credits a hit.
+ */
 export function matchReviewFinding(
   finding: ReviewCodeLocation,
   threads: readonly ReviewHarvestThread[],
 ): ReviewFindingMatch {
-  const matched = threads.filter((thread) => findingOverlapsThread(finding, thread));
-  if (matched.length === 0) return { outcome: "unmatched", matchedThreadIds: [] };
-  const labels = new Set(matched.map((thread) => labelReviewThread(thread).label));
+  const labels = new Set<ReviewThreadLabel>();
+  const matchedThreadIds: string[] = [];
+  for (const thread of threads) {
+    const overlap = threadOverlap(finding, thread);
+    if (overlap === "apart") continue;
+    matchedThreadIds.push(thread.id);
+    labels.add(overlap === "unknown" ? "unmeasured" : labelReviewThread(thread).label);
+  }
+  if (matchedThreadIds.length === 0) return { outcome: "unmatched", matchedThreadIds };
   const outcome = LABEL_PRECEDENCE.find((label) => labels.has(label)) ?? "unmeasured";
-  return { outcome, matchedThreadIds: matched.map((thread) => thread.id) };
+  return { outcome, matchedThreadIds };
 }

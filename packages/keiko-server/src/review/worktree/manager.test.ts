@@ -5,6 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -15,7 +16,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { createGitProcessRunner, gitEnv } from "@oscharko-dev/keiko-git";
+import {
+  createGitProcessRunner,
+  createGitReviewProcessRunner,
+  gitEnv,
+  type GitProcessRunner,
+} from "@oscharko-dev/keiko-git";
 import {
   captureActivityLog,
   type ActivityLogCapture,
@@ -393,6 +399,74 @@ describe("lifecycle and cleanup (AC5)", () => {
       failedCount: 0,
     });
   });
+
+  // R4130-016: the sweep took its set of live leaves once, at its start, and `create()` adds a run
+  // to that set only once the worktree is accepted. A sweep that ran while a review was creating its
+  // worktree (the startup sweep is not awaited) removed the new, registered, locked worktree.
+  it("leaves a worktree that a review is creating to that review", async () => {
+    const head = git(repo, "rev-parse", "HEAD");
+    let added: () => void = () => undefined;
+    const reached = new Promise<void>((resolve) => {
+      added = resolve;
+    });
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const review = services({
+      localRunner: (options): GitProcessRunner => {
+        const real = createGitReviewProcessRunner(options);
+        return async (args, runOptions) => {
+          const result = await real(args, runOptions);
+          if (args.includes("worktree") && args.includes("add")) {
+            added();
+            await gate;
+          }
+          return result;
+        };
+      },
+    });
+    const creating = review.worktrees.create({
+      runId: "racing",
+      repositoryRoot: repo,
+      headSha: head,
+    });
+    await reached;
+    const swept = await review.worktrees.sweepOrphans();
+    release();
+    const created = await creating;
+
+    expect(swept).toEqual({ removed: 0, failed: 0 });
+    expect(created.ok).toBe(true);
+    if (created.ok) expect(existsSync(created.worktree.path)).toBe(true);
+    await review.dispose();
+  });
+
+  // R4130-021: an orphan directory the sweep could not delete threw out of the worktree sweep, so
+  // the startup ref sweep never ran and the daily retention timer was never armed. The refusal to
+  // delete is a permission denial, so a root user (who may delete anything) cannot reproduce it.
+  it.skipIf(process.getuid?.() === 0)(
+    "reports an undeletable orphan directory and still sweeps refs and arms retention",
+    async () => {
+      const review = services();
+      const orphan = join(review.reviewRoot, reviewRunLeaf("undeletable"));
+      const locked = join(orphan, "locked");
+      mkdirSync(locked, { recursive: true });
+      writeFileSync(join(locked, "held"), "x");
+      chmodSync(locked, 0o500);
+      try {
+        await expect(review.startup()).resolves.toBeUndefined();
+        expect(log.withOp("review.worktree.orphan-swept").at(-1)?.extra).toMatchObject({
+          removedCount: 0,
+          failedCount: 1,
+        });
+        expect(log.withOp("review.worktree.refs-swept")).toHaveLength(1);
+      } finally {
+        chmodSync(locked, 0o700);
+        await review.dispose();
+      }
+    },
+  );
 
   it("sweeps a locked review entry whose registry record was lost", async () => {
     const head = git(repo, "rev-parse", "HEAD");

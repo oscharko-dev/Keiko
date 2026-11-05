@@ -207,9 +207,13 @@ describe("CodingToolAuthorityPort", () => {
       actionId: "discover-1",
       idempotencyKey: "discover-1",
     } as const;
+    // A coding authority needs workspace-read for it, never command-execution. R4130-009: the
+    // read-only review authority, workspace-read alone, refuses it like every non-review tool.
     for (const [actionClasses, expected] of [
-      [["workspace-read"], true],
+      [["workspace-read", "workspace-write"], true],
+      [["workspace-write", "command-execution"], false],
       [["command-execution"], false],
+      [["workspace-read"], false],
     ] as const) {
       const envelope = restrictedEnvelope({ actionClasses });
       const authority = {
