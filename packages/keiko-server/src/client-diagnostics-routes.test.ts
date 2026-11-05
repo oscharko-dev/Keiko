@@ -1609,6 +1609,23 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "notice-held", notice: "activity" },
     { interaction: "notice-held", notice: "questions" },
     { interaction: "notice-held", notice: "editor-bridge" },
+    // #4271: what a delivery card showed was a warn/unknown sentence; it is a closed step and state.
+    { interaction: "delivery-step-shown", deliveryStep: "delivery-review", deliveryState: "ready" },
+    { interaction: "delivery-step-shown", deliveryStep: "stage-review", deliveryState: "loading" },
+    { interaction: "delivery-step-shown", deliveryStep: "unstage-review", deliveryState: "idle" },
+    { interaction: "delivery-step-shown", deliveryStep: "commit-review", deliveryState: "ready" },
+    { interaction: "delivery-step-shown", deliveryStep: "commit-result", deliveryState: "drift" },
+    {
+      interaction: "delivery-step-shown",
+      deliveryStep: "draft-delivery",
+      deliveryState: "draft-created",
+    },
+    {
+      interaction: "delivery-step-shown",
+      deliveryStep: "ci-readiness",
+      deliveryState: "unobserved",
+    },
+    { interaction: "delivery-step-shown", deliveryStep: "journey", deliveryState: "stale" },
   ])("persists the Coding Workbench interaction $interaction at info", async (interaction) => {
     const sink = captureServerLog();
     const body = JSON.stringify({
@@ -1653,6 +1670,18 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "notice-held" },
     { interaction: "notice-held", notice: "Activity not connected." },
     { interaction: "notice-held", notice: "skills", fileCount: 1 },
+    { interaction: "delivery-step-shown" },
+    { interaction: "delivery-step-shown", deliveryStep: "journey" },
+    { interaction: "delivery-step-shown", deliveryStep: "journey", deliveryState: "ready" },
+    { interaction: "delivery-step-shown", deliveryStep: "commit-review", deliveryState: "loading" },
+    { interaction: "delivery-step-shown", deliveryStep: "push", deliveryState: "ready" },
+    { interaction: "delivery-step-shown", deliveryStep: "ci-readiness", deliveryState: "head abc" },
+    {
+      interaction: "delivery-step-shown",
+      deliveryStep: "draft-delivery",
+      deliveryState: "pushed",
+      headSha: "333333333333",
+    },
     { interaction: "diff-windowed" },
     { interaction: "diff-windowed", surface: "changeset-review", fileCount: 1, totalLineCount: 5 },
     {

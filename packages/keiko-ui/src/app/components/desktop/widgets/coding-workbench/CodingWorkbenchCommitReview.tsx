@@ -10,7 +10,7 @@ import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/r
 import { validateCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import { validateCodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { UseCodingWorkbenchApprovalReviewResult } from "@/lib/useCodingWorkbenchApprovalReview";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "@/lib/coding-workbench-interaction";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import styles from "./CodingWorkbenchWindow.module.css";
 
@@ -27,8 +27,11 @@ export function StageReviewDiagnostic({
 }): null {
   useEffect(() => {
     if (kind !== "git-stage" && kind !== "git-unstage") return;
-    const action = kind === "git-stage" ? "stage" : "unstage";
-    reportClientDiagnostic(`[keiko] git ${action} review ${status}: files ${String(fileCount)}`);
+    reportCodingWorkbenchInteraction({
+      interaction: "delivery-step-shown",
+      deliveryStep: kind === "git-stage" ? "stage-review" : "unstage-review",
+      deliveryState: status,
+    });
   }, [kind, status, fileCount]);
   return null;
 }

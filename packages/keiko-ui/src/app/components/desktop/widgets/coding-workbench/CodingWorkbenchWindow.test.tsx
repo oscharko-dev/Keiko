@@ -3029,7 +3029,10 @@ describe("CodingWorkbenchWindow", () => {
   );
 
   it("#3386: shows exact paths before one-use Git stage approval", async () => {
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const reports: unknown[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      reports.push({ message, meta });
+    });
     const user = userEvent.setup();
     approvalReviewHookMock.mockReturnValue({
       status: "ready",
@@ -3046,15 +3049,26 @@ describe("CodingWorkbenchWindow", () => {
     const actions = renderWorkbench(editApprovalState("git-stage"));
     expect(screen.getByRole("heading", { name: "Stage changes" })).toBeInTheDocument();
     expect(screen.getByText("src/stage-only.ts")).toBeInTheDocument();
-    expect(warning).toHaveBeenCalledWith("[keiko] git stage review ready: files 1");
-    expect(JSON.stringify(warning.mock.calls)).not.toContain("src/stage-only.ts");
+    // #4271: what the review showed is a closed step and state, never its paths.
+    expect(reports).toContainEqual(
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          codingWorkbenchInteraction: {
+            interaction: "delivery-step-shown",
+            deliveryStep: "stage-review",
+            deliveryState: "ready",
+          },
+        }),
+      }),
+    );
+    expect(JSON.stringify(reports)).not.toContain("src/stage-only.ts");
+    resetClientDiagnosticWriter();
     expect(
       screen.queryByRole("region", { name: "Reviewed commit message" }),
     ).not.toBeInTheDocument();
     expect(actions.decideApproval).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Approve once" }));
     expect(actions.decideApproval).toHaveBeenCalledExactlyOnceWith("approved");
-    warning.mockRestore();
   });
 
   function commitApprovalState(
@@ -3355,15 +3369,29 @@ describe("CodingWorkbenchWindow", () => {
     },
   );
   it("#3387: records the unavailable delivery display without its rejected text", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const reports: unknown[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      reports.push({ message, meta });
+    });
     approvalReviewHookMock.mockReturnValue({
       status: "ready",
       review: draftDeliveryReview("push"),
       retry: vi.fn(),
     });
     renderWorkbench(deliveryApprovalState("pull-request"));
-    expect(warn).toHaveBeenCalledWith("[keiko] draft delivery review displayed: unavailable");
-    expect(JSON.stringify(warn.mock.calls)).not.toContain("Original template");
+    expect(reports).toContainEqual(
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          codingWorkbenchInteraction: {
+            interaction: "delivery-step-shown",
+            deliveryStep: "delivery-review",
+            deliveryState: "unavailable",
+          },
+        }),
+      }),
+    );
+    expect(JSON.stringify(reports)).not.toContain("Original template");
+    resetClientDiagnosticWriter();
   });
 
   it("#3387: denies an unavailable delivery without granting and retries its existing review channel", async () => {

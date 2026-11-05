@@ -5601,6 +5601,18 @@
               "required": false
             },
             {
+              "name": "deliveryState",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "deliveryStep",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "expanded",
               "type": "boolean",
               "dataClass": "closed-enum",

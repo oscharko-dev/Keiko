@@ -1108,7 +1108,11 @@ windowed review (`diff-windowed` with the closed `surface` `changeset-review`, `
 never a path or diff text; #4108). An unpaired window names the missing pairing once, in the
 run status sentence, and holds its secondary notices until it is paired; each hold is recorded as
 `notice-held` with the closed `notice` (`task-session`, `skills`, `mcp`, `activity`, `questions`,
-`editor-bridge`; #3880). These were warn/unknown
+`editor-bridge`; #3880). What a delivery card showed is `delivery-step-shown` with the closed
+`deliveryStep` (`delivery-review`, `stage-review`, `unstage-review`, `commit-review`,
+`commit-result`, `draft-delivery`, `ci-readiness`, `journey`) and only that step's closed
+`deliveryState` (a review's load state, a commit status, a delivery phase, a CI or journey state;
+never a head or tree digest; #4271). These were warn/unknown
 `client.diagnostic` notes before and buried the rare real browser failures. The server side of
 that bridge records each registration on `editor.agent.bridge-registration` (`registered`,
 `refreshed`, `rotated`, or `refused` at warn with the closed root-boundary reason or
