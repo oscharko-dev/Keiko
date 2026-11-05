@@ -45,3 +45,10 @@
     display: none;
   }
 }
+
+@media (forced-colors: active) {
+  /* Preserve the native palette in both painted and computed button text colors. */
+  .cmpNoticeActions button {
+    color: ButtonText;
+  }
+}

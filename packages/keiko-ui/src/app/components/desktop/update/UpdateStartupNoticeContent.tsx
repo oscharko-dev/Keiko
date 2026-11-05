@@ -8,6 +8,7 @@ import {
 } from "@/lib/optional-widget-i18n";
 import type { UpdatePreflightReport } from "@/lib/types";
 import { Icons } from "../Icons";
+import styles from "./UpdateWindow.module.css";
 import {
   startupUpdateNoticeKind,
   isPortableBootstrapSetupRequired,
@@ -65,7 +66,7 @@ function NoticeActions({
   t,
 }: UpdateStartupNoticeContentProps & { readonly t: I18nTranslate }): ReactNode {
   return (
-    <div className="update-notice-actions">
+    <div className={`update-notice-actions ${styles.cmpNoticeActions}`}>
       <button
         type="button"
         className="update-notice-primary"
