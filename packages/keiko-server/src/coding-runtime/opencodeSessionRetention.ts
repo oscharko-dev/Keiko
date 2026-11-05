@@ -20,7 +20,11 @@ import {
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { OPENCODE_PERSISTENCE_SCHEMAS } from "./opencodePersistenceContract.js";
+import {
+  OPENCODE_PERSISTENCE_SCHEMAS,
+  OPENCODE_PERSISTENCE_TABLE_CLASSES,
+  type OpenCodePersistenceTableClass,
+} from "./opencodePersistenceContract.js";
 
 /**
  * Server-owned retention of a settled native run's own session state (S02/S03, #3904).
@@ -674,15 +678,17 @@ function sqliteErrorCode(error: unknown): number | undefined {
   return typeof code === "number" ? code : undefined;
 }
 
-/** Tables the runtime keeps authority or credentials in; a retained copy holds none of their rows. */
-const GRANT_TABLES = ["permission"] as const;
-const CREDENTIAL_TABLES = ["credential", "account", "account_state", "control_account"] as const;
-const PENDING_TABLES = ["session_pending", "session_inbox"] as const;
-/** Tables whose content Keiko does not model: any row is a state it cannot vouch for. */
-const UNKNOWN_STATE_TABLES = ["kv", "workspace"] as const;
-const UNKNOWN_STATE_CHECKS: Readonly<
-  Record<(typeof UNKNOWN_STATE_TABLES)[number], RetentionAuditCheck>
-> = { kv: "kv-rows", workspace: "workspace-rows" };
+/** Which refusal a row in each class of table earns; the classes are per runtime version. */
+const CLASS_REFUSALS = [
+  ["grant", "grant-present"],
+  ["credential", "credential-present"],
+  ["pending-input", "pending-input"],
+] as const;
+/** The closed check each table of unknown content reports. */
+const UNKNOWN_STATE_CHECKS: Readonly<Record<string, RetentionAuditCheck>> = {
+  kv: "kv-rows",
+  workspace: "workspace-rows",
+};
 
 interface SessionRow {
   readonly id?: unknown;
@@ -732,23 +738,11 @@ export function auditDatabase(path: string, expected: AuditExpectation): AuditRe
 }
 
 function auditOpenDatabase(database: DatabaseSync, expected: AuditExpectation): AuditResult {
-  const tables: readonly (readonly [readonly string[], RetentionRefusal])[] = [
-    [GRANT_TABLES, "grant-present"],
-    [CREDENTIAL_TABLES, "credential-present"],
-    [PENDING_TABLES, "pending-input"],
-  ];
-  for (const [names, reason] of tables) {
-    for (const name of names) {
-      if (rowCount(database, `SELECT COUNT(*) AS n FROM "${name}"`) !== 0) {
-        return { ok: false, reason };
-      }
-    }
-  }
-  for (const name of UNKNOWN_STATE_TABLES) {
-    if (rowCount(database, `SELECT COUNT(*) AS n FROM "${name}"`) !== 0) {
-      return { ok: false, reason: "schema-unknown", check: UNKNOWN_STATE_CHECKS[name] };
-    }
-  }
+  const classes = Object.hasOwn(OPENCODE_PERSISTENCE_TABLE_CLASSES, expected.version)
+    ? OPENCODE_PERSISTENCE_TABLE_CLASSES[expected.version]
+    : undefined;
+  const refusal = classes === undefined ? undefined : refusalForClassifiedRows(database, classes);
+  if (refusal !== undefined) return refusal;
   if (!matchesPersistenceContract(database, expected.version)) {
     return { ok: false, reason: "schema-unknown", check: "schema-drift" };
   }
@@ -761,14 +755,35 @@ function auditOpenDatabase(database: DatabaseSync, expected: AuditExpectation): 
   if (sessions.length !== 1 || session === undefined) {
     return { ok: false, reason: "session-mismatch" };
   }
-  const refusal = sessionRefusal(session, expected);
-  if (refusal !== undefined) return { ok: false, reason: refusal };
+  const sessionProblem = sessionRefusal(session, expected);
+  if (sessionProblem !== undefined) return { ok: false, reason: sessionProblem };
   const messageCount = rowCount(
     database,
     "SELECT COUNT(*) AS n FROM session_message WHERE session_id = ?",
     expected.sessionId,
   );
   return { ok: true, messageCount };
+}
+
+function refusalForClassifiedRows(
+  database: DatabaseSync,
+  classes: Readonly<Record<string, OpenCodePersistenceTableClass>>,
+): AuditResult | undefined {
+  const entries = Object.entries(classes);
+  const hasRows = ([name]: readonly [string, unknown]): boolean =>
+    rowCount(database, `SELECT COUNT(*) AS n FROM "${name}"`) !== 0;
+  for (const [tableClass, reason] of CLASS_REFUSALS) {
+    if (entries.filter((entry) => entry[1] === tableClass).some(hasRows)) {
+      return { ok: false, reason };
+    }
+  }
+  const unknown = entries.filter((entry) => entry[1] === "unknown-state").find(hasRows);
+  if (unknown === undefined) return undefined;
+  return {
+    ok: false,
+    reason: "schema-unknown",
+    check: UNKNOWN_STATE_CHECKS[unknown[0]] ?? "schema-drift",
+  };
 }
 
 interface SchemaObjectRow {

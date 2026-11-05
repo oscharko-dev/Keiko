@@ -13,6 +13,17 @@
  */
 type OpenCodePersistenceSchema = Readonly<Record<string, readonly string[]>>;
 
+/**
+ * What a retained copy may hold in a table. `session-state` is the session's own record; every
+ * other class must be empty, because its rows could act with authority or state a later run does
+ * not have. `unknown-state` names a table whose content Keiko does not model. Each version
+ * classifies every table it creates, so an upgrade cannot add one nobody looked at.
+ */
+export type OpenCodePersistenceTableClass =
+  "grant" | "credential" | "pending-input" | "unknown-state" | "session-state";
+
+type OpenCodePersistenceTableClasses = Readonly<Record<string, OpenCodePersistenceTableClass>>;
+
 const OPENCODE_2_1_4_PERSISTENCE_SCHEMA: OpenCodePersistenceSchema = Object.freeze({
   account: [
     "access_token",
@@ -151,6 +162,36 @@ const OPENCODE_2_0_10_PERSISTENCE_SCHEMA: OpenCodePersistenceSchema = Object.fre
     "vcs",
     "worktree",
   ],
+});
+
+const OPENCODE_2_1_4_TABLE_CLASSES: OpenCodePersistenceTableClasses = Object.freeze({
+  permission: "grant",
+  credential: "credential",
+  account: "credential",
+  account_state: "credential",
+  control_account: "credential",
+  session_pending: "pending-input",
+  session_inbox: "pending-input",
+  kv: "unknown-state",
+  workspace: "unknown-state",
+  event: "session-state",
+  event_sequence: "session-state",
+  instruction_blob: "session-state",
+  instruction_entry: "session-state",
+  instruction_state: "session-state",
+  migration: "session-state",
+  project: "session-state",
+  project_directory: "session-state",
+  session_message: "session-state",
+  session_v2: "session-state",
+  worktree: "session-state",
+});
+
+export const OPENCODE_PERSISTENCE_TABLE_CLASSES: Readonly<
+  Record<string, OpenCodePersistenceTableClasses>
+> = Object.freeze({
+  "2.1.4": OPENCODE_2_1_4_TABLE_CLASSES,
+  "2.0.10": OPENCODE_2_1_4_TABLE_CLASSES,
 });
 
 export const OPENCODE_PERSISTENCE_SCHEMAS: Readonly<Record<string, OpenCodePersistenceSchema>> =
