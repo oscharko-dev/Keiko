@@ -252,7 +252,7 @@ function predicateOnlyComparison(
   wordsB: readonly string[],
   differing: readonly string[],
 ): FactComparison {
-  return differing.some(isSingleValuePredicate)
+  return differing.some((word) => isSingleValuePredicate(word))
     ? "different"
     : equalWordsComparison(a, b, wordsA, wordsB);
 }
@@ -264,12 +264,12 @@ export function compareFacts(a: string, b: string): FactComparison {
   const onlyB = unmatched(wordsB, wordsA);
   if (wordsA.length === 0 || wordsB.length === 0) return "different";
   const differing = [...onlyA, ...onlyB];
-  if (differing.every(isPredicateWord)) {
+  if (differing.every((word) => isPredicateWord(word))) {
     return predicateOnlyComparison(a, b, wordsA, wordsB, differing);
   }
   const shared = wordsA.length - onlyA.length;
   if (shared === 0 || onlyA.length !== onlyB.length) return "different";
-  if (differing.every(isNumberWord)) return "number-changed";
+  if (differing.every((word) => isNumberWord(word))) return "number-changed";
   return sharesSlot(a, b, wordsA, wordsB) && onlyA.length <= MAX_SLOT_WORDS
     ? "slot-changed"
     : "different";

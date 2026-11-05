@@ -216,7 +216,7 @@ function rawSalienceItem(value: unknown): RawSalienceItem | null {
 }
 
 function validItems(items: readonly unknown[]): readonly RawSalienceItem[] {
-  return items.map(rawSalienceItem).filter((item) => item !== null);
+  return items.map((item) => rawSalienceItem(item)).filter((item) => item !== null);
 }
 
 // Structured-output callers wrap the item array in a root object under "items" — Azure OpenAI
