@@ -71,7 +71,9 @@ invalid explicit values fail closed. This availability default is scoped to Codi
 its explicit deployment ceiling or `governed-assist`, including legacy requests and standing
 maintenance. See ADR-0124 D2 and ADR-0163 D7. A person's own clear "Merke dir" or "Vergiss das" in a Chat is
 their decision, not unattended learning: it acts at once in every mode, after the hard denials
-(ADR-0146 D4b). Records learned from natural conversation stay under the Memory ceiling and mode.
+(ADR-0146 D4b). Records learned from natural conversation stay under the Memory ceiling and mode;
+deterministic checks on the person's own words admit them, and they never replace a clear statement
+(ADR-0146 D4c).
 
 Hard denials remain mode-independent: invalid or expired authority, workspace escape, denied
 sensitive paths, secret exfiltration, unsupported actions, exhausted budgets, and platform

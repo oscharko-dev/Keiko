@@ -8,7 +8,8 @@ Amended by Issue #2864 (2026-07-31) to record that standing and opportunistic ma
 the same D2 autonomy gate before unattended promotion. Amended by Issue #2885 (2026-08-02) to make
 the mapping apply uniformly to salience, explicit chat intent, voice recap, and
 capture-from-conversation. Amended by Issue #4211 (2026-11-05) to add D4b: a person's clear statement
-in a chat acts at once in every mode.
+in a chat acts at once in every mode. Amended by Issue #4212 (2026-11-05) to add D4c: deterministic
+checks decide what is learned from conversation and when it replaces an older fact.
 
 ## Amends
 
@@ -187,16 +188,19 @@ A negation ("Merke dir nicht", "Vergiss den Bericht nicht"), a question, and the
 and "Forget it" state nothing to store or forget. A named forget reaches a memory only through the
 same word or an inflection of it, so "Java" does not reach "JavaScript".
 
-Saying a statement again confirms the existing memory through `recordAccess` instead of storing a
-second record: in the same words without an embedder, and as a paraphrase through the existing
+Saying a statement again confirms the existing memory through `recordAccess`, naming the chat,
+instead of storing a second record: in the same words without an embedder, and as a paraphrase through the existing
 novelty gate with one. A paraphrase of a forgotten fact is suppressed the same way.
 
 "Vergiss das" reaches what the last turn left behind, in any scope of the conversation and
 including a parked proposal, and goes through the one forget implementation with its audit preflight
-and tombstone. It also reaches an older memory the last turn drew on, when that turn asked a question
-or said the fact again. After any other sentence the memory an answer happened to use is not "das".
-A sentence that repeats a stored fact reaches the memory it was folded into, so the forget is not
-reported while the fact stays. Every chat path reads the last turn from the conversation, grounded
+and tombstone. A learned fact names the turn it came from (`sourceMessageIds`), so a slow capture of
+an earlier turn that finishes later is not "das"; only a record without that provenance falls back to
+its creation time. It also reaches an older memory this chat's last turn touched: one the person
+confirmed by saying it again, in any wording, or one the answer drew on (`recordUse`) when that turn
+asked a question or said a fact. Both touches name their chat, so another chat or maintenance
+touching the memory in the same window never makes it "das", and a touch without a chat never counts.
+After any other sentence the memory an answer happened to use is not "das". Every chat path reads the last turn from the conversation, grounded
 turns included; with no earlier turn nothing was left behind and no older memory is "das".
 If that turn left nothing, "das" is the statement before it, not an older memory; a question or a
 pasted document is no such statement, so the person is asked:
@@ -204,12 +208,56 @@ pasted document is no such statement, so the person is asked:
 learning pass stores nothing from it. The statement's text is never written, and a statement that
 carries a credential keeps only its hash and never reaches the embedding endpoint. When "das" could
 mean several memories, or there is nothing it could mean, the person is asked in one short sentence
-and nothing is deleted. Each decision is recorded body-free as `memory.explicit.forget` or
+and nothing is deleted. A named forget that matches no memory is asked about the same way, because a
+clear request is never ignored. Each decision is recorded body-free as `memory.explicit.forget` or
 `memory.explicit.remember`.
 
 Only such a statement gets an answer in the chat, because the person asked. `explicitStatement` on the
 candidate or rejected action carries that; what is only learned, or a refusal of an ordinary message,
 stays out of the chat even with the same status.
+
+### D4c — What is learned from conversation, and when it replaces a fact
+
+The model proposes and deterministic checks decide, on the person's own words only (Issue #4212). In
+doubt Keiko learns too little rather than too much, because nobody approves what it learns once
+D2 lets a fact through.
+
+- **Form.** A learned memory is one normalized statement about the person. Provenance keeps the exact
+  span of the person's message it rests on (`evidenceSpan`, sealed at rest like the body) and the
+  person's turns it came from (`sourceMessageIds`). A decision keeps its reason in the key-value
+  payload, and a stated end in the future closes validity; both are parsed from the words, never
+  taken from the model. A stated end that has passed means the fact is over, so nothing is stored.
+- **Admission.** The span appears verbatim at clause boundaries and is not a question, request,
+  quotation, hypothesis, irony, doubt, opinion ("Ich glaube"), denial or past statement. The fact
+  is about the person: labelled `self`, with a first-person word, and naming no one else (a titled
+  person, a relation word or another person's pronoun). "Wir" and "X und ich" wait for project
+  memory. Credentials, IBANs, phone numbers and customer identifiers are refused. Every body word comes from the span
+  except a short predicate vocabulary, with the same polarity, where a verb that rejects its object
+  ("hasse", "avoid") and "ohne" count as negation. Each drop is one closed reason.
+- **Confidence** is derived from what the checks saw, never from the model:
+  0.4, plus 0.3 for a first-person subject, plus 0.15 when the body covers at least half of the
+  span. A thin fact without a subject stays below the D4 promotion gate.
+- **Relation.** The model labels `new`, `same`, `update` or `contradiction`; checks confirm it. A
+  reversal, a changed number or a changed polarity replaces the older fact on its own. A new value
+  in the same slot, or a stated change ("ab jetzt", "from now on"), replaces it only with the
+  model's label. A shared preference verb alone is no slot, so "Tabellen" and "Tee" both stand;
+  living, working and names are single-valued slots. A claim of sameness that neither the lexical
+  nor the semantic duplicate gate confirms stores nothing. A changed value is never a duplicate.
+- **Supersession** reuses the `supersedes` edge, the `superseded` status and the closed validity of
+  the human correction path, in one transaction with a precondition on the older fact. Where D2
+  asks for approval, the new fact waits as a `correction` with its `corrects` edge, written in the
+  same single transaction. A learned fact replaces only what Keiko learned in the person's own scope:
+  a clear statement (D4b) and anything outside that scope are fixed, so a learned fact never
+  overwrites them. A newer clear statement replaces an older learned fact.
+- **Reinforcement.** Only the person strengthens a memory: saying it again records a confirmation.
+  An answer that repeats a memory records a use for "Vergiss das" and never a reinforcement, so a
+  false memory cannot entrench itself by being repeated back.
+- **Forgotten while learning.** A capture still running when the person forgot that turn's
+  statement stores nothing from it, because each candidate is also checked against the statement's
+  own tombstone.
+- **Evidence.** `memory.learn.extraction`, `memory.learn.dropped` and `memory.learn.relation`
+  record counts, the source message count and closed reason, label, decision and basis values; no
+  words of the person or of a fact enter the Activity Log.
 
 ### D5 — Capture stays failure-contained and diagnostics stay content-free
 
