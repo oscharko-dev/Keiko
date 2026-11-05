@@ -644,9 +644,11 @@ metadata while removing the credential floor and configured infrastructure-secre
 unconditional redactor still serves `short_result` and audit data. The store never reads the
 environment: composed without a content redactor, it projects content with its unconditional
 redactor (fail closed). Default content redaction remains unchanged; no database migration or
-historical unmasking is performed. Text saved during the opt-out is not rewritten when the
-deployment returns to the default: history rehydration and compaction redact it again, while the
-recent verbatim turns of that conversation are resent as stored. No reasoning traces, no evidence
+historical unmasking is performed. Text saved under the preserving policy is not rewritten when the
+deployment lowers the threshold: history rehydration and compaction redact it again, while the
+recent verbatim turns of that conversation are resent as stored. Owner decision 2026-11-04: the
+preserving policy is the default, `KEIKO_CONTENT_REDACTION=on` is the lowered threshold, and the tool
+transcript follows the content redactor as well. No reasoning traces, no evidence
 payloads, no SSE event data are stored in the DB.
 
 **DB location never inside a target repository.** The default path is

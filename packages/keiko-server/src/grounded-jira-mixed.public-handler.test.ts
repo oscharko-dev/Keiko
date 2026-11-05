@@ -2074,14 +2074,16 @@ it.each(["disabled", "outside-scope"] as const)(
   },
 );
 
-it.each(["default", "preserve"] as const)(
+// Owner decision 2026-11-04: the default keeps what the model and the reader need; only the
+// credential floor goes. `KEIKO_CONTENT_REDACTION=on` is the lowered threshold.
+it.each(["default", "off", "on"] as const)(
   "keeps %s document policy and the credential floor across real mixed Jira rounds",
   async (policy) => {
     const secret = "synthetic-configured-infrastructure-value";
     const phone = "+49 30 12345678";
     const f = runtime(false, {
       KEIKO_DEFAULT_API_KEY: secret,
-      ...(policy === "preserve" ? { KEIKO_CONTENT_REDACTION: "off" } : {}),
+      ...(policy === "default" ? {} : { KEIKO_CONTENT_REDACTION: policy }),
     });
     writeFileSync(
       join(f.root, "src", "Feature.ts"),
@@ -2107,14 +2109,14 @@ it.each(["default", "preserve"] as const)(
     expect(result.status).toBe(200);
     expect(f.jiraRequests).toEqual(["GET"]);
     expect(requests).toHaveLength(2);
-    expect(requests.every((request) => request.includes(phone))).toBe(policy === "preserve");
+    expect(requests.every((request) => request.includes(phone))).toBe(policy !== "on");
     expect(requests.every((request) => !request.includes(secret))).toBe(true);
     const answer = result.body as GroundedAnswer;
-    expect(answer.content.includes(phone)).toBe(policy === "preserve");
+    expect(answer.content.includes(phone)).toBe(policy !== "on");
     expect(answer.content).not.toContain(secret);
     const stored = f.deps.store.listMessages(f.chatId);
     expect(stored.find((message) => message.role === "assistant")?.content.includes(phone)).toBe(
-      policy === "preserve",
+      policy !== "on",
     );
     expect(JSON.stringify(stored)).not.toContain(secret);
     expect(JSON.stringify(answer.citations)).not.toContain("jira");

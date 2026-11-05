@@ -307,7 +307,10 @@ describe("production coding repository handler composition", () => {
     });
     const { root, handler, events } = fixture(() => true, {
       nowMs: () => now,
-      deadlineAtMs: 100,
+      // Only the fake clock passes the soft stop. The real timer the remaining hard budget arms
+      // must still outlast a projection read on a loaded machine.
+      scanDeadlineAtMs: 50_000,
+      deadlineAtMs: 100_000,
       fs: {
         ...nodeWorkspaceFs,
         readFileBytes: async (...args): Promise<Uint8Array> => {
@@ -321,7 +324,7 @@ describe("production coding repository handler composition", () => {
             if (entry.name === "example.ts") {
               await firstRead;
               await new Promise<void>((resolve) => setImmediate(resolve));
-              now = 60;
+              now = 60_000;
             }
           }
         },
@@ -340,7 +343,7 @@ describe("production coding repository handler composition", () => {
       coverageIncomplete: true,
       coverageReasons: ["timeout"],
       truncationReasons: ["time-limit"],
-      durationMs: 60,
+      durationMs: 60_000,
     });
     expectDiagnosticRetention(events, 0);
   });

@@ -51,7 +51,10 @@ describe("extractQiDocumentText", () => {
       maxExtractedBytes: 4096,
       signal: controller.signal,
     });
-    expect(text).toContain("IBAN muss validiert");
+    expect(text).toEqual({
+      text: "Fachkonzept: Die IBAN muss validiert werden.",
+      truncated: false,
+    });
     expect(extractMock).toHaveBeenCalledTimes(1);
     expect(extractMock.mock.calls[0]?.[0]).toMatchObject({
       extension: "pdf",
@@ -67,7 +70,7 @@ describe("extractQiDocumentText", () => {
     });
   });
 
-  it("returns undefined without invoking the parser when the file exceeds the input cap", async () => {
+  it("reports oversized without invoking the parser when the file exceeds the input cap", async () => {
     const dir = makeDir();
     mkdirSync(join(dir, "nested"));
     const path = join(dir, "nested", "large.docx");
@@ -80,11 +83,11 @@ describe("extractQiDocumentText", () => {
       maxInputBytes: 4,
       maxExtractedBytes: 4096,
     });
-    expect(text).toBeUndefined();
+    expect(text).toEqual({ failure: "oversized" });
     expect(extractMock).not.toHaveBeenCalled();
   });
 
-  it("returns undefined without invoking the parser when the file cannot be read", async () => {
+  it("reports unreadable without invoking the parser when the file cannot be read", async () => {
     const dir = makeDir();
     const path = join(dir, "missing.pdf");
     const text = await extractQiDocumentText({
@@ -95,11 +98,11 @@ describe("extractQiDocumentText", () => {
       maxInputBytes: 2 * 1024 * 1024,
       maxExtractedBytes: 4096,
     });
-    expect(text).toBeUndefined();
+    expect(text).toEqual({ failure: "unreadable" });
     expect(extractMock).not.toHaveBeenCalled();
   });
 
-  it("returns undefined for supported documents without extractable text", async () => {
+  it("names the reason for supported documents without extractable text", async () => {
     const dir = makeDir();
     const path = join(dir, "scan.pdf");
     writeFileSync(path, "%PDF image only", "utf8");
@@ -119,6 +122,82 @@ describe("extractQiDocumentText", () => {
       maxInputBytes: 2 * 1024 * 1024,
       maxExtractedBytes: 4096,
     });
-    expect(text).toBeUndefined();
+    expect(text).toEqual({ failure: "no-text-layer" });
+  });
+
+  it.each(["encrypted", "malformed", "timed-out", "empty", "unsupported-format"] as const)(
+    "passes the %s outcome on as the failure reason",
+    async (outcome) => {
+      const dir = makeDir();
+      const path = join(dir, "doc.docx");
+      writeFileSync(path, "PK fixture", "utf8");
+      extractMock.mockResolvedValueOnce({
+        outcome,
+        format: "docx",
+        text: "",
+        extractedBytes: 0,
+        truncated: false,
+        diagnostics: [],
+      });
+      const result = await extractQiDocumentText({
+        path,
+        label: "Doc",
+        format: "docx",
+        decodedText: "",
+        maxInputBytes: 2 * 1024 * 1024,
+        maxExtractedBytes: 4096,
+      });
+      expect(result).toEqual({ failure: outcome });
+    },
+  );
+
+  it("passes the parser's truncation signal on instead of dropping it", async () => {
+    const dir = makeDir();
+    const path = join(dir, "long.pdf");
+    writeFileSync(path, "%PDF fixture", "utf8");
+    extractMock.mockResolvedValueOnce({
+      outcome: "extracted",
+      format: "pdf",
+      text: "first part",
+      extractedBytes: 10,
+      truncated: true,
+      diagnostics: [],
+    });
+    const result = await extractQiDocumentText({
+      path,
+      label: "Long",
+      format: "pdf",
+      decodedText: "",
+      maxInputBytes: 2 * 1024 * 1024,
+      maxExtractedBytes: 10,
+    });
+    expect(result).toEqual({ text: "first part", truncated: true });
+  });
+
+  it("reads HTML through the parser with the html media type", async () => {
+    const dir = makeDir();
+    const path = join(dir, "spec.html");
+    writeFileSync(path, "<p>Visible</p><script>x()</script>", "utf8");
+    extractMock.mockResolvedValueOnce({
+      outcome: "extracted",
+      format: "html",
+      text: "Visible",
+      extractedBytes: 7,
+      truncated: false,
+      diagnostics: [],
+    });
+    const result = await extractQiDocumentText({
+      path,
+      label: "Spec",
+      format: "html",
+      decodedText: "",
+      maxInputBytes: 2 * 1024 * 1024,
+      maxExtractedBytes: 4096,
+    });
+    expect(result).toEqual({ text: "Visible", truncated: false });
+    expect(extractMock.mock.calls[0]?.[0]).toMatchObject({
+      extension: "html",
+      mediaType: "text/html",
+    });
   });
 });

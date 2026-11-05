@@ -90,8 +90,9 @@ export is removed, no root package entry point is added, and no raw filesystem a
 
 The same release adds `CallerAttemptAdmissionError` to distinguish refusal by the caller's
 remaining grant from provider context overflow; the declaration-only `GatewayRetryNotice` and
-`GatewayRetryObserver` types describe bounded retry observations. `decodeHtmlEntities` and
-`decodeXmlEntities` expose the existing document decoding semantics. The source-query helpers
+`GatewayRetryObserver` types describe bounded retry observations. `decodeHtmlEntities`,
+`decodeHtmlAttributeEntities` and `decodeXmlEntities` expose the existing document decoding
+semantics. The source-query helpers
 `containsNumberedCompoundQueryTerm`, `isNumberedCompoundQueryTerm` and
 `hasRecursiveTraversalQuery` classify query intent; they grant no source authority or budget.
 
@@ -135,6 +136,9 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
   a byte-capped Git diff as a bounded truncated view, and keeps a proven chat model selectable while
   its provider is busy. The model gateway package adds the `ProviderResponseInvalidError` export.
   No customer database schema migration is introduced.
+- Unreleased: `KEIKO_CONTENT_REDACTION` reads differently (owner decision, 2026-11-04). What a person
+  reads and what the model receives lose only the credential floor by default; only `on` lowers the
+  threshold back to the strict projection, and an unrecognized value warns and keeps redaction.
 - 1.3.1: root exports, CLI entrypoints and local server routes remain unchanged. The release fixes
   Coding Workbench, editor, Git-change Chat and Linux sandbox behaviour. The server reads the new
   deployment environment variable `KEIKO_CONTENT_REDACTION` once at startup: only the exact value
@@ -178,7 +182,8 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
   `CallerAttemptAdmissionError`, `StructuralExecutionStoppedError`,
   `WORKSPACE_PATH_DISCOVERY_LIMITS`, `WORKSPACE_PATH_DISCOVERY_MODES`,
   `WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS`, `containsNumberedCompoundQueryTerm`,
-  `decodeHtmlEntities`, `decodeXmlEntities`, `discoverWorkspacePaths`,
+  `decodeHtmlAttributeEntities`, `decodeHtmlEntities`, `decodeXmlEntities`,
+  `discoverWorkspacePaths`,
   `executionControlledWorkspaceFs`, `hasRecursiveTraversalQuery`,
   `isNumberedCompoundQueryTerm` and `readGatewayReadinessChatCompletionResponse`.
   Declaration-only additions are `GatewayRetryNotice`, `GatewayRetryObserver`,

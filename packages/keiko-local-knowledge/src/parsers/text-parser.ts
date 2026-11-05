@@ -1,7 +1,8 @@
-// Plain-text + markdown adapter (Epic #189, Issue #266). Pure: takes bytes, returns a
-// ParserResult. Plain text emits a single section unit covering the whole document; markdown
-// is split on ATX-style headings (`^#{1,6}\\s`) into one section per heading run with the
-// hierarchical sectionPath populated from heading text.
+// Plain-text + lightweight-markup adapter (Epic #189, Issue #266). Pure: takes bytes, returns a
+// ParserResult. Plain text emits a single section unit covering the whole document; Markdown,
+// reStructuredText and AsciiDoc are split on their headings into one section per heading run with
+// the hierarchical sectionPath populated from heading text (see text-structure.ts for the heading
+// forms and what is not structure).
 //
 // Configuration and text-like formats without a dedicated structural parser route here too via
 // `languageHint`. Source-code formats owned by code-parser.ts are registered before this adapter.
@@ -12,12 +13,24 @@ import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts
 import { LOCAL_KNOWLEDGE_TEXT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 
 import {
+  binaryContentReason,
   decodeUtf8,
   diagnostic,
   emptyResult,
-  oversizeDiagnostic,
+  encodingDiagnostic,
+  limitSeverity,
   shouldStop,
+  textParserAdapter,
 } from "./_internal.js";
+import {
+  isMarkdownTableSeparator,
+  liveLines,
+  scanHeadings,
+  sourceLines,
+  type Heading,
+  type MarkupKind,
+  type SourceLine,
+} from "./text-structure.js";
 import type {
   InternalParserResult,
   ParserAdapter,
@@ -26,7 +39,7 @@ import type {
 } from "./types.js";
 
 const PARSER_ID = "text";
-const PARSER_VERSION = "1";
+const PARSER_VERSION = "2";
 
 // Extensions accepted by the text adapter. The list is intentionally explicit so unknown
 // binary extensions fall through to the unsupported adapter rather than being mis-parsed as
@@ -36,15 +49,71 @@ const TEXT_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_TEXT_FILE_E
 
 const TEXT_MEDIA_PREFIXES: readonly string[] = ["text/"];
 
-function isMarkdown(input: ParserSelectionInput): boolean {
-  const ext = input.extension.toLowerCase();
-  if (ext === "md" || ext === "markdown") return true;
-  return input.mediaType.toLowerCase() === "text/markdown";
+const MARKUP_BY_EXTENSION: Readonly<Record<string, MarkupKind>> = Object.freeze({
+  md: "markdown",
+  markdown: "markdown",
+  rst: "rst",
+  adoc: "asciidoc",
+  asciidoc: "asciidoc",
+});
+
+const MARKUP_BY_MEDIA_TYPE: Readonly<Record<string, MarkupKind>> = Object.freeze({
+  "text/markdown": "markdown",
+  "text/x-rst": "rst",
+  "text/asciidoc": "asciidoc",
+});
+
+function markupKind(input: ParserSelectionInput): MarkupKind {
+  return (
+    MARKUP_BY_EXTENSION[input.extension.toLowerCase()] ??
+    MARKUP_BY_MEDIA_TYPE[input.mediaType.toLowerCase()] ??
+    "plain"
+  );
+}
+
+// Well-known files that have no extension and are plain text. The caller derives an empty extension
+// for all of them, so the name is the only evidence; an arbitrary extension-less file (a binary, a
+// dotfile that may hold credentials) is not claimed.
+const EXTENSIONLESS_TEXT_FILE_NAMES: ReadonlySet<string> = new Set([
+  "authors",
+  "changelog",
+  "changes",
+  "codeowners",
+  "containerfile",
+  "contributing",
+  "contributors",
+  "copying",
+  "dockerfile",
+  "gemfile",
+  "gnumakefile",
+  "jenkinsfile",
+  "license",
+  "licence",
+  "maintainers",
+  "makefile",
+  "notice",
+  "procfile",
+  "rakefile",
+  "readme",
+  "vagrantfile",
+]);
+
+// Text exactly when the bytes carry no binary evidence.
+function isExtensionlessText(input: ParserSelectionInput): boolean {
+  return (
+    input.extension === "" &&
+    input.mediaType === "" &&
+    input.fileName !== undefined &&
+    EXTENSIONLESS_TEXT_FILE_NAMES.has(input.fileName.toLowerCase()) &&
+    input.bytes.length > 0 &&
+    binaryContentReason(input.bytes) === undefined
+  );
 }
 
 function isTextLike(input: ParserSelectionInput): boolean {
   const ext = input.extension.toLowerCase();
   if (TEXT_EXTENSIONS.has(ext)) return true;
+  if (isExtensionlessText(input)) return true;
   const media = input.mediaType.toLowerCase();
   for (const prefix of TEXT_MEDIA_PREFIXES) {
     if (media.startsWith(prefix)) return true;
@@ -52,136 +121,7 @@ function isTextLike(input: ParserSelectionInput): boolean {
   return false;
 }
 
-// ATX heading line: zero leading spaces, 1-6 `#`, at least one space, then text.
-// Strict ATX: setext headings (=== / ---) are deliberately out of scope to keep the scanner
-// simple and one-pass.
-interface MarkdownHeading {
-  readonly level: number;
-  readonly text: string;
-  readonly characterStart: number;
-}
-
-interface MarkdownLine {
-  readonly text: string;
-  readonly start: number;
-  readonly end: number;
-}
-
-function scanHeadings(text: string): readonly MarkdownHeading[] {
-  const out: MarkdownHeading[] = [];
-  let inFence = false;
-  let pendingSetext: MarkdownLine | undefined;
-  for (const lineInfo of markdownLines(text)) {
-    const line = lineInfo.text;
-    if (isFenceLine(line)) {
-      inFence = !inFence;
-      pendingSetext = undefined;
-      continue;
-    }
-    if (inFence) continue;
-    const setext = matchSetextUnderline(line);
-    if (setext !== null && pendingSetext !== undefined) {
-      out.push({
-        level: setext,
-        text: pendingSetext.text.trim(),
-        characterStart: pendingSetext.start,
-      });
-      pendingSetext = undefined;
-      continue;
-    }
-    const heading = matchAtxHeading(line);
-    if (heading !== null) {
-      out.push({ ...heading, characterStart: lineInfo.start });
-      pendingSetext = undefined;
-      continue;
-    }
-    pendingSetext =
-      line.trim().length > 0 && !isMarkdownTableSeparator(line) ? lineInfo : undefined;
-  }
-  return out;
-}
-
-const HASH = 0x23;
-const SPACE = 0x20;
-const TAB = 0x09;
-
-function isHSpace(code: number): boolean {
-  return code === SPACE || code === TAB;
-}
-
-function countHashes(line: string): number {
-  let i = 0;
-  while (i < line.length && line.codePointAt(i) === HASH && i < 6) i += 1;
-  return i;
-}
-
-function skipHSpace(line: string, from: number): number {
-  let i = from;
-  while (i < line.length && isHSpace(line.codePointAt(i) ?? 0)) i += 1;
-  return i;
-}
-
-function trimAtxTrailing(line: string, start: number): number {
-  let end = line.length;
-  while (end > start && isHSpace(line.codePointAt(end - 1) ?? 0)) end -= 1;
-  while (end > start && line.codePointAt(end - 1) === HASH) end -= 1;
-  while (end > start && isHSpace(line.codePointAt(end - 1) ?? 0)) end -= 1;
-  return end;
-}
-
-function matchAtxHeading(line: string): { readonly level: number; readonly text: string } | null {
-  const level = countHashes(line);
-  if (level < 1 || level > 6) return null;
-  if (level >= line.length || !isHSpace(line.codePointAt(level) ?? 0)) return null;
-  const textStart = skipHSpace(line, level + 1);
-  const textEnd = trimAtxTrailing(line, textStart);
-  if (textEnd <= textStart) return null;
-  return { level, text: line.slice(textStart, textEnd) };
-}
-
-function markdownLines(text: string): readonly MarkdownLine[] {
-  const lines: MarkdownLine[] = [];
-  let cursor = 0;
-  while (cursor < text.length) {
-    const newline = text.indexOf("\n", cursor);
-    const lineEnd = newline === -1 ? text.length : newline;
-    lines.push({ text: text.slice(cursor, lineEnd), start: cursor, end: lineEnd });
-    cursor = lineEnd + 1;
-  }
-  return lines;
-}
-
-function isFenceLine(line: string): boolean {
-  const trimmed = line.trimStart();
-  const indent = line.length - trimmed.length;
-  if (indent > 3) return false;
-  return trimmed.startsWith("```") || trimmed.startsWith("~~~");
-}
-
-function matchSetextUnderline(line: string): 1 | 2 | null {
-  const trimmed = line.trim();
-  if (/^=+\s*$/u.test(trimmed)) return 1;
-  if (/^-+\s*$/u.test(trimmed) && trimmed.length >= 3) return 2;
-  return null;
-}
-
-function splitMarkdownTableRow(line: string): readonly string[] {
-  const trimmed = line.trim();
-  const body = trimmed.startsWith("|") && trimmed.endsWith("|") ? trimmed.slice(1, -1) : trimmed;
-  return body.split("|").map((part) => part.trim());
-}
-
-function isMarkdownTableSeparator(line: string): boolean {
-  if (!line.includes("|")) return false;
-  const cells = splitMarkdownTableRow(line);
-  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/u.test(cell));
-}
-
-function isMarkdownTableHeader(line: string, nextLine: string | undefined): boolean {
-  return line.includes("|") && nextLine !== undefined && isMarkdownTableSeparator(nextLine);
-}
-
-interface MarkdownEmission {
+interface MarkupEmission {
   readonly units: readonly ParsedUnit[];
   readonly diagnostics: readonly ParserDiagnostic[];
 }
@@ -203,8 +143,8 @@ function sectionUnit(
 
 function pushHeading(
   stack: string[],
-  current: MarkdownHeading,
-  next: MarkdownHeading | undefined,
+  current: Heading,
+  next: Heading | undefined,
   text: string,
   input: ParserSelectionInput,
 ): ParsedUnit {
@@ -214,36 +154,58 @@ function pushHeading(
   return sectionUnit(input, [...stack], current.characterStart, sectionEnd);
 }
 
-function emitMarkdownSections(
+function emitPlainSection(
   text: string,
   input: ParserSelectionInput,
   options: ParserOptions,
   startedAt: number,
-): MarkdownEmission {
-  const headings = scanHeadings(text);
-  if (headings.length === 0) {
-    return emitPlainSection(text, input, options, startedAt);
+): MarkupEmission {
+  const limit = shouldStop(startedAt, options, 0);
+  if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
+    return {
+      units: [],
+      diagnostics: [
+        diagnostic(limit.code, limit.message, input.documentId, limitSeverity(limit.code)),
+      ],
+    };
   }
+  return { units: [sectionUnit(input, [], 0, text.length)], diagnostics: [] };
+}
+
+function emitHeadingSections(
+  headings: readonly Heading[],
+  text: string,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+  startedAt: number,
+): MarkupEmission {
+  if (headings.length === 0) return emitPlainSection(text, input, options, startedAt);
   const units: ParsedUnit[] = [];
   const diagnostics: ParserDiagnostic[] = [];
   const stack: string[] = [];
   const firstStart = headings[0]?.characterStart ?? 0;
   if (firstStart > 0) units.push(sectionUnit(input, [], 0, firstStart));
-  for (let i = 0; i < headings.length; i += 1) {
+  for (const [index, current] of headings.entries()) {
     const limit = shouldStop(startedAt, options, units.length);
     if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
-      diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
+      diagnostics.push(
+        diagnostic(limit.code, limit.message, input.documentId, limitSeverity(limit.code)),
+      );
       break;
     }
-    const current = headings[i];
-    if (current === undefined) break;
-    units.push(pushHeading(stack, current, headings[i + 1], text, input));
+    units.push(pushHeading(stack, current, headings[index + 1], text, input));
   }
   return { units, diagnostics };
 }
 
-function isBlankOrNonTableRow(text: string): boolean {
-  return !text.includes("|") || text.trim().length === 0;
+// ─── Markdown tables ─────────────────────────────────────────────────────────
+
+function isTableHeader(line: string, next: string | undefined): boolean {
+  return line.includes("|") && next !== undefined && isMarkdownTableSeparator(next);
+}
+
+function isTableRow(line: SourceLine | undefined, live: boolean): line is SourceLine {
+  return line !== undefined && live && line.text.includes("|") && line.text.trim().length > 0;
 }
 
 interface TableRowScan {
@@ -253,146 +215,138 @@ interface TableRowScan {
   readonly stopped: boolean;
 }
 
+interface TableScanContext {
+  readonly lines: readonly SourceLine[];
+  readonly live: readonly boolean[];
+  readonly input: ParserSelectionInput;
+  readonly options: ParserOptions;
+  readonly startedAt: number;
+}
+
 // Consumes the row lines of a single markdown table starting at `startIndex` (the first line
 // after the header + separator). Stops at the first non-row line or once `shouldStop` trips.
 function scanTableRows(
-  lines: readonly MarkdownLine[],
+  context: TableScanContext,
   startIndex: number,
-  input: ParserSelectionInput,
-  options: ParserOptions,
-  startedAt: number,
+  tableName: string,
   baseUnitCount: number,
 ): TableRowScan {
+  const { lines, live, input, options, startedAt } = context;
   const units: ParsedUnit[] = [];
-  const diagnostics: ParserDiagnostic[] = [];
-  const tableName = "markdown-table";
-  let rowIndex = 0;
-  let i = startIndex;
-  while (i < lines.length) {
-    const row = lines[i];
-    if (row === undefined || isBlankOrNonTableRow(row.text)) {
-      i -= 1;
-      break;
-    }
+  let index = startIndex;
+  while (isTableRow(lines[index], live[index] === true)) {
+    const row = lines[index];
     const limit = shouldStop(startedAt, options, baseUnitCount + units.length);
+    if (row === undefined) break;
     if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
-      diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
-      return { units, diagnostics, nextIndex: i, stopped: true };
+      const stop = diagnostic(
+        limit.code,
+        limit.message,
+        input.documentId,
+        limitSeverity(limit.code),
+      );
+      return { units, diagnostics: [stop], nextIndex: index, stopped: true };
     }
     units.push({
       kind: "csv-row",
       documentId: input.documentId,
       tableName,
-      rowIndex,
+      rowIndex: units.length,
       characterStart: row.start,
       characterEnd: row.end,
     });
-    rowIndex += 1;
-    i += 1;
+    index += 1;
   }
-  return { units, diagnostics, nextIndex: i, stopped: false };
+  return { units, diagnostics: [], nextIndex: index, stopped: false };
+}
+
+// The first table keeps the historical name; later tables of the same document are told apart by
+// their ordinal so two tables never share a unit identity.
+function tableNameFor(ordinal: number): string {
+  return ordinal === 1 ? "markdown-table" : `markdown-table-${String(ordinal)}`;
 }
 
 function emitMarkdownTableRows(
-  text: string,
-  input: ParserSelectionInput,
-  options: ParserOptions,
-  startedAt: number,
+  context: TableScanContext,
   initialUnitCount: number,
-): MarkdownEmission {
+): MarkupEmission {
   const units: ParsedUnit[] = [];
   const diagnostics: ParserDiagnostic[] = [];
-  const lines = markdownLines(text);
-  let inFence = false;
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (line === undefined) break;
-    if (isFenceLine(line.text)) {
-      inFence = !inFence;
-      i += 1;
+  let tables = 0;
+  let index = 0;
+  while (index < context.lines.length) {
+    const line = context.lines[index];
+    const header =
+      line !== undefined &&
+      context.live[index] === true &&
+      context.live[index + 1] === true &&
+      isTableHeader(line.text, context.lines[index + 1]?.text);
+    if (!header) {
+      index += 1;
       continue;
     }
-    if (inFence) {
-      i += 1;
-      continue;
-    }
-    if (!isMarkdownTableHeader(line.text, lines[i + 1]?.text)) {
-      i += 1;
-      continue;
-    }
+    tables += 1;
     const scan = scanTableRows(
-      lines,
-      i + 2,
-      input,
-      options,
-      startedAt,
+      context,
+      index + 2,
+      tableNameFor(tables),
       initialUnitCount + units.length,
     );
     units.push(...scan.units);
     diagnostics.push(...scan.diagnostics);
-    i = scan.nextIndex;
-    if (scan.stopped) return { units, diagnostics };
+    index = Math.max(scan.nextIndex, index + 2);
+    if (scan.stopped) break;
   }
   return { units, diagnostics };
 }
 
-function emitPlainSection(
+function emitStructure(
   text: string,
   input: ParserSelectionInput,
   options: ParserOptions,
   startedAt: number,
-): MarkdownEmission {
-  const limit = shouldStop(startedAt, options, 0);
-  if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
-    return {
-      units: [],
-      diagnostics: [diagnostic(limit.code, limit.message, input.documentId, "info")],
-    };
-  }
+): MarkupEmission {
+  const kind = markupKind(input);
+  if (kind === "plain") return emitPlainSection(text, input, options, startedAt);
+  const lines = sourceLines(text);
+  const live = liveLines(lines, kind);
+  const sections = emitHeadingSections(
+    scanHeadings(lines, live, kind),
+    text,
+    input,
+    options,
+    startedAt,
+  );
+  if (kind !== "markdown") return sections;
+  const tables = emitMarkdownTableRows(
+    { lines, live, input, options, startedAt },
+    sections.units.length,
+  );
   return {
-    units: [
-      {
-        kind: "section",
-        documentId: input.documentId,
-        sectionPath: [],
-        characterStart: 0,
-        characterEnd: text.length,
-      },
-    ],
-    diagnostics: [],
+    units: [...sections.units, ...tables.units],
+    diagnostics: [...sections.diagnostics, ...tables.diagnostics],
   };
 }
 
-export const textParser: ParserAdapter = Object.freeze({
-  capability: Object.freeze({
+export const textParser: ParserAdapter = textParserAdapter(
+  {
     parserId: PARSER_ID,
     parserVersion: PARSER_VERSION,
     matches: (input: ParserSelectionInput): boolean => isTextLike(input),
-  }),
-  parse: (input: ParserSelectionInput, options: ParserOptions) => {
-    if (input.bytes.byteLength > options.maxBytes) {
-      return emptyResult(textParser.capability, input.documentId, options, [
-        oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes),
-      ]);
-    }
-    const startedAt = options.now();
+  },
+  ({ capability, input, options, startedAt }) => {
     const decoded = decodeUtf8(input.bytes);
-    const emission = isMarkdown(input)
-      ? emitMarkdownSections(decoded.text, input, options, startedAt)
-      : emitPlainSection(decoded.text, input, options, startedAt);
-    const tableEmission = isMarkdown(input)
-      ? emitMarkdownTableRows(decoded.text, input, options, startedAt, emission.units.length)
-      : { units: [], diagnostics: [] };
+    const encoding = encodingDiagnostic(decoded, input.documentId);
+    const emission = emitStructure(decoded.text, input, options, startedAt);
     return {
       ...emptyResult(
-        textParser.capability,
+        capability,
         input.documentId,
         options,
-        [...emission.diagnostics, ...tableEmission.diagnostics],
-        [...emission.units, ...tableEmission.units],
+        [...(encoding === undefined ? [] : [encoding]), ...emission.diagnostics],
+        emission.units,
       ),
       normalizedText: decoded.text,
     } satisfies InternalParserResult;
   },
-});
+);

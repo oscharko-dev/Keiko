@@ -9,6 +9,27 @@ function summary(text: string): readonly string[] {
   );
 }
 
+// A one-line macro or inline code opened a fence that nothing closed, so every heading after it
+// was read as code and a section the description really has looked missing.
+describe("one-line code does not open a fence", () => {
+  it.each([
+    ["{code}x = 1{code}", "wiki code macro"],
+    ["{code:java}int x;{code}", "wiki code macro with a language"],
+    ["{noformat}raw{noformat}", "wiki noformat macro"],
+    ["```inline```", "markdown inline code"],
+  ])("keeps the headings after %s (%s)", (line) => {
+    expect(summary(`h2. A\n${line}\nh2. B\ntext`)).toEqual(["2:A:full", "2:B:full"]);
+  });
+
+  it("still hides the headings inside a real code block", () => {
+    expect(summary("h2. A\n{code:java}\nh2. fake\n{code}\nh2. B\ntext")).toEqual([
+      "2:A:full",
+      "2:B:full",
+    ]);
+    expect(summary("## A\n```\n## fake\n```\n## B\ntext")).toEqual(["2:A:full", "2:B:full"]);
+  });
+});
+
 describe("heading detection never backtracks", () => {
   it("reads a 100k character adversarial line in linear time", () => {
     const hostile = [

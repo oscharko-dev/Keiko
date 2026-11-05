@@ -1,8 +1,9 @@
 // PowerPoint (.pptx) text-layer parser. Reads the slide order from `ppt/presentation.xml` and its
-// relationships, each slide's shape paragraphs and tables, and the speaker notes linked through
-// the slide's relationships. One section is emitted per slide that carries text, so a citation
-// can point at "Slide N". Images, charts, SmartArt and embedded objects are never read, and no
-// OCR runs. Bounds and fail-closed behaviour follow the docx adapter: the package is inflated
+// relationships, each slide's shape paragraphs and tables in reading order, the text of the charts
+// and SmartArt diagrams the slide embeds, and the speaker notes linked through the slide's
+// relationships. One section is emitted per slide that carries text, so a citation can point at
+// "Slide N". Hidden slides stay indexed and are counted. Images and other embedded objects are
+// never read, and no OCR runs. Bounds and fail-closed behaviour follow the docx adapter: the package is inflated
 // in memory under entry-size, ratio and entry-count caps, and malformed markup is rejected.
 
 import { posix } from "node:path";
@@ -26,11 +27,16 @@ import {
 } from "./_internal.js";
 import {
   classifyOoxmlZipError,
+  isOoxmlEntryOversized,
   ooxmlEntryInflatedLimit,
   readOoxmlZipEntries,
   type OoxmlZipReadPlan,
 } from "./ooxml-zip.js";
-import { attributeOf, scanXmlTags, walkPresentationPart, type PartItem } from "./pptx-xml.js";
+import { BLOCK_BREAK, joinBlocks, type TextBlock } from "./block-text.js";
+import { readChartLines, readDiagramLines, type EmbeddedRead } from "./pptx-embedded.js";
+import { attributeOf, scanXmlTags } from "./pptx-xml.js";
+import { cleanHeaderLabel, neutraliseValue } from "./tabular.js";
+import { walkPresentationPart, type PartItem, type SlidePosition } from "./pptx-walk.js";
 import type {
   AsyncParserAdapter,
   InternalParserResult,
@@ -41,7 +47,10 @@ import type {
 } from "./types.js";
 
 const PARSER_ID = "pptx";
-const PARSER_VERSION = "1";
+// v2: speaker notes keep their paragraphs, shapes are read in reading order, bullet levels are kept,
+// merged table cells repeat their value, alternate renderings are read once, and the text of
+// embedded charts and SmartArt diagrams is indexed.
+const PARSER_VERSION = "2";
 const DEPENDENCY_VERSIONS = Object.freeze([
   Object.freeze({ packageName: "yauzl", version: "3.4.0" }),
 ]);
@@ -51,7 +60,13 @@ const PRESENTATION_RELS_ENTRY = "ppt/_rels/presentation.xml.rels";
 const SLIDE_ENTRY_PATTERN = /^ppt\/slides\/[^/]+\.xml$/u;
 const SLIDE_RELS_ENTRY_PATTERN = /^ppt\/slides\/_rels\/[^/]+\.xml\.rels$/u;
 const NOTES_ENTRY_PATTERN = /^ppt\/notesSlides\/[^/]+\.xml$/u;
+const CHART_ENTRY_PATTERN = /^ppt\/charts\/[^/]+\.xml$/u;
+const DIAGRAM_DATA_ENTRY_PATTERN = /^ppt\/diagrams\/data[^/]*\.xml$/u;
 const NOTES_RELATIONSHIP_SUFFIX = "/notesslide";
+const CHART_RELATIONSHIP_SUFFIX = "/chart";
+const DIAGRAM_RELATIONSHIP_SUFFIX = "/diagramdata";
+// Shapes whose tops lie within one band read as a row, left to right.
+const ROW_BAND_EMU = 457_200;
 const MAX_PPTX_PART_INFLATED_BYTES = 16 * 1024 * 1024;
 const MAX_PPTX_PACKAGE_INFLATED_BYTES = 128 * 1024 * 1024;
 // A deck with a few hundred slides carries media, layouts and relationship parts well beyond a
@@ -60,6 +75,7 @@ const MAX_PPTX_ZIP_ENTRIES = 16_384;
 const MAX_TITLE_CHARACTERS = 120;
 const TITLE_PLACEHOLDERS: ReadonlySet<string> = new Set(["title", "ctrTitle"]);
 const CHROME_PLACEHOLDERS: ReadonlySet<string> = new Set(["sldNum", "dt", "ftr", "hdr", "sldImg"]);
+const NOTES_TEXT_PLACEHOLDERS: ReadonlySet<string> = new Set(["body", "obj"]);
 const PPTX_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_PPTX_FILE_EXTENSIONS);
 
 function isPptx(input: ParserSelectionInput): boolean {
@@ -75,7 +91,9 @@ function isPptxEntry(name: string): boolean {
     name === PRESENTATION_RELS_ENTRY ||
     SLIDE_ENTRY_PATTERN.test(name) ||
     SLIDE_RELS_ENTRY_PATTERN.test(name) ||
-    NOTES_ENTRY_PATTERN.test(name)
+    NOTES_ENTRY_PATTERN.test(name) ||
+    CHART_ENTRY_PATTERN.test(name) ||
+    DIAGRAM_DATA_ENTRY_PATTERN.test(name)
   );
 }
 
@@ -147,15 +165,18 @@ function readSlideOrder(
   return order;
 }
 
-function notesPartOf(
+function slideRelationships(
   parts: ReadonlyMap<string, string>,
   slidePart: string,
   maxDepth: number,
-): string | undefined {
+): ReadonlyMap<string, Relationship> {
   const directory = posix.dirname(slidePart);
   const relsXml = parts.get(`${directory}/_rels/${posix.basename(slidePart)}.rels`);
-  if (relsXml === undefined) return undefined;
-  for (const relationship of parseRelationships(relsXml, directory, maxDepth).values()) {
+  return relsXml === undefined ? new Map() : parseRelationships(relsXml, directory, maxDepth);
+}
+
+function notesPartOf(relationships: ReadonlyMap<string, Relationship>): string | undefined {
+  for (const relationship of relationships.values()) {
     if (relationship.type.endsWith(NOTES_RELATIONSHIP_SUFFIX)) return relationship.partName;
   }
   return undefined;
@@ -165,13 +186,14 @@ function notesPartOf(
 
 interface SlideText {
   readonly label: string;
-  readonly lines: readonly string[];
+  readonly blocks: readonly TextBlock[];
 }
 
 function normalizeHeaders(cells: readonly string[]): readonly string[] {
   const seen = new Map<string, number>();
   return cells.map((cell, index) => {
-    const base = cell.trim().length > 0 ? cell.trim() : `Column ${String(index + 1)}`;
+    const label = cleanHeaderLabel(cell);
+    const base = label.length > 0 ? label : columnLabel(index);
     const count = seen.get(base) ?? 0;
     seen.set(base, count + 1);
     return count === 0 ? base : `${base} ${String(count + 1)}`;
@@ -190,7 +212,7 @@ function projectTable(item: Extract<PartItem, { kind: "table" }>): readonly stri
     .filter((cells) => cells.some((cell) => cell.length > 0))
     .map((cells, rowIndex) => {
       const projected = cells
-        .map((cell, index) => `${headers[index] ?? columnLabel(index)}=${cell}`)
+        .map((cell, index) => `${headers[index] ?? columnLabel(index)}=${neutraliseValue(cell)}`)
         .join(" | ");
       return `Table row ${String(rowIndex + 1)}: ${projected}`;
     });
@@ -219,27 +241,79 @@ function titleOf(items: readonly PartItem[]): SlideTitle {
   };
 }
 
-function bodyLines(items: readonly PartItem[]): readonly string[] {
-  const lines: string[] = [];
-  for (const item of items) {
+/**
+ * Every paragraph is a block of its own: what makes a paragraph a bullet usually lives in the slide
+ * layout, so nothing here can tell a list from separate statements. Only table rows stay together.
+ */
+function bodyBlocks(items: readonly PartItem[]): readonly TextBlock[] {
+  const blocks: TextBlock[] = [];
+  items.forEach((item, index) => {
     if (item.kind === "table") {
-      lines.push(...projectTable(item));
-    } else if (!TITLE_PLACEHOLDERS.has(item.placeholder ?? "") && !isChrome(item.placeholder)) {
-      lines.push(...item.paragraphs);
+      const group = `table:${String(index)}`;
+      blocks.push(...projectTable(item).map((text) => ({ text, group })));
+    } else if (
+      item.kind === "shape" &&
+      !TITLE_PLACEHOLDERS.has(item.placeholder ?? "") &&
+      !isChrome(item.placeholder)
+    ) {
+      blocks.push(...item.paragraphs.map((text) => ({ text })));
     }
-  }
-  return lines;
+  });
+  return blocks;
 }
 
 function isChrome(placeholder: string | undefined): boolean {
   return placeholder !== undefined && CHROME_PLACEHOLDERS.has(placeholder);
 }
 
-function noteLines(items: readonly PartItem[]): readonly string[] {
+/**
+ * The first note paragraph carries the label; every paragraph stays its own block. A placeholder
+ * that names no type is an object placeholder by default (`obj`), which on a notes page holds the
+ * notes text just as `body` does.
+ */
+function noteBlocks(items: readonly PartItem[]): readonly TextBlock[] {
   const paragraphs = items.flatMap((item) =>
-    item.kind === "shape" && item.placeholder === "body" ? item.paragraphs : [],
+    item.kind === "shape" && NOTES_TEXT_PLACEHOLDERS.has(item.placeholder ?? "")
+      ? item.paragraphs
+      : [],
   );
-  return paragraphs.length === 0 ? [] : [`Speaker notes: ${paragraphs.join(" ")}`];
+  const [first, ...rest] = paragraphs;
+  if (first === undefined) return [];
+  return [`Speaker notes: ${first}`, ...rest].map((text) => ({ text }));
+}
+
+// ─── Reading order ───────────────────────────────────────────────────────────
+
+interface Placed {
+  readonly item: PartItem;
+  readonly index: number;
+  readonly band: number;
+  readonly x: number;
+}
+
+function placementOf(position: SlidePosition | undefined): Pick<Placed, "band" | "x"> {
+  return position === undefined
+    ? { band: Number.NEGATIVE_INFINITY, x: Number.NEGATIVE_INFINITY }
+    : { band: Math.floor(position.y / ROW_BAND_EMU), x: position.x };
+}
+
+/**
+ * Orders items top to bottom, then left to right, the way the slide is read. An item without a
+ * position of its own (a placeholder that inherits it from the layout) stays right behind the
+ * item before it, and ties keep document order, so a slide without positions is unchanged.
+ */
+function inReadingOrder(items: readonly PartItem[]): readonly PartItem[] {
+  let last: SlidePosition | undefined;
+  const placed: Placed[] = items.map((item, index) => {
+    if (item.position !== undefined) last = item.position;
+    return { item, index, ...placementOf(item.position ?? last) };
+  });
+  placed.sort((a, b) => {
+    if (a.band !== b.band) return a.band < b.band ? -1 : 1;
+    if (a.x !== b.x) return a.x < b.x ? -1 : 1;
+    return a.index - b.index;
+  });
+  return placed.map((entry) => entry.item);
 }
 
 function slideTextOf(
@@ -248,13 +322,17 @@ function slideTextOf(
   notesItems: readonly PartItem[],
 ): SlideText | undefined {
   const title = titleOf(slideItems);
-  const lines = [...title.overflow, ...bodyLines(slideItems), ...noteLines(notesItems)];
-  if (title.label.length === 0 && lines.length === 0) return undefined;
+  const blocks = [
+    ...title.overflow.map((text) => ({ text })),
+    ...bodyBlocks(slideItems),
+    ...noteBlocks(notesItems),
+  ];
+  if (title.label.length === 0 && blocks.length === 0) return undefined;
   const label =
     title.label.length === 0
       ? `Slide ${String(number)}`
       : `Slide ${String(number)}: ${title.label}`;
-  return { label, lines };
+  return { label, blocks };
 }
 
 // ─── Deck assembly ───────────────────────────────────────────────────────────
@@ -280,18 +358,46 @@ function missingSlidesDiagnostic(input: ParserSelectionInput, missing: number): 
   );
 }
 
+function skippedPartsDiagnostic(input: ParserSelectionInput, skipped: number): ParserDiagnostic {
+  return diagnostic(
+    "PART_SKIPPED",
+    `pptx ${String(skipped)} chart or diagram part(s) could not be read and were skipped`,
+    input.documentId,
+    "warning",
+  );
+}
+
+function hiddenSlidesDiagnostic(input: ParserSelectionInput, hidden: number): ParserDiagnostic {
+  return diagnostic(
+    "HIDDEN_SLIDE_INDEXED",
+    `indexed ${String(hidden)} hidden slide(s); hidden slides stay searchable`,
+    input.documentId,
+    "info",
+  );
+}
+
 function walkPart(
   context: DeckContext,
   partName: string | undefined,
   remainingObjects: number,
-): { readonly items: readonly PartItem[]; readonly objectCount: number; readonly limit: boolean } {
+): {
+  readonly items: readonly PartItem[];
+  readonly objectCount: number;
+  readonly limit: boolean;
+  readonly hidden: boolean;
+} {
   const xml = partName === undefined ? undefined : context.parts.get(partName);
-  if (xml === undefined) return { items: [], objectCount: 0, limit: false };
+  if (xml === undefined) return { items: [], objectCount: 0, limit: false, hidden: false };
   const walked = walkPresentationPart(xml, {
     maxDepth: context.options.maxNestingDepth,
     maxObjects: remainingObjects,
   });
-  return { items: walked.items, objectCount: walked.objectCount, limit: walked.limitReached };
+  return {
+    items: walked.items,
+    objectCount: walked.objectCount,
+    limit: walked.limitReached,
+    hidden: walked.hidden,
+  };
 }
 
 interface ObjectBudget {
@@ -301,6 +407,75 @@ interface ObjectBudget {
 interface SlideRead {
   readonly text: SlideText | undefined;
   readonly limitReached: boolean;
+  readonly hidden: boolean;
+  /** Chart and diagram references whose data part could not be read. */
+  readonly skipped: number;
+}
+
+/** Part a chart or diagram reference resolves to, when the relationship has the right type. */
+function embeddedPartOf(
+  item: Extract<PartItem, { kind: "embedded" }>,
+  relationships: ReadonlyMap<string, Relationship>,
+): string | undefined {
+  const relationship = relationships.get(item.relationshipId);
+  const suffix = item.flavor === "chart" ? CHART_RELATIONSHIP_SUFFIX : DIAGRAM_RELATIONSHIP_SUFFIX;
+  return relationship?.type.endsWith(suffix) === true ? relationship.partName : undefined;
+}
+
+function readEmbedded(
+  context: DeckContext,
+  item: Extract<PartItem, { kind: "embedded" }>,
+  partName: string | undefined,
+  budget: ObjectBudget,
+): EmbeddedRead | undefined {
+  const xml = partName === undefined ? undefined : context.parts.get(partName);
+  if (xml === undefined) return undefined;
+  const limits = { maxDepth: context.options.maxNestingDepth, maxObjects: budget.remaining };
+  const read =
+    item.flavor === "chart" ? readChartLines(xml, limits) : readDiagramLines(xml, limits);
+  budget.remaining -= read.objectCount;
+  return read;
+}
+
+interface ResolvedItems {
+  readonly items: readonly PartItem[];
+  readonly limitReached: boolean;
+  readonly skipped: number;
+}
+
+/** Replaces each chart or diagram reference by the shape of text read from its part. */
+function resolveEmbedded(
+  context: DeckContext,
+  items: readonly PartItem[],
+  relationships: ReadonlyMap<string, Relationship>,
+  budget: ObjectBudget,
+): ResolvedItems {
+  const resolved: PartItem[] = [];
+  let limitReached = false;
+  let skipped = 0;
+  for (const item of items) {
+    if (item.kind !== "embedded") {
+      resolved.push(item);
+      continue;
+    }
+    const read = readEmbedded(context, item, embeddedPartOf(item, relationships), budget);
+    if (read === undefined) {
+      // A reference that leads nowhere (outside the package, absent, of another type) is a chart
+      // whose text is lost; the deck says so instead of reading as if the slide had no chart.
+      skipped += 1;
+      continue;
+    }
+    limitReached ||= read.limitReached;
+    if (read.lines.length > 0) {
+      resolved.push({
+        kind: "shape",
+        placeholder: undefined,
+        paragraphs: read.lines,
+        position: item.position,
+      });
+    }
+  }
+  return { items: resolved, limitReached, skipped };
 }
 
 function readSlide(
@@ -311,12 +486,19 @@ function readSlide(
 ): SlideRead {
   const slide = walkPart(context, slidePart, budget.remaining);
   budget.remaining -= slide.objectCount;
-  const notesPart = notesPartOf(context.parts, slidePart, context.options.maxNestingDepth);
-  const notes = walkPart(context, notesPart, budget.remaining);
+  const relationships = slideRelationships(
+    context.parts,
+    slidePart,
+    context.options.maxNestingDepth,
+  );
+  const embedded = resolveEmbedded(context, slide.items, relationships, budget);
+  const notes = walkPart(context, notesPartOf(relationships), budget.remaining);
   budget.remaining -= notes.objectCount;
   return {
-    text: slideTextOf(number, slide.items, notes.items),
-    limitReached: slide.limit || notes.limit,
+    text: slideTextOf(number, inReadingOrder(embedded.items), notes.items),
+    limitReached: slide.limit || notes.limit || embedded.limitReached,
+    hidden: slide.hidden,
+    skipped: embedded.skipped,
   };
 }
 
@@ -326,33 +508,58 @@ function stopDiagnostic(context: DeckContext): ParserDiagnostic | undefined {
   return diagnostic(stop.code, stop.message, context.input.documentId, "info");
 }
 
+interface DeckTally {
+  readonly slides: SlideText[];
+  readonly diagnostics: ParserDiagnostic[];
+  missing: number;
+  hidden: number;
+  skipped: number;
+}
+
+/** Reads the listed slide parts in order; returns false once the read must stop. */
+function readListedSlide(
+  context: DeckContext,
+  tally: DeckTally,
+  slidePart: string | undefined,
+  index: number,
+  budget: ObjectBudget,
+): boolean {
+  const stopped = stopDiagnostic(context);
+  if (stopped !== undefined) {
+    tally.diagnostics.push(stopped);
+    return false;
+  }
+  if (slidePart === undefined || !context.parts.has(slidePart)) {
+    tally.missing += 1;
+    return true;
+  }
+  const read = readSlide(context, slidePart, index + 1, budget);
+  tally.skipped += read.skipped;
+  if (read.text !== undefined) {
+    tally.slides.push(read.text);
+    if (read.hidden) tally.hidden += 1;
+  }
+  if (!read.limitReached) return true;
+  const { input, options } = context;
+  tally.diagnostics.push(objectLimitDiagnostic(input.documentId, options.maxObjectsPerDocument));
+  return false;
+}
+
 function readDeck(context: DeckContext): DeckRead {
   const { options, input } = context;
   const order = readSlideOrder(context.parts, options.maxNestingDepth);
-  const slides: SlideText[] = [];
-  const diagnostics: ParserDiagnostic[] = [];
+  const tally: DeckTally = { slides: [], diagnostics: [], missing: 0, hidden: 0, skipped: 0 };
   const budget: ObjectBudget = { remaining: options.maxObjectsPerDocument };
-  let missing = 0;
   for (const [index, slidePart] of order.entries()) {
-    const stopped = stopDiagnostic(context);
-    if (stopped !== undefined) {
-      diagnostics.push(stopped);
-      break;
-    }
-    if (slidePart === undefined || !context.parts.has(slidePart)) {
-      missing += 1;
-      continue;
-    }
-    const read = readSlide(context, slidePart, index + 1, budget);
-    if (read.text !== undefined) slides.push(read.text);
-    if (read.limitReached) {
-      diagnostics.push(objectLimitDiagnostic(input.documentId, options.maxObjectsPerDocument));
-      break;
-    }
+    if (!readListedSlide(context, tally, slidePart, index, budget)) break;
   }
-  if (order.length > 0 && missing === order.length) throw new Error("pptx slide parts missing");
-  if (missing > 0) diagnostics.push(missingSlidesDiagnostic(input, missing));
-  return { slides, diagnostics };
+  if (order.length > 0 && tally.missing === order.length) {
+    throw new Error("pptx slide parts missing");
+  }
+  if (tally.missing > 0) tally.diagnostics.push(missingSlidesDiagnostic(input, tally.missing));
+  if (tally.skipped > 0) tally.diagnostics.push(skippedPartsDiagnostic(input, tally.skipped));
+  if (tally.hidden > 0) tally.diagnostics.push(hiddenSlidesDiagnostic(input, tally.hidden));
+  return { slides: tally.slides, diagnostics: tally.diagnostics };
 }
 
 interface SectionBuild {
@@ -369,15 +576,16 @@ function slideSections(
   const sections: SectionRecord[] = [];
   const units: ParsedUnit[] = [];
   const diagnostics: ParserDiagnostic[] = [];
-  const total = texts.join("\n").length;
+  const total = texts.join(BLOCK_BREAK).length;
   let start = 0;
   for (const [index, text] of texts.entries()) {
     const stop = shouldStop(context.startedAt, context.options, units.length);
     if (stop.stop && stop.code !== undefined && stop.message !== undefined) {
-      diagnostics.push(diagnostic(stop.code, stop.message, context.input.documentId, "info"));
+      const severity = stop.code === "UNIT_LIMIT_REACHED" ? "warning" : "info";
+      diagnostics.push(diagnostic(stop.code, stop.message, context.input.documentId, severity));
       break;
     }
-    const end = index === texts.length - 1 ? total : start + text.length + 1;
+    const end = index === texts.length - 1 ? total : start + text.length + BLOCK_BREAK.length;
     const section: SectionRecord = {
       documentId: context.input.documentId,
       sectionPath: [slides[index]?.label ?? ""],
@@ -419,7 +627,7 @@ function deckResult(
   context: DeckContext,
   deck: DeckRead,
 ): InternalParserResult {
-  const texts = deck.slides.map((slide) => [slide.label, ...slide.lines].join("\n"));
+  const texts = deck.slides.map((slide) => joinBlocks([{ text: slide.label }, ...slide.blocks]));
   const built = slideSections(texts, deck.slides, context);
   return {
     documentId: context.input.documentId,
@@ -429,7 +637,7 @@ function deckResult(
     units: built.units,
     diagnostics: [...deck.diagnostics, ...built.diagnostics],
     extractedAt: context.options.now(),
-    normalizedText: texts.join("\n"),
+    normalizedText: texts.join(BLOCK_BREAK),
   };
 }
 
@@ -459,13 +667,27 @@ function failureDiagnostic(
   }
 }
 
+function oversizedPartDiagnostic(
+  error: unknown,
+  input: ParserSelectionInput,
+): ParserDiagnostic | undefined {
+  if (!isOoxmlEntryOversized(error)) return undefined;
+  return diagnostic(
+    "OVERSIZED_FILE",
+    "pptx part exceeds the inflated size limit of the parser",
+    input.documentId,
+    "info",
+  );
+}
+
 function failureResult(
   capability: ParserCapability,
   input: ParserSelectionInput,
   options: ParserOptions,
   error: unknown,
 ): ParserResult {
-  const entry = failureDiagnostic(classifyOoxmlZipError(error), input);
+  const entry =
+    oversizedPartDiagnostic(error, input) ?? failureDiagnostic(classifyOoxmlZipError(error), input);
   return emptyResult(capability, input.documentId, options, [entry]);
 }
 

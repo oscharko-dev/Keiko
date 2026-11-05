@@ -105,7 +105,7 @@ describe("convertAdfToText — golden output per node type", () => {
     expectText(doc(list(3)), "3. First\n4. Second");
   });
 
-  it("linearizes tables one row per line with ` | ` separators, flattening cell blocks", () => {
+  it("linearizes tables one row per line with ` | ` separators and a marker under a header row", () => {
     const table = {
       type: "table",
       content: [
@@ -125,7 +125,7 @@ describe("convertAdfToText — golden output per node type", () => {
         },
       ],
     };
-    expectText(doc(table), "Name | Role\nAlice Example | Admin");
+    expectText(doc(table), "Name | Role\n--- | ---\nAlice Example | Admin");
   });
 
   it("renders fenced code blocks with and without a language", () => {
@@ -402,5 +402,58 @@ describe("convertAdfToText — purity and determinism", () => {
     const snapshot = JSON.stringify(input);
     convertAdfToText(input);
     expect(JSON.stringify(input)).toBe(snapshot);
+  });
+});
+
+// Read by a model, a table cell or a code block must stay what it was (#4235).
+describe("convertAdfToText — structure survives into text", () => {
+  const cell = (type: string, value: string): Json => ({ type, content: [p(value)] });
+  const row = (...cells: Json[]): Json => ({ type: "tableRow", content: cells });
+
+  it("keeps a pipe inside a cell from forging a column", () => {
+    const table = {
+      type: "table",
+      content: [row(cell("tableCell", "a | b"), cell("tableCell", "c"))],
+    };
+    expectText(doc(table), "a \\| b | c");
+  });
+
+  it("marks a header row only when every cell of the first row is a header", () => {
+    const header = {
+      type: "table",
+      content: [row(cell("tableHeader", "A"), cell("tableHeader", "B"))],
+    };
+    expectText(doc(header), "A | B\n--- | ---");
+    const mixed = {
+      type: "table",
+      content: [row(cell("tableHeader", "A"), cell("tableCell", "B"))],
+    };
+    expectText(doc(mixed), "A | B");
+    const second = {
+      type: "table",
+      content: [row(cell("tableCell", "x")), row(cell("tableHeader", "y"))],
+    };
+    expectText(doc(second), "x\ny");
+  });
+
+  it("fences code with more backticks than its body holds", () => {
+    const code = { type: "codeBlock", content: [text("a\n```\nb\n`````")] };
+    expectText(doc(code), "``````\na\n```\nb\n`````\n``````");
+  });
+
+  it("drops a code language that is not one word", () => {
+    const code = { type: "codeBlock", attrs: { language: "js\n# Heading" }, content: [text("x")] };
+    expectText(doc(code), "```\nx\n```");
+    const word = { type: "codeBlock", attrs: { language: "c++" }, content: [text("x")] };
+    expectText(doc(word), "```c++\nx\n```");
+  });
+
+  it("keeps a heading on one line", () => {
+    const heading = {
+      type: "heading",
+      attrs: { level: 2 },
+      content: [text("a"), { type: "hardBreak" }, text("b")],
+    };
+    expectText(doc(heading), "## a b");
   });
 });

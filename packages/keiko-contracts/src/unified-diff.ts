@@ -45,6 +45,55 @@ export class PatchParseError extends Error {
   }
 }
 
+const OCTAL_ESCAPE = /^[0-7]{3}$/u;
+const SIMPLE_ESCAPES: ReadonlyMap<string, number> = new Map([
+  ["a", 7],
+  ["b", 8],
+  ["t", 9],
+  ["n", 10],
+  ["v", 11],
+  ["f", 12],
+  ["r", 13],
+  ['"', 34],
+  ["\\", 92],
+]);
+
+/**
+ * Decodes a path written in the C-style quoted form of a diff header
+ * (`"dir/Gr\303\266\303\237e.txt"`): a name that holds a control character, a quote, a backslash
+ * or (by default) a non-ASCII byte is quoted this way. Returns undefined when the text is not a
+ * well-formed quoted path or its bytes are not valid UTF-8. Shared by every reader of such headers.
+ */
+export function decodeGitQuotedPath(raw: string): string | undefined {
+  if (raw.length < 2 || !raw.startsWith('"') || !raw.endsWith('"')) return undefined;
+  const bytes: number[] = [];
+  const encoder = new TextEncoder();
+  const content = raw.slice(1, -1);
+  let index = 0;
+  while (index < content.length) {
+    const value = String.fromCodePoint(content.codePointAt(index) ?? 0);
+    if (value !== "\\") {
+      bytes.push(...encoder.encode(value));
+      index += value.length;
+      continue;
+    }
+    const octal = content.slice(index + 1, index + 4);
+    const simple = SIMPLE_ESCAPES.get(content.charAt(index + 1));
+    if (OCTAL_ESCAPE.test(octal)) {
+      bytes.push(Number.parseInt(octal, 8));
+      index += 4;
+    } else if (simple !== undefined) {
+      bytes.push(simple);
+      index += 2;
+    } else {
+      return undefined;
+    }
+  }
+  // Bytes that are not valid UTF-8 decode to U+FFFD; a path that holds one has no reliable identity.
+  const decoded = new TextDecoder("utf-8").decode(Uint8Array.from(bytes));
+  return decoded.includes("\uFFFD") ? undefined : decoded;
+}
+
 function stripPrefix(raw: string): string {
   if (raw === "/dev/null") {
     return raw;
@@ -60,8 +109,11 @@ function stripPrefix(raw: string): string {
 function headerPath(line: string, marker: string): string {
   const rest = line.slice(marker.length);
   const tab = rest.indexOf("\t");
-  const raw = tab === -1 ? rest : rest.slice(0, tab);
-  return stripPrefix(raw.trim());
+  const raw = (tab === -1 ? rest : rest.slice(0, tab)).trim();
+  if (!raw.startsWith('"')) return stripPrefix(raw);
+  const decoded = decodeGitQuotedPath(raw);
+  if (decoded === undefined) throw new PatchParseError("malformed quoted path in file header");
+  return stripPrefix(decoded);
 }
 
 function classify(oldPath: string, newPath: string): { kind: PatchChangeKind; path: string } {
@@ -309,6 +361,12 @@ function handleBodyLine(
   consumeBudget(file.current, line);
 }
 
+// The signature delimiter of `git format-patch` (and of mail). With the hunk's budget spent, a
+// removal line spelled like this could only be an extra line, so it ends the patch body instead.
+function isSignatureDelimiter(line: string): boolean {
+  return line === "-- " || line === "--";
+}
+
 function handleLine(
   state: ParseState,
   line: string,
@@ -326,6 +384,10 @@ function handleLine(
   }
   if (state.current === undefined) {
     return; // skip preamble before the first file header
+  }
+  if (isSignatureDelimiter(line)) {
+    finishHunk(state.current);
+    return;
   }
   if (line.startsWith("+++ ")) {
     state.current.newPath = headerPath(line, "+++ ");

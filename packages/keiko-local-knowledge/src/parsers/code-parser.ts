@@ -12,9 +12,12 @@ import {
   decodeUtf8,
   diagnostic,
   emptyResult,
-  oversizeDiagnostic,
+  encodingDiagnostic,
+  limitSeverity,
   shouldStop,
+  textParserAdapter,
 } from "./_internal.js";
+import { sourceLines } from "./text-structure.js";
 import type {
   InternalParserResult,
   ParserAdapter,
@@ -23,7 +26,7 @@ import type {
 } from "./types.js";
 
 export const CODE_PARSER_ID = "code-text" as const;
-const CODE_PARSER_VERSION = "1";
+const CODE_PARSER_VERSION = "2";
 
 // `mts`/`cts` are TypeScript in exactly the way `mjs`/`cjs` are JavaScript: the extension selects
 // the module system, never the syntax, so the same strict (void-blocking) pattern set applies. They
@@ -269,9 +272,12 @@ const SYMBOL_PATTERNS_SHARED: readonly SymbolPattern[] = Object.freeze([
     pattern: /^\s*type\s+([A-Za-z_]\w*)\s+(?:struct|interface)\b/u,
   },
   { kind: "type", pattern: /^\s*class\s+([A-Za-z_]\w*)\b/u },
+  // A constant is a module-level declaration, so the pattern is anchored at column 0: an indented
+  // `const`/`let`/`var` is a local variable of the surrounding function or block, and as a definition
+  // line it would cut a function into one chunk per local variable.
   {
     kind: "constant",
-    pattern: /^\s*(?:export\s+)?(?:declare\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\b/u,
+    pattern: /^(?:export\s+)?(?:declare\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\b/u,
   },
 ]);
 
@@ -312,6 +318,13 @@ interface CodeLine {
 interface SymbolAnchor {
   readonly characterStart: number;
   readonly label: string;
+  // Index of the declaration line; the section may start earlier, at its leading documentation.
+  readonly lineIndex?: number;
+}
+
+/** Whether the extension (no leading dot) names a source-code language this parser anchors. */
+export function isCodeExtension(extension: string): boolean {
+  return Object.hasOwn(CODE_LANGUAGE_BY_EXTENSION, extension.toLowerCase());
 }
 
 function codeLanguage(input: ParserSelectionInput): string | undefined {
@@ -320,15 +333,7 @@ function codeLanguage(input: ParserSelectionInput): string | undefined {
 
 function codeLines(text: string): readonly CodeLine[] {
   if (text.length === 0) return [];
-  const lines: CodeLine[] = [];
-  let start = 0;
-  while (start < text.length) {
-    const newline = text.indexOf("\n", start);
-    const end = newline === -1 ? text.length : newline;
-    lines.push({ start, text: text.slice(start, end).replace(/\r$/u, "") });
-    start = end + 1;
-  }
-  return lines;
+  return sourceLines(text).map((line) => ({ start: line.start, text: line.text }));
 }
 
 export function codeSymbolLabel(line: string, extension = ""): string | undefined {
@@ -345,6 +350,84 @@ export function isCodeSymbolDefinitionLine(line: string, extension = ""): boolea
   return codeSymbolLabel(line, extension) !== undefined;
 }
 
+// Indentation width of a line: a tab counts as four columns.
+function indentWidth(text: string): number {
+  let width = 0;
+  for (const char of text) {
+    if (char === " ") width += 1;
+    else if (char === "\t") width += 4;
+    else break;
+  }
+  return width;
+}
+
+interface OpenSymbol {
+  readonly indent: number;
+  readonly isType: boolean;
+  // Indentation of the members of a type, read from the first content line inside it. A declaration
+  // indented deeper sits inside the body of a member and is not itself a member.
+  readonly memberIndent: number | undefined;
+}
+
+// A declaration anchors a section when it is top-level or a member of a type. A declaration nested
+// in a function body (a local helper, a callback) is part of that function, so it never anchors.
+// `open` holds the enclosing declarations, innermost last; a line at or left of an open symbol's
+// indentation closes it. Returns whether the declaration anchors and registers it as open.
+function anchorsHere(open: OpenSymbol[], symbol: OpenSymbol): boolean {
+  while ((open.at(-1)?.indent ?? -1) >= symbol.indent) open.pop();
+  const parent = open.at(-1);
+  if (parent !== undefined) {
+    if (!parent.isType) return false;
+    if (parent.memberIndent !== undefined && symbol.indent > parent.memberIndent) return false;
+  }
+  open.push(symbol);
+  return true;
+}
+
+// Indentation of the first non-blank line after `index`, when it is indented deeper than `indent`.
+function memberIndentAfter(
+  lines: readonly CodeLine[],
+  index: number,
+  indent: number,
+): number | undefined {
+  for (let next = index + 1; next < lines.length; next += 1) {
+    const text = lines[next]?.text ?? "";
+    if (text.trim().length === 0) continue;
+    const width = indentWidth(text);
+    return width > indent ? width : undefined;
+  }
+  return undefined;
+}
+
+// Prefixes of a line that documents or decorates the declaration below it. `#` is a comment only
+// where the language says so (it starts a preprocessor line in C and a region in C#).
+const COMMENT_PREFIXES: readonly string[] = ["//", "/*", "*", "@"];
+const HASH_COMMENT_LANGUAGES: ReadonlySet<string> = new Set(["python", "ruby", "php"]);
+
+function isLeadingDocumentation(text: string, language: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return false;
+  if (COMMENT_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) return true;
+  if (HASH_COMMENT_LANGUAGES.has(language) && trimmed.startsWith("#")) return true;
+  if (language === "rust" && trimmed.startsWith("#[")) return true;
+  return language === "csharp" && trimmed.startsWith("[") && trimmed.endsWith("]");
+}
+
+// The start of the documentation block (comment lines, annotations, decorators) that directly
+// precedes the declaration: no blank line in between, and never crossing the previous section.
+function documentationStart(
+  lines: readonly CodeLine[],
+  lineIndex: number,
+  floor: number,
+  language: string,
+): number {
+  let first = lineIndex;
+  while (first - 1 >= floor && isLeadingDocumentation(lines[first - 1]?.text ?? "", language)) {
+    first -= 1;
+  }
+  return lines[first]?.start ?? 0;
+}
+
 // The scan aborts on the deadline/cancellation signal mid-file rather than only between
 // emitted units. `emitCodeSections` still reports the stop as a diagnostic on its first
 // iteration, so the truncated anchor list never reaches a caller as a complete parse.
@@ -357,22 +440,34 @@ export function isCodeSymbolDefinitionLine(line: string, extension = ""): boolea
 function symbolAnchors(
   text: string,
   extension: string,
+  language: string,
   options: ParserOptions,
   startedAt: number,
 ): readonly SymbolAnchor[] {
   const anchors: SymbolAnchor[] = [];
+  const open: OpenSymbol[] = [];
   const lines = codeLines(text);
-  for (let index = 0; index < lines.length; index += 1) {
+  for (const [index, line] of lines.entries()) {
     if (
       index % SYMBOL_SCAN_DEADLINE_STRIDE === 0 &&
       shouldStop(startedAt, options, anchors.length).stop
     ) {
       break;
     }
-    const line = lines[index];
-    if (line === undefined) continue;
     const label = codeSymbolLabel(line.text, extension);
-    if (label !== undefined) anchors.push({ characterStart: line.start, label });
+    if (label === undefined) continue;
+    const indent = indentWidth(line.text);
+    const isType = label.startsWith("type ");
+    const memberIndent = isType ? memberIndentAfter(lines, index, indent) : undefined;
+    if (!anchorsHere(open, { indent, isType, memberIndent })) continue;
+    // The first declaration keeps what precedes it as the module preamble; every later one owns the
+    // documentation directly above it, so a doc comment never ends the previous section.
+    const previous = anchors.at(-1);
+    const characterStart =
+      previous === undefined
+        ? line.start
+        : documentationStart(lines, index, (previous.lineIndex ?? 0) + 1, language);
+    anchors.push({ characterStart, label, lineIndex: index });
   }
   return anchors;
 }
@@ -405,7 +500,7 @@ function stopDiagnostic(
 ): ParserDiagnostic | undefined {
   const limit = shouldStop(startedAt, options, emittedUnits);
   if (!limit.stop || limit.code === undefined || limit.message === undefined) return undefined;
-  return diagnostic(limit.code, limit.message, input.documentId, "info");
+  return diagnostic(limit.code, limit.message, input.documentId, limitSeverity(limit.code));
 }
 
 function unitAnchors(
@@ -415,7 +510,7 @@ function unitAnchors(
   options: ParserOptions,
   startedAt: number,
 ): readonly SymbolAnchor[] {
-  const anchors = symbolAnchors(text, extension, options, startedAt);
+  const anchors = symbolAnchors(text, extension, language, options, startedAt);
   if (anchors.length === 0 || anchors[0]?.characterStart === 0) return anchors;
   return [{ characterStart: 0, label: `${language} module` }, ...anchors];
 }
@@ -442,31 +537,26 @@ function emitCodeSections(
   return { units, diagnostics: [] };
 }
 
-export const codeParser: ParserAdapter = Object.freeze({
-  capability: Object.freeze({
+export const codeParser: ParserAdapter = textParserAdapter(
+  {
     parserId: CODE_PARSER_ID,
     parserVersion: CODE_PARSER_VERSION,
     matches: (input: ParserSelectionInput): boolean => codeLanguage(input) !== undefined,
-  }),
-  parse: (input: ParserSelectionInput, options: ParserOptions) => {
-    if (input.bytes.byteLength > options.maxBytes) {
-      return emptyResult(codeParser.capability, input.documentId, options, [
-        oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes),
-      ]);
-    }
-    const startedAt = options.now();
+  },
+  ({ capability, input, options, startedAt }) => {
     const decoded = decodeUtf8(input.bytes);
+    const encoding = encodingDiagnostic(decoded, input.documentId);
     const language = codeLanguage(input) ?? "code";
     const emission = emitCodeSections(decoded.text, language, input, options, startedAt);
     return {
       ...emptyResult(
-        codeParser.capability,
+        capability,
         input.documentId,
         options,
-        emission.diagnostics,
+        [...(encoding === undefined ? [] : [encoding]), ...emission.diagnostics],
         emission.units,
       ),
       normalizedText: decoded.text,
     } satisfies InternalParserResult;
   },
-});
+);

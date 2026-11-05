@@ -87,7 +87,8 @@ describe("pptxParser", () => {
     ]);
     const text = textOf(result);
     expect(text).toContain("Revenue grew 12%");
-    expect(text).toContain("Speaker notes: Mention the Q3 pricing change Ask for questions");
+    // #4235: every note paragraph stays its own line; only the first carries the label.
+    expect(text).toContain("Speaker notes: Mention the Q3 pricing change\n\nAsk for questions");
     expect(text).toContain("Table row 1: Key=C-17 | Value=Encrypt backups");
     expect(text).toContain("Table row 2: Key=C-18 | Value=Rotate keys");
     expect(text).not.toContain("Table row 3");
@@ -145,7 +146,7 @@ describe("pptxParser", () => {
       expect(result.diagnostics).toEqual([]);
       expect(result.sections[0]?.sectionPath).toEqual([`Slide 1: ${filler}`]);
       expect(textOf(result)).toContain("LH-099 Required control");
-      expect(textOf(result)).toContain(`${title}\nBody line`);
+      expect(textOf(result)).toContain(`${title}\n\nBody line`);
     });
 
     it("keeps every paragraph of a multi-paragraph title that exceeds the label length", async () => {
@@ -163,7 +164,7 @@ describe("pptxParser", () => {
       const text = textOf(result);
 
       expect(result.sections[0]?.sectionPath[0]).toBe(`Slide 1: ${filler}`);
-      expect(text).toContain(`${filler} first\nsecond LH-100\nthird LH-101`);
+      expect(text).toContain(`${filler} first\n\nsecond LH-100\n\nthird LH-101`);
     });
 
     it("does not repeat a title that fits the label", async () => {
@@ -194,7 +195,7 @@ describe("pptxParser", () => {
       const result = await parse(bytes);
 
       expect(result.diagnostics).toEqual([]);
-      expect(textOf(result)).toBe("Slide 1\nreal");
+      expect(textOf(result)).toBe("Slide 1\n\nreal");
     });
 
     it("emits CDATA as literal character data without its wrapper", async () => {
@@ -202,7 +203,7 @@ describe("pptxParser", () => {
       const bytes = buildPptx(rawSlide(shapeXml(undefined, cdata)));
       const text = textOf(await parse(bytes));
 
-      expect(text).toBe("Slide 1\nx a <b> &amp; &#65; c y");
+      expect(text).toBe("Slide 1\n\nx a <b> &amp; &#65; c y");
       expect(text).not.toContain("CDATA");
     });
 
@@ -221,7 +222,7 @@ describe("pptxParser", () => {
       const result = await parse(bytes);
 
       expect(result.sections[0]?.sectionPath).toEqual(["Slide 1"]);
-      expect(textOf(result)).toBe("Slide 1\nBody text");
+      expect(textOf(result)).toBe("Slide 1\n\nBody text");
     });
 
     it("decodes predefined entities and numeric references in attribute values", async () => {
@@ -491,7 +492,8 @@ describe("pptxParser", () => {
       ]);
       const result = await parse(bomb, { maxBytes: 4096 + bomb.byteLength });
 
-      expect(codes(result)).toEqual(["MALFORMED_INPUT"]);
+      // #4235: a size refusal has its own code; the ratio bound below stays MALFORMED_INPUT.
+      expect(codes(result)).toEqual(["OVERSIZED_FILE"]);
     });
 
     it("rejects an entry whose compression ratio exceeds the ratio bound", async () => {

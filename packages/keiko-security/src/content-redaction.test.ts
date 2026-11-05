@@ -20,8 +20,10 @@ const INFRASTRUCTURE_SECRET = "fixture-provider-credential-2026";
 
 describe("deployment content policy resolution", () => {
   it.each([
-    [undefined, "redact", "default"],
-    ["", "redact", "default"],
+    // Owner decision 2026-11-04: by default what a person reads and the model receives loses only
+    // the credential floor. `on` lowers the threshold back, and a typo still fails closed.
+    [undefined, "preserve", "default"],
+    ["", "preserve", "default"],
     ["on", "redact", "on"],
     ["off", "preserve", "off"],
     ["OFF", "redact", "invalid"],

@@ -15,7 +15,10 @@ import {
   QiIngestionError,
 } from "../runIngestion.js";
 import type { IngestInlineSourcesInput, QiIngestionResult } from "../runIngestion.js";
-import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
+import type {
+  QualityIntelligenceAdfNode,
+  QualityIntelligenceStartRunRequest,
+} from "@oscharko-dev/keiko-contracts";
 import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
 
@@ -361,6 +364,73 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
       expect(err).toBeInstanceOf(QiIngestionError);
       expect((err as QiIngestionError).code).toBe("QI_SOURCE_UNSUPPORTED");
     }
+  });
+
+  it("reports a parser-side cut of a document in the source summary", async () => {
+    const dir = makeDir();
+    const path = writeFile(dir, "long.pdf", "%PDF-1.7 binary-ish");
+    const result = await ingestInlineSourcesAsync({
+      ...input([fileSource("PDF", path)]),
+      documentTextExtractor: () => ({
+        text: "Fachkonzept: erster Teil des Dokuments.",
+        truncated: true,
+      }),
+    });
+    expect(result.sourceSummaries[0]?.truncated).toBe(true);
+    expect(result.sourceSummaries[0]?.notices).toContain("source-truncated-to-byte-budget");
+  });
+
+  it("reports no truncation when the parser did not cut the document", async () => {
+    const dir = makeDir();
+    const path = writeFile(dir, "whole.pdf", "%PDF-1.7 binary-ish");
+    const result = await ingestInlineSourcesAsync({
+      ...input([fileSource("PDF", path)]),
+      documentTextExtractor: () => ({ text: "Fachkonzept: ganzes Dokument.", truncated: false }),
+    });
+    expect(result.sourceSummaries[0]?.truncated).toBeUndefined();
+  });
+
+  it.each([
+    ["encrypted", "is password-protected"],
+    ["no-text-layer", "has no text layer"],
+    ["malformed", "is damaged or incomplete"],
+    ["timed-out", "took too long to read"],
+    ["oversized", "is larger than the size limit"],
+  ] as const)(
+    "names the %s failure of a document instead of a generic message",
+    async (failure, words) => {
+      const dir = makeDir();
+      const path = writeFile(dir, "spec.pdf", "%PDF-1.7 binary-ish");
+      const error = await ingestInlineSourcesAsync({
+        ...input([fileSource("PDF", path)]),
+        documentTextExtractor: () => ({ failure }),
+      }).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      expect(error).toBeInstanceOf(QiIngestionError);
+      expect((error as QiIngestionError).code).toBe("QI_SOURCE_UNSUPPORTED");
+      expect((error as QiIngestionError).message).toContain(words);
+    },
+  );
+
+  it("reads an HTML file through the extractor when one is configured, not as raw markup", async () => {
+    const dir = makeDir();
+    const path = writeFile(
+      dir,
+      "spec.html",
+      "<html><script>track()</script><p>The system must validate every transfer.</p></html>",
+    );
+    const result = await ingestInlineSourcesAsync({
+      ...input([fileSource("Spec", path)]),
+      documentTextExtractor: ({ format }) =>
+        format === "html"
+          ? { text: "The system must validate every transfer.", truncated: false }
+          : undefined,
+    });
+    const text = result.ingestedAtoms.map((atom) => atom.canonicalText).join("\n");
+    expect(text).toContain("The system must validate every transfer.");
+    expect(text).not.toContain("track()");
   });
 
   it("awaits an async PDF extractor and passes parser budgets", async () => {
@@ -710,6 +780,68 @@ describe("ingestInlineSources — happy path", () => {
       "| IBAN muss gültig sein |",
     );
     expect(result.sourceSummaries[0]?.notices).toContain("adf-normalized");
+  });
+
+  it("ingests ADF with a mention, hard break and unknown node, and names the degradation", () => {
+    const para = (...content: QualityIntelligenceAdfNode[]): QualityIntelligenceAdfNode => ({
+      type: "paragraph",
+      content,
+    });
+    const result = ingestInlineSources(
+      input([
+        {
+          kind: "requirements",
+          label: "Jira ADF",
+          text: "",
+          adf: {
+            type: "doc",
+            version: 1,
+            content: [
+              para(
+                { type: "text", text: "REQ-7: The system shall notify " },
+                { type: "mention", attrs: { id: "u1", text: "@Ann" } },
+                { type: "hardBreak" },
+                { type: "text", text: "within five minutes." },
+              ),
+              {
+                type: "futureNode",
+                content: [para({ type: "text", text: "Audit trail required." })],
+              },
+            ],
+          },
+        },
+      ]),
+    );
+    const joined = result.ingestedAtoms.map((atom) => atom.canonicalText).join("\n");
+    expect(joined).toContain("@Ann");
+    expect(joined).toContain("Audit trail required.");
+    expect(result.sourceSummaries[0]?.notices).toEqual([
+      "adf-normalized",
+      "adf-unknown-node-types-degraded",
+    ]);
+  });
+
+  it("reports an ADF tree over a size limit as too large, not as invalid", () => {
+    const paragraphs = Array.from({ length: 5_001 }, () => ({
+      type: "paragraph",
+      content: [{ type: "text", text: "REQ-1: The system shall log in." }],
+    }));
+    const run = (adf: Record<string, unknown>): QiIngestionError | undefined => {
+      try {
+        ingestInlineSources(
+          input([{ kind: "requirements", label: "Jira ADF", text: "", adf: adf as never }]),
+        );
+      } catch (err) {
+        return err instanceof QiIngestionError ? err : undefined;
+      }
+      return undefined;
+    };
+    const tooLarge = run({ type: "doc", version: 1, content: paragraphs });
+    expect(tooLarge?.code).toBe("QI_SOURCE_TOO_LARGE");
+    expect(tooLarge?.message).toContain("size limit");
+    const malformed = run({ type: "paragraph", content: [] });
+    expect(malformed?.code).toBe("QI_BAD_SOURCE");
+    expect(malformed?.message).toContain("invalid Atlassian Document Format");
   });
 
   it("keeps the requirements envelope id stable when the requirement text changes in-place", () => {

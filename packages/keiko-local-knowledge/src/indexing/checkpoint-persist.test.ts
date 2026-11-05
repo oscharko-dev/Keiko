@@ -1,6 +1,7 @@
 import {
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   largeDocumentPolicyFingerprint,
+  MAX_LEARNED_FURNITURE,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 import type {
   ChunkId,
@@ -68,6 +69,7 @@ function checkpoint(
     coverage: "partial",
     fingerprint: fingerprint(),
     terminalDiagnostics: [],
+    learnedFurniture: [],
     createdAt: 100,
     updatedAt: 200,
     ...overrides,
@@ -268,5 +270,62 @@ describe("resume projections", () => {
     expect(progress.processedPages).toBe(7);
     expect(progress.resumable).toBe(true);
     expect(progress.safeDisplayName).toBe("report.pdf");
+  });
+});
+
+describe("learned page furniture in a checkpoint", () => {
+  const DOC_A = "doc-1" as DocumentId;
+  const DIGEST_A = "AAAAAAAAAAAAAAAAAAAAAA";
+  const DIGEST_B = "b_b-b_b-b_b-b_b-b_b-bb";
+  let fx: Fixture;
+  const write = (learnedFurniture?: readonly string[]): void => {
+    const extra = learnedFurniture === undefined ? {} : { learnedFurniture };
+    upsertExtractionCheckpoint(fx.store._internal.db, checkpoint(fx.capsuleId, DOC_A, extra));
+  };
+  const read = (): readonly string[] | undefined =>
+    selectExtractionCheckpoint(fx.store._internal.db, fx.capsuleId, DOC_A)?.learnedFurniture;
+
+  beforeEach(() => {
+    fx = buildFixture();
+  });
+  afterEach(() => {
+    fx.cleanup();
+  });
+
+  it("keeps the digests in the order they were learned", () => {
+    write([DIGEST_B, DIGEST_A]);
+
+    expect(read()).toEqual([DIGEST_B, DIGEST_A]);
+  });
+
+  it("stores an empty list for a writer that learned nothing", () => {
+    write();
+
+    expect(read()).toEqual([]);
+  });
+
+  it.each([
+    ["broken JSON", "["],
+    ["an object", '{"not":"a list"}'],
+    ["a value that is no string", "[1]"],
+    ["repeated text instead of a digest", '["Manual header"]'],
+    [
+      "more than a run carries",
+      JSON.stringify(Array.from({ length: MAX_LEARNED_FURNITURE + 1 }, () => DIGEST_A)),
+    ],
+  ])("refuses %s", (_name, json) => {
+    write();
+    fx.store._internal.db
+      .prepare("UPDATE extraction_checkpoints SET learned_furniture_json = :j")
+      .run({ j: json });
+
+    expect(read()).toBeUndefined();
+  });
+
+  it("accepts the most a run carries", () => {
+    const most = Array.from({ length: MAX_LEARNED_FURNITURE }, () => DIGEST_A);
+    write(most);
+
+    expect(read()).toEqual(most);
   });
 });

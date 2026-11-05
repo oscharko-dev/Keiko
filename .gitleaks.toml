@@ -235,3 +235,12 @@ condition = "AND"
 commits = ["1b5b2525320e00b9db16b66063999837c9264013"]
 paths = ['''^packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy\.test\.ts$''']
 targetRules = ["jwt", "private-key", "generic-api-key"]
+
+[[allowlists]]
+description = "PR #4238: the synthetic credential-shaped value that proves a JSON parse diagnostic never echoes the document, in two immutable checkpoints of the JSON parser test. It is test data, later commits assemble it at runtime, and `dev` branch protection forbids rewriting the two commits."
+condition = "AND"
+commits = ["f767219db257ac104306611f2c31475736b38405", "7b181a051c4ab9ac95c526d354ed76cb6491cf49"]
+paths = ['''^packages/keiko-local-knowledge/src/parsers/json-parser\.fidelity\.test\.ts$''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''^\s*const secret = "AKIA-LIVE-SECRET-[0-9A-F]{8}";$''']

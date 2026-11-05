@@ -103,21 +103,27 @@ This shapes the product _and_ how you work on it:
   Optional Apple signing evidence must remain truthful and cannot become a hidden update gate.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
   body-free: counts, hashes, redacted summaries — never raw content, keys, endpoints, or PII.
-- **Authorized content preservation (owner decision, 2026-10-27, #4098):** the deployment operator
-  may set `KEIKO_CONTENT_REDACTION=off` before starting Keiko so Chat keeps authorized document
-  context, answers and private chat history. The server resolves it once at startup into the deps
-  graph (`chat.content-policy.resolved`; an unrecognized value warns and keeps redaction); no
-  package reads it per request. Only Chat model ports and the Chat connected-context workspace
-  carry the preserving policy from this switch. Independently of it, the OpenCode runtime is its own
-  producer and uses the gateway as infrastructure only: the Coding Workbench sidecar route always
-  hands it the model's answer, reasoning and structured output under the preserving policy (owner
-  decision, 2026-10-27). Coding repository search and semantic refresh, Coding History exports and
-  imports, evidence, audit, logs, support exports and tool arguments keep their default or
-  unconditional redaction.
-  Preserved content still loses the credential floor: configured secret literals, private keys,
-  URL credentials, `Authorization` header values, encoded-looking Bearer/Basic values, JWT-shaped bearer tokens and known
-  token shapes; memory proposals keep the default projection. Workspace
-  authority, containment, deny-lists and budgets are unchanged. See ADR-0003 D7 and ADR-0022 D4.
+- **Content threshold (owner decision, 2026-11-04, supersedes the opt-out of #4098):** Keiko runs on
+  the user's own device and its stores never leave it, so what a person reads and what the model
+  receives lose only the credential floor by default. `KEIKO_CONTENT_REDACTION=on` lowers the
+  threshold back to the strict projection; `off` or an absent value preserves; an unrecognized value
+  warns and keeps redaction. The server resolves it once at startup into the deps graph
+  (`chat.content-policy.resolved`); no package reads it per request. `deps.redactor` and the Chat
+  model ports follow it, including tool arguments a person reads and the tool transcript. The
+  OpenCode runtime is its own producer and always receives the model's output preserved (owner
+  decision, 2026-10-27). `keiko_research_fetch` arguments leave for the public internet and keep the
+  full redaction. Evidence, audit records, memory proposals and Quality Intelligence stay on
+  `strictRedactor`; Coding repository search, Coding History exports and support exports keep their
+  own redaction.
+  The floor always goes: configured secret literals, private keys, URL credentials, `Authorization`
+  header values, encoded-looking Bearer/Basic values, JWT-shaped bearer tokens and known token shapes.
+  Workspace authority, containment, deny-lists and budgets are unchanged. See ADR-0003 D7 and
+  ADR-0022 D4.
+- **The Activity Log carries no personal data (owner decision, 2026-11-04).** It is the only thing
+  that ever leaves the machine, so its sink over-redacts: a value holds no space, and a name, IBAN,
+  telephone, card or account number, date with a year, IPv4 address, remote URL or host, or personal
+  field name is refused whatever field carries it (`log-redaction.ts`, `activity-log-label-policy.ts`). Never loosen
+  this to keep a value readable: emit a count, a closed value or a digest instead.
 - Source redaction preserves TypeScript/JavaScript and Java syntax at the shared security boundary;
   syntax metadata never exempts credential literal data or configured secrets. JSON/JSONC and YAML
   use parsed value boundaries. Ordinary unified diffs reuse the canonical parser at the contracts
