@@ -544,7 +544,11 @@ refusals from `GATEWAY_CONTEXT_OVERFLOW` without asserting exact unknown output 
 Prompt fitting retains separate model and remaining caller input caps. Mandatory overhead that
 fits the model but exceeds the caller allowance uses the caller refusal; overhead that exceeds
 the model retains context-overflow handling. Best-effort citation repair keeps the completed
-answer when its remaining input allowance or synthesis attempt slots cannot fund the repair.
+answer when its remaining input allowance or synthesis attempt slots cannot fund the repair. Citation
+repair only inserts markers through the same admitted, turn-metered model port, without offering
+a catalog or entering the tool loop. Unexpected tool-call output is refused and charged; current
+readiness, authority, cancellation and synthesis/spend grants remain binding. The existing
+answer-details event records its disposition.
 Unrelated gateway retries and separately bounded entailment/embedding stages retain their existing
 contracts without supplying another synthesis attempt. Normalized output is buffered before
 publication; rejected declarations cannot escape through streamed chunks. The existing allocator's

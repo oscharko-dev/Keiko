@@ -2,7 +2,10 @@ import {
   createGroundedSynthesisCallBudget,
   createGroundedSynthesisAttemptAdmission,
 } from "./grounded-answer.js";
-import { callGroundedSynthesisModel } from "./grounded-plural-synthesis.js";
+import {
+  callGroundedSynthesisModel,
+  callPluralGroundedSynthesis,
+} from "./grounded-plural-synthesis.js";
 import { conversationForGateway, usableGatewayTurns } from "./conversation-gateway.js";
 import {
   captureConversationReadinessAdmission,
@@ -797,3 +800,134 @@ it.each([
     expect(tracker.admission({ promptTokens: 1, maxOutputTokens: 1 })).toBeUndefined();
   },
 );
+
+it.each([
+  "allowed",
+  "caller-refused",
+  "authority-revoked",
+  "generation-changed",
+  "human-stop",
+  "deadline",
+  "unexpected-tool",
+] as const)("keeps citation repair inside the existing model admission (%s)", async (state) => {
+  const { pod, deps } = await fixture();
+  Object.assign(deps, {
+    chatToolTurnBudget: {
+      maxRuntimeMs: 60_000,
+      maxToolCalls: 10,
+      maxPromptTokens: 100,
+      maxPatchBytes: 0,
+    },
+  });
+  const accepted = deps.store.admitChatTurn(`citation-repair-${state}`, {
+    chatId: pod.chatId,
+    role: "user",
+    content: "Explain the source.",
+    timestamp: Date.now(),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+  if (accepted.kind !== "admitted") throw new Error("Expected accepted turn");
+  const controller = new AbortController();
+  const turn = await createChatToolTurn(
+    deps,
+    MODEL,
+    accepted.userMessage,
+    controller.signal,
+    "citation-repair-admission",
+  );
+  if (turn === undefined) throw new Error("Expected Knowledge tool turn");
+  const toolLoop = vi.spyOn(turn, "call");
+  deps.gatewayConfig?.recordVerifiedCapability(
+    MODEL,
+    { conversationReady: true },
+    new Date().toISOString(),
+  );
+  const readiness = captureConversationReadinessAdmission(deps, MODEL);
+  if ("status" in readiness) throw new Error("Expected admitted model");
+  const sent: GatewayCallRequest[] = [];
+  const model: ModelPort = {
+    call: (request): Promise<NormalizedResponse> => {
+      const reservation = request.attemptAdmission?.({ promptTokens: 60, maxOutputTokens: 7 });
+      if (reservation === undefined)
+        throw new CallerAttemptAdmissionError("Fixture admission refused before dispatch");
+      expect(reservation.maxOutputTokens).toBe(7);
+      sent.push(request);
+      const response: NormalizedResponse = {
+        modelId: MODEL,
+        content: "Feature returns true [1].",
+        finishReason: "stop",
+        toolCalls:
+          state === "unexpected-tool"
+            ? [
+                {
+                  id: "changed-write",
+                  name: "jira_comment",
+                  arguments: { body: "Changed repair comment" },
+                },
+              ]
+            : [],
+        structuredOutput: null,
+        usage: {
+          requestId: "repair-admission",
+          promptTokens: 60,
+          completionTokens: 3,
+          latencyMs: 1,
+          costClass: "low",
+        },
+      };
+      reservation.settle(response.usage, true, "observed");
+      return Promise.resolve(response);
+    },
+  };
+  const checked = withConversationReadinessAdmission(turn.meter(model), MODEL, readiness, deps);
+  const budget = createGroundedSynthesisCallBudget();
+  if (state === "authority-revoked") deps.agentAuthorityRegistry?.revokeChatAuthorities(pod.chatId);
+  if (state === "generation-changed") {
+    const holder = deps.gatewayConfig;
+    if (holder === undefined) throw new Error("Expected gateway configuration");
+    vi.spyOn(holder, "generation").mockReturnValue(holder.generation() + 1);
+  }
+  if (state === "human-stop") controller.abort();
+  const invoke = (): Promise<NormalizedResponse> =>
+    callPluralGroundedSynthesis({
+      purpose: "citation-repair",
+      deps: { ...deps, chatToolTurn: turn },
+      evidenceCount: 1,
+      model: checked,
+      signal: controller.signal,
+      budget,
+      grants: {
+        inputTokensMax: state === "caller-refused" ? 1 : 1000,
+        outputTokensMax: 7,
+        ...(state === "deadline" ? { deadlineAtMs: Date.now() - 1 } : {}),
+      },
+      accounting: undefined,
+      request: {
+        modelId: MODEL,
+        messages: [{ role: "user", content: "Insert citation markers only." }],
+        maxOutputTokens: 7,
+      },
+    });
+  if (state === "allowed") {
+    await invoke();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.toolCatalog).toBeUndefined();
+    expect(budget.pendingUsage()).toEqual({ promptTokens: 60, completionTokens: 3 });
+    // The same turn has only forty prompt tokens left; repair cannot acquire a fresh envelope.
+    await expect(invoke()).rejects.toBeInstanceOf(CallerAttemptAdmissionError);
+    expect(sent).toHaveLength(1);
+  } else {
+    await expect(invoke()).rejects.toThrow();
+    expect(sent).toHaveLength(state === "unexpected-tool" ? 1 : 0);
+    if (state === "unexpected-tool")
+      expect(budget.pendingUsage()).toEqual({ promptTokens: 60, completionTokens: 3 });
+  }
+  expect(toolLoop).not.toHaveBeenCalled();
+  expect(
+    deps.store.findMessageById(accepted.userMessage.id)?.toolTranscript?.exchanges,
+  ).toBeUndefined();
+});

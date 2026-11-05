@@ -1302,14 +1302,14 @@ paged the tool and listed 41 of 41. `chat.grounded-tool-round.completed` records
 (`requirementUnitCount`, `excerptRequirementCount`). The guidance replaces redundant wording, so the
 mixed Jira/Data overflow pin keeps its budget. An answer built from tool results carries no excerpt
 markers; the optional citation repair runs only while a synthesis attempt slot is free and otherwise
-keeps the completed answer instead of failing the turn. The repair regenerates the whole answer, so
-it replaces a complete first answer only when it finished with the natural `stop` and attaches at
-least one citation; a repair interrupted at its output limit, by a content filter, an error or a
-cancellation, or still uncited, leaves the complete answer standing
-(lab S12, Gemma: a repair with the remaining output grant cut a 41-row coverage matrix at row 28).
-A repair sends the turn's tool results again, so whether it fits is judged by the last measured prompt;
-one the input grant refuses at admission keeps the completed answer too (lab S11, Qwen: a finished
-answer over 200 issues became a 403 because only the repair's bare prompt had been counted).
+keeps the completed answer instead of failing the turn. Citation repair requests bounded marker
+insertions through the same admitted, turn-metered model port; it advertises no tools and never
+re-enters the catalog/binder loop. It preserves the completed answer unless the locally checked
+insertion plan adds supported markers without changing the prose. Unexpected returned tool calls
+are refused with their usage retained. The original input/output, deadline, readiness, current
+authority, physical-attempt and spend grants remain binding; an admission refusal keeps the
+completed answer. Existing answer-details and gateway admission evidence records the disposition
+without answer or tool-result bodies.
 `search.citations.reconciled` records the outcome in `citationRepairDisposition`
 (`rejected-truncated` for every interrupted repair, `rejected-uncited`, `applied`,
 `skipped-budget`, `not-needed`).

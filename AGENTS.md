@@ -548,7 +548,10 @@ system that exists, never beside it:
   Marker repair requests at most 32 unique-prose insertion annotations instead of regenerating
   the answer. The existing repair owner constructs the candidate locally, then applies the
   unchanged verbatim-content, code, assessment, sent-range and cumulative-budget guards.
-  Literal marker-only responses remain subject to those same guards.
+  Literal marker-only responses remain subject to those same guards. Citation repair uses the same
+  admitted, turn-metered model port without a tool catalog or tool loop. Unexpected tool-call
+  output is refused and charged; current readiness, authority, cancellation and cumulative
+  synthesis/spend grants remain binding. Existing answer-details evidence records the disposition.
   Symbol discovery batches the existing bounded excerpt ranges per source and observation wave.
   Each definition retains current-source, call/parent and range certificates; no persistent source
   cache, read grant, synthesis attempt or source authority is added by batching.

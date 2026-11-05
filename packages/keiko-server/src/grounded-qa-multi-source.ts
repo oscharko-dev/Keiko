@@ -1145,6 +1145,7 @@ async function multiSourceGatewayRepair(
     return uninvokedCitationRepair(original);
   ensureNotCancelled(signal);
   const response = await callPluralGroundedSynthesis({
+    purpose: "citation-repair",
     deps: ctx.deps,
     evidenceCount: sent.sentReferenceCount,
     model: ctx.model,

@@ -1248,6 +1248,7 @@ async function hybridGatewayRepair(
     return uninvokedCitationRepair(original);
   ensureNotCancelled(signal);
   const response = await callPluralGroundedSynthesis({
+    purpose: "citation-repair",
     deps: ctx.deps,
     evidenceCount: ctx.sourceEvidenceCount,
     model: ctx.model,

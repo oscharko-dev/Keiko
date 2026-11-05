@@ -1,3 +1,9 @@
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  expectRegisteredActivityLogLine,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../tests/support/activity-log-proof.js";
 import type { MemoryId, ProjectId, UserId } from "@oscharko-dev/keiko-contracts/memory";
 import { randomBytes, randomUUID } from "node:crypto";
 import { handleUpdateChat } from "./store-handlers.js";
@@ -817,6 +823,7 @@ function isProductiveRequest(body: string): boolean {
   return (
     body.includes("File: src/Feature.ts") ||
     body.includes("Citations:") ||
+    body.includes("only insert supported markers") ||
     body.includes('"tools":') ||
     body.includes('"role":"tool"')
   );
@@ -825,9 +832,14 @@ function providerBody(init: RequestInit | undefined): string {
   return typeof init?.body === "string" ? init.body : "";
 }
 function isToolStep(body: string, step: ProviderStep): boolean {
-  return body.includes('"tools":') && (step === "tool" || step === "write" || step === "malformed");
+  return (
+    step === "repair-write" ||
+    (body.includes('"tools":') && (step === "tool" || step === "write" || step === "malformed"))
+  );
 }
 function toolArguments(step: ProviderStep, commentBody: string): string {
+  if (step === "repair-write")
+    return JSON.stringify({ issueKey: "KEIKO-1", body: "Changed citation repair comment" });
   if (step === "write") return JSON.stringify({ issueKey: "KEIKO-1", body: commentBody });
   return step === "malformed" ? '{"maxResults":0}' : "{}";
 }
@@ -838,6 +850,7 @@ function responseContent(
   answerContent?: string,
 ): string {
   if (answerContent !== undefined) return answerContent;
+  if (step === "uncited") return "Feature returns true.";
   return body.includes("Citations:")
     ? "Feature returns true [1]. Jira tool result: project SYN is visible."
     : finalContent(step, steps);
@@ -849,6 +862,7 @@ function finalContent(step: ProviderStep, steps: readonly ProviderStep[]): strin
 type ProviderStep =
   | "tool"
   | "write"
+  | "repair-write"
   | "malformed"
   | "answer"
   | "uncited"
@@ -950,7 +964,10 @@ function provider(
                       id: `mixed-call-${String(requests.length)}${index === 0 ? "" : `-${String(index)}`}`,
                       type: "function",
                       function: {
-                        name: step === "write" ? "jira_comment" : "jira_projects",
+                        name:
+                          step === "write" || step === "repair-write"
+                            ? "jira_comment"
+                            : "jira_projects",
                         arguments: toolArguments(step, commentBody),
                       },
                     })),
@@ -1346,6 +1363,57 @@ it("keeps tool orchestration outside the one answer plus one repair synthesis ce
   expect(f.jiraRequests).toEqual(["GET", "GET"]);
   expect((response.body as GroundedAnswer).content).toContain("[src/Feature.ts:1]");
 });
+
+it.each(["folder", "multi-source", "hybrid"] as const)(
+  "keeps %s citation repair tool-free after a committed write and refuses a changed write response",
+  async (source) => {
+    const f = runtime(true);
+    if (source === "hybrid")
+      await connectDataPod(f, "Feature returns true. Feature is a function.", true);
+    if (source === "multi-source") {
+      writeFileSync(join(f.root, "src", "Second.ts"), "export const second = true;\n");
+      f.deps.store.updateChat(f.chatId, {
+        connectedScopes: ["Feature.ts", "Second.ts"].map((file) => ({
+          kind: "files" as const,
+          root: f.root,
+          relativePaths: [`src/${file}`],
+          connectedAtMs: 1,
+        })),
+      });
+    }
+    const requests = provider(["write", "uncited", "repair-write", "answer"]);
+    const result = await handleGroundedAsk(
+      context({
+        chatId: f.chatId,
+        content: "Explain Feature and add the requested Jira comment.",
+        modelId: MODEL,
+      }),
+      f.deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect.soft(requests[2]?.includes('"tools":')).toBe(false);
+    expect.soft(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+    expect(requests).toHaveLength(3);
+    expect(requests[0]).toContain('"tools":');
+    expect(requests[1]).toContain('"tools":');
+    expect(requests[2]).not.toContain('"tools":');
+    expect(requests[2]).not.toContain('"role":"tool"');
+    expect(outputCap(requests[2] ?? "{}")).toBeLessThan(outputCap(requests[1] ?? "{}"));
+    expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+    expect((result.body as GroundedAnswer).content).toContain("Feature returns true.");
+    const exchanges = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges ?? [];
+    expect(exchanges.filter((exchange) => exchange.call.name === "jira_comment")).toHaveLength(1);
+    const raw = readPersistedActivityLog(dirname(f.deps.uiDbPath ?? ""));
+    const line = persistedActivityLogLines(raw, "search.connected-context.answer-details").at(-1);
+    expect(line).toBeDefined();
+    expect(
+      expectRegisteredActivityLogLine("search.connected-context.answer-details", line ?? ""),
+    ).toMatchObject({ citationRepairDisposition: "failed" });
+    expect(line).not.toContain("Changed citation repair comment");
+    expect(line).not.toContain("Feature");
+    expect(analyzeLogText(raw).evidence.classification).toBe("supported");
+  },
+);
 
 it("dispatches the one steered repair of a tool round that exhausted its output budget", async () => {
   const f = runtime();

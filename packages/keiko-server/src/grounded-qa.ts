@@ -21,6 +21,7 @@ import {
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
 import {
   callGroundedSynthesisModel,
+  type GroundedSynthesisPurpose,
   requiresObservedToolResult,
 } from "./grounded-plural-synthesis.js";
 import {
@@ -1687,6 +1688,7 @@ function groundedPromptBuilder(options?: GroundedGatewayPromptOptions): Grounded
 }
 
 interface GroundedGatewayAnswerContext {
+  readonly purpose?: GroundedSynthesisPurpose | undefined;
   readonly userMessageId: string | undefined;
   readonly assistantReferences: NonNullable<OrchestratorInput["assistantReferents"]>;
   readonly synthesis: GroundedSynthesisCallBudget;
@@ -1731,7 +1733,7 @@ function createGatewayAnswerer(
     answer: (question, pack, options) => gatewayGroundedAnswer(ctx, question, pack, options ?? {}),
     repair: (question, pack, original, options) =>
       gatewayGroundedAnswer(
-        ctx,
+        { ...ctx, purpose: "citation-repair" },
         `${question}\n\n${buildCitationRepairPrompt(original)}`,
         pack,
         options,
@@ -1937,6 +1939,7 @@ async function dispatchGroundedSynthesis(
       tracker,
       ctx.deps.chatToolTurn,
       requiresObservedToolResult(ctx.deps, sent.sentReferenceCount),
+      { purpose: ctx.purpose },
     );
     ctx.synthesis.recordCompleted();
     tracker.settleFallback(promptTokens, response.usage);
