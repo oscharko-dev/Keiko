@@ -14674,6 +14674,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      blockedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       ageMs: {
         type: "integer",
         dataClass: "duration",

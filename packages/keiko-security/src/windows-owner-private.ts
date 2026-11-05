@@ -305,10 +305,11 @@ function currentUserSid(runner: WindowsLocalVolumeRunner, whoami: string): strin
 }
 
 /**
- * Replaces the file's DACL with a protected one granting full control to the current user, SYSTEM
- * and Administrators only, so a private file Keiko writes does not inherit a profile or drive ACL
- * that lets other accounts modify it. icacls receives SIDs only and is judged by its exit status.
- * Callers protect a file they just created in their own directory and still verify it on read.
+ * Replaces the DACL of a file or directory with a protected one granting full control to the current
+ * user, SYSTEM and Administrators only, so a private path Keiko writes does not inherit a profile or
+ * drive ACL that lets other accounts reach it. icacls receives SIDs only and is judged by its exit
+ * status. Callers protect a path they just created in their own directory and still verify a file on
+ * read. A directory's new DACL is not inheritable, so each file below it is protected itself.
  */
 export function protectWindowsOwnerPrivateFile(
   path: string,

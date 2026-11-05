@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "862143d204dc76fb08159bcff5fb92ae76941b997fc250522f2c3742f215a21a",
+    "catalogDigest": "60d89364430df0499e518ea728fa5813f03725eeef97292f373a04130653fa99",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -15301,6 +15301,11 @@
             "dataClass": "count",
             "required": false
           },
+          "blockedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "ageMs": {
             "type": "integer",
             "dataClass": "duration",
@@ -15327,8 +15332,8 @@
         "failureClasses": ["coding-runtime-session-continuity"],
         "proofIds": ["coding-runtime.session-continuity.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:216",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:362"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:217",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:366"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39139,7 +39144,7 @@
         "registrationSite": "packages/keiko-security/src/windows-owner-private.ts:41",
         "emitterSites": [
           "packages/keiko-security/src/windows-owner-private.ts:269",
-          "packages/keiko-security/src/windows-owner-private.ts:341"
+          "packages/keiko-security/src/windows-owner-private.ts:342"
         ]
       },
       {
@@ -71274,6 +71279,12 @@
                   "name": "auditCheck",
                   "type": "string",
                   "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "blockedCount",
+                  "type": "integer",
+                  "dataClass": "count",
                   "required": false
                 },
                 {
@@ -109985,7 +109996,7 @@
     {
       "op": "coding-runtime.session-continuity",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:219",
+      "site": "packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:220",
       "package": "keiko-server"
     },
     {

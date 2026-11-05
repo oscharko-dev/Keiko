@@ -526,6 +526,7 @@ function attemptRetain(
         messageCount: result.messageCount,
         entryCount: result.entryCount,
         prunedCount: result.prunedCount,
+        blockedCount: result.blockedCount,
       });
       return;
     }

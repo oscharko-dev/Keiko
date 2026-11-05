@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -1002,7 +1003,14 @@ describe("pruning the retained entries", () => {
 
     const pruned = f.store.prune((taskId) => taskId !== "task-orphan");
 
-    expect(pruned).toEqual({ expired: 0, orphaned: 1, invalid: 2, quota: 0, entryCount: 1 });
+    expect(pruned).toEqual({
+      expired: 0,
+      orphaned: 1,
+      invalid: 2,
+      quota: 0,
+      blocked: 0,
+      entryCount: 1,
+    });
     expect(entryNames(f)).toEqual(["not-ours", retainedSessionKey("task-live")].sort());
   });
 
@@ -1044,6 +1052,7 @@ describe("pruning the retained entries", () => {
       orphaned: 0,
       invalid: 0,
       quota: 0,
+      blocked: 0,
       entryCount: 0,
     });
   });
@@ -1080,5 +1089,223 @@ describe("auditing a database directly", () => {
         version: VERSION,
       }),
     ).toEqual({ ok: false, reason: "schema-unknown", check: "audit-unreadable" });
+  });
+});
+
+// Node's mode bits say nothing on Windows, so the retained state is judged by its real DACL. The
+// fixture grants the built-in Users group inherited read access first: without that, a profile's
+// usual owner-only inheritance would satisfy this proof without Keiko doing anything (#4068).
+describe.runIf(WINDOWS_HOST)("retained session privacy on the Windows DACL", () => {
+  const BROAD_READERS = ["BU", "WD", "AU"];
+
+  function grantInheritedRead(path: string): void {
+    execFileSync("icacls", [path, "/grant", "*S-1-5-32-545:(OI)(CI)(RX)"], { stdio: "ignore" });
+  }
+
+  function sddl(path: string): string {
+    return execFileSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "(Get-Acl -LiteralPath $env:KEIKO_ACL_PATH).Sddl",
+      ],
+      { encoding: "utf8", env: { ...process.env, KEIKO_ACL_PATH: path } },
+    ).trim();
+  }
+
+  function broadReaders(path: string): readonly string[] {
+    const aces = [...sddl(path).matchAll(/(A;[^;]*;[^;]*;;;([A-Z]{2}|S-[d-]+))/gu)];
+    return aces
+      .map((ace) => ace[2] ?? "")
+      .filter((sid) => BROAD_READERS.includes(sid) || sid === "S-1-5-32-545");
+  }
+
+  it("denies other accounts the retained entry below a broadly readable parent", () => {
+    const f = fixture();
+    grantInheritedRead(f.root);
+
+    expect(retain(f)).toMatchObject({ ok: true });
+
+    const entry = entryDirectory(f);
+    for (const path of [entry, join(entry, "opencode.db"), join(entry, "manifest.json")]) {
+      expect({ path: path.slice(entry.length), readers: broadReaders(path) }).toEqual({
+        path: path.slice(entry.length),
+        readers: [],
+      });
+    }
+  });
+
+  it("denies other accounts the checked-out copy below a broadly readable parent", () => {
+    const f = fixture();
+    grantInheritedRead(f.root);
+    expect(retain(f)).toMatchObject({ ok: true });
+
+    const { destination, result } = checkout(f);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(broadReaders(destination)).toEqual([]);
+  });
+});
+
+// The runtime's SQLite connection shares its file for reading and writing but not for deletion, so
+// a held connection is what a lingering runtime, a backup or a scanner looks like on Windows, where
+// neither the file nor a directory above it can then be moved or removed (#4068).
+describe.runIf(WINDOWS_HOST)("retained session entries a process holds open on Windows", () => {
+  function holding<Result>(f: Fixture, taskId: string, action: () => Result): Result {
+    const held = new DatabaseSync(join(entryDirectory(f, taskId), "opencode.db"), {
+      readOnly: true,
+    });
+    try {
+      expect(held.prepare("SELECT count(*) AS tables FROM sqlite_schema").get()).toMatchObject({
+        tables: expect.any(Number) as number,
+      });
+      return action();
+    } finally {
+      held.close();
+    }
+  }
+
+  it("keeps the previous entry and leaves no staging behind when it cannot be replaced", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    const previous = sha256(join(entryDirectory(f), "opencode.db"));
+
+    expect(() => holding(f, "task-1", () => retain(f))).toThrow(
+      expect.objectContaining({ code: expect.stringMatching(/^(EPERM|EBUSY|EACCES)$/u) as string }),
+    );
+
+    expect(entryNames(f)).toEqual([retainedSessionKey("task-1")]);
+    expect(sha256(join(entryDirectory(f), "opencode.db"))).toBe(previous);
+    expect(checkout(f).result).toMatchObject({ ok: true, messageCount: 3 });
+    expect(retain(f)).toMatchObject({ ok: true, messageCount: 3 });
+  });
+
+  it("reports a published retain as retained when pruning another entry is blocked", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    f.clock.value += RETAINED_SESSION_LIMITS.maxAgeMs + 1;
+
+    const result = holding(f, "task-1", () => retain(f, { taskId: "task-2" }));
+
+    expect(result).toMatchObject({ ok: true, messageCount: 3 });
+    expect(entryNames(f)).toContain(retainedSessionKey("task-2"));
+    expect(checkout(f, { taskId: "task-2" }).result).toMatchObject({ ok: true });
+  });
+
+  it("still prunes every other entry and retries the held one on the next pass", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    expect(retain(f, { taskId: "task-2" })).toMatchObject({ ok: true });
+    f.clock.value += RETAINED_SESSION_LIMITS.maxAgeMs + 1;
+
+    holding(f, "task-1", () => f.store.prune());
+
+    expect(existsSync(entryDirectory(f, "task-2"))).toBe(false);
+    f.store.prune();
+    expect(entryNames(f)).toEqual([]);
+  });
+
+  it("records a startup pruning that had to leave a held entry in place", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    mkdirSync(join(f.root, "coding-runtime"));
+    renameSync(f.storeRoot, retainedSessionRoot(f.root));
+    const held = new DatabaseSync(
+      join(retainedSessionRoot(f.root), retainedSessionKey("task-1"), "opencode.db"),
+      {
+        readOnly: true,
+      },
+    );
+    const log = createBufferedServerLogSink();
+
+    try {
+      // No Coding History holds the task, so the startup pruning wants the entry gone.
+      createStateCodingSessionContinuity({
+        stateDir: f.root,
+        retention: undefined,
+        history: { get: () => undefined, forRun: () => undefined },
+        activityLog: log,
+      });
+    } finally {
+      held.close();
+    }
+
+    expect(log.events).toHaveLength(1);
+    const [event] = log.events;
+    expect(event).toMatchObject({
+      op: "coding-runtime.session-continuity",
+      correlationId: "session-retention-startup",
+      extra: { action: "prune", outcome: "pruned", prunedCount: 0, blockedCount: 1 },
+    });
+    expectActivityLogProof(
+      "coding-runtime.session-continuity.emitted-line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(JSON.stringify(event)).not.toContain(f.root);
+  });
+
+  it("returns the refusal, not a filesystem error, when a refused entry cannot be removed yet", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    f.clock.value += RETAINED_SESSION_LIMITS.maxAgeMs + 1;
+
+    const { result } = holding(f, "task-1", () => checkout(f));
+
+    expect(result).toEqual({ ok: false, reason: "expired", removed: false });
+  });
+});
+
+describe("a retained path that cannot be made private", () => {
+  function refusingStore(f: Fixture, refuseFrom: number): RetainedSessionStore {
+    let calls = 0;
+    return createRetainedSessionStore({
+      root: f.storeRoot,
+      now: () => f.clock.value,
+      protectPrivatePath: () => {
+        calls += 1;
+        if (calls >= refuseFrom) throw new Error("not-private");
+      },
+    });
+  }
+
+  it.each([
+    ["the staging directory", 1],
+    ["the database copy", 2],
+    ["the manifest", 3],
+  ])("refuses the retain at %s and keeps the previous entry", (_step, refuseFrom) => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    const previous = sha256(join(entryDirectory(f), "opencode.db"));
+
+    expect(() =>
+      refusingStore(f, refuseFrom).retain({
+        binding: binding(),
+        sessionId: SESSION_ID,
+        directory: WORKSPACE,
+        sourceDatabase: f.source,
+      }),
+    ).toThrow("not-private");
+
+    expect(entryNames(f)).toEqual([retainedSessionKey("task-1")]);
+    expect(sha256(join(entryDirectory(f), "opencode.db"))).toBe(previous);
+  });
+
+  it("refuses the checkout and leaves no unprotected copy behind", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    const destination = join(f.root, "restored.db");
+
+    expect(() =>
+      refusingStore(f, 1).checkout({
+        binding: binding(),
+        directory: WORKSPACE,
+        destinationDatabase: destination,
+      }),
+    ).toThrow("not-private");
+
+    expect(existsSync(destination)).toBe(false);
+    expect(entryNames(f)).toEqual([retainedSessionKey("task-1")]);
   });
 });

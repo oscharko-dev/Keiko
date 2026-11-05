@@ -72,6 +72,12 @@ rename; a same-volume rename keeps the descriptor. `icacls` receives SIDs only (
 from `whoami.exe /user`, whose SID column is not localized) and is judged by exit status. A file
 that cannot be protected is not written. POSIX keeps `0o600`.
 
+The retained session store (`opencodeSessionRetention.ts`) follows the same rule (#4068, W9). It
+protects the staging directory, the database copy, the manifest and a checked-out copy, and reads
+each file back through the verdict above. A path that cannot be protected or verified refuses the
+retain or checkout: the failure propagates through the existing `coding-runtime.session-continuity`
+failure path, the previous entry stays and no staging or copy remains.
+
 ## Consequences
 
 - MCP, native plugins, remote skills, global configuration and external instruction sources become
@@ -81,6 +87,8 @@ that cannot be protected is not written. POSIX keeps `0o600`.
   `owner-private-file-not-owner-private` on Windows).
 - Each read set costs one PowerShell process (about 0.2 s warm, 1–2 s cold on the qualified host);
   writes cost two short system-binary processes. Reads are rare (registry and launch-time inputs).
+  A retain or checkout runs several of these synchronously: about 3 s on the qualified Windows 11
+  host, measured in the test suite. It runs when a run settles or resumes, not per turn.
 - Enterprise hosts that block PowerShell P/Invoke cannot use these features; the refusal is
   explicit and closed.
 - Other owner-trust checks (trusted toolchain executables, Keiko-created state reported as

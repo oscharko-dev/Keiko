@@ -21,6 +21,12 @@ import {
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import {
+  inspectWindowsOwnerPrivateFiles,
+  protectWindowsOwnerPrivateFile,
+  windowsOwnerPrivateVerdict,
+} from "@oscharko-dev/keiko-security/windows-owner-private";
+
 import { OPENCODE_PERSISTENCE_SCHEMAS } from "./opencodePersistenceContract.js";
 
 /**
@@ -142,6 +148,8 @@ export type RetainResult =
       readonly messageCount: number;
       readonly entryCount: number;
       readonly prunedCount: number;
+      /** Entries a pruning wanted gone but a process holds open; the next pruning retries them. */
+      readonly blockedCount: number;
     }
   | {
       readonly ok: false;
@@ -171,6 +179,8 @@ export interface PruneResult {
   readonly orphaned: number;
   readonly invalid: number;
   readonly quota: number;
+  /** Entries left in place because a process holds them open; the next pruning retries them. */
+  readonly blocked: number;
   readonly entryCount: number;
 }
 
@@ -216,6 +226,8 @@ export interface RetainedSessionStoreOptions {
    * entry of a task that does not.
    */
   readonly isLiveTask?: ((taskId: string) => boolean) | undefined;
+  /** Makes one retained path private to this account. Throwing refuses the retain or checkout. */
+  readonly protectPrivatePath?: ((path: string) => void) | undefined;
 }
 
 export function retainedSessionKey(taskId: string): string {
@@ -255,11 +267,13 @@ class Store {
   private readonly now: () => number;
   private readonly limits: RetainedSessionLimits;
   private readonly isLiveTask: ((taskId: string) => boolean) | undefined;
+  private readonly protectPrivatePath: (path: string) => void;
 
   public constructor(options: RetainedSessionStoreOptions) {
     this.root = options.root;
     this.now = options.now ?? Date.now;
     this.isLiveTask = options.isLiveTask;
+    this.protectPrivatePath = options.protectPrivatePath ?? protectPrivatePathOnWindows;
     this.limits = { ...RETAINED_SESSION_LIMITS, ...options.limits };
   }
 
@@ -280,6 +294,7 @@ class Store {
         messageCount: staged.messageCount,
         entryCount: pruned.entryCount,
         prunedCount: pruned.expired + pruned.orphaned + pruned.invalid + pruned.quota,
+        blockedCount: pruned.blocked,
       };
     } finally {
       // A refusal is a result; a filesystem or database failure propagates to the caller, which owns
@@ -319,12 +334,12 @@ class Store {
   public prune(
     isLiveTask: ((taskId: string) => boolean) | undefined = this.isLiveTask,
   ): PruneResult {
-    const counts = { expired: 0, orphaned: 0, invalid: 0, quota: 0 };
+    const counts = { expired: 0, orphaned: 0, invalid: 0, quota: 0, blocked: 0 };
     if (this.existingRoot() === undefined) return { ...counts, entryCount: 0 };
     const entries: PrunableEntry[] = [];
     for (const name of readdirSync(this.root)) {
       if (INTERRUPTED_ENTRY.test(name)) {
-        rmSync(join(this.root, name), { recursive: true, force: true });
+        if (!removeUnlessHeld(join(this.root, name))) counts.blocked += 1;
         continue;
       }
       // A name Keiko did not write is not Keiko's to delete.
@@ -333,7 +348,7 @@ class Store {
       if (kept !== undefined) entries.push(kept);
     }
     const remaining = this.evictOverQuota(entries, counts);
-    return { ...counts, entryCount: remaining };
+    return { ...counts, entryCount: remaining + counts.blocked };
   }
 
   // The steps of a retain, in the order that makes a refusal cost nothing: the compacted copy is
@@ -346,10 +361,12 @@ class Store {
     if (size === undefined) return { ok: false, reason: "database-missing" };
     if (size > this.limits.maxDatabaseBytes) return { ok: false, reason: "database-oversized" };
     mkdirSync(staging, { mode: 0o700 });
+    this.protectPrivatePath(staging);
     const database = join(staging, DATABASE_FILE);
     if (compactCopy(input.sourceDatabase, database) === "unreadable") {
       return { ok: false, reason: "schema-unknown", check: "copy-unreadable" };
     }
+    this.protectPrivatePath(database);
     const audit = auditDatabase(database, {
       sessionId: input.sessionId,
       directory: input.directory,
@@ -372,6 +389,7 @@ class Store {
       retainedAtMs: this.now(),
     };
     writeFileSync(join(staging, MANIFEST_FILE), JSON.stringify(manifest), { mode: 0o600 });
+    this.protectPrivatePath(join(staging, MANIFEST_FILE));
     return { ok: true, databaseBytes: hashed.bytes, messageCount: audit.messageCount };
   }
 
@@ -385,7 +403,8 @@ class Store {
       renameSync(entry, aside);
     }
     renameSync(staging, entry);
-    if (aside !== undefined) rmSync(aside, { recursive: true, force: true });
+    // The new entry is published; a replaced one a process still holds is an interrupted leftover.
+    if (aside !== undefined) removeUnlessHeld(aside);
   }
 
   private copyOut(
@@ -413,6 +432,7 @@ class Store {
     input: Parameters<RetainedSessionStore["checkout"]>[0],
   ): CheckoutResult {
     chmodSync(input.destinationDatabase, 0o600);
+    this.protectPrivatePath(input.destinationDatabase);
     const verdict = copyVerdict(manifest, input);
     if (typeof verdict === "string") {
       rmSync(input.destinationDatabase, { force: true });
@@ -432,8 +452,8 @@ class Store {
   // A refusal that cannot become valid removes the entry; one that depends on the asking run only
   // (a smaller window) leaves it for a run that can take it.
   private refuse(taskId: string, reason: RetentionRefusal): CheckoutResult {
-    const removed = reason !== "window-shrunk";
-    if (removed) this.remove(taskId);
+    const removed =
+      reason !== "window-shrunk" && removeUnlessHeld(join(this.root, retainedSessionKey(taskId)));
     return { ok: false, reason, removed };
   }
 
@@ -493,7 +513,7 @@ class Store {
   private pruneEntry(
     name: string,
     isLiveTask: ((taskId: string) => boolean) | undefined,
-    counts: { expired: number; orphaned: number; invalid: number },
+    counts: { expired: number; orphaned: number; invalid: number; blocked: number },
   ): PrunableEntry | undefined {
     const path = join(this.root, name);
     const manifest = this.readManifest(path);
@@ -501,8 +521,8 @@ class Store {
     if (verdict === "kept" && manifest !== undefined) {
       return { path, bytes: manifest.databaseBytes, retainedAtMs: manifest.retainedAtMs };
     }
-    rmSync(path, { recursive: true, force: true });
-    if (verdict !== "kept") counts[verdict] += 1;
+    if (!removeUnlessHeld(path)) counts.blocked += 1;
+    else if (verdict !== "kept") counts[verdict] += 1;
     return undefined;
   }
 
@@ -516,7 +536,10 @@ class Store {
     return isLiveTask !== undefined && !isLiveTask(manifest.taskId) ? "orphaned" : "kept";
   }
 
-  private evictOverQuota(entries: PrunableEntry[], counts: { quota: number }): number {
+  private evictOverQuota(
+    entries: PrunableEntry[],
+    counts: { quota: number; blocked: number },
+  ): number {
     entries.sort((a, b) => a.retainedAtMs - b.retainedAtMs);
     let total = entries.reduce((sum, entry) => sum + entry.bytes, 0);
     while (
@@ -525,9 +548,9 @@ class Store {
     ) {
       const oldest = entries.shift();
       if (oldest === undefined) break;
-      rmSync(oldest.path, { recursive: true, force: true });
       total -= oldest.bytes;
-      counts.quota += 1;
+      if (removeUnlessHeld(oldest.path)) counts.quota += 1;
+      else counts.blocked += 1;
     }
     return entries.length;
   }
@@ -645,6 +668,39 @@ function fileSize(path: string, kind: "source" | "retained" = "source"): number 
     if (isAbsentPath(error)) return undefined;
     throw error;
   }
+}
+
+/**
+ * On Windows a file a process holds open cannot be removed, nor can a directory above it. That is a
+ * state to retry, counted by the caller and written to the Activity Log; any other failure, and any
+ * failure on a host whose removal does not depend on open handles, keeps its own cause.
+ */
+function removeUnlessHeld(path: string): boolean {
+  try {
+    rmSync(path, { recursive: true, force: true });
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const held = code === "EPERM" || code === "EBUSY" || code === "EACCES" || code === "ENOTEMPTY";
+    if (process.platform === "win32" && held) return false;
+    throw error;
+  }
+}
+
+/**
+ * Windows reports synthesized mode bits, so `chmod` keeps nobody out and a retained conversation
+ * would inherit whatever its parent directory grants. The DACL is replaced, and a file is read back
+ * through the shared owner-private verdict. A failure propagates and refuses the operation.
+ */
+function protectPrivatePathOnWindows(path: string): void {
+  if (process.platform !== "win32") return;
+  protectWindowsOwnerPrivateFile(path);
+  const opened = statSync(path, { bigint: true });
+  if (!opened.isFile()) return;
+  const inspection = inspectWindowsOwnerPrivateFiles([path]);
+  const facts = inspection.files[0] ?? { kind: "unavailable" as const };
+  const verdict = windowsOwnerPrivateVerdict(facts, inspection.principal, opened);
+  if (verdict.kind !== "owner-private") throw new Error("retained-session-not-owner-private");
 }
 
 function isAbsentPath(error: unknown): boolean {
