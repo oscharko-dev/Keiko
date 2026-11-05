@@ -34,8 +34,8 @@ const WATCHED_SOURCES = Object.freeze([
 ]);
 
 function compareVersions(left, right) {
-  const a = left.split(".").map(Number);
-  const b = right.split(".").map(Number);
+  const a = left.split(".").map((part) => Number(part));
+  const b = right.split(".").map((part) => Number(part));
   return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
 }
 

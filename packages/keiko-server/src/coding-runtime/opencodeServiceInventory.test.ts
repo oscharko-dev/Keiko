@@ -371,9 +371,13 @@ describe("OpenCode upgrade compatibility diff", () => {
     const { operations } = inventory(PREVIOUS_PIN_VERSION);
     const admitted: ReadonlySet<string> = new Set(OPENCODE_V2_APPROVED_ENDPOINTS);
     const before = operations.filter((operation) => admitted.has(endpoint(operation)));
-    const now: ReadonlySet<string> = new Set(CURRENT.operations.map(endpoint));
+    const now: ReadonlySet<string> = new Set(
+      CURRENT.operations.map((operation) => endpoint(operation)),
+    );
     expect(before.length).toBeGreaterThan(0);
-    expect(before.map(endpoint).filter((name) => !now.has(name))).toEqual([]);
+    expect(before.map((operation) => endpoint(operation)).filter((name) => !now.has(name))).toEqual(
+      [],
+    );
   });
 });
 

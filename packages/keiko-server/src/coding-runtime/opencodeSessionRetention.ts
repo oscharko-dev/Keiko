@@ -778,11 +778,13 @@ function refusalForClassifiedRows(
   const hasRows = ([name]: readonly [string, unknown]): boolean =>
     rowCount(database, `SELECT COUNT(*) AS n FROM "${name}"`) !== 0;
   for (const [tableClass, reason] of CLASS_REFUSALS) {
-    if (entries.filter((entry) => entry[1] === tableClass).some(hasRows)) {
+    if (entries.filter((entry) => entry[1] === tableClass).some((entry) => hasRows(entry))) {
       return { ok: false, reason };
     }
   }
-  const unknown = entries.filter((entry) => entry[1] === "unknown-state").find(hasRows);
+  const unknown = entries
+    .filter((entry) => entry[1] === "unknown-state")
+    .find((entry) => hasRows(entry));
   if (unknown === undefined) return undefined;
   return {
     ok: false,
