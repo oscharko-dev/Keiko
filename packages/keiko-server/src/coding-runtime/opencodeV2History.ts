@@ -237,44 +237,17 @@ const ASSISTANT_FIELDS = [
 
 const COMPACTION_ENVELOPE_FIELDS = ["id", "metadata", "time", "type", "status", "reason"];
 
-type CompactionLayout = "current" | "legacy";
-
-// `Session.Message.Compaction.{Running,Completed,Failed}`, per runtime layout and status. The
-// current layout is OpenCode 2.1.4: the provider replay state is `native` and no tail is reported.
-// The legacy layout is the 2.0.10 npm runtime's: it carried the retained tail text (`recent`) and
-// its provider state (`providerState`, `providerContext`). Summary, error and provider bodies are
-// checked for shape only and never projected.
-const COMPACTION_LAYOUT_FIELDS: Readonly<
-  Record<CompactionLayout, Readonly<Record<string, readonly string[]>>>
-> = {
-  current: {
-    running: [...COMPACTION_ENVELOPE_FIELDS, "summary"],
-    completed: [...COMPACTION_ENVELOPE_FIELDS, "summary", "model", "native", "cost", "tokens"],
-    failed: [...COMPACTION_ENVELOPE_FIELDS, "error", "cost", "tokens"],
-  },
-  legacy: {
-    running: [...COMPACTION_ENVELOPE_FIELDS, "summary", "recent"],
-    completed: [
-      ...COMPACTION_ENVELOPE_FIELDS,
-      "summary",
-      "recent",
-      "model",
-      "providerState",
-      "providerContext",
-      "cost",
-      "tokens",
-    ],
-    failed: [...COMPACTION_ENVELOPE_FIELDS, "error", "cost", "tokens"],
-  },
+// `Session.Message.Compaction.{Running,Completed,Failed}`, per status. The provider replay state is
+// `native`. Summary, error and provider bodies are checked for shape only and never projected.
+const COMPACTION_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  running: [...COMPACTION_ENVELOPE_FIELDS, "summary"],
+  completed: [...COMPACTION_ENVELOPE_FIELDS, "summary", "model", "native", "cost", "tokens"],
+  failed: [...COMPACTION_ENVELOPE_FIELDS, "error", "cost", "tokens"],
 };
 
 const MESSAGE_FIELDS: Readonly<Record<string, FieldLayouts>> = {
   user: [["id", "metadata", "time", "text", "files", "agents", "skills", "type"]],
-  assistant: [
-    // OpenCode 2.1.4 renamed the provider replay state of a message to `native`.
-    [...ASSISTANT_FIELDS, "native"],
-    [...ASSISTANT_FIELDS, "providerState"],
-  ],
+  assistant: [[...ASSISTANT_FIELDS, "native"]],
   idle: [["id", "metadata", "time", "type", "outcome", "error"]],
   system: [["id", "metadata", "time", "type", "text", "description"]],
   synthetic: [["id", "metadata", "time", "type", "text", "description"]],
@@ -285,17 +258,9 @@ const MESSAGE_FIELDS: Readonly<Record<string, FieldLayouts>> = {
   "location-switched": [
     ["id", "metadata", "time", "type", "projectID", "subpath", "location", "previous"],
   ],
-  // The union of every layout and status: the per-status layouts are enforced where the message is
-  // decoded (`compactionLayout`), so an unknown field is named here before any layout is chosen.
-  compaction: [
-    [
-      ...new Set(
-        Object.values(COMPACTION_LAYOUT_FIELDS).flatMap((statuses) =>
-          Object.values(statuses).flat(),
-        ),
-      ),
-    ],
-  ],
+  // The union of every status: the fields of each are enforced where the message is decoded
+  // (`compactionFits`), so an unknown field is named here before its status is read.
+  compaction: [[...new Set(Object.values(COMPACTION_FIELDS).flat())]],
 };
 
 const STRUCTURED_ERROR_FIELDS: ReadonlySet<string> = new Set([
@@ -307,10 +272,9 @@ const STRUCTURED_ERROR_FIELDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * OpenCode 2.1.4 ends a failed turn with an idle message carrying `Session.StructuredError`
- * (`type`, `message`, optional HTTP `status`, `response.body`, `retryAfterMs`); 2.0.10 had no such
- * field. The shape is checked strictly, and nothing of it is projected: the terminal failure stays
- * body-free (#3897 review).
+ * The runtime ends a failed turn with an idle message carrying `Session.StructuredError` (`type`,
+ * `message`, optional HTTP `status`, `response.body`, `retryAfterMs`). The shape is checked
+ * strictly, and nothing of it is projected: the terminal failure stays body-free (#3897 review).
  */
 function assertIdleErrorShape(value: unknown): void {
   if (value !== undefined && !isStructuredError(value))
@@ -319,8 +283,7 @@ function assertIdleErrorShape(value: unknown): void {
 
 /**
  * `Session.StructuredError`, the one error shape every current message uses (a failed compaction
- * carries it as well as an idle message). 2.0.10's error was the `type`, `message` and `status`
- * subset of it, so one check serves both layouts.
+ * carries it as well as an idle message).
  */
 function isStructuredError(value: unknown): boolean {
   const error = record(value);
@@ -878,31 +841,27 @@ function toolOrPlanSignal(
 }
 
 /**
- * The layout a compaction message fits, strictly: its fields all belong to its status in that layout
- * and the fields the decoder reads are present with their schema types. `undefined` when no admitted
- * layout fits, so a message mixing the two, or missing a required field, is refused.
+ * Whether a compaction message fits its status, strictly: its fields all belong to that status and
+ * the fields the decoder reads are present with their schema types.
  */
-function compactionLayout(
-  message: Readonly<Record<string, unknown>>,
-): CompactionLayout | undefined {
+function compactionFits(message: Readonly<Record<string, unknown>>): boolean {
   const { status, reason } = message;
-  if (typeof status !== "string" || (reason !== "auto" && reason !== "manual")) return undefined;
-  const layouts: readonly CompactionLayout[] = ["current", "legacy"];
-  return layouts.find((layout) => compactionFitsLayout(message, status, layout));
-}
-
-function compactionFitsLayout(
-  message: Readonly<Record<string, unknown>>,
-  status: string,
-  layout: CompactionLayout,
-): boolean {
-  const allowed = ownEntry(COMPACTION_LAYOUT_FIELDS[layout], status);
+  if (typeof status !== "string" || (reason !== "auto" && reason !== "manual")) return false;
+  const allowed = ownEntry(COMPACTION_FIELDS, status);
   if (allowed === undefined || Object.keys(message).some((key) => !allowed.includes(key)))
     return false;
-  if (status === "failed") return isStructuredError(message.error);
+  return status === "failed"
+    ? isStructuredError(message.error)
+    : typeof message.summary === "string";
+}
+
+// A summary names the messages it keeps verbatim with `metadata.keepID`; one written before that
+// reference stored their text in `metadata.recent`. Only the fact is projected, never either value.
+function compactionKeptMessages(message: Readonly<Record<string, unknown>>): boolean {
+  const metadata = record(message.metadata);
   return (
-    typeof message.summary === "string" &&
-    (layout === "current" || typeof message.recent === "string")
+    typeof metadata?.keepID === "string" ||
+    (typeof metadata?.recent === "string" && metadata.recent !== "")
   );
 }
 
@@ -910,8 +869,7 @@ function nativeCompactionActivity(
   message: Readonly<Record<string, unknown>>,
   id: string,
 ): OpenCodeCompactionActivity {
-  const layout = compactionLayout(message);
-  if (layout === undefined) throw new OpenCodeV2HistoryError("reason=compaction-shape-invalid");
+  if (!compactionFits(message)) throw new OpenCodeV2HistoryError("reason=compaction-shape-invalid");
   const compactionIdSha256 = createHash("sha256").update(id, "utf8").digest("hex");
   if (message.status === "failed") {
     return {
@@ -921,14 +879,20 @@ function nativeCompactionActivity(
       finishReason: "error",
     };
   }
-  if (message.status === "completed") return { event: "completed", compactionIdSha256 };
-  const auto = message.reason === "auto";
-  // Only the 2.0.10 runtime reports the tail it retained (`recent`, empty until it chose one);
-  // 2.1.4 reports none, and a tail it did not report is not invented.
-  if (layout === "legacy" && message.recent !== "") {
-    return { event: "tail-retained", compactionIdSha256, auto, retainedTail: true };
+  if (message.status === "completed") {
+    return {
+      event: "completed",
+      compactionIdSha256,
+      retainedTail: compactionKeptMessages(message),
+    };
   }
-  return { event: "started", compactionIdSha256, auto, retainedTail: false };
+  // A running compaction has kept nothing yet: the completed one says what it kept.
+  return {
+    event: "started",
+    compactionIdSha256,
+    auto: message.reason === "auto",
+    retainedTail: false,
+  };
 }
 
 function nativeCompactionCandidate(

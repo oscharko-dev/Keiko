@@ -158,7 +158,7 @@ it to the first 800 lines and 16,384 bytes, with one explicit truncation line wh
 carries the whole masked file, up to the helper's 1 MiB ceiling and half the model's input window.
 
 - **Native profile.** The copy is written to the run's private configuration as the pinned
-  2.1.4 producer's global instruction file, which its own instruction plugin loads and watches.
+  producer's global instruction file, which its own instruction plugin loads and watches.
   Keiko refreshes the copy before every turn, so an edit, a file `init` creates and a removal reach
   the next model call. The producer's `read` still loads nested `AGENTS.md` files.
 - **Mapped profiles.** The bounded text rides in the first message, nonce-framed so it cannot close

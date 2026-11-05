@@ -60,13 +60,13 @@ const HELPER = "helper-binary";
 function approvalFor(): NpmLaneRuntimeApproval {
   return {
     packageName: PACKAGE_NAME,
-    upstreamVersion: "2.0.10",
+    upstreamVersion: "2.1.4",
     adapterName: "keiko-coding-sidecar",
     adapterVersion: "2",
     executableTreeSha256: sha256(`bin/opencode\0${sha256(EXECUTABLE)}\0`),
     licenseSha256: sha256(LICENSE),
     // The approved version's own producer-derived schema digest (opencodeRuntimeVersions.ts).
-    protocolSchemaSha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
+    protocolSchemaSha256: "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9",
     sbomSha256: sha256(SBOM),
     helperSha256: sha256(HELPER),
     helperSizeBytes: HELPER.length,

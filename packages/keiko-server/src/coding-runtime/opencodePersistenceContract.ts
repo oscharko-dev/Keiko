@@ -1,6 +1,6 @@
 /**
  * The private SQLite schema the pinned OpenCode runtime's own migrations create, derived from the
- * producers: fresh admitted 2.2.5, 2.1.4 and 2.0.10 servers' `opencode.db`, every table (SQLite's internal `sqlite_*` tables
+ * producers: fresh admitted 2.2.5 and 2.1.4 servers' `opencode.db`, every table (SQLite's internal `sqlite_*` tables
  * excepted) with its complete column set. `opencodeNativeSessionResume.real.test.ts` proves that the
  * database of a real settled run still has exactly this schema.
  *
@@ -139,29 +139,6 @@ const OPENCODE_2_1_4_PERSISTENCE_SCHEMA: OpenCodePersistenceSchema = Object.free
   ],
   workspace: ["binding", "created_at", "id", "last_used_at", "provider"],
   worktree: ["directory", "project_id", "strategy", "time_created"],
-});
-
-/**
- * The still-admitted published 2.0.10 runtime has the same table/column contract except for these
- * project columns. Its original 47 migrations predate 2.1.4's time_active/time_archived additions.
- * Both entries are checked against their own real producer by the native session continuity suite.
- */
-const OPENCODE_2_0_10_PERSISTENCE_SCHEMA: OpenCodePersistenceSchema = Object.freeze({
-  ...OPENCODE_2_1_4_PERSISTENCE_SCHEMA,
-  project: [
-    "commands",
-    "icon_color",
-    "icon_url",
-    "icon_url_override",
-    "id",
-    "name",
-    "sandboxes",
-    "time_created",
-    "time_initialized",
-    "time_updated",
-    "vcs",
-    "worktree",
-  ],
 });
 
 /**
@@ -304,12 +281,10 @@ export const OPENCODE_PERSISTENCE_TABLE_CLASSES: Readonly<
 > = Object.freeze({
   "2.2.5": OPENCODE_2_2_5_TABLE_CLASSES,
   "2.1.4": OPENCODE_2_1_4_TABLE_CLASSES,
-  "2.0.10": OPENCODE_2_1_4_TABLE_CLASSES,
 });
 
 export const OPENCODE_PERSISTENCE_SCHEMAS: Readonly<Record<string, OpenCodePersistenceSchema>> =
   Object.freeze({
     "2.2.5": OPENCODE_2_2_5_PERSISTENCE_SCHEMA,
     "2.1.4": OPENCODE_2_1_4_PERSISTENCE_SCHEMA,
-    "2.0.10": OPENCODE_2_0_10_PERSISTENCE_SCHEMA,
   });

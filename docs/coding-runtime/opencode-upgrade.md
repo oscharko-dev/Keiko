@@ -7,8 +7,9 @@ contract, and which evidence proves that the upgrade kept every native capabilit
 ## 1. What an upgrade changes
 
 Every version identity reads from one file, `packages/keiko-contracts/src/opencode-runtime-pins.json`.
-`opencodeRuntimeVersions.test.ts` refuses a restated pin in production code, a test fixture path
-naming the current pin, and comment text naming a pin. Two files state versions on purpose:
+`opencodeRuntimeVersions.test.ts` refuses a quoted version in production code, a test fixture path
+naming the current pin, and the words `pinned <version>` in any source, so a comment recording what
+one version did may name it. Two files state versions on purpose:
 `npmLaneRuntimeApprovals.ts` names what was published, and `opencodePersistenceContract.ts` binds
 each version's database schema.
 

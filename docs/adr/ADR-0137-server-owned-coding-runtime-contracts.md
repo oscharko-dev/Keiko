@@ -122,7 +122,7 @@ override the pinned helper ceiling.
 On the native profile the same read reaches the model through the producer's own
 instruction plugin instead of the first message (#3900 AC3, 2026-10-25). Keiko writes it, under a
 header that labels it repository-authored and untrusted and grants no authority, to `AGENTS.md` in
-the run's private configuration directory: the pinned 2.1.4 runtime's global instruction file,
+the run's private configuration directory: the pinned runtime's global instruction file,
 which the agent cannot write. The producer watches that one slot from launch (a configured
 `instructions` source is watched only when it exists at launch, so it would miss a file created
 during the run), so Keiko refreshes the copy before the launch and before every turn, through the
@@ -162,7 +162,7 @@ omitted and counted. The context line adds per-kind counts (`globalSourceCount`,
 `ancestorSourceCount`, `configuredSourceCount`, `remoteSourceCount`) and the refused and omitted
 counts; a failed discovery or remote pull is its own `refused` line (`sourceKind`) with frames, and
 the root file's copy is kept. `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` disables every
-source. 2.1.4 reads no `CLAUDE.md`.
+source. The pinned runtime reads no `CLAUDE.md`.
 
 An application upgrade may still resolve the immutable npm runtime 1.1.3. Its previously approved
 helper digests remain admitted with their original 64 KiB wire capability; unknown bytes remain
@@ -1012,7 +1012,7 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   synthetic readiness reply never becomes an uncached historical assistant message.
   The Activity Log records `gateway.reasoning-history` states and byte/message counts only.
   The text beside a tool call remains ordinary assistant content and is preserved (#3907 AC3).
-- **Runtime part types require version qualification.** OpenCode's admitted 2.1.4 source
+- **Runtime part types require version qualification.** OpenCode's admitted source
   [converts failed or interrupted reasoning to ordinary text](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/session/runner/to-llm-message.ts#L155).
   The inspected upstream snapshot
   [drops those reasoning parts instead](https://github.com/anomalyco/opencode/blob/008619ae06cd00dc21f60e4bdb29c04a60b07b6b/packages/core/src/session/runner/to-llm-message.ts#L142).
@@ -1197,7 +1197,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
 - **The runtime keeps its own tools, agents and configuration.** The launch configuration of the
   native profile (`opencodeLaunchProfile.ts`) names no ordinary action: it denies only the
   mode-independent `external_directory` escape (admitting the run's own plan directory), keeps
-  `update` and `share` off (a session is never published, and OpenCode 2.1.4 has no share operation;
+  `update` and `share` off (a session is never published, and OpenCode has no share operation;
   the equivalent is the human's local export and import of a task's Coding History, D4), keeps the single `keiko-runtime` provider behind the Model
   Gateway, and enables native snapshots. The producer appends configured rules after each built-in agent's own
   rules and the last match wins, so any configured rule naming an ordinary action would replace an
@@ -1308,7 +1308,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   Linux mount allowlist names no external root yet, so none is admitted there; repository
   references would leave the machine and stay refused.
 - **Web search runs through the search integration the operator admitted (T15, #3903 AC3,
-  PR #4064 review).** The pinned 2.1.4 `websearch` asks the policy for its query and then calls the
+  PR #4064 review).** The pinned `websearch` asks the policy for its query and then calls the
   selected provider of the runtime's websearch service; with no provider selected it waits on the
   user's choice. The generated `keiko.native-delivery` plugin registers Keiko's provider, `keiko`,
   as that service's default (`ctx.websearch`), so the original tool, its permission ask and its
@@ -1436,7 +1436,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   in Ask for approval is allowed without a human and projects as the plan; the control without the
   switch is offered no plan tool and the call is the producer's own error.
 - **Built-in formatters follow the launch mode, and only Full access runs them (#3897, parity row
-  C07).** The pinned 2.1.4 producer runs a built-in formatter (`gofmt`, `rustfmt`, `shfmt`,
+  C07).** The pinned producer runs a built-in formatter (`gofmt`, `rustfmt`, `shfmt`,
   `prettier`, ...) after its own `write` and `edit` as a plain child process of the runtime. No
   permission is evaluated for it, so the policy hook sees the edit and never the formatter, and it
   runs only when the configuration says `formatter: true`; its own default is off. Keiko therefore
@@ -1477,7 +1477,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   configured and refused entry counts).
 - **Repository configuration is data until the operator admits its executable effects (#3903).**
   A first increment loaded the repository's `opencode.json` and `.opencode/` directory like
-  standalone. That is retired. The pinned 2.1.4 producer discovers a project's `opencode.json`,
+  standalone. That is retired. The pinned producer discovers a project's `opencode.json`,
   `.opencode/` agents, commands, skills and `plugins/` modules (and any module an `opencode.json`
   `plugins` entry names) as one layer, imports a plugin module's top-level code and `setup` before
   any permission is evaluated, and merges a project `providers`/`model` entry above the private
@@ -1768,7 +1768,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   refused (`request-conflict`) rather than answered with the receipt of the first, and a receipt
   that names another id is committed as accepted but unreconciled and never retried. A retry that
   arrives after the turn settled is refused with no way to tell whether the first attempt was
-  applied; the log shows its `delivery-unconfirmed` attempt. The pinned 2.1.4 behaviour is proven against the original executable
+  applied; the log shows its `delivery-unconfirmed` attempt. The pinned behaviour is proven against the original executable
   (`opencodeNativePromptInputs.real.test.ts`): `steer` reaches the model with the running turn's
   next step and `queue` after its final answer, both inside one execution, so the one settlement
   Keiko waits for covers them, and a lost acknowledgement followed by a retry of the same request
@@ -1866,7 +1866,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   not fail the stop. The Workbench lists the messages above the composer with Cancel and, for a queued
   one, Send now, and refreshes on the run's revision and on the conversation gaining a message (no
   polling); a failed read is a retryable error, never an empty list.
-- **A turn may run as one of the runtime's slash commands (C02).** The pinned 2.1.4 producer lists its
+- **A turn may run as one of the runtime's slash commands (C02).** The pinned producer lists its
   commands (`GET /api/command`, `command.list`: `init`, guided AGENTS.md setup, and `review`, review
   of the changes, defaulting to the uncommitted ones) and runs one as a turn (`POST
   /api/session/{sessionID}/command`, `session.command`, body `{ name, text, files?, agents?, skills?,
@@ -2556,12 +2556,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     an unknown schema is refused rather than guessed. Because the whole database crosses this
     boundary, its schema is bound to the producer's persistence contract
     (`opencodePersistenceContract.ts`, #3908 AC4): exactly the tables and columns each admitted
-    runtime's own migrations create for the session's runtime version, derived from genuine 2.1.4
-    and 2.0.10 databases and proven against real settled runs
+    runtime's own migrations create for the session's runtime version, derived from genuine
+    databases of the admitted producers and proven against real settled runs
     (`opencodeNativeSessionResume.real.test.ts`, with `KEIKO_OPENCODE_REAL_VERSION` selecting the
-    admitted producer). The still-published 2.0.10 runtime lacks only the two newer project columns
-    `time_active` and `time_archived`; its own schema is admitted without relaxing any state audit
-    or allowing a different runtime version to resume the session. An
+    admitted producer). The pin, schema and history layouts of 2.0.10 were retired once the 2.1.4
+    runtime packages had replaced its published packages (#4271); a different runtime version
+    still cannot resume a session. An
     added table or column (even an empty one), a view, a trigger, a missing one, or a version with no
     contract is refused as `schema-unknown` with the audit check `schema-drift`, so a producer
     upgrade cannot carry unexamined persisted state forward. A new runtime version needs its own
