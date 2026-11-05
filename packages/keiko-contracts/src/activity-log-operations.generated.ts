@@ -1820,6 +1820,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      historyDocumentCandidates: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       tokensBefore: {
         type: "integer",
         dataClass: "count",

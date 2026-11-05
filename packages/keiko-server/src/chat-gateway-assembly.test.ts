@@ -1303,3 +1303,31 @@ it("refuses an oversized protected skill before any prompt-compaction model call
   expect(call).not.toHaveBeenCalled();
   store.close();
 });
+
+it("reprojects current and retained document text through the current credential floor (#4157)", () => {
+  const { store, chatId } = createStore();
+  const secret = "synthetic-configured-document-credential";
+  const document = makeDocument("retained-doc", "sample.md", `Release cobalt-lantern. ${secret}`);
+  try {
+    const historical = store.createMessage({
+      ...createMessage(chatId, "user", "Read this document", NOW),
+      documentContext: [document],
+    });
+    const result = selectGatewayPromptAssembly({
+      historyPrefix: [historical],
+      historyTurnCount: 1,
+      request: { content: "What is the release identifier?", discussionMode: undefined },
+      profile: DEFAULT_CONTEXT_PROFILE,
+      memoryEntries: [],
+      documentContext: [document],
+      redactionSecrets: [secret],
+      contentRedaction: "preserve",
+    });
+    expect(result).toBeDefined();
+    expect(JSON.stringify(result?.messages)).toContain("cobalt-lantern");
+    expect(JSON.stringify(result?.messages)).not.toContain(secret);
+    expect(historical.documentContext?.[0]?.text).toContain(secret);
+  } finally {
+    store.close();
+  }
+});

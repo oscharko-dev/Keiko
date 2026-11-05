@@ -177,3 +177,38 @@ it.each(['needle" OR content:*', "", "x".repeat(257)])(
     expect(() => found(store, chatId, value)).toThrow(TypeError);
   },
 );
+
+it("finds and rehydrates attachment facts beyond the bounded active history (#4157)", () => {
+  const { store, chatId } = fixture();
+  const user = store.createMessage({
+    ...message(chatId, "user", "Read this document", 1),
+    documentContext: [
+      {
+        id: "archive-doc",
+        displayName: "spec.md",
+        mimeType: "text/markdown",
+        sizeBytes: 64,
+        extractedBytes: 64,
+        truncated: false,
+        text: "The cobalt-lantern release identifier is 731.",
+      },
+    ],
+  });
+  store.createMessage(message(chatId, "assistant", "Document received", 2));
+  for (let index = 0; index < 150; index++) {
+    store.createMessage(message(chatId, "user", "Unrelated history ".repeat(1000), 3 + index * 2));
+    store.createMessage(message(chatId, "assistant", "Acknowledged", 4 + index * 2));
+  }
+  expect(found(store, chatId, "cobalt")).toContain(user.id);
+  const recalled = rehydrateChatHistory(
+    store,
+    chatId,
+    "What is the cobalt-lantern release identifier?",
+    new Set(),
+    [],
+  );
+  expect(recalled).toContain("731");
+  expect(recalled).toContain(user.id);
+  store.deleteChat(chatId);
+  expect(found(store, chatId, "cobalt")).toEqual([]);
+});

@@ -1476,6 +1476,14 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 - Operator failure modes go in [`docs/troubleshooting/`](docs/troubleshooting/) using the template
   (Symptom / Root Cause / Diagnostic Steps / Resolution) — redacted, no live endpoints or logs.
 
+**Document retention and npm delivery (#4157, #3582).**
+Chat's extracted document text belongs to its admitted user message in the existing private store;
+keep the visible draft separate, redact before persistence and prompt use, include attachment text
+in history accounting/compaction and the existing private recall index, and keep evidence body-free.
+Publish staging keeps external ownership in vendor archives and the root, while the physical npm
+bundle omits equivalently promoted external edges. Preserve required/optional reachability and
+qualify project npm, isolated global npm and Yarn installs without bundling the external closure.
+
 ---
 
 ## 13. When you are unsure

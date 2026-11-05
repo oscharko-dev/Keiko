@@ -356,19 +356,19 @@ function buildProgress(options, blueprints, writer, total, assertOwned) {
  * Builds a corpus with validated options. `dependencies` (for tests): `createWriter(options)` replaces
  * the writer, `env` replaces the environment the API key is read from. Returns the manifest.
  */
-export function runBuild(options, log = console.log, dependencies = {}) {
-  return withExclusiveProcessLock(options.out, "memory-lab-corpus", (assertOwned) =>
-    runBuildExclusive(options, log, dependencies, assertOwned),
-  );
-}
-
-async function runBuildExclusive(options, log, dependencies, assertOwned) {
-  if (existsSync(join(options.out, "manifest.json")))
-    throw new Error(`refusing to overwrite an existing corpus in ${options.out}`);
+export async function runBuild(options, log = console.log, dependencies = {}) {
   const blueprints = loadBlueprintDirectory(options.blueprints);
   if (blueprints.length === 0) throw new RangeError("the blueprint directory holds no blueprint");
   if (options.focused)
     for (const blueprint of blueprints) checkFocusedIdRoom(blueprint.id, options.seeds);
+  return withExclusiveProcessLock(options.out, "memory-lab-corpus", (assertOwned) =>
+    runBuildExclusive(options, log, dependencies, assertOwned, blueprints),
+  );
+}
+
+async function runBuildExclusive(options, log, dependencies, assertOwned, blueprints) {
+  if (existsSync(join(options.out, "manifest.json")))
+    throw new Error(`refusing to overwrite an existing corpus in ${options.out}`);
   const writer = (dependencies.createWriter ?? createWriter)(
     options,
     dependencies.env ?? process.env,

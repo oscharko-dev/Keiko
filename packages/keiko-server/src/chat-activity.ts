@@ -199,6 +199,7 @@ const CHAT_CONTEXT_SELECTED_OPERATION = defineActivityLogOperation({
     omittedSummaryCategories: { type: "integer", dataClass: "count", required: true },
     compactedHistoryMessages: { type: "integer", dataClass: "count", required: true },
     retainedHistoryMessages: { type: "integer", dataClass: "count", required: true },
+    historyDocumentCandidates: { type: "integer", dataClass: "count", required: false },
     tokensBefore: { type: "integer", dataClass: "count", required: true },
     tokensAfter: { type: "integer", dataClass: "count", required: true },
     tokensSaved: { type: "integer", dataClass: "count", required: true },
@@ -435,6 +436,7 @@ export function logChatContextSelection(
   correlationId: string | undefined,
   assembly: GatewayPromptAssembly,
   imageCount: number,
+  historyDocumentCandidates?: number,
 ): void {
   const { compaction, diagnostics } = assembly;
   const compacted = compaction !== undefined;
@@ -452,6 +454,7 @@ export function logChatContextSelection(
       {
         state: compacted ? "compacted" : "verbatim",
         ...historyMetrics,
+        ...(historyDocumentCandidates === undefined ? {} : { historyDocumentCandidates }),
         ...selectedSkillLogFields(assembly),
         tokensSaved: Math.max(0, tokensBefore - tokensAfter),
         promptTokens: diagnostics.totalEstimatedTokens,

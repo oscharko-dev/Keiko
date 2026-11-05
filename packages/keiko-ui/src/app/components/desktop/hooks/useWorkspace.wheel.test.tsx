@@ -791,7 +791,7 @@ describe("useWorkspace active-window content-zoom coalescing (issues #2402, #365
     return view;
   }
 
-  it("coalesces a same-frame burst into one commit that replays each snapped step", async () => {
+  it("coalesces a same-frame burst without rounding away fractional movement", async () => {
     const callbacks = mockAnimationFrames();
     await renderActiveWindow();
     const scheduledBefore = callbacks.length;
@@ -804,8 +804,8 @@ describe("useWorkspace active-window content-zoom coalescing (issues #2402, #365
 
     act(() => callbacks[scheduledBefore]?.(0));
 
-    // 1 -[-100]-> 1.2 -[-100]-> 1.4. Summing first (exp(0.3) ≈ 1.35 → 1.3) would diverge.
-    await waitFor(() => expect(screen.getByTestId("files-zoom")).toHaveTextContent("1.4"));
+    // The continuous gesture reaches exp(0.3), then publishes the nearest 0.1 step.
+    await waitFor(() => expect(screen.getByTestId("files-zoom")).toHaveTextContent("1.3"));
   });
 
   it("replays a burst across the max bound like separate commits", async () => {
@@ -832,6 +832,18 @@ describe("useWorkspace active-window content-zoom coalescing (issues #2402, #365
 
     expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
     expect(screen.getByTestId("wins-identity-changes")).toHaveTextContent(identityBefore ?? "");
+  });
+
+  it("retains fine pinch movement across animation frames", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const callbacks = mockAnimationFrames();
+    await renderActiveWindow();
+    for (let index = 0; index < 120; index++) {
+      fireContentZoomWheel(-2);
+      act(() => callbacks.at(-1)?.(index));
+    }
+    expect(screen.getByTestId("files-zoom")).toHaveTextContent("1.4");
+    expect(screen.getByTestId("view-zoom")).toHaveTextContent("1");
   });
 
   it("marks the workspace view-active so the wallpaper shader pauses", async () => {

@@ -322,30 +322,43 @@ export function applyContentWheelZoom(win: AppWindow, deltaY: number): AppWindow
   return zoom === current ? win : { ...win, zoom };
 }
 
-// Issue #2402 — identity-preserving: content zoom snaps to 0.1 steps, so most wheel events are
-// no-ops; returning the SAME array for those skips the whole downstream chain (persistence
-// schedule, connection prune, selection normalization, scene re-render). `deltas` replays every
-// queued wheel event IN ORDER — see createWheelContentZoomQueue for why a raw SUM cannot be used.
+function accumulatedContentWheelZoom(current: number, deltas: readonly number[]): number {
+  let zoom = current;
+  for (const deltaY of deltas) {
+    const next = zoom * Math.exp(-deltaY * 0.0015);
+    zoom = Number.isNaN(next) ? 1 : Math.max(CONTENT_MIN_ZOOM, Math.min(CONTENT_MAX_ZOOM, next));
+  }
+  return zoom;
+}
+
+interface ContentWheelContinuation {
+  readonly expectedZoom: number;
+  readonly rawZoom: number;
+}
+
+// Retain fractional movement until publication, while clamping each event in order. A clamp
+// reversal cannot be represented by summing deltas. A snapped no-op preserves array identity.
 export function applyWheelZoomToWindows(
   ws: AppWindow[] | null,
   windowId: string,
   deltas: readonly number[],
+  continuation?: ContentWheelContinuation,
 ): AppWindow[] | null {
   if (ws === null) return ws;
   const index = ws.findIndex((w) => w.id === windowId);
   const current = index === -1 ? undefined : ws[index];
   if (current === undefined) return ws;
-  let updated = current;
-  for (const deltaY of deltas) updated = applyContentWheelZoom(updated, deltaY);
-  // Compare the resulting zoom, not the object: a batch that pins at the clamp and eases straight
-  // back allocates a new object with the ORIGINAL value.
-  if (updated.zoom === current.zoom) return ws;
+  const currentZoom = current.zoom ?? 1;
+  const initial = continuation?.expectedZoom === currentZoom ? continuation.rawZoom : currentZoom;
+  const zoom = clampContentZoom(accumulatedContentWheelZoom(initial, deltas));
+  if (zoom === currentZoom) return ws;
   const next = ws.slice();
-  next[index] = updated;
+  next[index] = { ...current, zoom };
   return next;
 }
 
 export interface WheelContentZoomQueue {
+  readonly flush: () => void;
   readonly queue: (windowId: string, deltaY: number) => void;
   readonly cancel: () => void;
 }
@@ -353,10 +366,8 @@ export interface WheelContentZoomQueue {
 // Issue #2402 — a trackpad pinch synthesizes ctrl-wheel at 60-120+Hz. Mirror queueView's rAF
 // coalescing: deltas for one window accumulate per animation frame and flush as ONE commit.
 //
-// The commit replays the deltas in order instead of summing them, because the 0.1 snap and the
-// clamp apply on every step and are nonlinear: from zoom=1, deltaY -100 twice reaches 1.4 while
-// summing first reaches 1.3; from zoom=1.9, -300 then +40 hits the 2.0 cap and settles on 1.9 while
-// summing first lands on 2.0. Exported so a unit test can pin the frame-cancellation bookkeeping.
+// Replay preserves event order so hitting a bound and reversing behaves the same across frames.
+// Exported so cancellation and target-switch bookkeeping can be checked independently.
 export function createWheelContentZoomQueue(
   apply: (windowId: string, deltas: readonly number[]) => void,
 ): WheelContentZoomQueue {
@@ -395,7 +406,7 @@ export function createWheelContentZoomQueue(
     pendingWindowId = null;
     pendingDeltas = [];
   };
-  return { queue, cancel };
+  return { queue, cancel, flush };
 }
 
 // GEN-UI-KEYBOARD-006 — resolve which window a keyboard chord (move/resize/content
@@ -578,10 +589,24 @@ interface ActiveWindowContentZoom {
 // and never moves the camera. Any other window keeps routing to workspace zoom (route is false).
 function createActiveWindowContentZoom(
   setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
+  getWins: () => AppWindow[] | null,
   beforeZoom: () => void,
 ): ActiveWindowContentZoom {
+  let carry: (ContentWheelContinuation & { readonly windowId: string }) | undefined;
   const queue = createWheelContentZoomQueue((windowId, deltas) => {
-    setWins((ws) => applyWheelZoomToWindows(ws, windowId, deltas));
+    const target = getWins()?.find((win) => win.id === windowId);
+    if (target === undefined) {
+      carry = undefined;
+      return;
+    }
+    const current = target.zoom ?? 1;
+    const rawZoom =
+      carry?.windowId === windowId && carry.expectedZoom === current ? carry.rawZoom : current;
+    const continuation = { expectedZoom: current, rawZoom };
+    const nextRaw = accumulatedContentWheelZoom(rawZoom, deltas);
+    carry = { windowId, expectedZoom: clampContentZoom(nextRaw), rawZoom: nextRaw };
+    // The updater stays pure under React replay; an intervening keyboard change uses its new zoom.
+    setWins((ws) => applyWheelZoomToWindows(ws, windowId, deltas, continuation));
   });
   let lastEventAt = Number.NEGATIVE_INFINITY;
   const route = (event: WheelEvent, selection: WorkspaceUiSelectionState): boolean => {
@@ -593,6 +618,8 @@ function createActiveWindowContentZoom(
     // One body-free line per gesture, not one per 60-120+Hz wheel event.
     const now = Date.now();
     if (now - lastEventAt > VIEW_ACTIVE_SETTLE_MS) {
+      queue.flush();
+      carry = undefined;
       reportClientDiagnostic("[keiko] workspace window content zoomed by wheel.", {
         composerActivity: "workspace-window-content-zoomed",
       });
@@ -601,7 +628,13 @@ function createActiveWindowContentZoom(
     queue.queue(windowId, normalizeWheelDelta(event).y);
     return true;
   };
-  return { route, cancel: queue.cancel };
+  return {
+    route,
+    cancel: (): void => {
+      queue.cancel();
+      carry = undefined;
+    },
+  };
 }
 
 function frontmostLayoutWindowId(
@@ -946,10 +979,14 @@ function usePanZoom({
     const gestureRect = createGestureRectReader(el);
     // Issue #2402 — the wallpaper shader's gesture suppression (data-view-active,
     // GEN-PERF-WORKSPACE-004) must engage for content zoom exactly as for camera zoom.
-    const contentZoom = createActiveWindowContentZoom(setWins, () => {
-      settleCameraAnimation();
-      markViewActive();
-    });
+    const contentZoom = createActiveWindowContentZoom(
+      setWins,
+      () => winsRef.current,
+      () => {
+        settleCameraAnimation();
+        markViewActive();
+      },
+    );
     const onWheel = (e: WheelEvent): void => {
       if (routeLockedWorkspaceWheel(e, isLayoutLocked())) return;
       if (e.metaKey || e.ctrlKey) {
@@ -992,6 +1029,7 @@ function usePanZoom({
     selectionRef,
     isLayoutLocked,
     setWins,
+    winsRef,
     settleCameraAnimation,
     markViewActive,
   ]);

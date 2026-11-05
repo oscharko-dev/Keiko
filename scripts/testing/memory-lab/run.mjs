@@ -676,18 +676,18 @@ function runProgress(options, corpus, gateway, assertOwned) {
 }
 
 /** Runs the lab with validated options and returns the summary; writes evidence under `out`. */
-export function runLab(options, log = console.log) {
-  return withExclusiveProcessLock(options.out, "memory-lab-run", (assertOwned) =>
-    runLabExclusive(options, log, assertOwned),
-  );
-}
-
-async function runLabExclusive(options, log, assertOwned) {
-  if (existsSync(join(options.out, "scorecard.json")) && !options.resume)
-    throw new Error(`refusing to overwrite an existing run in ${options.out}`);
+export async function runLab(options, log = console.log) {
   const gateway = gatewayEvidence(options);
   const corpus = loadCorpus(options);
   assertKeepAllowed(corpus.scenarios, options.keep);
+  return withExclusiveProcessLock(options.out, "memory-lab-run", (assertOwned) =>
+    runLabExclusive(options, log, assertOwned, gateway, corpus),
+  );
+}
+
+async function runLabExclusive(options, log, assertOwned, gateway, corpus) {
+  if (existsSync(join(options.out, "scorecard.json")) && !options.resume)
+    throw new Error(`refusing to overwrite an existing run in ${options.out}`);
   const progress = runProgress(options, corpus, gateway, assertOwned);
   const stateRoot = prepareOutput(options, corpus);
   activeStateRoot = corpus.sealed || !options.keep ? stateRoot : undefined;

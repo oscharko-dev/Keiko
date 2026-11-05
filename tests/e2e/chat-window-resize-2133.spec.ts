@@ -178,3 +178,50 @@ test("chat resize keeps the outer window body clipped and the transcript scrollb
   expect(metrics.chatScrollRange).toBeGreaterThan(120);
   expect(metrics.clampedChatScrollTop).toBeLessThanOrEqual(metrics.chatScrollRange + 1);
 });
+
+test("browser resize keeps the complete shell fitted with Settings open (#4184)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.locator("main.workspace")).toBeVisible();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const settings = page.locator('.window[data-window-id="settings"]');
+  await expect(settings).toBeVisible();
+  for (const [width, height] of [
+    [1280, 720],
+    [2288, 1246],
+    [900, 600],
+    [1600, 900],
+    [720, 1000],
+    [2288, 1246],
+    [1000, 700],
+    [2288, 1246],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const app = document.querySelector(".app")?.getBoundingClientRect();
+          const header = document.querySelector(".header")?.getBoundingClientRect();
+          const footer = document.querySelector(".footer")?.getBoundingClientRect();
+          return {
+            appWidth: app?.width,
+            appHeight: app?.height,
+            headerWidth: header?.width,
+            footerBottom: footer?.bottom,
+            scrollWidth: document.documentElement.scrollWidth,
+            scrollHeight: document.documentElement.scrollHeight,
+          };
+        }),
+      )
+      .toEqual({
+        appWidth: width,
+        appHeight: height,
+        headerWidth: width,
+        footerBottom: height,
+        scrollWidth: width,
+        scrollHeight: height,
+      });
+    await expect(settings).toBeVisible();
+  }
+});

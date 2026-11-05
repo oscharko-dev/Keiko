@@ -3945,6 +3945,12 @@
               "required": true
             },
             {
+              "name": "historyDocumentCandidates",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "imageCount",
               "type": "integer",
               "dataClass": "count",

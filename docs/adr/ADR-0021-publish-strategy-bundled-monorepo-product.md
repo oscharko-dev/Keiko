@@ -86,9 +86,14 @@ workspace surface. The dual representation is required because npm consumes its 
 when installing an outer tarball, while Yarn gives directory `file:` dependencies different
 resolution semantics when the parent is an npm registry locator. Internal edges in vendored manifests
 become exact-version peer dependencies so npm and Yarn resolve every private package to the sibling
-provided by the root. External dependencies remain declared by their owning vendored manifest and
-are also promoted at their reviewed lockfile version to the staged root manifest so the published
-root graph remains deterministic and auditable. External peers are promoted as required or optional
+provided by the root. External dependencies remain declared by the vendor archive manifest and
+are promoted at their reviewed lockfile version to the staged root manifest. The physical npm
+bundle omits those external ownership edges: in npm's global shallow layout an incoming edge from
+a bundled package otherwise incorrectly marks an absent registry sibling as already bundled
+(#3582). Staging proves the root satisfies every removed range and preserves required versus
+optional reachability; unpromoted, incompatible or weakened edges fail staging. Internal bundled
+sibling edges stay. The archive and physical bundle contain the same runtime payload, with these
+intentionally distinct dependency-owner manifests. No third-party runtime closure is embedded. External peers are promoted as required or optional
 according to their peer metadata. Missing or incompatible
 locked resolutions fail staging; missing runtime surfaces fail the npm/Yarn install smoke.
 

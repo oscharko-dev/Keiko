@@ -221,6 +221,14 @@ describe("content wheel zoom", () => {
     expect(next?.find((win) => win.id === "target")?.zoom).toBe(1.9);
   });
 
+  it("accumulates fine pinch deltas before rounding and matches a coarse gesture", () => {
+    const wins = [appWindow({ id: "target", zoom: 1 })];
+    const fine = applyWheelZoomToWindows(wins, "target", Array<number>(120).fill(-2));
+    const coarse = applyWheelZoomToWindows(wins, "target", [-240]);
+    expect(fine?.[0]?.zoom).toBe(1.4);
+    expect(fine?.[0]?.zoom).toBe(coarse?.[0]?.zoom);
+  });
+
   it("returns the input unchanged for a missing window, an empty list and no list", () => {
     const wins = [appWindow({ id: "only" })];
     const empty: ReturnType<typeof appWindow>[] = [];

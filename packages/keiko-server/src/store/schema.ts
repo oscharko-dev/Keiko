@@ -5,13 +5,16 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { ServerLogSink } from "../observability/index.js";
 import { migrateJourneyOutcomeProjection } from "./journeyOutcomeMigration.js";
-import { CHAT_HISTORY_SEARCH_SCHEMA } from "./chatHistorySearchSchema.js";
+import {
+  CHAT_DOCUMENT_HISTORY_SEARCH_SCHEMA,
+  CHAT_HISTORY_SEARCH_SCHEMA,
+} from "./chatHistorySearchSchema.js";
 import {
   migrateLegacyProjectManifests,
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 58;
+export const SCHEMA_VERSION = 59;
 
 interface Migration {
   readonly version: number;
@@ -1957,6 +1960,12 @@ export const MIGRATIONS: readonly Migration[] = [
     // single writes does not count them.
     sql: `ALTER TABLE chat_tool_mutations ADD COLUMN batch_digest TEXT
       CHECK (batch_digest IS NULL OR (length(batch_digest) = 64 AND batch_digest NOT GLOB '*[^0-9a-f]*'));`,
+  },
+  {
+    version: 59,
+    // #4157: attachment text belongs to its admitted user turn and follows chat retention.
+    sql: `ALTER TABLE chat_messages ADD COLUMN document_context_json TEXT;
+      ${CHAT_DOCUMENT_HISTORY_SEARCH_SCHEMA}`,
   },
 ];
 

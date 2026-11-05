@@ -1,3 +1,4 @@
+import { redactContent } from "@oscharko-dev/keiko-security";
 import type {
   ContentRedactionPolicy,
   ContextAssemblyDiagnostics,
@@ -586,12 +587,40 @@ export function buildChatCompactionContextText(
   );
 }
 
+function projectPromptDocuments<T extends Parameters<typeof assembleSelectedGatewayPrompt>[0]>(
+  input: T,
+): T {
+  const scrub = (text: string): string =>
+    redactContent(text, input.contentRedaction ?? "redact", input.redactionSecrets);
+  const project = (
+    documents: readonly ConversationDocumentContextWire[],
+  ): readonly ConversationDocumentContextWire[] =>
+    documents.map((document) => ({
+      ...document,
+      id: scrub(document.id),
+      displayName: scrub(document.displayName),
+      mimeType: scrub(document.mimeType),
+      text: scrub(document.text),
+      truncationMarker:
+        document.truncationMarker === undefined ? undefined : scrub(document.truncationMarker),
+    }));
+  return {
+    ...input,
+    documentContext: project(input.documentContext),
+    historyPrefix: input.historyPrefix.map((message) =>
+      message.documentContext === undefined
+        ? message
+        : { ...message, documentContext: project(message.documentContext) },
+    ),
+  };
+}
+
 export function selectGatewayPromptAssembly(
   input: Parameters<typeof assembleSelectedGatewayPrompt>[0] & {
     readonly proactiveCompaction?: boolean;
   },
 ): GatewayPromptAssembly | undefined {
-  const adjusted = adjustLatestPromptOutputBudget(input);
+  const adjusted = adjustLatestPromptOutputBudget(projectPromptDocuments(input));
   const selected = assembleSelectedGatewayPrompt(adjusted);
   const candidate =
     selected === undefined

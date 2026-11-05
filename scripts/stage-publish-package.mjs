@@ -19,6 +19,9 @@ import { fileURLToPath } from "node:url";
 import { resolveHostExecutable, shellCommandForTrustedExecutable } from "./lib/host-executable.mjs";
 import { explicitPrivateWorkspaceExclusions, scope } from "./release-workspace-policy.mjs";
 import {
+  aliasRange,
+  descriptorIsSatisfied,
+  manifestRuntimeEdges,
   collectRuntimeRequirements,
   manifestRequirements,
   resolveLockfileEdge,
@@ -284,7 +287,54 @@ export function workspacePackInvocation(npmExecutable, platform = process.platfo
   };
 }
 
-function packWorkspace(stageRoot, record, runtimeNames) {
+/** npm global installs must see external ownership only at the root. Incoming bundle edges make
+ * Arborist classify absent registry siblings as already bundled and skip their extraction (#3582).
+ * Vendor archives retain their full manifest for Yarn's independent package installations. */
+export function physicalBundleManifest(source, rootManifest) {
+  const manifest = structuredClone(source);
+  const bundled = new Set(rootManifest.bundleDependencies);
+  const promoted = new Map(manifestRequirements(rootManifest).map((edge) => [edge.name, edge]));
+  const optionalOwner = optionalRootOwner(rootManifest, source.name);
+  for (const edge of manifestRuntimeEdges(source)) {
+    if (bundled.has(edge.name)) continue;
+    const rootEdge = promoted.get(edge.name);
+    assertRootOwnsPhysicalEdge(source.name, edge, rootEdge, optionalOwner);
+    for (const field of [
+      "dependencies",
+      "optionalDependencies",
+      "peerDependencies",
+      "peerDependenciesMeta",
+    ])
+      if (manifest[field] !== undefined) Reflect.deleteProperty(manifest[field], edge.name);
+  }
+  for (const field of [
+    "dependencies",
+    "optionalDependencies",
+    "peerDependencies",
+    "peerDependenciesMeta",
+  ])
+    if (manifest[field] !== undefined && Object.keys(manifest[field]).length === 0)
+      Reflect.deleteProperty(manifest, field);
+  return manifest;
+}
+
+function optionalRootOwner(manifest, name) {
+  return (
+    manifest.dependencies?.[name] === undefined &&
+    manifest.optionalDependencies?.[name] !== undefined
+  );
+}
+
+function assertRootOwnsPhysicalEdge(owner, edge, rootEdge, optionalOwner) {
+  if (
+    rootEdge === undefined ||
+    (!edge.optional && rootEdge.optional && !optionalOwner) ||
+    !descriptorIsSatisfied(edge, aliasRange(rootEdge.range))
+  )
+    throw new Error(`external runtime edge is not equivalently root-owned: ${owner}.${edge.name}`);
+}
+
+function packWorkspace(stageRoot, record, runtimeNames, rootManifest) {
   const directory = record.external
     ? externalVendorDirectory(record.manifest.name)
     : stagedVendorDirectory(record.manifest.name);
@@ -317,6 +367,7 @@ function packWorkspace(stageRoot, record, runtimeNames) {
   const bundledRoot = join(stageRoot, "node_modules", ...record.manifest.name.split("/"));
   mkdirSync(dirname(bundledRoot), { recursive: true });
   cpSync(packageRoot, bundledRoot, { recursive: true });
+  writeJson(join(bundledRoot, "package.json"), physicalBundleManifest(manifest, rootManifest));
   rmSync(workspaceStage, { recursive: true, force: true });
   return {
     name: record.manifest.name,
@@ -489,7 +540,8 @@ function stagedRootManifest(
   for (const name of Object.keys(dependencies)) Reflect.deleteProperty(optionalDependencies, name);
   manifest.dependencies = dependencies;
   setObjectField(manifest, "optionalDependencies", optionalDependencies);
-  // npm consumes the physical bundle; Yarn consumes the matching tarball-local file archives.
+  // npm consumes the root-owned physical bundle; Yarn consumes the same package payloads
+  // through tarball-local archives whose manifests retain external dependency ownership.
   manifest.bundleDependencies = [
     ...new Set([...(manifest.bundleDependencies ?? []), ...archives.keys()]),
   ];
@@ -623,7 +675,7 @@ export function createStagedPublishPackage({
   try {
     copyRootSurface(resolvedRepoRoot, stageRoot, plan.rootManifest);
     for (const record of plan.packages) {
-      vendorPackages.push(packWorkspace(stageRoot, record, plan.runtimeNames));
+      vendorPackages.push(packWorkspace(stageRoot, record, plan.runtimeNames, plan.rootManifest));
     }
     rmSync(join(stageRoot, ".vendor-stage"), { recursive: true, force: true });
     writeJson(join(stageRoot, "package.json"), plan.rootManifest);

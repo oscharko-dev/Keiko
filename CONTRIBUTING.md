@@ -901,3 +901,11 @@ binding receives only a run-bound relay capability. Preserve issuer/resource/sco
 one-use app-session-bound callbacks, credential-generation revocation and no-replay semantics.
 Changes to tool metadata must be refused before dispatch even without notifications. Include
 real SDK, restart/revocation and browser proofs; legacy native OAuth tests do not replace them.
+
+**Document retention and npm delivery (#4157, #3582).**
+Chat's extracted document text belongs to its admitted user message in the existing private store;
+keep the visible draft separate, redact before persistence and prompt use, include attachment text
+in history accounting/compaction and the existing private recall index, and keep evidence body-free.
+Publish staging keeps external ownership in vendor archives and the root, while the physical npm
+bundle omits equivalently promoted external edges. Preserve required/optional reachability and
+qualify project npm, isolated global npm and Yarn installs without bundling the external closure.

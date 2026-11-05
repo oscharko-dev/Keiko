@@ -2962,6 +2962,51 @@ describe("desktop chat routes", () => {
     expect(lastTurn?.content).toContain("Some document content.");
   });
 
+  it.each([undefined, "document-turn"])(
+    "retains attached document context for follow-up turns and isolates other chats (%s)",
+    async (clientTurnId) => {
+      const chat = store.createChat(projectDir, "Document chat", CHAT_MODEL);
+      const send = (chatId: string, body: object): Promise<Response> =>
+        fetch(`${base()}/api/desktop/chat`, {
+          method: "POST",
+          headers: POST_JSON_HEADERS,
+          body: JSON.stringify({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, ...body }),
+        });
+      const initial = await send(chat.id, {
+        content: "Read this document",
+        clientTurnId,
+        documentContext: [
+          {
+            id: "retained-doc",
+            displayName: "spec.md",
+            mimeType: "text/markdown",
+            sizeBytes: 64,
+            extractedBytes: 64,
+            truncated: false,
+            text: "The release identifier is cobalt-lantern.",
+          },
+        ],
+      });
+      expect(initial.status).toBe(200);
+      await restartWithDeps(deps());
+      const followup = await send(chat.id, { content: "What is the release identifier?" });
+      expect(followup.status).toBe(200);
+      const historicalUser = seenRequests
+        .at(-1)
+        ?.messages.find(
+          (message) => message.role === "user" && message.content.includes("Read this document"),
+        );
+      expect(historicalUser?.content).toContain("Attached document context:");
+      expect(historicalUser?.content).toContain("cobalt-lantern");
+      expect(store.listMessages(chat.id)[0]?.content).toBe("Read this document");
+      const otherChat = store.createChat(projectDir, "Separate chat", CHAT_MODEL);
+      expect(
+        (await send(otherChat.id, { content: "What is the release identifier?" })).status,
+      ).toBe(200);
+      expect(JSON.stringify(seenRequests.at(-1)?.messages)).not.toContain("cobalt-lantern");
+    },
+  );
+
   // Issue #502 — a selected discussion mode threads the additive directive block onto the latest
   // user turn for the model call. The mode is turn-local (never persisted to chat history).
   it("threads the discussion directive block onto the latest user turn for the model call", async () => {

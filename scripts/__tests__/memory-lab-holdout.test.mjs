@@ -562,7 +562,11 @@ describe("a sealed run against the real product", () => {
       expect(lines.join("\n").toLowerCase()).not.toContain("zebrafink");
 
       const report = join(root, "report");
-      expect(readdirSync(report).toSorted()).toEqual([
+      expect(
+        readdirSync(report)
+          .filter((name) => !name.startsWith("work-project.lock."))
+          .toSorted(),
+      ).toEqual([
         "evidence-scan.json",
         "manifest.json",
         "scorecard.json",
