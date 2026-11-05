@@ -646,6 +646,9 @@ reference, attached and dangling counts share the closed reconciliation outcome.
 `ambiguousMarkerCount` and `droppedImplicitCount`; optional weak-overlap/grouped counts describe
 only measurements actually made. Omitted metrics must not be interpreted as measured zeroes.
 
+`client.composer.activity` records `draft-notifications-ready` when the private draft notification
+subscription mounts in layout, before browser input or passive effects, without draft text.
+
 `editor.semantic-tokens.refused` records only an observed sanitizer refusal, with
 `reason: sanitizer-refused`; it does not guess which tuple, size or version check refused it.
 Other admitted attempts use `editor.semantic-tokens.settled`: served with the actual returned-token

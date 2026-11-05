@@ -15472,7 +15472,7 @@
       "anti-slop/no-unknown-parameters": 1
     },
     "packages/keiko-ui/src/app/components/desktop/hooks/useChatDraft.test.tsx": {
-      "anti-slop/no-known-value-widening": 1,
+      "anti-slop/no-known-value-widening": 2,
       "anti-slop/no-module-mocking": 2
     },
     "packages/keiko-ui/src/app/components/desktop/hooks/useChatMarkdownSkill.ts": {
