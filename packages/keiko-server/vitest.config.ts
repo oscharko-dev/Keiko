@@ -9,7 +9,6 @@ export default defineConfig({
     // #3532: explicit Activity Log test-writer injection, identical to the root suite.
     setupFiles: [
       fileURLToPath(new URL("../../tests/support/activity-log-test-writer.ts", import.meta.url)),
-      fileURLToPath(new URL("../../tests/support/hermetic-home.ts", import.meta.url)),
     ],
   },
 });

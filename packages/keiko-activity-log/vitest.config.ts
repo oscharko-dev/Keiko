@@ -13,7 +13,6 @@ export default defineConfig({
     maxWorkers: 2,
     setupFiles: [
       fileURLToPath(new URL("../../tests/support/activity-log-test-writer.ts", import.meta.url)),
-      fileURLToPath(new URL("../../tests/support/hermetic-home.ts", import.meta.url)),
     ],
   },
 });
