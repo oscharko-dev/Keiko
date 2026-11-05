@@ -697,7 +697,9 @@ function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig)
   assertValidGatewaySamplingParameters(request);
   return {
     model: request.modelId,
-    messages: request.messages.map(openAiCompatiblePromptMessage),
+    messages: request.messages.map((message) =>
+      openAiCompatiblePromptMessage(message, config.reasoningHistoryField),
+    ),
     ...toolsField(request.tools),
     ...responseFormatField(request),
     ...samplingFields(request),
@@ -2252,7 +2254,9 @@ export class OpenAiAdapter implements ProviderAdapter {
     const admit = request.attemptAdmission;
     if (admit === undefined) return undefined;
     const reservation = admit({
-      promptTokens: countGatewayPromptTokens(request),
+      promptTokens: countGatewayPromptTokens(request, undefined, {
+        reasoningHistoryField: config.reasoningHistoryField,
+      }),
       maxOutputTokens: dispatchedMaxOutputTokens(request, config) ?? 0,
     });
     if (reservation === undefined)

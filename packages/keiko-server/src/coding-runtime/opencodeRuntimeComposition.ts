@@ -700,6 +700,7 @@ export interface OpenCodeRuntimeCompositionInput {
     | {
         readonly service: CodingSessionContinuity;
         readonly workspaceId: string;
+        readonly freshReasoningHistory?: boolean | undefined;
         /** The workspace the run's own one was provisioned from (#3903 AC4); see the context. */
         readonly forkSource?: SessionContinuationContext["forkSource"];
       }
@@ -2256,6 +2257,7 @@ function continuationContext(
   return {
     service: continuity.service,
     workspaceId: continuity.workspaceId,
+    freshReasoningHistory: continuity.freshReasoningHistory,
     runtimeVersion: input.portable.verification.summary.upstreamVersion,
     maxInputTokens: input.contextGeometry.maxInputTokens,
     activityLog: input.activityLog,
@@ -3233,7 +3235,7 @@ async function challengeV2Gateway(
     return false;
   }
   const signal = request.signal ?? AbortSignal.timeout(request.timeoutMs);
-  if (run.continuation === undefined) {
+  if (run.continuation === undefined && input.sessionContinuity?.freshReasoningHistory !== true) {
     return runGatewayChallenge(input, run, client, sessionId, signal);
   }
   return challengeInScratchSession(input, run, client, signal);

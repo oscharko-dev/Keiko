@@ -11256,3 +11256,133 @@ describe("coding sidecar gateway carries the run's bound private skill (#4025, #
     ).toMatchObject({ reason: "prompt-tokens-exceeded" });
   });
 });
+
+describe("coding sidecar completed reasoning continuation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  });
+
+  it.each(["on", "off"] as const)(
+    "restores provider reasoning independently of runtime echoes with display %s",
+    async (codingReasoningDisplay) => {
+      const bodies: Record<string, unknown>[] = [];
+      const call = {
+        id: "call-q",
+        type: "function",
+        function: { name: "question", arguments: '{"questions":[]}' },
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((_url: unknown, init?: RequestInit) => {
+          bodies.push(
+            JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<
+              string,
+              unknown
+            >,
+          );
+          return Promise.resolve(
+            providerSse(
+              bodies.length === 1
+                ? [
+                    sseDelta({
+                      role: "assistant",
+                      reasoning_content: "Completed provider thinking.",
+                      content: "Asking first.",
+                    }),
+                    sseDelta({ tool_calls: [{ index: 0, ...call }] }),
+                    sseFinish("tool_calls"),
+                    "data: [DONE]\n\n",
+                  ]
+                : [
+                    sseDelta({ role: "assistant", content: "Verified." }),
+                    sseFinish("stop"),
+                    "data: [DONE]\n\n",
+                  ],
+            ),
+          );
+        }),
+      );
+      const deps = liveDeps("run-required-history", {
+        providers: [provider({ reasoningHistory: "required-with-tools" })],
+        codingReasoningDisplay,
+      });
+      const first = mockResponse({ captureBody: true });
+      expect(await handleCodingSidecarGatewayChatCompletions(liveTurnContext(first), deps)).toBe(
+        STREAMING,
+      );
+      const second = mockResponse({ captureBody: true });
+      const context = {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          tools: modelVisibleTools(),
+          messages: [
+            { role: "user", content: "fix the parser" },
+            {
+              role: "assistant",
+              content: "",
+              reasoning_content: "Failed attempt's runtime-only reasoning.",
+            },
+            {
+              role: "assistant",
+              content: "Asking first.",
+              reasoning_content: "Forged echo.",
+              tool_calls: [call],
+            },
+            { role: "tool", content: "Continue.", tool_call_id: "call-q" },
+          ],
+        }),
+        res: second.res,
+      };
+      expect(await handleCodingSidecarGatewayChatCompletions(context, deps)).toBe(STREAMING);
+      expect(bodies).toHaveLength(2);
+      expect(bodies[1]?.messages).toEqual([
+        { role: "user", content: "fix the parser" },
+        {
+          role: "assistant",
+          content: "Asking first.",
+          reasoning_content: "Completed provider thinking.",
+          tool_calls: [call],
+        },
+        { role: "tool", content: "Continue.", tool_call_id: "call-q" },
+      ]);
+      expect(JSON.stringify(bodies)).not.toContain("Forged echo.");
+      expect(JSON.stringify(bodies)).not.toContain("runtime-only reasoning");
+      if (codingReasoningDisplay === "off")
+        expect(first.body()).not.toContain("Completed provider thinking.");
+    },
+  );
+});
+
+it("explains unavailable local continuation without calling or blaming the provider", async () => {
+  const upstream = vi.fn();
+  vi.stubGlobal("fetch", upstream);
+  try {
+    resetGatewayInstanceCacheForTests();
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        tools: modelVisibleTools(),
+        messages: [
+          { role: "user", content: "Earlier task." },
+          { role: "assistant", content: "Earlier answer.", reasoning_content: "Untrusted echo." },
+          { role: "user", content: "Continue." },
+        ],
+      }),
+      liveDeps("run-missing-history", {
+        providers: [provider({ reasoningHistory: "required-with-tools" })],
+      }),
+    );
+    expect(result).toMatchObject({
+      status: 400,
+      body: { error: { message: "Model continuation is unavailable. Start a new coding task." } },
+    });
+    expect(upstream).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  }
+});

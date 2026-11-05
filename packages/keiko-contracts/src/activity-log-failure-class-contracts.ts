@@ -5102,7 +5102,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-model-gateway"],
     requiredLifecycleOperations: {
       start: ["gateway.chat.started"],
-      state: [],
+      state: ["gateway.reasoning-history"],
       end: ["gateway.chat.completed"],
       failure: ["gateway.chat.failed"],
       loss: [],
@@ -5111,15 +5111,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "gateway.chat.completed",
       "gateway.chat.failed",
       "gateway.chat.started",
+      "gateway.reasoning-history",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "gateway.chat.completed",
       "gateway.chat.failed",
       "gateway.chat.started",
+      "gateway.reasoning-history",
     ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["gateway.chat.completed", "gateway.chat.started"],
+    requiredResourceOperations: [
+      "gateway.chat.completed",
+      "gateway.chat.started",
+      "gateway.reasoning-history",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",
@@ -5621,12 +5627,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-model-gateway"],
     requiredLifecycleOperations: {
       start: ["gateway.stream.started"],
-      state: ["gateway.stream.buffered-fallback"],
+      state: ["gateway.reasoning-history", "gateway.stream.buffered-fallback"],
       end: ["gateway.stream.abandoned", "gateway.stream.completed"],
       failure: ["gateway.stream.failed"],
       loss: [],
     },
     requiredCausalOperations: [
+      "gateway.reasoning-history",
       "gateway.stream.abandoned",
       "gateway.stream.buffered-fallback",
       "gateway.stream.completed",
@@ -5635,6 +5642,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
+      "gateway.reasoning-history",
       "gateway.stream.abandoned",
       "gateway.stream.buffered-fallback",
       "gateway.stream.completed",
@@ -5643,6 +5651,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
+      "gateway.reasoning-history",
       "gateway.stream.abandoned",
       "gateway.stream.buffered-fallback",
       "gateway.stream.completed",

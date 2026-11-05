@@ -2549,6 +2549,7 @@ function callPreparedAssembly(
   signal: AbortSignal,
   correlationId: string | undefined,
   toolTurn: ChatToolTurnPort | undefined,
+  chatId: string,
 ): Promise<NormalizedResponse> {
   const request = {
     modelId,
@@ -2556,6 +2557,7 @@ function callPreparedAssembly(
     ...gatewayAssemblyOutputAllocation(assembly),
     stream: false,
     logContext: { correlationId },
+    reasoningScope: `chat:${chatId}`,
   };
   return toolTurn === undefined
     ? model.call(request, signal)
@@ -2608,6 +2610,7 @@ async function assembleAndCallBuffered(
     abortSignal,
     correlationId,
     run.toolTurn,
+    prepared.chat.id,
   );
   return { assembly, response };
 }
@@ -4497,6 +4500,7 @@ async function assembleAndCallRegeneration(
       ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
       stream: false,
       logContext: { correlationId },
+      reasoningScope: `chat:${prepared.chat.id}`,
     },
     signal,
   );

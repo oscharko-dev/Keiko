@@ -1285,10 +1285,19 @@ is final for the coding runtime (`runtimeRetry=refused`). The provider usage of 
 discarded (a repair's first answer, a rejected tool call) counts against the run's prompt
 allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemptCount`,
 `discardedPromptTokens`, `discardedCompletionTokens`). The correction the model receives is one fixed
-sentence, and the failed answer's reasoning is never recorded. Prior reasoning is never resent
-upstream: the coding sidecar drops the reasoning fields of prior assistant messages and every
-assistant message that carries nothing but reasoning, and `coding-sidecar.gateway.request-validated`
-records the number dropped as `droppedReasoningMessageCount`. The text a model wrote beside its tool
+sentence, and the failed answer's reasoning is never recorded. Untrusted runtime reasoning is
+never resent: the coding sidecar drops echoed reasoning fields and reasoning-only assistant
+messages, and `coding-sidecar.gateway.request-validated` counts the dropped messages. By default
+prior reasoning is omitted. A qualified provider can explicitly select `reasoningHistory`:
+`required-with-tools` restores all previous assistant reasoning when tools are advertised;
+`current-turn` restores only assistants after the latest user message. The gateway restores only
+completed responses from bounded, session- and provider-bound transient state, independently of
+`codingReasoningDisplay`; `reasoningHistoryField` selects `reasoning_content` (default) or `reasoning`.
+Missing, expired or ambiguous required state fails closed. Same-generation context refinements
+share state; a configuration generation change starts independent state. Full-history providers use a fresh
+native Coding session and the existing history replay instead of resuming/forking incomplete
+protocol state. `gateway.reasoning-history` records only closed state and counts; reasoning never
+enters evidence, logs, history exports or repository files. The text a model wrote beside its tool
 calls is resent as written, like a standalone OpenCode run (#3907); only a tool-calling turn without
 text goes upstream as `content: null`, and the same line counts the others as
 `toolCallTextMessageCount`. The gateway hands reasoning only to a call that asks for it with the

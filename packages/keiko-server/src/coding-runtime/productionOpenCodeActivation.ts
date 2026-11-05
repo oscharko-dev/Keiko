@@ -185,6 +185,7 @@ export interface ProductionOpenCodeActivationInput {
   >;
   readonly resolveGatewayRunMetadata?:
     ((modelId: string) => CodingWorkbenchSidecarGatewayRunMetadata | undefined) | undefined;
+  readonly requiresCompleteReasoningHistory?: ProductionOpenCodeBackendInput["requiresCompleteReasoningHistory"];
   /** The gateway's coding-capable model ids right now (#3903 AC1); absent offers none beside a run's. */
   readonly gatewayCodingModelIds?: (() => readonly string[]) | undefined;
   /** Explicit test/composition override; packaged production constructs its own verified port. */
@@ -343,6 +344,7 @@ function activatedPorts(
     backend: createProductionOpenCodeBackend({
       historyCapture: input.historyCapture,
       sessionContinuity: input.sessionContinuity,
+      requiresCompleteReasoningHistory: input.requiresCompleteReasoningHistory,
       portable,
       runtimeStateRoot: input.runtimeStateDir,
       processEnv: input.env,
