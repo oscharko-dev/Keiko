@@ -1,3 +1,4 @@
+import { browserChatMessages } from "./chat-message-projection.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { hasMixedToolGroundingScope } from "./chat-grounding.js";
 import {
@@ -310,7 +311,7 @@ async function persistStreamedTurn(
   );
   return {
     chat: updatedChat,
-    messages: [canonicalUser, assistantMessage],
+    messages: browserChatMessages([canonicalUser, assistantMessage]),
     usage: turn.response.usage,
     memory: { ...memory, actions },
     ...(conversationImageDeliveries(request).length === 0

@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
 import type { ContextLaneId } from "@oscharko-dev/keiko-contracts";
@@ -55,6 +55,7 @@ import { GROUNDED_PACK_VALIDATION_MESSAGE } from "./grounded-pack-validation.js"
 import { sentPromptContext } from "./grounded-prompt-context.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import {
+  defaultRetriever,
   buildLabeledAnswerCitations,
   groundedSourceScopeFingerprint,
   buildConnectedScopes,
@@ -3711,4 +3712,104 @@ describe("createMultiSourceAnswerer correlation threading", () => {
       await built.dispose?.();
     }
   });
+});
+
+describe("ordinary folder recursive retrieval (#4161)", () => {
+  function deepFolderScopes(): ChatConnectedScope[] {
+    const depth = Array.from({ length: 48 }, (_, index) => `layer-${String(index)}`).join("/");
+    return ["alpha", "beta"].map((label, index) => {
+      const root = join(tmp, label);
+      for (const [path, text] of [
+        [
+          "handbook/top.md",
+          `# Session renewal\nThe ${label} session renewal interval is ${index === 0 ? "137" : "293"} seconds.\n`,
+        ],
+        [
+          `handbook/${depth}/manual.md`,
+          `# Session renewal\nThe ${label} session renewal retry count is ${index === 0 ? "17" : "29"}.\n`,
+        ],
+        ["outside.md", "Session renewal MUSTNOTREAD outside the selected scope.\n"],
+      ] as const) {
+        const full = join(root, path);
+        mkdirSync(dirname(full), { recursive: true });
+        writeFileSync(full, text);
+      }
+      return { kind: "directory", root, relativePaths: ["handbook"], connectedAtMs: NOW };
+    });
+  }
+
+  it.each([false, true])(
+    "retrieves both deep roots and discloses bounded omissions (bounded=%s)",
+    async (bounded) => {
+      const scopes = deepFolderScopes();
+      const chatId = makeChat(scopes);
+      const deps = recordingDeps([]);
+      const realRetriever = defaultRetriever(
+        new AbortController().signal,
+        deps,
+        "deep-folder-proof",
+      );
+      const sent: LabeledPack[] = [];
+      const retriever: GroundedRetriever = (input, signal) =>
+        realRetriever(
+          bounded
+            ? {
+                ...input,
+                budget: {
+                  ...DEFAULT_EXPLORATION_BUDGET,
+                  ...input.budget,
+                  filesReadMax: 1,
+                  followUpPassesMax: 0,
+                },
+              }
+            : input,
+          signal,
+        );
+      const answerer: MultiSourceAnswerer = (_question, packs) => {
+        sent.push(...packs);
+        return Promise.resolve(
+          packs
+            .flatMap(({ pack }, index) =>
+              pack.files.map(
+                (file) =>
+                  `Session renewal evidence [source:${String(index + 1)}|${file.scopePath}:1-2].`,
+              ),
+            )
+            .join("\n"),
+        );
+      };
+      const result = await handleGroundedAsk(
+        ctx(
+          JSON.stringify({
+            chatId,
+            content: "What are the session renewal interval and retry count in alpha and beta?",
+          }),
+        ),
+        deps,
+        undefined,
+        { retriever, answerer },
+      );
+      expect(result.status).toBe(200);
+      expect(sent).toHaveLength(2);
+      expect(sent.map(({ pack }) => pack.files.length)).toEqual(bounded ? [1, 1] : [2, 2]);
+      const source = sent
+        .flatMap(({ pack }) =>
+          pack.files.flatMap((file) => file.excerpts.map((excerpt) => excerpt.content)),
+        )
+        .join("\n");
+      expect(source).not.toContain("MUSTNOTREAD");
+      if (!bounded) {
+        for (const fact of ["137", "293", "17", "29"]) expect(source).toContain(fact);
+        expect(
+          sent.every(({ pack }) => pack.files.some((file) => file.scopePath.endsWith("manual.md"))),
+        ).toBe(true);
+      }
+      const answer = result.body as Extract<GroundedAnswer, { groundingKind: "connected-context" }>;
+      expect(answer.citations).toHaveLength(bounded ? 2 : 4);
+      expect(answer.omittedCount).toBe(bounded ? 2 : 0);
+      expect(answer.uncertainty.filter((item) => item.kind === "budget-clipped")).toHaveLength(
+        bounded ? 2 : 0,
+      );
+    },
+  );
 });

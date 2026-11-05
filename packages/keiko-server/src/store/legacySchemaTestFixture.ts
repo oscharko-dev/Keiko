@@ -1,3 +1,4 @@
+import { CHAT_HISTORY_SEARCH_SCHEMA, DROP_CHAT_HISTORY_SEARCH } from "./chatHistorySearchSchema.js";
 import type { DatabaseSync } from "node:sqlite";
 import { MIGRATIONS, SCHEMA_VERSION } from "./schema.js";
 
@@ -28,6 +29,10 @@ interface VersionRollback {
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
+  {
+    version: 59,
+    sql: `${DROP_CHAT_HISTORY_SEARCH} DROP VIEW chat_history_search_source; ALTER TABLE chat_messages DROP COLUMN document_context_json; ${CHAT_HISTORY_SEARCH_SCHEMA}`,
+  },
   {
     version: 56,
     sql: `DROP TRIGGER chat_history_search_insert;

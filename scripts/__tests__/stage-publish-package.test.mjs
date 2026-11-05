@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   assertWorkspacePack,
+  physicalBundleManifest,
   createStagedPublishPackage,
   stagedVendorDirectory,
   workspacePackInvocation,
@@ -159,6 +160,47 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+describe("physical bundle dependency ownership (#3582)", () => {
+  it.each([
+    ["npm:foo@^1.0.0", "npm:bar@1.2.0"],
+    ["npm:@scope/foo@^1.0.0", "npm:@scope/bar@1.2.0"],
+    ["npm:foo@^1.0.0", "1.2.0"],
+    ["^1.0.0", "npm:foo@1.2.0"],
+  ])("refuses a different dependency identity (%s / %s)", (sourceRange, rootRange) => {
+    expect(() =>
+      physicalBundleManifest(
+        { name: "owner", dependencies: { codec: sourceRange } },
+        { bundleDependencies: [], dependencies: { codec: rootRange } },
+      ),
+    ).toThrow(/not equivalently root-owned/u);
+  });
+  it.each([{}, { dependencies: { ws: "2.0.0" } }, { optionalDependencies: { ws: "1.0.0" } }])(
+    "refuses an unpromoted, incompatible or weakened required edge (%j)",
+    (root) => {
+      expect(() =>
+        physicalBundleManifest(
+          { name: "owner", dependencies: { ws: "^1.0.0" } },
+          { ...root, bundleDependencies: [] },
+        ),
+      ).toThrow(/not equivalently root-owned/u);
+    },
+  );
+  it("retains bundled sibling edges and leaves the archive/source untouched", () => {
+    const source = {
+      name: "owner",
+      peerDependencies: { sibling: "1.0.0", ws: "^1.0.0" },
+      peerDependenciesMeta: { sibling: { optional: true }, ws: { optional: true } },
+    };
+    const result = physicalBundleManifest(source, {
+      bundleDependencies: ["sibling"],
+      dependencies: { ws: "1.2.0" },
+    });
+    expect(result.peerDependencies).toEqual({ sibling: "1.0.0" });
+    expect(result.peerDependenciesMeta).toEqual({ sibling: { optional: true } });
+    expect(source.peerDependencies.ws).toBe("^1.0.0");
+  });
+});
+
 describe("staged publish package", () => {
   it("keeps dynamic Windows pack destinations out of shell-visible arguments", () => {
     expect(workspacePackInvocation(String.raw`C:\Program Files\nodejs\npm.cmd`, "win32")).toEqual({
@@ -285,6 +327,18 @@ describe("staged publish package", () => {
     expect(server.peerDependenciesMeta).toEqual({
       "@oscharko-dev/keiko-contracts": { optional: true },
       react: { optional: true },
+    });
+    const physical = JSON.parse(
+      readFileSync(
+        join(staged.packageDir, "node_modules", "@oscharko-dev", "keiko-server", "package.json"),
+        "utf8",
+      ),
+    );
+    expect(physical.dependencies).toBeUndefined();
+    expect(physical.optionalDependencies).toBeUndefined();
+    expect(physical.peerDependencies).toEqual({ "@oscharko-dev/keiko-contracts": "1.2.3" });
+    expect(physical.peerDependenciesMeta).toEqual({
+      "@oscharko-dev/keiko-contracts": { optional: true },
     });
     expect(serverPackage?.files).toContain("dist/index.js");
     expect(serverPackage?.files).toContain("assets/schema.json");

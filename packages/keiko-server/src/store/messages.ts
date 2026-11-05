@@ -1,3 +1,4 @@
+import { decodeStoredDocumentContext, encodeStoredDocumentContext } from "./chatDocumentContext.js";
 import { projectChatToolMutationHistory } from "./chatToolMutationProjection.js";
 import { decodeChatToolTranscript } from "./chatToolTranscript.js";
 // ADR-0013 — chat_messages CRUD. shortResult is redacted+truncated to ≤ MAX_SHORT_RESULT before persist.
@@ -59,6 +60,7 @@ interface MessageRow {
   readonly client_turn_content_digest: string | null;
   readonly assistant_response_versions_json: string | null;
   readonly tool_transcript_json: string | null;
+  readonly document_context_json: string | null;
 }
 
 const MAX_ASSISTANT_RESPONSE_VERSIONS = 50;
@@ -176,6 +178,7 @@ function rowToMessage(db: DatabaseSync, row: MessageRow): ChatMessage {
     shortResult: row.short_result ?? undefined,
     taskType: row.task_type ?? undefined,
     groundedAnswer,
+    documentContext: decodeStoredDocumentContext(row.document_context_json, row.role),
     toolTranscript: decodeChatToolTranscript(row.tool_transcript_json, {
       messageId: row.id,
       chatId: row.chat_id,
@@ -185,7 +188,7 @@ function rowToMessage(db: DatabaseSync, row: MessageRow): ChatMessage {
 }
 
 const COLUMNS =
-  "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json, client_turn_id, client_turn_state, client_turn_content_digest, assistant_response_versions_json, tool_transcript_json";
+  "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json, client_turn_id, client_turn_state, client_turn_content_digest, assistant_response_versions_json, tool_transcript_json, document_context_json";
 
 const SQL_LIST = `SELECT ${COLUMNS} FROM chat_messages WHERE chat_id = ? ORDER BY timestamp ASC, rowid ASC`;
 const SQL_LIST_LIMITED = `
@@ -237,8 +240,8 @@ const SQL_VERSION_ASSISTANT_CONTENT = `
 `;
 const SQL_INSERT = `
 INSERT INTO chat_messages
-  (id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json, client_turn_id, client_turn_state, client_turn_content_digest)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  (id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json, client_turn_id, client_turn_state, client_turn_content_digest, document_context_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING ${COLUMNS}
 `;
 
@@ -826,6 +829,7 @@ export function insertMessage(
       clientTurnId ?? null,
       clientTurnState ?? null,
       clientTurnContentDigest ?? null,
+      encodeStoredDocumentContext(msg.documentContext, msg.role, redactors.redactContentString),
     ) as unknown as MessageRow;
   return rowToMessage(db, row);
 }

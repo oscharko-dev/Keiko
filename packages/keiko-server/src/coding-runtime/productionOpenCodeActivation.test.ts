@@ -53,6 +53,7 @@ function activationInput(
     runtimeStateDir: overrides.stateDir ?? join(tmpdir(), "keiko-runtime-state"),
     runtimeEvidence: { observe: () => undefined },
     gatewayReadiness: {
+      bindContinuationRoute: () => undefined,
       waitForObservedRequest: () => Promise.resolve(false),
       verifyObserved: () => undefined,
       clear: () => undefined,

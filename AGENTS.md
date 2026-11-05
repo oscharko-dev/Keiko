@@ -1053,6 +1053,12 @@ system that exists, never beside it:
   names its check, rule, site, and remediation. Run it before every pull request that changes
   product runtime behaviour.
 
+Expected Memory capability states and salience extraction/capture summaries use the registered
+`server.diagnostic.observation` timeline at info, without an error kind or automatic failure incident
+(#4247). Producers explicitly declare `diagnosticOutcome: "routine"`; unclassified diagnostics and
+real model, vault or vector-index failures retain the failure channel. Shutdown start is info even
+with work in flight; faulted cleanup retains its warning and failure evidence.
+
 `client.citation.activated` records a citation click and its source selection under the
 activation correlation. `reason` describes the source fingerprint: `matched` (one root),
 `unmatched`, `absent`, `malformed`, or `ambiguous` (several matches). `outcome` records
@@ -1299,7 +1305,7 @@ is final for the coding runtime (`runtimeRetry=refused`). The provider usage of 
 discarded (a repair's first answer, a rejected tool call) counts against the run's prompt
 allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemptCount`,
 `discardedPromptTokens`, `discardedCompletionTokens`). The correction the model receives is one fixed
-sentence, and the failed answer's reasoning is never recorded. Runtime reasoning fields are
+sentence, and the failed answer's reasoning is never recorded. For default and shared-history profiles, runtime reasoning fields are
 never forwarded directly: the coding sidecar drops echoed reasoning fields and reasoning-only assistant
 messages, and `coding-sidecar.gateway.request-validated` counts the dropped messages. By default
 prior reasoning is omitted. A qualified provider can explicitly select `reasoningHistory`:
@@ -1314,6 +1320,21 @@ protocol state. `gateway.reasoning-history` records only closed state and counts
 enters evidence, logs, history exports or repository files. Identifying echoed reasoning requires
 the runtime to preserve part types: reasoning already relabelled as ordinary text cannot be identified from
 the wire body. ADR-0137 D8 records the pinned runtime's interrupted-reasoning qualification limit.
+
+For the authenticated native Coding path, the separate explicit provider policy
+`reasoningContinuation: "required-with-tools"` uses the existing native session as the sole
+continuation owner (#4059). It is mutually exclusive with `reasoningHistory` and
+`reasoningHistoryField`; its qualified wire field remains `reasoning_content`. The native context
+hook reads canonical session context and removes excluded rounds from lowered context before
+provider serialization, excluding aborted, unfinished
+and foreign-model assistant rounds and orphaned tool results. Existing run and retained-session
+route bindings prevent continuation under changed or unproven routes. This native path retains exact
+completed reasoning independently of live display, checks the current credential floor, and applies
+full byte, context and spend limits. Missing, conflicting, secret-bearing or oversized state fails
+closed. It bypasses the shared transient history cache and preserves native resume/fork ownership;
+no additional reasoning store is introduced. Activity evidence contains counts and closed outcomes
+only.
+
 The text a model wrote beside its tool calls is resent as written, like a standalone OpenCode run
 (#3907); only a tool-calling turn without
 text goes upstream as `content: null`, and the same line counts the others as
@@ -1495,6 +1516,14 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   release-impact catalog.
 - Operator failure modes go in [`docs/troubleshooting/`](docs/troubleshooting/) using the template
   (Symptom / Root Cause / Diagnostic Steps / Resolution) — redacted, no live endpoints or logs.
+
+**Document retention and npm delivery (#4157, #3582).**
+Chat's extracted document text belongs to its admitted user message in the existing private store;
+keep the visible draft separate, redact before persistence and prompt use, include attachment text
+in history accounting/compaction and the existing private recall index, and keep evidence body-free.
+Publish staging keeps external ownership in vendor archives and the root, while the physical npm
+bundle omits equivalently promoted external edges. Preserve required/optional reachability and
+qualify project npm, isolated global npm and Yarn installs without bundling the external closure.
 
 ---
 

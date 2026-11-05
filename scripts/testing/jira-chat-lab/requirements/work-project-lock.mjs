@@ -158,6 +158,27 @@ function release(directory, generation) {
   writeFileSync(join(generationPath(directory, generation), RELEASED), "", { mode: 0o600 });
 }
 
+/** Exclusive local output ownership for other labs, using the same atomic generations. */
+export async function withExclusiveProcessLock(directory, id, run) {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const generation = tryAcquire(directory, id);
+  if (generation === false) throw new Error("another lab process owns the output directory");
+  const assertOwned = () => {
+    if (
+      generations(directory).at(-1) !== generation ||
+      released(generationPath(directory, generation))
+    )
+      throw new Error("the lab process no longer owns the output directory");
+  };
+  try {
+    assertOwned();
+    return await run(assertOwned);
+  } finally {
+    assertOwned();
+    release(directory, generation);
+  }
+}
+
 /**
  * Runs `run` alone among the lanes sharing `directory` unless the journey writes no shared issue.
  *

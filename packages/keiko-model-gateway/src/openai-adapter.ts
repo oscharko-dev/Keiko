@@ -60,6 +60,7 @@ import {
   bindNormalizedToolCalls,
   carriedReasoning,
   normalizeChatResponse,
+  normalizedFinishReason,
   reasoningOfChatPayload,
   reasoningText,
   textFromContent,
@@ -698,7 +699,12 @@ function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig)
   return {
     model: request.modelId,
     messages: request.messages.map((message) =>
-      openAiCompatiblePromptMessage(message, config.reasoningHistoryField),
+      openAiCompatiblePromptMessage(
+        message,
+        config.reasoningHistoryField,
+        config.reasoningContinuation === "required-with-tools" ||
+          config.reasoningHistory !== undefined,
+      ),
     ),
     ...toolsField(request.tools),
     ...responseFormatField(request),
@@ -727,15 +733,6 @@ function buildStreamBody(
     ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
   };
 }
-
-const FINISH_REASONS: ReadonlySet<FinishReason> = new Set([
-  "stop",
-  "tool_calls",
-  "length",
-  "content_filter",
-  "error",
-  "cancelled",
-]);
 
 function firstStreamChoice(chunk: unknown): Record<string, unknown> | undefined {
   if (!isRecord(chunk) || !Array.isArray(chunk.choices)) {
@@ -767,9 +764,7 @@ function reasoningFromChunk(chunk: unknown): string | undefined {
 function finishReasonFromChunk(chunk: unknown): FinishReason | undefined {
   const choice = firstStreamChoice(chunk);
   const raw = choice?.finish_reason;
-  return typeof raw === "string" && FINISH_REASONS.has(raw as FinishReason)
-    ? (raw as FinishReason)
-    : undefined;
+  return normalizedFinishReason(raw);
 }
 
 function nonNegativeCount(value: unknown): number {
@@ -1107,6 +1102,7 @@ function redactResponse(
   secrets: readonly string[],
   isExactContentTool: (alias: string) => boolean,
   policy: ContentRedactionPolicy,
+  requiredReasoning: boolean,
 ): RedactedResponse {
   const exactContent = literalScrub(secrets);
   const redacted: NormalizedResponse = {
@@ -1118,9 +1114,30 @@ function redactResponse(
     structuredOutput: redactRecord(response.structuredOutput, secrets, policy),
     ...(response.reasoning === undefined
       ? {}
-      : { reasoning: redactContent(response.reasoning, policy, secrets) }),
+      : {
+          reasoning: requiredReasoning
+            ? preserveRequiredReasoning(response.reasoning, secrets)
+            : redactContent(response.reasoning, policy, secrets),
+        }),
   };
   return { response: redacted, toolArgumentsRedacted: exactContent.changed };
+}
+
+/** Opaque provider continuation may pass the credential floor only byte for byte. */
+function preserveRequiredReasoning(text: string, secrets: readonly string[]): string {
+  if (redactContent(text, "preserve", secrets) !== text)
+    throw new ResponseRedactionError(
+      "Required model continuation state failed the credential floor.",
+      secrets,
+    );
+  return text;
+}
+
+function requiresReasoningState(request: GatewayCallRequest, config: ModelProviderConfig): boolean {
+  return (
+    request.reasoningDelivery === "forward" &&
+    config.reasoningContinuation === "required-with-tools"
+  );
 }
 
 function providerReportedUsage(payload: unknown): boolean {
@@ -1134,13 +1151,23 @@ function bindCatalogResponse(
   response: NormalizedResponse,
   secrets: readonly string[],
   catalog: GatewayToolCatalogBridge,
-  options: { readonly usageReported: boolean; readonly policy: ContentRedactionPolicy },
+  options: {
+    readonly usageReported: boolean;
+    readonly policy: ContentRedactionPolicy;
+    readonly requiredReasoning: boolean;
+  },
   onToolArgumentsRedacted: (redactedStringCount: number, toolCallCount: number) => void,
 ): NormalizedResponse {
   const { usageReported, policy } = options;
   try {
     catalog.assertNativeTransport(response);
-    const redacted = redactResponse(response, secrets, catalog.isExactContentTool, policy);
+    const redacted = redactResponse(
+      response,
+      secrets,
+      catalog.isExactContentTool,
+      policy,
+      options.requiredReasoning,
+    );
     if (redacted.toolArgumentsRedacted > 0) {
       onToolArgumentsRedacted(redacted.toolArgumentsRedacted, response.toolCalls.length);
     }
@@ -1798,6 +1825,28 @@ function* flushedLanes(lanes: StreamTextLanes): Generator<StreamTextChunk> {
   if (content.length > 0) yield { type: "delta", token: content };
 }
 
+function streamTextLanes(read: StreamRead, report: StreamReport): StreamTextLanes {
+  const project = (text: string): string =>
+    redactContent(text, contentPolicy(read.request), read.secrets, {
+      onCodeProjection: (projection): void => {
+        report.redaction.streamCodeRegions += projection.regions;
+        report.redaction.streamCodeDepthRefusals += projection.depthRefusals;
+        report.redaction.streamCodeSizeRefusals += projection.sizeRefusals;
+        report.redaction.streamCodeSyntaxRefusals += projection.syntaxRefusals;
+      },
+    });
+  const lanes: StreamTextLanes = {
+    reasoning: createStreamingRedactor(
+      requiresReasoningState(read.request, read.config)
+        ? (text): string => preserveRequiredReasoning(text, read.secrets)
+        : project,
+      read.secrets,
+    ),
+    content: createStreamingRedactor(project, read.secrets),
+  };
+  return lanes;
+}
+
 export class OpenAiAdapter implements ProviderAdapter {
   readonly attemptAdmissionBoundary = "transport";
   private readonly now: () => number;
@@ -1815,7 +1864,11 @@ export class OpenAiAdapter implements ProviderAdapter {
     request: GatewayCallRequest,
     config: ModelProviderConfig,
   ): Promise<NormalizedResponse> => {
-    const secrets = [config.apiKey, config.baseUrl];
+    const secrets = [
+      config.apiKey,
+      config.baseUrl,
+      ...(requiresReasoningState(request, config) ? (request.reasoningStateSecrets ?? []) : []),
+    ];
     if (request.cancellationSignal?.aborted === true) {
       throw requestAbortError(
         request.cancellationSignal,
@@ -1864,7 +1917,11 @@ export class OpenAiAdapter implements ProviderAdapter {
     config: ModelProviderConfig,
     bounds?: StreamReadBounds,
   ): AsyncGenerator<GatewayStreamChunk> {
-    const secrets = [config.apiKey, config.baseUrl];
+    const secrets = [
+      config.apiKey,
+      config.baseUrl,
+      ...(requiresReasoningState(request, config) ? (request.reasoningStateSecrets ?? []) : []),
+    ];
     if (request.cancellationSignal?.aborted === true) {
       throw requestAbortError(
         request.cancellationSignal,
@@ -1931,19 +1988,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     acc: StreamAccumulator,
     report: StreamReport,
   ): AsyncGenerator<StreamTextChunk> {
-    const project = (text: string): string =>
-      redactContent(text, contentPolicy(read.request), read.secrets, {
-        onCodeProjection: (projection): void => {
-          report.redaction.streamCodeRegions += projection.regions;
-          report.redaction.streamCodeDepthRefusals += projection.depthRefusals;
-          report.redaction.streamCodeSizeRefusals += projection.sizeRefusals;
-          report.redaction.streamCodeSyntaxRefusals += projection.syntaxRefusals;
-        },
-      });
-    const lanes: StreamTextLanes = {
-      reasoning: createStreamingRedactor(project, read.secrets),
-      content: createStreamingRedactor(project, read.secrets),
-    };
+    const lanes = streamTextLanes(read, report);
     const silenceMs = read.bounds?.silenceMs ?? STREAM_IDLE_TIMEOUT_MS;
     const completion = { sawDone: false };
     try {
@@ -2062,7 +2107,11 @@ export class OpenAiAdapter implements ProviderAdapter {
       normalized,
       secrets,
       catalog,
-      { usageReported: providerReportedUsage(payload), policy: contentPolicy(request) },
+      {
+        usageReported: providerReportedUsage(payload),
+        policy: contentPolicy(request),
+        requiredReasoning: requiresReasoningState(request, config),
+      },
       (redactedStringCount, toolCallCount) => {
         this.logToolArgumentsRedacted(config.modelId, redactedStringCount, toolCallCount);
       },

@@ -225,7 +225,7 @@ function salienceSeedFor(deps: UiHandlerDeps, modelId: string): number | undefin
 // Content-free operator diagnostic for the salience pipeline: routes through the single
 // redaction-safe server diagnostic sink (diagnostics-log.ts) instead of console.* directly, mirroring
 // the emitAdvisoryPhaseSummary pattern in memory-conflict-advisory.ts. errorClass doubles as a
-// machine-readable event-kind tag for non-error informational records (e.g. a capture summary).
+// machine-readable event-kind tag; expected records explicitly select the routine observation channel.
 // `correlationId` is always the turn-scoped id `captureSalientFromTurn` already resolved (or its
 // own fallback default) — never minted fresh here — so an informational salience diagnostic joins
 // the SAME trail as that turn's eventual failure diagnostic (`emitSalienceFailureDiagnostic`)
@@ -249,6 +249,7 @@ function emitSalienceDiagnostic(
     operation: "memory.salience",
     source,
     errorClass,
+    diagnosticOutcome: errorClass === "SalienceCaptureDropped" ? "source-skipped" : "routine",
     message,
     ...(code === undefined ? {} : { code }),
   });
@@ -654,8 +655,8 @@ function logSalienceCaptureSummary(
     "memory-salience.captureSalientFromTurn",
     "SalienceCaptureSummary",
     "salience-capture-summary",
-    `mode=${mode} proposed=${String(summary.proposed)} accepted=${String(summary.accepted)} ` +
-      `rejected=${String(summary.rejected)} merged=${String(summary.merged)}`,
+    `mode=${mode}:proposed=${String(summary.proposed)}:accepted=${String(summary.accepted)}:` +
+      `rejected=${String(summary.rejected)}:merged=${String(summary.merged)}`,
   );
 }
 
