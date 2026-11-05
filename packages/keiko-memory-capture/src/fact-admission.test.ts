@@ -3,10 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   admitProposedFact,
   reasonNamesOtherPerson,
+  type FactAdmission,
   type FactDropReason,
 } from "./fact-admission.js";
 
-function admit(text: string, evidence: string, body = evidence, about = "self") {
+function admit(text: string, evidence: string, body = evidence, about = "self"): FactAdmission {
   return admitProposedFact({ body, evidence, about }, text);
 }
 

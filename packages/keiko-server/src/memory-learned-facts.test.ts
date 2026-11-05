@@ -209,7 +209,7 @@ describe("a changed fact replaces the older one", () => {
     expect(liveBodies(vault, ctx)).toEqual([newer]);
     const [superseded] = recordsWith(vault, ctx, "superseded");
     expect(superseded?.body).toBe(older);
-    expect(superseded?.validity?.validUntil).toBeDefined();
+    expect(superseded?.validity.validUntil).toBeDefined();
     if (superseded === undefined) throw new Error("expected the older fact");
     expect(vault.listOutgoingEdges(superseded.id).map((edge) => edge.kind)).toEqual(["supersedes"]);
 
@@ -450,7 +450,7 @@ describe("what a fact keeps from the person's words", () => {
       await say(vault, ctx, said, [stated(said)]);
 
       const [record] = recordsWith(vault, ctx, "accepted");
-      expect(record?.validity?.validUntil).toBeGreaterThan(Date.now());
+      expect(record?.validity.validUntil).toBeGreaterThan(Date.now());
     },
   );
 });

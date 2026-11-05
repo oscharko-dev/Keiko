@@ -444,7 +444,7 @@ function noveltyOptions(
   if (relation.kind === "new") return {};
   return {
     replaces: relation.memoryId,
-    insert: (record) => {
+    insert: (record): MemoryRecord => {
       const applied = applyLearnedSupersession(vault, record, relation.memoryId);
       if (applied.pendingApproval) onSuperseded("supersession-proposed");
       else if (applied.superseded !== undefined) onSuperseded("superseded");

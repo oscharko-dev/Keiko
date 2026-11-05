@@ -49,7 +49,7 @@ function harness(reply: string): Harness {
     calls,
     deps: {
       callModel: () => Promise.resolve(reply),
-      callModelMessages: (messages) => {
+      callModelMessages: (messages): Promise<string> => {
         calls.push(messages);
         return Promise.resolve(reply);
       },

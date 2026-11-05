@@ -927,17 +927,28 @@ export async function insertSalienceMemoryWithNoveltyGate(
     neighborCount,
   });
   if (embedding !== null) {
-    try {
-      vault.upsertEmbedding(inserted.id, embedding);
-    } catch (error) {
-      // gateEmbeddingInput / storage rejection — capture already succeeded; drop the embedding.
-      logEmbeddingStoreRejected("store-rejected", error);
-    }
-    // A-MEM-style associative linking (#204, O-P4). Reuses the neighbour set already fetched for the
-    // novelty gate — no extra IO. Opt-in (default off => no edges, byte-identical).
-    autoLinkRelatedMemories(deps, vault, inserted.id, embedding, neighbors, calibration);
+    storeEmbeddingAndLinks(deps, vault, inserted.id, embedding, neighbors, calibration);
   }
   return { kind: "inserted", record: inserted };
+}
+
+function storeEmbeddingAndLinks(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  id: MemoryRecord["id"],
+  embedding: MemoryEmbeddingInput,
+  neighbors: ReturnType<typeof gatherScopeEmbeddings>,
+  calibration: MemoryEmbeddingCalibration,
+): void {
+  try {
+    vault.upsertEmbedding(id, embedding);
+  } catch (error) {
+    // gateEmbeddingInput / storage rejection — capture already succeeded; drop the embedding.
+    logEmbeddingStoreRejected("store-rejected", error);
+  }
+  // A-MEM-style associative linking (#204, O-P4). Reuses the neighbour set already fetched for the
+  // novelty gate — no extra IO. Opt-in (default off => no edges, byte-identical).
+  autoLinkRelatedMemories(deps, vault, id, embedding, neighbors, calibration);
 }
 
 const EMBEDDING_FAILURE_KIND = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;

@@ -887,6 +887,26 @@ type MemoryReadOps = Pick<
   | "countAcceptedMemoriesMissingEmbedding"
 >;
 
+function applyGraphMutationWithEvents(
+  db: DatabaseSync,
+  mutation: MemoryGraphMutation,
+  opts: ResolvedOptions,
+): MemoryGraphMutationResult {
+  const ready = runGraphMutation(db, mutation, opts);
+  for (const record of ready.inserted) {
+    opts.emit({ kind: "memory:inserted", record });
+  }
+  emitUpdatedRecords(ready.memories, opts);
+  for (const edge of ready.edges) {
+    opts.emit({ kind: "edge:inserted", edge });
+  }
+  return {
+    inserted: ready.inserted,
+    memories: ready.memories.map((updated) => updated.record),
+    edges: ready.edges,
+  };
+}
+
 function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWriteOps {
   return {
     insertMemory: (record: MemoryRecord): MemoryRecord => {
@@ -911,23 +931,8 @@ function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWri
         return ready.map((updated) => updated.record);
       });
     },
-    applyGraphMutation: (mutation: MemoryGraphMutation): MemoryGraphMutationResult => {
-      return withSidecarHardening(opts, () => {
-        const ready = runGraphMutation(db, mutation, opts);
-        for (const record of ready.inserted) {
-          opts.emit({ kind: "memory:inserted", record });
-        }
-        emitUpdatedRecords(ready.memories, opts);
-        for (const edge of ready.edges) {
-          opts.emit({ kind: "edge:inserted", edge });
-        }
-        return {
-          inserted: ready.inserted,
-          memories: ready.memories.map((updated) => updated.record),
-          edges: ready.edges,
-        };
-      });
-    },
+    applyGraphMutation: (mutation: MemoryGraphMutation): MemoryGraphMutationResult =>
+      withSidecarHardening(opts, () => applyGraphMutationWithEvents(db, mutation, opts)),
     deleteMemory: (id: MemoryId, options: DeleteMemoryOptions): void => {
       withSidecarHardening(opts, () => {
         deleteMemoryWithEvents(db, id, options, opts);
@@ -1228,6 +1233,27 @@ function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): Edge
   };
 }
 
+function hasForgetTombstoneForBodyRow(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+  scope: MemoryScope,
+  body: string,
+): boolean {
+  gateMemoryScope(scope);
+  const currentHash = opts.bodySuppressionHash(body);
+  const legacyHash = memoryBodySuppressionHash(body);
+  // GEN-PERF-PERSISTENCE-014 — presence-only check keyed on body_hash; never decrypts the sealed
+  // reason column. Same suppression decision as scanning + decrypting every tombstone, but O(1)
+  // rows and zero reason decrypts (strengthens confidentiality on this hot path).
+  const presence = selectForgetSuppressionBodyHashPresence(db, scope, currentHash, legacyHash);
+  if (presence.current) return true;
+  if (!presence.legacy) return false;
+  withSidecarHardening(opts, () => {
+    updateTombstoneBodyHashByScopeRows(db, scope, legacyHash, currentHash);
+  });
+  return true;
+}
+
 function buildTombstoneAndAccessOps(
   db: DatabaseSync,
   opts: ResolvedOptions,
@@ -1241,21 +1267,8 @@ function buildTombstoneAndAccessOps(
       validatedTombstonePage(db, opts, scopes, limit, after),
     recordForgottenStatements: (statements): readonly MemoryTombstone[] =>
       withSidecarHardening(opts, () => recordForgottenStatementRows(db, statements, opts)),
-    hasForgetTombstoneForBody: (scope: MemoryScope, body: string): boolean => {
-      gateMemoryScope(scope);
-      const currentHash = opts.bodySuppressionHash(body);
-      const legacyHash = memoryBodySuppressionHash(body);
-      // GEN-PERF-PERSISTENCE-014 — presence-only check keyed on body_hash; never decrypts the sealed
-      // reason column. Same suppression decision as scanning + decrypting every tombstone, but O(1)
-      // rows and zero reason decrypts (strengthens confidentiality on this hot path).
-      const presence = selectForgetSuppressionBodyHashPresence(db, scope, currentHash, legacyHash);
-      if (presence.current) return true;
-      if (!presence.legacy) return false;
-      withSidecarHardening(opts, () => {
-        updateTombstoneBodyHashByScopeRows(db, scope, legacyHash, currentHash);
-      });
-      return true;
-    },
+    hasForgetTombstoneForBody: (scope: MemoryScope, body: string): boolean =>
+      hasForgetTombstoneForBodyRow(db, opts, scope, body),
     hasSemanticallySimilarForgetTombstone: (scope, candidate, threshold): boolean => {
       gateMemoryScope(scope);
       return hasSemanticallySimilarForgetTombstoneRow(db, scope, opts.cipher, candidate, threshold);

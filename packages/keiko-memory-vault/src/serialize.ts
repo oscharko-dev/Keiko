@@ -42,39 +42,34 @@ import type { MemoryContentCipher } from "./cipher.js";
 // cleartext so SQL indexes and the UI scope display keep working without a key. Crypto is confined
 // to the two wrapper functions below; the pure row↔record builders never see a key.
 
-function openNullable(cipher: MemoryContentCipher, value: string | null): string | null {
-  return value === null ? null : cipher.openString(value);
+type ContentColumns = Pick<
+  MemoryRow,
+  "body" | "payload_json" | "tags_json" | "capture_rationale" | "stale_reason" | "evidence_span"
+>;
+
+// One mapping for both directions, so a newly sealed column cannot be sealed but never opened.
+function mapContentColumns<T extends ContentColumns>(row: T, map: (value: string) => string): T {
+  const nullable = (value: string | null): string | null => (value === null ? null : map(value));
+  return {
+    ...row,
+    body: map(row.body),
+    payload_json: nullable(row.payload_json),
+    tags_json: map(row.tags_json),
+    capture_rationale: nullable(row.capture_rationale),
+    stale_reason: nullable(row.stale_reason),
+    evidence_span: nullable(row.evidence_span),
+  };
 }
 
 // Returns a row whose sealed content columns are decrypted in place, so the pure builders below run
 // on plaintext exactly as they did before encryption landed.
 function decryptContentColumns(row: MemoryRow, cipher: MemoryContentCipher): MemoryRow {
-  return {
-    ...row,
-    body: cipher.openString(row.body),
-    payload_json: openNullable(cipher, row.payload_json),
-    tags_json: cipher.openString(row.tags_json),
-    capture_rationale: openNullable(cipher, row.capture_rationale),
-    stale_reason: openNullable(cipher, row.stale_reason),
-    evidence_span: openNullable(cipher, row.evidence_span),
-  };
-}
-
-function sealNullable(cipher: MemoryContentCipher, value: string | null): string | null {
-  return value === null ? null : cipher.sealString(value);
+  return mapContentColumns(row, (value) => cipher.openString(value));
 }
 
 // Returns a write-row whose content columns are sealed, leaving every metadata column untouched.
 function encryptContentColumns(row: MemoryRowWrite, cipher: MemoryContentCipher): MemoryRowWrite {
-  return {
-    ...row,
-    body: cipher.sealString(row.body),
-    payload_json: sealNullable(cipher, row.payload_json),
-    tags_json: cipher.sealString(row.tags_json),
-    capture_rationale: sealNullable(cipher, row.capture_rationale),
-    stale_reason: sealNullable(cipher, row.stale_reason),
-    evidence_span: sealNullable(cipher, row.evidence_span),
-  };
+  return mapContentColumns(row, (value) => cipher.sealString(value));
 }
 
 export interface MemoryRow {
@@ -131,6 +126,24 @@ function buildScopeFromRow(kind: string, coord: string): MemoryScope {
   }
 }
 
+// Like the tags and payload columns, a damaged list is a storage error, never a silent guess.
+function parsedSourceMessageIds(json: string | null): readonly string[] | undefined {
+  if (json === null) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new MemoryStorageError("schema-mismatch", "Stored source message ids JSON is invalid.");
+  }
+  if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== "string")) {
+    throw new MemoryStorageError(
+      "schema-mismatch",
+      "Stored source message ids JSON must be an array of strings.",
+    );
+  }
+  return parsed as string[];
+}
+
 function buildProvenanceFromRow(row: MemoryRow): MemoryProvenance {
   const base: {
     sourceKind: MemorySourceKind;
@@ -163,9 +176,8 @@ function buildProvenanceFromRow(row: MemoryRow): MemoryProvenance {
     base.captureRationale = row.capture_rationale;
   }
   if (row.evidence_span !== null) base.evidenceSpan = row.evidence_span;
-  if (row.source_message_ids_json !== null) {
-    base.sourceMessageIds = JSON.parse(row.source_message_ids_json) as readonly string[];
-  }
+  const sourceMessageIds = parsedSourceMessageIds(row.source_message_ids_json);
+  if (sourceMessageIds !== undefined) base.sourceMessageIds = sourceMessageIds;
   if (row.model_provider !== null && row.model_id !== null) {
     const identity: { provider: string; modelId: string; modelRevision?: string } = {
       provider: row.model_provider,
@@ -257,39 +269,8 @@ function decryptedRowToMemoryRecord(row: MemoryRow): MemoryRecord {
   return out;
 }
 
-export interface MemoryRowWrite {
-  readonly id: string;
-  readonly schema_version: string;
-  readonly type: string;
-  readonly scope_kind: string;
-  readonly scope_coordinate: string;
-  readonly body: string;
-  readonly payload_json: string | null;
-  readonly status: string;
-  readonly sensitivity: string;
-  readonly pinned: number;
-  readonly confidence: number;
-  readonly valid_from: number;
-  readonly valid_until: number | null;
-  readonly stale_reason: string | null;
-  readonly tags_json: string;
-  readonly source_kind: string;
-  readonly source_conversation_id: string | null;
-  readonly source_workflow_run_id: string | null;
-  readonly source_evidence_manifest_id: string | null;
-  readonly captured_at: number;
-  readonly capture_rationale: string | null;
-  readonly model_provider: string | null;
-  readonly model_id: string | null;
-  readonly model_revision: string | null;
-  readonly retention_policy_key: string | null;
-  readonly retention_retain_until: number | null;
-  readonly retention_notes: string | null;
-  readonly evidence_span: string | null;
-  readonly source_message_ids_json: string | null;
-  readonly created_at: number;
-  readonly updated_at: number;
-}
+// A written row has exactly the columns a read row has.
+export type MemoryRowWrite = MemoryRow;
 
 type ProvenanceRowFields = Pick<
   MemoryRowWrite,
