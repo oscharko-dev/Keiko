@@ -135,6 +135,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private readonly budget: ReturnType<typeof createHarnessCatalogBudget>;
   private bound: CatalogToolBinder | undefined;
   private readonly continuation: GatewayMessage[] = [];
+  private currentToolResponse: NormalizedResponse | undefined;
   private readonly settledExchanges: ChatToolExchange[] = [];
   private usableObservation = false;
   private readonly callIds = new Set<string>();
@@ -440,7 +441,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       .findMessageById(this.options.message.id)
       ?.toolTranscript?.exchanges.find((exchange) => exchange.call.id === id);
     requireDispatch(stored?.result !== undefined, "invalid", "recovery-required");
-    this.continuation.push(...gatewayMessagesForToolExchange(stored));
+    const messages = gatewayMessagesForToolExchange(stored);
+    this.continuation.push(
+      ...(this.currentToolResponse === undefined
+        ? messages
+        : messages.filter((entry) => entry.role === "tool")),
+    );
     this.settledExchanges.push(stored);
     // Only this turn's validated, redacted result actually published to the model is evidence.
     // A successful empty list is useful; a settled denial, failure or missing payload is not.
@@ -688,6 +694,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     return {
       ...request,
       stream: false,
+      reasoningScope: `chat:${this.options.message.chatId}`,
       messages: [
         this.instruction,
         ...request.messages,
@@ -758,10 +765,25 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         "denied",
         "budget-exhausted",
       );
+      this.retainToolResponse(request.modelId, response);
       for (const call of response.toolCalls) await this.dispatch(call); // NOSONAR typescript:S9382 -- dispatches share authority/budgets; receipts, mutation journals and transcripts must settle before the next admission
+      this.currentToolResponse = undefined;
       this.correctedSinceProgress = false;
     }
     requireDispatch(false, "denied", "budget-exhausted");
+  }
+
+  private retainToolResponse(modelId: string, response: NormalizedResponse): void {
+    const provider = this.options.deps.gatewayConfig
+      ?.current()
+      ?.providers.find((entry) => entry.modelId === modelId);
+    if (provider?.reasoningHistory === undefined) return;
+    this.currentToolResponse = response;
+    this.continuation.push({
+      role: "assistant",
+      content: response.content,
+      toolCalls: response.toolCalls,
+    });
   }
 
   /** Every round's usage, including attempts the gateway discarded, counts against the turn. */

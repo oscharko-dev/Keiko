@@ -3,6 +3,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  Gateway,
   createDefaultChatCapability,
   createGatewayToolCatalogBridge,
   parseGatewayConfig,
@@ -28,6 +29,7 @@ import { jiraChatActorDigest } from "./atlassian/jiraPodAccess.js";
 import { handleDecideChatWriteApproval } from "./atlassian/chatWriteApprovalRoutes.js";
 import { installMcpChatCatalogRuntime } from "./mcp/mcpChatCatalogRuntime.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { conversationForGateway } from "./conversation-gateway.js";
 
 const MODEL = "synthetic-combined-chat";
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
@@ -38,6 +40,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 interface Options {
+  readonly reasoningHistory?: "required-with-tools" | undefined;
   readonly write?: boolean;
   readonly repeat?: boolean;
   readonly batchSize?: number;
@@ -63,7 +66,7 @@ function context(body: Record<string, unknown>, params: Record<string, string> =
     correlationId: CORRELATION,
   };
 }
-function configure(deps: UiHandlerDeps): void {
+function configure(deps: UiHandlerDeps, reasoningHistory?: "required-with-tools"): void {
   const provider = {
     modelId: MODEL,
     baseUrl: "https://model.example.invalid/v1",
@@ -71,6 +74,7 @@ function configure(deps: UiHandlerDeps): void {
     timeoutMs: 5000,
     maxRetries: 0,
     retryBaseDelayMs: 1,
+    reasoningHistory,
   };
   deps.gatewayConfig?.set(
     parseGatewayConfig({
@@ -78,6 +82,9 @@ function configure(deps: UiHandlerDeps): void {
       capabilities: [
         {
           ...createDefaultChatCapability(MODEL),
+          ...(reasoningHistory === undefined
+            ? {}
+            : { contextWindow: 128_000, maxOutputTokens: 4_096 }),
           toolCalling: true,
           toolCallingVerification: {
             status: "verified",
@@ -110,6 +117,7 @@ function model(calls: GatewayCallRequest[], options: Options): ModelPort {
         finishReason: "stop",
         toolCalls: [],
         structuredOutput: null,
+        reasoning: "Inspect both configured sources.",
         usage: {
           requestId: `request-${String(calls.length)}`,
           promptTokens,
@@ -133,7 +141,7 @@ function model(calls: GatewayCallRequest[], options: Options): ModelPort {
       const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
       return Promise.resolve({
         ...response,
-        content: "",
+        content: options.reasoningHistory === undefined ? "" : "Inspecting both sources.",
         finishReason: "tool_calls",
         toolCalls: Array.from({ length: batchSize }, (_, index) => {
           const external = index % 2 === 0;
@@ -254,7 +262,7 @@ function fixture(options: Options = {}): Fixture {
     await deps.dispose?.();
     rmSync(root, { recursive: true, force: true });
   });
-  configure(deps);
+  configure(deps, options.reasoningHistory);
   deps.store.createProject(root);
   const chat = deps.store.createChat(root, "Synthetic combined", MODEL);
   deps.store.updateChat(
@@ -513,4 +521,58 @@ it("keeps the prompt allowance shared when source execution changes", async () =
   await pending;
   expect(f.effects).toEqual(["mcp-read", "jira-read"]);
   expect(f.calls).toHaveLength(2);
+});
+
+it("preserves complete parallel assistant exchanges through real Gateway and reloaded Chat history", async () => {
+  const f = fixture({ reasoningHistory: "required-with-tools" });
+  const config = f.deps.gatewayConfig?.current();
+  if (config === undefined) throw new TypeError("Missing gateway fixture config");
+  const upstream = model(f.calls, { reasoningHistory: "required-with-tools" });
+  const gateway = new Gateway(config, {
+    adapter: {
+      call: (request): Promise<NormalizedResponse> =>
+        upstream.call(
+          { ...request, attemptAdmission: undefined },
+          request.cancellationSignal ?? new AbortController().signal,
+        ),
+    },
+  });
+  const qualified = {
+    ...f,
+    deps: {
+      ...f.deps,
+      modelPortFactory: (): ModelPort => ({
+        call: (request): Promise<NormalizedResponse> => gateway.chat(request),
+      }),
+    },
+  };
+  expect((await send(qualified)).status).toBe(200);
+  const completed = f.calls[1]?.messages.find(
+    (message) => message.role === "assistant" && message.toolCalls !== undefined,
+  );
+  expect(completed).toMatchObject({
+    content: "Inspecting both sources.",
+    reasoningContent: "Inspect both configured sources.",
+  });
+  expect(completed?.toolCalls).toHaveLength(2);
+  const first = f.calls[0];
+  if (first === undefined) throw new TypeError("Missing initial Chat call");
+  await expect(
+    gateway.chat({
+      ...first,
+      attemptAdmission: undefined,
+      messages: [
+        ...conversationForGateway(f.deps.store.listMessages(f.chatId)),
+        { role: "user", content: "Continue inspecting." },
+      ],
+    }),
+  ).resolves.toMatchObject({ content: "Both source observations are available." });
+  expect(
+    f.calls[2]?.messages
+      .filter((message) => message.role === "assistant")
+      .map((message) => message.reasoningContent),
+  ).toEqual(["Inspect both configured sources.", "Inspect both configured sources."]);
+  expect(JSON.stringify(f.deps.store.listMessages(f.chatId))).not.toContain(
+    "Inspect both configured sources.",
+  );
 });

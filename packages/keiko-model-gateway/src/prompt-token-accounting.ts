@@ -32,6 +32,8 @@ export interface OpenAiCompatiblePromptMessage {
   readonly role: string;
   readonly content: string | ProviderMessageContentParts | null;
   readonly tool_call_id?: string | undefined;
+  readonly reasoning_content?: string | undefined;
+  readonly reasoning?: string | undefined;
   readonly tool_calls?:
     | readonly {
         readonly id: string;
@@ -68,7 +70,10 @@ function providerContent(
   return providerContentParts(message.contentParts);
 }
 
-export function openAiCompatiblePromptMessage(message: ChatMessage): OpenAiCompatiblePromptMessage {
+export function openAiCompatiblePromptMessage(
+  message: ChatMessage,
+  reasoningField: "reasoning_content" | "reasoning" = "reasoning_content",
+): OpenAiCompatiblePromptMessage {
   const toolCalls = message.toolCalls?.map((call) => ({
     id: call.id,
     type: "function" as const,
@@ -82,6 +87,9 @@ export function openAiCompatiblePromptMessage(message: ChatMessage): OpenAiCompa
       ? { tool_call_id: message.toolCallId }
       : {}),
     ...(hasToolCalls ? { tool_calls: toolCalls } : {}),
+    ...(message.role === "assistant" && message.reasoningContent !== undefined
+      ? { [reasoningField]: message.reasoningContent }
+      : {}),
   };
 }
 
@@ -99,6 +107,7 @@ export function openAiCompatiblePromptTools(
 }
 
 export interface GatewayPromptTokenOptions {
+  readonly reasoningHistoryField?: "reasoning_content" | "reasoning" | undefined;
   readonly contextWindow?: number | undefined;
   /**
    * A positive provider count already includes the media contribution (images and PDF documents).
@@ -122,7 +131,7 @@ function countMessageTokens(
   accounting: ContextTokenAccounting | undefined,
   options: GatewayPromptTokenOptions,
 ): number {
-  const projected = openAiCompatiblePromptMessage(message);
+  const projected = openAiCompatiblePromptMessage(message, options.reasoningHistoryField);
   const parts =
     typeof projected.content === "string" || projected.content === null
       ? undefined

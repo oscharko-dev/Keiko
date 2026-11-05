@@ -12,6 +12,7 @@
 // routing invariant is preserved.
 
 export { KEIKO_MODEL_GATEWAY_VERSION } from "./version.js";
+export { ReasoningHistoryUnavailableError } from "./reasoning-history.js";
 
 export type {
   CircuitBreakerConfig,

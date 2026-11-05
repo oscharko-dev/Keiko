@@ -24111,10 +24111,10 @@
       "failureClass": "gateway-chat-call",
       "requirementContract": "gateway-chat-call",
       "productSurfaces": ["keiko-model-gateway"],
-      "lifecycleTransitions": ["end", "failure", "start"],
+      "lifecycleTransitions": ["end", "failure", "start", "state"],
       "lifecycleOperations": {
         "start": ["gateway.chat.started"],
-        "state": [],
+        "state": ["gateway.reasoning-history"],
         "end": ["gateway.chat.completed"],
         "failure": ["gateway.chat.failed"],
         "loss": []
@@ -24131,10 +24131,18 @@
         {
           "op": "gateway.chat.started",
           "mode": "correlation"
+        },
+        {
+          "op": "gateway.reasoning-history",
+          "mode": "correlation"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["gateway.chat.completed", "gateway.chat.started"],
+      "resourceSignals": [
+        "gateway.chat.completed",
+        "gateway.chat.started",
+        "gateway.reasoning-history"
+      ],
       "replayReferences": [],
       "operations": [
         {
@@ -24352,6 +24360,42 @@
             "causeChain": false
           },
           "proofIds": ["gateway.chat.started.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "gateway.reasoning-history",
+          "owner": "keiko-model-gateway",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "messageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "reasoningBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "state",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["gateway.reasoning-history.lifecycle"],
           "replayReferences": [],
           "missingObligations": []
         }
@@ -27411,12 +27455,16 @@
       "lifecycleTransitions": ["end", "failure", "start", "state"],
       "lifecycleOperations": {
         "start": ["gateway.stream.started"],
-        "state": ["gateway.stream.buffered-fallback"],
+        "state": ["gateway.reasoning-history", "gateway.stream.buffered-fallback"],
         "end": ["gateway.stream.abandoned", "gateway.stream.completed"],
         "failure": ["gateway.stream.failed"],
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "gateway.reasoning-history",
+          "mode": "correlation"
+        },
         {
           "op": "gateway.stream.abandoned",
           "mode": "correlation"
@@ -27440,6 +27488,7 @@
       ],
       "lossSignals": [],
       "resourceSignals": [
+        "gateway.reasoning-history",
         "gateway.stream.abandoned",
         "gateway.stream.buffered-fallback",
         "gateway.stream.completed",
@@ -27447,6 +27496,42 @@
       ],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "gateway.reasoning-history",
+          "owner": "keiko-model-gateway",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "messageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "reasoningBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "state",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["gateway.reasoning-history.lifecycle"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "gateway.stream.abandoned",
           "owner": "keiko-model-gateway",

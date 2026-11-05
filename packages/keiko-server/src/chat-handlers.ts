@@ -2625,7 +2625,10 @@ function callPreparedAssembly(
   signal: AbortSignal,
   correlationId: string | undefined,
   toolTurn: ChatToolTurnPort | undefined,
-  retryFollows: ContextWindowAttempt["retryFollows"],
+  continuation: {
+    readonly chatId: string;
+    readonly retryFollows: ContextWindowAttempt["retryFollows"];
+  },
 ): Promise<NormalizedResponse> {
   const request = {
     modelId,
@@ -2633,10 +2636,11 @@ function callPreparedAssembly(
     ...gatewayAssemblyOutputAllocation(assembly),
     stream: false,
     logContext: { correlationId },
+    reasoningScope: `chat:${continuation.chatId}`,
   };
   return toolTurn === undefined
     ? model.call(request, signal)
-    : toolTurn.call(model, request, signal, undefined, retryFollows);
+    : toolTurn.call(model, request, signal, undefined, continuation.retryFollows);
 }
 
 // One assembled attempt: plans the prompt from the CURRENT context profile, re-checks the provider
@@ -2686,7 +2690,7 @@ async function assembleAndCallBuffered(
     abortSignal,
     correlationId,
     run.toolTurn,
-    run.attempt.retryFollows,
+    { chatId: prepared.chat.id, retryFollows: run.attempt.retryFollows },
   );
   return { assembly, response };
 }
@@ -4644,6 +4648,7 @@ async function assembleAndCallRegeneration(
       ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
       stream: false,
       logContext: { correlationId },
+      reasoningScope: `chat:${prepared.chat.id}`,
     },
     signal,
   );
