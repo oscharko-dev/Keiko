@@ -529,7 +529,10 @@ async function failMutation(
   const failure = codingWorkbenchRuntimeApiError(error);
   dispatch({ kind: "mutation-failed", error: failure });
   if (failure.code === RUN_NOT_FOUND_CODE) requestCodingAppSessionReinspection();
-  if (isServerConflict(error)) await untilPreempted(refreshRun(), signal);
+  // A request that hit its deadline has an unknown outcome, and a start whose run already exists
+  // keeps going on the server: only a re-read shows it (#4271).
+  if (isServerConflict(error) || failure.code === RUNTIME_REQUEST_TIMEOUT_CODE)
+    await untilPreempted(refreshRun(), signal);
 }
 
 // A control that hit its own deadline is already recorded by the API layer with its call kind and

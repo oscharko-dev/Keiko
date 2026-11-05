@@ -11290,6 +11290,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "verification-not-evidenced",
           "model-unavailable",
           "workspace-unqualified",
+          "start-abandoned",
           "prompt-allowance-exhausted",
           "envelope-duration-exhausted",
           "output-exhausted-repeated",

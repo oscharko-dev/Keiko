@@ -1124,7 +1124,10 @@ request the Coding Workbench gave up on at its own client-side deadline (#4109):
 `question-reject`) and `deadlineMs`, under the failed request's correlation id; a mutation that
 Stop preempted is not a timeout and is not reported. The deadlines come from measurements: 10 s for
 status and snapshot reads, 15 s for Stop, 180 s for start (a cold start is unmeasured) and 60 s for
-every other, unmeasured, mutation. Stop is never queued behind another mutation: it ends the client
+every other, unmeasured, mutation. A start that hit its deadline re-reads the run, because the
+server may have started it; when the client hung up before a run existed, the server creates none
+and records `coding-runtime.operation.refused` with the route-level reason `start-abandoned`, a
+reason never stored or sent as a failure code. Stop is never queued behind another mutation: it ends the client
 wait of the one in flight (no alert, no failure) and drops those still waiting, and stays enabled
 while another mutation is pending. Closed values and one duration only.
 

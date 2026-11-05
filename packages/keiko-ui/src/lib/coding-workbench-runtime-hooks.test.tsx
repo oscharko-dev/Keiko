@@ -627,6 +627,16 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     return runtimeState({ run: { status: "ready", value: run, error: null }, ...overrides });
   }
 
+  // #4271: the server may have created the run while the client's wait ran out.
+  it("re-reads the run when a start hit its deadline, so a run that exists appears", async () => {
+    vi.mocked(startCodingWorkbenchRuntime).mockRejectedValueOnce(
+      new DOMException("The operation timed out.", "TimeoutError"),
+    );
+    const { mutations, refreshRun } = renderMutations(readyRunState(null, { canStart: true }));
+    await act(() => mutations.start("task", { projectMemoryEnabled: true }));
+    expect(refreshRun).toHaveBeenCalledOnce();
+  });
+
   it("starts a run and installs the server truth", async () => {
     vi.mocked(startCodingWorkbenchRuntime).mockResolvedValue(snapshot({ state: "starting" }));
     const { mutations, dispatch } = renderMutations(readyRunState(null, { canStart: true }));
