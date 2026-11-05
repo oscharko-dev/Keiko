@@ -276,6 +276,45 @@ the root's own authority. Nothing has to be migrated; start the run again.
 
 ---
 
+## A run fails at once because the repository holds Keiko's own runtime
+
+| Field             | Value                                                 |
+| ----------------- | ----------------------------------------------------- |
+| Severity          | Medium                                                |
+| Surface           | Local UI / Coding Workbench                           |
+| Stable identifier | `workspace-contains-runtime`, `workspace-unqualified` |
+
+**Symptom**
+
+The run fails within seconds, before any model call, with "Keiko refused this repository because its
+own coding runtime is stored inside it". Earlier builds showed `Failed. Failure: runtime-failed` and
+"The coding run ended with an internal error" for the same cause, with the advice to start the task
+again, which never helped.
+
+**Root Cause**
+
+The selected workspace holds the runtime's managed root. That is a Keiko checkout after
+`npm run dev:start`, which stages the runtime at `.portable-sidecar-payloads`, or any folder above the
+place Keiko is installed. A run must not be able to write to its own runtime, so the manager refuses
+before anything spawns. The refusal is not configurable.
+
+**Diagnostic Steps**
+
+1. Activity log, the run id: `op: "coding-runtime.start"` with
+   `code: "stage=start:reason=workspace-contains-runtime"`.
+2. In a dev checkout, the same code appears on the `[keiko-server:diagnostic]` line of
+   `.keiko/dev/dev-ui.log`.
+3. `stage=start:reason=sidecar-unmanaged` is a different cause: the runtime's executable lies outside
+   its own managed root, which points at a damaged payload rather than at the selected repository.
+
+**Resolution**
+
+Select another repository. To work on Keiko itself with Keiko, select a separate checkout or worktree
+of it, not the one that ran `dev:start`. A Windows checkout cannot start a coding run at all yet, and
+reports `gateway-service-unqualified` before this refusal can occur.
+
+---
+
 ## A run fails `runtime-failed` right after a long model turn, with `GATEWAY_MALFORMED_TOOL_CALL`
 
 | Field             | Value                                                                                                          |

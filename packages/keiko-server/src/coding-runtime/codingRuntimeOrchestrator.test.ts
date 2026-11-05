@@ -2630,6 +2630,37 @@ describe("CodingRuntimeOrchestrator", () => {
     );
   });
 
+  // A workspace that holds the runtime is the one managed start failure the operator can repair, so
+  // it alone leaves the internal-error code. Its precise reason stays in the diagnostic either way.
+  it.each([
+    ["workspace-contains-runtime", "workspace-unqualified"],
+    ["sidecar-unmanaged", "runtime-failed"],
+    ["spawn-failed", "runtime-failed"],
+  ] as const)(
+    "settles a start the manager refused with %s as %s",
+    async (managerCode, failureCode) => {
+      const captured = captureDiagnostics();
+      const f = fixture(undefined, undefined, [], captured.diagnostics);
+      f.manager.start.mockResolvedValueOnce({
+        ok: false,
+        retryable: false,
+        failureCode: managerCode,
+      });
+
+      expect(successfulSnapshot(await f.orchestrator.start(start))).toMatchObject({
+        state: "failed",
+        failureCode,
+      });
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          operation: "coding-runtime.start",
+          code: `stage=start:reason=${managerCode}`,
+        }),
+      );
+    },
+  );
+
   // #3565 Observation 17: a model the gateway does not admit reached the customer as
   // `authority-resolution-failed` (403) and the log named no cause. The start now answers with
   // `model-unavailable` and the diagnostic carries the sidecar's closed reason.

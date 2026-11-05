@@ -1260,6 +1260,17 @@ function promptInputFields(
   };
 }
 
+/**
+ * What a start the manager refused settles as. A workspace that holds the runtime is the one such
+ * refusal the operator can repair, so it names the workspace. The rest are internal, and the
+ * diagnostic keeps every precise reason.
+ */
+function managedStartFailureCode(
+  code: CodingRuntimeFailureCode,
+): CodingWorkbenchRuntimeFailureCode {
+  return code === "workspace-contains-runtime" ? "workspace-unqualified" : "runtime-failed";
+}
+
 function recordRuntimeStartFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
@@ -4549,7 +4560,7 @@ export class CodingRuntimeOrchestrator {
     }
     if (!result.ok) {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, result.failureCode);
-      return this.transitionActive("failed", "runtime-failed");
+      return this.transitionActive("failed", managedStartFailureCode(result.failureCode));
     }
     return undefined;
   }

@@ -161,6 +161,7 @@ describe("Coding Workbench translations", () => {
     "codingWorkbench.composer.commands.review.description",
     "codingWorkbench.composer.blocked.commandsLoading",
     "codingWorkbench.event.failure.invalid-intent",
+    "codingWorkbench.event.failure.workspace-unqualified",
   ] as const)("localizes %s in both catalogs", (key) => {
     const en = translateCodingWorkbench("en", key, { name: "n", count: 1, position: 1, total: 1 });
     const de = translateCodingWorkbench("de", key, { name: "n", count: 1, position: 1, total: 1 });
@@ -170,6 +171,13 @@ describe("Coding Workbench translations", () => {
     if (key !== "codingWorkbench.composer.commands.active") expect(de).not.toBe(en);
     expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
     expect(de).not.toMatch(/\{\w+\}/u);
+  });
+
+  // Starting the same task again can never help here, so the sentence must not say so.
+  it("tells the operator to select another repository when it holds the runtime", () => {
+    const key = "codingWorkbench.event.failure.workspace-unqualified";
+    expect(translateCodingWorkbench("en", key)).toContain("Select another repository");
+    expect(translateCodingWorkbench("de", key)).toContain("Wähle ein anderes Repository");
   });
 
   it("keeps the placeholders the command menu fills in both languages", () => {

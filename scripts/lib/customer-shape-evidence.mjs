@@ -90,6 +90,7 @@ const START_DIAGNOSTIC_CODES = [
   "runtime-unqualified",
   "runtime-version-mismatch",
   "signature-unverified",
+  "workspace-contains-runtime",
   "workspace-root-denied",
   "workspace-unqualified",
 ].map((reason) => `stage=start:reason=${reason}`);

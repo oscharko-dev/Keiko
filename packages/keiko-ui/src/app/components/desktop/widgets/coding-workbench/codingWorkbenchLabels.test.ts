@@ -310,6 +310,8 @@ describe("eventDetail auxiliary outcome", () => {
     // ADR-0137 D10: a start the server refused before its first turn, because a file the first
     // prompt referenced or the slash command it opened with was not accepted.
     ["invalid-intent", "codingWorkbench.event.failure.invalid-intent"],
+    // A start the runtime refused because the selected repository holds Keiko's own runtime.
+    ["workspace-unqualified", "codingWorkbench.event.failure.workspace-unqualified"],
   ] as const)("renders a run that failed with %s as %s", (failureCode, key) => {
     const settled = runtimeEvent({ kind: "status", state: "failed", failureCode });
     expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runFailed");

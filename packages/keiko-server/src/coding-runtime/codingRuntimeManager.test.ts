@@ -1821,6 +1821,55 @@ describe("coding runtime manager", () => {
     });
   });
 
+  // A run must not be able to write to its own runtime. A checkout selected as its own workspace does
+  // this, because the dev lane stages the runtime inside it. Only this cause of an unmanaged runtime
+  // has something the operator can do about it, so the two are told apart. The managed root is the
+  // verified payload's, never the request's, so these cases place the workspace around that payload.
+  it.each([
+    ["below the workspace", (resourceRoot: string): string => resourceRoot],
+    [
+      "at the workspace itself",
+      (resourceRoot: string, payloadRootPath: string): string =>
+        join(resourceRoot, payloadRootPath),
+    ],
+  ])("refuses a managed root %s before anything spawns", async (_label, workspaceOf) => {
+    const { resourceRoot, verification, executablePath } = createPortableRuntimeFixture();
+    const workspaceRoot = workspaceOf(resourceRoot, verification.payloadRootPath);
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: { PATH: "/usr/bin" },
+      portableRuntimeResolver: () => ({ verification, resourceRoot, target: "windows-x64" }),
+    });
+
+    expect(
+      await manager.start(launchRequest(workspaceRoot, resourceRoot, executablePath)),
+    ).toMatchObject({ ok: false, failureCode: "workspace-contains-runtime", retryable: false });
+    expect(harness.captures).toHaveLength(0);
+  });
+
+  it("keeps an executable outside its managed root a refusal of its own", async () => {
+    const { resourceRoot, verification, executablePath } = createPortableRuntimeFixture();
+    executable(join(resourceRoot, "runtime", "outside"));
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: { PATH: "/usr/bin" },
+      portableRuntimeResolver: () => ({
+        verification: { ...verification, executablePath: "runtime/outside/opencode-sidecar" },
+        resourceRoot,
+        target: "windows-x64",
+      }),
+    });
+
+    expect(
+      await manager.start(
+        launchRequest(tempDir("keiko-runtime-workspace-"), resourceRoot, executablePath),
+      ),
+    ).toMatchObject({ ok: false, failureCode: "sidecar-unmanaged", retryable: false });
+    expect(harness.captures).toHaveLength(0);
+  });
+
   it("starts a managed sidecar with only allowlisted inherited env and runtime projection", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();

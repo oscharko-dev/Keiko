@@ -98,10 +98,11 @@ When readiness reports `false`, the `runtimeUnavailableReason` names the first f
 | `runtime-unqualified`         | Generic composition fallback (for example, no task-workspace stack).                                                                  | Check server composition.                                   |
 | `gateway-service-unqualified` | A Windows runtime that is not release-qualified, so no broker may enforce its gateway policy.                                         | None in a checkout: use a release-qualified package.        |
 
-A start can also be refused after readiness. `stage=start:reason=sidecar-unmanaged` in the dev log
-means the selected workspace contains the runtime's managed root, as a checkout selected as its own
-workspace does on any platform: a run must not be able to write to its own runtime. Select another
-repository.
+A start can also be refused after readiness. On a macOS checkout selected as its own workspace, the
+run fails with `workspace-unqualified` and a sentence asking for another repository, and the dev log
+shows `stage=start:reason=workspace-contains-runtime`. The checkout holds the staged runtime, and a
+run must not be able to write to its own runtime. `sidecar-unmanaged` is a different cause: the
+runtime's executable lies outside its own managed root, which points at a damaged payload.
 
 ## Deployment ceiling
 

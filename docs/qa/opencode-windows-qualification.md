@@ -1235,7 +1235,9 @@ port. A live authority expiry and a lock held by a still-running runtime also re
 A real attempt on this host, on the running dev UI, failed with
 `stage=start:reason=sidecar-unmanaged`. The selected workspace was the Keiko checkout, and the dev
 lane stages the runtime inside it. That refusal is correct on any platform: a run must not be able to
-write to its own runtime.
+write to its own runtime. The Workbench called it an internal error and advised starting the task
+again, which could never help, so this cause now has its own reason,
+`workspace-contains-runtime`, and a sentence asking for another repository.
 
 Tracing what another repository would reach found the defect behind it. **Readiness reported
 `runtimeAvailable: true` for a runtime that refuses every start.** Composition binds the gateway
