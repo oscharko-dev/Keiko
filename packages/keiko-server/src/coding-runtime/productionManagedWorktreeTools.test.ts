@@ -3623,8 +3623,10 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     // Body-free evidence reaches the activity log through the real production path. "search" is
     // now a catalog-covered action (#3413 F8): its tool-catalog.* lifecycle pair wraps the H1
     // search handler's own started/settled pair, both threaded with this run's correlation id.
+    // #4271: the bind line describes the handler this call selected, which is ready here; another
+    // unavailable handler in the catalog no longer reports this completed search as unavailable.
     expect(events.map((event) => event.op)).toEqual([
-      "tool-catalog.bind-unavailable",
+      "tool-catalog.bind-ready",
       "tool-catalog.projection",
       "tool-catalog.invocation-started",
       "coding-repository-handler.started",

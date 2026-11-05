@@ -10,6 +10,7 @@ import { opencodeRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
 import { mintProposalId } from "../gitDelivery/proposalId.js";
 import { CODING_TOOL_MAX_BODY_BYTES, parseCodingToolRequest } from "./codingToolIpc.js";
 import { OPENCODE_NATIVE_PROFILE_CONTEXT_ADDENDUM } from "./opencodeNativeContext.js";
+import { OPENCODE_NATIVE_LAUNCH_SECRETS_PLUGIN_FILE } from "./opencodeNativeLaunchSecrets.js";
 import {
   OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE,
   OPENCODE_NATIVE_DELIVERY_PLUGIN_ID,
@@ -289,8 +290,11 @@ describe("the native delivery tool set", () => {
 });
 
 describe("the generated native plugins", () => {
-  it("add the delivery plugin beside the policy and context plugins, and nothing else", () => {
+  it("add the delivery and launch-secret plugins beside the policy and context plugins, and nothing else", () => {
+    // #4271: the launch-secret plugin takes the run's own secrets out of the server's environment
+    // before a shell child can inherit them; only the native profile starts shells.
     expect(Object.keys(createGeneratedOpenCodeV2Plugins("native")).sort()).toEqual([
+      OPENCODE_NATIVE_LAUNCH_SECRETS_PLUGIN_FILE,
       "keiko_native_context",
       OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE,
       "keiko_native_policy",

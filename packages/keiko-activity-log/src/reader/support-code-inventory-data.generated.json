@@ -1335,6 +1335,7 @@
     "keiko-server/coding-runtime/opencodeNativeExternalRoots",
     "keiko-server/coding-runtime/opencodeNativeFormatter",
     "keiko-server/coding-runtime/opencodeNativeGitMetadata",
+    "keiko-server/coding-runtime/opencodeNativeLaunchSecrets",
     "keiko-server/coding-runtime/opencodeNativeLinkedFiles",
     "keiko-server/coding-runtime/opencodeNativeMcp",
     "keiko-server/coding-runtime/opencodeNativeMcpActionIdentity",

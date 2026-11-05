@@ -292,7 +292,7 @@ describe("automatic Workbench probes — a live run keeps the gateway", () => {
     const config = deps.gatewayConfig?.current();
     if (config === undefined) throw new TypeError("Expected a gateway config");
     const [firstProvider] = config.providers;
-    const [firstCapability] = config.capabilities;
+    const [firstCapability] = config.capabilities ?? [];
     if (firstProvider === undefined || firstCapability === undefined) {
       throw new TypeError("Expected a configured model");
     }

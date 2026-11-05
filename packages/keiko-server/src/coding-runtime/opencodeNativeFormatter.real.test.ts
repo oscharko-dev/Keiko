@@ -526,6 +526,8 @@ interface Run {
   readonly facade: Stub;
   readonly client: OpenCodeV2HttpClient;
   readonly sessionId: string;
+  /** The run's server password, which a formatter the runtime starts may not inherit. */
+  readonly password: string;
 }
 
 async function withRun(options: LaunchOptions, body: (run: Run) => Promise<void>): Promise<void> {
@@ -552,7 +554,14 @@ async function withRun(options: LaunchOptions, body: (run: Run) => Promise<void>
     expect((await client.info()).version).toBe(OPENCODE_PINNED_VERSION);
     const session = await client.createSession(fixture.workspace);
     if (typeof session.id !== "string") throw new Error("fixture-session-invalid");
-    await body({ fixture, gateway, facade, client, sessionId: session.id });
+    await body({
+      fixture,
+      gateway,
+      facade,
+      client,
+      sessionId: session.id,
+      password: launched.password,
+    });
   } finally {
     await stopChild(launched.child);
     await Promise.all([closeStub(gateway), closeStub(facade)]);

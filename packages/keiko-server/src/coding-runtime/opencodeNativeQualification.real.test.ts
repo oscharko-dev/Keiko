@@ -606,6 +606,8 @@ interface Run {
   readonly client: OpenCodeV2HttpClient;
   readonly sessionId: string;
   readonly child: ChildProcessByStdio<null, Readable, Readable>;
+  /** The run's server password, which no child of the runtime may read. */
+  readonly password: string;
   /** A GET of the runtime's own API for the run's location (`/api/mcp`, say). */
   readonly raw: (path: string) => Promise<unknown>;
 }
@@ -668,6 +670,7 @@ async function withRun(
       client,
       sessionId: session.id,
       child: launched.child,
+      password: launched.password,
       raw,
     });
   } finally {

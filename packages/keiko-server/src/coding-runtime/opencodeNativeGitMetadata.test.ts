@@ -94,7 +94,15 @@ describe("native Git metadata of the task workspace (#3897 review)", () => {
       layout: "repository",
       binding: "unresolved",
       readRoots: [],
-      protectedWriteRoots: expect.arrayContaining([join(repository, ".git", "config")]),
+      protectedWriteRoots: [
+        "config",
+        "config.worktree",
+        "commondir",
+        "gitdir",
+        "worktrees",
+        "modules",
+        "objects/info/alternates",
+      ].map((path) => join(repository, ".git", path)),
     });
     expect(resolveNativeGitMetadata(folder, access("ordinary", folder))).toEqual({
       layout: "none",
@@ -163,6 +171,7 @@ describe("native Git metadata of the task workspace (#3897 review)", () => {
       layout,
       binding: "managed-task",
       readRoots: layout === "linked-worktree" ? [join(root, "PRIVATE_REPOSITORY", ".git")] : [],
+      protectedWriteRoots: [join(root, "PRIVATE_REPOSITORY", ".git", "config")],
     });
     return events;
   }
