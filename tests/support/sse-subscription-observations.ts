@@ -465,7 +465,7 @@ export function defineSseBackpressureContract<Manager>(
   registerDrainAndHealthyWrites(binding);
 }
 
-export interface SessionStreamScenario {
+interface SessionStreamScenario {
   /** Opens the scenario's stream on `res`, reporting backpressure to `onBackpressure`. */
   readonly open: (
     res: ServerResponse,
