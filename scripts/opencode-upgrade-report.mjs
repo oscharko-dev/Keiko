@@ -339,7 +339,7 @@ export async function buildUpgradeReport(to, deps) {
 function parseTarget(argv) {
   const [flag, value, ...rest] = argv;
   if (flag !== "--to" || value === undefined || rest.length > 0) {
-    throw new Error("usage: npm run opencode:upgrade-report -- --to <version>");
+    throw new Error("usage: node scripts/opencode-upgrade-report.mjs --to <version>");
   }
   const version = value.replace(/^v/u, "");
   if (!VERSION_PATTERN.test(version)) throw new Error("--to must be a release version");

@@ -187,7 +187,6 @@
     "dev:coding-runtime:stage": "node scripts/stage-dev-coding-runtime.mjs",
     "portable:prepare-sidecars": "node scripts/prepare-approved-sidecar-payloads.mjs",
     "portable:approve-runtimes": "node scripts/update-portable-runtime-approvals.mjs",
-    "opencode:upgrade-report": "node scripts/opencode-upgrade-report.mjs",
     "portable:verify-signing": "node scripts/verify-portable-runtime-signing.mjs",
     "portable:manual-review": "npm run build:packages && npm run build:ui && node --disable-warning=ExperimentalWarning scripts/portable-manual-review.mjs",
     "smoke:portable-launch-setup": "npm run build:packages && node --disable-warning=ExperimentalWarning scripts/portable-launch-setup-smoke.mjs",

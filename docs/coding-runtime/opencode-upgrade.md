@@ -37,7 +37,7 @@ Run them in a clean checkout of the branch that carries the bump.
    prior `npm run build:packages`:
 
    ```bash
-   npm run opencode:upgrade-report -- --to <version>
+   node scripts/opencode-upgrade-report.mjs --to <version>
    ```
 
    It prints the pin entry, the upstream breaking changes, the admitted endpoints that went missing
