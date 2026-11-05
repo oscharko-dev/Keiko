@@ -32,6 +32,7 @@ import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 
 /** What the composition hands in about the run it prepares and the runtime it launches. */
 export interface SessionContinuationContext {
+  readonly continuationRouteDigest?: string | undefined;
   readonly service: CodingSessionContinuity;
   readonly workspaceId: string;
   readonly runtimeVersion: string;
@@ -94,6 +95,9 @@ function bindingOf(
 ): RetainedSessionBinding {
   return {
     taskId,
+    ...(context.continuationRouteDigest === undefined
+      ? {}
+      : { continuationRouteDigest: context.continuationRouteDigest }),
     workspaceKey: continuationWorkspaceKey(context.workspaceId, location.workspaceRoot),
     runtimeVersion: context.runtimeVersion,
     maxInputTokens: context.maxInputTokens,

@@ -12,6 +12,42 @@ against a LiteLLM-only configuration. Buffered dictation and read-aloud remain a
 
 ---
 
+## DeepSeek thinking with tool continuations (#4059)
+
+A tool-enabled thinking route may require the exact prior assistant `reasoning_content`, including
+ordinary assistant answers before a later user turn. Configure the existing provider entry with
+`"reasoningContinuation": "required-with-tools"` only when the deployed endpoint implements that
+contract. Model display aliases do not select it. Setup preserves the explicit policy across
+rediscovery; changing it invalidates the old tool-calling proof. Keep LiteLLM's
+`merge_reasoning_content_in_choices` disabled and do not strip `reasoning_content` or replace it with
+a blank placeholder. See the [DeepSeek thinking contract](https://api-docs.deepseek.com/guides/thinking_mode/).
+
+Rerun readiness after selecting this policy. Its bounded probe now requires two tool/result rounds,
+a final assistant answer and another tool-enabled user turn. A single accepted tool call is no proof
+of continuation support. Every attempt uses existing spend, timeout, cancellation and input budgets;
+missing, conflicting, secret-bearing, oversized or rejected continuation remains unverified.
+
+`codingReasoningDisplay: "off"` hides the live timeline while the native session retains its required
+private transport state. Complete native assistant records survive an eligible session resume;
+aborted, unfinished and foreign-model rounds are excluded with their orphaned tool results.
+A live run refuses changed model routes, and retained sessions with a changed route start fresh
+(`coding-runtime.session-continuity`, `reason: model-route-changed`). A streamed physical attempt
+that has published required reasoning ends as failed if it cannot complete; it never combines that
+state with a repair's reasoning. Retry before publishing any state retains the normal policy.
+
+Read `coding-sidecar.gateway.request-validated` counts `reasoningContinuationMessages` and
+`reasoningContinuationBytes`, then the existing outcome/readiness operations. Invalid incoming state
+uses `reasoning-continuation-invalid`; unusable response state is a rejected turn. No reasoning text,
+provider endpoint or credential belongs in an Activity Log/support report.
+
+Qualification on 2026-11-05 uses strict synthetic buffered/SSE endpoints and the pinned native
+OpenCode 2.1.4 binary under macOS Seatbelt, including multi-tool, cancellation, length, compaction
+and a new-process retained-session resume. It does not certify a live native DeepSeek deployment,
+a customer LiteLLM route, a particular LiteLLM version, or the legacy 2.0.10 binary. Those remain
+explicitly unverified until the approved deployment completes the same bounded round trip.
+
+---
+
 ## Context limits and token admission
 
 Configure each LiteLLM route's actual deployed input/output limits in `model_info`. Discovery uses

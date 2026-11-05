@@ -107,6 +107,8 @@ export interface ModelProviderConfig {
   readonly apiVersion?: string | undefined;
   readonly realtimeAuthMode?: RealtimeAuthMode | undefined;
   readonly outputTokenParameter?: OutputTokenParameter | undefined;
+  /** Explicit deployment protocol contract; never inferred from a model display alias. */
+  readonly reasoningContinuation?: "required-with-tools" | undefined;
   /** Use the configured LiteLLM proxy's authenticated token-counting endpoint. */
   readonly tokenCounter?: "litellm" | undefined;
   /**

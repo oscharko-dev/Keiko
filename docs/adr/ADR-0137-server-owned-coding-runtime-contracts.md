@@ -981,16 +981,23 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
 
 - **Default on, operator opt-out.** A coding turn's gateway call, which carries the explicit
   `reasoningDelivery: "forward"` that only the coding sidecar route sets, forwards the model's
-  reasoning unless the gateway configuration sets `codingReasoningDisplay: "off"`; with the switch off
-  the gateway still parses the reasoning and discards it. Every other surface always discards it,
+  reasoning unless the gateway configuration sets `codingReasoningDisplay: "off"`. The switch hides
+  live presentation; a provider explicitly requiring reasoning continuation retains its private native
+  transport state even while hidden (#4059). Default providers still discard it when hidden.
+  Every other surface always discards it,
   also one that borrows the `coding-workbench` latency profile for its timeout floors (ADR-0003,
   #3873 F23).
-- **Never resent upstream.** The runtime records the forwarded reasoning in its history and sends it
-  back with later requests. The sidecar drops it there: the reasoning fields of prior assistant
-  messages never reach the gateway request, and an assistant message that carries nothing but
-  reasoning (no answer text, no tool call) is dropped and counted
-  (`droppedReasoningMessageCount` on `coding-sidecar.gateway.request-validated`), so a failed turn's
-  reasoning does not grow the prompt of the attempts that follow it (#3873 F23). The answer text a
+- **Provider-bound continuation.** The default sidecar policy strips prior reasoning and drops
+  reasoning-only assistant messages, counted as `droppedReasoningMessageCount` on
+  `coding-sidecar.gateway.request-validated` (#3873 F23). Explicit provider configuration
+  `reasoningContinuation: "required-with-tools"` preserves exact completed assistant reasoning for
+  the provider protocol (#4059). The generated native context hook reads the pinned runtime's
+  canonical `session.context`, excludes aborted, unfinished and foreign-model assistant rounds and
+  their orphaned tool results, and leaves completed length continuations and compaction checkpoints
+  admissible. The existing gateway run registry binds the route before launch, preserves it after
+  readiness and removes it on disposal. The existing retained-session manifest carries only its
+  route digest; changed or unproven routes start fresh. Required state is credential-floor checked
+  and fully budgeted, independently of UI display, with counts only in registered evidence. The answer text a
   model wrote beside its tool calls is not reasoning: the gateway resends it as written, as a
   standalone OpenCode run does, and sends `content: null` only for a tool-calling turn without
   text (#3907 AC3; `toolCallTextMessageCount` on the same line).

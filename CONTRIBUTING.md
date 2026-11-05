@@ -660,10 +660,16 @@ is final for the coding runtime (`runtimeRetry=refused`). The provider usage of 
 discarded (a repair's first answer, a rejected tool call) counts against the run's prompt
 allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemptCount`,
 `discardedPromptTokens`, `discardedCompletionTokens`). The correction the model receives is one fixed
-sentence, and the failed answer's reasoning is never recorded. Prior reasoning is never resent
-upstream: the coding sidecar drops the reasoning fields of prior assistant messages and every
-assistant message that carries nothing but reasoning, and `coding-sidecar.gateway.request-validated`
-records the number dropped as `droppedReasoningMessageCount`. The text a model wrote beside its tool
+sentence, and the failed answer's reasoning is never recorded. By default the coding sidecar drops
+prior reasoning fields and assistant messages carrying only reasoning; the registered
+`droppedReasoningMessageCount` records the latter. An explicitly configured provider with
+`reasoningContinuation: "required-with-tools"` retains exact completed assistant reasoning for its
+tool continuation protocol (#4059), independently of `codingReasoningDisplay`. The native context
+hook excludes aborted, unfinished and foreign-model assistant rounds and their orphaned tool results.
+The existing run register and retained-session binding reject changed model routes; no separate
+reasoning store is introduced. Required state passes the credential floor and the full prompt and
+byte budgets or the request fails closed. The same Activity Log line records only
+`reasoningContinuationMessages` and `reasoningContinuationBytes`, never their contents. The text a model wrote beside its tool
 calls is resent as written, like a standalone OpenCode run (#3907); only a tool-calling turn without
 text goes upstream as `content: null`, and the same line counts the others as
 `toolCallTextMessageCount`. The gateway hands reasoning only to a call that asks for it with the

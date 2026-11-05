@@ -236,6 +236,21 @@ describe("parseGatewayConfig", () => {
     expect(fromEnv.providers[0]?.realtimeAuthMode).toBe("ephemeral-session");
   });
 
+  it("requires explicit continuation policy and invalidates earlier readiness proofs", () => {
+    const ordinary = parseGatewayConfig(validRaw()).providers[0];
+    const configured = parseGatewayConfig(
+      rawWithProvider((p) => ({ ...p, reasoningContinuation: "required-with-tools" })),
+    ).providers[0];
+    expect(configured?.reasoningContinuation).toBe("required-with-tools");
+    if (ordinary === undefined || configured === undefined) throw new TypeError("Missing provider");
+    expect(toolCallingConfigurationFingerprint(configured)).not.toBe(
+      toolCallingConfigurationFingerprint(ordinary),
+    );
+    expect(() =>
+      parseGatewayConfig(rawWithProvider((p) => ({ ...p, reasoningContinuation: "guess" }))),
+    ).toThrow(/reasoningContinuation/u);
+  });
+
   it("rejects an unknown realtime auth mode", () => {
     expect(() =>
       parseGatewayConfig(rawWithProvider((p) => ({ ...p, realtimeAuthMode: "magic-token" }))),

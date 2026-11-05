@@ -382,3 +382,124 @@ describe("probeGatewayToolCalling", () => {
     );
   });
 });
+
+describe("thinking continuation readiness (#4059)", () => {
+  const provider = { ...PROVIDER, reasoningContinuation: "required-with-tools" as const };
+  const config = { ...CONFIG, providers: [provider], capabilities: [CAPABILITY] };
+  const message = (round: number): Record<string, unknown> => ({
+    role: "assistant",
+    reasoning_content: `Readiness reasoning ${String(round)}.`,
+    ...(round === 2
+      ? { content: "Ready" }
+      : {
+          content: null,
+          tool_calls: [
+            {
+              id: `probe-${String(round)}`,
+              type: "function",
+              function: { name: "report_readiness", arguments: '{"status":"ok"}' },
+            },
+          ],
+        }),
+  });
+
+  it("requires two tool continuations and a later user turn after a non-tool answer", async () => {
+    let calls = 0;
+    const fetchImpl = vi.fn((_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "") as {
+        messages: Record<string, unknown>[];
+        tool_choice: unknown;
+      };
+      // The actual DeepSeek thinking contract refuses named/required choices with HTTP 400.
+      if (body.tool_choice !== "auto" && body.tool_choice !== "none")
+        return Promise.resolve(jsonResponse({}, 400));
+      const assistants = body.messages.filter((entry) => entry.role === "assistant");
+      expect(assistants.map((entry) => entry.reasoning_content)).toEqual(
+        Array.from({ length: calls }, (_, index) => message(index).reasoning_content),
+      );
+      const round = calls++;
+      return Promise.resolve(
+        jsonResponse({
+          choices: [
+            { finish_reason: round === 2 ? "stop" : "tool_calls", message: message(round) },
+          ],
+        }),
+      );
+    }) as typeof fetch;
+    await expect(probeGatewayToolCalling(config, provider, fetchImpl)).resolves.toBe("verified");
+    expect(calls).toBe(4);
+  });
+
+  it("does not certify a single successful tool invocation when continuation is rejected", async () => {
+    let calls = 0;
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        calls++ === 0
+          ? jsonResponse({ choices: [{ finish_reason: "tool_calls", message: message(0) }] })
+          : jsonResponse({}, 400),
+      ),
+    ) as typeof fetch;
+    expect(await probeGatewayToolCalling(config, provider, fetchImpl)).not.toBe("verified");
+    expect(calls).toBe(3); // The existing bounded output-token compatibility retry also fails.
+  });
+
+  it.each(["missing", "conflicting", "exhausted"])("refuses %s reasoning state", async (kind) => {
+    const assistant: Record<string, unknown> = { ...message(0) };
+    if (kind === "missing") delete assistant.reasoning_content;
+    if (kind === "conflicting") assistant.reasoning = "Another opaque state";
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [
+            {
+              finish_reason: kind === "exhausted" ? "length" : "tool_calls",
+              message: assistant,
+            },
+          ],
+        }),
+      ),
+    ) as typeof fetch;
+    await expect(probeGatewayToolCalling(config, provider, fetchImpl)).resolves.toBe("unverified");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("counts full reasoning and tools before admitting the next readiness request", async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [
+            {
+              finish_reason: "tool_calls",
+              message: { ...message(0), reasoning_content: "Context state ".repeat(2000) },
+            },
+          ],
+        }),
+      ),
+    ) as typeof fetch;
+    const bounded = { ...config, capabilities: [{ ...CAPABILITY, contextWindow: 2048 }] };
+    await expect(probeGatewayToolCalling(bounded, provider, fetchImpl)).resolves.toBe("unverified");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("refuses another configured provider's credential without replaying altered opaque state", async () => {
+    const secret = "synthetic-other-provider-credential";
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [
+            {
+              finish_reason: "tool_calls",
+              message: { ...message(0), reasoning_content: `State ${secret}` },
+            },
+          ],
+        }),
+      ),
+    ) as typeof fetch;
+    const bounded = {
+      ...config,
+      providers: [provider, { ...PROVIDER, modelId: "other", apiKey: secret }],
+    };
+    await expect(probeGatewayToolCalling(bounded, provider, fetchImpl)).resolves.toBe("unverified");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+});

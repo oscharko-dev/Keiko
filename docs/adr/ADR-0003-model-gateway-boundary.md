@@ -797,9 +797,19 @@ repair never ran). Gemma 4 31B streamed through LiteLLM (run `742029841583121825
 motivated this: turn 5 reasoned for about 4,500 tokens and ended empty, the coding runtime retried the
 identical turn six more times, and the failed turns' reasoning stayed in the resent history. A coding
 sidecar turn whose repair ended `empty-again` is answered as final to the runtime (ADR-0173), and the
-sidecar drops that reasoning from every later request instead of resending it upstream: reasoning
-fields of prior assistant messages and assistant messages that carry nothing but reasoning never reach
-the gateway request, and `coding-sidecar.gateway.request-validated` records how many it dropped.
+sidecar drops failed-turn reasoning from later requests. The default provider policy strips prior
+reasoning fields and counts dropped reasoning-only assistant messages on
+`coding-sidecar.gateway.request-validated`. An explicit provider contract
+`reasoningContinuation: "required-with-tools"` instead serializes exact completed assistant reasoning
+as `reasoning_content` when the native runtime owns an admissible continuation (#4059). This is
+transport state, independent of the reasoning display preference. The native history owner removes
+aborted, unfinished and foreign-model rounds with orphaned tool results before provider serialization
+can reuse them; live and retained run bindings reject model-route changes. The credential floor,
+message/byte/context limits and spend admission apply to all retained state. Missing, conflicting,
+secret-bearing or oversized required state fails closed; it is never replaced with a blank or silently
+truncated. The four-round readiness probe checks two tool-result rounds, a final answer and a later
+user turn, reserving each attempt through the existing spend owner. Default and unrelated provider
+behavior remains unchanged. The Activity Log carries counts and closed outcomes only.
 
 **End-to-end budget.** A buffered call as a whole is bounded by `providerRequestBudgetMs(provider)`
 (`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry reserves

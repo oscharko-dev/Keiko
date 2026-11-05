@@ -113,3 +113,13 @@ it("forwards a PDF document part unchanged and charges it the media allowance, n
   expect(text).toBeLessThan(1_000);
   expect(countGatewayPromptTokens(input, undefined, { contextWindow: 131072 }) - text).toBe(8192);
 });
+
+it("charges complete opaque continuation state against the prompt budget (#4059)", () => {
+  const message = {
+    role: "assistant" as const,
+    content: "Done",
+    reasoningContent: "Analysis line.\n".repeat(20000),
+  };
+  expect(openAiCompatiblePromptMessage(message).reasoning_content).toBe(message.reasoningContent);
+  expect(countGatewayPromptTokens({ messages: [message] })).toBeGreaterThan(50000);
+});

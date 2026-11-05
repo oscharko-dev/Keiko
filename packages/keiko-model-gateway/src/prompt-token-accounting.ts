@@ -29,6 +29,7 @@ type ProviderMessageContentParts = readonly (
 )[];
 
 export interface OpenAiCompatiblePromptMessage {
+  readonly reasoning_content?: string | undefined;
   readonly role: string;
   readonly content: string | ProviderMessageContentParts | null;
   readonly tool_call_id?: string | undefined;
@@ -68,7 +69,10 @@ function providerContent(
   return providerContentParts(message.contentParts);
 }
 
-export function openAiCompatiblePromptMessage(message: ChatMessage): OpenAiCompatiblePromptMessage {
+export function openAiCompatiblePromptMessage(
+  message: ChatMessage,
+  includeReasoning = true,
+): OpenAiCompatiblePromptMessage {
   const toolCalls = message.toolCalls?.map((call) => ({
     id: call.id,
     type: "function" as const,
@@ -77,6 +81,9 @@ export function openAiCompatiblePromptMessage(message: ChatMessage): OpenAiCompa
   const hasToolCalls = toolCalls !== undefined && toolCalls.length > 0;
   return {
     role: message.role,
+    ...(includeReasoning && message.role === "assistant" && message.reasoningContent !== undefined
+      ? { reasoning_content: message.reasoningContent }
+      : {}),
     content: providerContent(message, hasToolCalls),
     ...(message.role === "tool" && message.toolCallId !== undefined
       ? { tool_call_id: message.toolCallId }
@@ -128,7 +135,7 @@ function countMessageTokens(
       ? undefined
       : projected.content;
   // Media bytes are never text tokens: an image or a PDF document takes the media reserve instead.
-  const mediaCount = parts?.filter((part) => part.type !== "text").length ?? 0;
+  const mediaCount = parts === undefined ? 0 : parts.filter((part) => part.type !== "text").length;
   const content =
     parts?.map((part) => (part.type === "text" ? part : { type: part.type })) ?? projected.content;
   const text =
@@ -139,7 +146,8 @@ function countMessageTokens(
   // Preserve the dense-text floor when the JSON projection escapes literal newlines.
   return (
     Math.max(
-      countContextTokens(text, accounting),
+      countContextTokens(text, accounting) +
+        countContextTokens(projected.reasoning_content ?? "", accounting),
       countContextTokens(JSON.stringify({ ...projected, content }), accounting),
     ) +
     mediaCount * fallbackImageTokens(options)

@@ -1,3 +1,4 @@
+import { presentCodingReasoning } from "./coding-reasoning-continuation.js";
 import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { createNativeMcpMutationJournal } from "./coding-runtime/opencodeNativeMcpMutationJournal.js";
 import type { ChatToolTurnPort } from "./chat-tool-turn.js";
@@ -900,6 +901,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
     | {
         /** Server-owned tool profile the runtime was composed with; read by the readiness route. */
         readonly toolProfile?: OpenCodeToolProfile;
+        readonly bindContinuationRoute: (runId: string, digest: string | undefined) => void;
+        readonly matchesContinuationRoute: (runId: string, digest: string | undefined) => boolean;
         readonly claim: (runId: string) => boolean;
         readonly isVerified: (runId: string) => boolean;
         readonly verifyObserved: (runId: string) => void;
@@ -4847,12 +4850,16 @@ function gatewayOutcomeFailureCode(
 
 function safeActivityContentSource(
   projection: CodingSafeActivityProjection | undefined,
+  visible: () => boolean,
 ): CodingAppSessionContentSource | undefined {
   return projection === undefined
     ? undefined
     : {
-        contentFor: () => projection.currentContent(),
-        subscribeContent: (listener) => projection.subscribeContent(listener),
+        contentFor: () => presentCodingReasoning(projection.currentContent(), visible()),
+        subscribeContent: (listener) =>
+          projection.subscribeContent((content) => {
+            listener(presentCodingReasoning(content, visible()));
+          }),
       };
 }
 
@@ -5191,7 +5198,10 @@ function buildAssemblyCodingAppSessionChannel(
       args.options.sessionPairingPort ?? resolveLauncherSessionPairingPort(args.options.env),
     contentSource:
       args.options.codingAppSessionContentSource ??
-      safeActivityContentSource(codingRuntimeControlPlane?.safeActivityProjection),
+      safeActivityContentSource(
+        codingRuntimeControlPlane?.safeActivityProjection,
+        () => args.runtimeConfig.current()?.codingReasoningDisplay !== "off",
+      ),
     // KEIKO-0225: forward the operator diagnostic sink so mid-stream SSE listener failures
     // (bare catch, backpressure `false`) surface as one redacted record per subscriber instead
     // of being silently swallowed.

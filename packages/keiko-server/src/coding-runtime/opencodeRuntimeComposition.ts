@@ -2258,6 +2258,9 @@ function continuationContext(
     workspaceId: continuity.workspaceId,
     runtimeVersion: input.portable.verification.summary.upstreamVersion,
     maxInputTokens: input.contextGeometry.maxInputTokens,
+    ...(input.contextGeometry.continuationRouteDigest === undefined
+      ? {}
+      : { continuationRouteDigest: input.contextGeometry.continuationRouteDigest }),
     activityLog: input.activityLog,
     ...(continuity.forkSource === undefined ? {} : { forkSource: continuity.forkSource }),
   };
