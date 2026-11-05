@@ -236,9 +236,13 @@ D2 lets a fact through.
   points at ("dem Kunden", but not "mit Kunden" or "die Kunden-Tickets"), a partner, another
   person's pronoun in the claim, or a reason in which someone else wants, says or recommends
   something ("weil Anna es so will"). A fact labelled `team` ("We decided as a team to release on
-  Tuesdays") is the team's own: it needs "wir" or "we", passes every person check above, and is
-  stored only in the project scope, never outside a project; "X und ich" names a person and is
-  dropped. A leading pronoun ("Sie beginnen immer mit einer Zusammenfassung") counts as the person's
+  Tuesdays") is the team's own: it needs "wir" or "we" and the person naming the group as their
+  team or project ("als Team", "in unserem Projekt", "our team"), because a bare "wir" may be a
+  couple or a household and another group's name ("The marketing team decided …") is no marker. The
+  rest of the claim passes every person check above, and the fact is stored only in the project
+  scope, never outside a project, and compared only with that scope's facts, so it never confirms or
+  replaces a private one; "X und ich" and "Wir und X" name a person and are dropped. A person named
+  by their relation (Vermieterin, landlord, Eltern, Oma, "meine Leute") is a third party. A leading pronoun ("Sie beginnen immer mit einer Zusammenfassung") counts as the person's
   own thing only when the body names it with a first-person possessive and the person's previous
   message in the same chat named it so ("meine Berichte"); that message reaches the learner as
   context, never as a source, and a person's pronoun stays a third party. Two limits are
