@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -1919,13 +1919,36 @@ function hasKeySignature(signatures) {
 
 const knownCatalogKeysCache = new Map();
 
-// The keys present in BOTH shared catalogs — the only keys a moved `t("key")` can rely on.
-function knownCatalogKeys(repoRoot) {
+// The tracked split-file feature catalogs (the Coding Workbench boundary), as English/German pairs.
+// A failed listing yields none, which only makes the guard stricter.
+function trackedFeatureCatalogPairs(repoRoot) {
+  const result = spawnSync(
+    resolveHostExecutable("git"),
+    ["ls-files", "--", "packages/keiko-ui/src/*-i18n.en.ts"],
+    { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  if (result.status !== 0) return [];
+  return result.stdout
+    .split("\n")
+    .filter((file) => file !== "")
+    .map((en) => [en, en.replace(FEATURE_CATALOG_EN_PATTERN, "-i18n.de.ts")])
+    .filter(([, de]) => existsSync(resolve(repoRoot, de)));
+}
+
+function keysInBoth(repoRoot, [enFile, deFile]) {
+  const en = extractCatalogKeys(readText(repoRoot, enFile));
+  const de = extractCatalogKeys(readText(repoRoot, deFile));
+  return Array.from(en).filter((key) => de.has(key));
+}
+
+// The keys present in BOTH halves of a catalog — the shared catalogs, or a tracked split-file
+// feature catalog pair — the only keys a moved `t("key")` can rely on. A Coding Workbench control
+// reusing its own existing, translated label is the same move as a shared key moving (#4271).
+export function knownCatalogKeys(repoRoot) {
   const cached = knownCatalogKeysCache.get(repoRoot);
   if (cached !== undefined) return cached;
-  const en = extractCatalogKeys(readText(repoRoot, EN_CATALOG));
-  const de = extractCatalogKeys(readText(repoRoot, DE_CATALOG));
-  const known = new Set(Array.from(en).filter((key) => de.has(key)));
+  const pairs = [[EN_CATALOG, DE_CATALOG], ...trackedFeatureCatalogPairs(repoRoot)];
+  const known = new Set(pairs.flatMap((pair) => keysInBoth(repoRoot, pair)));
   knownCatalogKeysCache.set(repoRoot, known);
   return known;
 }
