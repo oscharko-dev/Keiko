@@ -34,8 +34,8 @@ const WATCHED_SOURCES = Object.freeze([
 ]);
 
 function compareVersions(left, right) {
-  const a = left.split(".").map((part) => Number(part));
-  const b = right.split(".").map((part) => Number(part));
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
   return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
 }
 
@@ -48,9 +48,9 @@ export function versionsBetween(tags, from, to) {
     .sort(compareVersions);
 }
 
-const HEADING = /^(#{1,6})\s+(.*)$/u;
+const HEADING = /^(#{1,6})\s(.*)$/u;
 const BREAKING_HEADING = /^#{1,6}\s+breaking\s+changes?\b/iu;
-const LIST_ENTRY = /^[-*]\s+(.*)$/u;
+const LIST_ENTRY = /^[-*]\s(.*)$/u;
 const UNPLACED_BREAK = "the note mentions a breaking change outside a section: read it";
 
 function sectionLines(lines, start) {
