@@ -161,6 +161,46 @@ describe("logTaskWorkspaceManifestReconnected — Activity Log proof", () => {
 });
 
 describe("logRuntimeShutdown — Activity Log proof", () => {
+  it.each([0, 2])(
+    "records a normal shutdown start at info with %i active runs",
+    (activeRunCount) => {
+      const sink = createBufferedServerLogSink();
+      logRuntimeShutdown(sink, "req-runtime-shutdown-start", {
+        state: "started",
+        openSseStreamCount: 0,
+        activeRunCount,
+      });
+      expect(sink.events[0]).toMatchObject({ level: "info", op: "server.runtime.shutdown" });
+      expect(sink.events[0]).not.toHaveProperty("errorKind");
+    },
+  );
+
+  it("keeps a faulted runtime at warn even when cleanup succeeds", () => {
+    const sink = createBufferedServerLogSink();
+    logRuntimeShutdown(sink, "req-runtime-shutdown-runtime-fault", {
+      state: "completed",
+      openSseStreamCount: 0,
+      activeRunCount: 0,
+      durationMs: 12,
+      runtimeShutdown: "faulted",
+      cleanup: "completed",
+    });
+    expect(sink.events[0]).toMatchObject({ level: "warn", errorKind: "internal" });
+  });
+
+  it("keeps a faulted cleanup at warn with its failure classification", () => {
+    const sink = createBufferedServerLogSink();
+    logRuntimeShutdown(sink, "req-runtime-shutdown-failed", {
+      state: "completed",
+      openSseStreamCount: 0,
+      activeRunCount: 0,
+      durationMs: 12,
+      runtimeShutdown: "faulted",
+      cleanup: "faulted",
+    });
+    expect(sink.events[0]).toMatchObject({ level: "warn", errorKind: "internal" });
+  });
+
   it("writes a body-free server.runtime.shutdown line for a clean completed shutdown", () => {
     const sink = createBufferedServerLogSink();
 

@@ -12,7 +12,7 @@
 import type { MemoryType, WorkflowRunId } from "@oscharko-dev/keiko-contracts/memory";
 
 import { buildProposal } from "./_envelopes.js";
-import { memoryTextSecretEgressRejectionReason } from "./capture-safety.js";
+import { memoryTextCaptureRejectionReason } from "./capture-safety.js";
 import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
 import type {
@@ -49,7 +49,7 @@ function emitWorkflowCandidate(
   context: CaptureContext,
   policy: CapturePolicyOptions,
 ): CaptureOutcome {
-  const reason = memoryTextSecretEgressRejectionReason(body, policy);
+  const reason = memoryTextCaptureRejectionReason(body, policy);
   if (reason !== null) {
     return { kind: "rejected", reason };
   }

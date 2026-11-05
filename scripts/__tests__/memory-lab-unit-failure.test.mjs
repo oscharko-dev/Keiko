@@ -1,7 +1,7 @@
 // A unit that cannot be measured costs that unit, not the run: it is recorded with its error name
 // (and a scrubbed message where the scenario text may appear in evidence), and the run goes on.
 // Nothing here forks the product; a checkout without a runtime makes every unit fail at its start.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -156,6 +156,21 @@ describe("a run in which units cannot be measured", () => {
       expect(entry.name).toMatch(/:r0:store$/u);
       expect(entry.evidence).toMatch(/^unit-failed:\w+$/u);
     }
+  });
+
+  it("retains settled units and resumes an interrupted run exactly once (#4247)", async () => {
+    const built = options();
+    await expect(
+      runLab(built, () => {
+        throw new Error("interrupted");
+      }),
+    ).rejects.toThrow("interrupted");
+    expect(existsSync(join(built.out, ".progress", "manifest.json"))).toBe(true);
+    const lines = [];
+    const summary = await runLab({ ...built, resume: true }, (line) => lines.push(line));
+    expect(summary.runs).toBe(4);
+    expect(lines.filter((line) => line.includes("FAILED"))).toHaveLength(3);
+    expect(lines.join("\n")).not.toContain("run unit-failure-one off r0");
   });
 
   it("writes the run file with a scrubbed message and marks the unit in the timing", async () => {

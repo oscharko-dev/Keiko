@@ -14,11 +14,17 @@ import {
   type MemoryScope,
 } from "@oscharko-dev/keiko-contracts/memory";
 
+import { MEMORY_BODY_MAX_CHARS_DEFAULT } from "./_constants.js";
 import { buildForget, buildProposal, buildUpdate } from "./_envelopes.js";
 import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
-import { memoryTextSecretEgressRejectionReason } from "./capture-safety.js";
-import type { CaptureContext, CaptureOutcome, CapturePolicyOptions } from "./types.js";
+import { memoryTextCaptureRejectionReason } from "./capture-safety.js";
+import type {
+  CaptureContext,
+  CaptureMemoryResolver,
+  CaptureOutcome,
+  CapturePolicyOptions,
+} from "./types.js";
 
 // ─── Regex catalogue (narrow, anchored, single-quantifier) ────────────────────
 // All patterns are anchored and use a single open or bounded quantifier. The phrase trailing
@@ -77,11 +83,15 @@ function execFirst(patterns: readonly RegExp[], text: string): RegExpExecArray |
 }
 
 const REMEMBER_PATTERNS: readonly RegExp[] = [
-  /^\s*remember(?:\s+that)?\s+/iu,
-  /^\s*(?:merk|merke)\s+dir(?:\s+bitte)?(?:,?\s+dass)?\s+/iu,
-  /^\s*speicher(?:e)?(?:\s+bitte)?(?:,?\s+dass)?\s+/iu,
-  /^\s*notier(?:e)?(?:\s+bitte)?(?:,?\s+dass)?\s+/iu,
+  /^\s*(?:please\s+)?remember(?:\s+that)?[:,]?\s+/iu,
+  /^\s*(?:bitte\s+)?(?:merk|merke)\s+dir(?:\s+bitte)?(?:,?\s+dass)?[:,]?\s+/iu,
+  // Bare "Speichere die Datei" or "Notiere die Zahlen" is a task, not a memory statement.
+  /^\s*(?:bitte\s+)?speicher(?:e)?(?:\s+bitte)?(?:\s+dir)?(?:,?\s+dass|:)\s+/iu,
+  /^\s*(?:bitte\s+)?notier(?:e)?(?:\s+bitte)?(?:\s+dir)?(?:,?\s+dass|:)\s+/iu,
 ];
+// "Merke dir nicht, ..." asks for the opposite, and "Remember when ..." recalls instead of stating.
+const NOT_A_FACT_START_RE =
+  /^(?:nicht|nie|niemals|not|never|when|how|if|why|what|where|who|wann|wie|ob|warum|was|wo|wer)\b/iu;
 // Each branch carries its own copy of the trailing "this project/workspace:" scope hint (rather
 // than factoring it into a second matching stage) so a single execFirst pass still yields the
 // complete prefix length bodyAfterPrefix needs — matching the original REMEMBER_ABOUT_RE shape.
@@ -98,10 +108,78 @@ const REMEMBER_ABOUT_PATTERNS: readonly RegExp[] = [
   /^\s*speicher(?:e)?\s+(?:zu|über|ueber)\s+(?:this\s+(project|workspace)[:,\s]+)?/iu,
 ];
 const FORGET_PATTERNS: readonly RegExp[] = [
-  /^\s*forget(?:\s+about)?\s+/iu,
-  /^\s*vergiss(?:\s+bitte)?(?:\s+(?:alles\s+)?(?:über|ueber|zu|an))?\s+/iu,
-  /^\s*lösche(?:\s+bitte)?(?:\s+die\s+erinnerung\s+(?:an|zu|über|ueber))?\s+/iu,
+  /^\s*forget(?!\s+not\b)(?:\s+about)?(?:\s+that(?=\s+\S))?\s+/iu,
+  /^\s*vergiss(?:\s+bitte)?,?\s+dass\s+(?:alles\s+)?(?:über|ueber|zu|an)\s+/iu,
+  /^\s*vergiss(?:\s+bitte)?,?\s+dass\s+/iu,
+  /^\s*vergiss(?:\s+bitte)?\s+(?:alles\s+)?(?:über|ueber|zu|an)\s+/iu,
+  /^\s*vergiss(?:\s+bitte)?\s+/iu,
+  // Bare "Lösche die Datei" is a task. It must never reach a memory.
+  /^\s*lösche(?:\s+bitte)?\s+die\s+erinnerung\s+(?:an|zu|über|ueber)\s+/iu,
 ];
+// "Vergiss nicht, ..." and "Vergiss nie, ..." mean the opposite of forgetting, so they are no forget.
+const VERGISS_NICHT_RE = /^\s*vergiss\s+(?:es\s+|das\s+)?(?:bitte\s+)?(?:nicht|nie|niemals)\b/iu;
+const VERGISS_RE = /^\s*vergiss\b/iu;
+const DASS_RE = /\bdass\b/iu;
+const NEGATED_ENDINGS: readonly string[] = [" nicht", " nie", " niemals"];
+// "Vergiss es" and "Forget it" mean "never mind", so they name nothing to forget.
+const NEVER_MIND_TARGETS: ReadonlySet<string> = new Set(["es", "it"]);
+
+// "Vergiss den Bericht nicht" keeps the negation for the end. "Vergiss, dass ich das nicht mag"
+// is a real forget: its "nicht" belongs to the fact.
+function endsNegated(text: string): boolean {
+  if (!VERGISS_RE.test(text) || DASS_RE.test(text)) return false;
+  const lower = trimForgetTarget(text.trim()).toLowerCase();
+  return NEGATED_ENDINGS.some((ending) => lower.endsWith(ending));
+}
+
+function forgetPrefixMatch(text: string): RegExpExecArray | null {
+  if (VERGISS_NICHT_RE.test(text) || endsNegated(text)) return null;
+  return execFirst(FORGET_PATTERNS, text);
+}
+
+// A whole statement that takes back what was just said, without naming it.
+const FORGET_REFERENCE_STATEMENTS: readonly (readonly [RegExp, string])[] = [
+  [/^\s*das\s+stimmt\s+nicht\s+mehr[.!]?\s*$/iu, "das"],
+  [/^\s*that(?:'s|\s+is)\s+no\s+longer\s+(?:true|correct|right)[.!]?\s*$/iu, "that"],
+  [/^\s*that(?:'s|\s+is)\s+not\s+(?:true|correct|right)\s+anymore[.!]?\s*$/iu, "that"],
+];
+const FORGET_REFERENCE_WORDS: ReadonlySet<string> = new Set([
+  "das",
+  "dies",
+  "dieses",
+  "that",
+  "this",
+]);
+const FORGET_TARGET_END_MARKS = new Set([" ", "\t", ".", "!", "?", "…"]);
+const FORGET_TARGET_POLITE_TAILS: readonly string[] = [" bitte", " please"];
+
+// Plain string walks: a regex anchored at the end would rescan a long run of spaces per position.
+function trimForgetTarget(target: string): string {
+  let end = target.length;
+  while (end > 0 && FORGET_TARGET_END_MARKS.has(target.charAt(end - 1))) end -= 1;
+  const trimmed = target.slice(0, end);
+  const lower = trimmed.toLowerCase();
+  const tail = FORGET_TARGET_POLITE_TAILS.find((polite) => lower.endsWith(polite));
+  return tail === undefined ? trimmed : trimmed.slice(0, -tail.length).trimEnd();
+}
+
+// Whether a forget target names nothing itself and refers to what the conversation just said.
+export function isMemoryForgetReference(target: string): boolean {
+  return FORGET_REFERENCE_WORDS.has(target.trim().toLowerCase());
+}
+
+function forgetTargetOf(text: string): string | null {
+  for (const [pattern, target] of FORGET_REFERENCE_STATEMENTS) {
+    if (pattern.test(text)) return target;
+  }
+  const prefixMatch = forgetPrefixMatch(text);
+  if (prefixMatch === null) return null;
+  const body = bodyAfterPrefix(prefixMatch, text);
+  if (body === null || firstSentence(body).endsWith("?")) return null;
+  const target = trimForgetTarget(firstSentence(body));
+  return target === "" || NEVER_MIND_TARGETS.has(target.toLowerCase()) ? null : target;
+}
+
 // Any of the four ECMAScript line-terminator code points. `.` (used by the single-regex-capture
 // patterns above) never matches these without the `s`/dotAll flag, so a trimmed body/target
 // containing one means the real content spans more than one line — treated as "not this intent",
@@ -119,6 +197,48 @@ function bodyAfterPrefix(prefixMatch: RegExpExecArray, text: string): string | n
   }
   return trimmed;
 }
+// An explicit statement stores what was stated, not the request that follows it in one message.
+const SENTENCE_MARKS_RE = /[.!?…]+/gu;
+const STARTS_UPPERCASE_RE = /^\p{Lu}/u;
+const ENDS_IN_NUMBER_RE = /\p{N}$/u;
+const SINGLE_LETTER_RE = /^\p{L}$/u;
+const SHORT_FORM_PART_CHARS = 2;
+const ABBREVIATIONS = new Set("bzw ca dr etc evtl ggf inkl nr prof sog usw vgl vs zzgl".split(" "));
+
+// Only a period can belong to its word. "z. B.", "e.g." and "bzw." are abbreviations, and a number
+// stays with what follows, because "am 3. Mai" reads the same as "Ich bin 42." and cutting a date
+// loses the fact. A longer word with a period inside is a name such as "Node.js".
+function periodBelongsToWord(line: string, index: number): boolean {
+  const word = line.slice(line.lastIndexOf(" ", index - 1) + 1, index);
+  if (ENDS_IN_NUMBER_RE.test(word) || ABBREVIATIONS.has(word.toLowerCase())) return true;
+  const parts = word.split(".");
+  return parts.length > 1
+    ? parts.every((part) => part.length <= SHORT_FORM_PART_CHARS)
+    : SINGLE_LETTER_RE.test(word);
+}
+
+function nextSentenceStartsAt(line: string, index: number): boolean {
+  const rest = line.slice(index);
+  const next = rest.trimStart();
+  return next === "" || (next.length < rest.length && STARTS_UPPERCASE_RE.test(next));
+}
+
+function firstSentence(line: string): string {
+  for (const match of line.matchAll(SENTENCE_MARKS_RE)) {
+    const end = match.index + match[0].length;
+    const abbreviated = match[0] === "." && periodBelongsToWord(line, match.index);
+    if (!abbreviated && nextSentenceStartsAt(line, end)) return line.slice(0, end);
+  }
+  return line;
+}
+
+function statedFactAfterPrefix(prefixMatch: RegExpExecArray, text: string): string | null {
+  const firstLine = text.slice(prefixMatch[0].length).trim().split(LINE_TERMINATOR_RE, 1)[0];
+  const body = firstLine === undefined ? "" : firstSentence(firstLine.trim());
+  if (body === "" || body.endsWith("?") || NOT_A_FACT_START_RE.test(body)) return null;
+  return body;
+}
+
 const UPDATE_KEYWORD_PATTERNS: readonly RegExp[] = [
   /^\s*update\s+(?:memory|the\s+memory)\s+about\s+/iu,
   /^\s*aktualisiere(?:\s+bitte)?\s+(?:die\s+)?(?:erinnerung|speicher(?:eintrag)?)\s+(?:zu|zum|zur|über|ueber)\s+/iu,
@@ -153,7 +273,7 @@ function execThatsWrongBody(text: string): RegExpExecArray | null {
 // Helper: secret scan + reject the body if it fires. Length enforcement happens in capture.ts
 // preflight before the explicit extractors run.
 function rejectIfUnsafe(body: string, policy: CapturePolicyOptions): CaptureOutcome | null {
-  const reason = memoryTextSecretEgressRejectionReason(body, policy);
+  const reason = memoryTextCaptureRejectionReason(body, policy);
   if (reason !== null) {
     return { kind: "rejected", reason };
   }
@@ -194,11 +314,10 @@ type ResolverOutcome =
   | { readonly kind: "unique"; readonly memoryId: MemoryId };
 
 function resolveTarget(
-  policy: CapturePolicyOptions,
+  resolver: CaptureMemoryResolver | undefined,
   target: string,
   scope: MemoryScope,
 ): ResolverOutcome {
-  const resolver = policy.resolver;
   if (resolver === undefined) {
     return { kind: "none" };
   }
@@ -234,11 +353,19 @@ function rejectOnScopeConflict(
 
 function mergePolicyScopeKind(
   policy: CapturePolicyOptions,
-  explicitScopeKind: ExplicitScopeKind | undefined,
+  explicitScopeKind: NonNullable<CapturePolicyOptions["scopeKind"]> | undefined,
 ): CapturePolicyOptions {
   if (explicitScopeKind === undefined) return policy;
   if (policy.scopeKind !== undefined) return policy;
   return { ...policy, scopeKind: explicitScopeKind };
+}
+
+// A statement that names no scope falls back to the caller's choice for remember statements.
+function rememberScopePolicy(
+  policy: CapturePolicyOptions,
+  explicitScopeKind: NonNullable<CapturePolicyOptions["scopeKind"]> | undefined,
+): CapturePolicyOptions {
+  return mergePolicyScopeKind(policy, explicitScopeKind ?? policy.rememberScopeKind);
 }
 
 // Reads the capturing group added to REMEMBER_ABOUT_PATTERNS. Returns undefined when the "about
@@ -279,7 +406,7 @@ export function tryExtractRemember(
   if (prefixMatch === null) {
     return null;
   }
-  const body = bodyAfterPrefix(prefixMatch, text);
+  const body = statedFactAfterPrefix(prefixMatch, text);
   if (body === null) {
     return null;
   }
@@ -297,8 +424,7 @@ export function tryExtractRemember(
   const explicitScopeKind = explicitScopeKindFromAboutMatch(aboutPrefixMatch);
   const conflictOutcome = rejectOnScopeConflict(policy, explicitScopeKind, context);
   if (conflictOutcome !== null) return conflictOutcome;
-  const effectivePolicy = mergePolicyScopeKind(policy, explicitScopeKind);
-  const scopeResolution = scopeOrReject(context, effectivePolicy);
+  const scopeResolution = scopeOrReject(context, rememberScopePolicy(policy, explicitScopeKind));
   if (!scopeResolution.ok) {
     return scopeResolution.outcome;
   }
@@ -321,17 +447,35 @@ export function tryExtractRemember(
   return { kind: "candidate", proposal, requiresApproval: decision.requiresApproval };
 }
 
+// What "Vergiss das" can leave a tombstone for: a fact said in a sentence. A question states nothing,
+// and a pasted document is not what "das" means. Its tombstone would suppress later facts near it.
+export function isForgettableStatement(text: string): boolean {
+  return (
+    text.length <= MEMORY_BODY_MAX_CHARS_DEFAULT &&
+    !text.trimEnd().endsWith("?") &&
+    forgetTargetOf(text) === null
+  );
+}
+
+// A message the explicit path owns. The learner must not read it as well: it would store the
+// statement itself, "Vergiss, dass ..." included.
+export function isExplicitMemoryStatement(text: string): boolean {
+  return explicitStatementKind(text) !== null;
+}
+
+export function explicitStatementKind(text: string): "forget" | "remember" | null {
+  if (forgetTargetOf(text) !== null) return "forget";
+  const remembered = execFirst(REMEMBER_ABOUT_PATTERNS, text) ?? execFirst(REMEMBER_PATTERNS, text);
+  return remembered === null ? null : "remember";
+}
+
 // ─── tryExtractForget ────────────────────────────────────────────────────────
 export function tryExtractForget(
   text: string,
   context: CaptureContext,
   policy: CapturePolicyOptions = {},
 ): CaptureOutcome | null {
-  const prefixMatch = execFirst(FORGET_PATTERNS, text);
-  if (prefixMatch === null) {
-    return null;
-  }
-  const target = bodyAfterPrefix(prefixMatch, text);
+  const target = forgetTargetOf(text);
   if (target === null) {
     return null;
   }
@@ -339,9 +483,16 @@ export function tryExtractForget(
   if (!scopeResolution.ok) {
     return scopeResolution.outcome;
   }
-  const resolved = resolveTarget(policy, target, scopeResolution.scope);
+  const resolved = resolveTarget(
+    policy.forgetResolver ?? policy.resolver,
+    target,
+    scopeResolution.scope,
+  );
   if (resolved.kind === "none") {
-    return null;
+    // A bare "Vergiss das" is a clear request about something unnamed: never ignore it.
+    return isMemoryForgetReference(target)
+      ? { kind: "rejected", reason: "forget-reference-unresolved" }
+      : null;
   }
   if (resolved.kind === "ambiguous") {
     return { kind: "rejected", reason: "ambiguous-forget" };
@@ -351,7 +502,7 @@ export function tryExtractForget(
     memoryId: resolved.memoryId,
     reason: MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
   });
-  return { kind: "forget", operation, requiresConfirmation: true };
+  return { kind: "forget", operation, requiresConfirmation: false };
 }
 
 // ─── tryExtractUpdate ────────────────────────────────────────────────────────
@@ -381,7 +532,7 @@ export function tryExtractUpdate(
   if (!scopeResolution.ok) {
     return scopeResolution.outcome;
   }
-  const resolved = resolveTarget(policy, target, scopeResolution.scope);
+  const resolved = resolveTarget(policy.resolver, target, scopeResolution.scope);
   if (resolved.kind === "none") {
     return null;
   }

@@ -1,3 +1,4 @@
+import { chatMessagePromptContent } from "./conversation-prompt.js";
 import { countContextTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { rehydrateMessage } from "@oscharko-dev/keiko-workflows/context-budget";
 import {
@@ -340,11 +341,12 @@ function scanMessage(
   state.order += 1;
   if (input.excludedIds.has(message.id) || message.content === input.query) return;
   const remaining = MAX_SCAN_CHARS - state.scannedChars;
-  const bounded = message.content.slice(-remaining);
+  const sourceContent = chatMessagePromptContent(message);
+  const bounded = sourceContent.slice(-remaining);
   state.scannedChars += bounded.length;
   // A truncated leading secret must not become an unrecognizable suffix in an excerpt.
   const overlap =
-    message.content.length > bounded.length
+    sourceContent.length > bounded.length
       ? Math.max(0, ...input.secrets.map((secret) => secret.length))
       : 0;
   const source = { ...message, content: bounded.slice(overlap) };

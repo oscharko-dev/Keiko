@@ -180,6 +180,19 @@ export interface DeleteMemoryOptions {
   readonly nowMs: number;
 }
 
+// A statement the person asked to forget before anything was stored from it. Its hash and optional
+// embedding suppress a later capture exactly like the tombstone of a deleted memory; the text itself
+// is never written.
+export interface MemoryForgottenStatement {
+  readonly scope: MemoryScope;
+  readonly body: string;
+  readonly forgetterSurface: string;
+  readonly reviewerId?: MemoryReviewerId;
+  readonly reason?: string;
+  readonly nowMs: number;
+  readonly bodyEmbedding?: Float32Array;
+}
+
 export interface MemoryVaultStore {
   readonly insertMemory: (record: MemoryRecord) => MemoryRecord;
   readonly updateMemory: (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number) => MemoryRecord;
@@ -278,6 +291,9 @@ export interface MemoryVaultStore {
     limit: number,
     after?: MemoryTombstoneLedgerCursor,
   ) => MemoryTombstonePage;
+  readonly recordForgottenStatements: (
+    statements: readonly MemoryForgottenStatement[],
+  ) => readonly MemoryTombstone[];
   readonly hasForgetTombstoneForBody: (scope: MemoryScope, body: string) => boolean;
   // Sealed embeddings of forgotten memories in this scope (GEN-AI-MEMORY-003, RB-4). Lets a capture
   // boundary suppress a semantic paraphrase of a forgotten fact — cosine-similar but a different

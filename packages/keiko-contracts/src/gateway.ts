@@ -733,13 +733,13 @@ export type ChatMessageContentPart =
   ChatMessageTextContentPart | ChatMessageImageUrlContentPart | ChatMessageFileContentPart;
 
 export interface ChatMessage {
+  /** Provider continuation state; separate from answer/presentation, admitted by the server. */
+  readonly reasoningContent?: string | undefined;
   readonly role: "system" | "user" | "assistant" | "tool";
   readonly content: string;
   readonly contentParts?: readonly ChatMessageContentPart[] | undefined;
   readonly toolCallId?: string | undefined;
   readonly toolCalls?: readonly NormalizedToolCall[] | undefined;
-  /** Transient provider continuation, restored from a completed response; never evidence. */
-  readonly reasoningContent?: string | undefined;
 }
 
 export interface ToolDefinition {

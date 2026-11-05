@@ -94,6 +94,9 @@ const ALLOWED_CHAT_MESSAGES_COLUMNS = new Set([
   "client_turn_content_digest",
   // V50 retains redacted tool messages and closed approval/result projections.
   "tool_transcript_json",
+  // V59 retains validated/redacted user attachment context under the same private Chat owner.
+  // It follows chat deletion and is omitted from browser rows; no provider/credential metadata.
+  "document_context_json",
 ]);
 
 // V44 retains private per-chat composer text and its CAS revision, without provider metadata.
@@ -803,7 +806,14 @@ it.each(["chat_history_words", "chat_history_fragments"])(
     try {
       expect(columnNames(inspector, table)).toEqual(["content"]);
       const schema = inspector.prepare("SELECT sql FROM sqlite_master WHERE name = ?").get(table);
-      expect(schema?.sql).toContain("content='chat_messages'");
+      expect(schema?.sql).toContain("content='chat_history_search_source'");
+      const source = inspector
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type='view' AND name='chat_history_search_source'",
+        )
+        .get() as { sql: string } | undefined;
+      expect(source?.sql).toContain("FROM chat_messages");
+      expect(source?.sql).toContain("document_context_json");
     } finally {
       inspector.close();
     }

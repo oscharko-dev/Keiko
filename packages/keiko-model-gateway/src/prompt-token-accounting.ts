@@ -70,9 +70,20 @@ function providerContent(
   return providerContentParts(message.contentParts);
 }
 
+function reasoningFields(
+  message: ChatMessage,
+  reasoningField: "reasoning_content" | "reasoning",
+  includeReasoning: boolean,
+): Pick<OpenAiCompatiblePromptMessage, "reasoning_content" | "reasoning"> {
+  return includeReasoning && message.role === "assistant" && message.reasoningContent !== undefined
+    ? { [reasoningField]: message.reasoningContent }
+    : {};
+}
+
 export function openAiCompatiblePromptMessage(
   message: ChatMessage,
   reasoningField: "reasoning_content" | "reasoning" = "reasoning_content",
+  includeReasoning = true,
 ): OpenAiCompatiblePromptMessage {
   const toolCalls = message.toolCalls?.map((call) => ({
     id: call.id,
@@ -87,9 +98,7 @@ export function openAiCompatiblePromptMessage(
       ? { tool_call_id: message.toolCallId }
       : {}),
     ...(hasToolCalls ? { tool_calls: toolCalls } : {}),
-    ...(message.role === "assistant" && message.reasoningContent !== undefined
-      ? { [reasoningField]: message.reasoningContent }
-      : {}),
+    ...reasoningFields(message, reasoningField, includeReasoning),
   };
 }
 
@@ -126,6 +135,10 @@ function fallbackImageTokens(options: GatewayPromptTokenOptions): number {
     : 8_192;
 }
 
+function selectedReasoning(message: OpenAiCompatiblePromptMessage): string {
+  return message.reasoning_content ?? message.reasoning ?? "";
+}
+
 function countMessageTokens(
   message: ChatMessage,
   accounting: ContextTokenAccounting | undefined,
@@ -137,7 +150,7 @@ function countMessageTokens(
       ? undefined
       : projected.content;
   // Media bytes are never text tokens: an image or a PDF document takes the media reserve instead.
-  const mediaCount = parts?.filter((part) => part.type !== "text").length ?? 0;
+  const mediaCount = parts === undefined ? 0 : parts.filter((part) => part.type !== "text").length;
   const content =
     parts?.map((part) => (part.type === "text" ? part : { type: part.type })) ?? projected.content;
   const text =
@@ -148,7 +161,8 @@ function countMessageTokens(
   // Preserve the dense-text floor when the JSON projection escapes literal newlines.
   return (
     Math.max(
-      countContextTokens(text, accounting),
+      countContextTokens(text, accounting) +
+        countContextTokens(selectedReasoning(projected), accounting),
       countContextTokens(JSON.stringify({ ...projected, content }), accounting),
     ) +
     mediaCount * fallbackImageTokens(options)

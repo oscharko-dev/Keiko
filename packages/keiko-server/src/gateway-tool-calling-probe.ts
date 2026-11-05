@@ -1,8 +1,12 @@
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { redactContent } from "@oscharko-dev/keiko-security";
 import {
   requestGatewayReadinessChatCompletion,
   readGatewayReadinessChatCompletionResponse,
   type EnvSource,
   type GatewayCallRequest,
+  type ToolDefinition,
   type GatewayConfig,
   type GatewaySpendReservation,
   type ModelCapability,
@@ -11,6 +15,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
 import { processServerLogSink } from "./process-log-sink.js";
+import { redactionSecrets } from "./redaction-secrets.js";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 
 const MAX_PROVIDER_RESPONSE_BYTES = 500_000;
@@ -35,6 +40,7 @@ export interface GatewayProbeSpendContext {
   readonly env: EnvSource;
   readonly capability: ModelCapability | undefined;
   readonly correlationId: string;
+  readonly redactionSecrets?: readonly string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -122,13 +128,14 @@ function probeBudgetRequest(provider: ModelProviderConfig): GatewayCallRequest {
 export function reserveGatewayProbeSpend(
   provider: ModelProviderConfig,
   context: GatewayProbeSpendContext | undefined,
+  request: GatewayCallRequest = probeBudgetRequest(provider),
 ): GatewaySpendReservation | undefined {
   return context === undefined
     ? undefined
     : reserveGatewaySpendForAttempt(
         context.env,
         context.capability,
-        probeBudgetRequest(provider),
+        request,
         context.correlationId,
       );
 }
@@ -185,6 +192,167 @@ function toolProbeStreams(
   return capability?.streaming === true;
 }
 
+function toolProbeBudgetRequest(
+  provider: ModelProviderConfig,
+  body: Readonly<Record<string, unknown>>,
+): GatewayCallRequest & { readonly tools: readonly ToolDefinition[] } {
+  const messages = body.messages as readonly Record<string, unknown>[];
+  return {
+    modelId: provider.modelId,
+    messages: messages.map((message) => ({
+      role: message.role as "user" | "assistant" | "system" | "tool",
+      content: typeof message.content === "string" ? message.content : "",
+      ...(typeof message.reasoning_content === "string"
+        ? { reasoningContent: message.reasoning_content }
+        : {}),
+      ...(typeof message.tool_call_id === "string" ? { toolCallId: message.tool_call_id } : {}),
+      ...(Array.isArray(message.tool_calls)
+        ? {
+            toolCalls: message.tool_calls.map(
+              (call: { id: string; function: { name: string; arguments: string } }) => ({
+                id: call.id,
+                name: call.function.name,
+                arguments: JSON.parse(call.function.arguments) as Record<string, unknown>,
+              }),
+            ),
+          }
+        : {}),
+    })),
+    tools: (body.tools as readonly { readonly function: ToolDefinition }[]).map(
+      (tool) => tool.function,
+    ),
+  };
+}
+
+interface ContinuationProbeChoice {
+  readonly finish_reason: unknown;
+  readonly message: Record<string, unknown>;
+}
+
+function continuationProbeChoice(payload: unknown): ContinuationProbeChoice | undefined {
+  if (!isRecord(payload) || !Array.isArray(payload.choices)) return undefined;
+  const choice: unknown = payload.choices[0];
+  if (!isRecord(choice) || !isRecord(choice.message)) return undefined;
+  return { finish_reason: choice.finish_reason, message: choice.message };
+}
+
+function usableProbeReasoning(
+  message: Record<string, unknown>,
+  secrets: readonly string[],
+): boolean {
+  return (
+    typeof message.reasoning_content === "string" &&
+    message.reasoning_content.trim().length > 0 &&
+    (message.reasoning === undefined || message.reasoning === message.reasoning_content) &&
+    redactContent(JSON.stringify(message), "preserve", secrets) === JSON.stringify(message)
+  );
+}
+
+function continuationToolMessage(
+  choice: ContinuationProbeChoice,
+): Record<string, unknown> | undefined {
+  const { message } = choice;
+  if (
+    choice.finish_reason !== "tool_calls" ||
+    !Array.isArray(message.tool_calls) ||
+    message.tool_calls.length !== 1
+  )
+    return undefined;
+  const call: unknown = message.tool_calls[0];
+  if (
+    !expectedToolCall(call) ||
+    !isRecord(call) ||
+    typeof call.id !== "string" ||
+    call.id.length === 0
+  )
+    return undefined;
+  return {
+    role: "assistant",
+    content: typeof message.content === "string" ? message.content : null,
+    reasoning_content: message.reasoning_content,
+    tool_calls: message.tool_calls,
+  };
+}
+
+function continuationProbeMessage(
+  payload: unknown,
+  secrets: readonly string[],
+): Record<string, unknown> | undefined {
+  const choice = continuationProbeChoice(payload);
+  if (choice === undefined || !usableProbeReasoning(choice.message, secrets)) return undefined;
+  const { message } = choice;
+  if (
+    choice.finish_reason === "stop" &&
+    typeof message.content === "string" &&
+    message.content.trim().length > 0 &&
+    (message.tool_calls === undefined ||
+      message.tool_calls === null ||
+      (Array.isArray(message.tool_calls) && message.tool_calls.length === 0))
+  )
+    return {
+      role: "assistant",
+      content: message.content,
+      reasoning_content: message.reasoning_content,
+    };
+  return continuationToolMessage(choice);
+}
+
+function expectedContinuationRound(
+  assistant: Readonly<Record<string, unknown>>,
+  round: number,
+): boolean {
+  return round === 2 ? assistant.tool_calls === undefined : assistant.tool_calls !== undefined;
+}
+
+function thinkingProbeBody(): Record<string, unknown> {
+  return {
+    ...toolCallingBody(),
+    tool_choice: "auto",
+    messages: [
+      {
+        role: "system",
+        content:
+          "Use report_readiness with status ok twice, waiting for each tool result. After the second result answer Ready without calling another tool. When the user asks to check again, call report_readiness once more.",
+      },
+      { role: "user", content: "Perform both readiness checks, then answer Ready." },
+    ],
+  };
+}
+
+function nextContinuationProbeBody(
+  body: Readonly<Record<string, unknown>>,
+  assistant: Readonly<Record<string, unknown>>,
+  round: number,
+): Record<string, unknown> {
+  const tail =
+    round === 2
+      ? [
+          {
+            role: "user",
+            content: "Check readiness once more by calling report_readiness with status ok.",
+          },
+        ]
+      : [
+          {
+            role: "tool",
+            tool_call_id: (assistant.tool_calls as { id: string }[])[0]?.id,
+            content: '{"status":"ok"}',
+          },
+        ];
+  return {
+    ...body,
+    messages: [...(body.messages as unknown[]), assistant, ...tail],
+    tool_choice: round === 1 ? "none" : "auto",
+  };
+}
+
+function probeRedactionSecrets(
+  config: GatewayConfig,
+  spend: GatewayProbeSpendContext | undefined,
+): readonly string[] {
+  return spend?.redactionSecrets ?? redactionSecrets(spend?.env ?? {}, config);
+}
+
 async function executeGatewayToolCallingProbe(
   config: GatewayConfig,
   provider: ModelProviderConfig,
@@ -192,13 +360,58 @@ async function executeGatewayToolCallingProbe(
   spend?: GatewayProbeSpendContext,
   signal?: AbortSignal,
 ): Promise<GatewayToolCallingProbeStatus> {
-  const reservation = reserveGatewayProbeSpend(provider, spend);
+  const required = provider.reasoningContinuation === "required-with-tools";
+  let body = required ? thinkingProbeBody() : toolCallingBody();
+  // Two tool rounds, an ordinary assistant answer, then a later user turn with tools still present.
+  for (let round = 0; round < (required ? 4 : 1); round++) {
+    const result = await sendGatewayToolProbe(config, provider, fetchImpl, spend, signal, body);
+    if (result.status !== "verified") return result.status;
+    if (!required) return hasExpectedToolCall(result.payload) ? "verified" : "unsupported";
+    const assistant = continuationProbeMessage(
+      result.payload,
+      probeRedactionSecrets(config, spend),
+    );
+    if (assistant === undefined || !expectedContinuationRound(assistant, round))
+      return "unverified";
+    body = nextContinuationProbeBody(body, assistant, round);
+  }
+  return "verified";
+}
+
+function probeInputFits(
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  request: GatewayCallRequest & { readonly tools: readonly ToolDefinition[] },
+  spend: GatewayProbeSpendContext | undefined,
+): boolean {
+  if (provider.reasoningContinuation === undefined) return true;
+  const capability =
+    spend?.capability ??
+    config.capabilities?.find((candidate) => candidate.id === provider.modelId);
+  return (
+    capability !== undefined &&
+    countGatewayPromptTokens(request, capability.tokenAccounting) <=
+      deriveContextProfileFromCapability(capability).effectiveInputBudget
+  );
+}
+
+async function sendGatewayToolProbe(
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  fetchImpl?: typeof fetch,
+  spend?: GatewayProbeSpendContext,
+  signal?: AbortSignal,
+  body: Readonly<Record<string, unknown>> = toolCallingBody(),
+): Promise<{ readonly status: GatewayToolCallingProbeStatus; readonly payload?: unknown }> {
+  const budgetRequest = toolProbeBudgetRequest(provider, body);
+  if (!probeInputFits(config, provider, budgetRequest, spend)) return { status: "unverified" };
+  const reservation = reserveGatewayProbeSpend(provider, spend, budgetRequest);
   let response: Response;
   try {
     response = await requestGatewayReadinessChatCompletion({
       config,
       provider,
-      body: toolCallingBody(),
+      body,
       stream: toolProbeStreams(config, provider, spend),
       ...(fetchImpl === undefined ? {} : { fetchImpl }),
       ...admittedGatewayProbeOutputLimit(reservation, spend),
@@ -215,7 +428,7 @@ async function executeGatewayToolCallingProbe(
   }
   if (!response.ok) {
     settleGatewayProbeSpend(reservation, undefined);
-    return rejectedStatus(response);
+    return { status: rejectedStatus(response) };
   }
   let payload: unknown;
   try {
@@ -228,7 +441,7 @@ async function executeGatewayToolCallingProbe(
     throw error;
   }
   settleGatewayProbeSpend(reservation, probeUsage(payload, spend));
-  return hasExpectedToolCall(payload) ? "verified" : "unsupported";
+  return { status: "verified", payload };
 }
 
 export async function probeGatewayToolCalling(

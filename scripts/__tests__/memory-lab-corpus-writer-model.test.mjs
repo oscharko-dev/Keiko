@@ -7,6 +7,8 @@ import { validateBlueprint } from "../testing/memory-lab/corpus/blueprint.mjs";
 import { CorpusError, generateScenario } from "../testing/memory-lab/corpus/generate.mjs";
 import { createModelWriter, parseJsonArray } from "../testing/memory-lab/corpus/writer-model.mjs";
 import { createRandom } from "../testing/memory-lab/corpus/random.mjs";
+import { deriveOracle } from "../testing/memory-lab/corpus/oracle.mjs";
+import { createCleanTester } from "../testing/memory-lab/corpus/realize.mjs";
 import { FACT_MARKER } from "../testing/memory-lab/corpus/writer-port.mjs";
 import { fixtureBlueprint } from "./support/memory-lab-corpus-fixture.mjs";
 
@@ -46,7 +48,14 @@ function fakeEndpoint(respond = (prompt) => content(JSON.stringify(wellBehaved(p
       status: reply.status,
       json: async () => {
         if (reply.malformed) throw new SyntaxError("Unexpected token");
-        return { choices: [{ message: { content: reply.content } }] };
+        return {
+          choices: [
+            {
+              finish_reason: reply.finishReason,
+              message: { content: reply.content, reasoning_content: reply.reasoning },
+            },
+          ],
+        };
       },
     };
   };
@@ -98,12 +107,37 @@ describe("model writer", () => {
     expect(first.init.signal).toBeInstanceOf(globalThis.AbortSignal);
     for (const call of endpoint.calls) {
       expect(call.body.max_tokens).toBeGreaterThan(0);
-      expect(call.body.max_tokens).toBeLessThanOrEqual(4096);
+      expect(call.body.max_tokens).toBeLessThanOrEqual(4096 + 8192);
       expect(call.body.messages[0].role).toBe("system");
     }
     const anonymous = fakeEndpoint();
     await generate(writerOver(anonymous, { apiKey: undefined }));
     expect(anonymous.calls[0].init.headers.authorization).toBeUndefined();
+  });
+
+  it("reserves reasoning tokens in addition to the answer budget (#4247)", async () => {
+    const endpoint = fakeEndpoint();
+    await writerOver(endpoint).exchanges({
+      language: "en",
+      role: "analyst",
+      count: 3,
+      random: createRandom(1),
+      isClean: () => true,
+    });
+    expect(endpoint.calls[0].body.max_tokens).toBe(620 + 8192);
+  });
+
+  it("names an exhausted output budget with no answer without echoing reasoning (#4247)", async () => {
+    const endpoint = fakeEndpoint(() => ({
+      status: 200,
+      content: "",
+      finishReason: "length",
+      reasoning: "PRIVATE REASONING",
+    }));
+    const failure = generate(writerOver(endpoint));
+    await expect(failure).rejects.toThrow(/finish_reason=length.*no answer/u);
+    await failure.catch((error) => expect(error.message).not.toContain("PRIVATE REASONING"));
+    expect(endpoint.calls).toHaveLength(3);
   });
 
   it("accepts an endpoint that already names the completions route", async () => {
@@ -251,6 +285,28 @@ describe("model writer failures", () => {
     expect(empty.calls).toHaveLength(3);
     const noMessage = fakeEndpoint(() => ({ status: 200, content: undefined }));
     await expect(generate(writerOver(noMessage))).rejects.toThrow(/held no message/u);
+  });
+
+  it.each([
+    ["blueprint-fact", "I prefer line charts for my reports."],
+    ["memory-command", "Remember this for later."],
+    ["reserved-marker", "Use [[PRIVATE MARKER]] please."],
+    ["forbidden-value", "Contact me at reader@outside.net."],
+  ])("names the %s filter refusal without echoing text (#4247)", async (kind, text) => {
+    const endpoint = fakeEndpoint(() =>
+      content(JSON.stringify([{ user: text, assistant: "Understood." }])),
+    );
+    const isClean = createCleanTester(deriveOracle(validateBlueprint(fixtureBlueprint())));
+    const failure = writerOver(endpoint).exchanges({
+      language: "en",
+      role: "analyst",
+      count: 3,
+      random: createRandom(1),
+      isClean,
+      refusalClass: isClean.refusalClass,
+    });
+    await expect(failure).rejects.toThrow(new RegExp(`${kind}=3`, "u"));
+    await failure.catch((error) => expect(error.message).not.toContain(text));
   });
 
   it("stops when the model writes exchanges that all state a fact", async () => {

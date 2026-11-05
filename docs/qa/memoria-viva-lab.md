@@ -226,6 +226,14 @@ of the runner cannot clean up by definition, so its instance ends with the runne
 state of the run stays in its `--out` directory; and `--keep` asks for that state on purpose, and keeps
 state only.
 
+Every settled unit is atomically checkpointed before the next unit starts. Repeat an interrupted
+command with the same options and `--resume` to skip those units and rebuild the final report over
+all of them. A unit interrupted before settlement runs again; settled failed units remain explicitly
+failed. Resume refuses changes to the scenario set, model/configuration, budgets, timing settings,
+repository environment, instrument or built product. A fresh invocation refuses unfinished progress
+until `--resume` is explicit. Completed reports are never overwritten. The private journal is
+removed after the final evidence scan.
+
 ## What a run proves about itself
 
 Two checks concern the evidence itself, and either one turns the run red with exit code 6, whatever it
@@ -257,9 +265,9 @@ the product head and the options. Its `metadata` records `sealed` (true for a `-
 the judge requires of the holdout part), `allowFoldedEnv`, `foldedKeys`, `budgetTokens`,
 `brokenLearner` and `configDigest`: the SHA-256 of the gateway configuration file in live mode,
 `offline` otherwise. It also records the **instrument**: `instrumentDigest`, a SHA-256 over the lab
-sources that decide what a run measures (`INSTRUMENT_FILES` in `instrument.mjs`: `corpus/sequence.mjs`,
+sources that decide what a run measures (`INSTRUMENT_FILES` in `instrument.mjs`: `../jira-chat-lab/requirements/work-project-lock.mjs`, `corpus/holdout.mjs`, `corpus/sequence.mjs`,
 `corpus/values.mjs`, `driver.mjs`, `evidence-scan.mjs`, `gateway-calls.mjs`, `instance.mjs`,
-`isolation.mjs`, `log-text.mjs`, `report.mjs`, `run.mjs`, `scenario.mjs`, `score.mjs`,
+`isolation.mjs`, `log-text.mjs`, `progress.mjs`, `report.mjs`, `run.mjs`, `scenario.mjs`, `score.mjs`,
 `scripted-model.mjs`, `set-files.mjs`, `unit-failure.mjs`), beside
 `labHead` and `labDirty` (the lab's commit, and whether its sources carried uncommitted changes) for
 people; and the **product build**: `productHead` and `productDistDigest`, a SHA-256 over every built
@@ -541,7 +549,11 @@ Plan the time of a run on a big person: every learning turn waits for the captur
 `--quiet-ms 300`, so a 10,000-message person takes in the order of an hour per arm and repetition.
 
 `--out` must lie outside the checkout (symbolic links are followed), an existing manifest or scenario
-file is never overwritten, and nothing is written when a conversation fails its validation.
+file is never overwritten, and a failed conversation is never published. Completed scenarios are atomically saved in the
+owner-private `<out>/.progress/` journal before the next scenario starts. After a failed build, repeat
+the same command with `--resume` to reuse them; a different blueprint, seed, writer setting or
+generator code is refused. The final manifest still marks a complete validated corpus. The journal
+is removed once publication completes.
 `<out>/scenarios/<person>-m<size>.json` holds one scenario per blueprint and size (with `--focused`, the
 focused scenarios under their ids). `<out>/manifest.json`
 holds the scenario manifest of the lab (set digest and one digest per scenario), the `corpusVersion`
@@ -554,11 +566,16 @@ and no key.
 The model writer posts a plain HTTP request per block (no provider SDK, ADR-0019 trust-1). It writes
 only filler and the words around the facts, is never sent a fact, and the generator inserts every fact
 sentence itself, so a model cannot rewrite or drop a truth. One request yields a block of ten filler
-exchanges or a pool of paragraphs or sentences; each request is bounded in tokens (4,096 at most), has a
-timeout (`--timeout-ms`, default 120 s) and three attempts. Text that states a fact, holds a
+exchanges or a pool of paragraphs or sentences; each request has an answer allowance of at most
+4,096 tokens plus the reasoning allowance (`--reasoning-tokens`, default 8,192; set 0 for a
+nonreasoning endpoint with a smaller output ceiling, maximum 65,536), a timeout (`--timeout-ms`, default 120 s) and three attempts. Text that states a fact, holds a
 value-shaped string, opens with a memory command or breaks the marker contract is dropped and asked
-for again; an error names an HTTP status or an error class and never echoes a response body. Without
-the key variable a request carries no authorization header.
+for again; an error names an HTTP status or an error class and never echoes a response body.
+An empty answer with `finish_reason=length` is reported as an exhausted output budget.
+Filter failures report closed refusal classes and counts (`blueprint-fact`, `forbidden-value`,
+`memory-command`, `reserved-marker`, `missing-message`, `invalid-json-array`, `filtered-text`, or
+`item-shape`), never rejected text.
+Without the key variable a request carries no authorization header.
 
 ### Variety
 
@@ -599,7 +616,10 @@ with mode 0600 and is created when absent; a key file that others can read, a li
 checkout and an existing holdout are refused. Delete the plaintext directory after sealing.
 
 A run on a holdout opens it only in memory. `--scenarios` and `--keep` are refused, bodies are never
-retained, no per-run file is written, and the instance state of each unit lives in a private temporary
+retained, no readable per-run file is written. Interrupted runs retain authenticated encrypted
+checkpoints in `<out>/.progress/`, with a separate key derived from the holdout key. Resume decrypts
+them only in memory, and successful completion removes them. No per-unit verdict is readable in
+the journal. The instance state of each unit lives in a private temporary
 directory that is removed afterwards. The report carries masked names
 `holdout:<class>:<language>:<first 12 hex of the HMAC-SHA256 of the id>`, keyed with a key derived
 from the holdout key, so that a guessed scenario id cannot be checked against a name (the unkeyed

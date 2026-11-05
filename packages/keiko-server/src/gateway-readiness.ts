@@ -72,6 +72,7 @@ import {
   reconcileGatewayToolCallingReadiness,
 } from "./gateway-setup.js";
 import { processServerLogSink } from "./process-log-sink.js";
+import { currentRedactionSecrets } from "./redaction-secrets.js";
 // #3557 review finding A: the one owning projection from a candidate model id to Activity Log
 // evidence — reused here so a readiness line never carries a value that would fail
 // `activityLogEvent`'s own opaque-id validation and silently drop the whole line.
@@ -810,7 +811,12 @@ function probeSpendContext(
   provider: ModelProviderConfig,
   correlationId: string,
 ): GatewayProbeSpendContext {
-  return { env: deps.env, capability: providerCapability(config, provider), correlationId };
+  return {
+    env: deps.env,
+    capability: providerCapability(config, provider),
+    correlationId,
+    redactionSecrets: currentRedactionSecrets(deps),
+  };
 }
 
 async function observedProbeUsage(

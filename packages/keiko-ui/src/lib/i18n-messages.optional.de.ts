@@ -2254,8 +2254,17 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.memory.forgetPermanently": "Dauerhaft vergessen",
   "chat.memory.forgetCompleted": "MemoriaViva-Vergessen abgeschlossen.",
   "chat.memory.forgetError": "Erinnerung konnte nicht vergessen werden.",
-  "chat.memory.proposalDeclined": "Speichervorschlag abgelehnt",
-  "chat.memory.noReason": "Kein Grund angegeben",
+  "chat.memory.rememberedStatement": "Gemerkt.",
+  "chat.memory.forgottenStatement": "Vergessen.",
+  "chat.memory.refusal.whichMemory": "Welche Erinnerung meinst du?",
+  "chat.memory.refusal.forgetFailed":
+    "Das konnte ich nicht vergessen. Bitte versuch es noch einmal.",
+  "chat.memory.refusal.forgotten":
+    "Du wolltest, dass ich das nicht behalte, deshalb habe ich es nicht gespeichert.",
+  "chat.memory.refusal.secret":
+    "Passwörter, Schlüssel und andere Zugangsdaten speichere ich nicht.",
+  "chat.memory.refusal.sensitive": "Das habe ich nicht gespeichert, weil es sensibel ist.",
+  "chat.memory.refusal.notSaved": "Das habe ich nicht gespeichert.",
   "chat.memory.actionNotCreated": "MemoriaViva-Aktion nicht erstellt",
   "memoria.back": "Zurück",
   "memoria.backToMemoria": "Zurück zu MemoriaViva",

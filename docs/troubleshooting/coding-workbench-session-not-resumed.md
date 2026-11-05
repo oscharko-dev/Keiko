@@ -28,8 +28,9 @@ condition holds (ADR-0137 D10). Otherwise the run starts a fresh runtime session
 context, exactly as before native resume existed, and the Activity Log names the closed reason. The
 usual reasons are:
 
-- `not-succeeded`: the previous run was stopped, cancelled or failed, or the server was restarted
-  while it ran. Only a run that ends `succeeded` through an orderly stop keeps its session.
+- `not-succeeded`: the previous run did not reach an orderly settled stop. Successful, failed and
+  cancelled native runs can retain their session only after process reaping and the same database
+  and binding audit. Unsettled kills and timeouts retain nothing.
 - `disabled`: `KEIKO_CODING_SESSION_RETENTION` is `off`, or holds a value other than `on` (an
   unknown value fails closed to off).
 - `expired`: the retained entry is older than 14 days. `no-retained-state`: there is none, for
@@ -37,6 +38,11 @@ usual reasons are:
 - `workspace-changed`, `version-changed`, `window-shrunk`: the task now points at another workspace,
   the runtime was upgraded, or the selected model has a smaller input window than the one the
   history was built under.
+- `model-route-changed`: required thinking continuation was produced by a different deployment/model
+  route, or the retained legacy entry has no route provenance. The task starts fresh; no opaque
+  provider state is transplanted. An entry with proven route provenance can still serve that
+  original route. With required continuation active, a legacy entry without provenance starts
+  fresh even when returning to the previously selected route.
 - `grant-present`, `credential-present`, `pending-input`, `revert-staged`, `integrity-failed`,
   `schema-unknown`, `session-mismatch`: the retained database failed its audit and was removed.
 - `database-oversized`, `history-oversized`: the session exceeds the retention bounds (128 MiB or
