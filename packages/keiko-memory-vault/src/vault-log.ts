@@ -441,11 +441,18 @@ function emitMemoryWriteCaptureFailureEvent(
     admitted: false,
     loss: "none",
   } as const;
-  const event = activityLogEvent(MEMORY_WRITE_CAPTURE_FAILED_OPERATION, envelope, {
-    ...fields,
-    completeness: evidence === undefined ? "partial" : "complete",
-    ...(evidence === undefined ? {} : { frames: evidence.frames, causeChain: evidence.causeChain }),
-  });
+  const event = activityLogEvent(
+    MEMORY_WRITE_CAPTURE_FAILED_OPERATION,
+    envelope,
+    evidence === undefined
+      ? { ...fields, completeness: "partial" }
+      : {
+          ...fields,
+          completeness: "complete",
+          frames: evidence.frames,
+          causeChain: evidence.causeChain,
+        },
+  );
   emitMemoryVaultLogEvent(
     sink,
     activityLogEventWillBeRejected(event)

@@ -135,32 +135,55 @@ function buildScopeFromRow(kind: string, coord: string): MemoryScope {
   return result.value;
 }
 
-function buildProvenanceFromRow(row: MemoryRow): object {
-  return {
+interface StoredModelIdentityCandidate {
+  provider: string;
+  modelId: string;
+  modelRevision?: string;
+}
+
+/** Stored provenance columns as read; validateMemoryRecord decides whether they form a record. */
+interface StoredProvenanceCandidate {
+  sourceKind: string;
+  capturedAt: number;
+  confidence: number;
+  sensitivity: string;
+  sourceConversationId?: string;
+  sourceWorkflowRunId?: string;
+  sourceEvidenceManifestId?: string;
+  captureRationale?: string;
+  modelIdentity?: StoredModelIdentityCandidate;
+}
+
+function buildModelIdentityFromRow(row: MemoryRow): StoredModelIdentityCandidate | undefined {
+  if (row.model_provider === null || row.model_id === null) return undefined;
+  const identity: StoredModelIdentityCandidate = {
+    provider: row.model_provider,
+    modelId: row.model_id,
+  };
+  if (row.model_revision !== null) identity.modelRevision = row.model_revision;
+  return identity;
+}
+
+function buildProvenanceFromRow(row: MemoryRow): StoredProvenanceCandidate {
+  const candidate: StoredProvenanceCandidate = {
     sourceKind: row.source_kind,
     capturedAt: row.captured_at,
     confidence: row.confidence,
     sensitivity: row.sensitivity,
-    ...(row.source_conversation_id !== null
-      ? { sourceConversationId: row.source_conversation_id }
-      : {}),
-    ...(row.source_workflow_run_id !== null
-      ? { sourceWorkflowRunId: row.source_workflow_run_id }
-      : {}),
-    ...(row.source_evidence_manifest_id !== null
-      ? { sourceEvidenceManifestId: row.source_evidence_manifest_id }
-      : {}),
-    ...(row.capture_rationale !== null ? { captureRationale: row.capture_rationale } : {}),
-    ...(row.model_provider !== null && row.model_id !== null
-      ? {
-          modelIdentity: {
-            provider: row.model_provider,
-            modelId: row.model_id,
-            ...(row.model_revision !== null ? { modelRevision: row.model_revision } : {}),
-          },
-        }
-      : {}),
   };
+  if (row.source_conversation_id !== null) {
+    candidate.sourceConversationId = row.source_conversation_id;
+  }
+  if (row.source_workflow_run_id !== null) {
+    candidate.sourceWorkflowRunId = row.source_workflow_run_id;
+  }
+  if (row.source_evidence_manifest_id !== null) {
+    candidate.sourceEvidenceManifestId = row.source_evidence_manifest_id;
+  }
+  if (row.capture_rationale !== null) candidate.captureRationale = row.capture_rationale;
+  const modelIdentity = buildModelIdentityFromRow(row);
+  if (modelIdentity !== undefined) candidate.modelIdentity = modelIdentity;
+  return candidate;
 }
 
 function buildValidityFromRow(row: MemoryRow): MemoryValidityInterval {
@@ -353,7 +376,12 @@ function isMemoryFieldGroup(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function captureMemoryScope(value: unknown): unknown {
+/** One own-field snapshot of a group; the record validator decides whether it is valid. */
+type CapturedMemoryGroup = Readonly<Record<string, unknown>>;
+
+function captureMemoryScope(
+  value: MemoryRecord["scope"],
+): MemoryRecord["scope"] | CapturedMemoryGroup {
   if (!isMemoryFieldGroup(value)) return value;
   const kind = value.kind;
   switch (kind) {
@@ -370,7 +398,9 @@ function captureMemoryScope(value: unknown): unknown {
   }
 }
 
-function captureMemoryModelIdentity(value: unknown): unknown {
+function captureMemoryModelIdentity(
+  value: MemoryRecord["provenance"]["modelIdentity"],
+): MemoryRecord["provenance"]["modelIdentity"] | CapturedMemoryGroup {
   if (!isMemoryFieldGroup(value)) return value;
   return ownMemoryFields({
     provider: value.provider,
@@ -379,7 +409,9 @@ function captureMemoryModelIdentity(value: unknown): unknown {
   });
 }
 
-function captureMemoryProvenance(value: unknown): unknown {
+function captureMemoryProvenance(
+  value: MemoryRecord["provenance"],
+): MemoryRecord["provenance"] | CapturedMemoryGroup {
   if (!isMemoryFieldGroup(value)) return value;
   return ownMemoryFields({
     sourceKind: value.sourceKind,
@@ -394,12 +426,16 @@ function captureMemoryProvenance(value: unknown): unknown {
   });
 }
 
-function captureMemoryValidity(value: unknown): unknown {
+function captureMemoryValidity(
+  value: MemoryRecord["validity"],
+): MemoryRecord["validity"] | CapturedMemoryGroup {
   if (!isMemoryFieldGroup(value)) return value;
   return ownMemoryFields({ validFrom: value.validFrom, validUntil: value.validUntil });
 }
 
-function captureMemoryRetention(value: unknown): unknown {
+function captureMemoryRetention(
+  value: MemoryRecord["retentionHint"],
+): MemoryRecord["retentionHint"] | CapturedMemoryGroup {
   if (!isMemoryFieldGroup(value)) return value;
   return ownMemoryFields({
     policyKey: value.policyKey,
@@ -429,16 +465,14 @@ function memoryArrayCaptureLength(values: readonly unknown[], maximum: number): 
   return length;
 }
 
-function captureMemoryStrings(value: unknown, maximum: number): unknown {
-  if (!Array.isArray(value)) return value;
+function captureMemoryStrings(value: readonly unknown[], maximum: number): readonly unknown[] {
   const length = memoryArrayCaptureLength(value, maximum);
   const captured: unknown[] = [];
   for (let index = 0; index < length; index += 1) captured.push(value[index]);
   return freezeMemoryArray(captured);
 }
 
-function captureMemoryEntries(value: unknown): unknown {
-  if (!Array.isArray(value)) return value;
+function captureMemoryEntries(value: readonly unknown[]): readonly unknown[] {
   const length = memoryArrayCaptureLength(value, MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES);
   const captured: unknown[] = [];
   for (let index = 0; index < length; index += 1) {
@@ -450,19 +484,32 @@ function captureMemoryEntries(value: unknown): unknown {
   return freezeMemoryArray(captured);
 }
 
-function captureMemoryPayload(value: unknown): unknown {
+function captureMemoryPayload(
+  value: MemoryRecord["payload"],
+): MemoryRecord["payload"] | CapturedMemoryGroup {
   if (!isMemoryFieldGroup(value)) return value;
   const kind = value.kind;
   if (kind === "string-list") {
+    const items = value.items;
     return ownMemoryFields({
       kind,
-      items: captureMemoryStrings(value.items, MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES),
+      items: Array.isArray(items)
+        ? captureMemoryStrings(items, MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES)
+        : items,
     });
   }
   if (kind === "key-value") {
-    return ownMemoryFields({ kind, entries: captureMemoryEntries(value.entries) });
+    const entries = value.entries;
+    return ownMemoryFields({
+      kind,
+      entries: Array.isArray(entries) ? captureMemoryEntries(entries) : entries,
+    });
   }
   return ownMemoryFields({ kind });
+}
+
+function captureMemoryTags(tags: MemoryRecord["tags"]): MemoryRecord["tags"] | readonly unknown[] {
+  return Array.isArray(tags) ? captureMemoryStrings(tags, MEMORY_TAGS_MAX_COUNT) : tags;
 }
 
 function captureMemoryRecord(record: MemoryRecord): MemoryRecord {
@@ -476,7 +523,7 @@ function captureMemoryRecord(record: MemoryRecord): MemoryRecord {
     validity: captureMemoryValidity(record.validity),
     status: record.status,
     pinned: record.pinned,
-    tags: captureMemoryStrings(record.tags, MEMORY_TAGS_MAX_COUNT),
+    tags: captureMemoryTags(record.tags),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     payload: captureMemoryPayload(record.payload),

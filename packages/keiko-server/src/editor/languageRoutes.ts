@@ -460,10 +460,7 @@ function recordSemanticTokenOutcome(
     correlationId,
     activityLogEvent(
       SEMANTIC_TOKEN_SETTLED,
-      {
-        correlationId,
-        ...(errorKind === undefined ? {} : { errorKind }),
-      },
+      errorKind === undefined ? { correlationId } : { correlationId, errorKind },
       { ...fields },
     ),
   );

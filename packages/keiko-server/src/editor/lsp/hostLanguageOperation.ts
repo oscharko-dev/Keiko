@@ -1788,8 +1788,8 @@ export function recordSemanticTokenRequestFailure(
     errorClass: contentFreeErrorClass(error),
     message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
     diagnosticOutcome: "request-failed",
-    ...(frames.length === 0 ? {} : { frames }),
-    ...(causes.length === 0 ? {} : { causeChain: causes }),
+    frames: frames.length === 0 ? undefined : frames,
+    causeChain: causes.length === 0 ? undefined : causes,
   });
 }
 
