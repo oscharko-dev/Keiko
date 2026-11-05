@@ -97,6 +97,10 @@ export interface HtmlManualPodCreateRequest {
 
 const MAX_DISPLAY_NAME_LENGTH = 120;
 
+interface HtmlManualPodRefreshValidationState {
+  errors: string[];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -124,15 +128,30 @@ function onlyKnownKeys(
   return extra === undefined ? [] : [`${field} must not include ${extra}`];
 }
 
+function isHtmlManualPodRefreshRequest(
+  input: unknown,
+  state: HtmlManualPodRefreshValidationState,
+): input is HtmlManualPodRefreshRequest {
+  if (!isRecord(input)) {
+    state.errors = ["request must be an object"];
+    return false;
+  }
+  const errors = onlyKnownKeys(input, ["capsuleId", "sourceId"], "request");
+  state.errors = errors;
+  const knownKeys = errors.length === 0;
+  const capsuleIdValid = isSafeManualPodId(input.capsuleId);
+  if (!capsuleIdValid) errors.push("capsuleId must be a safe id token");
+  const sourceIdValid = isSafeManualPodId(input.sourceId);
+  if (!sourceIdValid) errors.push("sourceId must be a safe id token");
+  return knownKeys && capsuleIdValid && sourceIdValid;
+}
+
 export function validateHtmlManualPodRefreshRequest(
   input: unknown,
 ): LocalKnowledgeValidation<HtmlManualPodRefreshRequest> {
-  if (!isRecord(input)) return { ok: false, errors: ["request must be an object"] };
-  const errors = onlyKnownKeys(input, ["capsuleId", "sourceId"], "request");
-  if (!isSafeManualPodId(input.capsuleId)) errors.push("capsuleId must be a safe id token");
-  if (!isSafeManualPodId(input.sourceId)) errors.push("sourceId must be a safe id token");
-  if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, value: input as unknown as HtmlManualPodRefreshRequest };
+  const state: HtmlManualPodRefreshValidationState = { errors: [] };
+  if (!isHtmlManualPodRefreshRequest(input, state)) return { ok: false, errors: state.errors };
+  return { ok: true, value: input };
 }
 
 // Normalise + validate an optional path prefix: undefined/null -> null; a string is scope-checked;

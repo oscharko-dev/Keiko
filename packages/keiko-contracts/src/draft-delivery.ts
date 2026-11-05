@@ -205,6 +205,10 @@ const PHASE_REASONS: Readonly<Record<DraftDeliveryPhase, ReadonlySet<string>>> =
   ]),
 };
 
+function isDraftDeliveryPhase(phase: string): phase is DraftDeliveryPhase {
+  return Object.hasOwn(PHASE_REASONS, phase);
+}
+
 /**
  * Whether a record in this phase means something was actually delivered — a push that reached the
  * remote, or a draft pull request that exists. Derived from `PHASE_REASONS` rather than restated as
@@ -220,8 +224,11 @@ const PHASE_REASONS: Readonly<Record<DraftDeliveryPhase, ReadonlySet<string>>> =
 export function isDeliveredDraftDeliveryPhase(phase: string): boolean {
   // Exported on the runtime subpath, so a JavaScript caller can hand in any string: a value that is
   // not one of the table's own phases is never delivered - not a thrown `size` read on `undefined`.
-  if (!Object.hasOwn(PHASE_REASONS, phase)) return false;
-  const reasons = PHASE_REASONS[phase as DraftDeliveryPhase];
+  if (!isDraftDeliveryPhase(phase)) return false;
+  const phaseReasons: Readonly<Partial<Record<DraftDeliveryPhase, ReadonlySet<string>>>> =
+    PHASE_REASONS;
+  const reasons = phaseReasons[phase];
+  if (reasons === undefined) return false;
   return reasons.size === 1 && reasons.has("completed");
 }
 
@@ -358,10 +365,11 @@ function validRecordedAt(value: unknown): boolean {
 
 function validPhase(value: Record<string, unknown>): boolean {
   if (typeof value.phase !== "string" || !Object.hasOwn(PHASE_REASONS, value.phase)) return false;
-  return (
-    typeof value.reason === "string" &&
-    PHASE_REASONS[value.phase as DraftDeliveryPhase].has(value.reason)
-  );
+  if (typeof value.reason !== "string") return false;
+  const phase = value.phase;
+  if (typeof phase !== "string" || !isDraftDeliveryPhase(phase)) return false;
+  const reasons = PHASE_REASONS[phase];
+  return reasons.has(value.reason);
 }
 
 function validRemote(value: Record<string, unknown>, binding: DraftDeliveryBinding): boolean {
@@ -393,18 +401,27 @@ function currentDraftMatches(
   );
 }
 
+function validRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 function validRecordMetadata(value: Record<string, unknown>): boolean {
   return (
     value.schemaVersion === "1" &&
     Object.keys(value).every((key) => RECORD_KEYS.has(key)) &&
     typeof value.revision === "number" &&
     Number.isSafeInteger(value.revision) &&
-    value.revision >= 0 &&
+    validRevision(value.revision) &&
     matches(value.proposalId, SAFE_ID) &&
     matches(value.proposalDigest, DIGEST) &&
     validRecordedAt(value.recordedAt) &&
     validPhase(value)
   );
+}
+
+function validObservedRemote(value: Record<string, unknown>): boolean {
+  const binding = value.binding;
+  return isDraftDeliveryBinding(binding) && validRemote(value, binding);
 }
 
 /** A delivery record whose binding names the accepted issue and its repository. */
@@ -434,6 +451,6 @@ export function isDraftDeliveryRecord(value: unknown): value is DraftDeliveryRec
     record(value) &&
     isDraftDeliveryBinding(value.binding) &&
     validRecordMetadata(value) &&
-    validRemote(value, value.binding)
+    validObservedRemote(value)
   );
 }

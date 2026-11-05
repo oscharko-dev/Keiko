@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import {
+  parseWorkspaceManifestAccess as parsePublicWorkspaceManifestAccess,
+  validateWorkspaceManifest as validatePublicWorkspaceManifest,
+  workspaceManifestAccessResponse as publicWorkspaceManifestAccessResponse,
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import {
   isWorkspaceManifestDigest,
   isWorkspaceManifestRef,
@@ -270,3 +275,146 @@ describe("workspace manifest access wire shape", () => {
     expect(parseWorkspaceManifestAccess(hostile).ok).toBe(false);
   });
 });
+
+type PublicAccess = Extract<ReturnType<typeof parsePublicWorkspaceManifestAccess>, { ok: true }>;
+type PublicManifest = PublicAccess["access"]["manifests"][number];
+
+function sourceAccessFixture(
+  session: Parameters<typeof workspaceManifestAccessResponse>[0],
+): ReturnType<typeof workspaceManifestAccessResponse> {
+  return workspaceManifestAccessResponse(session, session === "paired" ? [validManifest()] : []);
+}
+
+function publicAccessFixture(
+  session: Parameters<typeof publicWorkspaceManifestAccessResponse>[0],
+): ReturnType<typeof publicWorkspaceManifestAccessResponse> {
+  const parsed = parsePublicWorkspaceManifestAccess({
+    session: "paired",
+    manifests: [validManifest()],
+  });
+  if (!parsed.ok) throw new TypeError("healthy public fixture refused");
+  const manifest = parsed.access.manifests[0];
+  if (manifest === undefined) throw new TypeError("healthy public fixture missing");
+  return publicWorkspaceManifestAccessResponse(session, session === "paired" ? [manifest] : []);
+}
+
+it("retains independent public primitive and closed pairing declarations", () => {
+  expectTypeOf<PublicAccess["access"]["session"]>().toEqualTypeOf<
+    "paired" | "unpaired" | "unknown"
+  >();
+  expectTypeOf<PublicManifest["revision"]>().toEqualTypeOf<number>();
+  expectTypeOf<PublicManifest["roots"][number]["canonicalRoot"]>().toEqualTypeOf<string>();
+  expectTypeOf<
+    Extract<ReturnType<typeof parsePublicWorkspaceManifestAccess>, { ok: false }>["reasons"]
+  >().toEqualTypeOf<readonly string[]>();
+});
+
+describe.each([
+  ["source", parseWorkspaceManifestAccess, validateWorkspaceManifest, sourceAccessFixture],
+  [
+    "public",
+    parsePublicWorkspaceManifestAccess,
+    validatePublicWorkspaceManifest,
+    publicAccessFixture,
+  ],
+] as const)(
+  "%s session vocabulary preservation",
+  (_entrypoint, parseAccess, validateManifest, produceAccess) => {
+    it("consumes actual producer assertions and preserves manifest references", () => {
+      for (const session of WORKSPACE_MANIFEST_SESSION_ASSERTIONS) {
+        const response = produceAccess(session);
+        const manifests = response.manifests;
+        const result = parseAccess(response);
+        expect(result).toEqual({ ok: true, access: response });
+        if (!result.ok) throw new TypeError("healthy producer assertion refused");
+        expect(result.access.manifests).toBe(manifests);
+        expect(result.access.session).toBe(session);
+        for (const manifest of manifests) expect(validateManifest(manifest)).toEqual({ ok: true });
+      }
+    });
+
+    it("preserves omission, own undefined and extra response fields", () => {
+      const manifests: WorkspaceManifest[] = [];
+      for (const response of [
+        { manifests, extra: true },
+        { session: undefined, manifests },
+      ]) {
+        const result = parseAccess(response);
+        expect(result).toEqual({ ok: true, access: { session: "unknown", manifests } });
+        if (!result.ok) throw new TypeError("healthy unknown pairing refused");
+        expect(result.access.manifests).toBe(manifests);
+      }
+    });
+
+    it.each([null, 0, Symbol("session"), "PAIRED", "future", {}, Object("paired")])(
+      "refuses non-members without coercion %s",
+      (session: unknown) => {
+        expect(parseAccess({ session, manifests: [] })).toEqual({
+          ok: false,
+          reasons: ["workspace manifest access invalid"],
+        });
+      },
+    );
+
+    it("does not coerce a candidate and retains one session getter observation", () => {
+      let coercions = 0;
+      const session = {
+        [Symbol.toPrimitive](): never {
+          coercions++;
+          throw new TypeError("unexpected fixture coercion");
+        },
+      };
+      expect(parseAccess({ session, manifests: [] })).toEqual({
+        ok: false,
+        reasons: ["workspace manifest access invalid"],
+      });
+      expect(coercions).toBe(0);
+      let reads = 0;
+      const response = {
+        get session(): string {
+          reads++;
+          return "paired";
+        },
+        manifests: [],
+      };
+      expect(parseAccess(response)).toEqual({
+        ok: true,
+        access: { session: "paired", manifests: [] },
+      });
+      expect(reads).toBe(1);
+    });
+
+    it("retains exact disclosure and malformed-manifest refusals", () => {
+      for (const response of [
+        { session: "unpaired", manifests: [validManifest()] },
+        { session: "paired", manifests: [{}] },
+      ]) {
+        expect(parseAccess(response)).toEqual({
+          ok: false,
+          reasons: ["workspace manifest access invalid"],
+        });
+      }
+    });
+
+    it("reinvokes admission after invalid mutation of a previously accepted reference", () => {
+      const response = produceAccess("paired");
+      const input = response.manifests[0];
+      if (input === undefined) throw new TypeError("healthy fixture manifest missing");
+      const root = input.roots[0];
+      if (root === undefined) throw new TypeError("healthy fixture root missing");
+      const result = parseAccess(response);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("healthy mutation control refused");
+      expect(result.access.manifests[0]).toBe(input);
+      expect(Reflect.set(root, "canonicalRoot", "/work/../escape")).toBe(true);
+      expect(validateManifest(input)).toEqual({
+        ok: false,
+        reasons: ["workspace manifest invalid"],
+      });
+      expect(parseAccess(response)).toEqual({
+        ok: false,
+        reasons: ["workspace manifest access invalid"],
+      });
+    });
+  },
+);

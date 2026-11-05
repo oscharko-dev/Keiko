@@ -65,7 +65,7 @@ export type HtmlManualCrawlScope =
       readonly rootPath: string;
       // Seed page relative to `rootPath` the link-graph crawl starts from (e.g. "index.html").
       // A safe relative storage reference; when omitted the crawler defaults to "index.html".
-      readonly entryPath?: string;
+      readonly entryPath?: string | undefined;
     }
   | {
       readonly kind: "html-manual-http";
@@ -154,51 +154,74 @@ function isManualRedactionSafe(value: string): boolean {
 }
 
 // ─── Scope validation ───────────────────────────────────────────────────────────
-function validateLocalScope(input: Record<string, unknown>, errors: string[]): void {
-  if (typeof input.rootPath !== "string" || !isSafeScopePath(input.rootPath)) {
-    errors.push("scope.rootPath is unsafe or empty");
-  }
-  if (
-    input.entryPath !== undefined &&
-    (typeof input.entryPath !== "string" || !isSafeStorageReference(input.entryPath))
-  ) {
-    errors.push("scope.entryPath must be a safe relative path when set");
-  }
+function isManualRecord(input: unknown): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null && !Array.isArray(input);
 }
 
-function validateHttpScope(input: Record<string, unknown>, errors: string[]): void {
-  if (typeof input.origin !== "string" || !isSafeManualOrigin(input.origin)) {
+function validateLocalScope(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & { rootPath: string; entryPath?: string | undefined } {
+  const rootValid = typeof input.rootPath === "string" && isSafeScopePath(input.rootPath);
+  if (!rootValid) errors.push("scope.rootPath is unsafe or empty");
+  const entryValid =
+    input.entryPath === undefined ||
+    (typeof input.entryPath === "string" && isSafeStorageReference(input.entryPath));
+  if (!entryValid) errors.push("scope.entryPath must be a safe relative path when set");
+  return rootValid && entryValid;
+}
+
+function validateHttpScope(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & { origin: string; pathPrefix: string | null } {
+  const originValid = typeof input.origin === "string" && isSafeManualOrigin(input.origin);
+  if (!originValid)
     errors.push(
       "scope.origin must be a canonical scheme://host[:port] with no path or credentials",
     );
-  }
   const prefix = input.pathPrefix;
   if (prefix !== null && typeof prefix !== "string") {
     errors.push("scope.pathPrefix must be a string or null");
-  } else if (!isSafeManualPathPrefix(prefix)) {
+    return false;
+  }
+  const prefixValid = isSafeManualPathPrefix(prefix);
+  if (!prefixValid)
     errors.push(
       "scope.pathPrefix must be a same-origin path with no traversal, query, or fragment",
     );
+  return originValid && prefixValid;
+}
+
+interface ManualScopeValidation {
+  readonly errors: string[];
+  knownKind: boolean;
+}
+
+function validateScopeFields(
+  input: Record<string, unknown>,
+  state: ManualScopeValidation,
+): input is Record<string, unknown> & HtmlManualCrawlScope {
+  if (input.kind === "html-manual-local") {
+    state.knownKind = true;
+    return validateLocalScope(input, state.errors);
   }
+  if (input.kind === "html-manual-http") {
+    state.knownKind = true;
+    return validateHttpScope(input, state.errors);
+  }
+  return false;
 }
 
 export function validateHtmlManualCrawlScope(
   input: unknown,
 ): LocalKnowledgeValidation<HtmlManualCrawlScope> {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) {
-    return { ok: false, errors: ["scope must be an object"] };
-  }
-  const record = input as Record<string, unknown>;
-  const errors: string[] = [];
-  if (record.kind === "html-manual-local") {
-    validateLocalScope(record, errors);
-  } else if (record.kind === "html-manual-http") {
-    validateHttpScope(record, errors);
-  } else {
+  if (!isManualRecord(input)) return { ok: false, errors: ["scope must be an object"] };
+  const state: ManualScopeValidation = { errors: [], knownKind: false };
+  if (validateScopeFields(input, state)) return { ok: true, value: input };
+  if (!state.knownKind)
     return { ok: false, errors: ["scope.kind must be html-manual-local or html-manual-http"] };
-  }
-  if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, value: record as unknown as HtmlManualCrawlScope };
+  return { ok: false, errors: state.errors };
 }
 
 // ─── Limits validation (narrow-only against the governed defaults) ──────────────
@@ -206,56 +229,102 @@ function isPositiveIntWithin(value: unknown, max: number): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= max;
 }
 
-export function validateHtmlManualScopeLimits(input: unknown): readonly string[] {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) {
-    return ["limits must be an object"];
-  }
-  const limits = input as Record<string, unknown>;
-  const errors: string[] = [];
-  const bounds = DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS;
-  if (!isPositiveIntWithin(limits.maxPages, bounds.maxPages)) errors.push("limits.maxPages");
-  if (!isPositiveIntWithin(limits.maxDepth, bounds.maxDepth)) errors.push("limits.maxDepth");
-  if (!isPositiveIntWithin(limits.maxBytes, bounds.maxBytes)) errors.push("limits.maxBytes");
-  if (!isPositiveIntWithin(limits.maxLinkSample, bounds.maxLinkSample)) {
-    errors.push("limits.maxLinkSample");
-  }
-  if (!isPositiveIntWithin(limits.timeoutMs, bounds.timeoutMs)) errors.push("limits.timeoutMs");
-  if (limits.followRedirects !== false) errors.push("limits.followRedirects");
-  return errors.map((field) => `${field} must not widen the governed default`);
+interface ManualLimitValidation {
+  readonly valid: boolean;
+  readonly errors: readonly string[];
 }
 
-// ─── HtmlManualSource validation ────────────────────────────────────────────────
-function validateSourceIdentity(record: Record<string, unknown>, errors: string[]): void {
-  if (record.schemaVersion !== HTML_MANUAL_SOURCE_SCHEMA_VERSION) {
-    errors.push('source.schemaVersion must be the literal "1"');
-  }
-  if (typeof record.sourceFingerprint !== "string" || record.sourceFingerprint.length === 0) {
+function checkManualPageLimits(input: Record<string, unknown>, errors: string[]): boolean {
+  const bounds = DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS;
+  const pages = isPositiveIntWithin(input.maxPages, bounds.maxPages);
+  if (!pages) errors.push("limits.maxPages");
+  const depth = isPositiveIntWithin(input.maxDepth, bounds.maxDepth);
+  if (!depth) errors.push("limits.maxDepth");
+  const bytes = isPositiveIntWithin(input.maxBytes, bounds.maxBytes);
+  if (!bytes) errors.push("limits.maxBytes");
+  return pages && depth && bytes;
+}
+
+function checkManualRequestLimits(input: Record<string, unknown>, errors: string[]): boolean {
+  const bounds = DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS;
+  const sample = isPositiveIntWithin(input.maxLinkSample, bounds.maxLinkSample);
+  if (!sample) errors.push("limits.maxLinkSample");
+  const timeout = isPositiveIntWithin(input.timeoutMs, bounds.timeoutMs);
+  if (!timeout) errors.push("limits.timeoutMs");
+  const redirects = input.followRedirects === false;
+  if (!redirects) errors.push("limits.followRedirects");
+  return sample && timeout && redirects;
+}
+
+function checkManualLimitFields(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & DocumentationManualScopeLimits {
+  const pages = checkManualPageLimits(input, errors);
+  const requests = checkManualRequestLimits(input, errors);
+  return pages && requests;
+}
+
+function checkManualLimits(input: unknown): ManualLimitValidation {
+  if (!isManualRecord(input)) return { valid: false, errors: ["limits must be an object"] };
+  const errors: string[] = [];
+  const valid = checkManualLimitFields(input, errors);
+  return { valid, errors: errors.map((field) => `${field} must not widen the governed default`) };
+}
+
+export function validateHtmlManualScopeLimits(input: unknown): readonly string[] {
+  return checkManualLimits(input).errors;
+}
+
+function validateSourceIdentity(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> &
+  Pick<HtmlManualSource, "schemaVersion" | "sourceFingerprint" | "proposedPodName"> {
+  const schema = input.schemaVersion === HTML_MANUAL_SOURCE_SCHEMA_VERSION;
+  if (!schema) errors.push('source.schemaVersion must be the literal "1"');
+  let fingerprint = true;
+  if (typeof input.sourceFingerprint !== "string" || input.sourceFingerprint.length === 0) {
     errors.push("source.sourceFingerprint must be a non-empty token");
-  } else if (!isManualRedactionSafe(record.sourceFingerprint)) {
+    fingerprint = false;
+  } else if (!isManualRedactionSafe(input.sourceFingerprint)) {
     errors.push("source.sourceFingerprint must be redaction-safe");
+    fingerprint = false;
   }
-  if (
-    typeof record.proposedPodName !== "string" ||
-    !isManualRedactionSafe(record.proposedPodName)
-  ) {
-    errors.push("source.proposedPodName must be a redaction-safe label");
-  }
+  const name =
+    typeof input.proposedPodName === "string" && isManualRedactionSafe(input.proposedPodName);
+  if (!name) errors.push("source.proposedPodName must be a redaction-safe label");
+  return schema && fingerprint && name;
+}
+
+function validateSourceScope(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & { scope: HtmlManualCrawlScope } {
+  const result = validateHtmlManualCrawlScope(input.scope);
+  if (!result.ok) errors.push(...result.errors);
+  return result.ok;
+}
+
+function validateSourceLimits(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & { limits: DocumentationManualScopeLimits } {
+  const result = checkManualLimits(input.limits);
+  errors.push(...result.errors);
+  return result.valid;
 }
 
 export function validateHtmlManualSource(
   input: unknown,
 ): LocalKnowledgeValidation<HtmlManualSource> {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) {
-    return { ok: false, errors: ["source must be an object"] };
-  }
-  const record = input as Record<string, unknown>;
+  if (!isManualRecord(input)) return { ok: false, errors: ["source must be an object"] };
   const errors: string[] = [];
-  const scopeResult = validateHtmlManualCrawlScope(record.scope);
-  if (!scopeResult.ok) errors.push(...scopeResult.errors);
-  errors.push(...validateHtmlManualScopeLimits(record.limits));
-  validateSourceIdentity(record, errors);
-  if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, value: record as unknown as HtmlManualSource };
+  const scope = validateSourceScope(input, errors);
+  const limits = validateSourceLimits(input, errors);
+  const identity = validateSourceIdentity(input, errors);
+  if (scope && limits && identity) return { ok: true, value: input };
+  return { ok: false, errors };
 }
 
 // ─── Approval → source bridge (fail-closed) ─────────────────────────────────────
@@ -279,13 +348,16 @@ export function deriveHtmlManualSource(
 ): LocalKnowledgeValidation<HtmlManualSource> {
   const { approval, scope, computedFingerprint } = input;
   const errors: string[] = [];
-  if (scope.kind !== approval.sourceKind) {
+  const kindMatches = scope.kind === approval.sourceKind;
+  if (!kindMatches) {
     errors.push("scope.kind must match the approved sourceKind");
   }
-  if (computedFingerprint.length === 0 || computedFingerprint !== approval.sourceFingerprint) {
+  const fingerprintMatches =
+    computedFingerprint.length !== 0 && computedFingerprint === approval.sourceFingerprint;
+  if (!fingerprintMatches) {
     errors.push("computedFingerprint must match the approved sourceFingerprint");
   }
-  if (errors.length > 0) return { ok: false, errors };
+  if (!kindMatches || !fingerprintMatches) return { ok: false, errors };
   return validateHtmlManualSource({
     schemaVersion: HTML_MANUAL_SOURCE_SCHEMA_VERSION,
     scope,

@@ -52,7 +52,7 @@ export const DISCUSSION_MODES: readonly DiscussionMode[] = [
 ] as const;
 
 export function isDiscussionMode(value: unknown): value is DiscussionMode {
-  return typeof value === "string" && (DISCUSSION_MODES as readonly string[]).includes(value);
+  return typeof value === "string" && new Set<string>(DISCUSSION_MODES).has(value);
 }
 
 export function assertNeverDiscussionMode(value: never): never {
@@ -366,9 +366,7 @@ export const DISCUSSION_TURN_STATUS_TRANSITIONS: Readonly<
 } as const);
 
 export function isDiscussionTurnStatus(value: unknown): value is DiscussionTurnStatus {
-  return (
-    typeof value === "string" && (DISCUSSION_TURN_STATUSES as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && new Set<string>(DISCUSSION_TURN_STATUSES).has(value);
 }
 
 export function canTransitionDiscussionTurnStatus(
@@ -557,9 +555,12 @@ export function validateDiscussionTurnContext(value: unknown): DiscussionValidat
 }
 
 function readStringArray(value: unknown): readonly string[] {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string")
-    : [];
+  const strings: string[] = [];
+  if (!Array.isArray(value)) return strings;
+  Array.prototype.forEach.call(value, (entry: unknown): void => {
+    if (typeof entry === "string") strings.push(entry);
+  });
+  return strings;
 }
 
 // True when `value` is an array containing at least one non-string entry. readStringArray above
@@ -568,7 +569,10 @@ function readStringArray(value: unknown): readonly string[] {
 // pads the canonical set with foreign, non-string data (e.g. an injected object) would otherwise
 // compare equal to canonical once the extra entry becomes invisible, and must fail instead.
 function hasNonStringEntry(value: unknown): boolean {
-  return Array.isArray(value) && value.some((entry) => typeof entry !== "string");
+  return (
+    Array.isArray(value) &&
+    Array.prototype.some.call(value, (entry: unknown): boolean => typeof entry !== "string")
+  );
 }
 
 // Compared against the canonical plan set-wise rather than by a capability heuristic: brainstorm's
@@ -586,7 +590,7 @@ function validateModePlanFacets(mode: DiscussionMode, value: unknown, reasons: s
     }
   }
   for (const facet of mandated) {
-    if (!(canonical as readonly string[]).includes(facet)) {
+    if (!new Set<string>(canonical).has(facet)) {
       reasons.push(`mandatedFacets: ${mode} must not mandate ${facet}`);
     }
   }
@@ -636,10 +640,7 @@ function validateModePlanDirectives(value: unknown, reasons: string[]): void {
     return;
   }
   for (const directive of value) {
-    if (
-      typeof directive !== "string" ||
-      !(DISCUSSION_DIRECTIVES as readonly string[]).includes(directive)
-    ) {
+    if (typeof directive !== "string" || !new Set<string>(DISCUSSION_DIRECTIVES).has(directive)) {
       reasons.push(`directives: unknown directive ${JSON.stringify(directive)}`);
     }
   }

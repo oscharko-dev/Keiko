@@ -7,6 +7,7 @@
 //   AC1/AC2/AC3 admission gating is derived from the wire contract, not re-encoded.
 // The module is pure; these tests read no clock and perform no IO.
 
+import { expectCatalogGuardWithoutCoercion } from "./__tests__/support/catalog-guard.js";
 import { describe, expect, it } from "vitest";
 import type { VoiceProfile } from "./gateway.js";
 import type { VoiceControlMessageKind } from "./voice-protocol.js";
@@ -379,3 +380,35 @@ describe("summarizeVoiceTranscript (AC5 evidence-safe)", () => {
     expect(summary.highestSeq).toBe(0);
   });
 });
+
+import * as publicTranscriptCatalog from "@oscharko-dev/keiko-contracts/runtime/voice-transcript";
+
+it.each([
+  ["segment state/source", isVoiceTranscriptSegmentState, VOICE_TRANSCRIPT_SEGMENT_STATES],
+  [
+    "segment state/public",
+    publicTranscriptCatalog.isVoiceTranscriptSegmentState,
+    publicTranscriptCatalog.VOICE_TRANSCRIPT_SEGMENT_STATES,
+  ],
+  [
+    "provider error kind/source",
+    isVoiceTranscriptProviderErrorKind,
+    VOICE_TRANSCRIPT_PROVIDER_ERROR_KINDS,
+  ],
+  [
+    "provider error kind/public",
+    publicTranscriptCatalog.isVoiceTranscriptProviderErrorKind,
+    publicTranscriptCatalog.VOICE_TRANSCRIPT_PROVIDER_ERROR_KINDS,
+  ],
+  ["source/source", isVoiceTranscriptSource, VOICE_TRANSCRIPT_SOURCES],
+  [
+    "source/public",
+    publicTranscriptCatalog.isVoiceTranscriptSource,
+    publicTranscriptCatalog.VOICE_TRANSCRIPT_SOURCES,
+  ],
+] as const)(
+  "%s accepts catalog strings without coercing foreign candidates",
+  (_name, guard, catalog): void => {
+    expectCatalogGuardWithoutCoercion(guard, catalog);
+  },
+);

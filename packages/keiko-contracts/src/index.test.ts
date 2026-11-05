@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, expectTypeOf } from "vitest";
 
 import { createRequire } from "node:module";
 import { KEIKO_CONTRACTS_VERSION } from "./version.js";
@@ -214,6 +214,14 @@ import {
 const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as {
   version: string;
 };
+
+/** Each named export of `module` is a function; the names are checked against its type. */
+function expectFunctionExports<M extends object>(
+  module: M,
+  names: readonly (keyof M & string)[],
+): void {
+  for (const name of names) expect(typeof module[name], name).toBe("function");
+}
 
 describe("keiko-contracts package surface", () => {
   it("exports governed attachment MIME normalization through the package entrypoint", () => {
@@ -527,17 +535,19 @@ describe("keiko-contracts package surface", () => {
     expect(mod.MEMORY_UPDATE_FIELDS).toContain("body");
     expect(mod.MEMORY_STRUCTURED_PAYLOAD_KINDS).toContain("string-list");
     expect(mod.MEMORY_STATUS_TRANSITIONS.proposed).toContain("accepted");
-    expect(typeof mod.checkStatusTransition).toBe("function");
-    expect(typeof mod.validateMemoryRecord).toBe("function");
-    expect(typeof mod.validateMemoryProposal).toBe("function");
-    expect(typeof mod.validateMemoryAuditRecord).toBe("function");
-    expect(typeof mod.isMemoryRecord).toBe("function");
-    expect(typeof mod.isMemoryEdge).toBe("function");
-    expect(typeof mod.isScopeReachable).toBe("function");
-    expect(typeof mod.assertNeverMemoryType).toBe("function");
-    expect(typeof mod.looksLikeSecretShape).toBe("function");
-    expect(typeof mod.hasPaymentCardPanShape).toBe("function");
-    expect(typeof mod.hasStaleModelMetadata).toBe("function");
+    expectFunctionExports(mod, [
+      "checkStatusTransition",
+      "validateMemoryRecord",
+      "validateMemoryProposal",
+      "validateMemoryAuditRecord",
+      "isMemoryRecord",
+      "isMemoryEdge",
+      "isScopeReachable",
+      "assertNeverMemoryType",
+      "looksLikeSecretShape",
+      "hasPaymentCardPanShape",
+      "hasStaleModelMetadata",
+    ]);
   });
 
   it("memory contract types remain available at their declared public surface (#205)", async () => {
@@ -725,16 +735,18 @@ describe("keiko-contracts package surface", () => {
     expect([...mod.EDITOR_AGENT_WRITE_ACTION_TYPES].sort()).toEqual(
       ["applyChangeset", "applyPatch", "applyTextEdits", "format", "save"].sort(),
     );
-    expect(typeof mod.isEditorAgentEvent).toBe("function");
-    expect(typeof mod.isEditorAgentBridgeDecisionCapability).toBe("function");
-    expect(typeof mod.isEditorAgentActiveBufferActionType).toBe("function");
-    expect(typeof mod.isEditorAgentActionOrigin).toBe("function");
-    expect(typeof mod.resolveEditorAgentActionOrigin).toBe("function");
-    expect(typeof mod.isEditorAgentWriteActionType).toBe("function");
-    expect(typeof mod.editorAgentWritePreconditionError).toBe("function");
-    expect(typeof mod.editorAgentActionHasWritePrecondition).toBe("function");
-    expect(typeof mod.isEditorAgentConflictCode).toBe("function");
-    expect(typeof mod.isEditorAgentFailureCode).toBe("function");
+    expectFunctionExports(mod, [
+      "isEditorAgentEvent",
+      "isEditorAgentBridgeDecisionCapability",
+      "isEditorAgentActiveBufferActionType",
+      "isEditorAgentActionOrigin",
+      "resolveEditorAgentActionOrigin",
+      "isEditorAgentWriteActionType",
+      "editorAgentWritePreconditionError",
+      "editorAgentActionHasWritePrecondition",
+      "isEditorAgentConflictCode",
+      "isEditorAgentFailureCode",
+    ]);
     // Issue #2114 (ADR-0125 D3): the applyChangeset public contract surface — caps, changeset/
     // conflict/file-result guards, and the authority/approval reference guards — is re-exported
     // through the barrel so downstream packages import named symbols instead of re-deriving them.
@@ -743,19 +755,21 @@ describe("keiko-contracts package surface", () => {
     expect(mod.EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES).toBe(8 * 1_048_576);
     expect(mod.EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS).toBe(2_000);
     expect(mod.EDITOR_AGENT_REFERENCE_ID_MAX_CHARS).toBe(128);
-    expect(typeof mod.isEditorAgentChangeset).toBe("function");
-    expect(typeof mod.isEditorAgentChangesetFile).toBe("function");
-    expect(typeof mod.isEditorAgentConflictDetail).toBe("function");
-    expect(typeof mod.isEditorAgentDiagnostic).toBe("function");
-    expect(typeof mod.isEditorAgentDiagnosticsDetail).toBe("function");
-    expect(typeof mod.isEditorAgentFileActionResult).toBe("function");
-    expect(typeof mod.isEditorAgentGovernedAuthorityReference).toBe("function");
-    expect(typeof mod.isEditorAgentOneUseApprovalReference).toBe("function");
-    expect(typeof mod.isEditorAgentPreparedChangeset).toBe("function");
-    expect(typeof mod.isEditorAgentRootAttribution).toBe("function");
-    expect(typeof mod.isEditorAgentRootBinding).toBe("function");
-    expect(typeof mod.isEditorAgentSessionsRequest).toBe("function");
-    expect(typeof mod.editorAgentRootBindingDenyReason).toBe("function");
+    expectFunctionExports(mod, [
+      "isEditorAgentChangeset",
+      "isEditorAgentChangesetFile",
+      "isEditorAgentConflictDetail",
+      "isEditorAgentDiagnostic",
+      "isEditorAgentDiagnosticsDetail",
+      "isEditorAgentFileActionResult",
+      "isEditorAgentGovernedAuthorityReference",
+      "isEditorAgentOneUseApprovalReference",
+      "isEditorAgentPreparedChangeset",
+      "isEditorAgentRootAttribution",
+      "isEditorAgentRootBinding",
+      "isEditorAgentSessionsRequest",
+      "editorAgentRootBindingDenyReason",
+    ]);
   });
 
   it("editor-agent types remain available at their declared public surface (#1391)", async () => {
@@ -1044,9 +1058,11 @@ describe("keiko-contracts package surface", () => {
     expect(m.GIT_PR_RECOMMENDATIONS).toHaveLength(6);
     expect(m.GIT_PR_REJECTION_REASONS).toHaveLength(9);
 
-    expect(typeof m.synthesizePullRequestMetadata).toBe("function");
-    expect(typeof m.gitPullRequestReadinessFor).toBe("function");
-    expect(typeof m.gitPullRequestRecommendationFor).toBe("function");
+    expectFunctionExports(m, [
+      "synthesizePullRequestMetadata",
+      "gitPullRequestReadinessFor",
+      "gitPullRequestRecommendationFor",
+    ]);
     expect(m.gitPrRejectionToErrorCode("rate-limited")).toBe("network-failure");
     expect(m.gitPrRejectionToDisposition("validation-error")).toBe("user-fixable");
 
@@ -1369,11 +1385,13 @@ describe("keiko-contracts package surface", () => {
     expect(m.WORKSPACE_BINDING_V2_SCHEMA_VERSION).toBe("2");
     expect(m.WORKSPACE_TRUST_LEVELS).toEqual(["trusted", "restricted"]);
     expect(m.EDITOR_LOCAL_HISTORY_MAX_ENTRIES).toBe(512);
-    expect(typeof m.validateWorkspaceManifest).toBe("function");
-    expect(typeof m.validateWorkspaceRootDispatch).toBe("function");
-    expect(typeof m.validateWorkspaceTrustRecord).toBe("function");
-    expect(typeof m.resolveEditorM11Settings).toBe("function");
-    expect(typeof m.validateWorkspaceProfileManifest).toBe("function");
+    expectFunctionExports(m, [
+      "validateWorkspaceManifest",
+      "validateWorkspaceRootDispatch",
+      "validateWorkspaceTrustRecord",
+      "resolveEditorM11Settings",
+      "validateWorkspaceProfileManifest",
+    ]);
     expect(m.EDITOR_M11_DEFAULT_PROFILE_REF).toBe("profile-default");
     expect(typeof m.isWorkspaceProfileDisplayName).toBe("function");
     expect(typeof m.isAssignableWorkspaceProfileDisplayName).toBe("function");
@@ -1511,4 +1529,227 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").EvalFloorResult>();
     pin<import("./index.js").RegressionProbeResult>();
   });
+});
+
+import { normalizePdfCitationPreviewMarkerIndex as publicPreviewMarker } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-preview";
+it("actual public preview subpath preserves closed marker parsing", () => {
+  const parsed: number | undefined = publicPreviewMarker("【2】");
+  expect(parsed).toBe(2);
+  expect(publicPreviewMarker("[2】")).toBeUndefined();
+  expect(publicPreviewMarker(0)).toBeUndefined();
+});
+
+it("exports the additive Git parse types through the existing root type surface", () => {
+  const ok: import("./index.js").GitRepositoryParseOk<string> = { ok: true, value: "checked" };
+  const parsed: import("./index.js").GitRepositoryParseResult<string> = ok;
+  expect(parsed.value).toBe("checked");
+  const status: typeof import("./index.js").parseGitRepositoryStatusResponse = (
+    input: unknown,
+  ): import("./index.js").GitRepositoryParseResult<
+    import("./index.js").GitRepositoryStatusResponse
+  > => parsePublicGitStatusForIndex(input);
+  expect(status(null)).toEqual({ ok: false, reasons: ["response must be an object"] });
+});
+
+import { parseGitRepositoryStatusResponse as parsePublicGitStatusForIndex } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+
+import { parseGitHistoryResponse as parsePublicHistoryForIndex } from "@oscharko-dev/keiko-contracts/runtime/git-history";
+import {
+  parseGitSyncPreview as parsePublicSyncPreviewForIndex,
+  parseGitSyncExecuteResponse as parsePublicSyncExecuteForIndex,
+} from "@oscharko-dev/keiko-contracts/runtime/git-sync";
+
+it("exports both additive Git sync parser type identities", () => {
+  const preview: typeof import("./index.js").parseGitSyncPreview = parsePublicSyncPreviewForIndex;
+  const execute: typeof import("./index.js").parseGitSyncExecuteResponse =
+    parsePublicSyncExecuteForIndex;
+  for (const parse of [preview, execute])
+    expect(parse(null)).toEqual({ ok: false, reasons: ["response must be an object"] });
+});
+import {
+  parseGitRepositorySummary as parsePublicSummaryForIndex,
+  parseGitRemotesResponse as parsePublicRemotesForIndex,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository-summary";
+
+it("exports all three additive Git read parser type identities", () => {
+  const history: typeof import("./index.js").parseGitHistoryResponse = parsePublicHistoryForIndex;
+  const summary: typeof import("./index.js").parseGitRepositorySummary = parsePublicSummaryForIndex;
+  const remotes: typeof import("./index.js").parseGitRemotesResponse = parsePublicRemotesForIndex;
+  for (const parse of [history, summary, remotes])
+    expect(parse(null)).toEqual({ ok: false, reasons: ["response must be an object"] });
+});
+
+import {
+  parseLocalKnowledgeCapsulesResponse as parsePublicCatalogCapsulesForIndex,
+  parseLocalKnowledgeCapsuleSetsResponse as parsePublicCatalogSetsForIndex,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
+
+it("exposes concrete typed catalog wire parsers without widening strict producers (#3918)", () => {
+  const capsules: typeof import("@oscharko-dev/keiko-contracts").parseLocalKnowledgeCapsulesResponse =
+    parsePublicCatalogCapsulesForIndex;
+  const sets: typeof import("@oscharko-dev/keiko-contracts").parseLocalKnowledgeCapsuleSetsResponse =
+    parsePublicCatalogSetsForIndex;
+  expect(capsules({ capsules: [] })).toEqual({ ok: true, value: { capsules: [] } });
+  expect(sets({ capsuleSets: [] })).toEqual({ ok: true, value: { capsuleSets: [] } });
+  const pin = <T>(_value?: T): T | undefined => undefined;
+  pin<import("./index.js").KnowledgePodCatalogSummary>();
+  pin<import("./index.js").LocalKnowledgeCapsulesCatalogResponse>();
+  pin<import("./index.js").LocalKnowledgeCapsuleSetsCatalogResponse>();
+  expectTypeOf<import("./index.js").LegacyKnowledgePodCatalogSummary>().not.toExtend<
+    import("./index.js").KnowledgePodSummary
+  >();
+  expectTypeOf<import("./index.js").KnowledgePodSummary>().toExtend<
+    import("./index.js").KnowledgePodCatalogSummary
+  >();
+  expectTypeOf<
+    import("./index.js").LocalKnowledgeCapsulesCatalogResponse["capsules"][number]["id"]
+  >().toEqualTypeOf<import("./index.js").KnowledgeCapsuleId>();
+  expectTypeOf<
+    import("./index.js").LocalKnowledgeCapsuleSetsCatalogResponse["capsuleSets"][number]["capsuleCount"]
+  >().toEqualTypeOf<number>();
+});
+
+import type {
+  isAtlassianConnectionVerificationStatus as RootAtlasVerificationGuard,
+  isAtlassianLiveSearchTemplateId as RootAtlasTemplateGuard,
+  isAtlassianConnectorProvider as RootAtlasProviderGuard,
+  isAtlassianConnectorAuthScheme as RootAtlasAuthGuard,
+  isAtlassianConnectorActionType as RootAtlasActionGuard,
+  isAtlassianSyncJobStatus as RootAtlasJobGuard,
+  isAtlassianSyncTerminalStatus as RootAtlasTerminalGuard,
+  isAtlassianSyncFailureReason as RootAtlasSyncFailureGuard,
+  isAtlassianConnectorActionReviewReason as RootAtlasReviewGuard,
+  isAtlassianConnectorWriteFailureReason as RootAtlasWriteFailureGuard,
+  isAtlassianConnectorAuthorityFailureReason as RootAtlasAuthorityFailureGuard,
+  isAtlassianConnectorRegistryFailureReason as RootAtlasRegistryFailureGuard,
+} from "@oscharko-dev/keiko-contracts";
+import type * as atlasEnumRuntimeForIndex from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+
+it("preserves Atlassian root TYPE callable domains through existing runtime selectors (#3918)", () => {
+  expectTypeOf<{
+    readonly verification: typeof RootAtlasVerificationGuard;
+    readonly template: typeof RootAtlasTemplateGuard;
+    readonly provider: typeof RootAtlasProviderGuard;
+    readonly auth: typeof RootAtlasAuthGuard;
+    readonly action: typeof RootAtlasActionGuard;
+    readonly job: typeof RootAtlasJobGuard;
+    readonly terminal: typeof RootAtlasTerminalGuard;
+    readonly syncFailure: typeof RootAtlasSyncFailureGuard;
+    readonly review: typeof RootAtlasReviewGuard;
+    readonly writeFailure: typeof RootAtlasWriteFailureGuard;
+    readonly authorityFailure: typeof RootAtlasAuthorityFailureGuard;
+    readonly registryFailure: typeof RootAtlasRegistryFailureGuard;
+  }>().toEqualTypeOf<{
+    readonly verification: typeof atlasEnumRuntimeForIndex.isAtlassianConnectionVerificationStatus;
+    readonly template: typeof atlasEnumRuntimeForIndex.isAtlassianLiveSearchTemplateId;
+    readonly provider: typeof atlasEnumRuntimeForIndex.isAtlassianConnectorProvider;
+    readonly auth: typeof atlasEnumRuntimeForIndex.isAtlassianConnectorAuthScheme;
+    readonly action: typeof atlasEnumRuntimeForIndex.isAtlassianConnectorActionType;
+    readonly job: typeof atlasEnumRuntimeForIndex.isAtlassianSyncJobStatus;
+    readonly terminal: typeof atlasEnumRuntimeForIndex.isAtlassianSyncTerminalStatus;
+    readonly syncFailure: typeof atlasEnumRuntimeForIndex.isAtlassianSyncFailureReason;
+    readonly review: typeof atlasEnumRuntimeForIndex.isAtlassianConnectorActionReviewReason;
+    readonly writeFailure: typeof atlasEnumRuntimeForIndex.isAtlassianConnectorWriteFailureReason;
+    readonly authorityFailure: typeof atlasEnumRuntimeForIndex.isAtlassianConnectorAuthorityFailureReason;
+    readonly registryFailure: typeof atlasEnumRuntimeForIndex.isAtlassianConnectorRegistryFailureReason;
+  }>();
+});
+
+import type {
+  isGitDeliveryActionKind as RootGitActionGuard,
+  isGitDeliveryRiskClass as RootGitRiskGuard,
+  isGitDeliveryProviderCapability as RootGitCapabilityGuard,
+  isGitDeliveryBranchMatchKind as RootGitBranchMatchGuard,
+  isGitDeliveryBlockReason as RootGitBlockGuard,
+  isGitDeliveryMergeBlockReason as RootGitMergeBlockGuard,
+  isGitDeliveryMergeStrategyHint as RootGitMergeStrategyGuard,
+  isGitDeliveryAbortableOperation as RootGitAbortGuard,
+  isGitDeliveryRecoveryStrategyHint as RootGitRecoveryGuard,
+  isGitDeliveryExecutionOutcome as RootGitOutcomeGuard,
+  isGitDeliveryExecutionErrorCode as RootGitErrorGuard,
+} from "@oscharko-dev/keiko-contracts";
+import type * as gitEnumRuntimeForIndex from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
+
+it("preserves Git enum root TYPE callable domains through existing runtime selectors (#3918)", (): void => {
+  expectTypeOf<typeof RootGitActionGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryActionKind
+  >();
+  expectTypeOf<typeof RootGitRiskGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryRiskClass
+  >();
+  expectTypeOf<typeof RootGitCapabilityGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryProviderCapability
+  >();
+  expectTypeOf<typeof RootGitBranchMatchGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryBranchMatchKind
+  >();
+  expectTypeOf<typeof RootGitBlockGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryBlockReason
+  >();
+  expectTypeOf<typeof RootGitMergeBlockGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryMergeBlockReason
+  >();
+  expectTypeOf<typeof RootGitMergeStrategyGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryMergeStrategyHint
+  >();
+  expectTypeOf<typeof RootGitAbortGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryAbortableOperation
+  >();
+  expectTypeOf<typeof RootGitRecoveryGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryRecoveryStrategyHint
+  >();
+  expectTypeOf<typeof RootGitOutcomeGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryExecutionOutcome
+  >();
+  expectTypeOf<typeof RootGitErrorGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryExecutionErrorCode
+  >();
+});
+
+import type {
+  isGitEditorDiffScope as RootGitEditorScopeGuard,
+  isGitEditorDiffLayer as RootGitEditorLayerGuard,
+  isGitEditorDiffLineKind as RootGitEditorLineKindGuard,
+  isGitEditorDiffFileStatus as RootGitEditorFileStatusGuard,
+} from "@oscharko-dev/keiko-contracts";
+import * as gitEditorEnumRuntimeForIndex from "@oscharko-dev/keiko-contracts/runtime/git-editor";
+import * as gitEditorEnumAliasForIndex from "@oscharko-dev/keiko-contracts/git-editor";
+
+it("preserves GitEditor root TYPE callable domains and public runtime alias forwarding (#3918)", () => {
+  expectTypeOf<typeof RootGitEditorScopeGuard>().toEqualTypeOf<
+    (value: unknown) => value is import("@oscharko-dev/keiko-contracts").GitEditorDiffScope
+  >();
+  expectTypeOf<typeof RootGitEditorLayerGuard>().toEqualTypeOf<
+    (value: unknown) => value is import("@oscharko-dev/keiko-contracts").GitEditorDiffLayer
+  >();
+  expectTypeOf<typeof RootGitEditorLineKindGuard>().toEqualTypeOf<
+    (value: unknown) => value is import("@oscharko-dev/keiko-contracts").GitEditorDiffLineKind
+  >();
+  expectTypeOf<typeof RootGitEditorFileStatusGuard>().toEqualTypeOf<
+    (value: unknown) => value is import("@oscharko-dev/keiko-contracts").GitEditorDiffFileStatus
+  >();
+  expectTypeOf<typeof RootGitEditorScopeGuard>().toEqualTypeOf<
+    typeof gitEditorEnumRuntimeForIndex.isGitEditorDiffScope
+  >();
+  expectTypeOf<typeof RootGitEditorLayerGuard>().toEqualTypeOf<
+    typeof gitEditorEnumRuntimeForIndex.isGitEditorDiffLayer
+  >();
+  expectTypeOf<typeof RootGitEditorLineKindGuard>().toEqualTypeOf<
+    typeof gitEditorEnumRuntimeForIndex.isGitEditorDiffLineKind
+  >();
+  expectTypeOf<typeof RootGitEditorFileStatusGuard>().toEqualTypeOf<
+    typeof gitEditorEnumRuntimeForIndex.isGitEditorDiffFileStatus
+  >();
+  expect(gitEditorEnumAliasForIndex.isGitEditorDiffScope).toBe(
+    gitEditorEnumRuntimeForIndex.isGitEditorDiffScope,
+  );
+  expect(gitEditorEnumAliasForIndex.isGitEditorDiffLayer).toBe(
+    gitEditorEnumRuntimeForIndex.isGitEditorDiffLayer,
+  );
+  expect(gitEditorEnumAliasForIndex.isGitEditorDiffLineKind).toBe(
+    gitEditorEnumRuntimeForIndex.isGitEditorDiffLineKind,
+  );
+  expect(gitEditorEnumAliasForIndex.isGitEditorDiffFileStatus).toBe(
+    gitEditorEnumRuntimeForIndex.isGitEditorDiffFileStatus,
+  );
 });

@@ -706,3 +706,76 @@ describe("language document overlay trust boundary", () => {
     expect(isLanguageDocumentOverlay({ ...overlay, text: oversized })).toBe(true);
   });
 });
+
+import { parseLanguageServiceRequest as publicLanguageRequest } from "@oscharko-dev/keiko-contracts/runtime/language-service";
+
+describe.each([
+  ["source", parseLanguageServiceRequest],
+  ["public", publicLanguageRequest],
+] as const)("3918 language construction admission %s", (_surface, parse) => {
+  it("preserves copied envelope and nested output references", () => {
+    const document = overlay();
+    const point = position();
+    const input = { operation: "completion", root: "/repo", document, position: point };
+    const result = parse(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).not.toBe(input);
+    expect(result.value.document).toBe(document);
+    if (result.value.operation === "completion") expect(result.value.position).toBe(point);
+  });
+  it("refuses the malformed root observed only during assembly", () => {
+    let reads = 0;
+    const input = {
+      operation: "diagnostics",
+      document: overlay(),
+      get root(): unknown {
+        reads += 1;
+        return reads < 4 ? "/repo" : 42;
+      },
+    };
+    expect(parse(input)).toEqual({ ok: false, errors: ["root must be a non-empty string"] });
+    expect(reads).toBe(4);
+  });
+  it("refuses the malformed position observed only during assembly", () => {
+    let reads = 0;
+    const input = {
+      operation: "completion",
+      root: "/repo",
+      document: overlay(),
+      get position(): unknown {
+        reads += 1;
+        return reads === 1 ? position() : {};
+      },
+    };
+    expect(parse(input)).toEqual({ ok: false, errors: ["position must be { line, character }"] });
+    expect(reads).toBe(2);
+  });
+  it("refuses absent physical diagnostics", () => {
+    expect(
+      parse({
+        operation: "codeActions",
+        root: "/repo",
+        document: overlay(),
+        range: range(),
+        diagnostics: new Array<unknown>(1),
+      }),
+    ).toEqual({
+      ok: false,
+      errors: ["diagnostics must be an array of LanguageDiagnostic"],
+    });
+  });
+  it("preserves the exact eager multi-error order", () => {
+    expect(
+      parse({ operation: "codeActions", root: "", document: {}, range: {}, diagnostics: [42] }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "root must be a non-empty string",
+        "document must be { path, languageId, text }",
+        "range must be { start, end }",
+        "diagnostics must be an array of LanguageDiagnostic",
+      ],
+    });
+  });
+});

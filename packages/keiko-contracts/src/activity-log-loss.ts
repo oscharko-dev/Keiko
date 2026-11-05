@@ -54,6 +54,8 @@ export type ActivityLogLossReason = (typeof ACTIVITY_LOG_LOSS_REASONS)[number];
 export type ActivityLogLossCounters = Readonly<Record<ActivityLogLossReason, number>>;
 
 function zeroCounters(): Record<ActivityLogLossReason, number> {
+  // SAFETY: this fresh dictionary has exactly the closed reason keys, each initialized to zero.
+  // activity-log-loss.test.ts pins every key, independent snapshots, reset and saturation.
   return Object.fromEntries(ACTIVITY_LOG_LOSS_REASONS.map((reason) => [reason, 0])) as Record<
     ActivityLogLossReason,
     number

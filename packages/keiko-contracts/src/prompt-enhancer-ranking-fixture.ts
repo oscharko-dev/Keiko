@@ -18,6 +18,7 @@
 import {
   PROMPT_CRITIC_DIMENSIONS,
   type PromptCandidateScorecard,
+  type PromptCriticDimension,
 } from "./prompt-enhancer-critic.js";
 import { PROMPT_ENHANCER_SCHEMA_VERSION } from "./prompt-enhancer.js";
 
@@ -33,7 +34,7 @@ interface RankingFixtureInput {
 // Every dimension is present in canonical order (the scorecard contract requires exactly one entry
 // per PROMPT_CRITIC_DIMENSIONS member); only the three tie-break dimensions carry meaningful values.
 function scorecardOf(input: RankingFixtureInput): PromptCandidateScorecard {
-  const byDimension: Readonly<Record<string, number>> = {
+  const byDimension: Readonly<Partial<Record<PromptCriticDimension, number>>> = {
     safety: input.safety,
     completeness: input.completeness,
     "token-efficiency": input.tokenEfficiency,

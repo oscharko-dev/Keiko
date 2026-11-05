@@ -1,3 +1,4 @@
+import { expectCatalogGuardWithoutCoercion } from "./__tests__/support/catalog-guard.js";
 import { describe, expect, it } from "vitest";
 
 import type { VoiceProfile } from "./gateway.js";
@@ -372,3 +373,31 @@ describe("exhaustiveness guard", () => {
     );
   });
 });
+
+import * as publicPlaybackCatalog from "@oscharko-dev/keiko-contracts/runtime/voice-playback";
+
+it.each([
+  ["phase/source", isVoicePlaybackPhase, VOICE_PLAYBACK_PHASES],
+  [
+    "phase/public",
+    publicPlaybackCatalog.isVoicePlaybackPhase,
+    publicPlaybackCatalog.VOICE_PLAYBACK_PHASES,
+  ],
+  ["failure kind/source", isVoicePlaybackFailureKind, VOICE_PLAYBACK_FAILURE_KINDS],
+  [
+    "failure kind/public",
+    publicPlaybackCatalog.isVoicePlaybackFailureKind,
+    publicPlaybackCatalog.VOICE_PLAYBACK_FAILURE_KINDS,
+  ],
+  ["effect/source", isVoicePlaybackEffect, VOICE_PLAYBACK_EFFECTS],
+  [
+    "effect/public",
+    publicPlaybackCatalog.isVoicePlaybackEffect,
+    publicPlaybackCatalog.VOICE_PLAYBACK_EFFECTS,
+  ],
+] as const)(
+  "%s accepts catalog strings without coercing foreign candidates",
+  (_name, guard, catalog): void => {
+    expectCatalogGuardWithoutCoercion(guard, catalog);
+  },
+);
