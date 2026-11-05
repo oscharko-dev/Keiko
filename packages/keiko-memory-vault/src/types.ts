@@ -310,9 +310,9 @@ export interface MemoryVaultStore {
   // Access tracking (#204). `recordAccess` upserts an insert-or-increment counter for each id
   // (a recall reflex from the retrieval surface); `getAccessStats` reads the counters back for the
   // maintenance planner. Both operate on the cleartext `memory_access` table — no content.
-  readonly recordAccess: (ids: readonly MemoryId[], nowMs: number) => void;
+  readonly recordAccess: (ids: readonly MemoryId[], nowMs: number, conversationId?: string) => void;
   // An answer drew on these memories. Remembered for "Vergiss das"; it does not strengthen them.
-  readonly recordUse: (ids: readonly MemoryId[], nowMs: number) => void;
+  readonly recordUse: (ids: readonly MemoryId[], nowMs: number, conversationId: string) => void;
   // Outcome tracking (#204, O-V1). `recordOutcome` appends a governed retention judgement (utility
   // in [0,1]) for each id — a proposal accepted (1) / rejected (0), a conflict won (1) / lost (0),
   // an accepted correction superseding its origin (0). It never advances the access counter or

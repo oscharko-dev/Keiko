@@ -21,7 +21,11 @@ import type {
   UserId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
-import { collectMemoryActions, type SendDesktopChatRequest } from "./chat-handlers.js";
+import {
+  buildCanonicalTurnMemoryResult,
+  collectMemoryActions,
+  type SendDesktopChatRequest,
+} from "./chat-handlers.js";
 import { captureSalientFromTurn } from "./memory-salience.js";
 import { handleMemoryReviewQueue } from "./memory-handlers.js";
 import type { RouteContext } from "./routes.js";
@@ -960,7 +964,7 @@ describe("explicit forget statement in chat", () => {
     const asked = Date.now() + 60_000;
     const [record] = readMemories(vault, ctx);
     if (record === undefined) throw new Error("expected a memory");
-    vault.recordAccess([record.id], asked + 1);
+    vault.recordUse([record.id], asked + 1, ctx.conversationId);
     const deps = withPreviousStatement(learned, "Ich mag Kaffee.", asked);
 
     await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
@@ -975,7 +979,7 @@ describe("explicit forget statement in chat", () => {
     const asked = Date.now() + 60_000;
     const [record] = readMemories(vault, ctx);
     if (record === undefined) throw new Error("expected a memory");
-    vault.recordAccess([record.id], asked + 1);
+    vault.recordUse([record.id], asked + 1, ctx.conversationId);
     const said = { role: "user", content: "Vergiss das." } as ChatMessage;
     const deps = {
       ...learned,
@@ -1005,7 +1009,7 @@ describe("explicit forget statement in chat", () => {
       const turnStartedAt = Date.now() + 60_000;
       const [record] = readMemories(vault, ctx);
       if (record === undefined) throw new Error("expected a memory");
-      vault.recordAccess([record.id], turnStartedAt + 1);
+      vault.recordUse([record.id], turnStartedAt + 1, ctx.conversationId);
       const deps = withPreviousStatement(learned, statement, turnStartedAt);
 
       const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
@@ -1048,7 +1052,8 @@ describe("explicit forget statement in chat", () => {
   it.each(ALL_MODES)("forgets the conversation's memory in %s", async (mode) => {
     const vault = makeVault();
     const ctx = context();
-    const deps = await learnedFact(vault, ctx, mode, "user");
+    const learned = await learnedFact(vault, ctx, mode, "user");
+    const deps = withPreviousStatement(learned, USER_TEXT, Date.now() - 60_000);
     expect(readMemories(vault, ctx)).toHaveLength(1);
 
     const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
@@ -1099,10 +1104,183 @@ describe("explicit forget statement in chat", () => {
     expect(readByStatus(vault, ctx, "accepted")).toHaveLength(0);
   });
 
+  // A grounded turn reaches the resolver through the canonical path, whose request holds only this
+  // turn. It must read the last turn from the conversation like the desktop path does.
+  function groundedForget(
+    deps: UiHandlerDeps,
+    ctx: ConversationMemoryRuntimeContext,
+  ): ReturnType<typeof buildCanonicalTurnMemoryResult> {
+    return buildCanonicalTurnMemoryResult(
+      deps,
+      {
+        chatId: "chat-1",
+        projectPath: String(ctx.projectId),
+        messages: [
+          { role: "user", content: "Vergiss das." },
+          { role: "assistant", content: "OK." },
+        ],
+        modelId: "m",
+        memory: { enabled: true, budgetTokens: 0, context: {} },
+      },
+      ctx,
+      { retrievalContent: "Vergiss das.", correlationId: "grounded-forget" },
+    );
+  }
+
+  it("does not take an older memory for a bare reference in a grounded turn", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "project");
+    const deps = withPreviousStatement(learned, "Ich mag Kaffee.", Date.now() + 60_000);
+
+    await groundedForget(deps, ctx);
+
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+  });
+
+  it("asks instead of guessing on a bare reference in a grounded turn with no earlier turn", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "project");
+    const deps = {
+      ...learned,
+      store: { ...learned.store, listMessages: (): readonly ChatMessage[] => [] },
+    };
+
+    await groundedForget(deps, ctx);
+
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+  });
+
+  it("forgets what the last turn left behind on a bare reference in a grounded turn", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "project");
+    const deps = withPreviousStatement(learned, USER_TEXT, Date.now() - 60_000);
+
+    await groundedForget(deps, ctx);
+
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
+  it("forgets the memory a restated fact was folded into, not only the statement", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const statement = "The platform team ships releases on a fortnightly cadence.";
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "user");
+    const [record] = readMemories(vault, ctx);
+    if (record === undefined) throw new Error("expected a memory");
+    const said = Date.now() + 60_000;
+    vault.recordAccess([record.id], said + 1, ctx.conversationId);
+    const deps = withPreviousStatement(learned, statement, said);
+
+    await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
+  it("forgets the memory a paraphrase confirmed, without the same wording", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "user");
+    const [record] = readMemories(vault, ctx);
+    if (record === undefined) throw new Error("expected a memory");
+    const said = Date.now() + 60_000;
+    vault.recordAccess([record.id], said + 1, ctx.conversationId);
+    const deps = withPreviousStatement(learned, "Das machen wir alle zwei Wochen so.", said);
+
+    await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
+  it.each([
+    ["confirmed", "recordAccess"],
+    ["drew on", "recordUse"],
+  ] as const)("does not take a memory another chat %s for this chat's 'das'", async (_, touch) => {
+    const vault = makeVault();
+    const ctx = context();
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "user");
+    const [record] = readMemories(vault, ctx);
+    if (record === undefined) throw new Error("expected a memory");
+    const asked = Date.now() + 60_000;
+    vault[touch]([record.id], asked + 1, "another-conversation");
+    const deps = withPreviousStatement(learned, "Wie arbeiten wir?", asked);
+
+    await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+  });
+
+  it.each([
+    ["an earlier turn stays", "turn-before", 1],
+    ["the last turn goes", "m1", 0],
+  ])("binds a late learned fact to the turn it came from: %s", async (_, sourceMessageId, left) => {
+    const vault = makeVault();
+    const ctx = context();
+    const lastTurnStartedAt = Date.now() - 1;
+    const fact = "I ship releases on a fortnightly cadence.";
+    const content = JSON.stringify([
+      { about: "self", body: fact, evidence: fact, type: "fact", scope: "user" },
+    ]);
+    const deps = makeDeps({ vault, model: content, mode: "autonomous-delivery" });
+    await captureSalientFromTurn(
+      deps,
+      { ...salienceRequest("autonomous-delivery"), sourceMessageId },
+      ctx,
+      "fake-model",
+      "ok",
+    );
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+
+    await collectMemoryActions(
+      withPreviousStatement(deps, "Ich mag Kaffee.", lastTurnStartedAt),
+      turnRequest("Vergiss das."),
+      ctx,
+    );
+
+    expect(readMemories(vault, ctx)).toHaveLength(left);
+  });
+
+  it("does not take a touch without a known chat for this chat's 'das'", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "user");
+    const [record] = readMemories(vault, ctx);
+    if (record === undefined) throw new Error("expected a memory");
+    const asked = Date.now() + 60_000;
+    vault.recordAccess([record.id], asked + 1);
+    const deps = withPreviousStatement(learned, "Wie arbeiten wir?", asked);
+
+    await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+  });
+
+  it("skips this turn's own stored row when it reads the last turn of a grounded request", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "project");
+    const now = Date.now();
+    const rows = [
+      { id: "m1", role: "user", content: "Ich mag Kaffee.", timestamp: now + 60_000 },
+      { id: "m2", role: "user", content: "Vergiss das.", timestamp: now + 120_000 },
+    ] as ChatMessage[];
+    const deps = {
+      ...learned,
+      store: { ...learned.store, listMessages: (): readonly ChatMessage[] => rows },
+    };
+
+    await groundedForget(deps, ctx);
+
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+  });
+
   it("does not relearn the fact it forgot", async () => {
     const vault = makeVault();
     const ctx = context();
-    const deps = await learnedFact(vault, ctx, "autonomous-delivery", "project");
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "project");
+    const deps = withPreviousStatement(learned, USER_TEXT, Date.now() - 60_000);
     await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
 
     await captureSalientFromTurn(deps, salienceRequest("autonomous-delivery"), ctx, "m", "ok");

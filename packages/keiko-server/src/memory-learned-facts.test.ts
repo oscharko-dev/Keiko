@@ -355,6 +355,7 @@ describe("what the person repeats and what the answer repeats", () => {
       makeDeps(vault, []),
       { context: { memories: [{ memoryId: record.id, bodyExcerpt: fact }] } } as never,
       "Du bevorzugst Tabellen.",
+      ctx,
     );
 
     const stats = vault.getAccessStats([record.id]).get(record.id);

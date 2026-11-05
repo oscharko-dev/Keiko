@@ -19,6 +19,10 @@ export interface MemoryAccessStat {
   // a never-judged memory (no outcome => neutral factor).
   readonly outcomeCount: number;
   readonly utilitySum: number;
+  // The chats of the latest confirmation and use. Absent means no chat is known, which never counts
+  // as that chat's own touch.
+  readonly lastAccessedConversationId?: string;
+  readonly lastUsedConversationId?: string;
   // When an answer last drew on this memory. Not a reinforcement: `accessCount` and
   // `lastAccessedAt` rise only on the person's own repetition (#4212).
   readonly lastUsedAt?: number;
@@ -29,11 +33,12 @@ export interface MemoryAccessStat {
 // duplicate id inside one batch is applied as two separate statements => counted twice, which is
 // the intended semantics (two recalls of the same memory in one turn are two reinforcements).
 const UPSERT_SQL = `
-INSERT INTO memory_access (memory_id, last_accessed_at, access_count)
-VALUES (?, ?, 1)
+INSERT INTO memory_access (memory_id, last_accessed_at, access_count, last_accessed_conversation_id)
+VALUES (?, ?, 1, ?)
 ON CONFLICT(memory_id) DO UPDATE SET
   access_count = access_count + 1,
-  last_accessed_at = excluded.last_accessed_at
+  last_accessed_at = excluded.last_accessed_at,
+  last_accessed_conversation_id = excluded.last_accessed_conversation_id
 `;
 
 // Append a governed retention OUTCOME (#204, O-V1). Unlike an access, an outcome NEVER advances the
@@ -52,13 +57,15 @@ ON CONFLICT(memory_id) DO UPDATE SET
 // A use advances only its own timestamp. A fresh row anchors last_accessed_at at 0 with access_count
 // 0, so neither the maintenance recency model nor the stale check reads it as a recall.
 const RECORD_USE_SQL = `
-INSERT INTO memory_access (memory_id, last_accessed_at, access_count, last_used_at)
-VALUES (?, 0, 0, ?)
-ON CONFLICT(memory_id) DO UPDATE SET last_used_at = excluded.last_used_at
+INSERT INTO memory_access (memory_id, last_accessed_at, access_count, last_used_at, last_used_conversation_id)
+VALUES (?, 0, 0, ?, ?)
+ON CONFLICT(memory_id) DO UPDATE SET
+  last_used_at = excluded.last_used_at,
+  last_used_conversation_id = excluded.last_used_conversation_id
 `;
 
 const SELECT_ALL_SQL =
-  "SELECT memory_id, last_accessed_at, access_count, outcome_count, utility_sum, last_used_at FROM memory_access";
+  "SELECT memory_id, last_accessed_at, access_count, outcome_count, utility_sum, last_used_at, last_used_conversation_id, last_accessed_conversation_id FROM memory_access";
 
 interface AccessRow {
   readonly memory_id: string;
@@ -67,21 +74,33 @@ interface AccessRow {
   readonly outcome_count: number;
   readonly utility_sum: number;
   readonly last_used_at: number | null;
+  readonly last_used_conversation_id: string | null;
+  readonly last_accessed_conversation_id: string | null;
 }
 
-export function recordAccessRows(db: DatabaseSync, ids: readonly MemoryId[], nowMs: number): void {
+export function recordAccessRows(
+  db: DatabaseSync,
+  ids: readonly MemoryId[],
+  nowMs: number,
+  conversationId?: string,
+): void {
   if (ids.length === 0) return;
   const stmt = cachedPrepare(db, UPSERT_SQL);
   for (const id of ids) {
-    stmt.run(id, nowMs);
+    stmt.run(id, nowMs, conversationId ?? null);
   }
 }
 
-export function recordUseRows(db: DatabaseSync, ids: readonly MemoryId[], nowMs: number): void {
+export function recordUseRows(
+  db: DatabaseSync,
+  ids: readonly MemoryId[],
+  nowMs: number,
+  conversationId: string,
+): void {
   if (ids.length === 0) return;
   const stmt = cachedPrepare(db, RECORD_USE_SQL);
   for (const id of ids) {
-    stmt.run(id, nowMs);
+    stmt.run(id, nowMs, conversationId);
   }
 }
 
@@ -114,6 +133,12 @@ function rowsToMap(rows: readonly AccessRow[]): Map<MemoryId, MemoryAccessStat> 
       outcomeCount: row.outcome_count,
       utilitySum: row.utility_sum,
       ...(row.last_used_at === null ? {} : { lastUsedAt: row.last_used_at }),
+      ...(row.last_used_conversation_id === null
+        ? {}
+        : { lastUsedConversationId: row.last_used_conversation_id }),
+      ...(row.last_accessed_conversation_id === null
+        ? {}
+        : { lastAccessedConversationId: row.last_accessed_conversation_id }),
     });
   }
   return map;

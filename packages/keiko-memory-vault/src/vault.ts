@@ -1266,14 +1266,14 @@ function buildTombstoneAndAccessOps(
         return deleteTombstonesByScopeBeforeRows(db, scope, forgottenBeforeMs);
       });
     },
-    recordAccess: (ids: readonly MemoryId[], nowMs: number): void => {
+    recordAccess: (ids: readonly MemoryId[], nowMs: number, conversationId?: string): void => {
       withSidecarHardening(opts, () => {
-        recordAccessRows(db, ids, nowMs);
+        recordAccessRows(db, ids, nowMs, conversationId);
       });
     },
-    recordUse: (ids: readonly MemoryId[], nowMs: number): void => {
+    recordUse: (ids: readonly MemoryId[], nowMs: number, conversationId: string): void => {
       withSidecarHardening(opts, () => {
-        recordUseRows(db, ids, nowMs);
+        recordUseRows(db, ids, nowMs, conversationId);
       });
     },
     recordOutcome: (ids: readonly MemoryId[], utility: number, nowMs: number): void => {

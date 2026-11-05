@@ -453,6 +453,7 @@ interface LearningTrace {
   readonly mode: CodingWorkbenchMode;
   readonly correlationId: string;
   readonly sourceMessageCount: number;
+  readonly conversationId: string;
 }
 
 function recordRelation(
@@ -481,7 +482,7 @@ function confirmKnownFact(
   outcome: Extract<SalienceOutcome, { readonly kind: "confirmation" }>,
   trace: LearningTrace,
 ): PersistedCandidate {
-  vault.recordAccess([outcome.memoryId], Date.now());
+  vault.recordAccess([outcome.memoryId], Date.now(), trace.conversationId);
   recordRelation(outcome, "confirmed", trace);
   return { action: null, disposition: "merged" };
 }
@@ -828,6 +829,7 @@ async function runSalienceCapture(
     mode,
     correlationId,
     sourceMessageCount: request.sourceMessageId === undefined ? 0 : 1,
+    conversationId: context.conversationId,
   });
   if (outcomes.length > 0) logSalienceCaptureSummary(mode, summary, deps, correlationId);
   return actions;

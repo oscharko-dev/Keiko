@@ -91,7 +91,7 @@ function confirmExistingMemory(
   existing: MemoryRecord,
   record: MemoryRecord,
 ): PersistedCapturedMemory {
-  vault.recordAccess([existing.id], record.updatedAt);
+  vault.recordAccess([existing.id], record.updatedAt, record.provenance.sourceConversationId);
   return reuseCapturedMemory(vault, existing, record);
 }
 

@@ -116,6 +116,8 @@ export interface MemoryForgetResolverContext {
   // When the turn before this statement began. "Das" means what that turn left behind. Read only
   // for a bare reference, so an ordinary turn costs no history read.
   readonly lastTurnStartedAt: () => number | undefined;
+  // The person's message of that turn, which a learned fact names as its source.
+  readonly previousMessageId: () => string | undefined;
   // What the person said in that turn.
   readonly previousStatement: () => string | undefined;
 }
@@ -128,15 +130,44 @@ function lastTurnReachedMemory(statement: string | undefined): boolean {
   return statement.trimEnd().endsWith("?") || explicitStatementKind(statement) === "remember";
 }
 
-function lastReachedAt(stat: MemoryAccessStat | undefined): number {
-  return Math.max(stat?.lastAccessedAt ?? 0, stat?.lastUsedAt ?? 0);
+// Whether this conversation's last turn touched the memory. Only this chat's own latest touch
+// counts: another chat or maintenance touching it in the same window says nothing about "das". The
+// person saying the fact again counts on its own, an answer drawing on it only after a turn about
+// memory.
+function reachedInLastTurn(
+  stat: MemoryAccessStat | undefined,
+  conversationId: string,
+  startedAt: number,
+  answerCounts: boolean,
+): boolean {
+  if (stat === undefined) return false;
+  const confirmed =
+    stat.lastAccessedConversationId === conversationId && stat.lastAccessedAt >= startedAt;
+  const used =
+    stat.lastUsedConversationId === conversationId && (stat.lastUsedAt ?? 0) >= startedAt;
+  return confirmed || (answerCounts && used);
+}
+
+// What the last turn left behind. A learned fact names the turn it came from, so a slow capture of
+// an earlier turn that finishes later is not "das". Only a record without that provenance falls
+// back to its creation time.
+function leftByLastTurn(
+  record: MemoryRecord,
+  previousMessageId: string | undefined,
+  startedAt: number,
+): boolean {
+  const sources = record.provenance.sourceMessageIds;
+  return sources === undefined
+    ? record.createdAt >= startedAt
+    : previousMessageId !== undefined && sources.includes(previousMessageId);
 }
 
 function namesRecord(target: string, record: MemoryRecord): boolean {
   const body = tokenize(`${record.body} ${record.tags.join(" ")}`);
   const words = tokenize(target);
   return (
-    words.length > 0 && words.every((word) => body.some((candidate) => sameMemoryWord(word, candidate)))
+    words.length > 0 &&
+    words.every((word) => body.some((candidate) => sameMemoryWord(word, candidate)))
   );
 }
 
@@ -153,13 +184,23 @@ function referredRecords(
     (record) => record.provenance.sourceConversationId === context.conversationId,
   );
   const lastTurnStartedAt = context.lastTurnStartedAt();
-  if (lastTurnStartedAt === undefined) return ofConversation;
-  const left = ofConversation.filter((record) => record.createdAt >= lastTurnStartedAt);
-  if (!lastTurnReachedMemory(context.previousStatement())) return left;
+  // No earlier turn left anything behind, so an older record of this conversation is not "das".
+  if (lastTurnStartedAt === undefined) return [];
+  const previousMessageId = context.previousMessageId();
+  const left = ofConversation.filter((record) =>
+    leftByLastTurn(record, previousMessageId, lastTurnStartedAt),
+  );
+  const answerCounts = lastTurnReachedMemory(context.previousStatement());
   const stats = vault.getAccessStats(records.map((record) => record.id));
   const reached = records.filter(
     (record) =>
-      !left.includes(record) && lastReachedAt(stats.get(record.id)) >= lastTurnStartedAt,
+      !left.includes(record) &&
+      reachedInLastTurn(
+        stats.get(record.id),
+        context.conversationId,
+        lastTurnStartedAt,
+        answerCounts,
+      ),
   );
   return [...left, ...reached];
 }

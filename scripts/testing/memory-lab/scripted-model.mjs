@@ -189,10 +189,10 @@ function answerFor(model, messages, state) {
 function learnerItem(item) {
   return {
     body: item.body,
+    evidence: item.evidence ?? item.body,
+    about: item.about ?? "self",
     type: item.type,
-    confidence: item.confidence ?? 0.8,
-    scope: item.scope ?? "user",
-    source: "user",
-    tags: item.tags ?? [],
+    relation: item.relation ?? "new",
+    related: item.related ?? null,
   };
 }

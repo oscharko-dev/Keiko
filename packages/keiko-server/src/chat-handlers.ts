@@ -1488,12 +1488,13 @@ export function recordConversationMemoryUse(
   deps: UiHandlerDeps,
   memory: ConversationMemoryResultWire,
   assistantText: string,
+  context: ConversationMemoryRuntimeContext | undefined,
 ): void {
   const vault = deps.memoryVault;
-  if (vault === undefined || memory.context.memories.length === 0) return;
+  if (vault === undefined || context === undefined || memory.context.memories.length === 0) return;
   const usedIds = memoriesUsedInAnswer(memory.context.memories, assistantText);
   if (usedIds.length > 0) {
-    vault.recordUse(usedIds, Date.now());
+    vault.recordUse(usedIds, Date.now(), context.conversationId);
   }
 }
 
@@ -1736,6 +1737,7 @@ function captureMemoryActions(
           scopes: conversationMemoryScopes(context),
           conversationId: context.conversationId,
           lastTurnStartedAt: () => previousMessage()?.timestamp,
+          previousMessageId: () => previousMessage()?.id,
           previousStatement: () => previousMessage()?.content,
         }),
       }),
@@ -1808,7 +1810,7 @@ export function runPostCommitConversationMemorySideEffects(
   correlationId: string,
 ): void {
   runPostCommitMemoryEffect(deps, correlationId, "chat.memory.answer-use", () => {
-    recordConversationMemoryUse(deps, memory, assistantText);
+    recordConversationMemoryUse(deps, memory, assistantText, context);
   });
   if (context === undefined) return;
   runPostCommitMemoryEffect(deps, correlationId, "chat.memory.salience", () => {
@@ -4109,8 +4111,11 @@ function canonicalMessageMemoryActions(
   correlationId: string,
 ): Promise<ConversationMemoryActionWire[]> {
   const scopes = conversationMemoryScopes(context);
+  // A grounded request holds only this turn, so the last turn comes from the conversation.
+  const previousMessage = (): ChatMessage | undefined =>
+    previousUserMessage(deps, message.content, context.conversationId);
   const previousStatement = (): string | undefined =>
-    previousContent(request.messages, message.ordinal);
+    previousContent(request.messages, message.ordinal) ?? previousMessage()?.content;
   const outcomes = extractCandidatesFromUserText(
     message.content,
     buildCaptureContext(context, request.clientTurnId, message.ordinal),
@@ -4120,7 +4125,8 @@ function canonicalMessageMemoryActions(
       forgetResolver: createMemoryForgetResolver(vault, {
         scopes,
         conversationId: context.conversationId,
-        lastTurnStartedAt: () => undefined,
+        lastTurnStartedAt: () => previousMessage()?.timestamp,
+        previousMessageId: () => previousMessage()?.id,
         previousStatement,
       }),
     }),
@@ -4285,6 +4291,20 @@ function canonicalTurnSaliencePairs(
   return pairs;
 }
 
+// The stored row of the person's turn, so a fact learned from a grounded turn names its source like
+// any other learned fact.
+function sourceMessageOf(
+  deps: UiHandlerDeps,
+  content: string,
+  conversationId: string,
+): { readonly sourceMessageId?: string } {
+  const row = deps.store
+    .listMessages(conversationId)
+    .filter((message) => message.role === "user" && message.content === content)
+    .at(-1);
+  return row === undefined ? {} : { sourceMessageId: row.id };
+}
+
 function scheduleCanonicalTurnSalienceCapture(
   deps: UiHandlerDeps,
   request: CanonicalTurnMemoryRequest,
@@ -4301,6 +4321,7 @@ function scheduleCanonicalTurnSalienceCapture(
       {
         content: pair.userText,
         memory: request.memory,
+        ...sourceMessageOf(deps, pair.userText, context.conversationId),
       },
       context,
       modelId,
@@ -4321,7 +4342,7 @@ export function runPostCommitCanonicalTurnMemorySideEffects(
   correlationId: string,
 ): void {
   runPostCommitMemoryEffect(deps, correlationId, "grounded.memory.reinforcement", () => {
-    recordConversationMemoryUse(deps, memory, assistantText);
+    recordConversationMemoryUse(deps, memory, assistantText, context);
   });
   runPostCommitMemoryEffect(deps, correlationId, "grounded.memory.salience", () => {
     scheduleCanonicalTurnSalienceCapture(deps, request, context, modelId, correlationId);

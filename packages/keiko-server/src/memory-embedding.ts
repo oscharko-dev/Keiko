@@ -911,7 +911,7 @@ export async function insertSalienceMemoryWithNoveltyGate(
     options.replaces,
   );
   if (duplicateOf !== null) {
-    vault.recordAccess([duplicateOf], Date.now());
+    vault.recordAccess([duplicateOf], Date.now(), record.provenance.sourceConversationId);
     logNoveltyDecision(scopeKind, embedded, {
       outcome: "merged",
       dedupThreshold,

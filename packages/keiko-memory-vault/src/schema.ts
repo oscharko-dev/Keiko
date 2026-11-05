@@ -244,11 +244,14 @@ CREATE INDEX IF NOT EXISTS idx_tombstones_scope_forgotten
 // v12 = learned facts (#4212). A learned memory keeps the person's exact words it rests on and the
 // turns they came from; evidence_span is content and sealed like the body. memory_access gains
 // last_used_at: what an answer drew on is remembered for "Vergiss das" without counting as a
-// reinforcement, so a memory cannot strengthen itself by being repeated back.
+// reinforcement, so a memory cannot strengthen itself by being repeated back. The two conversation
+// columns name the chat of the latest confirmation and use, so another chat's touch is never "das".
 const V12_SQL = `
 ALTER TABLE memories ADD COLUMN evidence_span TEXT;
 ALTER TABLE memories ADD COLUMN source_message_ids_json TEXT;
 ALTER TABLE memory_access ADD COLUMN last_used_at INTEGER;
+ALTER TABLE memory_access ADD COLUMN last_used_conversation_id TEXT;
+ALTER TABLE memory_access ADD COLUMN last_accessed_conversation_id TEXT;
 `;
 
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the

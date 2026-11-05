@@ -626,18 +626,21 @@ describe("atomic graph mutations", () => {
     const vault = openVault(dir, []);
     const memory = vault.insertMemory(makeMemory({ id: "m-used" as MemoryId, status: "accepted" }));
 
-    vault.recordUse([memory.id], 1_700_000_000_500);
+    vault.recordUse([memory.id], 1_700_000_000_500, "chat-a");
     expect(vault.getAccessStats([memory.id]).get(memory.id)).toMatchObject({
       accessCount: 0,
       lastUsedAt: 1_700_000_000_500,
+      lastUsedConversationId: "chat-a",
     });
 
-    vault.recordAccess([memory.id], 1_700_000_000_600);
-    vault.recordUse([memory.id], 1_700_000_000_700);
+    vault.recordAccess([memory.id], 1_700_000_000_600, "chat-b");
+    vault.recordUse([memory.id], 1_700_000_000_700, "chat-c");
     expect(vault.getAccessStats([memory.id]).get(memory.id)).toMatchObject({
       accessCount: 1,
       lastAccessedAt: 1_700_000_000_600,
+      lastAccessedConversationId: "chat-b",
       lastUsedAt: 1_700_000_000_700,
+      lastUsedConversationId: "chat-c",
     });
     vault.close();
   });
