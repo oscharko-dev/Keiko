@@ -2667,7 +2667,9 @@ the files the path rules deny and answers a tool its entry trusts. A shell there
 credential stored in the keychain, and governed delivery runs outside the sandbox with the
 person's own credentials. Other lookups stay open, since toolchains need them (TLS verification goes
 through `trustd`). A toolchain's `var` directory, where its services keep their state, is denied
-too.
+too. Full access keeps the internet but not foreign unix sockets: `ssh-agent` would use the keys the
+path rules deny, and a container daemon would start a container mounting anything. The resolver and
+the sockets a run creates in its own roots stay reachable, and loopback TCP is unaffected.
 
 **The run cannot decide what Keiko's own Git executes (#4271).** Keiko runs Git outside the sandbox
 on the run's workspace, so repository configuration a shell child writes would run or read with

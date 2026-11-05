@@ -10,6 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { once } from "node:events";
 import { createServer, type Server } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
@@ -1514,6 +1515,34 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
         expect(resolver.stdout).toBe("DNS_DENIED");
       } finally {
         server.close();
+        tree.cleanup();
+        rmSync(socketDirectory, { recursive: true, force: true });
+      }
+    },
+    20_000,
+  );
+
+  // #4271: a unix socket needs no file rule, so ssh-agent and a container daemon stayed reachable at
+  // Full access; a socket the run made itself is its own.
+  it.skipIf(!canProveOnThisHost)(
+    "native profile: Full access reaches no foreign unix socket, and its own",
+    async () => {
+      const tree = createNativeProofTree();
+      const socketDirectory = mkdtempSync(join(tmpdir(), "keiko-sock-"));
+      const foreign = join(socketDirectory, "agent.sock");
+      const own = join(tree.workspaceRoot, "own.sock");
+      const servers = [foreign, own].map((path) =>
+        createServer((socket) => socket.end()).listen(path),
+      );
+      await Promise.all(servers.map((server) => once(server, "listening")));
+      try {
+        const connect = connectUnixProbe(foreign);
+        expect(run(process.execPath, ["-e", connect]).stdout).toBe("CONNECTED");
+        const confinement = nativeConfinement(tree, "inherited");
+        expect(runNative(tree, confinement, connect).stdout).toMatch(/^BLOCKED:/u);
+        expect(runNative(tree, confinement, connectUnixProbe(own)).stdout).toBe("CONNECTED");
+      } finally {
+        for (const server of servers) server.close();
         tree.cleanup();
         rmSync(socketDirectory, { recursive: true, force: true });
       }

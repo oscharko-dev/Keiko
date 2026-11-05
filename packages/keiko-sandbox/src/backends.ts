@@ -297,6 +297,22 @@ const NATIVE_HOST_SECRET_SERVICE_RULE =
   ' (global-name "com.apple.SecurityAgent"))';
 
 /**
+ * Full access keeps the internet, not the host's local services. A unix socket needs no file rule,
+ * so without this a shell reaches ssh-agent, whose keys the file rules deny, and a container daemon,
+ * which starts a container mounting anything and so escapes the workspace boundary (#4271). The
+ * resolver stays reachable, and so do the sockets the run itself creates in its own roots.
+ */
+function nativeFullAccessUnixSocketRules(filesystem: RuntimeGatewayFilesystem): string {
+  const own = [filesystem.workspaceRoot, filesystem.privateStateRoot]
+    .map((root) => `(subpath ${JSON.stringify(root)})`)
+    .join(" ");
+  return (
+    "(deny network-outbound (remote unix-socket))" +
+    `(allow network-outbound (literal "/private/var/run/mDNSResponder") ${own})`
+  );
+}
+
+/**
  * The native profile (#3897): the agent runs its own shell and toolchains like standalone
  * OpenCode. What the kernel enforces for the whole process tree is the filesystem boundary (a read
  * allowlist of the workspace, the private state, the system and toolchain roots; writes only inside
@@ -305,8 +321,8 @@ const NATIVE_HOST_SECRET_SERVICE_RULE =
  * boundary (signals and process information reach the tree's own sandbox only, never another
  * process of the same OS user; one exception no profile can close is `sysctl(KERN_PROCARGS2)`, which
  * shows the exec environment of any process of that user, see ADR-0137 D10). Network follows the run's mode: loopback only below Full access;
- * inherited at Full access, where the per-action permission policy and the accepted Authority
- * Envelope bound it.
+ * inherited at Full access apart from local unix sockets, where the per-action permission policy
+ * and the accepted Authority Envelope bound it.
  */
 function buildNativeSeatbeltCommand(
   command: string,
@@ -322,7 +338,9 @@ function buildNativeSeatbeltCommand(
     NATIVE_HOST_SECRET_SERVICE_RULE +
     OWN_PROCESS_TARGETS_SEATBELT_RULE +
     nativeWorkspaceSeatbeltRules(filesystem) +
-    (egress === "inherited" ? "" : NATIVE_LOOPBACK_ONLY_NETWORK_RULES);
+    (egress === "inherited"
+      ? nativeFullAccessUnixSocketRules(filesystem)
+      : NATIVE_LOOPBACK_ONLY_NETWORK_RULES);
   return { command: "/usr/bin/sandbox-exec", args: ["-p", profile, command, ...args] };
 }
 
