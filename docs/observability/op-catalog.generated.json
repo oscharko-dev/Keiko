@@ -105435,7 +105435,7 @@
     "violations": []
   },
   "legacyDiscovery": {
-    "dynamicCount": 93,
+    "dynamicCount": 94,
     "unknownCategoryCount": 84,
     "authoritative": false
   },
@@ -107484,6 +107484,13 @@
       "op": "<dynamic>",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/editor/localHistory/localHistoryCapture.ts:152",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/lsp/hostLanguageOperation.ts:1800",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -109571,13 +109578,6 @@
       "op": "editor.producer-turn.completed",
       "category": "process",
       "site": "packages/keiko-server/src/editor/agentProducerRoute.ts:92",
-      "package": "keiko-server"
-    },
-    {
-      "op": "editor.semantic-tokens",
-      "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/hostLanguageOperation.ts:1786",
-      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
@@ -112113,7 +112113,6 @@
     "editor.local-history.rekey.completed",
     "editor.local-history.rekey.failed",
     "editor.producer-turn.completed",
-    "editor.semantic-tokens",
     "editor.semantic-tokens.refused",
     "editor.semantic-tokens.settled",
     "editor.testGeneration",

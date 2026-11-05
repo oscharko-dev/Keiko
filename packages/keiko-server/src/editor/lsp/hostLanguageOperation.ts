@@ -1774,6 +1774,23 @@ export async function runHostLanguageSemanticTokens(
   return outcome.disposition === "served" ? outcome.result : undefined;
 }
 
+/** The four evidence shapes: only non-empty frames and causes become diagnostic fields. */
+type SemanticTokenFailureEvidence =
+  | { readonly frames: readonly string[]; readonly causeChain: readonly string[] }
+  | { readonly frames: readonly string[] }
+  | { readonly causeChain: readonly string[] }
+  | { readonly frames?: never; readonly causeChain?: never };
+
+function semanticTokenFailureEvidence(
+  frames: readonly string[],
+  causes: readonly string[],
+): SemanticTokenFailureEvidence {
+  if (frames.length > 0 && causes.length > 0) return { frames, causeChain: causes };
+  if (frames.length > 0) return { frames };
+  if (causes.length > 0) return { causeChain: causes };
+  return {};
+}
+
 export function recordSemanticTokenRequestFailure(
   options: HostLanguageOperationOptions,
   error: unknown,
@@ -1788,8 +1805,7 @@ export function recordSemanticTokenRequestFailure(
     errorClass: contentFreeErrorClass(error),
     message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
     diagnosticOutcome: "request-failed",
-    ...(frames.length === 0 ? {} : { frames }),
-    ...(causes.length === 0 ? {} : { causeChain: causes }),
+    ...semanticTokenFailureEvidence(frames, causes),
   });
 }
 
