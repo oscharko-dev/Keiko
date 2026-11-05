@@ -135,6 +135,22 @@ and head SHA; Keiko fetches `refs/pull/<n>/head` with the hardened Git runner an
 (`skipped/target-changed`) when the fetched head differs from the head the provider reported. A
 local-range target reviews a local branch against its base without a hosting provider.
 
+The diff starts at the merge base of the two commits, the commit the head branched from, as
+GitHub's own "Files changed" view does. It never starts at the base branch's newer tip, which would
+show the base's later changes as reverted or deleted by the head. Once both commits are present, a
+fixed-argv review operation (`resolveGitReviewMergeBase`, `git merge-base --end-of-options <base>
+<head>`) names it, for pull request and local-range targets alike. The target keeps the reported
+base SHA, and the review-rules file of D4 is read from that base. The run record keeps the merge
+base, so its per-file diff view shows the reviewed diff, and a local-range dry run estimates the
+changes from the same merge base (R4130-035). Without a merge base, the resolver asks Git whether
+the repository is shallow (`gitReviewRepositoryIsShallow`, `git rev-parse --is-shallow-repository`).
+A shallow clone may hide the fork point behind its boundary, so it refuses as `shallow-history`; a
+complete repository whose two commits share no history refuses as `no-merge-base` (R4130-036).
+Keiko never deepens the user's clone: that would rewrite `.git/shallow`, and the private ref stays
+the only repository change. Both reasons settle `skipped/worktree-failed`, never
+`skipped/target-changed`, because the target did not move. `review.target.resolved` records the
+merge base as a digest (R4130-008).
+
 Keiko creates a dedicated, detached review worktree at the head SHA. The user's own checkout and
 branches are never modified. Hooks, filter drivers (including Git LFS smudge), `core.symlinks` and
 fsmonitor are neutralized for that worktree, symbolic links are checked out as plain files, and
@@ -193,8 +209,9 @@ bounded harness session over a caller-supplied catalog, reserved profile and too
 configurable wall time. `keiko_child_agent` keeps its reserved `child@1` profile and behaviour on
 the same two functions. The counter-check (`review/counter-check/`) uses its own reserved profile,
 `review-counter-check@1` (ADR-0175 D2): `keiko_counter_check_read`, `keiko_counter_check_discover`,
-`keiko_counter_check_search` (a fixed-string `git grep -F` over the head commit, `grepGitReviewTree`)
-and `keiko_counter_check_verdict`. Every read is served from the Git objects of the reviewed head
+`keiko_counter_check_search` (a fixed-string `git grep -F` over the head commit, `grepGitReviewTree`;
+the literal is one `-e<literal>` token, so an option-shaped literal such as `-cp` is searched,
+never refused as an option, R4130-026) and `keiko_counter_check_verdict`. Every read is served from the Git objects of the reviewed head
 commit in the run's review worktree (never a working tree), behind the sensitive-path deny list.
 Each candidate gets a fresh session with the Counter-checker model whose only input is the candidate
 task: location, category, condition, mechanism, consequence and evidence locations as nonce-bound
@@ -238,7 +255,7 @@ most consequential names it (`model-failed`, `budget-exhausted`, `deadline-excee
 `files-unprocessed`). The building blocks' closed refusals map as follows (`mapping.ts`): a target
 that moved or no longer resolves (`target-changed`, `not-found`, `ref-invalid`) is
 `skipped/target-changed`, a target Keiko cannot fetch (no provider access, no GitHub remote, rate
-limit, failed fetch) and every worktree refusal but cancellation `skipped/worktree-failed`; the
+limit, failed fetch) or diff (`no-merge-base`, `shallow-history`) and every worktree refusal but cancellation `skipped/worktree-failed`; the
 review runtime's `rules-file-invalid` is `skipped/rules-file-invalid`, `task-too-large`
 `skipped/diff-too-large`, `runtime-unavailable` and a Reviewer run the orchestrator refused
 `skipped/model-unavailable`, a failed read-only self-check `skipped/policy-invalid`, and a failed

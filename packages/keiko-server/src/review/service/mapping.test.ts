@@ -31,7 +31,13 @@ describe("settlement mapping", () => {
     expect(targetRefusalSettlement("fetch-failed")).toEqual({
       kind: "skipped",
       reason: "worktree-failed",
-    });
+    }); // R4130-036: a target without a usable merge base never claims that the target changed.
+    for (const reason of ["no-merge-base", "shallow-history"] as const) {
+      expect(targetRefusalSettlement(reason), reason).toEqual({
+        kind: "skipped",
+        reason: "worktree-failed",
+      });
+    }
   });
 
   it("maps every worktree refusal: cancelled abandons, the rest skip as worktree-failed", () => {

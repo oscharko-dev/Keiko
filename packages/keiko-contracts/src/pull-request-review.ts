@@ -351,6 +351,10 @@ export const REVIEW_TARGET_REFUSAL_REASONS = [
   "ref-invalid",
   "fetch-failed",
   "rate-limited",
+  // R4130-008: the base and head share no history, so no diff base exists.
+  "no-merge-base",
+  // R4130-036: a shallow clone hides the merge base behind its boundary; Keiko never deepens it.
+  "shallow-history",
 ] as const;
 export type ReviewTargetRefusalReason = (typeof REVIEW_TARGET_REFUSAL_REASONS)[number];
 
