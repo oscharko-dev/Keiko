@@ -871,6 +871,8 @@ export interface ReviewCoverageEntry {
   readonly path: string;
   readonly list: ReviewDiffCoverageList;
   readonly reason?: string | undefined;
+  /** The base path of a rename; the reviewed diff reads the base side under it. */
+  readonly previousPath?: string | undefined;
 }
 
 /** A candidate finding as the run record keeps it; the counter-check evidence is the verdict's. */

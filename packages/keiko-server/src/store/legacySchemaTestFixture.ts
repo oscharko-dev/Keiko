@@ -28,9 +28,10 @@ interface VersionRollback {
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
-  { version: 56, sql: "ALTER TABLE review_runs DROP COLUMN runtime_cleanup;" },
+  { version: 61, sql: "ALTER TABLE review_coverage DROP COLUMN previous_path;" },
+  { version: 60, sql: "ALTER TABLE review_runs DROP COLUMN runtime_cleanup;" },
   {
-    version: 55,
+    version: 59,
     sql: `DROP TABLE review_findings;
     DROP TABLE review_coverage;
     DROP TABLE review_runs;`,

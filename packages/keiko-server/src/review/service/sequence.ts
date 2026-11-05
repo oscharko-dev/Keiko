@@ -15,6 +15,7 @@ import type {
   ReviewCoverageEntry,
   ReviewDiffCoverage,
   ReviewDiffCoverageSummary,
+  ReviewDiffFileRef,
   ReviewDiffSettlementInput,
   ReviewRoleTotals,
   ReviewRunPhase,
@@ -44,7 +45,7 @@ import {
   targetRefusalSettlement,
   worktreeRefusalSettlement,
 } from "./mapping.js";
-import { validateReviewRoleModels, type ReviewModelPort } from "./models.js";
+import { admitReviewRoleModels, evaluateReviewRoleModels, type ReviewModelPort } from "./models.js";
 import { counterCheckOrder } from "./presentation.js";
 import type { ReviewerSettlementFact } from "./settlement.js";
 import type { ReviewRunStore } from "./store.js";
@@ -188,10 +189,15 @@ async function createWorktree(
 /** Every changed path with its coverage list and closed reason, in list order. */
 function coverageEntries(coverage: ReviewDiffCoverage): ReviewCoverageEntry[] {
   const entries: ReviewCoverageEntry[] = [];
-  const add = (list: ReviewCoverageEntry["list"], files: readonly { path: string }[]): void => {
+  const add = (list: ReviewCoverageEntry["list"], files: readonly ReviewDiffFileRef[]): void => {
     for (const file of files) {
       const reason = (file as { readonly reason?: string }).reason;
-      entries.push({ path: file.path, list, ...(reason === undefined ? {} : { reason }) });
+      entries.push({
+        path: file.path,
+        list,
+        ...(reason === undefined ? {} : { reason }),
+        ...(file.previousPath === undefined ? {} : { previousPath: file.previousPath }),
+      });
     }
   };
   add("included", coverage.included);
@@ -247,17 +253,29 @@ async function buildPackage(
   return cancelled(ctx, state) ? undefined : built.package;
 }
 
+/**
+ * The role models: the policy admission first, so a refused model is never read or contacted
+ * (R4130-003), then eligibility against the gateway's capability data.
+ */
+function checkRoleModels(
+  deps: ReviewSequenceDeps,
+  ctx: ReviewRunContext,
+  state: ReviewRunState,
+): boolean {
+  if (!admitReviewRoleModels(deps.models, ctx, ctx.correlationId)) {
+    return stopWith(state, { kind: "skipped", reason: "policy-invalid" });
+  }
+  const models = evaluateReviewRoleModels(deps.models, ctx, deps.now());
+  return models.ok || stopWith(state, { kind: "skipped", reason: models.reason });
+}
+
 /** The `preparing` phase. Returns the diff package when the run may proceed to the Reviewer. */
 export async function prepareReviewRun(
   deps: ReviewSequenceDeps,
   ctx: ReviewRunContext,
   state: ReviewRunState,
 ): Promise<ReviewDiffPackage | undefined> {
-  const models = validateReviewRoleModels(deps.models, ctx, deps.now(), ctx.correlationId);
-  if (!models.ok) {
-    stopWith(state, { kind: "skipped", reason: models.reason });
-    return undefined;
-  }
+  if (!checkRoleModels(deps, ctx, state)) return undefined;
   if (cancelled(ctx, state) || !(await resolveTarget(deps, ctx, state))) return undefined;
   const target = state.target;
   if (target === undefined) return undefined;

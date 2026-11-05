@@ -6,7 +6,7 @@
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import {
@@ -15,6 +15,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
 import { captureActivityLog } from "../../activityLogCapture.test-support.js";
+import { defaultServerDiagnosticSink } from "../../diagnostics-log.js";
 import { API_ROUTES, type RouteContext, type RouteResult } from "../../routes.js";
 import { deriveRepositoryId } from "../../task-workspace/naming.js";
 import { handleReviewRunStart } from "../routes.js";
@@ -34,6 +35,7 @@ import {
   reviewRulesSettingsPort,
   reviewRunAdmission,
 } from "./policy.js";
+import type { ReviewSettingsStore } from "./settingsStore.js";
 import {
   handleReviewModelPolicy,
   handleReviewSettingsGet,
@@ -152,6 +154,28 @@ describe("GET/PUT /api/git-review/settings (AC7)", () => {
     ]);
     const conflict = await put(f, { expectedRevision: 0, rulesFilePath: "x.md" });
     expect(conflict.status).toBe(409);
+  });
+
+  // R4130-023: the run path turned an invalid stored document into "no setting" without a trace.
+  it("reports an invalid stored settings document on the run's correlation", () => {
+    const record = vi.spyOn(defaultServerDiagnosticSink, "record");
+    const f = fixture({ enabled: true });
+    const invalid: ReviewSettingsStore = {
+      read: () => ({ kind: "invalid" }),
+      write: () => undefined,
+    };
+    const port = reviewRulesSettingsPort(
+      () => f.deps,
+      () => invalid,
+    );
+    expect(port.rulesPath(REPOSITORY_ROOT, "corr-review-rules")).toBe(".keiko/review-rules.md");
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "review.settings.read",
+        correlationId: "corr-review-rules",
+      }),
+    );
+    record.mockRestore();
   });
 
   it("refuses a path outside the repository or with .. segments", async () => {

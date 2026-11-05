@@ -364,7 +364,7 @@ async function readRules(
     return await readReviewRulesFromBase({
       repositoryRoot: request.repositoryRoot,
       baseSha: request.baseSha,
-      path: context.deps.rulesSettings?.rulesPath(request.repositoryRoot),
+      path: context.deps.rulesSettings?.rulesPath(request.repositoryRoot, request.correlationId),
       runner: context.deps.runner(),
       abortSignal: request.signal,
     });

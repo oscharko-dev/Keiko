@@ -1,5 +1,5 @@
 // The Keiko for Quality review run records (ADR-0182 D6, Issue #4136), over the server's SQLite
-// store (schema migrations 55 and 56): one row per run, its coverage entries and its candidate
+// store (schema migrations 59, 60 and 61): one row per run, its coverage entries and its candidate
 // findings. All SQL is module-scope constants with bound parameters. Paths and finding text are local
 // product data for the UI; this module never logs. One unsettled run per repository is enforced by
 // the `review_runs_active` unique index, so two concurrent starts can never both succeed.
@@ -42,7 +42,7 @@ export interface ReviewRunRow {
   readonly candidateCount: number;
   readonly reviewer: ReviewRoleTotals;
   readonly counterChecker: ReviewRoleTotals;
-  /** The Reviewer runtime's cleanup (migration 56); null when no Reviewer run started. */
+  /** The Reviewer runtime's cleanup (migration 60); null when no Reviewer run started. */
   readonly runtimeCleanup: ReviewRuntimeCleanup | null;
 }
 
@@ -104,7 +104,7 @@ const SQL_TARGET =
 const SQL_RULES = "UPDATE review_runs SET rules_digest = ? WHERE run_id = ?";
 const SQL_COVERAGE = "UPDATE review_runs SET coverage_json = ? WHERE run_id = ?";
 const SQL_COVERAGE_ENTRY =
-  "INSERT INTO review_coverage (run_id, ordinal, path, list, reason) VALUES (?, ?, ?, ?, ?)";
+  "INSERT INTO review_coverage (run_id, ordinal, path, list, reason, previous_path) VALUES (?, ?, ?, ?, ?, ?)";
 const SQL_FINDING = `INSERT INTO review_findings (run_id, fingerprint, reviewer_rank, report_json,
   verdict, verdict_reason, verdict_evidence_json, evidence_in_head, presented, presentation_rank)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
@@ -130,7 +130,7 @@ const SQL_REFS = "SELECT private_refs_json FROM review_runs WHERE repository_roo
 const SQL_FINDINGS =
   "SELECT * FROM review_findings WHERE run_id = ? ORDER BY presented DESC, presentation_rank, reviewer_rank";
 const SQL_COVERAGE_ENTRIES =
-  "SELECT path, list, reason FROM review_coverage WHERE run_id = ? ORDER BY ordinal";
+  "SELECT path, list, reason, previous_path FROM review_coverage WHERE run_id = ? ORDER BY ordinal";
 
 type Row = Readonly<Record<string, unknown>>;
 
@@ -320,7 +320,8 @@ export class ReviewRunStore {
       this.db.prepare(SQL_COVERAGE).run(JSON.stringify(summary), runId);
       const insert = this.db.prepare(SQL_COVERAGE_ENTRY);
       entries.forEach((entry, ordinal) => {
-        insert.run(runId, ordinal, entry.path, entry.list, entry.reason ?? null);
+        const previous = entry.previousPath ?? null;
+        insert.run(runId, ordinal, entry.path, entry.list, entry.reason ?? null, previous);
       });
     });
   }
@@ -386,10 +387,12 @@ export class ReviewRunStore {
   public coverageEntries(runId: string): ReviewCoverageEntry[] {
     return (this.db.prepare(SQL_COVERAGE_ENTRIES).all(runId) as Row[]).map((row) => {
       const reason = nullableText(row, "reason");
+      const previousPath = nullableText(row, "previous_path");
       return {
         path: text(row, "path"),
         list: text(row, "list") as ReviewDiffCoverageList,
         ...(reason === null ? {} : { reason }),
+        ...(previousPath === null ? {} : { previousPath }),
       };
     });
   }
