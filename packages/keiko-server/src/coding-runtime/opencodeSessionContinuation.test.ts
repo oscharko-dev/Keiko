@@ -84,6 +84,7 @@ function fakeStore(
         messageCount: 9,
         entryCount: 2,
         prunedCount: 1,
+        blockedCount: 0,
       };
       if (result instanceof Error) throw result;
       return result;
@@ -92,7 +93,7 @@ function fakeStore(
       calls.removed.push(taskId);
       if (results.remove !== undefined) throw results.remove;
     },
-    prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, entryCount: 0 }),
+    prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, blocked: 0, entryCount: 0 }),
   };
   return { store, calls };
 }

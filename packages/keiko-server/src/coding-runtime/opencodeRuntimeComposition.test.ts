@@ -11151,13 +11151,14 @@ describe.each(["native", "direct", "code-mode"] as const)("%s session continuity
             messageCount: 6,
             entryCount: 1,
             prunedCount: 0,
+            blockedCount: 0,
           }
         );
       },
       remove: (taskId) => {
         calls.removed.push(taskId);
       },
-      prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, entryCount: 0 }),
+      prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, blocked: 0, entryCount: 0 }),
     };
     const service = createCodingSessionContinuity({
       store,
