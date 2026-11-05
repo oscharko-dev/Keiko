@@ -813,6 +813,12 @@ function installInto(tmp, tarballPath, options) {
 
 /** Qualify npm's genuinely global shallow layout in a disposable prefix (#3582). */
 export function assertGlobalPackageInstall(prefix, artifact, options) {
+  const modules =
+    process.platform === "win32"
+      ? join(prefix, "node_modules")
+      : join(prefix, "lib", "node_modules");
+  // Strict script-policy preflight loads the global root before npm's reify creates it.
+  mkdirSync(dirname(modules), { recursive: true });
   const result = run(
     "npm",
     [
@@ -829,10 +835,6 @@ export function assertGlobalPackageInstall(prefix, artifact, options) {
     { cwd: prefix, timeout: npmInstallTimeoutMs() },
   );
   if (result.status !== 0) fail(`isolated global install failed: ${result.stderr}`);
-  const modules =
-    process.platform === "win32"
-      ? join(prefix, "node_modules")
-      : join(prefix, "lib", "node_modules");
   const packageRoot = join(modules, "@oscharko-dev", "keiko");
   const verification = run(
     process.execPath,

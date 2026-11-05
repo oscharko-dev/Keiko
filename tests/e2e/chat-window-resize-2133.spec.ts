@@ -225,3 +225,59 @@ test("browser resize keeps the complete shell fitted with Settings open (#4184)"
     await expect(settings).toBeVisible();
   }
 });
+
+test("trusted Ctrl-wheel zooms active window content without camera or browser zoom (#3657)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const settings = page.locator('.window[data-window-id="settings"]');
+  const content = settings.locator(".win-content-zoom");
+  await expect(content).toBeVisible();
+  const before = await page.evaluate(() => ({
+    scene: document.querySelector<HTMLElement>(".ws-scene")?.style.cssText,
+    dpr: window.devicePixelRatio,
+    width: window.innerWidth,
+    scale: window.visualViewport?.scale,
+  }));
+  const zoomBefore = await content.evaluate(
+    (element) => new DOMMatrixReadOnly(getComputedStyle(element).transform).a,
+  );
+  await settings.locator(".win-body").hover();
+  const receipt = page.evaluate(
+    () =>
+      new Promise<{ trusted: boolean; prevented: boolean; control: boolean }>((resolve) => {
+        window.addEventListener(
+          "wheel",
+          (event) => {
+            resolve({
+              trusted: event.isTrusted,
+              prevented: event.defaultPrevented,
+              control: event.ctrlKey,
+            });
+          },
+          { once: true },
+        );
+      }),
+  );
+  await page.keyboard.down("Control");
+  try {
+    for (let index = 0; index < 3; index++) await page.mouse.wheel(0, -40);
+  } finally {
+    await page.keyboard.up("Control");
+  }
+  await expect
+    .poll(() =>
+      content.evaluate((element) => new DOMMatrixReadOnly(getComputedStyle(element).transform).a),
+    )
+    .toBeGreaterThan(zoomBefore);
+  expect(await receipt).toEqual({ trusted: true, prevented: true, control: true });
+  expect(
+    await page.evaluate(() => ({
+      scene: document.querySelector<HTMLElement>(".ws-scene")?.style.cssText,
+      dpr: window.devicePixelRatio,
+      width: window.innerWidth,
+      scale: window.visualViewport?.scale,
+    })),
+  ).toEqual(before);
+});

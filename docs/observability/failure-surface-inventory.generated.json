@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "381cc1d9ac34de47be636dafdd8659504739d09311245516c74b228e9b453748"
+    "catalogDigest": "eb966f20a405026cc9ddc0a383835dc49acb4f37eaad15e023e234b73d0682a1"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 630,
-    "proofCount": 652,
-    "resolvedProofCount": 652,
+    "operationCount": 631,
+    "proofCount": 653,
+    "resolvedProofCount": 653,
     "failureClassCount": 388,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -120,6 +120,7 @@
         "chat.creation.rejected",
         "chat.draft.operation",
         "chat.grounded-tool-round.completed",
+        "chat.messages.projected",
         "chat.regeneration.rejected",
         "chat.response.message",
         "chat.scope.update",
@@ -1314,6 +1315,9 @@
     "chat.draft.operation.lifecycle": ["packages/keiko-server/src/chat-draft-routes.test.ts"],
     "chat.grounded-tool-round.completed.schedule": [
       "packages/keiko-server/src/chat-activity.test.ts"
+    ],
+    "chat.messages.projected.document-context": [
+      "packages/keiko-server/src/chat-message-projection.test.ts"
     ],
     "chat.regeneration.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.request.compatibility-retry.emitted-line": [

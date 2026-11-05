@@ -92,7 +92,7 @@ async function runVisibleReadiness(page: Page): Promise<void> {
   await settings.getByRole("button", { name: "Close Settings window" }).click();
 }
 
-async function createProjectFixture(request: APIRequestContext): Promise<() => void> {
+async function createProjectFixture(request: APIRequestContext): Promise<() => Promise<void>> {
   const projectPath = mkdtempSync(join(tmpdir(), "keiko-e2e-fresh-chat-"));
   mkdirSync(join(projectPath, "src"));
   const response = await request.post("/api/projects", {
@@ -100,7 +100,12 @@ async function createProjectFixture(request: APIRequestContext): Promise<() => v
     data: { name: "Fresh Chat E2E", path: projectPath },
   });
   expect(response.status(), await response.text()).toBe(201);
-  return (): void => {
+  return async (): Promise<void> => {
+    const removal = await request.delete("/api/projects", {
+      params: { path: projectPath },
+      headers: { ...MUTATION_HEADERS, "Content-Type": "application/json" },
+    });
+    expect(removal.status(), await removal.text()).toBe(204);
     rmSync(projectPath, { force: true, recursive: true });
   };
 }
@@ -153,7 +158,7 @@ test("model dropdown overflow tooltips appear from row hover and clear consisten
     await expect(page.getByRole("tooltip")).toBeHidden();
     assertNoPageErrors();
   } finally {
-    removeProjectFixture();
+    await removeProjectFixture();
   }
 });
 
@@ -194,6 +199,6 @@ test("fresh chats remain distinct and reopening a model picker refetches its cat
     await expect(page.getByRole("option", { name: "e2e-chat-model" })).toBeVisible();
     assertNoPageErrors();
   } finally {
-    removeProjectFixture();
+    await removeProjectFixture();
   }
 });

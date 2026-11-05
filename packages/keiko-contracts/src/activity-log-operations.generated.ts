@@ -2368,6 +2368,42 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "chat.messages.projected",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "chat-message-projection.browserChatMessages",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      messageCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      omittedDocumentCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "none",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["chat-turn"],
+    proofIds: ["chat.messages.projected.document-context"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "chat.regeneration.rejected",
     category: "gateway",
     owner: "keiko-server",

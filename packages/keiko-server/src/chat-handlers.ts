@@ -1,3 +1,4 @@
+import { browserChatMessages } from "./chat-message-projection.js";
 import { parseDocumentContext } from "./chat-document-context.js";
 import {
   createChatToolTurn,
@@ -470,7 +471,7 @@ function chatEnvelope(deps: UiHandlerDeps, project: Project, chat: Chat): Record
   return {
     project: { ...project, available: isProjectAvailable(project) },
     chat,
-    messages,
+    messages: browserChatMessages(messages),
     projects,
     chats,
   };
@@ -1073,7 +1074,7 @@ function desktopChatReplayResponse(
 ): DesktopChatSendResponse {
   return {
     chat: deps.store.findChatById(chat.id) ?? chat,
-    messages: [turn.userMessage, turn.assistantMessage],
+    messages: browserChatMessages([turn.userMessage, turn.assistantMessage]),
   };
 }
 
@@ -2724,7 +2725,7 @@ function commitBufferedTurn(
     status: 200,
     body: {
       chat: updatedChat,
-      messages: [userMessage, assistantMessage],
+      messages: browserChatMessages([userMessage, assistantMessage]),
       ...(result.response.usage === undefined ? {} : { usage: result.response.usage }),
       memory: { ...memory, actions: memoryActions },
       ...(conversationImageDeliveries(request).length === 0

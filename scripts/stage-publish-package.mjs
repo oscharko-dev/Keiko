@@ -328,10 +328,21 @@ function optionalRootOwner(manifest, name) {
 function assertRootOwnsPhysicalEdge(owner, edge, rootEdge, optionalOwner) {
   if (
     rootEdge === undefined ||
+    runtimeEdgeIdentity(edge) !== runtimeEdgeIdentity(rootEdge) ||
     (!edge.optional && rootEdge.optional && !optionalOwner) ||
     !descriptorIsSatisfied(edge, aliasRange(rootEdge.range))
   )
     throw new Error(`external runtime edge is not equivalently root-owned: ${owner}.${edge.name}`);
+}
+
+function runtimeEdgeIdentity(edge) {
+  const descriptor = edge.range.trim();
+  if (!descriptor.startsWith("npm:")) return edge.name;
+  const target = descriptor.slice("npm:".length);
+  const separator = target.lastIndexOf("@");
+  const name = separator > 0 ? target.slice(0, separator) : target;
+  if (name.length === 0) throw new TypeError("external runtime alias target is empty");
+  return name;
 }
 
 function packWorkspace(stageRoot, record, runtimeNames, rootManifest) {

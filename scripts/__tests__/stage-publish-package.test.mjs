@@ -161,6 +161,19 @@ afterEach(() => {
 });
 
 describe("physical bundle dependency ownership (#3582)", () => {
+  it.each([
+    ["npm:foo@^1.0.0", "npm:bar@1.2.0"],
+    ["npm:@scope/foo@^1.0.0", "npm:@scope/bar@1.2.0"],
+    ["npm:foo@^1.0.0", "1.2.0"],
+    ["^1.0.0", "npm:foo@1.2.0"],
+  ])("refuses a different dependency identity (%s / %s)", (sourceRange, rootRange) => {
+    expect(() =>
+      physicalBundleManifest(
+        { name: "owner", dependencies: { codec: sourceRange } },
+        { bundleDependencies: [], dependencies: { codec: rootRange } },
+      ),
+    ).toThrow(/not equivalently root-owned/u);
+  });
   it.each([{}, { dependencies: { ws: "2.0.0" } }, { optionalDependencies: { ws: "1.0.0" } }])(
     "refuses an unpromoted, incompatible or weakened required edge (%j)",
     (root) => {

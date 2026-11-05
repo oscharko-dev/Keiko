@@ -32,6 +32,7 @@
   "chat.creation.rejected": "bff",
   "chat.draft.operation": "bff",
   "chat.grounded-tool-round.completed": "bff",
+  "chat.messages.projected": "bff",
   "chat.regeneration.rejected": "bff",
   "chat.request.compatibility-retry": "model-gateway",
   "chat.request.dispatch": "model-gateway",

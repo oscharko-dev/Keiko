@@ -1,4 +1,3 @@
-import { MAX_DOCUMENT_CONTEXT_ENTRIES } from "../chat-document-context.js";
 // Both complementary indexes stay inside the canonical private Chat database.
 const INDEXES = [
   { name: "chat_history_words", tokenizer: "unicode61 remove_diacritics 0" },
@@ -30,10 +29,12 @@ export const CHAT_HISTORY_SEARCH_SCHEMA = [
 
 // #4157: retain one private index over both the human draft and its untrusted attachments.
 // Existing v56 installations rebuild transactionally after the additive document column exists.
+// Persisted migration 59 SQL is immutable. A future index-cap change needs another migration.
+const MIGRATION_59_DOCUMENT_ENTRIES = 16;
 const DOCUMENT_HISTORY_CONTENT = (row: string): string =>
   [
     `${row}.content`,
-    ...Array.from({ length: MAX_DOCUMENT_CONTEXT_ENTRIES }, (_, index) =>
+    ...Array.from({ length: MIGRATION_59_DOCUMENT_ENTRIES }, (_, index) =>
       ["displayName", "text", "truncationMarker"]
         .map(
           (field) =>

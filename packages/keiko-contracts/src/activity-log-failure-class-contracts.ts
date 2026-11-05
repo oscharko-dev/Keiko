@@ -987,6 +987,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       state: [
         "chat.context.selected",
         "chat.grounded-tool-round.completed",
+        "chat.messages.projected",
         "chat.response.message",
       ],
       end: [],
@@ -1003,6 +1004,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProofOperations: [
       "chat.context.selected",
       "chat.grounded-tool-round.completed",
+      "chat.messages.projected",
       "chat.response.message",
       "chat.turn.started",
     ],
@@ -1010,6 +1012,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredResourceOperations: [
       "chat.context.selected",
       "chat.grounded-tool-round.completed",
+      "chat.messages.projected",
       "chat.response.message",
       "chat.turn.started",
     ],

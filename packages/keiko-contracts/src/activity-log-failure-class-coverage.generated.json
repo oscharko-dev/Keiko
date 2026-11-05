@@ -3897,6 +3897,7 @@
         "state": [
           "chat.context.selected",
           "chat.grounded-tool-round.completed",
+          "chat.messages.projected",
           "chat.response.message"
         ],
         "end": [],
@@ -3913,6 +3914,10 @@
           "mode": "correlation"
         },
         {
+          "op": "chat.messages.projected",
+          "mode": "none"
+        },
+        {
           "op": "chat.response.message",
           "mode": "correlation"
         },
@@ -3925,6 +3930,7 @@
       "resourceSignals": [
         "chat.context.selected",
         "chat.grounded-tool-round.completed",
+        "chat.messages.projected",
         "chat.response.message",
         "chat.turn.started"
       ],
@@ -4102,6 +4108,36 @@
             "causeChain": false
           },
           "proofIds": ["chat.grounded-tool-round.completed.schedule"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "chat.messages.projected",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "messageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "omittedDocumentCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.messages.projected.document-context"],
           "replayReferences": [],
           "missingObligations": []
         },

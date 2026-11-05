@@ -2988,6 +2988,25 @@ describe("desktop chat routes", () => {
         ],
       });
       expect(initial.status).toBe(200);
+      const initialBody = (await initial.json()) as {
+        messages: readonly { documentContext?: unknown }[];
+      };
+      expect(initialBody.messages.every((message) => message.documentContext === undefined)).toBe(
+        true,
+      );
+      expect(store.listMessages(chat.id)[0]?.documentContext?.[0]?.text).toContain(
+        "cobalt-lantern",
+      );
+      const listed = await fetch(
+        `${base()}/api/chats/messages?chatId=${encodeURIComponent(chat.id)}&projectPath=${encodeURIComponent(projectDir)}`,
+      );
+      expect(listed.status).toBe(200);
+      const listedBody = (await listed.json()) as {
+        messages: readonly { documentContext?: unknown }[];
+      };
+      expect(listedBody.messages.every((message) => message.documentContext === undefined)).toBe(
+        true,
+      );
       await restartWithDeps(deps());
       const followup = await send(chat.id, { content: "What is the release identifier?" });
       expect(followup.status).toBe(200);

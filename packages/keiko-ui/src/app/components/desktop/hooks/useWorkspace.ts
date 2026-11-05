@@ -312,8 +312,13 @@ function nextContentZoom(current: number, key: string): number {
   return clampContentZoom(current + 0.1);
 }
 
+function stepContentWheelZoom(current: number, deltaY: number): number {
+  const next = current * Math.exp(-deltaY * 0.0015);
+  return Number.isNaN(next) ? 1 : Math.max(CONTENT_MIN_ZOOM, Math.min(CONTENT_MAX_ZOOM, next));
+}
+
 export function nextContentZoomFromWheel(current: number, deltaY: number): number {
-  return clampContentZoom(current * Math.exp(-deltaY * 0.0015));
+  return clampContentZoom(stepContentWheelZoom(current, deltaY));
 }
 
 export function applyContentWheelZoom(win: AppWindow, deltaY: number): AppWindow {
@@ -324,10 +329,7 @@ export function applyContentWheelZoom(win: AppWindow, deltaY: number): AppWindow
 
 function accumulatedContentWheelZoom(current: number, deltas: readonly number[]): number {
   let zoom = current;
-  for (const deltaY of deltas) {
-    const next = zoom * Math.exp(-deltaY * 0.0015);
-    zoom = Number.isNaN(next) ? 1 : Math.max(CONTENT_MIN_ZOOM, Math.min(CONTENT_MAX_ZOOM, next));
-  }
+  for (const deltaY of deltas) zoom = stepContentWheelZoom(zoom, deltaY);
   return zoom;
 }
 

@@ -541,7 +541,7 @@ export interface ChatToolTranscript {
 }
 
 export interface ChatMessage {
-  /** Redacted, untrusted attachment text owned by this user turn; content remains the human draft. */
+  /** Private stored prompt metadata. Browser response projections omit it; content is the draft. */
   readonly documentContext?: readonly ConversationDocumentContextWire[] | undefined;
   readonly toolTranscript?: ChatToolTranscript | undefined;
   readonly id: string;
