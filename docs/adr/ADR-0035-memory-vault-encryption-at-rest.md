@@ -46,20 +46,26 @@ ids. Missing or malformed identities use the canonical Activity Log unknown clas
 
 A canonical `MemoryStorageValidationError` from the initial caller-record gate emits
 `memory-vault.write.rejected` through the existing vault log port before the identical error is
-rethrown. The registered event contains only the closed method, `caller-admission` stage,
-`invalid-record` reason, one rejection and `admitted: false`. It does not contain a validation
+rethrown. A graph mutation's invalid edge emits the same event with the `invalid-edge` reason.
+The registered event contains only the closed method, `caller-admission` stage, the closed
+`invalid-record` or `invalid-edge` reason, one rejection and `admitted: false`. It does not contain a validation
 message, field path, record id or content, and does not claim that an outer transaction has already
 settled. Foreign observational errors retain their original classification. The existing port's
 loss ledger and sink-failure fallback remain authoritative when evidence cannot be delivered.
 
 ### Physical record admission
 
-After all redaction callbacks, the serializer captures the fixed-schema write fields into owned,
-plain frozen containers and admits that projection through the canonical Memory record validator.
-Only those captured values supply encryption and SQL bindings. Foreign `toJSON` hooks and retained
-input references cannot supply later write values. The row writer returns that same admitted
-snapshot; vault return values and postcommit success events consume it, including batch and graph
-updates. Existing transaction, pre-image and throwing postcommit-hook semantics remain in force.
+The serializer captures the fixed-schema write fields into owned, plain frozen containers and
+admits that projection through the canonical Memory record validator. Redaction then runs on the
+admitted snapshot, and its fresh containers take the same owned, frozen form. Validation precedes
+redaction because a redaction may lengthen a field: the `[REDACTED]` marker replaces a shorter
+configured literal, so a field the caller kept within its bound can exceed it once redacted. The
+stored form has never been held to the caller's bounds, and a write the caller's record admits is
+not refused for it. Only the redacted snapshot supplies encryption and SQL bindings. Foreign `toJSON`
+hooks and retained input references cannot supply later write values, and a redaction callback
+cannot change the admitted values. The row writer returns that redacted snapshot; vault return
+values and postcommit success events consume it, including batch and graph updates. Existing
+transaction, pre-image and throwing postcommit-hook semantics remain in force.
 
 Canonical invalidity at this boundary emits `memory-vault.write.rejected` with
 `stage: physical-admission`; initial caller admission keeps its existing stage. A technical inability

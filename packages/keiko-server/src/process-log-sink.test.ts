@@ -1,5 +1,6 @@
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { validityChangingAfterGate } from "../../../tests/support/memory-validity-after-gate.js";
 // The adapter every BFF composition site hands to a domain package. Two properties are
 // load-bearing and both are invisible at the call sites that depend on them: the sink must reach
 // whichever logger is installed AT WRITE TIME, and its level predicate must answer from that same
@@ -248,28 +249,23 @@ function processMemoryCaptureFixture(
   readonly record: MemoryRecord;
   readonly arm: () => void;
 } {
-  const validity = { validFrom: 100 };
-  let armed = false;
+  const record = processMemoryCaptureRecord({ validFrom: 100 });
   const vault = createMemoryVault({
     memoryDir,
     vaultKey: Buffer.alloc(32, 7),
     logSink: processServerLogSinkFor("bootstrap-memory"),
-    redactString: (value) => {
-      if (armed)
-        Object.defineProperty(validity, "validUntil", {
-          configurable: true,
-          get: (): never => {
-            throw error;
-          },
-        });
-      return value;
-    },
   });
   return {
     vault,
-    record: processMemoryCaptureRecord(validity),
+    record,
     arm: (): void => {
-      armed = true;
+      Reflect.set(
+        record,
+        "validity",
+        validityChangingAfterGate(record, (): never => {
+          throw error;
+        }),
+      );
     },
   };
 }

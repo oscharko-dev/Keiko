@@ -32,11 +32,7 @@ import type {
   WorkflowRunId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
-import {
-  validateMemoryRecord,
-  validateMemoryScope,
-  validateMemoryStructuredPayload,
-} from "@oscharko-dev/keiko-contracts/runtime/memory";
+import { validateMemoryRecord } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import {
   MEMORY_TAGS_MAX_COUNT,
   MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES,
@@ -44,6 +40,7 @@ import {
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import { MemoryStorageValidationError, MemoryStorageError } from "./errors.js";
 import type { MemoryContentCipher } from "./cipher.js";
+import { redactMemoryRecord } from "./redact-record.js";
 import {
   emitMemoryWriteCaptureFailed,
   emitMemoryWriteRejected,
@@ -363,7 +360,12 @@ function isMemoryFieldGroup(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function captureMemoryScope(value: unknown): unknown {
+/** One own-field snapshot of a group; the record validator decides whether it is valid. */
+type CapturedMemoryGroup = Readonly<Record<string, unknown>>;
+
+function captureMemoryScope(
+  value: MemoryRecord["scope"],
+): MemoryRecord["scope"] | CapturedMemoryGroup {
   if (!isMemoryFieldGroup(value)) return value;
   const kind = value.kind;
   switch (kind) {
@@ -380,7 +382,9 @@ function captureMemoryScope(value: unknown): unknown {
   }
 }
 
-function captureMemoryModelIdentity(value: unknown): unknown {
+function captureMemoryModelIdentity(
+  value: MemoryRecord["provenance"]["modelIdentity"],
+): MemoryRecord["provenance"]["modelIdentity"] | CapturedMemoryGroup {
   if (!isMemoryFieldGroup(value)) return value;
   return ownMemoryFields({
     provider: value.provider,
@@ -389,7 +393,9 @@ function captureMemoryModelIdentity(value: unknown): unknown {
   });
 }
 
-function captureMemoryProvenance(value: unknown): unknown {
+function captureMemoryProvenance(
+  value: MemoryRecord["provenance"],
+): MemoryRecord["provenance"] | CapturedMemoryGroup {
   if (!isMemoryFieldGroup(value)) return value;
   return ownMemoryFields({
     sourceKind: value.sourceKind,
@@ -404,12 +410,16 @@ function captureMemoryProvenance(value: unknown): unknown {
   });
 }
 
-function captureMemoryValidity(value: unknown): unknown {
+function captureMemoryValidity(
+  value: MemoryRecord["validity"],
+): MemoryRecord["validity"] | CapturedMemoryGroup {
   if (!isMemoryFieldGroup(value)) return value;
   return ownMemoryFields({ validFrom: value.validFrom, validUntil: value.validUntil });
 }
 
-function captureMemoryRetention(value: unknown): unknown {
+function captureMemoryRetention(
+  value: MemoryRecord["retentionHint"],
+): MemoryRecord["retentionHint"] | CapturedMemoryGroup {
   if (!isMemoryFieldGroup(value)) return value;
   return ownMemoryFields({
     policyKey: value.policyKey,
@@ -439,16 +449,14 @@ function memoryArrayCaptureLength(values: readonly unknown[], maximum: number): 
   return length;
 }
 
-function captureMemoryStrings(value: unknown, maximum: number): unknown {
-  if (!Array.isArray(value)) return value;
+function captureMemoryStrings(value: readonly unknown[], maximum: number): readonly unknown[] {
   const length = memoryArrayCaptureLength(value, maximum);
   const captured: unknown[] = [];
   for (let index = 0; index < length; index += 1) captured.push(value[index]);
   return freezeMemoryArray(captured);
 }
 
-function captureMemoryEntries(value: unknown): unknown {
-  if (!Array.isArray(value)) return value;
+function captureMemoryEntries(value: readonly unknown[]): readonly unknown[] {
   const length = memoryArrayCaptureLength(value, MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES);
   const captured: unknown[] = [];
   for (let index = 0; index < length; index += 1) {
@@ -460,19 +468,33 @@ function captureMemoryEntries(value: unknown): unknown {
   return freezeMemoryArray(captured);
 }
 
-function captureMemoryPayload(value: unknown): unknown {
+function captureMemoryPayload(
+  value: MemoryRecord["payload"],
+): MemoryRecord["payload"] | CapturedMemoryGroup {
   if (!isMemoryFieldGroup(value)) return value;
-  const kind = value.kind;
+  const group: Readonly<Record<string, unknown>> = value;
+  const kind = group.kind;
   if (kind === "string-list") {
+    const items = group.items;
     return ownMemoryFields({
       kind,
-      items: captureMemoryStrings(value.items, MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES),
+      items: Array.isArray(items)
+        ? captureMemoryStrings(items, MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES)
+        : items,
     });
   }
   if (kind === "key-value") {
-    return ownMemoryFields({ kind, entries: captureMemoryEntries(value.entries) });
+    const entries = group.entries;
+    return ownMemoryFields({
+      kind,
+      entries: Array.isArray(entries) ? captureMemoryEntries(entries) : entries,
+    });
   }
   return ownMemoryFields({ kind });
+}
+
+function captureMemoryTags(tags: MemoryRecord["tags"]): MemoryRecord["tags"] | readonly unknown[] {
+  return Array.isArray(tags) ? captureMemoryStrings(tags, MEMORY_TAGS_MAX_COUNT) : tags;
 }
 
 function captureMemoryRecord(record: MemoryRecord): MemoryRecord {
@@ -486,7 +508,7 @@ function captureMemoryRecord(record: MemoryRecord): MemoryRecord {
     validity: captureMemoryValidity(record.validity),
     status: record.status,
     pinned: record.pinned,
-    tags: captureMemoryStrings(record.tags, MEMORY_TAGS_MAX_COUNT),
+    tags: captureMemoryTags(record.tags),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     payload: captureMemoryPayload(record.payload),
@@ -526,21 +548,60 @@ function admittedMemorySnapshot(
   }
 }
 
+// Redaction builds fresh containers around the owned snapshot. Each one gets the captured
+// groups' null-prototype, frozen form, so serialization and the returned record see owned data.
+function ownedRedactedGroup<T extends object>(group: T): Readonly<T> {
+  Object.setPrototypeOf(group, null);
+  return Object.freeze(group);
+}
+
+function ownedRedactedArray<T>(values: readonly T[]): readonly T[] {
+  Object.defineProperty(values, "toJSON", { value: undefined });
+  return Object.freeze(values);
+}
+
+function ownRedactedPayload(payload: MemoryStructuredPayload): void {
+  if (payload.kind === "string-list") {
+    ownedRedactedArray(payload.items);
+  } else {
+    for (const entry of payload.entries) ownedRedactedGroup(entry);
+    ownedRedactedArray(payload.entries);
+  }
+  ownedRedactedGroup(payload);
+}
+
+function redactedMemorySnapshot(
+  captured: MemoryRecord,
+  redactString: (input: string) => string,
+): MemoryRecord {
+  const redacted = redactMemoryRecord(captured, redactString);
+  ownedRedactedGroup(redacted.provenance);
+  ownedRedactedArray(redacted.tags);
+  if (redacted.payload !== undefined) ownRedactedPayload(redacted.payload);
+  if (redacted.retentionHint !== undefined) ownedRedactedGroup(redacted.retentionHint);
+  return ownedRedactedGroup(redacted);
+}
+
 export interface PreparedMemoryRow {
   readonly record: MemoryRecord;
   readonly row: MemoryRowWrite;
 }
 
-// Called only after all redaction callbacks have settled. No foreign container is reread
-// after capture: the admitted snapshot also supplies the vault's returned record and events.
+// Capture, then validate, then redact. No foreign container is reread after capture. A vault
+// write redacts the admitted snapshot, and that redacted form supplies the SQL row, the vault's
+// returned record and its events. Redaction runs after validation because it may lengthen a
+// field ("[REDACTED]" replaces a shorter literal), and the stored form was never held to the
+// caller's bounds (REVIEW-3918-057). A direct row write without an admission is not redacted.
 export function prepareMemoryRow(
   record: MemoryRecord,
   cipher: MemoryContentCipher,
   admission?: MemoryPhysicalWriteAdmission,
 ): PreparedMemoryRow {
   const captured = admittedMemorySnapshot(record, admission);
-  const row = encryptContentColumns(plainRecordToRow(captured), cipher);
-  return Object.freeze({ record: captured, row: Object.freeze(row) });
+  const stored =
+    admission === undefined ? captured : redactedMemorySnapshot(captured, admission.redactString);
+  const row = encryptContentColumns(plainRecordToRow(stored), cipher);
+  return Object.freeze({ record: stored, row: Object.freeze(row) });
 }
 
 export function memoryRecordToRow(

@@ -211,7 +211,7 @@ describe("rowToMemoryRecord — defensive parsing", () => {
 });
 
 describe("physical Memory write snapshot (#3918)", () => {
-  it("refuses an empty post-redaction body before invoking encryption", () => {
+  it("refuses an empty body before invoking encryption", () => {
     let sealed = 0;
     const countingCipher = {
       ...cipher,
@@ -412,6 +412,7 @@ describe("physical admission excludes later cipher and SQL failures", () => {
       },
       method: "insert" as const,
       context: { correlationId: "technical-error-request" },
+      redactString: (value: string): string => value,
     };
     const failure = new TypeError("fixture cipher failure");
     const throwingCipher = {

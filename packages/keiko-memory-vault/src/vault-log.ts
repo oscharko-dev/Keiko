@@ -39,7 +39,6 @@ import {
   activityLogEvent,
   activityLogEventWillBeRejected,
   normalizeKeikoFrame,
-  classifyErrorKind,
   defineActivityLogOperation,
   type RejectedActivityLogEvent,
   type ActivityLogEventEnvelope,
@@ -82,7 +81,7 @@ export type MemoryWriteMethod = "insert" | "update" | "update-batch" | "graph";
 export interface MemoryVaultLogExtra {
   readonly method?: MemoryWriteMethod | undefined;
   readonly stage?: "caller-admission" | "physical-admission" | undefined;
-  readonly reason?: "invalid-record" | "capture-unavailable" | undefined;
+  readonly reason?: "invalid-record" | "invalid-edge" | "capture-unavailable" | undefined;
   readonly completeness?: ActivityLogCompletenessState | undefined;
   readonly loss?: ActivityLogLossState | undefined;
   readonly frames?: readonly string[] | undefined;
@@ -131,6 +130,9 @@ export interface MemoryPhysicalWriteAdmission {
   readonly sink: MemoryVaultLogSink | undefined;
   readonly method: MemoryWriteMethod;
   readonly context: MemoryWriteContext | undefined;
+  // Applied to the admitted snapshot after validation, so a redaction that lengthens a field
+  // cannot refuse a record whose admitted form met every bound (REVIEW-3918-057).
+  readonly redactString: (input: string) => string;
 }
 
 const NULL_SINK: MemoryVaultLogSink = {
@@ -280,7 +282,7 @@ const MEMORY_WRITE_REJECTED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["invalid-record"],
+      values: ["invalid-record", "invalid-edge"],
     },
     rejectionCount: { type: "integer", dataClass: "count", required: true },
     admitted: { type: "boolean", dataClass: "closed-enum", required: true },
@@ -312,13 +314,14 @@ export function emitMemoryWriteRejected(
   method: MemoryWriteMethod,
   context: MemoryWriteContext | undefined,
   stage: "caller-admission" | "physical-admission" = "caller-admission",
+  reason: "invalid-record" | "invalid-edge" = "invalid-record",
 ): void {
   emitMemoryVaultLogEvent(
     sink,
     activityLogEvent(MEMORY_WRITE_REJECTED_OPERATION, writeRefusalEnvelope(context), {
       method,
       stage,
-      reason: "invalid-record",
+      reason,
       rejectionCount: 1,
       admitted: false,
     }),
@@ -449,11 +452,18 @@ function emitMemoryWriteCaptureFailureEvent(
     admitted: false,
     loss: "none",
   } as const;
-  const event = activityLogEvent(MEMORY_WRITE_CAPTURE_FAILED_OPERATION, envelope, {
-    ...fields,
-    completeness: evidence === undefined ? "partial" : "complete",
-    ...(evidence === undefined ? {} : { frames: evidence.frames, causeChain: evidence.causeChain }),
-  });
+  const event = activityLogEvent(
+    MEMORY_WRITE_CAPTURE_FAILED_OPERATION,
+    envelope,
+    evidence === undefined
+      ? { ...fields, completeness: "partial" }
+      : {
+          ...fields,
+          completeness: "complete",
+          frames: evidence.frames,
+          causeChain: evidence.causeChain,
+        },
+  );
   emitMemoryVaultLogEvent(
     sink,
     activityLogEventWillBeRejected(event)

@@ -37,6 +37,7 @@ import {
 import {
   emitMemoryVaultLogEvent,
   emitMemoryWriteRejected,
+  type MemoryPhysicalWriteAdmission,
   type MemoryWriteMethod,
   startMemoryVaultLogTimer,
   type MemoryVaultLogSink,
@@ -89,7 +90,7 @@ import {
   gateMemoryRecord,
   gateMemoryScope,
 } from "./validate.js";
-import { redactMemoryEdge, redactMemoryRecord, redactTombstone } from "./redact-record.js";
+import { redactMemoryEdge, redactTombstone } from "./redact-record.js";
 import {
   MemoryStorageError,
   MemoryStoragePreconditionError,
@@ -459,10 +460,11 @@ function emitVaultOpened(
   );
 }
 
-// Validate-then-redact for inserts. The validator runs on the CALLER-SUPPLIED record so a
-// validation failure carries the caller's exact failure list. Redaction runs SECOND so the SQL
-// row is the redacted form — a secret-shaped string that slipped past the capture-layer gate
-// in #207 is scrubbed before persistence.
+// Validate-then-redact for writes. The validator runs on the CALLER-SUPPLIED record so a
+// validation failure carries the caller's exact failure list. The physical write then captures,
+// validates and only afterwards redacts its own snapshot, so the SQL row is the redacted form —
+// a secret-shaped string that slipped past the capture-layer gate in #207 is scrubbed before
+// persistence — and a redaction that lengthens a field cannot refuse the write.
 interface RecordWriteOptions extends ResolvedOptions {
   readonly writeMethod: MemoryWriteMethod;
   readonly writeContext: MemoryWriteContext | undefined;
@@ -487,8 +489,32 @@ function admittedCallerRecord(record: MemoryRecord, opts: RecordWriteOptions): M
   }
 }
 
-function preparedForWrite(record: MemoryRecord, opts: RecordWriteOptions): MemoryRecord {
-  return redactMemoryRecord(admittedCallerRecord(record, opts), opts.redactString);
+function physicalWriteAdmission(opts: RecordWriteOptions): MemoryPhysicalWriteAdmission {
+  return {
+    sink: opts.logSink,
+    method: opts.writeMethod,
+    context: opts.writeContext,
+    redactString: opts.redactString,
+  };
+}
+
+// A graph mutation refuses an invalid edge with the same owning evidence as an invalid record
+// (REVIEW-3918-059).
+function admittedGraphEdge(edge: MemoryEdge, opts: RecordWriteOptions): MemoryEdge {
+  try {
+    return preparedEdgeForWrite(edge, opts);
+  } catch (error) {
+    if (error instanceof MemoryStorageValidationError) {
+      emitMemoryWriteRejected(
+        opts.logSink,
+        opts.writeMethod,
+        opts.writeContext,
+        "caller-admission",
+        "invalid-edge",
+      );
+    }
+    throw error;
+  }
 }
 
 function preparedEdgeForWrite(edge: MemoryEdge, opts: ResolvedOptions): MemoryEdge {
@@ -709,12 +735,8 @@ function updateMemoryInPlace(
     throw new MemoryStoragePreconditionError("updatedAt", update.id);
   }
   const merged = mergePatch(existing, update.patch, update.nowMs);
-  const ready = preparedForWrite(merged, opts);
-  const admitted = updateMemoryRow(db, ready, opts.cipher, {
-    sink: opts.logSink,
-    method: opts.writeMethod,
-    context: opts.writeContext,
-  });
+  const ready = admittedCallerRecord(merged, opts);
+  const admitted = updateMemoryRow(db, ready, opts.cipher, physicalWriteAdmission(opts));
   return {
     record: admitted,
     previous: { id: existing.id, status: existing.status, pinned: existing.pinned },
@@ -726,7 +748,7 @@ function runGraphMutation(
   mutation: MemoryGraphMutation,
   opts: RecordWriteOptions,
 ): { readonly memories: readonly UpdatedMemory[]; readonly edges: readonly MemoryEdge[] } {
-  const edges = mutation.edges.map((edge) => preparedEdgeForWrite(edge, opts));
+  const edges = mutation.edges.map((edge) => admittedGraphEdge(edge, opts));
   const memories: UpdatedMemory[] = [];
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -859,12 +881,8 @@ function insertMemoryWithEvents(
   opts: RecordWriteOptions,
 ): MemoryRecord {
   return withSidecarHardening(opts, () => {
-    const ready = preparedForWrite(record, opts);
-    const admitted = insertMemoryRow(db, ready, opts.cipher, {
-      sink: opts.logSink,
-      method: opts.writeMethod,
-      context: opts.writeContext,
-    });
+    const ready = admittedCallerRecord(record, opts);
+    const admitted = insertMemoryRow(db, ready, opts.cipher, physicalWriteAdmission(opts));
     opts.emit({ kind: "memory:inserted", record: admitted });
     return admitted;
   });

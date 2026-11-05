@@ -41,6 +41,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
+import { validityChangingAfterGate } from "../../../tests/support/memory-validity-after-gate.js";
 
 // Deterministic injected key so the vault tests never touch the OS keychain or write a keyfile,
 // and so encrypted-at-rest reads are reproducible across the suite (ADR-0035).
@@ -1400,18 +1401,6 @@ describe("activity-log seam: memory-vault.store.opened retains the key-resolutio
   });
 });
 
-// The recorder retains every transport. A normal-only assertion requires its closed arm.
-function normalFixtureEvent(event: MemoryVaultLogTransport): MemoryVaultLogEvent;
-function normalFixtureEvent(
-  event: MemoryVaultLogTransport | undefined,
-): MemoryVaultLogEvent | undefined;
-function normalFixtureEvent(
-  event: MemoryVaultLogTransport | undefined,
-): MemoryVaultLogEvent | undefined {
-  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
-  return event;
-}
-
 describe("initial record refusal invocation evidence", () => {
   it.each(["insert", "update", "update-batch", "graph"] as const)(
     "records the actual %s admission refusal without a success event",
@@ -1462,6 +1451,66 @@ describe("initial record refusal invocation evidence", () => {
       }
     },
   );
+
+  it("records an invalid graph edge refusal without a success event (REVIEW-3918-059)", () => {
+    const lines: MemoryVaultLogTransport[] = [];
+    const events: MemoryEvent[] = [];
+    const vault = createMemoryVault({
+      memoryDir: freshDir(),
+      vaultKey: TEST_VAULT_KEY,
+      logSink: { write: (event): void => void lines.push(event) },
+      onMemoryEvent: (event): void => void events.push(event),
+    });
+    const from = makeMemory({ id: "edge-refusal-from" as MemoryId });
+    const to = makeMemory({ id: "edge-refusal-to" as MemoryId });
+    try {
+      vault.insertMemory(from);
+      vault.insertMemory(to);
+      events.length = 0;
+      const context = { correlationId: "graph-edge-request" };
+      expect(() =>
+        vault.applyGraphMutation(
+          {
+            updates: [
+              { id: from.id, patch: { body: "must not commit" }, nowMs: from.updatedAt + 1 },
+            ],
+            edges: [
+              {
+                id: "e-invalid" as MemoryEdgeId,
+                schemaVersion: "1",
+                fromMemoryId: from.id,
+                toMemoryId: to.id,
+                kind: "supersedes",
+                createdAt: -1,
+              },
+            ],
+          },
+          context,
+        ),
+      ).toThrow(MemoryStorageValidationError);
+      const refusals = lines.filter((event) => event.op === "memory-vault.write.rejected");
+      expect(refusals).toHaveLength(1);
+      expect(
+        expectActivityLogProof(
+          "memory-vault.write.rejected.initial-admission",
+          formatActivityLogProofLine(refusals[0] ?? {}),
+        ),
+      ).toMatchObject({
+        correlationId: context.correlationId,
+        errorKind: "validation-failed",
+        method: "graph",
+        stage: "caller-admission",
+        reason: "invalid-edge",
+        admitted: false,
+        rejectionCount: 1,
+      });
+      expect(events).toEqual([]);
+      expect(vault.getMemory(from.id)).toEqual(from);
+      expect(vault.listOutgoingEdges(from.id)).toEqual([]);
+    } finally {
+      vault.close();
+    }
+  });
 
   it("keeps nested invocation ids separate on one vault", () => {
     const lines: MemoryVaultLogTransport[] = [];
@@ -1600,84 +1649,77 @@ it.each(["update-batch", "graph"] as const)(
   },
 );
 
-describe("post-redaction physical memory write admission", () => {
-  it("uses the actual record gate to establish valid input and invalid empty-body output", () => {
-    const record = makeMemory({ id: "post-redaction-contract" as MemoryId });
+// A configured literal shorter than the "[REDACTED]" marker makes a redacted field longer.
+const SHORT_LITERAL = "k9q4";
+const lengtheningRedactor = (text: string): string => text.replaceAll(SHORT_LITERAL, "[REDACTED]");
+
+describe("redaction after physical memory write admission", () => {
+  it("uses the actual record gate to establish that redaction crosses a bound the caller met", () => {
+    const tag = `${"t".repeat(58)}${SHORT_LITERAL}`;
+    const record = makeMemory({ id: "lengthened-contract" as MemoryId, tags: [tag] });
     expect(gateMemoryRecord(record)).toBe(record);
-    expect(() => gateMemoryRecord({ ...record, body: "" })).toThrow(MemoryStorageValidationError);
+    expect(() => gateMemoryRecord({ ...record, tags: [lengtheningRedactor(tag)] })).toThrow(
+      MemoryStorageValidationError,
+    );
   });
 
-  it("refuses invalid redaction output before INSERT without a row or success event", () => {
+  it("stores an INSERT whose tag redaction lengthens past its bound (REVIEW-3918-057)", () => {
     const dir = freshDir();
-    const record = makeMemory({ id: "post-redaction-insert" as MemoryId });
+    const tag = `${"t".repeat(58)}${SHORT_LITERAL}`;
+    const record = makeMemory({ id: "lengthened-insert" as MemoryId, tags: [tag] });
     const events: MemoryEvent[] = [];
+    const lines: MemoryVaultLogTransport[] = [];
     const vault = createMemoryVault({
       memoryDir: dir,
       vaultKey: TEST_VAULT_KEY,
-      redactString: (text) => (text === record.body ? "" : text),
+      redactString: lengtheningRedactor,
+      logSink: { write: (event): void => void lines.push(event) },
       onMemoryEvent: (event) => events.push(event),
     });
-    let physical: DatabaseSync | undefined;
+    let inserted: MemoryRecord;
     try {
-      physical = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
-      const rows = physical.prepare("SELECT * FROM memories ORDER BY id");
-      const before = rows.all();
-      let failure: unknown;
-      try {
-        vault.insertMemory(record);
-      } catch (error) {
-        failure = error;
-      }
-      expect(rows.all()).toEqual(before);
-      expect(failure).toBeInstanceOf(MemoryStorageValidationError);
-      expect(events).toEqual([]);
+      inserted = vault.insertMemory(record);
+      expect(inserted.tags).toEqual([lengtheningRedactor(tag)]);
+      expect(events.map((event) => event.kind)).toEqual(["memory:inserted"]);
+      expect(lines.filter((event) => event.op === "memory-vault.write.rejected")).toEqual([]);
     } finally {
-      physical?.close();
       vault.close();
     }
     const reopened = openVault(dir);
     try {
-      expect(reopened.getMemory(record.id)).toBeUndefined();
+      expect(reopened.getMemory(record.id)).toEqual(inserted);
     } finally {
       reopened.close();
     }
   });
 
-  it("refuses invalid redaction output before UPDATE and preserves exact stored row bytes", () => {
+  it("stores an UPDATE whose body redaction lengthens past its bound (REVIEW-3918-057)", () => {
     const dir = freshDir();
-    const record = makeMemory({ id: "post-redaction-update" as MemoryId });
-    const body = "replacement body";
+    const record = makeMemory({ id: "lengthened-update" as MemoryId });
+    const body = `${"b".repeat(4090)}${SHORT_LITERAL}`;
+    expect(gateMemoryRecord({ ...record, body })).toEqual({ ...record, body });
+    expect(() => gateMemoryRecord({ ...record, body: lengtheningRedactor(body) })).toThrow(
+      MemoryStorageValidationError,
+    );
     const events: MemoryEvent[] = [];
     const vault = createMemoryVault({
       memoryDir: dir,
       vaultKey: TEST_VAULT_KEY,
-      redactString: (text) => (text === body ? "" : text),
+      redactString: lengtheningRedactor,
       onMemoryEvent: (event) => events.push(event),
     });
-    let physical: DatabaseSync | undefined;
+    let updated: MemoryRecord;
     try {
       vault.insertMemory(record);
-      events.length = 0;
-      physical = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
-      const rows = physical.prepare("SELECT * FROM memories ORDER BY id");
-      const before = rows.all();
-      let failure: unknown;
-      try {
-        vault.updateMemory(record.id, { body }, record.updatedAt + 1);
-      } catch (error) {
-        failure = error;
-      }
-      expect(rows.all()).toEqual(before);
-      expect(failure).toBeInstanceOf(MemoryStorageValidationError);
-      expect(events).toEqual([]);
-      expect(vault.getMemory(record.id)).toEqual(record);
+      updated = vault.updateMemory(record.id, { body }, record.updatedAt + 1);
+      expect(updated.body).toBe(lengtheningRedactor(body));
+      expect(events.map((event) => event.kind)).toEqual(["memory:inserted", "memory:updated"]);
     } finally {
-      physical?.close();
       vault.close();
     }
     const reopened = openVault(dir);
     try {
-      expect(reopened.getMemory(record.id)).toEqual(record);
+      expect(reopened.getMemory(record.id)).toEqual(updated);
     } finally {
       reopened.close();
     }
@@ -1728,18 +1770,13 @@ describe("post-validation mutation at the physical memory write boundary", () =>
     "refuses mutated validity before %s reaches SQLite",
     (operation) => {
       const dir = freshDir();
-      const original = makeMemory({ id: "post-validation-mutation" as MemoryId });
-      const validity = { ...original.validity };
-      const record = { ...original, validity };
+      const record = makeMemory({ id: "post-validation-mutation" as MemoryId });
       const events: MemoryEvent[] = [];
-      let invalidating = false;
+      const lines: MemoryVaultLogTransport[] = [];
       const vault = createMemoryVault({
         memoryDir: dir,
         vaultKey: TEST_VAULT_KEY,
-        redactString: (text) => {
-          if (invalidating) Reflect.set(validity, "validUntil", -1);
-          return text;
-        },
+        logSink: { write: (event): void => void lines.push(event) },
         onMemoryEvent: (event) => events.push(event),
       });
       let physical: DatabaseSync | undefined;
@@ -1751,10 +1788,10 @@ describe("post-validation mutation at the physical memory write boundary", () =>
         physical = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
         const rows = physical.prepare("SELECT * FROM memories ORDER BY id");
         const before = rows.all();
-        invalidating = true;
+        const validity = validityChangingAfterGate(record, () => -1);
         let failure: unknown;
         try {
-          if (operation === "insert") vault.insertMemory(record);
+          if (operation === "insert") vault.insertMemory({ ...record, validity });
           else
             vault.updateMemory(
               record.id,
@@ -1767,6 +1804,9 @@ describe("post-validation mutation at the physical memory write boundary", () =>
         expect(rows.all()).toEqual(before);
         expect(failure).toBeInstanceOf(MemoryStorageValidationError);
         expect(events).toEqual([]);
+        expect(lines.filter((event) => event.op === "memory-vault.write.rejected")).toMatchObject([
+          { extra: { stage: "physical-admission" } },
+        ]);
       } finally {
         physical?.close();
         vault.close();
@@ -1841,7 +1881,6 @@ describe("owned physical snapshot is the vault result and event", () => {
       const vault = createMemoryVault({
         memoryDir: dir,
         vaultKey: TEST_VAULT_KEY,
-        redactString: (value) => (value === "reject-after-redaction" ? "" : value),
         onMemoryEvent: (event) => events.push(event),
       });
       try {
@@ -1868,7 +1907,13 @@ describe("owned physical snapshot is the vault result and event", () => {
         events.length = 0;
         const refused = updates.map((update, index) => ({
           ...update,
-          patch: { body: index === 1 ? "reject-after-redaction" : "must roll back" },
+          patch:
+            index === 1
+              ? {
+                  body: "refused at physical admission",
+                  validity: validityChangingAfterGate(makeMemory({ id: update.id }), () => -1),
+                }
+              : { body: "must roll back" },
           nowMs: update.nowMs + 1,
         }));
         expect(() =>
@@ -1907,33 +1952,18 @@ describe("owned physical snapshot is the vault result and event", () => {
   });
 });
 
-function captureThrowingValidity(validity: object, error: unknown): void {
-  Object.defineProperty(validity, "validUntil", {
-    configurable: true,
-    get: (): never => {
-      throw error;
-    },
-  });
-}
-
 describe("physical admission error and technical error separation", () => {
   it.each(["insert", "update"] as const)(
     "preserves the original %s capture error despite a failed log transport",
     (method) => {
       const dir = freshDir();
       const failure = new TypeError("private-capture-canary");
-      const validity = { validFrom: 1_700_000_000_000 };
-      const record = makeMemory({ id: "capture-error" as MemoryId, validity });
-      let armed = false;
+      const record = makeMemory({ id: "capture-error" as MemoryId });
       const events: MemoryEvent[] = [];
       const lines: MemoryVaultLogTransport[] = [];
       const vault = createMemoryVault({
         memoryDir: dir,
         vaultKey: TEST_VAULT_KEY,
-        redactString: (value) => {
-          if (armed) captureThrowingValidity(validity, failure);
-          return value;
-        },
         logSink: {
           write: (event) => {
             if (event.op === "memory-vault.write.capture-failed")
@@ -1947,11 +1977,13 @@ describe("physical admission error and technical error separation", () => {
         if (method === "update") vault.insertMemory(record);
         const before = physicalMemoryRows(dir);
         events.length = 0;
-        armed = true;
+        const validity = validityChangingAfterGate(record, (): never => {
+          throw failure;
+        });
         expect(
           thrownPhysicalWrite(() =>
             method === "insert"
-              ? vault.insertMemory(record)
+              ? vault.insertMemory({ ...record, validity })
               : vault.updateMemory(record.id, { validity }, record.updatedAt + 1),
           ),
         ).toBe(failure);

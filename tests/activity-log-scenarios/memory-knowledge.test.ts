@@ -22,6 +22,10 @@ import {
   resolveSupportSelection,
 } from "../../packages/keiko-cli/src/support-query-cli.js";
 import { resetServerLogger } from "../support/activity-log-test-support.js";
+import {
+  invalidAfterGateRecord,
+  validityChangingAfterGate,
+} from "../support/memory-validity-after-gate.js";
 // Activity Log scenario matrix (#3532): the memory/knowledge surface (keiko-local-knowledge's
 // indexing orchestrator, embedding batcher and discovery layer, plus the keiko-server
 // connected-context bridge). Each scenario drives a real production entry point with fault
@@ -784,7 +788,6 @@ describe("Activity Log scenario: memory-knowledge", () => {
       memoryDir: join(realpathSync(stateDir), "physical-invalid-vault"),
       vaultKey: Buffer.alloc(32, 7),
       logSink: processServerLogSinkFor("bootstrap-memory"),
-      redactString: (value) => (value === "physical-empty" ? "" : value),
     });
     const healthy = { ...refusedMemoryRecord(), tags: [] };
     try {
@@ -799,12 +802,12 @@ describe("Activity Log scenario: memory-knowledge", () => {
           index === 1
             ? vault.updateMemory(
                 healthy.id,
-                { body: "physical-empty" },
+                { validity: invalidAfterGateRecord(healthy).validity },
                 healthy.updatedAt + 1,
                 context,
               )
             : vault.insertMemory(
-                { ...healthy, id: `physical-${String(index)}` as MemoryId, body: "physical-empty" },
+                invalidAfterGateRecord({ ...healthy, id: `physical-${String(index)}` as MemoryId }),
                 context,
               ),
         ).toThrow(MemoryStorageValidationError);
@@ -851,11 +854,10 @@ describe("Activity Log scenario: memory-knowledge", () => {
       memoryDir: join(realpathSync(stateDir), "physical-unknown-vault"),
       vaultKey: Buffer.alloc(32, 7),
       logSink: processServerLogSinkFor("bootstrap-memory"),
-      redactString: (value) => (value === "physical-empty" ? "" : value),
     });
     try {
       expect(() =>
-        vault.insertMemory({ ...refusedMemoryRecord(), tags: [], body: "physical-empty" }),
+        vault.insertMemory(invalidAfterGateRecord({ ...refusedMemoryRecord(), tags: [] })),
       ).toThrow(MemoryStorageValidationError);
       await proveUnknownMemoryWriteCorrelation(stateDir);
       const raw = readPersistedActivityLog(stateDir);
@@ -1126,29 +1128,23 @@ function technicalMemoryCaptureFixture(
   readonly record: MemoryRecord;
   readonly arm: () => void;
 } {
-  const validity = { validFrom: 100 };
-  const record: MemoryRecord = { ...refusedMemoryRecord(), tags: [], validity };
-  let armed = false;
+  const record: MemoryRecord = { ...refusedMemoryRecord(), tags: [], validity: { validFrom: 100 } };
   const vault = createMemoryVault({
     memoryDir: join(realpathSync(stateDir), `physical-${suffix}`),
     vaultKey: Buffer.alloc(32, 7),
     ...(logSink === undefined ? {} : { logSink }),
-    redactString: (value) => {
-      if (armed)
-        Object.defineProperty(validity, "validUntil", {
-          configurable: true,
-          get: (): never => {
-            throw new TypeError("private-physical-capture-canary");
-          },
-        });
-      return value;
-    },
   });
   return {
     vault,
     record,
     arm: (): void => {
-      armed = true;
+      Reflect.set(
+        record,
+        "validity",
+        validityChangingAfterGate(record, (): never => {
+          throw new TypeError("private-physical-capture-canary");
+        }),
+      );
     },
   };
 }
