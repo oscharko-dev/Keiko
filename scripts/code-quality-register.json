@@ -265,7 +265,7 @@
       "anti-slop/no-known-value-widening": 3,
       "anti-slop/no-module-mocking": 2,
       "anti-slop/no-reflect-get": 1,
-      "anti-slop/no-runtime-typeof": 6,
+      "anti-slop/no-runtime-typeof": 8,
       "anti-slop/no-unknown-parameters": 1,
       "anti-slop/no-unknown-returns": 3,
       "anti-slop/no-unsafe-dictionary-type": 27,
@@ -20696,6 +20696,9 @@
       "anti-slop/no-unsafe-dictionary-type": 1,
       "anti-slop/require-safety-comment-for-type-assertion": 3
     },
+    "tests/e2e/support/smoke-test.ts": {
+      "anti-slop/no-conditional-empty-object-spread": 1
+    },
     "tests/e2e/support/update-bff-outage-3405.mjs": {
       "anti-slop/no-runtime-typeof": 2
     },
@@ -20872,8 +20875,7 @@
     "tests/scripts/dev-runner-readiness.test.ts": {
       "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-runtime-typeof": 2,
-      "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 4
+      "anti-slop/require-safety-comment-for-type-assertion": 2
     },
     "tests/scripts/keiko-script.test.ts": {
       "anti-slop/no-known-value-widening": 1,

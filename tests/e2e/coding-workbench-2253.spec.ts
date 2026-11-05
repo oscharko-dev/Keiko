@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { validateCodingWorkbenchCodexSubscriptionProfile } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth";
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, writeFileSync, type Stats } from "node:fs";

@@ -439,6 +439,7 @@ function repositoryFixture(): string {
   const repository = mkdtempSync(join(tmpdir(), "keiko-live-resume-"));
   temporaryRepositories.push(repository);
   git(repository, "init", "-q");
+  git(repository, "config", "--local", "commit.gpgsign", "false");
   git(repository, "config", "user.email", "fixture@example.invalid");
   git(repository, "config", "user.name", "Fixture");
   writeFileSync(join(repository, "index.js"), "module.exports = 1;\n");

@@ -480,6 +480,9 @@ describe("D12 performance comparison runner", () => {
   it("discovers an untracked toolchain path through the default Git preflight", async () => {
     const paths = fixture();
     execFileSync("git", ["init", "--quiet"], { cwd: paths.candidateRoot });
+    execFileSync("git", ["config", "--local", "commit.gpgsign", "false"], {
+      cwd: paths.candidateRoot,
+    });
     execFileSync("git", ["add", "package-lock.json"], { cwd: paths.candidateRoot });
     execFileSync(
       "git",
