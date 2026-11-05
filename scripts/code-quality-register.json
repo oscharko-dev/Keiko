@@ -8462,7 +8462,6 @@
     "packages/keiko-server/src/coding-runtime/productionCodingRuntimeResolver.test.ts": {
       "anti-slop/no-chained-type-assertions": 2,
       "anti-slop/no-conditional-empty-object-spread": 7,
-      "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-module-mocking": 2,
       "anti-slop/no-runtime-typeof": 3,
       "anti-slop/no-unknown-parameters": 2,
