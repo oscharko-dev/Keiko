@@ -145,6 +145,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.processing.continuing": "Preparing next step",
   "chat.processing.response": "Response",
   "chat.processing.done": "Done",
+  "chat.processing.doneWithIssues": "Completed with issues",
   "chat.processing.active": "In progress",
   "chat.processing.upcoming": "Up next",
   "chat.processing.approval": "Waiting for approval",

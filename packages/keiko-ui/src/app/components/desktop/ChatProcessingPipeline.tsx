@@ -25,10 +25,11 @@ function pipelineSummary(steps: readonly ChatProcessingStep[], t: OptionalWidget
     return t("chat.processing.current", { steps: current.map((step) => t(step.label)).join(", ") });
   if (steps.some((step) => step.state === "attention")) return t("chat.processing.checkOutcome");
   const terminal = ["failed", "blocked", "cancelled"] as const;
-  const state =
-    terminal.find((candidate) => steps.some((step) => step.state === candidate)) ??
-    steps.at(-1)?.state ??
-    "attention";
+  const issueState = terminal.find((candidate) => steps.some((step) => step.state === candidate));
+  const responseState = steps.find((step) => step.id === "response")?.state;
+  if (responseState === "done" && issueState !== undefined)
+    return t("chat.processing.summary", { state: t("chat.processing.doneWithIssues") });
+  const state = responseState ?? issueState ?? steps.at(-1)?.state ?? "attention";
   return t("chat.processing.summary", { state: t(CHAT_PROCESSING_STATE_LABELS[state]) });
 }
 

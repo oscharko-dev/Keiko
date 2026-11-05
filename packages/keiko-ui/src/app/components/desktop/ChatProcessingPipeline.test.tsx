@@ -146,7 +146,7 @@ describe("observed Chat processing steps", () => {
     );
   });
 
-  it("announces a failed tool even when the final response completed", () => {
+  it("keeps a failed tool visible when the final response completed", () => {
     const original = completed();
     if (original.result === undefined) throw new Error("Missing fixture result");
     const exchange: ChatToolExchange = {
@@ -164,10 +164,12 @@ describe("observed Chat processing steps", () => {
         steps={chatProcessingSteps(transcript(exchange), "completed", false)}
       />,
     );
-    expect(screen.getByRole("status")).toHaveTextContent("Failed");
+    expect(screen.getByRole("status")).toHaveTextContent("Completed with issues");
+    expect(screen.getAllByRole("listitem")[1]).toHaveTextContent("Failed");
+    expect(screen.getAllByRole("listitem")[1]).toHaveAttribute("data-state", "failed");
   });
 
-  it("announces a rejected action even when the final response completed", () => {
+  it("keeps a rejected action visible when the final response completed", () => {
     const exchange = {
       ...call("jira_create"),
       approval: { ...approval, state: "rejected" as const },
@@ -177,8 +179,100 @@ describe("observed Chat processing steps", () => {
         steps={chatProcessingSteps(transcript(exchange), "completed", false)}
       />,
     );
-    expect(screen.getByRole("status")).toHaveTextContent("Not performed");
+    expect(screen.getByRole("status")).toHaveTextContent("Completed with issues");
+    expect(screen.getAllByRole("listitem")[1]).toHaveTextContent("Not performed");
+    expect(screen.getAllByRole("listitem")[1]).toHaveAttribute("data-state", "blocked");
   });
+
+  it.each(["en", "de"] as const)(
+    "summarizes canonical completion with an earlier refusal honestly in %s",
+    async (locale) => {
+      await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+      localStorage.setItem(I18N_STORAGE_KEY, locale);
+      try {
+        const exchanges = transcript(
+          { ...completed(call("jira_create", "refused")), mutationOutcome: "not-dispatched" },
+          completed(call("jira_projects", "metadata")),
+          { ...completed(call("jira_create", "confirmed")), mutationOutcome: "succeeded" },
+        );
+        const steps = chatProcessingSteps(exchanges, "completed", false);
+        expect(steps.map((step) => step.state)).toEqual([
+          "done",
+          "blocked",
+          "done",
+          "done",
+          "done",
+        ]);
+        render(
+          <I18nProvider>
+            <ChatProcessingPipeline steps={steps} />
+          </I18nProvider>,
+        );
+        expect(screen.getByRole("status")).toHaveTextContent(
+          locale === "de" ? "Abgeschlossen mit Hinweisen" : "Completed with issues",
+        );
+        const observed = screen.getAllByRole("listitem");
+        expect(observed[1]).toHaveTextContent(
+          locale === "de" ? "Nicht ausgeführt" : "Not performed",
+        );
+        expect(observed[3]).toHaveTextContent(locale === "de" ? "Erledigt" : "Done");
+        expect(screen.queryByRole("listitem", { current: "step" })).toBeNull();
+      } finally {
+        localStorage.removeItem(I18N_STORAGE_KEY);
+      }
+    },
+  );
+
+  it.each(["failed", "cancelled"] as const)(
+    "retains canonical %s after a refusal and a separate confirmed write",
+    (turnState) => {
+      const steps = chatProcessingSteps(
+        transcript(
+          { ...completed(call("jira_create", "refused")), mutationOutcome: "not-dispatched" },
+          { ...completed(call("jira_create", "confirmed")), mutationOutcome: "succeeded" },
+        ),
+        turnState,
+        false,
+      );
+      render(<ChatProcessingPipeline steps={steps} />);
+      expect(screen.getByRole("status")).toHaveTextContent(
+        turnState === "failed" ? "Processing status: Failed" : "Processing status: Cancelled",
+      );
+      expect(screen.getAllByRole("listitem")[1]).toHaveTextContent("Not performed");
+      expect(screen.getAllByRole("listitem")[1]).toHaveAttribute("data-state", "blocked");
+    },
+  );
+
+  it("does not infer canonical completion from a successful separate tool", () => {
+    const steps = chatProcessingSteps(
+      transcript(
+        { ...completed(call("jira_create", "refused")), mutationOutcome: "not-dispatched" },
+        { ...completed(call("jira_create", "confirmed")), mutationOutcome: "succeeded" },
+      ),
+      undefined,
+      false,
+    );
+    render(<ChatProcessingPipeline steps={steps} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Processing status: Not performed");
+    expect(steps.some((step) => step.id === "response")).toBe(false);
+  });
+
+  it.each(["unknown", "succeeded-unconfirmed"] as const)(
+    "retains %s remote outcome warnings despite a completed response and another confirmed write",
+    (mutationOutcome) => {
+      const steps = chatProcessingSteps(
+        transcript(
+          { ...completed(call("jira_create", "uncertain")), mutationOutcome },
+          { ...completed(call("jira_create", "confirmed")), mutationOutcome: "succeeded" },
+        ),
+        "completed",
+        false,
+      );
+      render(<ChatProcessingPipeline steps={steps} />);
+      expect(screen.getByRole("status")).toHaveTextContent("Check the unconfirmed result");
+      expect(screen.getAllByRole("listitem")[1]).toHaveTextContent("Outcome unconfirmed");
+    },
+  );
 
   it.each([
     ["succeeded", "done"],
