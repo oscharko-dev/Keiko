@@ -31,6 +31,7 @@ import {
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { currentGatewayConfig, type Redactor, type UiHandlerDeps } from "./deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { strictRedactor } from "./content-redactor.js";
 
 const ADVISORY_OPERATION = "memory.consolidation.conflict-advisory";
 const ADVISORY_SOURCE = "memory-conflict-advisory";
@@ -430,7 +431,12 @@ async function processAdvisoryReviewItem(
   attempted: number,
   counts: AdvisoryPhaseCounts,
 ): Promise<{ readonly item: ReviewItem; readonly attemptedCall: boolean }> {
-  const candidate = prepareAdvisoryCandidate(item, ctx.memoriesById, ctx.deps.redactor, ctx.policy);
+  const candidate = prepareAdvisoryCandidate(
+    item,
+    ctx.memoriesById,
+    strictRedactor(ctx.deps),
+    ctx.policy,
+  );
   if (candidate === undefined) return { item, attemptedCall: false };
   if (attempted >= MAX_ADVISORY_CALLS_PER_JOB) {
     counts.truncatedByCap += 1;
@@ -447,7 +453,7 @@ async function processAdvisoryReviewItem(
     advisoryResponseFormat(candidate.labels),
     ctx.jobId,
   );
-  const outcome = advisoryOutcomeFromCall(call, candidate, ctx.deps.redactor, ctx.policy);
+  const outcome = advisoryOutcomeFromCall(call, candidate, strictRedactor(ctx.deps), ctx.policy);
   return {
     item: applyAdvisoryOutcome(item, outcome, ctx.deps, ctx.jobId, counts),
     attemptedCall: true,

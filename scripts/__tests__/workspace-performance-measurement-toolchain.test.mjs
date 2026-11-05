@@ -23,6 +23,19 @@ function digestFor(inputs) {
 }
 
 describe("workspace performance measurement toolchain", () => {
+  it.each([
+    "scripts/lib/d12-baseline.mjs",
+    "scripts/lib/workspace-storage-fixture.mjs",
+    "scripts/lib/workspace-storage-fixture.d.mts",
+    "tests/e2e/support/workspace-storage.ts",
+    "packages/keiko-ui/src/app/components/desktop/hooks/workspace-storage.ts",
+  ])("binds the complete shared workspace fixture input %s", (path) => {
+    const original = measurementInputs("playwright test");
+    const changed = new Map(original);
+    changed.set(path, "changed workspace storage fixture\n");
+    expect(digestFor(original)).not.toBe(digestFor(changed));
+  });
+
   it("binds the canonical workspace-performance npm command", () => {
     const original = measurementInputs(
       "playwright test --config tests/e2e/config/playwright.workspace-performance.config.ts --project=chromium",

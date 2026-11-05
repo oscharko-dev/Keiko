@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 // Voice Dialogue browser smoke. Drives the REAL app composer in headless Chromium through the documented
 // Studio path (Left Rail → Chat History → New). It proves the colleague-like dialogue surface renders
 // and starts the Realtime WebRTC transport from the single Voice Dialogue switch:
@@ -425,9 +426,9 @@ async function createGroundingParityChat(
 
 async function seedGroundingParityChat(page: Page, chat: GroundingParityChat): Promise<void> {
   await page.addInitScript(
-    ({ chatId, title }) => {
+    ({ argument: { chatId, title }, storageKeys }) => {
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "e2e-grounding-parity-chat-window",
@@ -442,9 +443,9 @@ async function seedGroundingParityChat(page: Page, chat: GroundingParityChat): P
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { chatId: chat.id, title: chat.title },
+    await workspaceStorageArgs(page, { chatId: chat.id, title: chat.title }),
   );
 }
 

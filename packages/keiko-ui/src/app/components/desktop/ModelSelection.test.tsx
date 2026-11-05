@@ -294,14 +294,59 @@ function makeChat(): Chat {
 }
 
 describe("ChatWindow no-eligible-models error (AC #1)", () => {
+  it("shows a pending catalog refresh as loading without a missing-model alert or send", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        models: [],
+        selectedModel: undefined,
+        modelCatalogStatus: "loading",
+        noEligibleModels: false,
+        draft: "Waiting draft",
+      }),
+    );
+    expect(screen.getByRole("combobox", { name: "Models" })).toHaveTextContent("Loading models");
+    expect(screen.queryByText(/No conversation-eligible model is configured/i)).toBeNull();
+    expect(screen.getByRole("button", { name: "Send message" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
   it("renders a role=alert message containing 'Settings' when noEligibleModels is true", () => {
     // activeChat required so the composer footer (containing the alert) renders (#146).
     renderWindow(
       makeSession({ noEligibleModels: true, selectedModel: undefined, activeChat: makeChat() }),
     );
-    const alert = screen.getByRole("alert");
+    const alert = screen.getByText(/No conversation-eligible model is configured/i);
+    expect(alert).toHaveAttribute("role", "alert");
     expect(alert).toBeInTheDocument();
     expect(alert.textContent).toMatch(/Settings/i);
+  });
+
+  it("shows a failed catalog as unavailable and permits opening the picker to retry", async () => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        models: [],
+        selectedModel: undefined,
+        modelCatalogStatus: "failed",
+        noEligibleModels: false,
+        draft: "Waiting draft",
+        error: "Synthetic catalog transport failure",
+      }),
+    );
+    const picker = screen.getByRole("combobox", { name: "Models" });
+    expect(picker).toHaveTextContent("Model list unavailable");
+    expect(picker).toBeEnabled();
+    expect(screen.queryByText(/No conversation-eligible model is configured/i)).toBeNull();
+    expect(screen.getByRole("button", { name: "Send message" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await user.click(picker);
+    expect(await screen.findByRole("option", { name: "Model list unavailable" })).toBeDisabled();
   });
 
   it("does not render the no-model alert when models are available", () => {

@@ -5675,7 +5675,7 @@ describe("ChatWindow private draft and skill recovery", () => {
   });
 
   it.each(["", "Saved private draft"])(
-    "shows saved-draft status only for retained text: %s",
+    "keeps successful draft autosave quiet, including retained text: %s",
     (draft) => {
       renderWindow(
         makeSession({
@@ -5683,6 +5683,7 @@ describe("ChatWindow private draft and skill recovery", () => {
           draft,
           draftPersistence: {
             phase: "saved",
+            hasUnsavedChanges: false,
             pending: false,
             retry: vi.fn(),
             prepareClose: vi.fn(),
@@ -5692,7 +5693,7 @@ describe("ChatWindow private draft and skill recovery", () => {
           },
         }),
       );
-      expect(screen.queryByText("Draft saved privately.") !== null).toBe(draft.length > 0);
+      expect(screen.queryByText("Draft saved privately.")).toBeNull();
     },
   );
 
@@ -5707,6 +5708,7 @@ describe("ChatWindow private draft and skill recovery", () => {
           prepareClose: vi.fn(),
           isCloseReady: vi.fn(),
           phase: "conflict",
+          hasUnsavedChanges: true,
           pending: false,
           retry: vi.fn(),
           keepLocal,

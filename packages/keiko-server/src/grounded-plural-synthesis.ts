@@ -111,6 +111,7 @@ export function pluralSynthesisCountFields(
 }
 
 interface PluralSynthesisCall {
+  readonly retryFollows?: ((error: unknown) => boolean) | undefined;
   readonly deps?: UiHandlerDeps | undefined;
   readonly evidenceCount?: number | undefined;
   readonly model: ModelPort;
@@ -129,7 +130,10 @@ export async function callPluralGroundedSynthesis(
 ): Promise<NormalizedResponse> {
   if (input.budget.remaining() <= 0)
     throw new CallerAttemptAdmissionError("Grounded synthesis attempt grant is exhausted");
-  const tracker = createGroundedSynthesisAttemptAdmission(input.budget, input.grants);
+  const tracker = createGroundedSynthesisAttemptAdmission(input.budget, {
+    ...input.grants,
+    retryFollows: input.retryFollows,
+  });
   const promptTokens = countGatewayPromptTokens(input.request, input.accounting);
   const pending = input.budget.pendingUsage();
   if (
@@ -185,15 +189,21 @@ export async function callGroundedSynthesisModel(
       content: GROUNDED_TOOL_TURN_GUIDANCE + requirementCoverageNote(coverage),
     },
   ];
-  const result = await toolTurn.call(model, { ...request, messages }, signal, (response) => {
-    if (response.toolCalls.length > 0) tracker.confirmToolRound();
-    logGroundedToolRound(
-      request.logContext?.correlationId,
-      response.toolCalls.length,
-      tracker.remainingSynthesisCalls(),
-      coverage,
-    );
-  });
+  const result = await toolTurn.call(
+    model,
+    { ...request, messages },
+    signal,
+    (response) => {
+      if (response.toolCalls.length > 0) tracker.confirmToolRound();
+      logGroundedToolRound(
+        request.logContext?.correlationId,
+        response.toolCalls.length,
+        tracker.remainingSynthesisCalls(),
+        coverage,
+      );
+    },
+    tracker.retryFollows,
+  );
   return requireToolResult && !toolTurn.hasUsableObservation()
     ? { ...result, content: connectedSearchNoEvidenceAnswer() }
     : result;

@@ -1,6 +1,59 @@
 import { EN_AUTONOMY_MODE_LABELS } from "@/lib/autonomy-mode-labels";
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
   ...EN_AUTONOMY_MODE_LABELS,
+  // File preview is loaded with the Files and Editor window bodies.
+  "filePreview.showSource": "Show source preview",
+  "filePreview.linesAdded": "{count} lines added.",
+  "filePreview.revealedLine": "Source line {line}.",
+  "filePreview.revealedPartialRange":
+    "Source lines {start}–{end} shown. More referenced lines are outside this view.",
+  "filePreview.revealedRange": "Source lines {start}–{end}.",
+  "filePreview.revealOutsideContent":
+    "The referenced line {line} is outside this file ({count} lines).",
+  "filePreview.deniedMessage":
+    "This file is excluded from the read surface for safety (matches a deny pattern such as .env, *.pem, node_modules, .git, …).",
+  "filePreview.searchableDocument":
+    "{format} files up to 2 MB are searchable in Repository Search via bounded text extraction when explicitly connected to a chat. Encrypted, scanned, or larger documents are not extracted — use Local Knowledge for those. No inline preview is available for this format here.",
+  "filePreview.error.loadFailed": "The file could not be loaded. Try again.",
+  "filePreview.error.unreadable": "Unable to read this file.",
+  "filePreview.binary.tooLarge": "Preview disabled because this file exceeds {maxBytes}.",
+  "filePreview.binary.unsupported":
+    "No safe text or image preview is available for this file type.",
+  "filePreview.metadata.type": "Type",
+  "filePreview.metadata.size": "Size",
+  "filePreview.metadata.modified": "Modified",
+  "filePreview.metadata.extension": "Extension",
+  "filePreview.metadata.extensionNone": "none",
+  "filePreview.backToFiles": "Back to files",
+  "filePreview.copyFileName": "Copy file name",
+  "filePreview.copyFilePath": "Copy file path",
+  "filePreview.copyStatus.nameCopied": "File name copied",
+  "filePreview.copyStatus.pathCopied": "File path copied",
+  "filePreview.copyStatus.clipboardFailed": "Clipboard access failed.",
+  "filePreview.refresh": "Refresh preview",
+  "filePreview.refreshing": "Refreshing preview",
+  "filePreview.refreshStatus.refreshing": "Refreshing...",
+  "filePreview.refreshStatus.reloaded": "Reloaded",
+  "filePreview.refreshStatus.failed": "Refresh failed",
+  "filePreview.openInEditor": "Open in editor",
+  "filePreview.closePreview": "Close preview",
+  "filePreview.loadingState": "Loading preview…",
+  "filePreview.retry": "Retry",
+  "filePreview.truncatedBanner":
+    "Preview truncated at {maxBytes}. Larger files can't be shown in full here.",
+  "filePreview.syntaxHighlightDisabled": "Syntax highlighting disabled for large previews.",
+  "filePreview.previewRegionLabel": "File preview: {name}",
+  "filePreview.showMoreLines": "Show {count} more lines",
+  "filePreview.showPreviousLines": "Show {count} previous lines",
+  "filePreview.readOnlyBanner": "Read-only source preview. This file cannot be edited here.",
+  "filePreview.hiddenFile": "Hidden file",
+  "filePreview.previewUnavailable": "Preview unavailable",
+  "filePreview.headerLoading": "Loading preview",
+  "filePreview.lang.denied": "denied",
+  "filePreview.lang.error": "error",
+  "filePreview.lang.loading": "loading",
+  "filePreview.lang.text": "text",
+  "filePreview.lang.binary": "binary",
   "atlassianConnectors.live.rename": "Rename Pod",
   "atlassianConnectors.live.renameTitle": "Rename Jira Pod",
   "atlassianConnectors.live.rotateTitle": "Replace Jira token",
@@ -140,6 +193,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "browserApproval.close": "Close",
   "browserApproval.notice":
     "Connect this browser to save private drafts and use protected features.",
+  "browserApproval.launchNotice": "Keiko opens a connected window in this browser.",
+  "browserApproval.launchFailed":
+    "Keiko could not connect this browser. Try again or reopen Keiko from its launcher.",
   "browserApproval.open": "Connect browser",
   "browserApproval.description":
     "Approve this browser from a browser already connected to this Keiko installation.",
@@ -219,12 +275,15 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.draft.saved": "Draft saved privately.",
   "chat.draft.unsaved": "Draft changes are not saved yet.",
   "chat.draft.saving": "Saving draft…",
-  "chat.draft.unavailable":
-    "Draft not saved. Connect this browser using the browser notice above, or open Keiko from its launcher. Keep this window open.",
+  "chat.draft.unavailable": "This draft has not been saved. Keep this window open.",
+  "chat.draft.loadFailed": "The saved draft could not be loaded. Retry loading it.",
+  "chat.draft.loadFailedUnsaved":
+    "The saved draft could not be loaded. Your changes have not been saved. Keep this window open and retry.",
   "chat.draft.failed": "This draft could not be saved. Keep this window open and retry.",
   "chat.draft.conflict":
     "Another window changed the saved draft. Keep this draft to replace it, or use the saved draft to replace this text.",
   "chat.draft.retry": "Retry draft save",
+  "chat.draft.retryLoad": "Retry loading draft",
   "chat.draft.keepLocal": "Keep this draft",
   "chat.draft.useSaved": "Use saved draft",
   "chat.skills.sendBlocked":
@@ -242,7 +301,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.author.generationError":
     "No complete skill draft was returned. Check the selected model and gateway, shorten the source if needed, and try again.",
   "chat.skills.author.review":
-    "Review the full draft, especially proposals, contradictions and open decisions. Saving or downloading does not activate the skill.",
+    "Review the full draft, especially proposals, contradictions and open decisions. Regular skills apply only after selection for the chat. Jira templates apply as soon as they are saved; downloading activates nothing.",
   "chat.skills.author.draft": "Skill draft (Markdown)",
   "chat.skills.author.save": "Save reviewed skill",
   "chat.skills.jira.title": "Jira issue templates",
@@ -286,7 +345,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Open Keiko from its launcher to manage private skills. Chat remains available without a skill.",
   "chat.skills.close": "Close skills",
   "chat.skills.description":
-    "Upload a Markdown file, then select it for this chat. Uploading alone does not activate a skill.",
+    "After uploading a regular skill, select it for this chat. Saved Jira templates apply to the projects, issue types and actions specified in them.",
   "chat.skills.protected":
     "Used for each new message. Skill instructions count toward the context and remain intact when the conversation is compacted.",
   "chat.skills.remove": "Remove skill from this chat",
@@ -1995,6 +2054,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.model.search": "Search models...",
   "chat.model.searchEmpty": "No matching models.",
   "chat.model.loading": "Loading models...",
+  "chat.model.unavailable": "Model list unavailable",
   "chat.model.noEligible": "No conversation-eligible model",
   "chat.model.change": "Change model",
   "chat.noModelAlert":

@@ -388,8 +388,23 @@ package and release gates are required before final acceptance.
 
 The ordinary Chat consumer retains one bounded invocation loop per accepted human
 turn, including context-window retries. Its gateway physical-attempt hook charges
-shared authority budgets before dispatch and settles observed usage once. Catalog
-transport wrappers have a separate fixed depth allowance; each descriptor/schema and
+shared authority budgets before dispatch and settles observed usage once.
+
+The context-window owner's existing retry decision reaches the tool-turn failure boundary.
+When that owner will retry an adopted window, the same turn retains its settled continuation,
+mutation receipts and remaining grants instead of ending with a transcript answer first. A final
+overflow, cancellation or refusal retains the existing bounded settlement behavior; the retry
+never repeats a committed handler or resets synthesis or authority budgets. The existing
+`gateway.context-window.retry` Activity Log records the retry without content.
+The already sent correction remains attached only to that active retry. Ended caller grants or
+turn envelopes keep the earlier completed answer or transcript fallback, and final settlement
+clears the correction before any later synthesis phase.
+If that adopted retry is refused during its new preflight, its owner may settle the same retained
+turn using the existing earlier-answer or transcript fallback and the first sent prompt's metadata.
+This terminal callback is bound to that second attempt and its original reported overflow; it does
+not replace an ordinary caller refusal, cancellation or an unexpected failure.
+
+Catalog transport wrappers have a separate fixed depth allowance; each descriptor/schema and
 all model arguments retain their original bounds and closed validation. Historical
 completed tool results retain their validated descriptor/projection snapshot privately
 in the existing Chat row; the public serializer omits that qualification metadata.
@@ -465,5 +480,6 @@ External schemas follow the explicitly separate JSON Schema dialect described in
 [ADR-0175 D3](ADR-0175-canonical-governed-tool-catalog.md#d3--digest-inputs-and-compatibility).
 The adapter preserves admitted remote schemas and validates actual arguments and results;
 it does not strip unsupported constraints to make a server connect. Internal closed schemas
-retain their existing contract. External schema complexity, references and patterns are
+retain their existing contract; `jira.draft` explicitly uses that same standard dialect for its
+two closed input alternatives as specified in ADR-0175 D3. Schema complexity, references and patterns are
 bounded before compilation, with no remote schema fetches or execution of schema-supplied code.

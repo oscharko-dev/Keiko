@@ -95,6 +95,10 @@ const ARRAY_ITEM: Readonly<Record<string, string>> = {
 };
 // eslint-disable-next-line no-control-regex -- metadata and references must not contain control characters.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
+// Rich text keeps its line breaks and tabs; every other control character is refused, as the
+// document composer refuses it for Cloud.
+// eslint-disable-next-line no-control-regex -- the pattern exists to refuse control characters.
+const RICH_TEXT_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u;
 
 function boundedText(value: unknown, max = 255): value is string {
   return (
@@ -433,7 +437,7 @@ function textValue(
 function validFieldText(field: JiraFieldMetadata, value: string): boolean {
   if (value.length > (field.richText ? 32768 : 255)) return false;
   if (field.required && value.trim() === "") return false;
-  return field.richText || !CONTROL.test(value);
+  return !(field.richText ? RICH_TEXT_CONTROL : CONTROL).test(value);
 }
 function numberValue(value: unknown): ValueResult {
   return typeof value === "number" &&

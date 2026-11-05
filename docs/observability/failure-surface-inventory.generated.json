@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4db350b4dc22029c720db6abc0ed04f341162a5a6d9860d5d6c23c0423292ea8"
+    "catalogDigest": "8ee946ff23630040edfae55e9df1648aa4523a918f0caa96bf40ace03cf395ca"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 630,
-    "proofCount": 652,
-    "resolvedProofCount": 652,
+    "operationCount": 631,
+    "proofCount": 653,
+    "resolvedProofCount": 653,
     "failureClassCount": 388,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -107,6 +107,7 @@
         "atlassian.credential.updated",
         "atlassian.jira-draft",
         "atlassian.jira-report",
+        "atlassian.target.admission",
         "chat.compaction.facts.classified",
         "chat.compaction.summary.work",
         "chat.context.failed",
@@ -327,6 +328,7 @@
       "ports": ["ManagedMcpLogPort", "ServerLogSink"],
       "operations": [
         "coding-app-session.browser-approval.state",
+        "coding-app-session.browser-open",
         "coding-app-session.channel.closed",
         "coding-app-session.channel.opened",
         "coding-app-session.expired",
@@ -540,6 +542,7 @@
         "indexing.document.extraction-failed",
         "indexing.document.extraction-started",
         "indexing.document.failed",
+        "indexing.document.page-read-failed",
         "indexing.document.skipped",
         "indexing.job.finished",
         "indexing.job.received",
@@ -562,8 +565,6 @@
         "memory.embedding.invalidated",
         "memory.embedding.invalidation-failed",
         "memory.embedding.store-rejected",
-        "memory.explicit.forget",
-        "memory.explicit.remember",
         "repository.fingerprint-diff.completed",
         "search.answer.assessed",
         "search.citations.reconciled",
@@ -957,6 +958,7 @@
     "document-chunking-gap": ["memory-knowledge.dependency-failure"],
     "document-embedding-gap": ["memory-knowledge.dependency-failure"],
     "document-extraction": ["memory-knowledge.dependency-failure"],
+    "document-page-read": ["memory-knowledge.dependency-failure"],
     "document-extraction-gap": ["memory-knowledge.dependency-failure"],
     "document-extraction-stall": ["memory-knowledge.dependency-failure"],
     "document-indexing": ["memory-knowledge.dependency-failure"],
@@ -1095,7 +1097,6 @@
     "chat-content-policy": ["lifecycle-crash.dependency-failure"],
     "memory-audit-state-cache": ["lifecycle-crash.dependency-failure"],
     "memory-capture-novelty": ["memory-knowledge.dependency-failure"],
-    "memory-explicit-statement": ["memory-knowledge.dependency-failure"],
     "memory-embedding-invalidation": ["memory-knowledge.dependency-failure"],
     "memory-embedding-request": ["memory-knowledge.dependency-failure"],
     "memory-embedding-storage": ["memory-knowledge.rejection"],
@@ -1280,6 +1281,9 @@
     "atlassian.jira-report.line": [
       "packages/keiko-server/src/atlassian/jiraReportRoutes.test.ts",
       "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
+    ],
+    "atlassian.target.admission.line": [
+      "packages/keiko-server/src/atlassian/wiring.target-admission.test.ts"
     ],
     "chat.compaction.facts.classified.line": [
       "packages/keiko-server/src/chat-compaction-model-summary.test.ts"
@@ -1519,6 +1523,9 @@
     ],
     "coding-app-session.browser-approval.state.line": [
       "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.test.ts"
+    ],
+    "coding-app-session.browser-open.outcome": [
+      "packages/keiko-server/src/coding-app-session/launcherBrowserRoutes.test.ts"
     ],
     "coding-app-session.channel.closed.duration": [
       "packages/keiko-server/src/coding-app-session/sessionStreamLifecycle.test.ts"
@@ -2490,6 +2497,9 @@
     "indexing.document.failed.class": [
       "packages/keiko-local-knowledge/src/indexing/orchestrator-activity-log.test.ts"
     ],
+    "indexing.document.page-read-failed.stage": [
+      "packages/keiko-local-knowledge/src/indexing/page-read-activity.test.ts"
+    ],
     "indexing.document.skipped.reason": [
       "packages/keiko-local-knowledge/src/indexing/orchestrator-activity-log.test.ts"
     ],
@@ -2582,8 +2592,6 @@
       "packages/keiko-server/src/memory-embedding.test.ts"
     ],
     "memory.embedding.store-rejected.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
-    "memory.explicit.forget.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
-    "memory.explicit.remember.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
     "native-file-dialog.selection.projected.counts": [
       "packages/keiko-server/src/native-file-dialog/route.test.ts"
     ],

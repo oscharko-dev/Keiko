@@ -82,6 +82,59 @@ describe("parseBugModelOutput (AC #9 / D9 model-output contract)", () => {
     expect(out.confidence).toBe("medium");
   });
 
+  it("reads a confidence level as a whole word, not inside another word", () => {
+    expect(parseBugModelOutput("## Confidence\nHighly likely").confidence).toBeUndefined();
+    expect(
+      parseBugModelOutput("## Confidence\n**Medium** - the highest-risk part is unverified")
+        .confidence,
+    ).toBe("medium");
+    expect(parseBugModelOutput("## Confidence\nI cannot follow it, so: low").confidence).toBe(
+      "low",
+    );
+  });
+
+  it("keeps a Markdown fence line that sits inside the diff as context", () => {
+    const content = [
+      "```diff",
+      "--- a/R.md",
+      "+++ b/R.md",
+      "@@ -1,3 +1,3 @@",
+      " # T",
+      " ```bash",
+      "-old",
+      "+new",
+      "```",
+      "## Root cause",
+      "bad",
+    ].join("\n");
+    const out = parseBugModelOutput(content);
+    expect(out.diff).toContain("+new");
+    expect(out.rootCause).toBe("bad");
+  });
+
+  it("closes a four-backtick fence only on a fence at least as long", () => {
+    const content = [
+      "````diff",
+      "--- a/R.md",
+      "+++ b/R.md",
+      "+```",
+      "+x",
+      "````",
+      "## Root cause",
+      "r",
+    ].join("\n");
+    const out = parseBugModelOutput(content);
+    expect(out.diff).toContain("+x");
+    expect(out.rootCause).toBe("r");
+  });
+
+  it("scans many fences in linear time", () => {
+    const content = "```diff\n--- a\n+++ b\n```\n".repeat(40_000);
+    const started = Date.now();
+    expect(parseBugModelOutput(content).diff).toContain("+++ b");
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
   it("ignores an unrecognised confidence body", () => {
     const out = parseBugModelOutput("## Confidence\nnot sure at all");
     expect(out.confidence).toBeUndefined();

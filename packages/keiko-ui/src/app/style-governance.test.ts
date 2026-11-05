@@ -10,7 +10,7 @@ const repositoryRoot = resolve(appDirectory, "../../../..");
 const styleExceptionsPath = resolve(repositoryRoot, "docs/design-system/styling-exceptions.json");
 // This is intentionally an equality pin rather than a capacity: every compatibility migration
 // must lower it in the same change, and any new exception needs an explicit governance decision.
-const EXPECTED_COMPATIBILITY_EXCEPTION_SOURCES = 38;
+const EXPECTED_COMPATIBILITY_EXCEPTION_SOURCES = 37;
 
 interface StylingException {
   readonly source: string;

@@ -24,6 +24,9 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { LARGE_DOCUMENT_DIAGNOSTIC_CODES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 
+import type { IndexingLogContext } from "../../indexing/types.js";
+import type { KnowledgeLogSink } from "../../knowledge-log.js";
+
 import { largeDocumentDiagnostic } from "./diagnostics.js";
 
 // ─── Byte source ──────────────────────────────────────────────────────────────
@@ -53,6 +56,9 @@ export interface ProgressiveExtractionWindow {
   // The 1-based page number of the last page in this window (resume cursor anchor).
   readonly lastPageNumber: number;
   readonly diagnostics: readonly ParserDiagnostic[];
+  // What the extractor has learned about the document so far and needs back to resume behind this
+  // window. Digests only; an extractor that learns nothing leaves it out.
+  readonly learnedFurniture?: readonly string[];
 }
 
 // ─── Options ──────────────────────────────────────────────────────────────────
@@ -82,6 +88,16 @@ export interface ProgressiveExtractionOptions {
   // extract-progressive.ts, from the already-persisted `extracted_text_bytes` cursor) should
   // pass it explicitly so resume is byte-identical to a continuous single-pass run.
   readonly resumeAnyPageEmitted?: boolean;
+  // What the last persisted window reported as `learnedFurniture`.
+  readonly resumeLearnedFurniture?: readonly string[];
+  // Where evidence goes that nothing above the extractor would see.
+  readonly log?: ProgressiveExtractionLog;
+}
+
+/** The port and the job and document a progressive extraction's Activity Log lines belong to. */
+export interface ProgressiveExtractionLog {
+  readonly sink: KnowledgeLogSink;
+  readonly context: IndexingLogContext & { readonly documentIdDigest: string };
 }
 
 // ─── Extractor ────────────────────────────────────────────────────────────────
@@ -215,6 +231,16 @@ function appendDiagnostics(
   target.push(...diagnostics);
 }
 
+// An extractor that sees the abort between pages ends its stream without another window, which
+// would read as a finished document. An abort observed once the stream is over means pages may be
+// missing, so the run is reported cancelled (partial), never complete.
+function settledStopReason(
+  stopReason: ProgressiveStopReason,
+  signal: AbortSignal | undefined,
+): ProgressiveStopReason {
+  return stopReason === "completed" && isAborted(signal) ? "cancelled" : stopReason;
+}
+
 // Pulls windows one at a time, enforces the resource policy between windows, and flushes each
 // window through the sink. Returns a content-free summary. The driver never holds more than one
 // window's text in memory.
@@ -256,6 +282,8 @@ export async function runProgressiveExtraction(
       break;
     }
   }
+
+  stopReason = settledStopReason(stopReason, options.signal);
 
   const stopDiag = stopDiagnostic(stopReason, options.documentId);
   if (stopDiag !== undefined) diagnostics.push(stopDiag);

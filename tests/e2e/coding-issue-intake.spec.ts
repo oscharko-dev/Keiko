@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -77,7 +78,7 @@ async function openWorkbench(page: Page): Promise<void> {
   // inline script nodes remain forbidden, including the issue fixture's hostile markup.
   await page.addInitScript({ path: createRequire(import.meta.url).resolve("axe-core/axe.min.js") });
   await page.addInitScript(
-    ({ windowId }) => {
+    ({ argument: { windowId }, storageKeys }) => {
       localStorage.setItem("keiko.theme", "dark");
       // #3625 review: a seeded `cfg.repositoryPath` no longer pre-selects the repository.
       // `workspace-persistence.ts`'s `sanitizeCfgForPersistence` now strips any cfg value that
@@ -88,7 +89,7 @@ async function openWorkbench(page: Page): Promise<void> {
       // the combobox instead (`bindPlainWorkspace`), the same real affordance
       // code-task-authority.spec.ts's `bindFixtureWorkspace` already uses.
       localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: windowId,
@@ -104,9 +105,9 @@ async function openWorkbench(page: Page): Promise<void> {
           },
         ]),
       );
-      localStorage.removeItem("keiko.conns.v1");
+      localStorage.removeItem(storageKeys.connections);
     },
-    { windowId: WINDOW_ID },
+    await workspaceStorageArgs(page, { windowId: WINDOW_ID }),
   );
   const fragment = encodeCodingAppSessionPairingFragment(
     mintLauncherPairingAttestation({

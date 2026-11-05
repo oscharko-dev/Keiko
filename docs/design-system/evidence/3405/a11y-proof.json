@@ -88,19 +88,19 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.de.ts",
-      "sha256": "e279816b756888bebc08ef2d6aa6e6c7f1fc4981ddacc9866050d884991bd521"
+      "sha256": "cd9faf03b0f4362368cf53815b1c69eaa31167df1e64483438afad1b75b201c0"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.en.ts",
-      "sha256": "925686e43ea8a5a4f295e7bdf871d7f58778aa6c419c07f0f61df869d7cbc17a"
+      "sha256": "b1fe01084dd77cdfb125ea75351a802a73dec2fb745d4312c15f504c5a3e038f"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
-      "sha256": "713431657238610a781e79e8459512fec6b920e7c12b4ce7de57bc1b0f6ee2ad"
+      "sha256": "0750ad85a36967ab9847767027ff65a5a0715cc95ada09d25904c9f184f7150d"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
-      "sha256": "7786ae532f4965d0ad6a85e2c46d0674964830ae879ff7a813535910030d579a"
+      "sha256": "c5646858ea277ce9fdc5059651d77b1136341f85beb9db396052d7d6ac658df7"
     },
     {
       "path": "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
@@ -111,7 +111,12 @@
     "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "1c2114f8a47145d76c1319fa23ccf67d250d5383d2e17c8a5111c0104c9a8a18",
     "tests/e2e/fixtures/keiko.e2e.config.json": "9ccdb592af0021033cb26f4868ff263badff5dcc4d716bb4a2fbac54c6dd69f6",
     "tests/e2e/support/evidence.ts": "54712c17afcf8c47de426c02c9983c5837fbd2e665f5beccc112d7ec312414fd",
-    "tests/e2e/support/update-bff-outage-3405.mjs": "097ca94239ff03ab06c2c8ec341c59ca61ee0138cf6bb9b66d9241b08e24204f"
+    "tests/e2e/support/update-bff-outage-3405.mjs": "097ca94239ff03ab06c2c8ec341c59ca61ee0138cf6bb9b66d9241b08e24204f",
+    "tests/e2e/support/workspace-storage.ts": "d72f8306c6969b00a1839c9e734536c03ecf6b4336d92bacf9df414490bf4cc4",
+    "scripts/lib/d12-baseline.mjs": "81b71b8c5bf86a8c1cf735fed941e3d99f084bc094f372f51f85be06a481cc64",
+    "scripts/lib/workspace-storage-fixture.mjs": "204a424e0b09a8ffd3238464d5eafa7c728846298bc0b92faa5014453ee53d52",
+    "scripts/lib/workspace-storage-fixture.d.mts": "aa245a9a8db69741010d58225f2c53669f400bb8a546a1f47f7e71ff5d005740",
+    "packages/keiko-ui/src/app/components/desktop/hooks/workspace-storage.ts": "23649437b93047cf1c14280cc6fd06de170ab00d981a36a30f92979cf7a2dd99"
   },
   "wcagTags": [
     "wcag2a",

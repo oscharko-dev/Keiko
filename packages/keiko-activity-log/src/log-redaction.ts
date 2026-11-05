@@ -138,11 +138,12 @@ export function resetActivityLogRouteRedactor(): void {
 // far above every legitimate value in the instrumentation surface and far below any body.
 export const MAX_LOG_STRING_LENGTH = 160;
 
-// Log field values are identifiers, codes, hosts, reasons and statuses. None of them is prose, and
-// none of them contains more than a stray space. Prose does. This is what stops a SHORT body or
-// prompt fragment smuggled under an innocuous field name — the length cap alone would let it
-// through, and no name-based rule can, since the caller picks the name.
-export const MAX_LOG_STRING_WHITESPACE = 3;
+// Log field values are identifiers, codes, hosts, reasons and statuses. None of them contains a
+// space. Prose does, and so does a person's name (`Selin Aydogan`) or a street (`Hauptstr. 12`). This
+// is what stops a SHORT body fragment or a name under an innocuous field name: the length cap alone
+// would let it through, and no name-based rule can, since the caller picks the name. The Activity
+// Log is the only thing that ever leaves the machine, so this errs on the side of refusing.
+export const MAX_LOG_STRING_WHITESPACE = 0;
 
 // The upper bound of printable ASCII. A log field value is an identifier, a code, a host, an
 // error kind or a status, and every one of those is written in ASCII. Document text is not.
@@ -318,20 +319,42 @@ const DENIED_FIELD_NAMES = new Set<string>([
   // Direct personal data.
   "account",
   "accountid",
+  "accountnumber",
   "address",
+  "assignee",
+  "author",
+  "bic",
+  "birthdate",
+  "city",
+  "dateofbirth",
+  "displayname",
+  "dob",
   "email",
   "emails",
   "familyname",
+  "firstname",
   "fullname",
   "givenname",
+  "iban",
+  "ip",
+  "ipaddress",
+  "lastname",
   "mail",
+  "mobile",
+  "person",
   "phone",
   "phonenumber",
+  "postalcode",
+  "reporter",
   "ssn",
+  "street",
+  "surname",
+  "taxid",
   "user",
   "userid",
   "username",
   "users",
+  "zip",
 ]);
 
 // A field name is an identifier, not free text; anything else is dropped outright.
@@ -381,20 +404,18 @@ export function isDeniedLogFieldName(name: string): boolean {
 //
 // The guard is script-agnostic instead, and states the positive rule: a log field value is an
 // ASCII identifier, code, host, error kind or status. A value that leaves printable ASCII is not
-// one, whatever script it is written in; a value that stays inside it still gets the space budget,
-// which is what catches short English body fragments. One bounded pass covers both, and it runs
+// one, whatever script it is written in; a value that stays inside it may hold no space at all,
+// which is what catches short body fragments, names and streets. One bounded pass covers both, and it runs
 // after the length cap so the scan is bounded by MAX_LOG_STRING_LENGTH.
 function hasProseShape(value: string): boolean {
   let spaces = 0;
   for (let index = 0; index < value.length; index += 1) {
     const code = value.codePointAt(index) ?? 0;
     if (code < 0x20 || code > MAX_IDENTIFIER_CHAR_CODE) return true;
-    if (code === 0x20) {
-      spaces += 1;
-      if (spaces > MAX_LOG_STRING_WHITESPACE) return true;
-    }
+    if (code === 0x20) spaces += 1;
   }
-  return false;
+  // Nothing but spaces carries nothing to refuse.
+  return spaces > MAX_LOG_STRING_WHITESPACE && spaces < value.length;
 }
 
 function hasPathPrefix(value: string): boolean {
@@ -407,10 +428,9 @@ function hasPathPrefix(value: string): boolean {
 
 function looksLikeFilesystemPath(value: string): boolean {
   if (hasPathPrefix(value)) return true;
-  // A URL is not a filesystem path. The endpoint reducers each package owns have already reduced
-  // the ones we log to scheme and host, and a credentialed one was refused by the secret guard two
-  // checks earlier — without this, a portless host (`https://api.openai.com`) would read as a file
-  // extension.
+  // A URL is not a filesystem path. A credentialed or remote one was refused by the secret and
+  // personal guards before this point, so what reaches here is local — without this, a portless
+  // host (`http://localhost`) would read as a file extension.
   if (URI_SCHEME_PATTERN.test(value)) return false;
   if (RELATIVE_MARKER_PATTERN.test(value) || BACKSLASH_SEPARATOR_PATTERN.test(value)) return true;
   // No exemption for an absolute value any more. A request path is not returned to the caller here
@@ -702,17 +722,22 @@ function isShortcutRefusalNote(value: string): boolean {
 
 // A note is admitted only in a code-owned shape, and even then never when it looks like a secret or
 // a personal identifier: the shapes carry class names and labels, which a hostile value could mimic.
+// A closed grammar's only digit runs are the bounded counts and issue numbers it declares, so its
+// numbers are not read as a telephone or account number; everything else about the note still is.
 function isBodyFreeClientNote(value: string): boolean {
   // An admitted note is written verbatim, so it is held to the bound of every other logged string
   // before any shape is tried (review on PR #3452).
   if (value.length > MAX_LOG_STRING_LENGTH) return false;
-  const shaped =
+  const closedGrammar =
     BODY_FREE_CLIENT_NOTES.has(value) ||
+    BODY_FREE_CLIENT_NOTE_PATTERNS.some((pattern) => pattern.test(value));
+  const shaped =
+    closedGrammar ||
     isClientFailureNote(value) ||
     isErrorClassNote(value) ||
-    isShortcutRefusalNote(value) ||
-    BODY_FREE_CLIENT_NOTE_PATTERNS.some((pattern) => pattern.test(value));
-  return shaped && !looksLikeSecret(value) && !looksLikePersonalIdentifier(value);
+    isShortcutRefusalNote(value);
+  if (!shaped || looksLikeSecret(value)) return false;
+  return !looksLikePersonalIdentifier(closedGrammar ? value.replace(/\d+/gu, "0") : value);
 }
 
 // Mirrors `redactGuardedArrayField`'s depth/name gate for the scalar hatch. `undefined` means
@@ -730,6 +755,29 @@ function redactGuardedScalarField(
   return undefined;
 }
 
+// A digest or process instance id is lowercase hex a machine generated, and short hex is sometimes
+// digits only (one 8-character instance id in about forty). Under exactly these names, and only for
+// exactly this alphabet, such a value is what it says it is, not a telephone number.
+const GENERATED_HEX_FIELD_NAME = /(?:Digest|Hash|InstanceId)$/u;
+const GENERATED_HEX_VALUE = /^[0-9a-f]{8,128}$/u;
+
+function isGeneratedHexField(name: string, value: unknown): boolean {
+  return (
+    GENERATED_HEX_FIELD_NAME.test(name) &&
+    typeof value === "string" &&
+    GENERATED_HEX_VALUE.test(value)
+  );
+}
+
+// A bare host name cannot be told from a dotted identifier by its shape, so the field name decides.
+// The only host a server legitimately logs is the local address it binds.
+const HOST_FIELD_NAME = /^(?:host|hostname)$/iu;
+const LOCAL_HOST_VALUE = /^(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1|\[::1\])$/u;
+
+function isRemoteHostField(name: string, value: unknown): boolean {
+  return HOST_FIELD_NAME.test(name) && typeof value === "string" && !LOCAL_HOST_VALUE.test(value);
+}
+
 // Resolves what a single ACCEPTED field (past the count/reserved/name-shape gates already applied
 // by the caller's loop) contributes to the sanitised object: the denylist marker, a guarded array
 // or scalar result (the array form returns `undefined` when nothing in it survived, so the caller
@@ -737,11 +785,15 @@ function redactGuardedScalarField(
 // Split out of `redactLogObject` to keep that loop's own branching under the complexity budget.
 function redactAcceptedField(name: string, fieldValue: unknown, depth: number): unknown {
   if (isDeniedLogFieldName(name)) return REDACTED_KEY;
+  if (isRemoteHostField(name, fieldValue)) return REDACTED_PERSONAL;
   const guardedArray = redactGuardedArrayField(name, fieldValue, depth);
   if (guardedArray !== undefined) return guardedArray.length > 0 ? guardedArray : undefined;
   const guardedScalar = redactGuardedScalarField(name, fieldValue, depth);
   if (guardedScalar !== undefined) return guardedScalar;
-  return redactLogValue(fieldValue, depth);
+  const redacted = redactLogValue(fieldValue, depth);
+  return redacted === REDACTED_PERSONAL && isGeneratedHexField(name, fieldValue)
+    ? fieldValue
+    : redacted;
 }
 
 interface AcceptedLogFields {

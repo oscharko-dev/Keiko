@@ -2,20 +2,18 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { verifyStoredCredential } from "../../../packages/keiko-server/dist/atlassian/credentialVerification.js";
 import { buildAtlassianConnectorCredentialDeps } from "../../../packages/keiko-server/dist/atlassian/wiring.js";
 import { readPrivateFile } from "./lab-client.mjs";
 
 export async function withProductPort(tokenPath, tlsDirectory, run) {
   const state = mkdtempSync(join(realpathSync(tmpdir()), "keiko-jira-4081-"));
   const baseUrl = "https://127.0.0.1:18443";
-  const network = { admitted: true, trusted: true };
+  const network = { trusted: true };
   try {
     const deps = buildAtlassianConnectorCredentialDeps({
       configPath: join(state, "config.json"),
       env: { KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: randomBytes(32).toString("base64") },
-      networkConfig: () => ({
-        privateTargets: network.admitted ? [{ baseUrl, addressClass: "loopback" }] : [],
-      }),
       egress: () =>
         network.trusted ? { caBundlePath: join(resolve(tlsDirectory), "ca.pem") } : undefined,
     });
@@ -29,7 +27,12 @@ export async function withProductPort(tokenPath, tlsDirectory, run) {
     });
     const port = deps.httpBodyPortFactory(metadata, "jira-lab-qualification");
     try {
-      return await run({ port, baseUrl, network });
+      return await run({
+        port,
+        baseUrl,
+        network,
+        verify: () => verifyStoredCredential(deps, metadata, "jira-lab-qualification"),
+      });
     } finally {
       deps.custody.delete(metadata.authRef);
     }

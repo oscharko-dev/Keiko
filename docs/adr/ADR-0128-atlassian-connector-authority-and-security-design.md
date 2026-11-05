@@ -240,23 +240,39 @@ gateway's *DNS-resolved* address re-check (`enforceOutboundTargetPolicy` with `r
 additionally requires `egress.pinProxiedConnectTarget` when this connector's traffic is proxied
 (ADR-0038 D6) — proxied deployments are first-class for this lane (below).
 
-**Exact Data Center admission (#4082, 2026-10-26).** The file-owned
-`atlassian.privateTargets` block may admit at most 64 canonical HTTPS base URLs, including
-port and context path, with an explicit `private` or `loopback` address class. It applies only
-to explicitly selected Jira Data Center connections. Setup request bodies, environment variables
-and global permissive egress flags cannot create this admission; setup saves preserve the
-operator block. Every request rechecks the current entry. DNS results must all match the declared
-class, and direct/proxied connects retain address pinning. Metadata/link-local targets and the
-active BFF listener port stay denied. Request paths must remain inside the configured context
-path; noncanonical paths, encoded traversal/separators and fragments fail before credentials
-are resolved. Safe configuration projections omit private target addresses.
+**Saved Data Center target admission (owner correction, 2026-11-04; #4082).**
+The canonical HTTPS base URL explicitly saved through the authenticated Jira Data Center
+connection form is the target authority. A second entry in `atlassian.privateTargets` is
+not required. That legacy configuration block remains readable for compatibility but no
+longer grants or revokes connector access; setup cannot turn it into a broader egress grant.
+
+On the first explicit verification, the server derives and privately persists one address
+class (`public`, `private`, or `loopback`) beside the existing credential metadata. No new
+form field, confirmation or configuration-file edit is involved. DNS names may bind only
+to a uniform public or private answer set. Loopback is admitted only for an explicitly
+entered loopback IP or `localhost`, never by a DNS name resolving to a local service.
+The class and canonical URL including port and context path remain bound to the saved
+connection across restart and credential rotation. Concurrent or stale verification cannot
+change this binding or recreate a removed credential. New bindings are established by
+explicit verification, not ordinary Chat or tool requests.
+
+Every request still validates the exact saved origin and context path before credential
+resolution, rechecks current metadata identity and listener ports, validates every DNS
+answer against the retained class, and pins direct and proxied connects to those vetted
+addresses. Mixed DNS classes, later class changes, metadata/link-local/multicast targets,
+and active BFF loopback ports stay denied. TLS trust, manual redirects, bounded bodies,
+timeouts and last-moment credential-generation checks remain mandatory. Noncanonical paths,
+encoded traversal/separators, URL credentials and fragments fail before credentials are
+resolved. The private address-class map is excluded from credential API projections, logs
+and support exports. The Activity Log records only the admission source, closed outcome
+and address class, making policy refusal distinguishable from a remote connection failure.
 
 **Correction (#3156, 2026-08-15).** The platform-level default for `pinProxiedConnectTarget` stays
 off for a generic `gatewayFetch` caller (ADR-0038 D6: a caller must construct it explicitly, exactly
 like `denyLoopback`) — nothing about that default changes here. This connector is one such caller,
 and it opts in on every call: `connectorEgressConfig` in `httpPort.ts` unconditionally sets
-`pinProxiedConnectTarget` to `true`. `denyLoopback` is also true except for the exact operator-owned
-Data Center admission described below, so a proxied connector's DNS-resolved address is independently re-validated after
+`pinProxiedConnectTarget` to `true`. `denyLoopback` is also true except for the exact saved-connection
+Data Center admission described above, so a proxied connector's DNS-resolved address is independently re-validated after
 resolution against the same loopback/private/link-local/metadata policy as the direct path, not
 merely covered by the literal-shape check. This text previously said the connector left that
 opt-in off in v1, covering a proxied deployment's resolved address by the literal check alone; two
@@ -267,8 +283,7 @@ connectors at internal reverse proxies.
 The accepted trade-off is that a corporate proxy filtering CONNECT by hostname rather than by
 resolved address could reject the now-pinned, IP-literal CONNECT authority; that is an
 operator-visible, diagnosable failure, weighed as preferable to a silent internal-address bypass for
-a lane whose target is already a single, operator-configured host. See `httpPort.ts`'s comment above
-`isBlockedLoopbackTarget` for the full reasoning and ADR-0038 D6 for what the two flags do and do
+a lane whose target is already a single, human-selected saved host. See `httpPort.ts`'s `connectorEgressConfig` guard for the current implementation and ADR-0038 D6 for what the two flags do and do
 not permit individually.
 
 **Transport:** the concrete adapter is built from `gatewayFetch` (ADR-0038), reusing its existing
@@ -1311,23 +1326,30 @@ answer over 200 issues became a 403 because only the repair's bare prompt had be
   follows `[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)*-?\d+` (`LH-001`, `R-12`, `REQ-FUNC-001`, `REQ_003`);
   technical tokens (`HTTP-2`, `AES-256`, `ISO-27001`, `UTF-8`, `SHA-256`, `TLS-1`, ...) are reserved
   data, not requirements. Candidates are headings, strong lines (bracketed, separated), table rows
-  with an id/statement/priority column, rows of a workbook extraction (`Sheet!2: ID=FR-1 | Titel=Foo`,
-  identifier in the first column, the lines of a multi-line cell read as separate criteria; the
-  sheet name is read up to its first colon, so `=`, `|` and `!` in a name are legal, and a blank line
-  inside a criteria or statement cell is a paragraph break of that cell, not the end of the row), and, in
-  HTML and slides, recorded section headings; a
+  with an id/statement/priority column, rows of a table extraction (`Sheet!2: ID=FR-1 | Titel=Foo`,
+  `Table row 2: ...`; the identifier is the column the header names as such, or else the first cell;
+  the lines of a multi-line cell read as separate criteria; the sheet name is read up to its first
+  colon, so `=`, `|` and `!` in a name are legal; a blank line ends the table, because no parser
+  writes one inside a row), and, in HTML and slides, recorded section headings; a
   heading needs a body or a second identifier of its prefix. Priority, criteria, metadata keys and
   modal verbs are data in several languages (DE, EN, FR, ES, IT) and extensible through the
   vocabulary, never code branches. A definition with a body wins over a table-of-contents mention of
   the same identifier; two different bodies under one identifier in one document are reported as
-  conflicting, never merged. Blocks end at the next heading or blank line, wrapped paragraphs are
-  merged, and an extractor-flattened HTML block is read from its inline keys. A PDF text layer has no
-  recorded headings and turns a page break into a blank line anywhere in a block, so in flat text a
-  blank line does not end a block when an unfinished sentence goes on behind it or the next paragraph
-  leads into a key line, and a short line without a closing mark counts as a chapter heading ahead of
-  the next unit or behind the block's closing field (lab corpus as PDF, 2026-11-03: a requirement
-  crossing a page lost its priority and criteria to a phantom unit `Priorität: Soll.`, and chapter
-  headings ended up in the statement before). A statement with a
+  conflicting, never merged. A sentence with a modal verb on the line of the identifier
+  (`FR-1: Das System muss X speichern.`) is that requirement's statement and body; a plain title
+  stays a title. Every document parser follows one block contract in its stored text: a
+  blank line ends a block, only the items of one list and the rows of one table stay on adjacent
+  lines, a table row holds no blank line, a PDF heading is a block of its own and a paragraph running
+  over a PDF page break stays one block. A unit ends at the next heading or section boundary, wrapped
+  paragraphs are merged, and an extractor-flattened HTML block is read from its inline keys. Under
+  this contract a requirement's statement, key lines and criteria are separate blocks in every format,
+  and flat text has no recorded headings, so a blank line does not end a unit when an unfinished
+  sentence goes on behind it, the next paragraph leads into a key line, or criteria or further prose
+  of the unit run on ahead of the next unit. An unrelated paragraph behind the last unit stays out, and
+  a short line without a closing mark counts as a chapter heading ahead of the next unit or behind the
+  block's closing field (lab corpus as PDF, 2026-11-03: a requirement crossing a page lost its priority
+  and criteria to a phantom unit `Priorität: Soll.`, and chapter headings ended up in the statement
+  before). A statement with a
   modal verb and no identifier gets `DRV-<8 letters>`, the SHA-256 of the document identity and the
   normalized statement (plus an occurrence index for exact repeats), so it survives insertion and
   renumbering and is not shared between documents. Such a statement names its subject (ISO/IEC/IEEE
@@ -1338,12 +1360,21 @@ answer over 200 issues became a 403 because only the repair's bare prompt had be
   its own subject and predicate whose main clause states the obligation (`Should a connection fail,
   the gateway must retry the request.`, `Sollte die Verbindung abbrechen, muss das System den
   Vorgang wiederholen.`); those lists are vocabulary data too.
+  A compound such as `Soll-Ablauf` or `must-have` and the result line of a calculation (`= 12 EUR`)
+  state no obligation. A table with a statement column and no identifier column yields such a unit
+  from each row whose statement cell states an obligation, with the row's title, priority and
+  criteria; a row holding only criteria extends the row above it. A statement cell without a modal
+  verb yields no unit, because a description column looks the same and a glossary must not become
+  requirements.
+  A lone priority word in a statement column is a rating, not a statement.
   The same specification yields the same
   identifiers, titles, priorities, criteria and digests from Markdown, plain text, HTML, Word,
-  PowerPoint, PDF (one extracted line per statement line) and Excel extraction
-  (`requirement-inventory-formats.integration`, and the lab corpus through the production parsers in
-  `jira-lab-corpus-requirement-parity`, PDF included); PDF line wrapping is only as stable as its
-  extracted lines. Page headers and footers a real PDF repeats are not recognized as such. Scanned documents (OCR) are not read. The result is a set of
+  PowerPoint, PDF and Excel extraction (`requirement-inventory-formats.integration`,
+  `requirement-parser-contract.integration`, and the lab corpus through the production parsers in
+  `jira-lab-corpus-requirement-parity`, PDF included). A PDF is rebuilt from its layout, so wrapped
+  lines and a paragraph over a page break are joined and repeated page headers and footers are
+  removed; where the layout gives no evidence a line stays a line. Scanned documents (OCR) are not
+  read. The result is a set of
   _detected units_, never claimed to be complete: the detector can miss or over-read, and says so.
 - _Reading._ The tool takes `{ view?, documents?, query?, ids?, priorities?, cursor?, limit?, reportId?, projectKey? }`.
   Units are paged in document order under an item bound (25, at most 50) and a byte bound (24,000

@@ -8,17 +8,17 @@ import { bffRequestErrorKind } from "@/lib/http";
 
 import { dirty, type DraftEntry, type DraftPhase } from "./chat-draft-state";
 
-function reportFailure(error: unknown): void {
-  reportClientDiagnostic("Private chat draft request failed.", {
+function reportFailure(error: unknown, action: "read" | "save"): void {
+  reportClientDiagnostic(`Private chat draft ${action} failed.`, {
     correlationId: correlationIdOf(error),
     errorKind: bffRequestErrorKind(error),
     errorEvidence: clientErrorEvidence(error),
   });
 }
-function failurePhase(error: unknown): DraftPhase {
+function failurePhase(error: unknown, action: "read" | "save"): DraftPhase {
   if (error instanceof ApiError && error.status === 409) return "conflict";
-  if (error instanceof ApiError && error.status === 404) return "unavailable";
-  return "failed";
+  if (error instanceof ApiError && [401, 403, 404].includes(error.status)) return "unavailable";
+  return action === "read" ? "load-failed" : "failed";
 }
 
 function canSave(chatId: string, entry: DraftEntry): boolean {
@@ -70,9 +70,9 @@ export class ChatDraftActions {
       if (!entry.disposed) this.applyRead(entry, remote);
     } catch (error) {
       if (entry.disposed) return;
-      entry.phase = failurePhase(error);
+      entry.phase = failurePhase(error, "read");
       entry.conflict ||= entry.phase === "conflict";
-      reportFailure(error);
+      reportFailure(error, "read");
     } finally {
       this.settled(chatId, entry);
     }
@@ -116,9 +116,9 @@ export class ChatDraftActions {
       entry.phase = dirty(entry) ? "unsaved" : "saved";
     } catch (error) {
       if (entry.disposed) return;
-      entry.phase = failurePhase(error);
+      entry.phase = failurePhase(error, "save");
       entry.conflict ||= entry.phase === "conflict";
-      reportFailure(error);
+      reportFailure(error, "save");
     } finally {
       this.settled(chatId, entry);
     }
@@ -138,9 +138,9 @@ export class ChatDraftActions {
       entry.phase = "unsaved";
     } catch (error) {
       if (entry.disposed) return;
-      entry.phase = failurePhase(error);
+      entry.phase = failurePhase(error, "read");
       entry.conflict ||= entry.phase === "conflict";
-      reportFailure(error);
+      reportFailure(error, "read");
     } finally {
       this.settled(chatId, entry);
     }
@@ -169,9 +169,9 @@ export class ChatDraftActions {
       entry.base = remote;
     } catch (error) {
       if (entry.disposed) return;
-      entry.phase = failurePhase(error);
+      entry.phase = failurePhase(error, "read");
       entry.conflict ||= entry.phase === "conflict";
-      reportFailure(error);
+      reportFailure(error, "read");
     } finally {
       this.settled(chatId, entry);
     }

@@ -1923,6 +1923,25 @@ describe("readSseStream", () => {
     expect(chunks).toEqual([{ a: 1 }]);
   });
 
+  it("splits lines on a bare carriage return, split anywhere between CR and LF", async () => {
+    for (const chunks of [
+      ['data: {"a":1}\r\rdata: {"b":2}\r\rdata: [DONE]\r\r'],
+      ['data: {"a":1}\r', '\ndata: {"b":2}\r', "\ndata: [DONE]\r\n"],
+    ]) {
+      expect(await collect(readSseStream(streamingResponse(chunks)))).toEqual([{ a: 1 }, { b: 2 }]);
+    }
+  });
+
+  it("treats an empty data field as no event and [DONE] with trailing blanks as the terminator", async () => {
+    const response = streamingResponse([
+      "data:\n",
+      "data: \n",
+      'data: {"a":1}\n',
+      "data: [DONE] \n",
+    ]);
+    expect(await collect(readSseStream(response))).toEqual([{ a: 1 }]);
+  });
+
   it("yields a final data line that has no trailing newline", async () => {
     const response = streamingResponse(['data: {"a":1}']);
     const chunks = await collect(readSseStream(response));

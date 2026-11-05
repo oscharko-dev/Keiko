@@ -314,7 +314,8 @@ contains no validation logic — because validation belongs to the caller, not t
 ### D4 — Patch validation rules, dry-run-never-writes, and fail-closed atomic apply
 
 **Supported subset.** `parseUnifiedDiff` handles standard unified
-diffs: `--- a/<path>` / `+++ b/<path>` headers, `@@ -l,s +l,s @@` hunks, ` `/`+`/`-` body lines,
+diffs: `--- a/<path>` / `+++ b/<path>` headers, including Git's C-quoted form for a path with special
+characters, `@@ -l,s +l,s @@` hunks, ` `/`+`/`-` body lines,
 file creation (`--- /dev/null`), and deletion (`+++ /dev/null`). This is not git-apply: no rename
 detection, no fuzzy matching, no binary patches. The parser is linear — a single pass over split
 lines with bounded per-line regexes — so it cannot backtrack catastrophically (CodeQL ReDoS guard).

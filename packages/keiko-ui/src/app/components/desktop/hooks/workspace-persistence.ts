@@ -5,7 +5,10 @@ import {
   isGitHubOwnerAndRepo,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { CLIENT_BINDING_WINDOW_REF_PATTERN } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { isDesktopChatCreationRequestId } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  isChatJiraPodId,
+  isDesktopChatCreationRequestId,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { sanitizeEditorRootSessionsJson } from "@/lib/editor-root-sessions";
 // KEIKO-0628: isSecretShapedString + its helpers live in a leaf module so tests/qa's cross-package
 // parity test can consume them without pulling this file's WIN_TYPES/WIN_META imports into the
@@ -751,14 +754,34 @@ function blockInvalidChatCreationModel(
   delete sanitized["newChatModelId"];
 }
 
+function sanitizeConnectorSelection(cfg: Record<string, unknown>): AppWindow["cfg"] {
+  const kind = cfg["selectedKind"];
+  const id = cfg["selectedId"];
+  if (kind !== "capsule" && kind !== "capsule-set" && kind !== "jira-live") return {};
+  if (typeof id !== "string" || !isSafeOpaqueReference(id)) return {};
+  if (kind === "jira-live" && !isChatJiraPodId(id)) return {};
+  // Selection is a display reference only. Labels, readiness, credentials and authority are
+  // fetched from the current owned catalog after reload, never trusted from the layout.
+  return {
+    selectedKind: kind,
+    selectedId: id,
+    ...(cfg["presentation"] === "node" ? { presentation: "node" } : {}),
+  };
+}
+
+function persistableConfigKeys(type: WindowType): ReadonlySet<string> {
+  return new Set([
+    ...(WIN_TYPES[type].config ?? []).map((field) => field.key),
+    ...(INTERNAL_CFG_KEYS[type] ?? []),
+  ]);
+}
+
 function sanitizeCfgForPersistence(type: WindowType, cfg: unknown): AppWindow["cfg"] {
   if (!isRecord(cfg)) return {};
   const persistence = WIN_META[type].persistence;
   if (persistence === "durable.config") return {};
-  const allowedKeys = new Set([
-    ...(WIN_TYPES[type].config ?? []).map((field) => field.key),
-    ...(INTERNAL_CFG_KEYS[type] ?? []),
-  ]);
+  if (type === "connector") return sanitizeConnectorSelection(cfg);
+  const allowedKeys = persistableConfigKeys(type);
   const out: AppWindow["cfg"] = {};
   for (const [key, value] of Object.entries(cfg)) {
     if (!allowedKeys.has(key)) continue;

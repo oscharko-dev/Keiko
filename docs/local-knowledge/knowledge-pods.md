@@ -29,9 +29,19 @@ Knowledge Pods are selected and managed through the existing Local Knowledge sur
 The first release does not add a second app area or a second registry.
 
 - **Discover** — users open Local Knowledge and see Knowledge Pods and Knowledge Pod
-  Sets instead of low-level capsule terminology.
-- **Create** — creating a pod still creates an existing Local Knowledge capsule under
-  the hood. Creating a pod set still creates a capsule set over existing pod ids.
+  Sets instead of low-level capsule terminology. Each pod row emphasizes its name and
+  workspace action; details and disconnect use the existing pod actions menu. Indexing
+  actions appear once a source is attached, and cancellation remains available while indexing.
+  Lifecycle badges and embedding guidance belong in the existing detail view rather than
+  the ordinary pod list (owner decision, 2026-11-04; `design-system/components.html`).
+  Embedded Jira Live Pods use the same compact list treatment; connection metadata remains
+  in connector settings, while actionable connection problems keep their repair controls.
+- **Create** — the ordinary Create Knowledge Pod dialog asks only for a name. It creates
+  an existing Local Knowledge capsule under the hood, using the server's existing `standard`
+  model-use policy default. Connecting a source and indexing remain separate actions.
+  Creating a pod set still creates a capsule set over existing pod ids. The separate **Add HTML
+  manual** creation feature is retired; HTML files remain supported through ordinary file/folder
+  sources, and existing indexed manual pods retain their refresh and citation paths.
 - **Inspect** — the detail page shows pod readiness, connected sources, document
   counts, indexing state, diagnostics, and actions through the current BFF routes.
 - **Attach** — Conversation Center, the existing source picker, Quality Intelligence, and voice
@@ -52,26 +62,23 @@ Synthetic task examples:
   release-readiness criteria as separate local pods, then attach the composed set to a
   review chat or Quality Intelligence run.
 
-These examples use only local pods over the existing `capsules.db` store. Remote,
-federated, ephemeral, hosted, or managed-service members remain placeholders for future
-governed designs and must not claim active retrieval in this release.
+These examples use only local pods over the existing `capsules.db` store. The owner decision
+of 2026-11-04 keeps Knowledge Pods local, with no sharing roadmap or sharing placeholders.
+The creation dialog has no Access or Model use choice. Local pod storage does not imply
+local model providers: the installation's central gateway configuration controls model routing.
 
-Vocabulary rules for current and future variants:
+Product vocabulary:
 
-| Product vocabulary   | Meaning in the initial release                                              | Current behavior                    |
+| Product vocabulary   | Meaning                                                                     | Current behavior                    |
 | -------------------- | --------------------------------------------------------------------------- | ----------------------------------- |
 | Local Knowledge Pod  | A pod backed by the local `capsules.db` store                               | Supported                           |
 | Knowledge Pod Set    | A logical composition over existing local pods                              | Supported                           |
 | Sealed Knowledge Pod | A pod whose reconstructive content follows the Local Knowledge store policy | Documented posture; no new UI badge |
-| Policy-backed Pod    | A future pod constrained by an explicit policy pack                         | Reserved vocabulary                 |
-| Remote/Federated Pod | A future non-local pod exposed through a governed source boundary           | Out of scope                        |
-| Ephemeral Pod        | A future short-lived pod whose backing evidence is not persisted as a pod   | Out of scope                        |
 
-Private local documents, project documentation, and policy packs fit the same product
-vocabulary by changing the source or policy posture, not by changing the retrieval
-registry. Supported local pod sources are the current `folder`, `repository`, and
-`files` source kinds. Policy packs and remote/federated/ephemeral pods require
-future governed designs before implementation.
+Private local documents and project documentation fit the same product vocabulary by
+changing the source, not the retrieval registry. Supported local pod sources include the
+`folder`, `repository`, and `files` source kinds. Existing compatibility vocabulary for
+unsupported pod variants does not advertise planned features or add choices to creation.
 
 ## Compatibility contract
 
@@ -210,10 +217,34 @@ anyway is dropped. Any other value fails the configuration load. The Activity Lo
 
 ## Project document formats
 
-A pod indexes the text layer of Word (`.docx`), Excel (`.xlsx`), PowerPoint (`.pptx`) and PDF
+A pod indexes the text of Word (`.docx`), Excel (`.xlsx`), CSV, PowerPoint (`.pptx`) and PDF
 files, with the source location a citation points at: the paragraph or sheet row, the slide
-(`Slide N: <title>`, including table rows and speaker notes) or the page. Images, charts and
-embedded objects are not read, and scanned documents are not recognized (no OCR).
+(`Slide N: <title>`, including table rows, chart and SmartArt text, and speaker notes) or the page.
+Images and other embedded objects are not read, and scanned documents are not recognized (no OCR).
+
+A PDF stores glyph runs, not paragraphs, so its pages are rebuilt from the layout: reading order
+of rows, columns and table cells, the paragraph a wrapped line belongs to, also across a page
+break, list items, headings as sections, and page headers and footers a document repeats are
+removed with a count. Where the layout gives no evidence, a line stays a line.
+
+Every format follows one block rule in the stored text: a blank line ends a block, and only the
+items of one list and the rows of one table stay on adjacent lines. Retrieval and the requirement
+inventory rely on this rule, so a new or changed parser has to keep it.
+
+Content a person does not see is reported, never silently dropped or passed off as visible: hidden
+Word text, unfilled placeholders and HTML marked `hidden` or `display:none` are excluded with a
+count, Word comments are not indexed with a count, and hidden Excel sheets, rows and columns and
+hidden slides stay indexed with a count.
+
+A repeated page line whose only change is a page counter (`Seite 3 von 12`, `Page 3`) counts as the
+same page furniture; a line whose number changes without a page word stays document text. JSON
+records keep their nested fields and exact number spellings within one object budget. CSV, Excel and
+the other formats share one parse deadline per document, and every Office container, Excel included,
+passes the same ZIP controls.
+
+The stored text is what a parser made of a file, so a refresh reads an unchanged file again when
+its parser has changed since and records `PARSER_VERSION_CHANGED`. A repaired parser therefore
+reaches existing pods without touching the files.
 
 A file that cannot be indexed is named by a closed reason and never contributes partial text:
 
@@ -232,22 +263,18 @@ never carries the file name, path or content.
 
 ## Model-use policy
 
-Knowledge Pods carry an additive `modelUsePolicy` contract that resolves to a
-body-free operation matrix. The create dialog asks for the policy in plain words, under
-"Model use", and submits it explicitly:
+Knowledge Pods carry an additive `modelUsePolicy` contract that resolves to a body-free
+operation matrix. The ordinary creation dialog submits only `{ displayName }`; the existing
+server-side create handler supplies `standard`. An indexed pod can then use the installation's
+configured embedding, reranking and answer models without a per-pod settings step. Model
+selection and routing remain in the central gateway configuration. These providers may be
+local or external; the location of the pod store does not determine provider locality.
 
-- **Use configured models** (`standard`, the default) — the pod is searchable and citable
-  as soon as it is indexed. Excerpts and questions go to the embedding and answer models
-  configured for this installation, so no later settings step is needed.
-- **Sealed local** (`sealed-local`) — content is never sent to an external model (embedding or
-  reranking), never used to write answers and never released as raw text. Only local, on-device
-  embedding and reranking are permitted by the policy. A sealed pod stays out of search and
-  answers until its policy is changed.
-
-A create request that omits the policy (an API caller, the manual and connector pod
-flows) also receives `standard`. Legacy persisted rows without an explicit policy resolve
-as `sealed-local`, which fails closed for operations that would release pod content to
-external model providers.
+API and connector create requests that omit the policy receive the same `standard` default.
+Existing explicit policies and their enforcement remain supported. Legacy persisted rows
+without an explicit policy resolve as `sealed-local`; removing the creation choices does
+not change those rows or relax their guards. Containment, authentication and body-free audit
+evidence are unchanged.
 
 The sealed-local default denies:
 
@@ -347,8 +374,8 @@ Forbidden activity evidence:
   codes.
 
 Current local activity modes are `local-only`, `lexical`, `vector`, `hybrid`, and
-`reranked`. `sealed`, `remote`, and `federated` are reserved compatibility modes so
-future governed pod designs can use the same UI contract without changing the shape.
+`reranked`. `sealed`, `remote`, and `federated` remain reserved compatibility values in the
+contract; they do not represent supported remote retrieval or a sharing roadmap.
 
 Server consumers must validate every emitted activity object with
 `validateKnowledgePodRetrievalActivity()`. UI consumers should render only the supplied
@@ -361,17 +388,15 @@ on write and again on read; malformed or unsafe stored metadata is rejected inst
 being silently dropped. Canonical operator evidence still lives in the existing context
 packs, retrieval diagnostics, and redacted evidence manifests.
 
-## Future remote, federated, or ephemeral pods
+## Local-only scope
 
-Remote, federated, ephemeral, shared, or cloud-backed pods are out of scope for
-Epic #1815. Any future non-local or short-lived pod design must add or update an
-ADR before implementation and must define:
-
-- ownership and human-control boundaries;
-- egress and model-provider policy;
-- evidence redaction and manifest rules;
-- compatibility with local-first operation;
-- retrieval-score normalization without direct cross-space score mixing.
+Knowledge Pod indexes and state remain local. Remote, federated, ephemeral, shared,
+hosted and managed-service pod variants are not offered, and sharing is not on the product
+roadmap (owner decision, 2026-11-04). Do not expose Coming soon placeholders for them.
+Existing reserved contract values remain compatibility data, not feature promises.
+This storage scope does not change supported source connectors or the centrally configured
+model providers. Existing model-use policy, source containment and redacted audit boundaries
+continue to apply.
 
 Future internal rename or migration work must be its own reviewed issue. It needs an
 ADR when it changes persisted state, route contracts, evidence semantics, retrieval
@@ -394,8 +419,9 @@ Known limits:
 
 - Existing API discriminants and route parameters still use `capsule` and
   `capsule-set` for compatibility.
-- No remote, hosted, managed-service, policy-pack, federated, or ephemeral pod
-  retrieval is implemented.
+- Only local pod storage and retrieval are offered; there is no sharing roadmap.
+- Remote, hosted, managed-service, policy-pack, federated and ephemeral pod retrieval
+  are not implemented; retained compatibility vocabulary is not a planned-feature list.
 - No persisted Local Knowledge migration is performed.
 - Linux CI remains authoritative for release evidence when platform-specific bundle
   fingerprints differ from a local developer machine.

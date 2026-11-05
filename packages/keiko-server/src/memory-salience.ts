@@ -39,7 +39,7 @@ import {
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
-import { deploymentContentPolicy } from "./content-redactor.js";
+import { deploymentContentPolicy, strictRedactor } from "./content-redactor.js";
 import {
   conversationMemoryScopes,
   type ConversationMemoryRuntimeContext,
@@ -519,7 +519,7 @@ function logSalienceCaptureDropped(
 // Memory proposals keep the default projection, so a preserved answer is projected again here.
 function memoryAssistantText(deps: UiHandlerDeps, assistantText: string): string {
   return deploymentContentPolicy(deps) === "preserve"
-    ? String(deps.redactor(assistantText))
+    ? String(strictRedactor(deps)(assistantText))
     : assistantText;
 }
 

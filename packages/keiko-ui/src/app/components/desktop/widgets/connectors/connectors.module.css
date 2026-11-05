@@ -24,15 +24,60 @@
    height of its content and scrolls with the page. Filling the page (height: 100%) left a screen of
    empty space above the Knowledge Pods list and nested a second scroll area inside the page's own. */
 .scope.cmpEmbedded {
-  gap: 10px;
+  --cmp-embedded-actions-gap: 6px;
+  gap: var(--space-4);
   height: auto;
-  margin-top: 24px;
+  margin-top: var(--space-8);
   padding: 0;
   overflow: visible;
 }
 
-.cmpEmbeddedTitle {
-  margin: 0;
+.cmpEmbeddedToolbar {
+  flex-wrap: wrap;
+}
+
+.cmpEmbeddedToolbar .cmpPodTitle {
+  min-inline-size: 0;
+}
+
+.cmpPodToolbarActions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-inline-size: 100%;
+}
+
+/* Both pod creation actions share a stable width and still fit a narrow window. */
+.cmpCreatePodButton {
+  flex: 0 0 auto;
+  inline-size: 12rem;
+  max-inline-size: 100%;
+}
+
+.scope.cmpEmbedded .cmpPodList {
+  gap: var(--space-4);
+}
+
+.scope.cmpEmbedded .cmpPodSection {
+  gap: var(--space-8);
+}
+
+.scope.cmpEmbedded .cmpPodCard,
+.scope.cmpEmbedded .cmpPodEmpty {
+  min-height: calc(var(--control-height) + var(--space-4) * 2 + var(--space-2));
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-primary);
+  box-shadow: var(--shadow-card);
+}
+
+.scope.cmpEmbedded .cmpPodEmpty {
+  display: flex;
+  align-items: center;
+}
+
+.cmpEmbedded .cmpPodIdentity {
+  flex-basis: 10rem;
 }
 
 .scope :global(.acx-title) {
@@ -135,7 +180,7 @@
 .scope :global(.acx-actions) {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--cmp-embedded-actions-gap, 8px);
   flex-wrap: wrap;
 }
 
@@ -345,6 +390,15 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 10px;
+}
+
+/* Reuse the Knowledge Pod icon, info and name primitives inside a static identity block.
+   Its spacing matches the existing drag handle without implying a drag interaction. */
+.cmpEmbeddedIdentity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
 }
 
 /* The identity keeps a readable width; when the window is narrow the chip and the actions wrap

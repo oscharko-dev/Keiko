@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -82,9 +83,9 @@ async function createChat(
 
 async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<void> {
   await page.addInitScript(
-    ({ chatId, title }) => {
+    ({ argument: { chatId, title }, storageKeys }) => {
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "e2e-chat-window",
@@ -99,9 +100,9 @@ async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<v
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { chatId: chat.id, title: chat.title },
+    await workspaceStorageArgs(page, { chatId: chat.id, title: chat.title }),
   );
 }
 
@@ -824,26 +825,29 @@ test("deletes selected chats with one mouse action and no confirmation @smoke", 
   expect(create.status()).toBe(201);
   const second = (await create.json()) as ChatResponse;
   await seedChatWindow(page, chat);
-  await page.addInitScript(() => {
-    const windows = JSON.parse(localStorage.getItem("keiko.workspace.v4") ?? "[]") as unknown[];
-    localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        ...windows,
-        {
-          id: "e2e-history-window",
-          type: "chatHistory",
-          x: 40,
-          y: 30,
-          w: 800,
-          h: 680,
-          z: 20,
-          cfg: {},
-          max: false,
-        },
-      ]),
-    );
-  });
+  await page.addInitScript(
+    ({ storageKeys }) => {
+      const windows = JSON.parse(localStorage.getItem(storageKeys.workspace) ?? "[]") as unknown[];
+      localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          ...windows,
+          {
+            id: "e2e-history-window",
+            type: "chatHistory",
+            x: 40,
+            y: 30,
+            w: 800,
+            h: 680,
+            z: 20,
+            cfg: {},
+            max: false,
+          },
+        ]),
+      );
+    },
+    await workspaceStorageArgs(page, undefined),
+  );
   await page.goto("/");
   // The seeded chat window binds its chat and loads its composer chunk after the page is up, and
   // the history panel below must not be driven while that bind is still settling: on a slow CI
@@ -881,9 +885,9 @@ test("locks layout while native scrolling works in an unselected window @smoke",
     expect(response.status()).toBe(201);
   }
   await page.addInitScript(
-    ({ chatId, title }) => {
+    ({ argument: { chatId, title }, storageKeys }) => {
       localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "e2e-scroll-first",
@@ -910,7 +914,7 @@ test("locks layout while native scrolling works in an unselected window @smoke",
         ]),
       );
     },
-    { chatId: chat.id, title: chat.title },
+    await workspaceStorageArgs(page, { chatId: chat.id, title: chat.title }),
   );
   await page.goto("/");
   const windows = page.locator('.window[data-window-id^="e2e-scroll-"]');

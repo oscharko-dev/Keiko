@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { render, renderHook, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import {
   redeemCodingAppSessionPairingOnBoot,
@@ -53,15 +53,26 @@ function navigateSameDocument(hash: string): void {
 }
 
 describe("KeikoDesktop", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ workspace: { storageId: "a".repeat(64) } })),
+        ),
+    );
+  });
   afterEach(() => {
+    vi.unstubAllGlobals();
     replace.mockClear();
     window.history.replaceState(null, "", "/");
   });
 
-  it("mounts the workspace app shell", () => {
+  it("mounts the workspace app shell after resolving its data store", async () => {
     render(<KeikoDesktop />);
 
-    expect(screen.getByRole("region", { name: "Mock app shell" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "Mock app shell" })).toBeInTheDocument();
   });
 
   it("redeems a launcher pairing fragment on boot (#2478)", () => {
@@ -134,8 +145,17 @@ describe("KeikoDesktop", () => {
   // unlike the boot path above. This drives the real redeemer (only `OnBoot` is mocked) against a
   // stubbed network and fails if the `hashchange` listener is ever removed.
   it("pins the clean address bar and posts the pairing after a same-document arrival (#3390)", async () => {
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 })),
+    const fetchMock = vi.fn((path: string) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify(
+            path === "/api/workspace/state"
+              ? { workspace: { storageId: "a".repeat(64) } }
+              : { schemaVersion: "1" },
+          ),
+          { status: 200 },
+        ),
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
     try {
@@ -148,9 +168,13 @@ describe("KeikoDesktop", () => {
 
       await waitFor(() => {
         expect(window.location.hash).toBe("");
-        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(
+          fetchMock.mock.calls.filter(([path]) => path !== "/api/workspace/state"),
+        ).toHaveLength(2);
       });
-      const calls = fetchMock.mock.calls as unknown as [string, RequestInit][];
+      const calls = (fetchMock.mock.calls as unknown as [string, RequestInit][]).filter(
+        ([path]) => path !== "/api/workspace/state",
+      );
       expect(calls.map(([path]) => path)).toEqual([PAIR_PATH, LOCAL_SESSION_PATH]);
       expect(calls.map(([, init]) => init.method)).toEqual(["POST", "POST"]);
       expect(replace).not.toHaveBeenCalled();

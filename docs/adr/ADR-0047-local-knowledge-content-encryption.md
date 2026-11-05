@@ -137,6 +137,11 @@ therefore claims encryption of reconstructive source-of-truth columns, vectors, 
 and path labels, not whole-database encryption and not encryption of the lexical
 retrieval projection.
 
+A heading of a parsed HTML document is document text as well as a label (#4235), as it
+already was for Word, PDF and Markdown: the label stays sealed in the path columns, and
+its words reach the lexical projection with the rest of the text, and no other plaintext
+column. Anchors are labels alone and appear in no plaintext byte of the store.
+
 ### D4 — Idempotent, crash-aware forward migration with WAL/freelist hygiene
 
 When an encrypted store opens, a one-time content-encryption migration runs before any

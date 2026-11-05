@@ -1,4 +1,4 @@
-// BFF routes for the live HTML Manual Knowledge Pod create/refresh/job surface (Issue #2063).
+// BFF routes for the live HTML Manual Knowledge Pod refresh/job surface for existing pods (Issue #2063).
 //
 // Same-origin/Content-Type/CSRF (`x-keiko-csrf`) enforcement and the top-level opaque-500 +
 // correlation-id observability are applied centrally in server.ts for every state-changing method —
@@ -8,15 +8,11 @@
 // trust-boundary validators before any job starts.
 
 import type { IncomingMessage } from "node:http";
-import {
-  validateHtmlManualPodCreateRequest,
-  validateHtmlManualPodRefreshRequest,
-} from "@oscharko-dev/keiko-contracts/runtime/html-manual-job";
+import { validateHtmlManualPodRefreshRequest } from "@oscharko-dev/keiko-contracts/runtime/html-manual-job";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   getManualPodJob,
-  startManualPodCreate,
   startManualPodRefresh,
   type StartManualPodJobResult,
 } from "./manual-pod-service.js";
@@ -120,19 +116,13 @@ function startResult(result: StartManualPodJobResult, ctx: RouteContext): RouteR
       ),
     };
   }
-  if (result.reason === "job-already-running") {
-    return {
-      status: 409,
-      body: errorBody(
-        "MANUAL_POD_JOB_ALREADY_RUNNING",
-        "An indexing job is already running for this Knowledge Pod.",
-        ctx.correlationId,
-      ),
-    };
-  }
   return {
-    status: 400,
-    body: errorBody("VALIDATION_FAILED", "The manual source is invalid.", ctx.correlationId),
+    status: 409,
+    body: errorBody(
+      "MANUAL_POD_JOB_ALREADY_RUNNING",
+      "An indexing job is already running for this Knowledge Pod.",
+      ctx.correlationId,
+    ),
   };
 }
 
@@ -140,12 +130,10 @@ function startResult(result: StartManualPodJobResult, ctx: RouteContext): RouteR
 // error bodies + success projection) is tested without exercising a crawl or the domain layer.
 export interface ManualPodRouteService {
   readonly startRefresh: typeof startManualPodRefresh;
-  readonly startCreate: typeof startManualPodCreate;
 }
 
 const DEFAULT_SERVICE: ManualPodRouteService = {
   startRefresh: startManualPodRefresh,
-  startCreate: startManualPodCreate,
 };
 
 export function handleRefreshHtmlManualPod(
@@ -162,23 +150,6 @@ export function handleRefreshHtmlManualPod(
       };
     }
     return startResult(service.startRefresh(deps, request.value), ctx);
-  });
-}
-
-export function handleCreateHtmlManualPod(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-  service: ManualPodRouteService = DEFAULT_SERVICE,
-): Promise<RouteResult> {
-  return runHandler(ctx, async () => {
-    const request = validateHtmlManualPodCreateRequest(await readJsonObject(ctx.req));
-    if (!request.ok) {
-      return {
-        status: 400,
-        body: errorBody("VALIDATION_FAILED", request.errors.join("; "), ctx.correlationId),
-      };
-    }
-    return startResult(await service.startCreate(deps, request.value), ctx);
   });
 }
 

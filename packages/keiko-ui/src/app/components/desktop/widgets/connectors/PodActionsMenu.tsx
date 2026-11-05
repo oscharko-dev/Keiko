@@ -1,5 +1,5 @@
 "use client";
-// The secondary actions of one Jira Pod behind a single "…" button (owner decision 2026-11-02):
+// Secondary Knowledge Pod actions behind a single "…" button:
 // the card keeps one visible primary action and a status chip instead of a row of buttons.
 
 import {
@@ -16,6 +16,7 @@ import styles from "./connectors.module.css";
 export interface PodMenuItem {
   readonly key: string;
   readonly label: string;
+  readonly ariaLabel?: string;
   readonly danger?: boolean;
   readonly onSelect: () => void;
 }
@@ -101,6 +102,7 @@ function MenuList({
           key={item.key}
           type="button"
           role="menuitem"
+          aria-label={item.ariaLabel}
           tabIndex={-1}
           className={styles.cmpPodMenuItem}
           data-danger={item.danger === true ? "true" : undefined}

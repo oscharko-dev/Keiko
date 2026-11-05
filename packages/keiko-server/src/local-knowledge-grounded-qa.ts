@@ -746,6 +746,13 @@ interface SentKnowledgePrompt {
   readonly profile: ContextProfile | undefined;
 }
 
+interface KnowledgeAnswerPromptState {
+  readonly renderedNumericEvidence: readonly NumericEntailmentEvidence[];
+  readonly sentReferences: readonly RetrievalReference[];
+  readonly sent: SentKnowledgePrompt | undefined;
+  readonly measuredPromptTokens: number;
+}
+
 class StoreBackedAnswerGenerator implements AnswerGenerator {
   private renderedNumericEvidence: readonly NumericEntailmentEvidence[] = [];
   private sentReferences: readonly RetrievalReference[] = [];
@@ -791,25 +798,57 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
   }
 
   private async answerResponse(input: AnswerGeneratorInput): Promise<NormalizedResponse> {
-    const { renderedNumericEvidence, sentReferences, sent, measuredPromptTokens } = this;
+    const before = this.promptState();
+    let retryState: KnowledgeAnswerPromptState | undefined;
     try {
       // Re-planned per attempt: when the provider's overflow answer taught Keiko the model's real
       // window, the retry fits the references into it (gateway-context-window.ts).
       return await withAdoptedContextWindowRetry(
         this.context.deps,
-        { modelId: this.modelId, surface: "grounded", correlationId: this.context.correlationId },
-        () => this.callWithinWindow(input),
+        {
+          modelId: this.modelId,
+          surface: "grounded",
+          correlationId: this.context.correlationId,
+          settleRetryFailure: (error, originalFailure) => {
+            const settled = this.context.deps.chatToolTurn?.settleRetryFailure(
+              error,
+              originalFailure,
+              this.modelId,
+              input.signal ?? new AbortController().signal,
+            );
+            if (settled !== undefined && retryState !== undefined)
+              this.restorePromptState(retryState);
+            return settled;
+          },
+        },
+        (attempt) => {
+          if (attempt.retrying) retryState = this.promptState();
+          return this.callWithinWindow(input, attempt.retryFollows);
+        },
       );
     } catch (error) {
       // The answer that stands was built from the prompt before this refused repair.
       if (input.citationRepair === true && this.repairRefused(error)) {
-        this.renderedNumericEvidence = renderedNumericEvidence;
-        this.sentReferences = sentReferences;
-        this.sent = sent;
-        this.measuredPromptTokens = measuredPromptTokens;
+        this.restorePromptState(before);
       }
       throw error;
     }
+  }
+
+  private promptState(): KnowledgeAnswerPromptState {
+    return {
+      renderedNumericEvidence: this.renderedNumericEvidence,
+      sentReferences: this.sentReferences,
+      sent: this.sent,
+      measuredPromptTokens: this.measuredPromptTokens,
+    };
+  }
+
+  private restorePromptState(state: KnowledgeAnswerPromptState): void {
+    this.renderedNumericEvidence = state.renderedNumericEvidence;
+    this.sentReferences = state.sentReferences;
+    this.sent = state.sent;
+    this.measuredPromptTokens = state.measuredPromptTokens;
   }
 
   public repairRefused(error: unknown): boolean {
@@ -875,7 +914,10 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     return id === undefined ? undefined : this.context.deps.store.markdownSkills.forTurn(id);
   }
 
-  private callWithinWindow(input: AnswerGeneratorInput): Promise<NormalizedResponse> {
+  private callWithinWindow(
+    input: AnswerGeneratorInput,
+    retryFollows: (error: unknown) => boolean,
+  ): Promise<NormalizedResponse> {
     const available = Math.min(input.references.length, this.limits.maxPromptReferences);
     const skill = this.selectedSkill();
     const render = (count: number): ReturnType<typeof buildLocalKnowledgeMessages> =>
@@ -908,12 +950,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       profile,
     };
     this.measuredPromptTokens = 0;
-    logGroundedPromptSelection(
-      this.context.correlationId,
-      this.sent.prompt,
-      profile?.effectiveInputBudget ?? 0,
-      profile?.tokenAccounting,
-    );
+    this.logSelectedPrompt(this.sent.prompt, profile);
     return this.callModel(
       {
         modelId: this.modelId,
@@ -923,6 +960,16 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       },
       input.signal ?? new AbortController().signal,
       profile,
+      retryFollows,
+    );
+  }
+
+  private logSelectedPrompt(sent: SentGroundedPrompt, profile: ContextProfile | undefined): void {
+    logGroundedPromptSelection(
+      this.context.correlationId,
+      sent,
+      profile?.effectiveInputBudget ?? 0,
+      profile?.tokenAccounting,
     );
   }
 
@@ -930,12 +977,14 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     request: GatewayCallRequest,
     signal: AbortSignal,
     profile: ContextProfile | undefined,
+    retryFollows: (error: unknown) => boolean,
   ): Promise<NormalizedResponse> {
     const toolTurn = this.context.deps.chatToolTurn;
     if (toolTurn === undefined) return this.model.call(request, signal);
     const limits = profile ?? DEFAULT_CONTEXT_PROFILE;
     const outputTokensMax = limits.reservedOutputTokens;
     return callPluralGroundedSynthesis({
+      retryFollows,
       model: this.model,
       deps: this.context.deps,
       evidenceCount: this.sentReferences.length,

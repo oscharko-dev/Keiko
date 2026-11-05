@@ -1,7 +1,7 @@
-// In-process create/refresh job service for HTML Manual Knowledge Pods (Issue #2063).
+// In-process refresh job service for existing HTML Manual Knowledge Pods (Issue #2063).
 //
-// Wires the UI-triggered live path to the already-audited domain functions: it runs
-// `createHtmlManualPod` / `refreshHtmlManualPod` (keiko-local-knowledge) as a bounded background job
+// Wires the retained refresh path to the already-audited `refreshHtmlManualPod` domain function
+// (keiko-local-knowledge) as a bounded background job
 // through the `gatewayFetch`-backed HTTP ManualCrawlFetcher, mounting through the SAME
 // `runIndexingJob` pipeline as filesystem and connector sources (no parallel indexing path). Crawl
 // bounds, the fail-closed scope guard, and evidence redaction are unchanged from Epic #1856 — this
@@ -11,34 +11,24 @@
 
 import { randomUUID } from "node:crypto";
 import type {
-  HtmlManualPodCreateRequest,
   HtmlManualPodJob,
   HtmlManualPodJobOperation,
   HtmlManualPodJobState,
   HtmlManualPodRefreshRequest,
-  HtmlManualSource,
   ManualRefreshOutcome,
-  KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
-import { validateHtmlManualSource } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 import {
   createDefaultParserRegistry,
-  createHtmlManualPod,
   refreshHtmlManualPod,
   type HtmlManualIndexingProgress,
   type ManualCrawlEvent,
   type ManualCrawlFetcher,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
-import { computeManualRootFingerprint } from "../docs-browser-proposal.js";
 import { createEmbeddingAdapter, openStoreForDeps } from "../local-knowledge-grounded-qa.js";
-import {
-  latestRunningJobId,
-  resolveNewCapsuleEmbeddingIdentity,
-} from "../local-knowledge-handlers.js";
+import { latestRunningJobId } from "../local-knowledge-handlers.js";
 import { currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
@@ -84,7 +74,7 @@ export class ManualPodJobRegistry {
     // pipeline keep consuming resources invisibly -- unregistered (so unpollable), with no
     // reachable controller (so uncancellable), and its eventual terminal patch() silently
     // discarded since patch() no-ops on an unknown jobId. Abort the victim's controller first:
-    // refreshRun/createRun already pass `signal: controller.signal` into the domain pipeline
+    // refreshRun already pass `signal: controller.signal` into the domain pipeline
     // cooperatively, so this actually stops the work through its normal (fail-closed) lifecycle
     // instead of just forgetting about it.
     const oldestTerminal = [...this.runs.values()].find((run) => run.job.state !== "running");
@@ -185,18 +175,15 @@ interface DomainEnv {
   readonly embeddingAdapter: OpenAIEmbeddingAdapter;
 }
 
-// The resolved domain outcome the runner reports back: the progress projection plus the terminal job
-// state each operation derived from its own domain result (so a fail-closed refresh/create is never
-// reported as `succeeded` merely because the promise resolved).
+// The resolved refresh outcome: the progress projection plus its domain-derived terminal state.
+// A fail-closed refresh is never reported as succeeded merely because the promise resolved.
 export interface ManualPodRunOutcome {
   readonly progress: HtmlManualIndexingProgress;
   readonly state: HtmlManualPodJobState;
 }
 
-// The one coverage rule both operations settle by, so a create and a refresh can never disagree about
-// what "succeeded" means: a usable pod plus a fully covered manual is `succeeded`; a usable pod with
-// gaps is `partial` (the domain phase already knows the difference — `ready` vs `degraded`); anything
-// that produced nothing usable is `failed`.
+// A usable pod plus a fully covered manual is succeeded; a usable pod with gaps is partial.
+// A refresh that produced nothing usable is failed.
 function usableTerminalState(
   progress: HtmlManualIndexingProgress,
   usable: boolean,
@@ -218,19 +205,8 @@ export function refreshTerminalState(
   return usableTerminalState(progress, applied && outcome !== "failed");
 }
 
-// The terminal state for a create: a usable pod requires at least one document's vectors to have been
-// persisted (something is searchable). An empty or cancelled crawl (no indexing) or an all-failed
-// index persists nothing → `failed`. Vectors persisted but pages of the approved manual skipped or
-// failed → `partial`; only a fully covered manual is `succeeded`.
-export function createTerminalState(progress: HtmlManualIndexingProgress): HtmlManualPodJobState {
-  return usableTerminalState(
-    progress,
-    progress.indexing !== null && progress.indexing.vectorsPersisted > 0,
-  );
-}
-
 // A run failure is body-free in the job state and emits one correlation-keyed operator diagnostic.
-// The prior pod (refresh) or no pod (create) is left intact by the domain functions. A resolved run
+// The prior pod is left intact by the domain function. A resolved run
 // carries the domain-derived terminal state, so a fail-closed outcome settles as `failed`, not
 // `succeeded`.
 export async function executeJob(
@@ -261,21 +237,6 @@ export async function executeJob(
     );
     manualPodJobRegistry.patch(jobId, failedJob(current));
   }
-}
-
-export function buildHttpManualSource(
-  request: HtmlManualPodCreateRequest,
-): { readonly ok: true; readonly source: HtmlManualSource } | { readonly ok: false } {
-  const fingerprint = computeManualRootFingerprint(`${request.origin}${request.pathPrefix ?? ""}`);
-  if (fingerprint === null) return { ok: false };
-  const source: HtmlManualSource = {
-    schemaVersion: "1",
-    scope: { kind: "html-manual-http", origin: request.origin, pathPrefix: request.pathPrefix },
-    limits: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
-    sourceFingerprint: fingerprint,
-    proposedPodName: request.displayName,
-  };
-  return validateHtmlManualSource(source).ok ? { ok: true, source } : { ok: false };
 }
 
 // KEIKO-0647: manual-pod-specific egress resolver, independent of currentGatewayEgressConfig.
@@ -325,7 +286,7 @@ export type StartManualPodJobResult =
   | { readonly ok: true; readonly job: HtmlManualPodJob }
   | {
       readonly ok: false;
-      readonly reason: "no-embedding-model" | "invalid-source" | "job-already-running";
+      readonly reason: "no-embedding-model" | "job-already-running";
     };
 
 // A background job runner: emits crawl events and resolves the domain progress. Injectable so tests
@@ -343,7 +304,7 @@ export interface StartManualPodOverrides {
   // Test seam: a pre-built domain context (real store + adapter + fetcher). Defaults to one resolved
   // from `deps` (configured embedding model required).
   readonly context?: ManualPodJobContext;
-  // Test seam: the background run thunk. Defaults to the real create/refresh domain call.
+  // Test seam: the background run thunk. Defaults to the real refresh domain call.
   readonly run?: ManualPodJobRunner;
 }
 
@@ -386,40 +347,8 @@ function refreshRun(
       });
 }
 
-function createRun(
-  ctx: ManualPodJobContext,
-  source: HtmlManualSource,
-  identity: KnowledgeCapsule["embeddingModelIdentity"],
-  ids: { readonly capsuleId: string; readonly sourceId: string },
-  controller: AbortController,
-): ManualPodJobRunner {
-  return (onCrawlEvent): Promise<ManualPodRunOutcome> =>
-    createHtmlManualPod(
-      {
-        store: ctx.env.store,
-        parserRegistry: createDefaultParserRegistry(),
-        embeddingAdapter: ctx.env.embeddingAdapter,
-        embeddingModelIdentity: identity,
-        fetcher: ctx.fetcher,
-        capsuleId: ids.capsuleId as KnowledgeCapsuleId,
-        sourceId: ids.sourceId as KnowledgeSourceId,
-        signal: controller.signal,
-        logSink: processServerLogSink(),
-        onCrawlEvent,
-      },
-      source,
-    )
-      .then((result) => ({
-        progress: result.progress,
-        state: createTerminalState(result.progress),
-      }))
-      .finally(() => {
-        ctx.env.close();
-      });
-}
-
 function startJob(
-  operation: "create" | "refresh",
+  operation: "refresh",
   ids: { capsuleId: string; sourceId: string },
   buildRun: (base: HtmlManualPodJob, controller: AbortController) => ManualPodJobRunner,
   diagnostics?: ServerDiagnosticSink,
@@ -430,47 +359,6 @@ function startJob(
   manualPodJobRegistry.register(base, controller);
   void executeJob(jobId, base, controller, buildRun(base, controller), diagnostics);
   return base;
-}
-
-// Start a CREATE job: allocate ids, resolve the configured embedding identity, derive the HTTP
-// source, and run createHtmlManualPod in the background. Returns the initial running job.
-export async function startManualPodCreate(
-  deps: UiHandlerDeps,
-  request: HtmlManualPodCreateRequest,
-  overrides: StartManualPodOverrides & {
-    readonly identity?: KnowledgeCapsule["embeddingModelIdentity"];
-  } = {},
-): Promise<StartManualPodJobResult> {
-  const built = buildHttpManualSource(request);
-  if (!built.ok) return { ok: false, reason: "invalid-source" };
-  const identity = overrides.identity ?? (await resolveIdentityFor(deps));
-  if (identity === undefined) return { ok: false, reason: "no-embedding-model" };
-  const ctx = overrides.context ?? resolveManualPodContext(deps);
-  if (ctx === undefined) return { ok: false, reason: "no-embedding-model" };
-  const ids = { capsuleId: randomUUID(), sourceId: randomUUID() };
-  const run = overrides.run;
-  const job = startJob(
-    "create",
-    ids,
-    (base, controller) =>
-      run ??
-      createRun(
-        overrides.context ?? productionManualPodJobContext(deps, ctx, base.jobId),
-        built.source,
-        identity,
-        ids,
-        controller,
-      ),
-    deps.diagnostics,
-  );
-  return { ok: true, job };
-}
-
-async function resolveIdentityFor(
-  deps: UiHandlerDeps,
-): Promise<KnowledgeCapsule["embeddingModelIdentity"] | undefined> {
-  const identity = await resolveNewCapsuleEmbeddingIdentity(deps);
-  return identity.ok ? identity.identity : undefined;
 }
 
 // Start a REFRESH job for an existing capsule/source. Scope is reconstructed inside

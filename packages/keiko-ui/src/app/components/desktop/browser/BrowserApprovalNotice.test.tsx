@@ -3,6 +3,8 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserApprovalManagementResult } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import * as api from "@/lib/browser-approval-api";
+import { openLauncherBrowser } from "@/lib/launcher-browser-client";
+vi.mock("@/lib/launcher-browser-client", () => ({ openLauncherBrowser: vi.fn() }));
 import {
   codingAppSessionPairingSettled,
   ensureLocalCodingAppSession,
@@ -73,22 +75,49 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetClientDiagnosticWriter();
+  vi.useRealTimers();
 });
 
 describe("browser notice authentication lifecycle", () => {
-  it("returns to the compact invoker after a pointer-opened dialog without granting authority", async () => {
+  it("connects in one click through the native launcher without a code dialog", async () => {
     active = false;
+    vi.mocked(openLauncherBrowser).mockImplementation(async () => {
+      active = true;
+    });
     render(<BrowserApprovalNotice compact />);
-    const connect = await screen.findByRole("button", { name: "Connect browser" });
-    expect(document.body).toHaveFocus();
-    fireEvent.click(connect);
-    const dialog = screen.getByRole("dialog", { name: "Connect this browser" });
-    await waitFor(() => expect(dialog).toHaveFocus());
-    expect(screen.getByRole("button", { name: "Request approval" })).toBeEnabled();
+    fireEvent.click(await screen.findByRole("button", { name: "Connect browser" }));
+    await waitFor(() => expect(openLauncherBrowser).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull(),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(api.requestBrowserApproval).not.toHaveBeenCalled();
     expect(api.approveBrowserRequest).not.toHaveBeenCalled();
-    fireEvent.keyDown(dialog, { key: "Escape" });
-    await waitFor(() => expect(connect).toHaveFocus());
+  });
+
+  it("reports an opener failure without starting the code flow or changing saved work", async () => {
+    active = false;
+    vi.mocked(openLauncherBrowser).mockRejectedValueOnce(new TypeError("unavailable"));
+    render(<BrowserApprovalNotice compact />);
+    fireEvent.click(await screen.findByRole("button", { name: "Connect browser" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("reopen Keiko from its launcher");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(api.requestBrowserApproval).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a launcher acknowledgement as authenticated access and offers a retry", async () => {
+    active = false;
+    vi.mocked(openLauncherBrowser).mockResolvedValue(undefined);
+    render(<BrowserApprovalNotice compact />);
+    const button = await screen.findByRole("button", { name: "Connect browser" });
+    vi.useFakeTimers();
+    fireEvent.click(button);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("reopen Keiko from its launcher");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("keeps compact inventory retry read-only", async () => {

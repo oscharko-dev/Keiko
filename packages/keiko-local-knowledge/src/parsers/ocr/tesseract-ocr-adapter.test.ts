@@ -158,6 +158,43 @@ describe("resolveOcrRuntimeFromEnv", () => {
     expect(runner).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: expected }));
   });
 
+  // A partial number is not a number: parseInt read "30s" as 30 ms and "25MB" as 25 bytes, which
+  // timed out or refused every OCR page, and a zero or negative value was clamped to 1.
+  it.each(["30s", "1e4", "-5", "0", "abc", "12.5", "0x20", ""])(
+    "takes the default for the invalid env timeout %j and the invalid byte limit",
+    async (raw) => {
+      const runner = vi.fn<TesseractCommandRunner>(() =>
+        Promise.resolve({ ok: true, stdout: Buffer.from("env text", "utf8") }),
+      );
+      const resolved = resolveOcrRuntimeFromEnv(
+        {
+          [LOCAL_KNOWLEDGE_OCR_ENGINE_ENV]: "tesseract",
+          [LOCAL_KNOWLEDGE_OCR_TIMEOUT_MS_ENV]: raw,
+          [LOCAL_KNOWLEDGE_OCR_MAX_BYTES_ENV]: raw,
+        },
+        { runner },
+      );
+
+      const result = await resolved.adapter.ocrPage({
+        bytes: new Uint8Array(1024),
+        pageNumber: 1,
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      expect(runner).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 30_000 }));
+    },
+  );
+
+  it("treats a zero or negative option as unset rather than clamping it to 1", async () => {
+    const runner = vi.fn<TesseractCommandRunner>(() =>
+      Promise.resolve({ ok: true, stdout: Buffer.from("text", "utf8") }),
+    );
+    const adapter = createTesseractOcrAdapter({ timeoutMs: 0, maxInputBytes: -3, runner });
+    const result = await adapter.ocrPage({ bytes: new Uint8Array(64), pageNumber: 1 });
+    expect(result).toMatchObject({ ok: true });
+    expect(runner).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 30_000 }));
+  });
+
   it("fails closed for an unsupported configured engine", async () => {
     const resolved = resolveOcrRuntimeFromEnv({ [LOCAL_KNOWLEDGE_OCR_ENGINE_ENV]: "remote" });
     const result = await resolved.adapter.ocrPage({ bytes: new Uint8Array([1]), pageNumber: 1 });

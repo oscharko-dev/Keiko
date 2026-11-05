@@ -16,7 +16,7 @@ function textFor(html: string): string {
 describe("standard HTML character references in the existing parser", () => {
   it.each([
     ["&Uuml;berhitzungsschutz", "Überhitzungsschutz"],
-    ["M&auml;ngel&nbsp;Beseitigung", "Mängel\u00a0Beseitigung"],
+    ["M&auml;ngel&nbsp;Beseitigung", "Mängel Beseitigung"],
     ["caf&eacute;", "café"],
   ])("decodes %s through the shared HTML producer", (encoded, expected) => {
     const text = textFor(`<html><body><p>${encoded} specifies 61.2 C.</p></body></html>`);

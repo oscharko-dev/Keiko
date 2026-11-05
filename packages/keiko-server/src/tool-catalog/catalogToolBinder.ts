@@ -12,7 +12,7 @@ import type {
 } from "./catalogToolPorts.js";
 import {
   assertCompatibilityTime,
-  captureCatalogJson,
+  captureCatalogEnvelope,
   compileToolProjection,
   computeHandlerSetDigest as computeCanonicalHandlerSetDigest,
   lookupCatalogTool,
@@ -156,7 +156,9 @@ function buildCatalogPreparation<Consumer extends CatalogConsumer = CodingCatalo
 ): CatalogBindingPreparation<Consumer> {
   const catalog = verifyToolCatalogSnapshot(sourceCatalog);
   const projection = compileToolProjection(catalog, input.projection.profile);
-  requireBinding(canonicalise(captureCatalogJson(input.projection)) === canonicalise(projection));
+  requireBinding(
+    canonicalise(captureCatalogEnvelope(input.projection)) === canonicalise(projection),
+  );
   const profile = catalog.profiles.find(
     (entry) =>
       entry.profile.id === projection.profile.id &&

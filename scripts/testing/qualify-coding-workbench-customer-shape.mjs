@@ -18,6 +18,7 @@ import {
   seedVendoredRegistry,
 } from "../installable-package-smoke.mjs";
 import { customerShapeRipgrepEnvironment } from "../lib/customer-shape-ripgrep.mjs";
+import { workspaceStorageArgs } from "../lib/workspace-storage-fixture.mjs";
 import {
   CUSTOMER_SHAPE_API_KEY,
   CUSTOMER_SHAPE_MODEL,
@@ -271,25 +272,28 @@ async function awaitSettledUsage(stateDir, runId) {
 }
 
 async function pairWorkbench(page, repository, pairingSecret) {
-  await page.addInitScript((root) => {
-    globalThis.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "qualification-workbench",
-          type: "coding",
-          x: 40,
-          y: 48,
-          w: 1120,
-          h: 900,
-          z: 10,
-          zoom: 1,
-          cfg: { repositoryPath: root },
-          max: false,
-        },
-      ]),
-    );
-  }, repository);
+  await page.addInitScript(
+    ({ argument: root, storageKeys }) => {
+      globalThis.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "qualification-workbench",
+            type: "coding",
+            x: 40,
+            y: 48,
+            w: 1120,
+            h: 900,
+            z: 10,
+            zoom: 1,
+            cfg: { repositoryPath: root },
+            max: false,
+          },
+        ]),
+      );
+    },
+    await workspaceStorageArgs(page, repository),
+  );
   const fragment = encodeCodingAppSessionPairingFragment(
     mintLauncherPairingAttestation({
       secret: pairingSecret,

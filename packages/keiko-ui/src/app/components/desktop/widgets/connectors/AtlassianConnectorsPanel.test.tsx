@@ -2,7 +2,7 @@
 // token flow), verifies, manages (scope + sync), and deletes with confirmation. Whole-panel axe
 // runs in light AND dark.
 
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
@@ -174,7 +174,19 @@ it("shows only owned Live Pods in the Hub without sync or legacy approvals", asy
   const { container } = render(<AtlassianConnectorsPanel client={client} jiraLive />);
   const card = await screen.findByTestId("acx-connector");
   expect(card).toHaveTextContent("Live Jira");
-  expect(card).toHaveTextContent("Ready");
+  expect(card).not.toHaveTextContent("Ready");
+  expect(card).not.toHaveTextContent(live.baseUrl);
+  const addToWorkspace = screen.getByRole("button", { name: "Add to workspace" });
+  expect(addToWorkspace).toBeVisible();
+  expect(addToWorkspace).toHaveClass("lk-btn-ghost");
+  expect(addToWorkspace).not.toHaveClass("lk-btn-primary");
+  const jiraLogo = within(card).getByRole("img", { name: "Jira" });
+  expect(jiraLogo).toHaveAttribute("src", "/assets/brands/jira.svg?v=ad20a139");
+  expect(jiraLogo).toHaveAttribute("width", "15");
+  expect(jiraLogo).toHaveAttribute("height", "15");
+  expect(jiraLogo.parentElement).toHaveClass("lk-capsule-icon");
+  expect(within(card).getByText("Live Jira")).toHaveClass("lk-capsule-name");
+  expect(jiraLogo.closest("button")).toBeNull();
   expect(screen.queryByText("Docs")).toBeNull();
   expect(screen.queryByRole("button", { name: /manage/i })).toBeNull();
   expect(client.listApprovals).not.toHaveBeenCalled();
@@ -195,7 +207,16 @@ it("renders the live Jira Pods as one Knowledge Pods page section", async () => 
   );
   await screen.findByText("No Jira Pods yet.");
   // A page section heading like the pod list's, without a nested "Connectors" heading.
-  expect(screen.getByRole("heading", { level: 2, name: "Jira Live Pods" })).toBeVisible();
+  const heading = screen.getByRole("heading", { level: 2, name: "Jira Live Pods" });
+  const create = screen.getByRole("button", { name: "Create Jira Pod" });
+  expect(heading).toBeVisible();
+  expect(heading).toHaveClass("lk-title");
+  expect(create).toHaveClass("lk-btn-primary", "lk-btn-lg");
+  expect(create.parentElement).toBe(heading.parentElement);
+  expect(
+    create.compareDocumentPosition(screen.getByText("No Jira Pods yet.")) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).not.toBe(0);
   expect(screen.queryByRole("heading", { name: "Connectors" })).toBeNull();
   expect(screen.getByRole("region", { name: "Jira Live Pods" })).toBeVisible();
   expect(screen.getByTestId("acx-panel")).toHaveProperty(

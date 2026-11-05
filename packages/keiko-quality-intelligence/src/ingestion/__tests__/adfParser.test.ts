@@ -47,13 +47,16 @@ describe("parseAdfDocument — happy path", () => {
     expect(doc.stats.nodes).toBeGreaterThan(0);
   });
 
-  it("extracts a link mark into a linkRef block alongside the runs", () => {
+  // Replaces the former pin "a link mark produces a linkRef and ZERO text runs": that pinned the
+  // defect that the linked text and its target never reached the rendered text (#4235).
+  it("keeps a link's visible text and its target in place", () => {
     const doc = parseAdfDocument({
       type: "doc",
       content: [
         {
           type: "paragraph",
           content: [
+            { type: "text", text: "see " },
             {
               type: "text",
               text: "click",
@@ -63,12 +66,7 @@ describe("parseAdfDocument — happy path", () => {
         },
       ],
     });
-    const paragraph = doc.blocks[0];
-    expect(paragraph?.kind).toBe("paragraph");
-    // The text node with a link mark produces a linkRef (NOT a text run).
-    if (paragraph?.kind === "paragraph") {
-      expect(paragraph.runs).toHaveLength(0);
-    }
+    expect(renderAdfDocumentText(doc)).toBe("see click (https://example.invalid/x)");
   });
 
   it("exposes documented defaults", () => {
@@ -137,6 +135,17 @@ describe("parseAdfDocument — happy path", () => {
   });
 });
 
+// A try/catch that asserts only inside the catch passes when nothing throws: the failure the test
+// raises itself is swallowed by the same catch (#4235). Returning the code makes the throw required.
+function errorCodeOf(run: () => unknown): string | undefined {
+  try {
+    run();
+  } catch (error) {
+    return error instanceof AdfParserError ? error.code : "NOT-AN-ADF-PARSER-ERROR";
+  }
+  return undefined;
+}
+
 describe("parseAdfDocument — typed errors", () => {
   it("rejects non-object root with ROOT_NOT_OBJECT", () => {
     try {
@@ -151,28 +160,26 @@ describe("parseAdfDocument — typed errors", () => {
   });
 
   it("rejects wrong root type with ROOT_TYPE_MISMATCH", () => {
-    try {
-      parseAdfDocument({ type: "paragraph", content: [] });
-      expect.unreachable("should have thrown");
-    } catch (err) {
-      if (err instanceof AdfParserError) {
-        expect(err.code).toBe("ROOT_TYPE_MISMATCH");
-      }
-    }
+    expect(errorCodeOf(() => parseAdfDocument({ type: "paragraph", content: [] }))).toBe(
+      "ROOT_TYPE_MISMATCH",
+    );
   });
 
-  it("rejects unknown node types with UNKNOWN_NODE_TYPE", () => {
-    try {
-      parseAdfDocument({
-        type: "doc",
-        content: [{ type: "blockquote", content: [] }],
-      });
-      expect.unreachable("should have thrown");
-    } catch (err) {
-      if (err instanceof AdfParserError) {
-        expect(err.code).toBe("UNKNOWN_NODE_TYPE");
-      }
-    }
+  // Replaces "rejects unknown node types": that test passed whether or not anything threw (its
+  // catch only asserted on an AdfParserError), and the behaviour it named rejected a whole
+  // requirement source for one node type Atlassian had added (#4235).
+  it("degrades an unknown node type to its child text instead of rejecting the document", () => {
+    const doc = parseAdfDocument({
+      type: "doc",
+      content: [
+        {
+          type: "futureNode",
+          content: [{ type: "paragraph", content: [{ type: "text", text: "kept" }] }],
+        },
+      ],
+    });
+    expect(renderAdfDocumentText(doc)).toBe("kept");
+    expect(doc.stats.unknownNodeTypes).toEqual(["futureNode"]);
   });
 
   it("rejects an inline child of a recognised BLOCK type (neither text nor status) with UNKNOWN_NODE_TYPE", () => {
@@ -200,23 +207,11 @@ describe("parseAdfDocument — typed errors", () => {
   });
 
   it("rejects invalid heading level", () => {
-    try {
-      parseAdfDocument({
-        type: "doc",
-        content: [
-          {
-            type: "heading",
-            attrs: { level: 9 },
-            content: [{ type: "text", text: "x" }],
-          },
-        ],
-      });
-      expect.unreachable("should have thrown");
-    } catch (err) {
-      if (err instanceof AdfParserError) {
-        expect(err.code).toBe("INVALID_HEADING_LEVEL");
-      }
-    }
+    const doc = {
+      type: "doc",
+      content: [{ type: "heading", attrs: { level: 9 }, content: [{ type: "text", text: "x" }] }],
+    };
+    expect(errorCodeOf(() => parseAdfDocument(doc))).toBe("INVALID_HEADING_LEVEL");
   });
 
   it("enforces maxNodes cap", () => {
@@ -224,14 +219,9 @@ describe("parseAdfDocument — typed errors", () => {
       type: "paragraph",
       content: [{ type: "text", text: `p${String(i)}` }],
     }));
-    try {
-      parseAdfDocument({ type: "doc", content }, { maxNodes: 3 });
-      expect.unreachable("should have thrown");
-    } catch (err) {
-      if (err instanceof AdfParserError) {
-        expect(err.code).toBe("MAX_NODES_EXCEEDED");
-      }
-    }
+    expect(errorCodeOf(() => parseAdfDocument({ type: "doc", content }, { maxNodes: 3 }))).toBe(
+      "MAX_NODES_EXCEEDED",
+    );
   });
 
   // KEIKO-0891: the node/depth/text-run bounds above only examine fields the parser actually

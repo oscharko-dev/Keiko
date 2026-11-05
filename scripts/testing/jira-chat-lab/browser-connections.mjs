@@ -1,8 +1,47 @@
 import assert from "node:assert/strict";
+import { URL } from "node:url";
 
-/** A Pod's status chip names its state; "Ready" is the verified, usable one. */
-export function readyChip(card) {
-  return card.getByTestId("acx-pod-state").filter({ hasText: /^Ready$/u });
+/** Creation verifies automatically; observe that request instead of issuing a second check. */
+export async function verifyPodAction(page, action) {
+  const pending = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      /^\/api\/atlassian-connectors\/credentials\/[^/]+\/verify$/u.test(
+        new URL(response.url()).pathname,
+      ),
+  );
+  await action();
+  const response = await pending;
+  assert.equal(response.status(), 200);
+  const result = await response.json();
+  assert.equal(result.status, "ok");
+  assert.equal(typeof result.authRef, "string");
+  return result;
+}
+
+/** Healthy Hub cards are quiet; canonical custody metadata proves readiness across reloads. */
+export async function assertVerifiedPod(page, card, identity) {
+  const response = await page.request.get("/api/atlassian-connectors/credentials");
+  assert.equal(response.status(), 200);
+  const { credentials } = await response.json();
+  const credential = credentials.find((item) => item.authRef === identity.authRef);
+  assert.ok(credential?.livePod, "The verified Jira Pod remains in canonical custody");
+  assert.equal(credential.livePod.verificationStatus, "ok");
+  assert.ok(credential.livePod.verificationRevision > 0);
+  if (identity.livePod !== undefined) {
+    assert.equal(credential.livePod.podId, identity.livePod.podId);
+    assert.equal(
+      credential.livePod.authenticationGeneration,
+      identity.livePod.authenticationGeneration,
+    );
+  }
+  const menu = card.getByRole("button", { name: /^More actions:/u });
+  await menu.click();
+  const verify = card.getByRole("menuitem", { name: "Verify connection", exact: true });
+  await verify.waitFor();
+  await verify.press("Escape");
+  assert.equal(await card.getByTestId("acx-pod-state").count(), 0);
+  return credential;
 }
 
 /** The Chat composer's Access radios (owner decision 2026-11-02): one label per autonomy mode. */
