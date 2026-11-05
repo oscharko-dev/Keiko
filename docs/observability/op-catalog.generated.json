@@ -108487,7 +108487,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-salience.ts:311",
+      "site": "packages/keiko-server/src/memory-salience.ts:312",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111743,7 +111743,7 @@
     {
       "op": "memory.salience",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-salience.ts:250",
+      "site": "packages/keiko-server/src/memory-salience.ts:251",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -112161,7 +112161,7 @@
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:934",
+      "site": "packages/keiko-server/src/memory-embedding.ts:947",
       "package": "keiko-server"
     },
     {

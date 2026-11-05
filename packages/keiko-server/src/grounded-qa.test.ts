@@ -4746,11 +4746,19 @@ describe("handleGroundedAsk", () => {
           "derived from that memory as uncited and unverified.",
       });
       expect(JSON.stringify(answer.uncertainty)).not.toContain("Use pnpm for package installs.");
+      // The answer's use of the recalled memory is remembered for "Vergiss das" and never
+      // reinforces it (ADR-0146): only the memory recalled from the question carries the use.
+      const stats = memoryVault.getAccessStats([
+        "mem-package-manager" as MemoryId,
+        "mem-production-database" as MemoryId,
+      ]);
+      expect(stats.get("mem-package-manager" as MemoryId)).toMatchObject({
+        accessCount: 0,
+        lastUsedConversationId: chatId,
+      });
       expect(
-        memoryVault
-          .getAccessStats(["mem-package-manager" as MemoryId])
-          .get("mem-package-manager" as MemoryId)?.accessCount,
-      ).toBe(1);
+        stats.get("mem-production-database" as MemoryId)?.lastUsedConversationId,
+      ).toBeUndefined();
     } finally {
       memoryVault.close();
     }
