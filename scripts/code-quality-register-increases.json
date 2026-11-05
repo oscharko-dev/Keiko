@@ -1642,14 +1642,6 @@
       "issue": 3918
     },
     {
-      "path": "packages/keiko-contracts/src/__tests__/support/parser-type-contract.ts",
-      "rule": "anti-slop/no-unknown-returns",
-      "from": 0,
-      "to": 1,
-      "reason": "proof-fixture",
-      "issue": 3918
-    },
-    {
       "path": "packages/keiko-contracts/src/__tests__/support/physical-task-catalog-contract.ts",
       "rule": "anti-slop-effect/prefer-effect-match",
       "from": 0,

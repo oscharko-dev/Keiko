@@ -18,7 +18,7 @@ type MatcherPass<M> = [M] extends [never]
       : false
     : false;
 
-export type LibraryParserTypeFacts<F extends Callable> = readonly [
+type LibraryParserTypeFacts<F extends Callable> = readonly [
   MatcherPass<ExpectTypeOf<LibraryInput<F>, { positive: true }>["toBeUnknown"]>,
   MatcherPass<ExpectTypeOf<LibraryInput<F>, { positive: true }>["not"]["toBeAny"]>,
   LibraryOutput<F>,
