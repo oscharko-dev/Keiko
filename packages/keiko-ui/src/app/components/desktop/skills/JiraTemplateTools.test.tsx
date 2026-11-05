@@ -1,9 +1,11 @@
 import userEvent from "@testing-library/user-event";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as templates from "@/lib/jira-templates-api";
 import * as skills from "@/lib/markdown-skills-api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import type { JiraTemplateValidation } from "@/lib/jira-templates-api";
 import { JiraTemplateTools } from "./JiraTemplateTools";
 import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
 
@@ -13,20 +15,21 @@ vi.mock("@/lib/jira-templates-api", () => ({
   proposeJiraTemplates: vi.fn(),
 }));
 vi.mock("@/lib/markdown-skills-api", () => ({ readMarkdownSkill: vi.fn() }));
+vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
 vi.mock("@/lib/atlassian-connectors-api", () => ({
   listAtlassianConnectors: vi.fn(() =>
-    Promise.resolve([
-      {
-        displayName: "Synthetic Jira",
+    Promise.resolve(
+      [1, 2].map((number) => ({
+        displayName: `Synthetic Jira ${String(number)}`,
         deployment: "data-center",
         livePod: {
-          podId: "pod-1",
+          podId: `pod-${String(number)}`,
           verificationStatus: "ok",
           verificationInProgress: false,
           capabilities: ["live-read", "live-write"],
         },
-      },
-    ]),
+      })),
+    ),
   ),
 }));
 vi.mock("../useConnectorRefresh", () => ({ useConnectorRefresh: vi.fn() }));
@@ -89,6 +92,38 @@ async function openPanel(): Promise<ReturnType<typeof userEvent.setup>> {
   await user.click(screen.getByRole("button", { name: "Jira issue templates" }));
   await screen.findByText("Story template");
   return user;
+}
+
+const MATCH: JiraTemplateValidation = {
+  valid: true,
+  findings: [],
+  checked: { project: true, fields: true, linkTypes: true, transitions: true },
+};
+const TASK = { ...ENTRY, id: "skill-task", revision: 1, name: "Task template", issueType: "Task" };
+
+function rowFor(name: string): HTMLElement {
+  const row = screen.getByText(name).closest("li");
+  if (row === null) throw new TypeError("Missing template row");
+  return row;
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve: (value: T) => void = () => {
+    throw new Error("Promise not initialized");
+  };
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
+async function validateRow(
+  user: ReturnType<typeof userEvent.setup>,
+  name = ENTRY.name,
+): Promise<void> {
+  const button = within(rowFor(name)).getByRole("button", { name: "Validate against Jira" });
+  await waitFor(() => expect(button).toBeEnabled());
+  await user.click(button);
 }
 
 describe("Jira issue template tools", () => {
@@ -246,6 +281,135 @@ describe("Jira issue template tools", () => {
     expect(screen.queryByText("The template matches the Jira instance.")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Validate against Jira" })).not.toBeInTheDocument();
     expect(skills.readMarkdownSkill).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a result with its template and clears it while only the next row is checking", async () => {
+    vi.mocked(templates.fetchJiraTemplates).mockResolvedValue([ENTRY, TASK]);
+    vi.mocked(skills.readMarkdownSkill).mockResolvedValue(DOCUMENT);
+    const pending = deferred<JiraTemplateValidation>();
+    vi.mocked(templates.validateJiraTemplate)
+      .mockResolvedValueOnce(MATCH)
+      .mockReturnValueOnce(pending.promise);
+    const user = await openPanel();
+    await validateRow(user);
+    await screen.findByText("The template matches the Jira instance.");
+    expect(
+      within(rowFor(ENTRY.name)).getByText("The template matches the Jira instance."),
+    ).toBeInTheDocument();
+    await validateRow(user, TASK.name);
+    expect(screen.queryByText("The template matches the Jira instance.")).not.toBeInTheDocument();
+    expect(within(rowFor(TASK.name)).getByRole("button", { name: "Validating…" })).toBeDisabled();
+    expect(
+      within(rowFor(ENTRY.name)).getByRole("button", { name: "Validate against Jira" }),
+    ).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "Validating…" })).toHaveLength(1);
+    await act(async () => {
+      pending.resolve(MATCH);
+    });
+    expect(
+      within(rowFor(TASK.name)).getByText("The template matches the Jira instance."),
+    ).toBeInTheDocument();
+    expect(reportClientDiagnostic).toHaveBeenCalledWith("Jira template validation completed.");
+  });
+
+  it("keeps the verified row result when an independent skill preview changes", async () => {
+    vi.mocked(skills.readMarkdownSkill).mockResolvedValue(DOCUMENT);
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue(MATCH);
+    const user = userEvent.setup();
+    const view = render(<JiraTemplateTools library={library} />);
+    await user.click(screen.getByRole("button", { name: "Jira issue templates" }));
+    await screen.findByText(ENTRY.name);
+    await validateRow(user);
+    await screen.findByText("The template matches the Jira instance.");
+    view.rerender(
+      <JiraTemplateTools
+        library={{ ...library, preview: { ...DOCUMENT, id: TASK.id, name: TASK.name } }}
+      />,
+    );
+    expect(
+      within(rowFor(ENTRY.name)).getByText("The template matches the Jira instance."),
+    ).toBeInTheDocument();
+    expect(templates.fetchJiraTemplates).toHaveBeenCalledTimes(1);
+  });
+
+  it("withdraws a result on Pod changes, including returning to the original Pod", async () => {
+    vi.mocked(skills.readMarkdownSkill).mockResolvedValue(DOCUMENT);
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue(MATCH);
+    const user = await openPanel();
+    await validateRow(user);
+    await screen.findByText("The template matches the Jira instance.");
+    const select = screen.getByRole("combobox", { name: "Jira Pod" });
+    await user.selectOptions(select, "pod-2");
+    expect(screen.queryByText("The template matches the Jira instance.")).not.toBeInTheDocument();
+    await user.selectOptions(select, "pod-1");
+    expect(screen.queryByText("The template matches the Jira instance.")).not.toBeInTheDocument();
+  });
+
+  it("discards a late response after Pod A → B → A without ending a newer check", async () => {
+    vi.mocked(skills.readMarkdownSkill).mockResolvedValue(DOCUMENT);
+    const old = deferred<JiraTemplateValidation>();
+    const current = deferred<JiraTemplateValidation>();
+    vi.mocked(templates.validateJiraTemplate)
+      .mockReturnValueOnce(old.promise)
+      .mockReturnValueOnce(current.promise);
+    const user = await openPanel();
+    await validateRow(user);
+    await waitFor(() => expect(templates.validateJiraTemplate).toHaveBeenCalledTimes(1));
+    const select = screen.getByRole("combobox", { name: "Jira Pod" });
+    expect(select).toBeEnabled();
+    await user.selectOptions(select, "pod-2");
+    await user.selectOptions(select, "pod-1");
+    await validateRow(user);
+    await waitFor(() => expect(templates.validateJiraTemplate).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      old.resolve(MATCH);
+    });
+    expect(screen.queryByText("The template matches the Jira instance.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Validating…" })).toBeDisabled();
+    expect(reportClientDiagnostic).toHaveBeenCalledWith("Jira template validation superseded.");
+    await act(async () => {
+      current.resolve(MATCH);
+    });
+    expect(await screen.findByText("The template matches the Jira instance.")).toBeInTheDocument();
+  });
+
+  it("does not start a stale Jira validation when the stored revision changes during its read", async () => {
+    const old = deferred<typeof DOCUMENT>();
+    vi.mocked(skills.readMarkdownSkill).mockReturnValue(old.promise);
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue(MATCH);
+    const user = userEvent.setup();
+    const view = render(<JiraTemplateTools library={library} />);
+    await user.click(screen.getByRole("button", { name: "Jira issue templates" }));
+    await screen.findByText(ENTRY.name);
+    await validateRow(user);
+    vi.mocked(templates.fetchJiraTemplates).mockResolvedValue([{ ...ENTRY, revision: 3 }]);
+    view.rerender(<JiraTemplateTools library={libraryOf([{ ...DOCUMENT, revision: 3 }])} />);
+    await waitFor(() => expect(templates.fetchJiraTemplates).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      old.resolve(DOCUMENT);
+    });
+    expect(templates.validateJiraTemplate).not.toHaveBeenCalled();
+    expect(screen.queryByText("The template matches the Jira instance.")).not.toBeInTheDocument();
+  });
+
+  it("discards a late result after the library changes even if its template revision remains", async () => {
+    vi.mocked(skills.readMarkdownSkill).mockResolvedValue(DOCUMENT);
+    const old = deferred<JiraTemplateValidation>();
+    vi.mocked(templates.validateJiraTemplate).mockReturnValue(old.promise);
+    const user = userEvent.setup();
+    const view = render(<JiraTemplateTools library={library} />);
+    await user.click(screen.getByRole("button", { name: "Jira issue templates" }));
+    await screen.findByText(ENTRY.name);
+    await validateRow(user);
+    await waitFor(() => expect(templates.validateJiraTemplate).toHaveBeenCalledTimes(1));
+    view.rerender(
+      <JiraTemplateTools library={libraryOf([{ ...DOCUMENT, id: "other", revision: 3 }])} />,
+    );
+    await waitFor(() => expect(templates.fetchJiraTemplates).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      old.resolve(MATCH);
+    });
+    expect(screen.queryByText("The template matches the Jira instance.")).not.toBeInTheDocument();
   });
 
   it("starts each proposal from its own Markdown, not the previous project's edits", async () => {
