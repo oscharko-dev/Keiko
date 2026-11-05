@@ -1,4 +1,4 @@
-import { buildManagedGitWorktree } from "./managedGitWorktree.test-support.js";
+import { buildManagedGitWorktree } from "./_support.js";
 // Route tests for the governed fetch/pull sync preview + execute routes (Issue #1573, Epic #1572).
 //
 // Drives the handlers at the BFF seam with an injected fake GitProcessRunner (no real git). Proves:

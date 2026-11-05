@@ -1,4 +1,4 @@
-import { buildManagedGitWorktree } from "./managedGitWorktree.test-support.js";
+import { buildManagedGitWorktree } from "./_support.js";
 import * as commitDraftQuality from "./commitDraftQuality.js";
 // Route tests for the governed commit preview + execute routes (Issue #475, Epic #470).
 //

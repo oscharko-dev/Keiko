@@ -1,4 +1,4 @@
-import { buildManagedGitWorktree } from "./managedGitWorktree.test-support.js";
+import { buildManagedGitWorktree } from "./_support.js";
 // Route tests for the governed local branch + staging execution routes (Issue #475, Epic #470).
 //
 // Two harnesses:
