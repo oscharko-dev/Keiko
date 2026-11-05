@@ -5476,7 +5476,7 @@
       "anti-slop/require-safety-comment-for-type-assertion": 5
     },
     "packages/keiko-model-gateway/src/speech-to-text-adapter.ts": {
-      "anti-slop/no-conditional-empty-object-spread": 12,
+      "anti-slop/no-conditional-empty-object-spread": 9,
       "anti-slop/no-known-value-widening": 4,
       "anti-slop/no-runtime-typeof": 6,
       "anti-slop/no-unknown-parameters": 3,
@@ -5490,7 +5490,7 @@
       "anti-slop/require-safety-comment-for-type-assertion": 7
     },
     "packages/keiko-model-gateway/src/text-to-speech-adapter.ts": {
-      "anti-slop/no-conditional-empty-object-spread": 10,
+      "anti-slop/no-conditional-empty-object-spread": 7,
       "anti-slop/no-known-value-widening": 2,
       "anti-slop/no-runtime-typeof": 3,
       "anti-slop/no-unknown-parameters": 1,
@@ -8462,6 +8462,7 @@
     "packages/keiko-server/src/coding-runtime/productionCodingRuntimeResolver.test.ts": {
       "anti-slop/no-chained-type-assertions": 2,
       "anti-slop/no-conditional-empty-object-spread": 7,
+      "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-module-mocking": 2,
       "anti-slop/no-runtime-typeof": 3,
       "anti-slop/no-unknown-parameters": 2,
