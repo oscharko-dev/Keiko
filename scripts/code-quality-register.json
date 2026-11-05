@@ -294,6 +294,10 @@
     },
     "packages/keiko-activity-log/src/server-logger.test.ts": {
       "anti-slop/no-chained-type-assertions": 1,
+      "anti-slop/no-known-value-widening": 1,
+      "anti-slop/no-object-parameters": 2,
+      "anti-slop/no-reflect-apply": 3,
+      "anti-slop/no-runtime-typeof": 2,
       "anti-slop/no-unknown-parameters": 1,
       "anti-slop/no-unsafe-dictionary-type": 3,
       "anti-slop/require-safety-comment-for-type-assertion": 3

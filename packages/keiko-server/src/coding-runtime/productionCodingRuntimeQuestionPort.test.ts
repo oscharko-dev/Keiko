@@ -216,3 +216,26 @@ describe("production coding runtime question port fail-closed branches", () => {
     ).resolves.toBe(false);
   });
 });
+
+describe("public runtime question response admission (#3918)", () => {
+  it("refuses a real malformed runtime projection before returning a list", async () => {
+    const questions = [{ question: "", header: "Action", options: [] }];
+    const port = createOpenCodeRuntimeQuestionPort({
+      ...unusedRunPort(),
+      listQuestions: () => Promise.resolve([{ id: "que_1", sessionID: "ses_1", questions }]),
+    });
+    await expect(port.list(operation("run-1", "public-invalid-list", 1))).resolves.toBeUndefined();
+  });
+
+  it("returns the real healthy projected list and original nested questions", async () => {
+    const questions = [{ question: "Continue?", header: "Action", options: [] }];
+    const port = createOpenCodeRuntimeQuestionPort({
+      ...unusedRunPort(),
+      listQuestions: () => Promise.resolve([{ id: "que_1", sessionID: "ses_1", questions }]),
+    });
+    const result = await port.list(operation("run-1", "public-healthy-list", 1));
+    expect(result).toEqual({ questions: [{ id: "que_1", questions }] });
+    expect(result?.questions[0]?.questions).toBe(questions);
+    expect(Object.hasOwn(result?.questions[0] ?? {}, "sessionID")).toBe(false);
+  });
+});
