@@ -4840,6 +4840,13 @@ function readinessProbeUnanswered(
     : isAnyCodingWorkbenchProbeUnanswered(config);
 }
 
+// A verification that is still running is a state the Workbench re-reads, not a shortfall, so it is
+// recorded at info. Every settled shortfall (context window, tool calling, conversation not ready)
+// stays a warning.
+function readinessShortfallLevel(reason: CodingWorkbenchReadinessShortfall): "info" | "warn" {
+  return reason === "model-verification-pending" ? "info" : "warn";
+}
+
 function logReadinessShortfall(
   ctx: RouteContext,
   result: CodingWorkbenchSidecarGatewayResult,
@@ -4848,7 +4855,7 @@ function logReadinessShortfall(
   storedReason?:
     "model-context-window-insufficient" | "no-tool-calling" | "tool-calling-unverified",
 ): void {
-  getServerLogger().warn(
+  getServerLogger()[readinessShortfallLevel(reason)](
     activityLogEvent(
       CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION,
       {

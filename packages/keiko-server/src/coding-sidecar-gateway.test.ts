@@ -6788,6 +6788,7 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
         probeMode: "passive",
       });
       expect(JSON.stringify(line)).not.toContain("apiKey");
+      expect(sink.events[0]?.level).toBe("warn");
     },
   );
 
@@ -10450,7 +10451,9 @@ describe("pending readiness original cause evidence", () => {
     "retains the actual stored tool shortfall while pending: %s",
     async (declared) => {
       vi.useFakeTimers({ toFake: ["setTimeout"] });
-      const sink = captureServerLog("warn");
+      // #4271 L3: a verification that is still running is a state, recorded at info, so the capture
+      // threshold is info; every settled shortfall elsewhere in this file stays asserted at warn.
+      const sink = captureServerLog("info");
       const { toolCallingVerification: _verification, ...unverified } = capability();
       const config = configValue(provider({ tokenCounter: "litellm" }), {
         ...unverified,
@@ -10486,6 +10489,7 @@ describe("pending readiness original cause evidence", () => {
         const event = sink.events.find(
           (entry) => entry.op === "coding-sidecar.gateway.readiness-insufficient",
         );
+        expect(event?.level).toBe("info");
         expect(event?.extra).toMatchObject({
           reason: "model-verification-pending",
           storedReason: declared ? "tool-calling-unverified" : "no-tool-calling",
