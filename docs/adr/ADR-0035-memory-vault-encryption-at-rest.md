@@ -63,7 +63,7 @@ configured literal, so a field the caller kept within its bound can exceed it on
 stored form has never been held to the caller's bounds, and a write the caller's record admits is
 not refused for it. Only the redacted snapshot supplies encryption and SQL bindings. Foreign `toJSON`
 hooks and retained input references cannot supply later write values, and a redaction callback
-cannot change the admitted values. The row writer returns that redacted snapshot; vault return
+cannot alter the admitted snapshot it redacts. The row writer returns that redacted snapshot; vault return
 values and postcommit success events consume it, including batch and graph updates. Existing
 transaction, pre-image and throwing postcommit-hook semantics remain in force.
 
