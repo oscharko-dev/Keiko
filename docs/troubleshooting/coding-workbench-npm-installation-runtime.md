@@ -45,9 +45,11 @@ and npm selects the one that matches the host.
 The runtime is absent after an install with `--omit=optional` (or `optional=false` in the npm
 configuration), or when a registry mirror does not carry the runtime package. Install the ONE
 package that matches the Mac's processor (`uname -m` prints `arm64` or `x86_64`; npm refuses the
-other one with `EBADPLATFORM`) in the folder where Keiko is installed, then restart Keiko. A global
-installation (`npm install -g`) is not supported yet
-([#3582](https://github.com/oscharko-dev/Keiko/issues/3582)).
+other one with `EBADPLATFORM`) in the folder where Keiko is installed, then restart Keiko.
+The #3582 packaging repair qualifies global npm installation in an isolated prefix as well as
+project npm and Yarn installs. Older artifacts can omit ordinary runtime dependencies under
+`npm install -g`; updating to an artifact containing that repair is required. Installing only the
+native runtime cannot repair that older dependency graph.
 
 Apple silicon (`arm64`):
 

@@ -496,6 +496,7 @@ describe("retaining a settled run's session state", () => {
     ["a workspace key that is not a digest", { workspaceKey: "workspace" }],
     ["a malformed version", { runtimeVersion: "2.1" }],
     ["a window of zero", { maxInputTokens: 0 }],
+    ["an invalid model route digest", { continuationRouteDigest: "not-a-digest" }],
   ])("refuses a binding with %s before touching the disk", (_name, overrides) => {
     const f = fixture();
 
@@ -607,6 +608,32 @@ describe("checking a retained entry out for a resuming run", () => {
     expect(existsSync(refused.destination)).toBe(false);
     expect(checkout(f, { maxInputTokens: 24_000 }).result).toMatchObject({ ok: true });
   });
+
+  it("restores required reasoning across runs only for the same model route", () => {
+    const f = fixture();
+    const continuationRouteDigest = "a".repeat(64);
+    expect(retain(f, { continuationRouteDigest })).toMatchObject({ ok: true });
+    // A new server/store instance models a later run; no ephemeral receipt is needed.
+    const next = { ...f, store: createRetainedSessionStore({ root: f.storeRoot, now: () => NOW }) };
+    expect(checkout(next, { continuationRouteDigest }).result).toMatchObject({ ok: true });
+    const changed = checkout(next, { continuationRouteDigest: "b".repeat(64) });
+    expect(changed.result).toEqual({ ok: false, reason: "model-route-changed", removed: false });
+    expect(existsSync(changed.destination)).toBe(false);
+    expect(checkout(next, { continuationRouteDigest }).result).toMatchObject({ ok: true });
+  });
+
+  it.each([undefined, "b".repeat(64)])(
+    "refuses legacy or different route provenance (%s)",
+    (stored) => {
+      const f = fixture();
+      retain(f, stored === undefined ? {} : { continuationRouteDigest: stored });
+      expect(checkout(f, { continuationRouteDigest: "a".repeat(64) }).result).toEqual({
+        ok: false,
+        reason: "model-route-changed",
+        removed: false,
+      });
+    },
+  );
 
   it("refuses an expired entry without reading its database and removes it", () => {
     const f = fixture();

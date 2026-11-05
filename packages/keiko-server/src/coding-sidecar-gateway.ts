@@ -1,3 +1,7 @@
+import { requiresReasoningContinuation } from "./coding-reasoning-continuation.js";
+import { redactContent } from "@oscharko-dev/keiko-security";
+import { currentRedactionSecrets } from "./deps.js";
+import { ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS } from "./activity-line-fields.js";
 import { gatewaySpendRejectionReason } from "./gateway-spend-budget.js";
 import { CodingRuntimeLaunchRejectedError } from "./coding-runtime/launchFailure.js";
 import {
@@ -338,6 +342,8 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
     // #3907 AC3: how many assistant messages of the history carry text beside their tool calls; the
     // gateway resends that text upstream as the model wrote it. A count; the text is never recorded.
     toolCallTextMessageCount: { type: "integer", dataClass: "count", required: false },
+    reasoningContinuationMessages: { type: "integer", dataClass: "count", required: false },
+    reasoningContinuationBytes: { type: "integer", dataClass: "count", required: false },
     // #3897 S14: how many validated image parts the request carries; present only when it carries
     // any. The count is part of what `estimatedPromptTokens` is charged for (the gateway's image
     // allowance per image); the images themselves are never recorded.
@@ -488,6 +494,7 @@ type CodingSidecarGatewayRejectionReason =
   | "input-messages-exceeded"
   | "prompt-tokens-exceeded"
   | "invalid-model"
+  | "reasoning-continuation-invalid"
   | "tool-contract-drift"
   | "tool-contract-missing"
   | "tool-contract-empty"
@@ -537,6 +544,7 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
         "input-messages-exceeded",
         "prompt-tokens-exceeded",
         "invalid-model",
+        "reasoning-continuation-invalid",
         "tool-contract-drift",
         "tool-contract-missing",
         "tool-contract-empty",
@@ -666,20 +674,7 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
     // The Keiko-code frames and cause classes of the failure, when the turn failed on an error
     // (PR #3617 review): a model-answer failure writes no error-level diagnostic, so this line is
     // where its frames live.
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -988,6 +983,10 @@ const BAD_REQUEST_MESSAGE_REASONS: readonly {
   readonly reason: CodingSidecarGatewayRejectionReason;
 }[] = [
   {
+    test: (message) => message.startsWith("Required reasoning continuation"),
+    reason: "reasoning-continuation-invalid",
+  },
+  {
     test: (message) =>
       message === "Request body is not valid JSON." ||
       message === "Request body must be a JSON object.",
@@ -1070,6 +1069,9 @@ function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort {
 export interface OpenCodeGatewayReadinessRegistry {
   /** Server-owned qualification choice; never selected from a request. */
   readonly toolProfile?: OpenCodeToolProfile;
+  /** Captured from the server's launch geometry, including an explicitly ordinary route. */
+  readonly bindContinuationRoute: (runId: string, digest: string | undefined) => void;
+  readonly matchesContinuationRoute: (runId: string, digest: string | undefined) => boolean;
   readonly claim: (runId: string) => boolean;
   readonly verifyObserved: (runId: string) => void;
   readonly isVerified: (runId: string) => boolean;
@@ -1108,6 +1110,33 @@ function pendingChallengeWait(
   });
 }
 
+function continuationRouteBinding(): {
+  readonly methods: Pick<
+    OpenCodeGatewayReadinessRegistry,
+    "bindContinuationRoute" | "matchesContinuationRoute"
+  >;
+  readonly clear: (runId: string) => void;
+} {
+  const continuationRoutes = new Map<string, string | undefined>();
+  return {
+    methods: {
+      bindContinuationRoute: (runId, digest): void => {
+        if (
+          (digest !== undefined && !/^[a-f0-9]{64}$/u.test(digest)) ||
+          (continuationRoutes.has(runId) && continuationRoutes.get(runId) !== digest)
+        )
+          throw new TypeError("Native model continuation route cannot be rebound.");
+        continuationRoutes.set(runId, digest);
+      },
+      matchesContinuationRoute: (runId, digest): boolean =>
+        continuationRoutes.get(runId) === digest,
+    },
+    clear: (runId): void => {
+      continuationRoutes.delete(runId);
+    },
+  };
+}
+
 export function createOpenCodeGatewayReadinessRegistry(
   toolProfile: OpenCodeToolProfile = "direct",
 ): OpenCodeGatewayReadinessRegistry {
@@ -1116,12 +1145,14 @@ export function createOpenCodeGatewayReadinessRegistry(
   const armed = new Set<string>();
   const adoptionGapDiagnosed = new Set<string>();
   const waiters = new Map<string, (result: boolean) => void>();
+  const routeBinding = continuationRouteBinding();
   const verifyObserved = (runId: string): void => {
     observed.add(runId);
     waiters.get(runId)?.(true);
   };
   return Object.freeze<OpenCodeGatewayReadinessRegistry>({
     toolProfile,
+    ...routeBinding.methods,
     claim: (runId): boolean => {
       if (!armed.delete(runId)) return false;
       verifyObserved(runId);
@@ -1146,7 +1177,10 @@ export function createOpenCodeGatewayReadinessRegistry(
       return true;
     },
     clear: (runId, preserveVerification = false): void => {
-      if (!preserveVerification) observed.delete(runId);
+      if (!preserveVerification) {
+        observed.delete(runId);
+        routeBinding.clear(runId);
+      }
       armed.delete(runId);
       adoptionGapDiagnosed.delete(runId);
       waiters.get(runId)?.(false);
@@ -1170,6 +1204,7 @@ export interface CodingSidecarGatewayChatCompletionRequest {
 }
 
 export interface CodingSidecarGatewayChatMessage {
+  readonly reasoningContent?: string | undefined;
   readonly role: "system" | "user" | "assistant" | "tool";
   /** The message text. With image parts it is the joined text parts; `contentParts` is complete. */
   readonly content: string;
@@ -1363,12 +1398,50 @@ function parseMessageContent(value: unknown): ParsedMessagePiece<ParsedMessageCo
   };
 }
 
-function parseMessageEntry(value: unknown): ParsedMessagePiece<CodingSidecarGatewayChatMessage> {
+function conflictingReasoningFields(value: Record<string, unknown>): boolean {
+  return (
+    typeof value.reasoning_content === "string" &&
+    typeof value.reasoning === "string" &&
+    value.reasoning_content !== value.reasoning
+  );
+}
+
+function parseMessageReasoning(
+  value: unknown,
+  role: CodingSidecarGatewayChatMessage["role"],
+  retainReasoning: boolean,
+): ParsedMessagePiece<Pick<CodingSidecarGatewayChatMessage, "reasoningContent">> {
+  if (retainReasoning && isRecord(value) && conflictingReasoningFields(value))
+    return { kind: "invalid" };
+  let reasoning: unknown;
+  if (isRecord(value) && role === "assistant" && retainReasoning)
+    reasoning =
+      typeof value.reasoning_content === "string" ? value.reasoning_content : value.reasoning;
+  return {
+    kind: "ok",
+    value:
+      typeof reasoning === "string" && reasoning.length > 0 ? { reasoningContent: reasoning } : {},
+  };
+}
+
+function parseMessageEntry(
+  value: unknown,
+  retainReasoning: boolean,
+): ParsedMessagePiece<CodingSidecarGatewayChatMessage> {
   const base = parseMessageBase(value);
   if (base.kind !== "ok") return base;
   const continuation = parseMessageContinuation(value, base.value.role);
   if (continuation === undefined) return { kind: "invalid" };
-  return { kind: "ok", value: { ...base.value, ...continuation } };
+  const reasoning = parseMessageReasoning(value, base.value.role, retainReasoning);
+  if (reasoning.kind !== "ok") return reasoning;
+  return {
+    kind: "ok",
+    value: {
+      ...base.value,
+      ...continuation,
+      ...reasoning.value,
+    },
+  };
 }
 
 // A tool-calling assistant message may carry `content: null`; every other message parses its
@@ -1550,7 +1623,10 @@ interface ParsedMessages {
  * content) for every other malformed shape. Reasoning-only assistant messages are dropped and
  * counted (#3873, F23); a history that was nothing else is an empty one.
  */
-function parseMessages(value: unknown): ParsedMessages | RouteResult | undefined {
+function parseMessages(
+  value: unknown,
+  retainReasoning: boolean,
+): ParsedMessages | RouteResult | undefined {
   if (!Array.isArray(value) || value.length === 0) {
     return undefined;
   }
@@ -1561,7 +1637,7 @@ function parseMessages(value: unknown): ParsedMessages | RouteResult | undefined
       droppedReasoningMessageCount += 1;
       continue;
     }
-    const parsed = parseMessageEntry(entry);
+    const parsed = parseMessageEntry(entry, retainReasoning);
     if (parsed.kind !== "ok") return messageParseRefusal(parsed, value.length);
     messages.push(parsed.value);
   }
@@ -1772,10 +1848,27 @@ function buildChatRequest(
   };
 }
 
+function chatRequestOptions(
+  body: Record<string, unknown>,
+  tools: readonly ToolDefinition[] | undefined,
+): Pick<
+  CodingSidecarGatewayChatCompletionRequest,
+  "model" | "tools" | "stream" | "temperature" | "top_p"
+> {
+  return {
+    ...(typeof body.model === "string" && body.model.length > 0 ? { model: body.model } : {}),
+    ...(tools === undefined ? {} : { tools }),
+    ...(typeof body.stream === "boolean" ? { stream: body.stream } : {}),
+    ...(typeof body.temperature === "number" ? { temperature: body.temperature } : {}),
+    ...(typeof body.top_p === "number" ? { top_p: body.top_p } : {}),
+  };
+}
+
 function parseChatRequest(
   body: Record<string, unknown>,
+  retainReasoning = false,
 ): CodingSidecarGatewayChatCompletionRequest | RouteResult | undefined {
-  const parsedMessages = parseMessages(body.messages);
+  const parsedMessages = parseMessages(body.messages, retainReasoning);
   if (parsedMessages === undefined) {
     return undefined;
   }
@@ -1787,13 +1880,9 @@ function parseChatRequest(
     return tools;
   }
   return {
-    ...(typeof body.model === "string" && body.model.length > 0 ? { model: body.model } : {}),
     messages: parsedMessages.messages,
     droppedReasoningMessageCount: parsedMessages.droppedReasoningMessageCount,
-    ...(tools === undefined ? {} : { tools }),
-    ...(typeof body.stream === "boolean" ? { stream: body.stream } : {}),
-    ...(typeof body.temperature === "number" ? { temperature: body.temperature } : {}),
-    ...(typeof body.top_p === "number" ? { top_p: body.top_p } : {}),
+    ...chatRequestOptions(body, tools),
   };
 }
 
@@ -2182,6 +2271,7 @@ function budgetValidationError(
 async function readChatCompletionRequest(
   ctx: RouteContext,
   maxRequestBytes: number,
+  parse: typeof parseChatRequest,
 ): Promise<CodingSidecarGatewayChatCompletionRequest | RouteResult> {
   const body = await readJsonObject(ctx.req, maxRequestBytes);
   if (isRouteResult(body)) {
@@ -2190,7 +2280,7 @@ async function readChatCompletionRequest(
   if (!isRecord(body)) {
     return badRequest("Request body must be a JSON object.");
   }
-  const parsed = parseChatRequest(body);
+  const parsed = parse(body);
   if (parsed === undefined) {
     return badRequest("Request body must include a non-empty messages array.");
   }
@@ -2692,6 +2782,7 @@ function runtimeRetryFor(
 ): RuntimeRetry {
   if (gatewaySpendRejectionReason(error) !== undefined) return "refused";
   if (error instanceof BoundSkillAttemptRefused) return "refused";
+  if (error instanceof ResponseRedactionError) return "refused";
   if (repairFailedAgain(error, failureCode)) return "refused";
   // The gateway already owns bounded schema/transport correction. Repeating the identical
   // malformed turn in OpenCode adds no correction and can loop without an attempt limit.
@@ -3463,14 +3554,19 @@ async function dispatchGatewayChat(
       binding,
       modelAlias,
       // Built inside the settlement: a bound skill that is already gone refuses here (#4025 AC5).
-      request: requestForGatewayDelivery(
-        ctx,
-        parsed,
-        delivery,
-        cancellation.signal,
-        retries.observer,
-        runId,
-      ),
+      request: {
+        ...requestForGatewayDelivery(
+          ctx,
+          parsed,
+          delivery,
+          cancellation.signal,
+          retries.observer,
+          runId,
+        ),
+        ...(requiresReasoningContinuation(binding.config, modelAlias)
+          ? { reasoningStateSecrets: currentRedactionSecrets(deps) }
+          : {}),
+      },
       runId,
       cancellation,
       promptTokenReservation: delivery.promptTokenReservation,
@@ -3585,13 +3681,58 @@ function refusalAnswer(ctx: RouteContext, runId: string, error: unknown): RouteR
   return error.capabilityRevoked ? unauthorizedGatewayRequest() : skillSelectionChanged(ctx);
 }
 
+function assertCompleteBufferedReasoning(
+  config: GatewayConfig,
+  modelAlias: string,
+  response: NormalizedResponse,
+): void {
+  if (
+    requiresReasoningContinuation(config, modelAlias) &&
+    (response.reasoning?.trim().length ?? 0) === 0
+  )
+    throw new ResponseRedactionError("Required model continuation state is unavailable.");
+}
+
+function bufferedDeliveryRefusal(
+  dispatch: GatewayChatDispatchContext,
+  stream: BufferedOpenAiStreamSession | undefined,
+  response: NormalizedResponse,
+  usage: ReturnType<typeof completionUsage>,
+  record: RecordBufferedOutcome,
+): RouteResult | typeof STREAMING | undefined {
+  const { binding, modelAlias, request, cancellation } = dispatch;
+  if (cancellation.signal.aborted) {
+    record("cancelled");
+    return stream === undefined
+      ? unavailableError()
+      : settleBufferedOpenAiStreamError(stream, "error");
+  }
+  assertCompleteBufferedReasoning(binding.config, modelAlias, response);
+  const maxOutputTokens = request.maxOutputTokens ?? 1;
+  if (finishedAnswerExceedsBudget(response, usage, maxOutputTokens)) {
+    record("output-limit", { limit: "answer" });
+    return stream === undefined
+      ? unavailableError()
+      : settleBufferedOpenAiStreamError(stream, "length");
+  }
+  if (
+    requiresReasoningContinuation(binding.config, modelAlias) &&
+    exceedsReasoningBudget(response, maxOutputTokens)
+  ) {
+    record("output-limit");
+    return stream === undefined
+      ? unavailableError()
+      : settleBufferedOpenAiStreamError(stream, "error");
+  }
+  return undefined;
+}
+
 async function executeBufferedGatewayChat(
   ctx: RouteContext,
   dispatch: GatewayChatDispatchContext,
   stream: BufferedOpenAiStreamSession | undefined,
 ): Promise<RouteResult | typeof STREAMING> {
-  const { deps, binding, modelAlias, request, runId, cancellation, promptTokenReservation } =
-    dispatch;
+  const { deps, binding, modelAlias, request, runId, promptTokenReservation } = dispatch;
   const response = await chatFactoryFor(deps, binding.gateway)(binding.config, modelAlias)(request);
   const promptSettlement = settlePromptTokenReservation(
     deps,
@@ -3614,24 +3755,13 @@ async function executeBufferedGatewayChat(
     promptSettlement,
   );
   const record = bufferedOutcomeRecorder(ctx, dispatch, metrics, response);
-  if (cancellation.signal.aborted) {
-    record("cancelled");
-    return stream === undefined
-      ? unavailableError()
-      : settleBufferedOpenAiStreamError(stream, "error");
-  }
-  const maxOutputTokens = request.maxOutputTokens ?? 1;
-  if (finishedAnswerExceedsBudget(response, usage, maxOutputTokens)) {
-    record("output-limit", { limit: "answer" });
-    return stream === undefined
-      ? unavailableError()
-      : settleBufferedOpenAiStreamError(stream, "length");
-  }
+  const refusal = bufferedDeliveryRefusal(dispatch, stream, settledResponse, usage, record);
+  if (refusal !== undefined) return refusal;
   return deliverBufferedGatewayAnswer(
     ctx,
     modelAlias,
     stream,
-    withinReasoningBudget(settledResponse, maxOutputTokens),
+    withinReasoningBudget(settledResponse, request.maxOutputTokens ?? 1),
     record,
   );
 }
@@ -4043,8 +4173,10 @@ async function streamGatewayReasoning(
   const { request, metrics } = session;
   const counted = incrementalUtf8ByteCount(token, metrics.previousReasoningEndedWithHighSurrogate);
   const total = metrics.forwardedReasoningBytes + counted.bytes;
-  const overBudget =
-    total > outputByteBudget(request.maxOutputTokens ?? 1) * REASONING_PASSAGES_PER_TURN;
+  const passages = requiresReasoningContinuation(session.answeredConfig, session.modelId)
+    ? 1
+    : REASONING_PASSAGES_PER_TURN;
+  const overBudget = total > outputByteBudget(request.maxOutputTokens ?? 1) * passages;
   const forwarded = await forwardStreamText(
     session,
     { reasoning_content: token },
@@ -4072,7 +4204,12 @@ async function forwardStreamText(
   if (limit !== undefined) {
     await iterator.return?.();
     recordSessionOutcome(session, "output-limit", REPAIR_NOT_SETTLED, limit);
-    writeSessionTerminal(session, "length");
+    writeSessionTerminal(
+      session,
+      limit === "reasoning" && requiresReasoningContinuation(session.answeredConfig, modelId)
+        ? "error"
+        : "length",
+    );
     return false;
   }
   const wrote = writeOpenAiSse(
@@ -4087,6 +4224,19 @@ async function forwardStreamText(
     return false;
   }
   return true;
+}
+
+function assertCompleteStreamReasoning(
+  session: GatewayStreamSession,
+  response: NormalizedResponse,
+): void {
+  const { metrics, request } = session;
+  if (
+    requiresReasoningContinuation(session.answeredConfig, session.modelId) &&
+    (metrics.forwardedReasoningBytes === 0 ||
+      exceedsReasoningBudget(response, request.maxOutputTokens ?? 1))
+  )
+    throw new ResponseRedactionError("Required model continuation state is unavailable.");
 }
 
 async function streamGatewayResponse(
@@ -4105,6 +4255,7 @@ async function streamGatewayResponse(
     discardedPromptTokens(response),
   );
   settleStreamCompletionUsage(session, response, outcome, promptSettlement);
+  assertCompleteStreamReasoning(session, response);
   const providerReported = response.usage.completionTokens > 0;
   const guarded = { completionTokens: metrics.completionTokens, outputBytes: producedBytes };
   if (exceedsOutputBudget(guarded, request.maxOutputTokens ?? 1, providerReported)) {
@@ -5113,7 +5264,7 @@ interface ValidatedChatRequest {
  */
 function agentModelProfile(
   deps: UiHandlerDeps,
-  parsed: CodingSidecarGatewayChatCompletionRequest | RouteResult,
+  parsed: Pick<CodingSidecarGatewayChatCompletionRequest, "model"> | RouteResult,
   resolved: AvailableGatewayProfile,
   authentication: AuthenticatedGatewayRequest,
 ): AvailableGatewayProfile {
@@ -5128,17 +5279,70 @@ function agentModelProfile(
   return routed;
 }
 
+function invalidContinuationState(
+  state: string | undefined,
+  withTools: boolean,
+  secrets: readonly string[],
+): boolean {
+  if (withTools && (state?.trim().length ?? 0) === 0) return true;
+  return state !== undefined && redactContent(state, "preserve", secrets) !== state;
+}
+
+function validateReasoningContinuation(
+  deps: UiHandlerDeps,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  resolved: AvailableGatewayProfile,
+): RouteResult | undefined {
+  if (!requiresReasoningContinuation(resolved.config, resolved.result.modelAlias)) return undefined;
+  const withTools = (parsed.tools?.length ?? 0) > 0;
+  const secrets = currentRedactionSecrets(deps);
+  for (const message of parsed.messages) {
+    if (message.role !== "assistant") continue;
+    if (invalidContinuationState(message.reasoningContent, withTools, secrets))
+      return badRequest(
+        "Required reasoning continuation is missing or cannot pass the credential floor.",
+      );
+  }
+  return undefined;
+}
+
+async function readRoutedChatRequest(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runProfile: AvailableGatewayProfile,
+  authentication: AuthenticatedGatewayRequest,
+): Promise<{
+  readonly parsed: CodingSidecarGatewayChatCompletionRequest | RouteResult;
+  readonly resolved: AvailableGatewayProfile;
+}> {
+  let resolved = runProfile;
+  const parsed = await readChatCompletionRequest(
+    ctx,
+    runProfile.result.runMetadata.maxRequestBytes,
+    (body) => {
+      resolved = agentModelProfile(
+        deps,
+        { model: typeof body.model === "string" ? body.model : undefined },
+        runProfile,
+        authentication,
+      );
+      return parseChatRequest(
+        body,
+        authentication.runtimeAuthenticated &&
+          requiresReasoningContinuation(resolved.config, resolved.result.modelAlias),
+      );
+    },
+  );
+  return { parsed, resolved };
+}
+
 async function readValidatedChatRequest(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runProfile: AvailableGatewayProfile,
   authentication: AuthenticatedGatewayRequest,
 ): Promise<RouteResult | ValidatedChatRequest> {
-  const parsed = await readChatCompletionRequest(
-    ctx,
-    runProfile.result.runMetadata.maxRequestBytes,
-  );
-  const resolved = agentModelProfile(deps, parsed, runProfile, authentication);
+  const { parsed, resolved } = await readRoutedChatRequest(ctx, deps, runProfile, authentication);
   const estimatedPromptTokens = isRouteResult(parsed)
     ? 0
     : promptTokenEstimate(parsed, promptTokenAccounting(resolved));
@@ -5164,7 +5368,38 @@ async function readValidatedChatRequest(
     return validationError;
   }
   if (isRouteResult(parsed)) return parsed;
+  const continuationError = validateReasoningContinuation(deps, parsed, resolved);
+  if (continuationError !== undefined) {
+    logChatRequestRejection(ctx, deps, authentication.runId, continuationError, {
+      parsed,
+      bounds: resolved.result.runMetadata,
+      estimatedPromptTokens,
+    });
+    return continuationError;
+  }
   return { parsed, estimatedPromptTokens, resolved };
+}
+
+function validateRunContinuationRoute(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  authentication: AuthenticatedGatewayRequest,
+  runProfile: AvailableGatewayProfile,
+): RouteResult | undefined {
+  const routeDigest = runProfile.result.runMetadata.continuationRouteDigest;
+  const registry = gatewayReadinessRegistry(deps);
+  if (
+    authentication.runtimeAuthenticated &&
+    !(
+      registry?.matchesContinuationRoute(authentication.runId, routeDigest) ??
+      routeDigest === undefined
+    )
+  ) {
+    const refusal = badRequest("Required reasoning continuation model route changed.");
+    logChatRequestRejection(ctx, deps, authentication.runId, refusal);
+    return refusal;
+  }
+  return undefined;
 }
 
 async function runHandleCodingSidecarGatewayChatCompletions(
@@ -5176,6 +5411,8 @@ async function runHandleCodingSidecarGatewayChatCompletions(
   const runProfile = resolveAuthenticatedGatewayProfile(deps, authentication);
   if (!isAvailableGatewayProfile(runProfile))
     return unavailableGatewayProfile(ctx, deps, runProfile, authentication);
+  const routeRefusal = validateRunContinuationRoute(ctx, deps, authentication, runProfile);
+  if (routeRefusal !== undefined) return routeRefusal;
   const validated = await readValidatedChatRequest(ctx, deps, runProfile, authentication);
   if (isRouteResult(validated)) return validated;
   const { parsed, estimatedPromptTokens, resolved } = validated;
@@ -5521,6 +5758,13 @@ function logValidatedRequestBounds(
         offeredToolCount: request.tools?.length ?? 0,
         droppedReasoningMessageCount: request.droppedReasoningMessageCount,
         toolCallTextMessageCount: countToolCallTextMessages(request.messages),
+        reasoningContinuationMessages: request.messages.filter(
+          (message) => message.reasoningContent !== undefined,
+        ).length,
+        reasoningContinuationBytes: request.messages.reduce(
+          (bytes, message) => bytes + Buffer.byteLength(message.reasoningContent ?? "", "utf8"),
+          0,
+        ),
         ...imageCountEvidence(request),
         completeness: "complete",
         loss: "none",

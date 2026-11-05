@@ -1,3 +1,4 @@
+import { browserChatMessages } from "./chat-message-projection.js";
 import { withToolResultsAsSource } from "./chat-tool-turn-ending.js";
 import {
   type ParsedDesktopChatSend,
@@ -3705,7 +3706,7 @@ export async function runMixedGroundedChat(
     status: 200,
     body: {
       chat: deps.store.findChatById(chat.id) ?? chat,
-      messages: [user, assistant],
+      messages: browserChatMessages([user, assistant], correlationId),
       memory: result.body.memory,
     },
   };
@@ -3786,6 +3787,7 @@ async function attachGroundedMemory(
       {
         retrievalContent: prepared.input.content,
         precomputedMemory: memoryPreparation.result,
+        correlationId: prepared.correlationId,
       },
     );
     return memory === undefined ? markedResult : { ...markedResult, body: { ...body, memory } };

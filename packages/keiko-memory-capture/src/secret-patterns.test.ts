@@ -114,6 +114,20 @@ describe("scanForSecrets — credential-shape patterns (looksLikeSecretShape par
     expect(scanForSecrets(`clone ${url}`)).toBe("credential-shape");
   });
 
+  it.each(["Passwort: hunter2", "Kennwort = hunter2", "Passphrase: hunter2", "kennwort=hunter2"])(
+    "rejects the German assignment %j",
+    (text) => {
+      expect(scanForSecrets(text)).toBe("credential-shape");
+    },
+  );
+
+  it.each(["Ich setze mein Passwort zurück", "Kennwort vergessen"])(
+    "leaves the plain mention %j alone",
+    (text) => {
+      expect(scanForSecrets(text)).toBeNull();
+    },
+  );
+
   it("rejects a form-encoded password assignment", () => {
     expect(scanForSecrets("logged in with password=hunter2 today")).toBe("credential-shape");
   });

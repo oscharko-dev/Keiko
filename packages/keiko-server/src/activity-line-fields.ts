@@ -52,3 +52,21 @@ export function activityErrorFields(line: ActivityStateLine): {
     ? {}
     : { frames: keikoStackFrames(line.error), causeChain: causeChain(line.error) };
 }
+
+/** Failure registrations share the reviewed frame classification and existing diagnostic bounds. */
+export const ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS = {
+  frames: {
+    type: "string-array",
+    dataClass: "safe-platform-class",
+    required: false,
+    maxLength: 512,
+    maxItems: 8,
+  },
+  causeChain: {
+    type: "string-array",
+    dataClass: "error-kind",
+    required: false,
+    maxLength: 128,
+    maxItems: 5,
+  },
+} as const;

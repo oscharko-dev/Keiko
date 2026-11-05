@@ -1,3 +1,4 @@
+import { ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS } from "./activity-line-fields.js";
 import { CODE_REDACTION_REVISION } from "@oscharko-dev/keiko-security/redaction";
 import {
   hasRecursiveTraversalQuery,
@@ -729,20 +730,7 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
     rerankerCandidateCount: { type: "integer", dataClass: "count", required: false },
     rerankerDocumentCount: { type: "integer", dataClass: "count", required: false },
     failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS,
     stackTraceFrameCount: { type: "integer", dataClass: "count", required: false },
     stackTraceExternalFrameCount: { type: "integer", dataClass: "count", required: false },
     continuityReferentSource: {
@@ -948,20 +936,7 @@ const SEARCH_METADATA_UNAVAILABLE_OPERATION = defineActivityLogOperation({
       ],
     },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1132,20 +1107,7 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
       required: false,
       maxLength: 64,
     },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },

@@ -6,7 +6,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { toolCallingConfigurationFingerprint } from "./config.js";
+import { toolCallingConfigurationFingerprint } from "./provider-identity.js";
 import type { GatewayCallRequest } from "./gateway.js";
 import type { ModelGatewayLogSink } from "./observability.js";
 import type { ChatMessage, ModelProviderConfig, NormalizedResponse } from "./types.js";

@@ -811,6 +811,58 @@ function installInto(tmp, tarballPath, options) {
   }
 }
 
+/** Qualify npm's genuinely global shallow layout in a disposable prefix (#3582). */
+export function assertGlobalPackageInstall(prefix, artifact, options) {
+  const modules =
+    process.platform === "win32"
+      ? join(prefix, "node_modules")
+      : join(prefix, "lib", "node_modules");
+  // Strict script-policy preflight loads the global root before npm's reify creates it.
+  mkdirSync(dirname(modules), { recursive: true });
+  const result = run(
+    "npm",
+    [
+      "install",
+      "--global",
+      "--prefix",
+      prefix,
+      artifact.tarballPath,
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      ...(options.includeOptional ? [] : ["--omit=optional"]),
+    ],
+    { cwd: prefix, timeout: npmInstallTimeoutMs() },
+  );
+  if (result.status !== 0) fail(`isolated global install failed: ${result.stderr}`);
+  const packageRoot = join(modules, "@oscharko-dev", "keiko");
+  const verification = run(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `
+    import {createRequire} from 'node:module';
+    import {pathToFileURL} from 'node:url';
+    import {join} from 'node:path';
+    const root = process.argv[1];
+    const local = createRequire(join(root, 'package.json'));
+    for (const name of ['ws','typescript','yauzl','yaml','ajv','pdfjs-dist']) local.resolve(name);
+    await import(pathToFileURL(join(root, 'dist/index.js')).href);
+    await import('@oscharko-dev/keiko-server');
+  `,
+      packageRoot,
+    ],
+    { cwd: packageRoot },
+  );
+  if (verification.status !== 0) fail(`global runtime graph is incomplete: ${verification.stderr}`);
+  const cli = run(process.execPath, [join(packageRoot, "dist", "cli", "index.js"), "--version"], {
+    cwd: prefix,
+  });
+  if (cli.status !== 0 || !cli.stdout.includes(rootVersion))
+    fail("global CLI version is unavailable");
+}
+
 function registryPackument(registryUrl, artifact, tarballBytes) {
   const integrity = `sha512-${createHash("sha512").update(tarballBytes).digest("base64")}`;
   return {
@@ -3060,14 +3112,12 @@ export function seedThenPack(vendorTmp, deps) {
 }
 
 /**
- * The one-line verdict the smoke prints once both consumer install paths — the npm tarball install
- * and the Yarn registry install — have passed. It names exactly the paths this smoke proves; the
- * global-prefix path is not among them since #3565 (see #3582).
+ * The one-line verdict after project npm, isolated global npm and Yarn registry installs pass.
  */
 export function smokeSuccessSummary(options, vendoredPackageCount) {
   const optionals = options.includeOptional ? "optional deps included" : "optional deps omitted";
   return (
-    `installable-smoke ok: npm tarball + Yarn registry installs passed (${optionals}), ` +
+    `installable-smoke ok: npm tarball + isolated global npm + Yarn registry installs passed (${optionals}), ` +
     `${String(vendoredPackageCount)} vendored packages present, ` +
     "root runtime/types + CLI + UI/lifecycle reachable."
   );
@@ -3081,6 +3131,7 @@ async function main() {
   // the first; the finally tolerates either being unassigned.
   let tmp;
   let yarnTmp;
+  let globalTmp;
   let artifact;
   try {
     tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
@@ -3088,6 +3139,8 @@ async function main() {
     const seeded = seedThenPack(vendorTmp);
     const { vendored } = seeded;
     artifact = seeded.artifact;
+    globalTmp = mkdtempSync(join(tmpdir(), "keiko-global-install-smoke-"));
+    assertGlobalPackageInstall(globalTmp, artifact, options);
     installInto(tmp, artifact.tarballPath, options);
     assertCliExecutable(tmp);
     assertVendoredPayload(tmp);
@@ -3112,6 +3165,7 @@ async function main() {
   } finally {
     if (tmp !== undefined) rmSync(tmp, { recursive: true, force: true });
     if (yarnTmp !== undefined) rmSync(yarnTmp, { recursive: true, force: true });
+    if (globalTmp !== undefined) rmSync(globalTmp, { recursive: true, force: true });
     // vendorTmp is deliberately NOT removed: it is the lockfile-keyed cache the next invocation
     // reuses, and it lives under the OS temp directory.
     artifact?.cleanup();

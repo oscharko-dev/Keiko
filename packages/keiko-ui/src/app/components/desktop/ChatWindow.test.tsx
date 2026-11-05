@@ -5258,7 +5258,7 @@ describe("ChatWindow multi-scope grounding display (#28)", () => {
 // ─── #28 — MemoryActionCard rejected kind ────────────────────────────────────
 
 describe("ChatWindow MemoryActionCard rejected kind (#28)", () => {
-  it("renders 'Memory proposal declined' title and the reason for a rejected action", async () => {
+  it("renders one plain sentence instead of the closed reason for a rejected action", async () => {
     const user = userEvent.setup();
     renderWindow(
       makeSession({
@@ -5273,7 +5273,7 @@ describe("ChatWindow MemoryActionCard rejected kind (#28)", () => {
           actions: [
             {
               kind: "rejected",
-              reason: "Below salience threshold.",
+              reason: "credential-shape",
             },
           ],
         },
@@ -5281,11 +5281,89 @@ describe("ChatWindow MemoryActionCard rejected kind (#28)", () => {
     );
 
     await user.click(screen.getByRole("button", { name: /no memories included/i }));
-    expect(screen.getByText("Memory proposal declined")).toBeInTheDocument();
-    expect(screen.getByText("Below salience threshold.")).toBeInTheDocument();
+    expect(
+      screen.getByText("I do not save passwords, keys or other credentials."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("credential-shape")).not.toBeInTheDocument();
   });
 
-  it("renders the fallback reason when the rejected reason is empty", async () => {
+  it.each([
+    [
+      { kind: "forget", memoryId: "m1", requiresConfirmation: false, forgotten: true },
+      "Forgotten.",
+    ],
+    [
+      { kind: "rejected", reason: "ambiguous-forget", explicitStatement: true },
+      "Which memory do you mean?",
+    ],
+    [
+      {
+        kind: "candidate",
+        proposalId: "p1",
+        body: "Tables",
+        scopeLabel: "user",
+        requiresApproval: false,
+        status: "accepted",
+        explicitStatement: true,
+      },
+      "Saved.",
+    ],
+  ] as const)(
+    "answers a clear statement in the chat with one sentence",
+    async (action, sentence) => {
+      renderWindow(
+        makeSession({
+          activeChat: makeChat(),
+          latestMemory: {
+            context: {
+              enabled: true,
+              text: "",
+              memories: [],
+              budget: { tokens: 1200, used: 0 },
+            },
+            actions: [action],
+          },
+        }),
+      );
+
+      expect(await screen.findByText(sentence)).toBeInTheDocument();
+      expect(screen.queryByRole("textbox", { name: /forget/i })).not.toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    [
+      {
+        kind: "candidate",
+        proposalId: "p1",
+        body: "Tables",
+        scopeLabel: "user",
+        requiresApproval: false,
+        status: "accepted",
+      },
+      "Saved.",
+    ],
+    [{ kind: "rejected", reason: "exceeds-length-limit" }, "I did not save this."],
+  ] as const)("keeps what the person did not state out of the chat", (action, sentence) => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "",
+            memories: [],
+            budget: { tokens: 1200, used: 0 },
+          },
+          actions: [action],
+        },
+      }),
+    );
+
+    expect(screen.queryByText(sentence)).not.toBeInTheDocument();
+  });
+
+  it("renders the general sentence for a reason without its own", async () => {
     const user = userEvent.setup();
     renderWindow(
       makeSession({
@@ -5308,8 +5386,7 @@ describe("ChatWindow MemoryActionCard rejected kind (#28)", () => {
     );
 
     await user.click(screen.getByRole("button", { name: /no memories included/i }));
-    expect(screen.getByText("Memory proposal declined")).toBeInTheDocument();
-    expect(screen.getByText("No reason provided")).toBeInTheDocument();
+    expect(screen.getByText("I did not save this.")).toBeInTheDocument();
   });
 });
 

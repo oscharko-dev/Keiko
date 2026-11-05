@@ -9,6 +9,9 @@ import type {
 } from "@oscharko-dev/keiko-contracts/memory";
 
 import {
+  isExplicitMemoryStatement,
+  isForgettableStatement,
+  isMemoryForgetReference,
   tryExtractCorrection,
   tryExtractForget,
   tryExtractRemember,
@@ -161,7 +164,7 @@ describe("tryExtractForget", () => {
     expect(outcome.operation.reason).toBe("explicit-user-request");
     expect(outcome.operation.reason).not.toContain("dark mode");
     expect(outcome.operation.userAcknowledgedDestructive).toBe(true);
-    expect(outcome.requiresConfirmation).toBe(true);
+    expect(outcome.requiresConfirmation).toBe(false);
   });
 
   it("returns null when resolver finds no match", () => {
@@ -185,7 +188,7 @@ describe("tryExtractForget", () => {
     if (outcome?.kind !== "forget") return;
     expect(outcome.operation.memoryId).toBe("m-9");
     expect(outcome.operation.reason).toBe("explicit-user-request");
-    expect(outcome.requiresConfirmation).toBe(true);
+    expect(outcome.requiresConfirmation).toBe(false);
   });
 
   // Regression: see the matching note on tryExtractRemember above. For forget specifically the
@@ -414,5 +417,162 @@ describe("regex performance (SonarCloud S8786 regression)", () => {
         ctx({ projectId: "p-1" as ProjectId }),
       ),
     ).toBeNull();
+  });
+});
+
+describe("explicit German forget and remember statements (#4211)", () => {
+  const captured = (): { targets: string[]; resolver: (target: string) => readonly MemoryId[] } => {
+    const targets: string[] = [];
+    return {
+      targets,
+      resolver: (target): readonly MemoryId[] => {
+        targets.push(target);
+        return ["m-1" as MemoryId];
+      },
+    };
+  };
+
+  it.each([
+    "Vergiss nicht, den Bericht zu schicken",
+    "Vergiss bitte nicht den Bericht",
+    "vergiss es nicht",
+    "Forget not the report",
+    "Vergiss nie, dass ich Tabellen mag",
+    "Vergiss mich nicht",
+    "Vergiss den Bericht nicht.",
+    "Vergiss es",
+    "Vergiss es bitte!",
+    "Forget it",
+    "Vergisst du manchmal Dinge?",
+    "Vergiss du den Bericht?",
+    "Lösche die Datei config.yml",
+    "Lösche den Cache",
+  ])("does not treat %j as a forget", (text) => {
+    const { targets, resolver } = captured();
+    expect(tryExtractForget(text, ctx(), { resolver })).toBeNull();
+    expect(targets).toEqual([]);
+  });
+
+  it.each([
+    ["Vergiss, dass ich Tabellen mag", "ich Tabellen mag"],
+    ["Vergiss bitte, dass ich Tabellen mag.", "ich Tabellen mag"],
+    ["Forget that I like tables.", "I like tables"],
+    ["Vergiss, dass ich Tabellen nicht mag", "ich Tabellen nicht mag"],
+    ["Lösche bitte die Erinnerung an den Bericht", "den Bericht"],
+    ["Vergiss, dass ich Tabellen mag. Zeig mir jetzt eine Zahl.", "ich Tabellen mag"],
+    ["Vergiss das. Und zeig mir Tabellen", "das"],
+  ])("takes the fact out of %j", (text, target) => {
+    const { targets, resolver } = captured();
+    expect(tryExtractForget(text, ctx(), { resolver })?.kind).toBe("forget");
+    expect(targets).toEqual([target]);
+  });
+
+  it.each([
+    ["Vergiss das.", "das"],
+    ["vergiss das", "das"],
+    ["Vergiss das bitte!", "das"],
+    ["Forget that.", "that"],
+    ["Das stimmt nicht mehr.", "das"],
+    ["That is no longer true.", "that"],
+  ])("hands the reference in %j to the resolver", (text, target) => {
+    const { targets, resolver } = captured();
+    expect(tryExtractForget(text, ctx(), { resolver })?.kind).toBe("forget");
+    expect(targets).toEqual([target]);
+  });
+
+  it("recognizes a bare reference and nothing longer", () => {
+    expect(isMemoryForgetReference("das")).toBe(true);
+    expect(isMemoryForgetReference("That")).toBe(true);
+    expect(isMemoryForgetReference("das mit den Tabellen")).toBe(false);
+  });
+
+  it("hands an unresolved reference to the caller instead of ignoring it", () => {
+    const outcome = tryExtractForget("Vergiss das.", ctx(), { resolver: () => [] });
+    expect(outcome).toEqual({ kind: "rejected", reason: "forget-reference-unresolved" });
+  });
+
+  it("prefers the forget resolver over the shared one", () => {
+    const outcome = tryExtractForget("Vergiss das.", ctx(), {
+      resolver: () => [],
+      forgetResolver: () => ["m-9" as MemoryId],
+    });
+    expect(outcome?.kind === "forget" && outcome.operation.memoryId).toBe("m-9");
+  });
+
+  it.each([
+    ["Merke dir bitte: Ich bevorzuge Tabellen", "Ich bevorzuge Tabellen"],
+    ["Merke dir: Ich bevorzuge Tabellen.", "Ich bevorzuge Tabellen."],
+    ["Bitte merke dir, dass ich Tabellen bevorzuge", "ich Tabellen bevorzuge"],
+    ["Remember: I prefer tables", "I prefer tables"],
+    [
+      "Merke dir bitte: Ich bevorzuge Tabellen. Erkläre mir jetzt bitte Rekursion.",
+      "Ich bevorzuge Tabellen.",
+    ],
+    ["Merke dir: Ich nutze z. B. Tabellen. Was ist Rekursion?", "Ich nutze z. B. Tabellen."],
+    ["Merke dir: Ich bevorzuge Tabellen\nWas ist Rekursion?", "Ich bevorzuge Tabellen"],
+    ["Merke dir: Ich mag es. Zeig mir eine Zahl.", "Ich mag es."],
+    ["Merke dir: Ich bin 42! Zeig mir eine Zahl.", "Ich bin 42!"],
+    [
+      "Merke dir: Ich nutze Tabellen vs. Listen. Zeig mir eine Zahl.",
+      "Ich nutze Tabellen vs. Listen.",
+    ],
+    ["Merke dir: Ich nutze z.B. Tabellen. Zeig mir eine Zahl.", "Ich nutze z.B. Tabellen."],
+    ["Merke dir: Ich nutze e.g. Tabellen. Zeig mir eine Zahl.", "Ich nutze e.g. Tabellen."],
+    ["Merke dir: Ich nutze Node.js. Zeig mir eine Zahl.", "Ich nutze Node.js."],
+    ["Merke dir: Ich bin am 3. Mai geboren. Zeig mir eine Zahl.", "Ich bin am 3. Mai geboren."],
+  ])("stores only the stated fact of %j", (text, body) => {
+    const outcome = tryExtractRemember(text, ctx());
+    expect(outcome?.kind === "candidate" && outcome.proposal.body).toBe(body);
+  });
+});
+
+describe("what is not a remember statement (#4211)", () => {
+  it.each([
+    "Speichere die Datei unter foo.txt",
+    "Speichere das in meinem Notizbuch",
+    "Notiere die Zahlen 1 bis 10",
+    "Merke dir bitte nicht, dass ich Tabellen mag",
+    "Merke dir nicht, dass ich Tabellen mag",
+    "Remember when we talked about the report?",
+    "Remember what I said",
+    "Merke dir das?",
+  ])("leaves %j alone", (text) => {
+    expect(tryExtractRemember(text, ctx())).toBeNull();
+  });
+
+  it.each([
+    ["Speichere: Ich bevorzuge Tabellen", "Ich bevorzuge Tabellen"],
+    ["Notiere dir: Deployments sind dienstags", "Deployments sind dienstags"],
+    ["Merke dir: Ich bevorzuge Tabellen. Was steht heute an?", "Ich bevorzuge Tabellen."],
+  ])("still reads %j", (text, body) => {
+    const outcome = tryExtractRemember(text, ctx(), { scopeKind: "user" });
+    expect(outcome?.kind).toBe("candidate");
+    if (outcome?.kind === "candidate") expect(outcome.proposal.body).toBe(body);
+  });
+
+  it("keeps the learner off a statement that declines to be remembered", () => {
+    expect(isExplicitMemoryStatement("Merke dir nicht, dass ich Tabellen mag")).toBe(true);
+    expect(isExplicitMemoryStatement("Speichere die Datei unter foo.txt")).toBe(false);
+    expect(isExplicitMemoryStatement("Vergiss es")).toBe(false);
+  });
+
+  it.each([
+    "Merke dir: mein Passwort ist hunter2hunter2",
+    "Remember: the password is hunter2",
+    "Merke dir: Passwort: hunter2",
+    "Merke dir: Kennwort = hunter2",
+    "Merke dir: Passphrase: hunter2",
+  ])("refuses a credential in plain words in %j", (text) => {
+    expect(tryExtractRemember(text, ctx(), { scopeKind: "user" })).toEqual({
+      kind: "rejected",
+      reason: "credential-shape",
+    });
+  });
+
+  it("does not leave a tombstone for a question or a pasted document", () => {
+    expect(isForgettableStatement("Ich mag Tabellen.")).toBe(true);
+    expect(isForgettableStatement("Wie zeigst du mir Zahlen?")).toBe(false);
+    expect(isForgettableStatement("x".repeat(4097))).toBe(false);
+    expect(isForgettableStatement("Vergiss das.")).toBe(false);
   });
 });

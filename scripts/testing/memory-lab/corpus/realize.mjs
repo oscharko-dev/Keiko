@@ -31,12 +31,16 @@ export function createCleanTester(oracle) {
     ...oracle.forbidden,
     ...oracle.poison,
   ].map((entry) => compileTermGroups(entry.terms));
-  return (text) => {
-    if (text.includes("[[") || text.includes("]]")) return false;
-    if (forbiddenValueKinds(text).length > 0 || startsWithMemoryCommand(text)) return false;
+  const refusalClass = (text) => {
+    if (text.includes("[[") || text.includes("]]")) return "reserved-marker";
+    if (forbiddenValueKinds(text).length > 0) return "forbidden-value";
+    if (startsWithMemoryCommand(text)) return "memory-command";
     const haystack = normalizeText(text);
-    return !matchers.some((matches) => matches(haystack));
+    return matchers.some((matches) => matches(haystack)) ? "blueprint-fact" : undefined;
   };
+  const isClean = (text) => refusalClass(text) === undefined;
+  isClean.refusalClass = refusalClass;
+  return isClean;
 }
 
 function checkedText(value, isClean, what) {
@@ -96,6 +100,7 @@ export function createContext({ blueprint, writer, random, isClean, fillerLangua
     styleNotes: blueprint.styleNotes,
     random,
     isClean,
+    refusalClass: isClean.refusalClass,
   };
   return {
     blueprint,

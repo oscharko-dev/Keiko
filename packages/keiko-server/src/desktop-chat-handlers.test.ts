@@ -1835,7 +1835,8 @@ describe("desktop chat routes", () => {
       const memoryIdsAfterFailure = memoriesAfterFailure.map((memory) => memory.id);
       expect(failed.status).toBe(500);
       expect(memoryIdsAfterFailure.length).toBeGreaterThan(0);
-      expect(memoriesAfterFailure.every((memory) => memory.status === "proposed")).toBe(true);
+      // A clear statement is accepted at once in every mode (ADR-0146 D4b).
+      expect(memoriesAfterFailure.every((memory) => memory.status === "accepted")).toBe(true);
       expect(store.listMessages(created.chat.id)).toHaveLength(1);
 
       await restartWithDeps(
@@ -2406,7 +2407,8 @@ describe("desktop chat routes", () => {
     const proposalId = body.memory?.actions[0]?.proposalId;
     expect(proposalId).toBeDefined();
     if (proposalId !== undefined) {
-      expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
+      // A clear statement is accepted at once in every mode (ADR-0146 D4b).
+      expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("accepted");
     }
     expect(memoryVault.getAccessStats([recalled.id]).get(recalled.id)?.accessCount ?? 0).toBe(0);
     memoryVault.close();
@@ -2591,7 +2593,9 @@ describe("desktop chat routes", () => {
     const body = (await sendRes.json()) as {
       memory?: { actions: { kind: string; reason?: string }[] };
     };
-    expect(body.memory?.actions).toEqual([{ kind: "rejected", reason: "customer-identifier" }]);
+    expect(body.memory?.actions).toEqual([
+      { kind: "rejected", reason: "customer-identifier", explicitStatement: true },
+    ]);
     expect(listAllMemories(memoryVault, { includeExpired: true })).toEqual([]);
     memoryVault.close();
   });
@@ -2857,7 +2861,8 @@ describe("desktop chat routes", () => {
         chatId: created.chat.id,
         projectPath: projectDir,
         modelId: CHAT_MODEL,
-        content: "remember that we deploy after the green CI run",
+        // Names the project: a statement without a scope stays private (ADR-0146 D4b).
+        content: "remember about this project: we deploy after the green CI run",
         memory: {
           enabled: true,
           context: {
@@ -2961,6 +2966,70 @@ describe("desktop chat routes", () => {
     expect(lastTurn?.content).toContain("spec.md");
     expect(lastTurn?.content).toContain("Some document content.");
   });
+
+  it.each([undefined, "document-turn"])(
+    "retains attached document context for follow-up turns and isolates other chats (%s)",
+    async (clientTurnId) => {
+      const chat = store.createChat(projectDir, "Document chat", CHAT_MODEL);
+      const send = (chatId: string, body: object): Promise<Response> =>
+        fetch(`${base()}/api/desktop/chat`, {
+          method: "POST",
+          headers: POST_JSON_HEADERS,
+          body: JSON.stringify({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, ...body }),
+        });
+      const initial = await send(chat.id, {
+        content: "Read this document",
+        clientTurnId,
+        documentContext: [
+          {
+            id: "retained-doc",
+            displayName: "spec.md",
+            mimeType: "text/markdown",
+            sizeBytes: 64,
+            extractedBytes: 64,
+            truncated: false,
+            text: "The release identifier is cobalt-lantern.",
+          },
+        ],
+      });
+      expect(initial.status).toBe(200);
+      const initialBody = (await initial.json()) as {
+        messages: readonly { documentContext?: unknown }[];
+      };
+      expect(initialBody.messages.every((message) => message.documentContext === undefined)).toBe(
+        true,
+      );
+      expect(store.listMessages(chat.id)[0]?.documentContext?.[0]?.text).toContain(
+        "cobalt-lantern",
+      );
+      const listed = await fetch(
+        `${base()}/api/chats/messages?chatId=${encodeURIComponent(chat.id)}&projectPath=${encodeURIComponent(projectDir)}`,
+      );
+      expect(listed.status).toBe(200);
+      const listedBody = (await listed.json()) as {
+        messages: readonly { documentContext?: unknown }[];
+      };
+      expect(listedBody.messages.every((message) => message.documentContext === undefined)).toBe(
+        true,
+      );
+      await restartWithDeps(deps());
+      const followup = await send(chat.id, { content: "What is the release identifier?" });
+      expect(followup.status).toBe(200);
+      const historicalUser = seenRequests
+        .at(-1)
+        ?.messages.find(
+          (message) => message.role === "user" && message.content.includes("Read this document"),
+        );
+      expect(historicalUser?.content).toContain("Attached document context:");
+      expect(historicalUser?.content).toContain("cobalt-lantern");
+      expect(store.listMessages(chat.id)[0]?.content).toBe("Read this document");
+      const otherChat = store.createChat(projectDir, "Separate chat", CHAT_MODEL);
+      expect(
+        (await send(otherChat.id, { content: "What is the release identifier?" })).status,
+      ).toBe(200);
+      expect(JSON.stringify(seenRequests.at(-1)?.messages)).not.toContain("cobalt-lantern");
+    },
+  );
 
   // Issue #502 — a selected discussion mode threads the additive directive block onto the latest
   // user turn for the model call. The mode is turn-local (never persisted to chat history).

@@ -295,3 +295,12 @@ scripts against the unchanged 349,184 B ceiling, leaving 58 B. This artifact run
 and a 20-GiB memory limit. It qualifies updater presentation and the declared BFF recovery fixture,
 not D12, workspace or native-runtime performance, native update installation, or final integrated-head
 acceptance.
+
+## Chat memory sentences — 2026-11-05 (#4211)
+
+The optional message catalogs are declared sources, and #4211 changed them: the Chat now confirms a
+clear remember or forget statement in one sentence, and the former proposal texts are gone. The
+producer ran with `KEIKO_WRITE_TRACKED_EVIDENCE=1` on macOS and rewrote all 17 declared artifacts;
+`npm run check:update-ui-evidence` passes against this worktree. The update window itself did not
+change, and this is macOS rendering, so the 14 PNGs differ in bytes from earlier captures. A Linux
+regeneration remains preferable if byte-comparable captures are wanted.

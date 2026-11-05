@@ -5547,21 +5547,21 @@ describe("coding sidecar gateway turn failure projection", () => {
   });
 
   it.each([
-    [new ProviderError("synthetic unavailable", 503), "provider-failed"],
-    [new ProviderError("empty assistant stream", 200), "stream-incomplete"],
+    [new ProviderError("synthetic unavailable", 503), "provider-failed", 503],
+    [new ProviderError("empty assistant stream", 200), "stream-incomplete", 503],
     // #3591 (1.1.7): the budget ran out before any content — a budget to raise, not a broken stream.
-    [new ProviderOutputExhaustedError("coding"), "output-exhausted"],
+    [new ProviderOutputExhaustedError("coding"), "output-exhausted", 503],
     // #3610: the provider answered with neither content nor a tool call — not a broken stream.
-    [new ProviderEmptyAnswerError("coding"), "empty-answer"],
+    [new ProviderEmptyAnswerError("coding"), "empty-answer", 503],
     // 1.1.8 lab run: the model's tool call never matched its schema — not a provider rejection.
-    [new MalformedToolCallError("tool call has non-JSON arguments"), "invalid-tool-call"],
+    [new MalformedToolCallError("tool call has non-JSON arguments"), "invalid-tool-call", 400],
     // PR #3617 review: the gateway's own redaction refused an answer nested too deep, tool call or
     // not. A Workbench guard rejected the turn; it keeps its diagnostic.
-    [new ResponseRedactionError("synthetic redaction depth"), "turn-rejected"],
-    [new TimeoutError("synthetic timeout"), "stream-incomplete"],
-    [new ContextOverflowError("synthetic context limit"), "turn-rejected"],
-    [new CallerAttemptAdmissionError("synthetic caller grant"), "turn-rejected"],
-  ] as const)("projects %s as %s without exposing provider text", async (error, code) => {
+    [new ResponseRedactionError("synthetic redaction depth"), "turn-rejected", 400],
+    [new TimeoutError("synthetic timeout"), "stream-incomplete", 503],
+    [new ContextOverflowError("synthetic context limit"), "turn-rejected", 503],
+    [new CallerAttemptAdmissionError("synthetic caller grant"), "turn-rejected", 503],
+  ] as const)("projects %s as %s without exposing provider text", async (error, code, status) => {
     const sink = captureServerLog("warn");
     const eventHub = new CodingRuntimeEventHub();
     const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
@@ -5577,7 +5577,7 @@ describe("coding sidecar gateway turn failure projection", () => {
       routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
       deps,
     );
-    expect(result).toMatchObject({ status: code === "invalid-tool-call" ? 400 : 503 });
+    expect(result).toMatchObject({ status });
     const replay = eventHub.replay("run-gateway-test");
     expect(replay.ok && replay.events).toMatchObject([{ failureCode: code }]);
     expect(JSON.stringify(replay)).not.toContain(error.message);
@@ -11311,6 +11311,480 @@ describe("coding sidecar gateway carries the run's bound private skill (#4025, #
       sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
     ).toMatchObject({ reason: "prompt-tokens-exceeded" });
   });
+});
+
+describe("configured thinking continuation (#4059)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  });
+  const nativeTools = [
+    {
+      type: "function",
+      function: {
+        name: "read_file",
+        description: "Read a file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+    },
+  ];
+  const tool = (
+    id: string,
+  ): { id: string; type: "function"; function: { name: string; arguments: string } } => ({
+    id,
+    type: "function",
+    function: { name: "read_file", arguments: '{"path":"README.md"}' },
+  });
+  const reply = (
+    index: number,
+  ): {
+    role: string;
+    content: string;
+    reasoning_content: string;
+    tool_calls?: ReturnType<typeof tool>[];
+  } => ({
+    role: "assistant",
+    content: index === 1 || index === 2 ? "" : `Answer ${String(index)}`,
+    reasoning_content: `Reasoning for completed step ${String(index)}.`,
+    ...(index === 1 || index === 2 ? { tool_calls: [tool(`call-${String(index)}`)] } : {}),
+  });
+
+  function thinkingDeps(): UiHandlerDeps {
+    const deps: UiHandlerDeps = {
+      ...liveDeps("run-thinking", {
+        providers: [provider({ maxRetries: 0, reasoningContinuation: "required-with-tools" })],
+        codingReasoningDisplay: "off",
+      }),
+      openCodeGatewayReadinessRegistry: createOpenCodeGatewayReadinessRegistry("native"),
+    };
+    const profile = resolveCodingSafeSidecarGatewayProfile(deps.config);
+    if (profile.status !== "available") throw new Error("thinking fixture unavailable");
+    deps.openCodeGatewayReadinessRegistry?.bindContinuationRoute(
+      "run-thinking",
+      profile.runMetadata.continuationRouteDigest,
+    );
+    return deps;
+  }
+
+  it.each(["endpoint", "deployment", "remove-policy"])(
+    "refuses a reverified %s change during the same run before contacting the provider",
+    async (change) => {
+      const bodies: Record<string, unknown>[] = [];
+      strictProvider(bodies);
+      const deps = thinkingDeps();
+      const original = deps.config;
+      if (original === undefined) throw new Error("fixture config missing");
+      const changed = original.providers.map((value) => ({
+        ...value,
+        ...(change === "endpoint" ? { baseUrl: "https://changed.example/v1" } : {}),
+        ...(change === "deployment" ? { deploymentIdentitySha256: "d".repeat(64) } : {}),
+        ...(change === "remove-policy" ? { reasoningContinuation: undefined } : {}),
+      }));
+      const config = { ...original, providers: changed };
+      const result = await sendThinking(
+        { ...deps, config },
+        [{ role: "user", content: "Later request" }],
+        false,
+      );
+      expect(result.result).toMatchObject({ status: 400 });
+      expect(bodies).toHaveLength(0);
+    },
+  );
+
+  it("retains route binding after the handshake and drops it only at final disposal", () => {
+    const registry = createOpenCodeGatewayReadinessRegistry("native");
+    const digest = "a".repeat(64);
+    expect(registry.matchesContinuationRoute("run", digest)).toBe(false);
+    registry.bindContinuationRoute("run", undefined);
+    expect(registry.matchesContinuationRoute("run", digest)).toBe(false);
+    expect(() => {
+      registry.bindContinuationRoute("run", digest);
+    }).toThrow(/cannot be rebound/u);
+    registry.clear("run");
+    registry.bindContinuationRoute("run", digest);
+    registry.verifyObserved("run");
+    registry.clear("run", true);
+    expect(registry.matchesContinuationRoute("run", digest)).toBe(true);
+    expect(registry.isVerified("run")).toBe(true);
+    registry.clear("run");
+    expect(registry.matchesContinuationRoute("run", digest)).toBe(false);
+  });
+
+  function strictProvider(bodies: Record<string, unknown>[]): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: unknown, init?: RequestInit) => {
+        const body = JSON.parse(typeof init?.body === "string" ? init.body : "") as Record<
+          string,
+          unknown
+        >;
+        const messages = body.messages as Record<string, unknown>[];
+        const valid = messages
+          .filter((message) => message.role === "assistant")
+          .every((message, index) => message.reasoning_content === reply(index).reasoning_content);
+        if (!valid) return Promise.resolve(new Response("{}", { status: 400 }));
+        bodies.push(body);
+        const message = reply(bodies.length - 1);
+        const finishReason = "tool_calls" in message ? "tool_calls" : "stop";
+        if (!body.stream)
+          return Promise.resolve(
+            new Response(JSON.stringify({ choices: [{ message, finish_reason: finishReason }] }), {
+              headers: { "content-type": "application/json" },
+            }),
+          );
+        return Promise.resolve(
+          providerSse([
+            sseDelta({
+              role: "assistant",
+              reasoning_content: message.reasoning_content.slice(0, 7),
+            }),
+            sseDelta({
+              reasoning_content: message.reasoning_content.slice(7),
+              content: message.content,
+              ...("tool_calls" in message
+                ? { tool_calls: message.tool_calls.map((call) => ({ index: 0, ...call })) }
+                : {}),
+            }),
+            sseFinish(finishReason),
+            "data: [DONE]\n\n",
+          ]),
+        );
+      }),
+    );
+  }
+
+  async function sendThinking(
+    deps: UiHandlerDeps,
+    messages: readonly unknown[],
+    stream: boolean,
+    tools = true,
+  ): Promise<{ readonly result: RouteResult | typeof STREAMING; readonly response: MockResponse }> {
+    const response = mockResponse({ captureBody: true });
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      {
+        ...authenticatedContext({
+          model: "coding",
+          messages,
+          stream,
+          ...(tools ? { tools: nativeTools } : {}),
+        }),
+        res: response.res,
+      },
+      deps,
+    );
+    if (result !== STREAMING && result.status === 200) {
+      response.res.writeHead(200);
+      response.res.end();
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    return { result, response };
+  }
+
+  it.each([false, true])(
+    "preserves complete state across two tool rounds and a later user turn (stream=%s)",
+    async (stream) => {
+      const bodies: Record<string, unknown>[] = [];
+      strictProvider(bodies);
+      const deps = thinkingDeps();
+      const history: unknown[] = [{ role: "user", content: "Inspect the project" }];
+      try {
+        for (let index = 0; index < 5; index++) {
+          const { result } = await sendThinking(deps, history, stream);
+          expect(
+            typeof result === "symbol" ? 200 : result.status,
+            `round ${String(index)}: ${JSON.stringify(result)}`,
+          ).toBe(200);
+          expect(bodies).toHaveLength(index + 1);
+          history.push(reply(index));
+          if (index === 1 || index === 2)
+            history.push({
+              role: "tool",
+              tool_call_id: `call-${String(index)}`,
+              content: "File observed",
+            });
+          else history.push({ role: "user", content: `Follow up ${String(index)}` });
+        }
+        const wire = bodies.at(-1)?.messages as Record<string, unknown>[];
+        expect(
+          wire
+            .filter((message) => message.role === "assistant")
+            .map((message) => message.reasoning_content),
+        ).toEqual([0, 1, 2, 3].map((index) => reply(index).reasoning_content));
+      } finally {
+        deps.store.close();
+      }
+    },
+  );
+
+  it("refuses absent, conflicting and credential-bearing state before egress", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    strictProvider(bodies);
+    const deps = thinkingDeps();
+    try {
+      for (const assistant of [
+        { role: "assistant", content: "A prior answer" },
+        { ...reply(0), reasoning: "Conflicting state" },
+        { ...reply(0), reasoning_content: "provider-secret" },
+      ]) {
+        const { result } = await sendThinking(
+          deps,
+          [
+            { role: "user", content: "Inspect the project" },
+            assistant,
+            { role: "user", content: "Continue" },
+          ],
+          false,
+        );
+        expect(result).toMatchObject({ status: 400 });
+      }
+      expect(bodies).toHaveLength(0);
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  it.each([false, true])(
+    "rejects successful output without required reasoning (stream=%s)",
+    async (stream) => {
+      for (const toolCall of [false, true]) {
+        const deps = thinkingDeps();
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(() =>
+            Promise.resolve(
+              stream
+                ? providerSse([
+                    sseDelta({
+                      role: "assistant",
+                      content: "Answer",
+                      ...(toolCall ? { tool_calls: [tool("call")] } : {}),
+                    }),
+                    sseFinish(toolCall ? "tool_calls" : "stop"),
+                    "data: [DONE]\n\n",
+                  ])
+                : new Response(
+                    JSON.stringify({
+                      choices: [
+                        {
+                          finish_reason: toolCall ? "tool_calls" : "stop",
+                          message: {
+                            role: "assistant",
+                            content: "Answer",
+                            ...(toolCall ? { tool_calls: [tool("call")] } : {}),
+                          },
+                        },
+                      ],
+                    }),
+                    { headers: { "content-type": "application/json" } },
+                  ),
+            ),
+          ),
+        );
+        try {
+          const { result, response } = await sendThinking(
+            deps,
+            [{ role: "user", content: "Inspect" }],
+            stream,
+          );
+          if (typeof result === "symbol") {
+            expect(response.body()).not.toContain('"finish_reason":"stop"');
+            expect(response.body()).not.toContain('"finish_reason":"tool_calls"');
+            expect(response.body()).toContain('"code":400');
+          } else expect(result.status).toBe(400);
+          expect(vi.mocked(fetch)).toHaveBeenCalledOnce();
+        } finally {
+          deps.store.close();
+          resetGatewayInstanceCacheForTests();
+        }
+      }
+    },
+  );
+
+  it.each(["stop", "length"])(
+    "never merges failed required reasoning with a repair after %s",
+    async (finishReason) => {
+      const deps = thinkingDeps();
+      const fetchImpl = vi.fn(() =>
+        Promise.resolve(
+          providerSse([
+            sseDelta({ role: "assistant", reasoning_content: "Discarded physical attempt." }),
+            sseFinish(finishReason),
+            "data: [DONE]\n\n",
+          ]),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchImpl);
+      try {
+        const { response } = await sendThinking(deps, [{ role: "user", content: "Inspect" }], true);
+        expect(fetchImpl).toHaveBeenCalledOnce();
+        expect(response.body()).not.toContain('"finish_reason":"stop"');
+        expect(response.body()).not.toContain('"finish_reason":"length"');
+        expect(response.body()).toMatch(/"finish_reason":"error"|invalid_request_error/u);
+      } finally {
+        deps.store.close();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "refuses a complete reasoning passage above its own byte allowance (stream=%s)",
+    async (stream) => {
+      const deps = thinkingDeps();
+      const profile = resolveCodingSafeSidecarGatewayProfile(deps.config);
+      if (profile.status !== "available") throw new Error("fixture profile missing");
+      const reasoning = "r".repeat(profile.runMetadata.maxOutputTokens * 4 + 1);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve(
+            stream
+              ? providerSse([
+                  sseDelta({ role: "assistant", reasoning_content: reasoning }),
+                  sseDelta({ content: "Answer" }),
+                  sseFinish("stop"),
+                  "data: [DONE]\n\n",
+                ])
+              : new Response(
+                  JSON.stringify({
+                    choices: [
+                      {
+                        message: {
+                          role: "assistant",
+                          content: "Answer",
+                          reasoning_content: reasoning,
+                        },
+                        finish_reason: "stop",
+                      },
+                    ],
+                  }),
+                  { headers: { "content-type": "application/json" } },
+                ),
+          ),
+        ),
+      );
+      try {
+        const { result, response } = await sendThinking(
+          deps,
+          [{ role: "user", content: "Inspect" }],
+          stream,
+        );
+        if (typeof result === "symbol") {
+          expect(response.body()).not.toContain('"finish_reason":"stop"');
+          expect(response.body()).toContain('"finish_reason":"error"');
+        } else expect(result.status).not.toBe(200);
+      } finally {
+        deps.store.close();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "refuses opaque output containing another configured credential (stream=%s)",
+    async (stream) => {
+      const secret = "synthetic-private-env-credential";
+      const deps = { ...thinkingDeps(), env: { KEIKO_DEFAULT_API_KEY: secret } };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve(
+            stream
+              ? providerSse([
+                  sseDelta({ role: "assistant", reasoning_content: `State ${secret}` }),
+                  sseDelta({ content: "Answer" }),
+                  sseFinish("stop"),
+                  "data: [DONE]\n\n",
+                ])
+              : new Response(
+                  JSON.stringify({
+                    choices: [
+                      {
+                        message: {
+                          role: "assistant",
+                          content: "Answer",
+                          reasoning_content: `State ${secret}`,
+                        },
+                        finish_reason: "stop",
+                      },
+                    ],
+                  }),
+                  { headers: { "content-type": "application/json" } },
+                ),
+          ),
+        ),
+      );
+      try {
+        const { result, response } = await sendThinking(
+          deps,
+          [{ role: "user", content: "Inspect" }],
+          stream,
+        );
+        if (typeof result === "symbol") {
+          expect(response.body()).not.toContain('"finish_reason":"stop"');
+          expect(response.body()).not.toContain(secret);
+        } else expect(result.status).not.toBe(200);
+      } finally {
+        deps.store.close();
+      }
+    },
+  );
+  it.each(["aborted", "insufficient_system_resource"])(
+    "never publishes %s partial state as a successful continuation",
+    async (finishReason) => {
+      for (const stream of [false, true]) {
+        const deps = thinkingDeps();
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(() =>
+            Promise.resolve(
+              stream
+                ? providerSse([
+                    sseDelta({
+                      role: "assistant",
+                      reasoning_content: "Partial reasoning",
+                      content: "Partial answer",
+                    }),
+                    sseFinish(finishReason),
+                    "data: [DONE]\n\n",
+                  ])
+                : new Response(
+                    JSON.stringify({
+                      choices: [
+                        {
+                          message: {
+                            role: "assistant",
+                            content: "Partial answer",
+                            reasoning_content: "Partial reasoning",
+                          },
+                          finish_reason: finishReason,
+                        },
+                      ],
+                    }),
+                    { headers: { "content-type": "application/json" } },
+                  ),
+            ),
+          ),
+        );
+        try {
+          const { result, response } = await sendThinking(
+            deps,
+            [{ role: "user", content: "Inspect" }],
+            stream,
+          );
+          const wire = typeof result === "symbol" ? response.body() : JSON.stringify(result.body);
+          expect(wire).not.toContain('"finish_reason":"stop"');
+          expect(wire).toContain('"finish_reason":"error"');
+        } finally {
+          deps.store.close();
+          resetGatewayInstanceCacheForTests();
+        }
+      }
+    },
+  );
 });
 
 describe("coding sidecar completed reasoning continuation", () => {

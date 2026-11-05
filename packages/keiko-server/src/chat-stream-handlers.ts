@@ -1,3 +1,5 @@
+import { browserChatMessages } from "./chat-message-projection.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { hasMixedToolGroundingScope } from "./chat-grounding.js";
 import {
   createChatToolTurn,
@@ -44,7 +46,6 @@ import type { ChatMessage } from "./store/index.js";
 import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import type {
-  ConversationMemoryActionWire,
   ConversationMemoryResultWire,
   DesktopChatSendResponse,
   DesktopChatStreamEvent,
@@ -279,14 +280,11 @@ async function persistStreamedTurn(
   turn: StreamedTurn,
   userMessage: ChatMessage,
   signal: AbortSignal,
+  correlationId: string,
 ): Promise<DesktopChatSendResponse | undefined> {
   const { request, chat, modelId, memoryContext } = prepared;
   const redactedContent = currentContentRedactor(deps)(turn.response.content) as string;
-  const actions: readonly ConversationMemoryActionWire[] = await collectMemoryActions(
-    deps,
-    request,
-    memoryContext,
-  );
+  const actions = await collectMemoryActions(deps, request, memoryContext, correlationId);
   if (signal.aborted) return undefined;
   const createdAssistant = createAssistantMessage(
     deps,
@@ -313,7 +311,7 @@ async function persistStreamedTurn(
   );
   return {
     chat: updatedChat,
-    messages: [canonicalUser, assistantMessage],
+    messages: browserChatMessages([canonicalUser, assistantMessage]),
     usage: turn.response.usage,
     memory: { ...memory, actions },
     ...(conversationImageDeliveries(request).length === 0
@@ -425,6 +423,7 @@ async function streamAndPersist(
     turn,
     userMessage,
     controller.signal,
+    ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
   );
   if (payload === undefined) {
     failCancelledStreamTurn(ctx, deps, request, true);

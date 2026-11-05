@@ -244,6 +244,7 @@ function workbenchDeps(
   };
   const config = { providers: [providerConfig], capabilities: [capability] };
   const deps = {
+    env: {},
     gatewayConfig: {
       storagePath: "/dev/null",
       current: () => config,

@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "forget-statement-de",
+  "language": "de",
+  "class": "forget",
+  "difficulty": "plain",
+  "description": "\"Das stimmt nicht mehr\" forgets what the last turn left behind.",
+  "truth": [],
+  "forgotten": [
+    {
+      "terms": [["Tabellen"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "learner": [
+        {
+          "body": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+          "type": "preference"
+        }
+      ]
+    },
+    {
+      "user": "Das stimmt nicht mehr.",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Wie sollst du mir Zahlen zeigen?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    }
+  ]
+}

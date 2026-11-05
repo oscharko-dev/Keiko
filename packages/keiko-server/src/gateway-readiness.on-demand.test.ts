@@ -206,6 +206,7 @@ function probeableDeps(
     },
   };
   const deps = {
+    env: {},
     gatewayConfig: holder,
     redactor: (value: unknown): unknown => value,
     gatewayReadinessFetch: (): Promise<Response> => {
@@ -241,6 +242,7 @@ describe("ensureAnyConversationReadyChatModel budget", () => {
       retryBaseDelayMs: 1,
     }));
     const deps = {
+      env: {},
       gatewayConfig: {
         ...holderWith(undefined, generation),
         current: () => ({ providers }),

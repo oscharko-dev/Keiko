@@ -8,7 +8,7 @@
 import type { MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
 
 import { buildProposal } from "./_envelopes.js";
-import { memoryTextSecretEgressRejectionReason } from "./capture-safety.js";
+import { memoryTextCaptureRejectionReason } from "./capture-safety.js";
 import { applyPolicy } from "./policy.js";
 import type { CaptureContext, CaptureOutcome, CapturePolicyOptions } from "./types.js";
 
@@ -177,7 +177,7 @@ function buildIdentityCandidate(
   policy: CapturePolicyOptions,
 ): CaptureOutcome {
   const body = `The user's name is ${name}.`;
-  const rejection = memoryTextSecretEgressRejectionReason(body, policy);
+  const rejection = memoryTextCaptureRejectionReason(body, policy);
   if (rejection !== null) {
     return { kind: "rejected", reason: rejection };
   }

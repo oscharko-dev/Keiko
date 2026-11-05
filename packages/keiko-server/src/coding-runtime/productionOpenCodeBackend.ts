@@ -203,7 +203,7 @@ export interface ProductionOpenCodeBackendInput {
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly gatewayReadiness: Pick<
     OpenCodeGatewayReadinessRegistry,
-    "waitForObservedRequest" | "verifyObserved" | "clear" | "toolProfile"
+    "waitForObservedRequest" | "verifyObserved" | "clear" | "toolProfile" | "bindContinuationRoute"
   >;
   readonly fetch?: typeof globalThis.fetch | undefined;
   /** The host environment the native profile inherits its allowlisted names from (#3897). */
@@ -316,6 +316,16 @@ export function createProductionOpenCodeBackend(
   });
 }
 
+function requiredRunGeometry(
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+): OpenCodeRuntimeCompositionInput["contextGeometry"] {
+  const metadata = input.resolveGatewayRunMetadata?.(run.context.modelProfile.profileId);
+  const geometry = metadata === undefined ? undefined : resolveOpenCodeContextGeometry(metadata);
+  if (geometry === undefined) throw new CodingRuntimeLaunchRejectedError("runtime-unqualified");
+  return geometry;
+}
+
 function createOpenCodeRun(
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
@@ -323,12 +333,7 @@ function createOpenCodeRun(
   toolProfile: OpenCodeToolProfile,
 ): QualifiedProductionRuntimeRun {
   assertOpenCodeRun(run);
-  const metadata = input.resolveGatewayRunMetadata?.(run.context.modelProfile.profileId);
-  const contextGeometry =
-    metadata === undefined ? undefined : resolveOpenCodeContextGeometry(metadata);
-  if (contextGeometry === undefined) {
-    throw new CodingRuntimeLaunchRejectedError("runtime-unqualified");
-  }
+  const contextGeometry = requiredRunGeometry(input, run);
   const safeActivity = safeActivityController(
     run.minted.authorityRef.runId,
     safeActivityProjection,
@@ -337,6 +342,10 @@ function createOpenCodeRun(
   );
   const launchInput = withVerifiedRipgrep(input, run, toolProfile);
   try {
+    input.gatewayReadiness.bindContinuationRoute(
+      run.minted.authorityRef.runId,
+      contextGeometry.continuationRouteDigest,
+    );
     const composition = composeOpenCodeRun(
       launchInput,
       run,
@@ -361,6 +370,7 @@ function createOpenCodeRun(
       },
     };
   } catch (error) {
+    input.gatewayReadiness.clear(run.minted.authorityRef.runId);
     safeActivity.clear();
     safeActivityProjection.purge(run.minted.authorityRef.runId, "stop");
     throw error;

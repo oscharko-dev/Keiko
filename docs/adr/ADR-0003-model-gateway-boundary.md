@@ -797,11 +797,26 @@ repair never ran). Gemma 4 31B streamed through LiteLLM (run `742029841583121825
 motivated this: turn 5 reasoned for about 4,500 tokens and ended empty, the coding runtime retried the
 identical turn six more times, and the failed turns' reasoning stayed in the resent history. A coding
 sidecar turn whose repair ended `empty-again` is answered as final to the runtime (ADR-0173), and the
-sidecar drops that reasoning from every later request instead of resending it upstream: reasoning
+default/shared sidecar path drops that reasoning from later requests instead of resending it upstream: reasoning
 fields of prior assistant messages and assistant messages that carry nothing but reasoning never reach
 the gateway request, and `coding-sidecar.gateway.request-validated` records how many it dropped.
 This requires the runtime to preserve reasoning part types; ADR-0137 D8 documents the pinned runtime's
 separate limitation when interrupted reasoning is converted to ordinary assistant text.
+
+
+For the authenticated native Coding path, the separate explicit provider policy
+`reasoningContinuation: "required-with-tools"` uses the existing native session as the sole
+continuation owner (#4059). It is mutually exclusive with `reasoningHistory` and
+`reasoningHistoryField`; its qualified wire field remains `reasoning_content`. The native context
+hook reads canonical session context before runtime serialization and excludes aborted, unfinished
+and foreign-model assistant rounds and orphaned tool results. Existing run and retained-session
+route bindings prevent continuation under changed or unproven routes. This native path retains exact
+completed reasoning independently of live display, checks the current credential floor, and applies
+full byte, context and spend limits. Missing, conflicting, secret-bearing or oversized state fails
+closed. It bypasses the shared transient history cache and preserves native resume/fork ownership;
+no additional reasoning store is introduced. Activity evidence contains counts and closed outcomes
+only.
+
 
 **End-to-end budget.** A buffered call as a whole is bounded by `providerRequestBudgetMs(provider)`
 (`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry reserves

@@ -1,3 +1,4 @@
+import { ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS } from "./activity-line-fields.js";
 import { DECLARED_MODEL_MODES } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   activityLogErrorKindOr,
@@ -64,6 +65,7 @@ const DIAGNOSTIC_OUTCOMES = [
   "request-refused",
   "provider-busy",
   "request-cancelled",
+  "routine",
 ] as const;
 
 const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
@@ -183,20 +185,7 @@ const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
     },
     promptTokens: { type: "integer", dataClass: "count", required: false },
     completionTokens: { type: "integer", dataClass: "count", required: false },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -205,6 +194,42 @@ const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
   analyzerProjection: "failure-cluster",
   failureClasses: ["server-diagnostic"],
   proofIds: ["server.diagnostic.failure.activity-log-line"],
+  releaseImpact: "patch",
+});
+
+// Expected capability states and per-turn summaries are observations, never failure clusters.
+const SERVER_DIAGNOSTIC_OBSERVATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "server.diagnostic.observation",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "diagnostics-log.diagnosticObservationEvent",
+  fields: {
+    diagnosticOperation: { type: "string", dataClass: "opaque-id", required: true, maxLength: 160 },
+    diagnosticErrorClass: {
+      type: "string",
+      dataClass: "error-kind",
+      required: true,
+      maxLength: 64,
+    },
+    source: { type: "string", dataClass: "opaque-id", required: true, maxLength: 160 },
+    parentCorrelationId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+    code: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    semanticCandidateCount: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["server-diagnostic"],
+  proofIds: ["server.diagnostic.observation.activity-log-line"],
   releaseImpact: "patch",
 });
 
@@ -548,7 +573,30 @@ function activityLogDiagnosticOperation(operation: string): string {
   return label.replace(" ", ":");
 }
 
+function diagnosticObservationEvent(record: ServerDiagnosticRecord): ServerLogEvent {
+  const code = boundedDiagnosticCode(record.code);
+  return activityLogEvent(
+    SERVER_DIAGNOSTIC_OBSERVATION_OPERATION,
+    { level: "info", correlationId: record.correlationId },
+    {
+      diagnosticOperation: activityLogDiagnosticOperation(record.operation),
+      diagnosticErrorClass: record.errorClass,
+      source: record.source,
+      ...(record.parentCorrelationId === undefined
+        ? {}
+        : { parentCorrelationId: record.parentCorrelationId }),
+      ...(code === undefined ? {} : { code }),
+      ...(record.semanticCandidateCount === undefined
+        ? {}
+        : { semanticCandidateCount: record.semanticCandidateCount }),
+      completeness: "complete",
+      loss: "none",
+    },
+  );
+}
+
 function diagnosticActivityLogEvent(record: ServerDiagnosticRecord): ServerLogEvent {
+  if (record.diagnosticOutcome === "routine") return diagnosticObservationEvent(record);
   const fields = {
     diagnosticOperation: activityLogDiagnosticOperation(record.operation),
     diagnosticErrorClass: record.errorClass,

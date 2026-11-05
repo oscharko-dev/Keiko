@@ -1,3 +1,4 @@
+import { browserChatMessages } from "./chat-message-projection.js";
 import {
   revokeChangedJiraChatAuthority,
   revokeJiraChatAccess,
@@ -1525,7 +1526,12 @@ export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): Rout
       .filter((message) => !isLegacyEmptyAssistantPlaceholder(message));
     return {
       status: 200,
-      body: { messages: projectMessagesWithCurrentLocalKnowledgeLifecycle(deps, messages) },
+      body: {
+        messages: browserChatMessages(
+          projectMessagesWithCurrentLocalKnowledgeLifecycle(deps, messages),
+          ctx.correlationId,
+        ),
+      },
     };
   });
 }
@@ -1559,7 +1565,7 @@ export async function handleCreateMessage(
       shortResult: optionalString(body, "shortResult"),
       taskType: optionalTaskType(body),
     });
-    return { status: 201, body: { message } };
+    return { status: 201, body: { message: browserChatMessages([message], ctx.correlationId)[0] } };
   });
 }
 
@@ -1601,7 +1607,7 @@ export async function handleUpdateMessage(
     const body = await readJsonObject(ctx.req);
     const patch = buildMessagePatch(body);
     const message = deps.store.updateMessage(id, patch);
-    return { status: 200, body: { message } };
+    return { status: 200, body: { message: browserChatMessages([message], ctx.correlationId)[0] } };
   });
 }
 
