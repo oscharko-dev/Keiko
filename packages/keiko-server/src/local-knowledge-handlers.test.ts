@@ -1,3 +1,8 @@
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import {
+  htmlManualSourceKindTag,
+  htmlManualSourceFingerprintTag,
+} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -13,6 +18,7 @@ import {
   getCapsule,
   listCapsules,
   openKnowledgeStore,
+  persistHtmlManualSourceMetadata,
   resolveKnowledgeStorePath,
   updateCapsuleDetails,
   upsertExtractionCheckpoint,
@@ -77,6 +83,7 @@ import {
 import { createInMemoryUiStore } from "./store/index.js";
 import {
   expectActivityLogProof,
+  expectRegisteredActivityLogLine,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
 
@@ -5015,5 +5022,69 @@ describe("local-knowledge large-document health (Issue #1286)", () => {
     // The capsule has no sources, so the handler returns a conflict rather than indexing — but the
     // `resume` mode passes validation (a rejected mode would be a 400 invalid-request).
     expect(result.status).not.toBe(400);
+  });
+});
+
+describe("manual summary omission in request listings", () => {
+  it("forwards request correlation and emits only when pods are requested", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-summary-obs-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    const sourceId = "manual-list-observation" as KnowledgeSourceId;
+    addSourceToCapsule(store, capId, {
+      id: sourceId,
+      displayName: "Fixture manual",
+      tags: [
+        htmlManualSourceKindTag("html-manual-http"),
+        htmlManualSourceFingerprintTag("fp-list"),
+      ],
+      scope: { kind: "folder", rootPath: "/fixture/manual", recursive: true },
+    });
+    persistHtmlManualSourceMetadata(store, capId, sourceId, {
+      schemaVersion: "1",
+      scope: {
+        kind: "html-manual-http",
+        origin: "https://manual.example.invalid",
+        pathPrefix: null,
+      },
+      limits: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
+      sourceFingerprint: "fp-list",
+      proposedPodName: "Fixture manual",
+    });
+    // Historical corrupt summary after the healthy metadata INSERT.
+    store._internal.db
+      .prepare("UPDATE html_manual_sources SET last_change_summary_json = :bytes")
+      .run({ bytes: "{private-refused-fixture" });
+    store.close();
+    const events: ServerLogEvent[] = [];
+    setServerLogger(
+      createServerLogger({ sink: { write: (event) => events.push(event) }, level: "debug" }),
+    );
+    await handleListLocalKnowledgeCapsules(baseCtx(tmp, "GET"), depsFor(tmp));
+    expect(
+      events.filter((event) => event.op === "knowledge.manual-refresh-summary.rejected"),
+    ).toHaveLength(0);
+    const ctx = { ...knowledgePodsCtx(tmp, "GET"), correlationId: "manual-list-request" };
+    const result = await handleListLocalKnowledgeCapsules(ctx, depsFor(tmp));
+    expect(result.status).toBe(200);
+    const rejected = events.filter(
+      (event) => event.op === "knowledge.manual-refresh-summary.rejected",
+    );
+    expect(rejected).toHaveLength(1);
+    expect(
+      expectRegisteredActivityLogLine(
+        "knowledge.manual-refresh-summary.rejected",
+        formatActivityLogProofLine(rejected[0] ?? {}),
+      ),
+    ).toMatchObject({
+      correlationId: "manual-list-request",
+      invalidJsonCount: 1,
+      summaryReturned: false,
+    });
+    await handleListLocalKnowledgeCapsuleSets(ctx, depsFor(tmp));
+    expect(
+      events.filter((event) => event.op === "knowledge.manual-refresh-summary.rejected"),
+    ).toHaveLength(1);
+    expect(JSON.stringify(events)).not.toContain("private-refused-fixture");
   });
 });

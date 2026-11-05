@@ -8868,6 +8868,55 @@ const activityLogOperationPart1 = () =>
     {
       contractKind: "activity-log-operation",
       schemaVersion: 1,
+      op: "editor.semantic-tokens.refused",
+      category: "diagnostic",
+      owner: "keiko-server",
+      emitter: "editor.languageRoutes.recordSemanticTokenOutcome",
+      fields: {
+        completeness: activityLogCompletenessField(),
+        loss: activityLogLossField(),
+        reason: activityLogStringEnumField(true, ["sanitizer-refused"]),
+      },
+      causal: "correlation",
+      lifecycle: "failure",
+      analyzerProjection: "failure-cluster",
+      failureClasses: ["editor-semantic-token-refusal"],
+      proofIds: ["editor.semantic-tokens.refused.line"],
+      releaseImpact: "patch",
+      diagnosticWhen: [{ field: "reason", values: ["sanitizer-refused"] }],
+    },
+    {
+      contractKind: "activity-log-operation",
+      schemaVersion: 1,
+      op: "editor.semantic-tokens.settled",
+      category: "diagnostic",
+      owner: "keiko-server",
+      emitter: "editor.languageRoutes.recordSemanticTokenOutcome",
+      fields: {
+        completeness: activityLogCompletenessField(),
+        loss: activityLogLossField(),
+        outcome: activityLogStringEnumField(true, ["served", "unavailable", "cancelled", "failed"]),
+        reason: activityLogStringEnumField(true, [
+          "available",
+          "activation-unavailable",
+          "host-unavailable",
+          "not-negotiated",
+          "request-cancelled",
+          "request-failed",
+        ]),
+        returnedTokenCount: activityLogCountField(false),
+      },
+      causal: "correlation",
+      lifecycle: "end",
+      analyzerProjection: "timeline",
+      failureClasses: ["editor-semantic-token-settlement"],
+      proofIds: ["editor.semantic-tokens.settled.line"],
+      releaseImpact: "patch",
+      diagnosticWhen: [{ field: "outcome", values: ["failed"] }],
+    },
+    {
+      contractKind: "activity-log-operation",
+      schemaVersion: 1,
       op: "editor.verification.dependencies",
       category: "process",
       owner: "keiko-server",
@@ -13920,6 +13969,9 @@ const activityLogOperationPart1 = () =>
       proofIds: ["git.snapshot.released.line"],
       releaseImpact: "patch",
     },
+  ] as const;
+const activityLogOperationPart2 = () =>
+  [
     {
       contractKind: "activity-log-operation",
       schemaVersion: 1,
@@ -13954,9 +14006,6 @@ const activityLogOperationPart1 = () =>
       proofIds: ["git.snapshot.reserved.line"],
       releaseImpact: "patch",
     },
-  ] as const;
-const activityLogOperationPart2 = () =>
-  [
     {
       contractKind: "activity-log-operation",
       schemaVersion: 1,
@@ -15083,6 +15132,28 @@ const activityLogOperationPart2 = () =>
       analyzerProjection: "capability",
       failureClasses: ["activity-log-sink"],
       proofIds: ["knowledge.log.sink-failed.body-free"],
+      releaseImpact: "patch",
+    },
+    {
+      contractKind: "activity-log-operation",
+      schemaVersion: 1,
+      op: "knowledge.manual-refresh-summary.rejected",
+      category: "diagnostic",
+      owner: "keiko-local-knowledge",
+      emitter: "knowledge-pods.logManualRefreshSummaryRejection",
+      fields: {
+        completeness: activityLogCompletenessField(),
+        loss: activityLogLossField(),
+        invalidJsonCount: activityLogCountField(true),
+        invalidSummaryCount: activityLogCountField(true),
+        reason: activityLogStringEnumField(true, ["invalid-json", "invalid-summary", "mixed"]),
+        summaryReturned: activityLogBooleanField(true),
+      },
+      causal: "correlation",
+      lifecycle: "failure",
+      analyzerProjection: "failure-cluster",
+      failureClasses: ["knowledge-manual-summary-validation"],
+      proofIds: ["knowledge.manual-refresh-summary.rejected.omission"],
       releaseImpact: "patch",
     },
     {
@@ -20423,6 +20494,9 @@ const activityLogOperationPart2 = () =>
       proofIds: ["tool-catalog.completion-discarded.emitted-line"],
       releaseImpact: "patch",
     },
+  ] as const;
+const activityLogOperationPart3 = () =>
+  [
     {
       contractKind: "activity-log-operation",
       schemaVersion: 1,
@@ -20573,9 +20647,6 @@ const activityLogOperationPart2 = () =>
       proofIds: ["tool-catalog.invocation-started.emitted-line"],
       releaseImpact: "patch",
     },
-  ] as const;
-const activityLogOperationPart3 = () =>
-  [
     {
       contractKind: "activity-log-operation",
       schemaVersion: 1,

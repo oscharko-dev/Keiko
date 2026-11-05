@@ -200,10 +200,15 @@ export function createRepositoryPodShell(
   return buildSummary(deps.store, deps.capsuleId);
 }
 
-function buildSummary(store: KnowledgeStore, capsuleId: KnowledgeCapsuleId): KnowledgePodSummary {
+function buildSummary(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  logSink?: KnowledgeLogSink,
+  correlationId?: string,
+): KnowledgePodSummary {
   const capsule = getCapsule(store, capsuleId);
   if (capsule === undefined) throw new KnowledgeStoreError("repository capsule vanished");
-  return buildKnowledgePodSummary(store, capsule);
+  return buildKnowledgePodSummary(store, capsule, { logSink, correlationId });
 }
 
 function requireRepositoryScope(
@@ -484,6 +489,10 @@ function indexingResultCanApply(
   );
 }
 
+function buildRefreshSummary(deps: RepositoryPodIndexingDeps, runId: string): KnowledgePodSummary {
+  return buildSummary(deps.store, deps.capsuleId, deps.logSink, knowledgeLogCorrelationId(runId));
+}
+
 export async function refreshRepositoryPod(
   deps: RepositoryPodIndexingDeps,
   input: RefreshRepositoryPodInput = {},
@@ -526,7 +535,11 @@ export async function refreshRepositoryPod(
   );
   const run = buildRunRecord(deps, runId, drained.result, counts, persisted, applied);
   persistRun(deps, run);
-  return { run, indexing: drained.result, summary: buildSummary(deps.store, deps.capsuleId) };
+  return {
+    run,
+    indexing: drained.result,
+    summary: buildRefreshSummary(deps, runId),
+  };
 }
 
 // Scope args stay positional to match the package's `list*` reader convention
