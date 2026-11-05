@@ -585,11 +585,22 @@ interface RuntimeMutationQueue {
   readonly cancelStart: () => void;
 }
 
+/**
+ * The later reads of a cancelled start, after the immediate one. That read travels on another
+ * connection and can reach the server before the start's ended request does, while the server is
+ * still past its last check and about to create the run (#4271 audit). Two bounded reads find it; a
+ * run already shown ends them, and closing the Workbench clears them.
+ */
+export const CANCELLED_START_REREAD_DELAYS_MS: readonly number[] = [1_000, 4_000];
+
+type ScheduleReread = (reread: () => void, delayMs: number) => void;
+
 // Ending the start's request is what tells the server to create no run. The request may have lost
 // that race, so the window re-reads: a run that already exists appears with its own Stop.
 function cancelPendingStart(
-  { refreshRun, dispatch }: RuntimeMutationQueueInput,
+  { stateRef, refreshRun, dispatch }: RuntimeMutationQueueInput,
   pending: ReadonlySet<PendingMutation>,
+  schedule: ScheduleReread,
 ): void {
   const starts = [...pending].filter((entry) => entry.kind === "start");
   if (starts.length === 0) return;
@@ -597,15 +608,41 @@ function cancelPendingStart(
   dispatch({ kind: "mutation-complete" });
   reportCodingWorkbenchInteraction({ interaction: "start-cancelled" });
   void refreshRun();
+  const reread = (): void => {
+    if (runBoundTarget(stateRef.current) === null) void refreshRun();
+  };
+  for (const delayMs of CANCELLED_START_REREAD_DELAYS_MS) schedule(reread, delayMs);
+}
+
+function useScheduledRereads(): ScheduleReread {
+  const [timers] = useState(() => new Set<ReturnType<typeof setTimeout>>());
+  useEffect(
+    () => (): void => {
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+    },
+    [timers],
+  );
+  return useCallback(
+    (reread, delayMs): void => {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        reread();
+      }, delayMs);
+      timers.add(timer);
+    },
+    [timers],
+  );
 }
 
 function useRuntimeMutationQueue(input: RuntimeMutationQueueInput): RuntimeMutationQueue {
   const { stateRef, refreshRun, dispatch } = input;
   const mutationTail = useRef<Promise<void>>(Promise.resolve());
   const [pending] = useState(() => new Set<PendingMutation>());
+  const schedule = useScheduledRereads();
   const cancelStart = useCallback((): void => {
-    cancelPendingStart({ stateRef, refreshRun, dispatch }, pending);
-  }, [dispatch, pending, refreshRun, stateRef]);
+    cancelPendingStart({ stateRef, refreshRun, dispatch }, pending, schedule);
+  }, [dispatch, pending, refreshRun, schedule, stateRef]);
   const enqueueMutation = useCallback<EnqueueMutation>(
     (kind, prepare, preempting = false): Promise<void> => {
       const entry: PendingMutation = { kind, controller: new AbortController() };
