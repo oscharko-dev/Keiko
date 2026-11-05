@@ -66,22 +66,26 @@ remain truthful and cannot become a hidden prerequisite for an unsigned update.
 
 ### Activity Log runtime changes
 
-The deployment operator can set `KEIKO_CONTENT_REDACTION=off` before startup so Chat preserves
-authorized document context, answers and private chat history (#4098). The server resolves the
-setting once at startup and records `chat.content-policy.resolved` (`policy`, `setting`; `warn` for
-an unrecognized value, which keeps redaction). Only Chat model ports and the Chat connected-context
-workspace receive the preserving policy from it; the gateway, workspace and store never read the
-environment. Independently of the setting, the Coding Workbench sidecar route always gives the
-OpenCode runtime the model's answer under the preserving policy (credential floor only), because
-OpenCode is its own producer and uses the gateway as infrastructure; Coding repository search and
-Coding History exports and imports keep the default projection. Preserved content still loses
-configured infrastructure-secret literals, private keys, URL credentials, `Authorization` header
-values, encoded-looking Bearer/Basic values, JWT-shaped bearer tokens and known token shapes, and memory proposals keep the
-default projection. Diagnostics, audit evidence, support exports and
-tool-argument protections remain unconditional. The setting applies to every configured provider;
-it does not infer trust from a provider hostname. `chat.request.dispatch` records the per-call
-`contentRedactionEnabled` without source text. See
-[the operator procedure](docs/troubleshooting/chat-content-redaction.md).
+What a person reads and what the model receives lose only the credential floor by default (owner
+decision, 2026-11-04). `KEIKO_CONTENT_REDACTION=on` before startup lowers the threshold back to the
+strict projection; `off` or an absent value preserves. The server resolves the setting once at startup
+and records `chat.content-policy.resolved` (`policy`, `setting`; `warn` for an unrecognized value, which
+keeps redaction). `deps.redactor`, the Chat model ports and the Chat connected-context workspace follow
+it; the gateway, workspace and store never read the environment. Independently of the setting, the
+Coding Workbench sidecar route always gives the OpenCode runtime the model's answer under the preserving
+policy, because OpenCode is its own producer. `keiko_research_fetch` arguments leave for the public
+internet and keep the full redaction. Evidence, audit records, memory proposals and Quality Intelligence
+stay on `strictRedactor`; Coding repository search, Coding History exports and imports and support
+exports keep their own redaction. Preserved content still loses configured infrastructure-secret
+literals, private keys, URL credentials, `Authorization` header values, encoded-looking Bearer/Basic
+values, JWT-shaped bearer tokens and known token shapes.
+
+The Activity Log is the only thing that ever leaves the machine and carries no personal data: its sink
+refuses a value with a space, a name, IBAN, telephone, card or account number, a date with a year, an
+IPv4 address, a remote URL or host and personal field names, whatever field carries them. Never loosen it to keep a value
+readable; emit a count, a closed value or a digest. The setting applies to every configured provider; it does not infer
+trust from a provider hostname. `chat.request.dispatch` records the per-call `contentRedactionEnabled`
+without source text. See [the operator procedure](docs/troubleshooting/chat-content-redaction.md).
 
 Source redaction uses the shared security owner to preserve language syntax while masking credential
 values under the default content policy, including escaped JSON/JSONC and YAML scalars. An unsafe or

@@ -124,6 +124,7 @@ export {
   type ProgressiveExtractionSource,
   type ProgressiveExtractionWindow,
   type ProgressiveExtractionOptions,
+  type ProgressiveExtractionLog,
   type ProgressiveExtractionSink,
   type ProgressiveExtractionSummary,
   type ProgressiveStopReason,

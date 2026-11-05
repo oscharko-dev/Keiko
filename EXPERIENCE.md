@@ -122,3 +122,14 @@ Existing linked decisions and executable gates remain the source to check before
   set"), and the proofs may only be regenerated on the Linux reference environment. Give a lab or
   tool a `node scripts/...` entry point and register it in `knip.json` instead; the continuity and
   memory labs run that way. Seen on PR #4230 (2026-11-03).
+- **A parser that flattens structure makes every consumer guess.** Before #4235 a blank line meant
+  something different per format: Word, HTML and PowerPoint put neighbouring paragraphs on adjacent
+  lines, PDF lost its headings and page-crossing sentences, and a table row could hold a blank line.
+  The requirement inventory compensated with rules such as "a blank line inside a cell" and still
+  read a paragraph behind a table into its last cell. The correction is one block contract in the
+  parsers (`parsers/block-text.ts`): a blank line ends a block, only list items and table rows stay
+  adjacent. When a consumer of parsed text needs a rule about a parser's quirk, fix the parser and
+  delete the rule. Likewise, the inventory's pipe reader took labelled table rows for pipe tables
+  until a data cell happened to name a column. Evidence: `tests/integration/requirement-parser-contract.integration.test.ts`
+  and the Word/PDF inventory comparison over the QI corpus (15 of 15 identical, 2026-11-04, PR #4238).
+  Retirement trigger: the block contract is replaced or a parser stops using `block-text.ts`.

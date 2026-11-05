@@ -611,7 +611,7 @@ function activityFailureKind(kind: string): string {
   return nested === undefined ? kind : `DISCOVERY_FAILED.${nested}`;
 }
 
-function failureErrorKind(kind: string): ActivityLogErrorKind {
+export function failureErrorKind(kind: string): ActivityLogErrorKind {
   const classifiedKind = nestedDiscoveryFailureKind(kind) ?? kind;
   const exact = EXACT_FAILURE_ERROR_KINDS[classifiedKind];
   if (exact !== undefined) return exact;

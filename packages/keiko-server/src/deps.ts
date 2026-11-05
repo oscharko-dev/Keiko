@@ -829,7 +829,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly env: EnvSource;
   // Resolved outbound HTTP egress policy, including config-file-only Figma egress.
   readonly egress?: GatewayEgressConfig | undefined;
-  // Live-payload redactor (D9). Applied to run reports, projections, and SSE event data.
+  // Live-payload redactor (D9). Applied to run reports, projections, and SSE event data: what a person
+  // reads. It follows the deployment content policy; evidence, audit and memory use `strictRedactor`.
   readonly redactor: Redactor;
   // #4098: the Chat content policy resolved once at startup from `KEIKO_CONTENT_REDACTION`. Absent
   // means `redact`; only Chat reads it, never diagnostics, evidence or another surface.
@@ -2233,8 +2234,9 @@ export function buildRedactor(env: EnvSource, config?: GatewayConfig): Redactor 
   return (value: unknown): unknown => deepRedactStrings(value, redactString);
 }
 
-// #4098: the private Chat history redactor. Under the default policy it is the live redactor
-// itself; only the deployment opt-out keeps authorized content and removes the credential floor.
+// #4098, owner decision 2026-11-04: what a person reads and what the model receives. By default it
+// removes only the credential floor; `KEIKO_CONTENT_REDACTION=on` lowers the threshold back to the
+// strict live redactor.
 function runtimeContentRedactString(
   env: EnvSource,
   runtimeConfig: RuntimeGatewayConfig,
@@ -4523,6 +4525,7 @@ interface UiHandlerDepsAssemblyArgs {
   readonly codingWorkbenchEvidenceStore: EvidenceStore;
   readonly redactString: (value: string) => string;
   readonly liveRedactor: Redactor;
+  readonly contentRedactor: Redactor;
   readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
   readonly bundle: PersistenceBundle;
   readonly contextProfileForModel: ContextProfileResolver;
@@ -5617,7 +5620,7 @@ function buildBaseUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): BaseUiHandlerD
     evidenceDir: args.resolvedEvidenceDir,
     env: args.options.env,
     egress: args.egress,
-    redactor: args.liveRedactor,
+    redactor: args.contentRedactor,
     contentRedaction: args.contentPolicy.policy,
     diagnostics: args.options.diagnostics,
     activityLog: args.options.activityLog ?? processServerLogSink(),
@@ -6737,7 +6740,7 @@ function localKnowledgeKeys(env: EnvSource): ReturnType<typeof createLocalKnowle
 }
 
 // #4098: the Chat content policy is resolved once per deps graph and recorded on the startup
-// correlation, so a misspelled opt-out is visible as a warning instead of a silent default.
+// correlation, so a misspelled value is visible as a warning instead of a silent default.
 function resolveLoggedContentPolicy(
   env: EnvSource,
   correlationId: string,
@@ -6745,6 +6748,40 @@ function resolveLoggedContentPolicy(
   const policy = resolveContentRedactionPolicy(env);
   logChatContentPolicyResolved(processServerLogSink(), correlationId, policy);
   return policy;
+}
+
+interface RedactionProjections {
+  readonly redactString: (value: string) => string;
+  readonly liveRedactor: Redactor;
+  readonly contentPolicy: ResolvedContentRedactionPolicy;
+  readonly contentRedactString: (value: string) => string;
+  readonly contentRedactor: Redactor;
+}
+
+// The two projections of one running configuration: the strict one evidence and audit keep, and the
+// content one that people and models read under the deployment policy.
+function buildRedactionProjections(
+  env: EnvSource,
+  runtimeConfig: RuntimeGatewayConfig,
+  egress: GatewayConfig["egress"],
+  correlationId: string,
+): RedactionProjections {
+  const redactString = runtimeRedactString(env, runtimeConfig, egress);
+  const contentPolicy = resolveLoggedContentPolicy(env, correlationId);
+  const contentRedactString = runtimeContentRedactString(
+    env,
+    runtimeConfig,
+    egress,
+    redactString,
+    contentPolicy,
+  );
+  return {
+    redactString,
+    liveRedactor: (value: unknown): unknown => deepRedactStrings(value, redactString),
+    contentPolicy,
+    contentRedactString,
+    contentRedactor: (value: unknown): unknown => deepRedactStrings(value, contentRedactString),
+  };
 }
 
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
@@ -6758,24 +6795,21 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bootstrapCorrelationId,
   );
   const evidenceStore = createNodeEvidenceStore(resolvedEvidenceDir);
-  const codingWorkbenchEvidenceStore =
-    options.codingWorkbenchEvidenceStore ??
-    createNodeEvidenceStore(join(resolvedEvidenceDir, "coding-workbench"));
-  const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
-  const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
-  const localKnowledgeKeyProvider = localKnowledgeKeys(options.env);
-  const contentPolicy = resolveLoggedContentPolicy(options.env, bootstrapCorrelationId);
+  const projections = buildRedactionProjections(
+    options.env,
+    runtimeConfig,
+    egress,
+    bootstrapCorrelationId,
+  );
   const bundle = buildPersistenceBundle(
     options,
     resolvedUiDbPath,
-    redactString,
+    projections.redactString,
     evidenceStore,
     bootstrapCorrelationId,
-    runtimeContentRedactString(options.env, runtimeConfig, egress, redactString, contentPolicy),
+    projections.contentRedactString,
   );
-  const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   reconcileNodeStoreAtStartup(options, bundle, bootstrapCorrelationId);
-  const codingSessionContinuity = buildCodingSessionContinuity(options, resolvedUiDbPath, bundle);
   return assembleUiHandlerDeps({
     options,
     resolvedUiDbPath,
@@ -6785,15 +6819,18 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     runtimeConfig,
     egress,
     evidenceStore,
-    codingWorkbenchEvidenceStore,
-    redactString,
-    liveRedactor,
-    localKnowledgeKeyProvider,
+    codingWorkbenchEvidenceStore:
+      options.codingWorkbenchEvidenceStore ??
+      createNodeEvidenceStore(join(resolvedEvidenceDir, "coding-workbench")),
+    redactString: projections.redactString,
+    liveRedactor: projections.liveRedactor,
+    contentRedactor: projections.contentRedactor,
+    localKnowledgeKeyProvider: localKnowledgeKeys(options.env),
     bundle,
-    contextProfileForModel,
+    contextProfileForModel: buildContextProfileResolver(() => runtimeConfig.current()),
     bootstrapCorrelationId,
-    contentPolicy,
-    codingSessionContinuity,
+    contentPolicy: projections.contentPolicy,
+    codingSessionContinuity: buildCodingSessionContinuity(options, resolvedUiDbPath, bundle),
     mcpCredentialRelay: createMcpCredentialRelay(),
   });
 }

@@ -429,6 +429,7 @@
   "indexing.document.extraction-failed": "memory-knowledge",
   "indexing.document.extraction-started": "memory-knowledge",
   "indexing.document.failed": "memory-knowledge",
+  "indexing.document.page-read-failed": "memory-knowledge",
   "indexing.document.skipped": "memory-knowledge",
   "indexing.job.finished": "memory-knowledge",
   "indexing.job.received": "memory-knowledge",

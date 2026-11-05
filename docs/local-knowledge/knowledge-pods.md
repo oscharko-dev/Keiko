@@ -217,10 +217,34 @@ anyway is dropped. Any other value fails the configuration load. The Activity Lo
 
 ## Project document formats
 
-A pod indexes the text layer of Word (`.docx`), Excel (`.xlsx`), PowerPoint (`.pptx`) and PDF
+A pod indexes the text of Word (`.docx`), Excel (`.xlsx`), CSV, PowerPoint (`.pptx`) and PDF
 files, with the source location a citation points at: the paragraph or sheet row, the slide
-(`Slide N: <title>`, including table rows and speaker notes) or the page. Images, charts and
-embedded objects are not read, and scanned documents are not recognized (no OCR).
+(`Slide N: <title>`, including table rows, chart and SmartArt text, and speaker notes) or the page.
+Images and other embedded objects are not read, and scanned documents are not recognized (no OCR).
+
+A PDF stores glyph runs, not paragraphs, so its pages are rebuilt from the layout: reading order
+of rows, columns and table cells, the paragraph a wrapped line belongs to, also across a page
+break, list items, headings as sections, and page headers and footers a document repeats are
+removed with a count. Where the layout gives no evidence, a line stays a line.
+
+Every format follows one block rule in the stored text: a blank line ends a block, and only the
+items of one list and the rows of one table stay on adjacent lines. Retrieval and the requirement
+inventory rely on this rule, so a new or changed parser has to keep it.
+
+Content a person does not see is reported, never silently dropped or passed off as visible: hidden
+Word text, unfilled placeholders and HTML marked `hidden` or `display:none` are excluded with a
+count, Word comments are not indexed with a count, and hidden Excel sheets, rows and columns and
+hidden slides stay indexed with a count.
+
+A repeated page line whose only change is a page counter (`Seite 3 von 12`, `Page 3`) counts as the
+same page furniture; a line whose number changes without a page word stays document text. JSON
+records keep their nested fields and exact number spellings within one object budget. CSV, Excel and
+the other formats share one parse deadline per document, and every Office container, Excel included,
+passes the same ZIP controls.
+
+The stored text is what a parser made of a file, so a refresh reads an unchanged file again when
+its parser has changed since and records `PARSER_VERSION_CHANGED`. A repaired parser therefore
+reaches existing pods without touching the files.
 
 A file that cannot be indexed is named by a closed reason and never contributes partial text:
 

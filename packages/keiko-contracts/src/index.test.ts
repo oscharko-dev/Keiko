@@ -463,7 +463,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("knowledge-capsule schema values remain available at their declared public surface (#265)", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(33);
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(34);
     // The string contract version and the integer DB version must remain distinct so the
     // contract surface and the on-disk DDL can evolve independently.
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");

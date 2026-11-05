@@ -167,6 +167,16 @@ name the Workbench's run phase while a provider outage is ridden out.
 
 ### D7 — Secret redaction at the boundary
 
+**Content threshold amendment (owner decision, 2026-11-04).** Keiko runs on the user's own device and
+its stores never leave it, so what a person reads and what the model receives lose only the credential
+floor by default. An absent or empty `KEIKO_CONTENT_REDACTION` now preserves like `off`; `on` lowers the
+threshold back to the strict projection, and an unrecognized value still warns and keeps redaction.
+Chat answer ports, conversation-history compaction summaries and the commit-message draft carry that
+policy. Tool arguments now follow the call's policy as well, because a Jira draft or a question is what
+a person reads, with two exceptions: `keiko_research_fetch` arguments leave for the public internet and
+keep the full heuristic redaction, and exact-content tools keep literal-only removal (#4009). Where the
+paragraph below says otherwise about the default or about tool arguments, this amendment governs.
+
 **Authorized content amendment (owner decision, 2026-10-27, #4098).** Content redaction is a
 per-call policy, distinct from infrastructure-secret and diagnostic protection. The gateway never
 reads the deployment environment: a call preserves authorized response content, reasoning and

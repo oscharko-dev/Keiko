@@ -2260,6 +2260,9 @@ function discoveryStreamFor(
         : {}),
       largeDocumentJobId: state.jobId,
       chunkingStrategyVersion: chunkingStrategyKey(chunkingOptionsForState(state)),
+      ...(state.options.logSink === undefined
+        ? {}
+        : { logSink: state.options.logSink, logContext: state.logContext }),
     },
     sourceDiscoveryParams(state, source),
   );

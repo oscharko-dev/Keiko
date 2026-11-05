@@ -15,8 +15,10 @@ export interface RequirementVocabulary {
   readonly priorityValues: readonly string[];
   /** Keys that introduce acceptance criteria. */
   readonly criteriaKeys: readonly string[];
-  /** Keys whose line carries metadata, not statement text. */
+  /** Keys of one metadata value (`Quelle: X`): not statement text, and complete on its line. */
   readonly metaKeys: readonly string[];
+  /** Keys of a free-text remark, which runs over its lines up to the next key. */
+  readonly noteKeys: readonly string[];
   /** Keys that label the statement itself (`Anforderung: ...`); the label is not content. */
   readonly statementKeys: readonly string[];
   /** Obligation phrases; a sentence containing one is a requirement statement. */
@@ -121,10 +123,10 @@ export const DEFAULT_REQUIREMENT_VOCABULARY: RequirementVocabulary = Object.free
     "Kapitel",
     "Chapter",
     "Status",
-    "Hinweis",
-    "Note",
-    "Speaker notes",
-    "Anmerkung",
+    "Typ",
+    "Type",
+    "Jira",
+    "Ticket",
     "Abhängigkeit",
     "Abhängigkeiten",
     "Dependency",
@@ -133,8 +135,8 @@ export const DEFAULT_REQUIREMENT_VOCABULARY: RequirementVocabulary = Object.free
     "Owner",
     "Fuente",
     "Origine",
-    "Remarque",
   ],
+  noteKeys: ["Hinweis", "Note", "Speaker notes", "Anmerkung", "Remarque"],
   statementKeys: [
     "Anforderung",
     "Anforderungstext",
@@ -234,26 +236,68 @@ export const DEFAULT_REQUIREMENT_VOCABULARY: RequirementVocabulary = Object.free
       "reference",
       "identifier",
       "req id",
+      "key",
+      "schlüssel",
+      "anforderungs id",
+      "anforderungsnummer",
+      "anforderungs nr",
+      "identifiant",
+      "identificador",
+      "identificativo",
+      "numéro",
+      "número",
+      "numero",
     ],
-    title: ["titel", "title", "name", "bezeichnung", "titre", "título", "titolo", "nom", "nombre"],
+    title: [
+      "titel",
+      "title",
+      "name",
+      "bezeichnung",
+      "kurztitel",
+      "überschrift",
+      "zusammenfassung",
+      "summary",
+      "titre",
+      "título",
+      "titolo",
+      "nom",
+      "nombre",
+    ],
     statement: [
       "beschreibung",
       "description",
       "anforderung",
+      "anforderungstext",
       "requirement",
-      "text",
+      "requirement text",
       "statement",
+      "text",
       "descripción",
       "descrizione",
+      "exigence",
+      "énoncé",
+      "libellé",
+      "texte",
+      "requisito",
+      "texto",
+      "testo",
     ],
     priority: ["priorität", "prioritaet", "priority", "prio", "priorité", "prioridad", "priorità"],
     criteria: [
       "abnahmekriterien",
+      "abnahmekriterium",
       "akzeptanzkriterien",
+      "akzeptanzkriterium",
+      "kriterien",
+      "kriterium",
       "acceptance criteria",
+      "acceptance criterion",
       "critères d'acceptation",
+      "critère d'acceptation",
       "criterios de aceptación",
+      "criterio de aceptación",
       "criteri di accettazione",
+      "criterio di accettazione",
     ],
   },
 });
@@ -264,12 +308,18 @@ export interface CompiledVocabulary {
   readonly priorityKey: RegExp;
   /** `^<criteria key>` followed by an optional colon. */
   readonly criteriaKey: RegExp;
-  /** `^<meta key>\s*:` */
+  /** `^<meta or note key>\s*:` */
   readonly metaKey: RegExp;
+  /** `^<note key>\s*:` */
+  readonly noteKey: RegExp;
   /** `^<statement key>\s*:` */
   readonly statementKey: RegExp;
   /** Global zero-width split point in front of an inline priority or criteria key. */
   readonly inlineKey: RegExp;
+  /** The first statement key inside a line that opened with another field. */
+  readonly inlineStatementKey: RegExp;
+  /** A priority key and a value the vocabulary knows, up to the whitespace behind it. */
+  readonly priorityLead: RegExp;
   /** A sentence with an obligation phrase. */
   readonly modal: RegExp;
   /** A sentence that opens with a personal obligation phrase, so it names no subject. */
@@ -283,7 +333,12 @@ export interface CompiledVocabulary {
   readonly priorityTag: RegExp;
   readonly priorityValues: ReadonlySet<string>;
   readonly reservedPrefixes: ReadonlySet<string>;
+  /** Table header roles, keyed by the header folded with `foldHeader`. */
   readonly tableRoles: ReadonlyMap<string, TableColumnRole>;
+  /** The same keys with their spaces removed, so a hyphenated line break still matches. */
+  readonly compactTableRoles: ReadonlyMap<string, TableColumnRole>;
+  /** Single-word names of the id role; a header that ends in one (`Anforderungs-ID`) is an id. */
+  readonly idHeadWords: ReadonlySet<string>;
 }
 
 const LETTER_BEFORE = String.raw`(?<![\p{L}\p{N}])`;
@@ -312,6 +367,66 @@ export function foldTerm(value: string): string {
     .trim();
 }
 
+const MAX_HEADER_CHARS = 200;
+
+/** The text without its closed parenthesized or bracketed qualifiers, nested ones included. */
+function withoutQualifiers(value: string): string {
+  const kept: string[] = [];
+  const opened: number[] = [];
+  for (const character of value) {
+    const start = character === ")" || character === "]" ? opened.pop() : undefined;
+    if (start === undefined) {
+      if (character === "(" || character === "[") opened.push(kept.length);
+      kept.push(character);
+    } else {
+      kept.length = start;
+      kept.push(" ");
+    }
+  }
+  return kept.join("");
+}
+
+/**
+ * A table header folded for role lookup: case, diacritics, decoration and punctuation removed
+ * (`Priorität *` and `Prio.` fold to `prioritat` and `prio`), a parenthesized qualifier dropped
+ * (`Akzeptanzkriterien (Gegeben/Wenn/Dann)`), words separated by single spaces.
+ */
+export function foldHeader(value: string): string {
+  return foldTerm(withoutQualifiers(value.slice(0, MAX_HEADER_CHARS)))
+    .replaceAll(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function compact(folded: string): string {
+  return folded.replaceAll(" ", "");
+}
+
+const NUMBERED_HEADER = /\s\d{1,3}$/u;
+
+function exactRoleOf(vocabulary: CompiledVocabulary, folded: string): TableColumnRole | undefined {
+  return vocabulary.tableRoles.get(folded) ?? vocabulary.compactTableRoles.get(compact(folded));
+}
+
+/**
+ * The role a table header names, or undefined when it names none. A header numbered `Kriterium 2`
+ * (a repeated column header, which the table extraction numbers) names the role of `Kriterium`
+ * when that role takes several cells; a second title or priority would overwrite the first.
+ */
+export function tableRoleOf(
+  vocabulary: CompiledVocabulary,
+  header: string,
+): TableColumnRole | undefined {
+  const folded = foldHeader(header);
+  const exact = exactRoleOf(vocabulary, folded);
+  if (exact !== undefined) return exact;
+  const numbered = NUMBERED_HEADER.test(folded)
+    ? exactRoleOf(vocabulary, folded.replace(NUMBERED_HEADER, ""))
+    : undefined;
+  if (numbered === "criteria" || numbered === "statement") return numbered;
+  const words = folded.split(" ");
+  return words.length > 1 && vocabulary.idHeadWords.has(words.at(-1) ?? "") ? "id" : undefined;
+}
+
 function merge(base: readonly string[], extra: readonly string[] | undefined): readonly string[] {
   return extra === undefined ? base : [...new Set([...base, ...extra])];
 }
@@ -328,6 +443,7 @@ export function mergeRequirementVocabulary(
     priorityValues: merge(base.priorityValues, extra.priorityValues),
     criteriaKeys: merge(base.criteriaKeys, extra.criteriaKeys),
     metaKeys: merge(base.metaKeys, extra.metaKeys),
+    noteKeys: merge(base.noteKeys, extra.noteKeys),
     statementKeys: merge(base.statementKeys, extra.statementKeys),
     modalVerbs: merge(base.modalVerbs, extra.modalVerbs),
     impersonalModalVerbs: merge(base.impersonalModalVerbs, extra.impersonalModalVerbs),
@@ -343,13 +459,16 @@ export function mergeRequirementVocabulary(
   };
 }
 
-function tableRoleMap(vocabulary: RequirementVocabulary): ReadonlyMap<string, TableColumnRole> {
+function tableRoleMap(
+  vocabulary: RequirementVocabulary,
+  key: (name: string) => string,
+): ReadonlyMap<string, TableColumnRole> {
   const roles = new Map<string, TableColumnRole>();
   for (const [role, names] of Object.entries(vocabulary.tableColumns) as [
     TableColumnRole,
     readonly string[],
   ][])
-    for (const name of names) roles.set(foldTerm(name), role);
+    for (const name of names) roles.set(key(foldHeader(name)), role);
   return roles;
 }
 
@@ -369,14 +488,24 @@ export function compileRequirementVocabulary(
   return {
     priorityKey: new RegExp(String.raw`^(?:${priorityKeys})\s*[:=]`, "iu"),
     criteriaKey: new RegExp(String.raw`^(?:${criteriaKeys})${LETTER_AFTER}\s*:?`, "iu"),
-    metaKey: new RegExp(String.raw`^(?:${alternation(vocabulary.metaKeys)})\s*:`, "iu"),
+    metaKey: new RegExp(
+      String.raw`^(?:${alternation([...vocabulary.metaKeys, ...vocabulary.noteKeys])})\s*:`,
+      "iu",
+    ),
+    noteKey: new RegExp(String.raw`^(?:${alternation(vocabulary.noteKeys)})\s*:`, "iu"),
     statementKey: new RegExp(
       String.raw`^(?:${alternation(vocabulary.statementKeys)})${LETTER_AFTER}\s*:`,
       "iu",
     ),
     inlineKey: new RegExp(String.raw`(?<=^|\s)(?=(?:${priorityKeys}|${criteriaKeys})\s*:)`, "giu"),
+    inlineStatementKey: new RegExp(
+      String.raw`(?<=\s)(?=(?:${alternation(vocabulary.statementKeys)})${LETTER_AFTER}\s*:)`,
+      "iu",
+    ),
+    priorityLead: new RegExp(String.raw`^(?:${priorityKeys})\s*[:=]\s*(?:${values})(?=\s)`, "iu"),
+    // `Soll-Ablauf`, `Muss-Feld`, `must-have`: a compound names a thing, it obliges nobody.
     modal: new RegExp(
-      `${LETTER_BEFORE}(?:${alternation(vocabulary.modalVerbs)})${LETTER_AFTER}`,
+      String.raw`${LETTER_BEFORE}(?:${alternation(vocabulary.modalVerbs)})${LETTER_AFTER}(?!-\p{L})`,
       "iu",
     ),
     subjectlessModal: new RegExp(String.raw`^(?:${personalModals(vocabulary)})(?=\s)`, "iu"),
@@ -387,6 +516,12 @@ export function compileRequirementVocabulary(
     priorityTag: new RegExp(String.raw`[(\[]\s*(${values})\s*[)\]]`, "iu"),
     priorityValues: new Set(vocabulary.priorityValues.map((value) => foldTerm(value))),
     reservedPrefixes: new Set(vocabulary.reservedPrefixes.map((prefix) => prefix.toUpperCase())),
-    tableRoles: tableRoleMap(vocabulary),
+    tableRoles: tableRoleMap(vocabulary, (folded) => folded),
+    compactTableRoles: tableRoleMap(vocabulary, compact),
+    idHeadWords: new Set(
+      vocabulary.tableColumns.id
+        .map((name) => foldHeader(name))
+        .filter((name) => !name.includes(" ")),
+    ),
   };
 }

@@ -185,7 +185,8 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
     }
     await sleep(500);
     if (stateDir !== undefined) {
-      rmSync(stateDir, { recursive: true, force: true });
+      // A runner child that is still exiting can write here once more, so removal has to retry.
+      rmSync(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
       stateDir = undefined;
     }
     if (uiTsconfigBefore !== undefined) {

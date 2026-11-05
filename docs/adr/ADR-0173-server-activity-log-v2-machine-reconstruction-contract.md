@@ -300,6 +300,17 @@ stating the reducer's own shape and its no-source-maps rationale.
 
 ### D4 — Redaction doctrine is unchanged: body-free, fail-closed, structural
 
+**No personal data (owner decision, 2026-11-04).** The Activity Log is the only thing that ever leaves
+the machine, while what a person reads inside Keiko keeps its content by default (ADR-0022 D4). The sink
+therefore over-redacts on purpose, whatever field a value arrives under: a value holds no space, and an
+IBAN, a run of seven to nineteen digits, a date with a four-digit year, an IPv4 address other than
+loopback or unspecified, a URL with a remote host, a telephone number inside an identifier, and a single
+capitalised word are refused, as are personal field names and a remote host under a host field. A
+lowercase IBAN is recognised by its checksum. UUIDs, instants with a time of day, a value named as a
+measurement (`responseBudgetBytes=114819072`), digests under `*Digest`, `*Hash` and `*InstanceId` field
+names, local addresses, and the closed `clientNote` grammars stay readable. An emitter that needs one of these facts records a count, a
+closed value or a digest.
+
 Nothing about this contract relaxes `packages/keiko-activity-log/src/log-redaction.ts`'s existing
 doctrine: guards are structural, not advisory, and do not depend on a caller naming its fields
 honestly. Every new field this ADR

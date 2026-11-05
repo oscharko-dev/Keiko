@@ -281,8 +281,8 @@ describe("countRows guard (KEIKO-1041)", () => {
 });
 
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 33 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(33);
+  it("is the integer 34 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(34);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -782,6 +782,27 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
       );
     } finally {
       db.close();
+    }
+  });
+
+  it("adds the learned furniture of a checkpoint at v34, empty for rows that predate it", () => {
+    const migrated = new DatabaseSync(":memory:");
+    const fresh = new DatabaseSync(":memory:");
+    try {
+      for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        for (const stmt of entry.up) migrated.exec(stmt);
+      }
+      for (const stmt of KNOWLEDGE_CAPSULE_DDL) fresh.exec(stmt);
+      const column = (db: DatabaseSync): unknown =>
+        db
+          .prepare("PRAGMA table_info('extraction_checkpoints')")
+          .all()
+          .find((entry) => (entry as { readonly name: string }).name === "learned_furniture_json");
+      expect(column(migrated)).toMatchObject({ notnull: 1, dflt_value: "'[]'" });
+      expect(column(migrated)).toEqual(column(fresh));
+    } finally {
+      migrated.close();
+      fresh.close();
     }
   });
 

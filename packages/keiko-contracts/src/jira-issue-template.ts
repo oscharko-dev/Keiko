@@ -138,7 +138,8 @@ const KEY_SET: ReadonlySet<string> = new Set(KEYS);
 
 interface RawEntry {
   readonly key: string;
-  readonly values: readonly string[];
+  /** Grown in place while a block list is scanned: copying it per item made a long list quadratic. */
+  readonly values: string[];
   readonly list: boolean;
   /** `[a, b]` form; a block list (`key:` then `- item` lines) is open for further items. */
   readonly inline?: boolean;
@@ -229,7 +230,9 @@ interface Scan {
 function entryFor(key: string, raw: string, line: number): RawEntry | undefined {
   if (raw.startsWith("[")) {
     const items = raw.endsWith("]") ? inlineItems(raw) : undefined;
-    return items === undefined ? undefined : { key, values: items, list: true, inline: true, line };
+    return items === undefined
+      ? undefined
+      : { key, values: [...items], list: true, inline: true, line };
   }
   if (raw.length === 0) return { key, values: [], list: true, line };
   const value = unquote(raw);
@@ -285,7 +288,7 @@ function addBlockItem(scan: Scan, text: string, line: number): void {
     scan.errors.push({ code: "malformed-line", line });
     return;
   }
-  scan.entries[scan.entries.length - 1] = { ...last, values: [...last.values, value] };
+  last.values.push(value);
 }
 
 function scanFrontMatter(lines: readonly string[]): Scan {

@@ -1439,11 +1439,34 @@ describe("server activity log line format", () => {
     });
     const record = JSON.parse(line) as Record<string, unknown>;
     expect(record).toMatchObject({
-      endpoint: "https://gateway.internal:8443",
+      // Owner decision 2026-11-04: a remote address never leaves the machine in the log.
+      endpoint: "[redacted:personal]",
       prompt: REDACTED_KEY,
       apiKey: REDACTED_KEY,
       inputCount: 36,
     });
+  });
+
+  // Owner decision 2026-11-04: the Activity Log is the only thing that ever leaves the machine. The
+  // producer below is the worst case, a call site that hands personal data under harmless names.
+  it("writes no personal data on a line, whatever harmless field name carries it", () => {
+    const personal = {
+      subject: "Selin Aydogan",
+      owner: "Aydogan",
+      account: "DE89370400440532013000",
+      contact: "0171-1234567",
+      born: "12.03.1985",
+      card: "4111111111111111",
+      where: "Hauptstr. 12",
+      node: "192.168.1.20",
+    };
+    const line = formatServerLogLine({
+      category: "embedding",
+      op: "indexing.embedding.request",
+      extra: { ...personal, nested: personal, inputCount: 36 },
+    });
+    for (const value of Object.values(personal)) expect(line).not.toContain(value);
+    expect(JSON.parse(line)).toMatchObject({ inputCount: 36 });
   });
 
   it("redacts the envelope labels too, so op and errorKind cannot carry content", () => {

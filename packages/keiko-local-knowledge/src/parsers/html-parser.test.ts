@@ -46,7 +46,15 @@ describe("htmlParser", () => {
     );
     expect(result.diagnostics).toEqual([]);
     const paths = result.units.map((unit) => asBlock(unit).path);
-    expect(paths).toEqual([["Top"], ["Top", "Sub"], ["Top", "Sub", "Deeper"]]);
+    // Every heading is a block of its own (its words are text), owned by the path it opens.
+    expect(paths).toEqual([
+      ["Top"],
+      ["Top"],
+      ["Top", "Sub"],
+      ["Top", "Sub"],
+      ["Top", "Sub", "Deeper"],
+      ["Top", "Sub", "Deeper"],
+    ]);
   });
 
   it("DROPS <script>/<style> contents entirely — no JS leaks into any unit (GRD-003)", () => {
@@ -157,7 +165,7 @@ describe("htmlParser", () => {
       buildParserOptions({ now: () => 0 }),
     );
     const paths = result.units.map((unit) => asBlock(unit).path);
-    expect(paths).toEqual([["Top"], ["Top", "Sub"], ["Top2"]]);
+    expect(paths).toEqual([["Top"], ["Top"], ["Top", "Sub"], ["Top", "Sub"], ["Top2"], ["Top2"]]);
   });
 
   // #2906 KEIKO-0775 — a heading whose source markup spans multiple lines (source
@@ -184,7 +192,7 @@ describe("htmlParser", () => {
       buildParserOptions({ now: () => 0 }),
     );
     const text = (result as InternalParserResult).normalizedText ?? "";
-    expect(text).toContain("Table: Name=A | Preis=42");
+    expect(text).toContain("Table!2: Name=A | Preis=42");
     const tableBlock = result.units.find((unit) => {
       if (unit.kind !== "html-block") return false;
       return text.slice(unit.characterStart, unit.characterEnd).includes("Name=A");
@@ -422,19 +430,19 @@ describe("htmlParser — post-merge audit fixes (#1886)", () => {
     // A parameter table where one cell lists sub-options in its own table. The pre-fix
     // non-greedy `<tr>...</tr>` regex stopped at the INNER table's </tr>, dropping "Outer2" from
     // the row structure — it leaked separately as stray body text instead of staying part of the
-    // "Table: ..." row projection, so assert it lands INSIDE that one row block.
+    // "Table!N: ..." row projection, so assert it lands INSIDE that one row block.
     const texts = blockTexts(
       "<table><tr><td>Outer1<table><tr><td>Inner</td></tr></table></td>" +
         "<td>Outer2</td></tr></table>",
     );
-    const rowBlock = texts.find((t) => t.startsWith("Table:"));
+    const rowBlock = texts.find((t) => t.startsWith("Table!"));
     expect(rowBlock).toBeDefined();
     expect(rowBlock).toContain("Outer1");
     expect(rowBlock).toContain("Inner");
     expect(rowBlock).toContain("Outer2");
     // Exactly one row was emitted for the outer table (the nested table must not produce its own
-    // independently-counted "Table: ..." row block collapsed into the outer one incorrectly).
-    expect(texts.filter((t) => t.startsWith("Table:"))).toHaveLength(1);
+    // independently-counted "Table!N: ..." row block collapsed into the outer one incorrectly).
+    expect(texts.filter((t) => t.startsWith("Table!"))).toHaveLength(1);
   });
 
   it("does not truncate a nested <dl> inside a <dd> — no sibling term/definition lost", () => {
@@ -692,29 +700,30 @@ describe("htmlParser — table span hardening (audit 2026-07-07)", () => {
       '<table><tr><th colspan="2">Category</th><th>Other</th></tr>' +
       "<tr><td>A</td><td>B</td><td>C</td></tr></table>";
     const texts = blockTexts(html);
-    const row = texts.find((t) => t.startsWith("Table:"));
+    const row = texts.find((t) => t.startsWith("Table!"));
     expect(row).toBeDefined();
-    expect(row).toBe("Table: Category=A | Category 2=B | Other=C");
+    expect(row).toBe("Table!2: Category=A | Category 2=B | Other=C");
   });
 
-  it("emits HTML_TABLE_SPAN_UNSUPPORTED when a header cell uses rowspan > 1", () => {
-    const result = htmlParser.parse(
-      selectionFromText(
-        '<table><tr><th rowspan="2">Id</th><th>Value</th></tr>' +
-          "<tr><td>2</td></tr><tr><td>1</td><td>x</td></tr></table>",
-        { extension: "html" },
-      ),
-      buildParserOptions({ now: () => 0 }),
+  it("does not leak a spanning header cell into the data rows it spans", () => {
+    // The header cell is carried through its column, so the data row keeps its own value under the
+    // right header and the header text is not repeated as a value (it used to warn instead).
+    const texts = blockTexts(
+      '<table><tr><th rowspan="2">Id</th><th>Value</th></tr>' +
+        "<tr><td>2</td></tr><tr><td>1</td><td>x</td></tr></table>",
     );
-    expect(result.diagnostics.map((d) => d.code)).toContain("HTML_TABLE_SPAN_UNSUPPORTED");
+    expect(texts.filter((t) => t.startsWith("Table!"))).toEqual([
+      "Table!2: Id= | Value=2",
+      "Table!3: Id=1 | Value=x",
+    ]);
   });
 
   it("collapses source line-wraps inside table cells before emitting row text", () => {
     const html =
       "<table><tr><th>Name</th><th>Description</th></tr>" +
       "<tr><td>Alpha</td><td>first\n        wrapped\n        value</td></tr></table>";
-    const row = blockTexts(html).find((text) => text.startsWith("Table:"));
-    expect(row).toBe("Table: Name=Alpha | Description=first wrapped value");
+    const row = blockTexts(html).find((text) => text.startsWith("Table!"));
+    expect(row).toBe("Table!2: Name=Alpha | Description=first wrapped value");
   });
 });
 

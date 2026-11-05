@@ -18,6 +18,7 @@ import type {
   LargeDocumentExtractionStrategy,
   ParserDiagnostic,
 } from "@oscharko-dev/keiko-contracts";
+import { parseLearnedFurniture } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 import type { DatabaseSync } from "node:sqlite";
 
 const UPSERT_SQL = [
@@ -26,13 +27,13 @@ const UPSERT_SQL = [
   "  object_cursor, extracted_text_bytes, chunk_cursor, embedded_chunk_cursor,",
   "  last_embedded_chunk_id, retry_count, coverage, source_content_hash, parser_version,",
   "  policy_fingerprint, chunking_strategy_version, embedding_identity_json,",
-  "  terminal_diagnostics_json, created_at, updated_at",
+  "  terminal_diagnostics_json, learned_furniture_json, created_at, updated_at",
   ") VALUES (",
   "  :capsule_id, :document_id, :job_id, :strategy, :phase, :page_cursor, :section_cursor,",
   "  :object_cursor, :extracted_text_bytes, :chunk_cursor, :embedded_chunk_cursor,",
   "  :last_embedded_chunk_id, :retry_count, :coverage, :source_content_hash, :parser_version,",
   "  :policy_fingerprint, :chunking_strategy_version, :embedding_identity_json,",
-  "  :terminal_diagnostics_json, :created_at, :updated_at",
+  "  :terminal_diagnostics_json, :learned_furniture_json, :created_at, :updated_at",
   ") ON CONFLICT(capsule_id, document_id) DO UPDATE SET",
   "  job_id = excluded.job_id,",
   "  strategy = excluded.strategy,",
@@ -52,6 +53,7 @@ const UPSERT_SQL = [
   "  chunking_strategy_version = excluded.chunking_strategy_version,",
   "  embedding_identity_json = excluded.embedding_identity_json,",
   "  terminal_diagnostics_json = excluded.terminal_diagnostics_json,",
+  "  learned_furniture_json = excluded.learned_furniture_json,",
   "  updated_at = excluded.updated_at",
 ].join(" ");
 
@@ -90,6 +92,7 @@ interface CheckpointRow {
   readonly chunking_strategy_version: string;
   readonly embedding_identity_json: string;
   readonly terminal_diagnostics_json: string;
+  readonly learned_furniture_json: string;
   readonly created_at: number;
   readonly updated_at: number;
 }
@@ -124,6 +127,7 @@ export function upsertExtractionCheckpoint(
     chunking_strategy_version: checkpoint.fingerprint.chunkingStrategyVersion,
     embedding_identity_json: JSON.stringify(checkpoint.fingerprint.embeddingIdentity),
     terminal_diagnostics_json: diagnosticsToJson(checkpoint.terminalDiagnostics),
+    learned_furniture_json: JSON.stringify(checkpoint.learnedFurniture ?? []),
     created_at: checkpoint.createdAt,
     updated_at: checkpoint.updatedAt,
   });
@@ -169,6 +173,7 @@ function rowToCheckpoint(row: CheckpointRow): ExtractionCheckpointRecord {
       embeddingIdentity: parseEmbeddingIdentity(row.embedding_identity_json),
     },
     terminalDiagnostics: parseDiagnostics(row.terminal_diagnostics_json),
+    learnedFurniture: parseLearnedFurniture(row.learned_furniture_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

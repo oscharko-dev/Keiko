@@ -649,3 +649,27 @@ it("refuses a description whose Unicode bytes exceed the catalog string limit", 
     data: { outcome: "failed", reason: "bounds-exceeded" },
   });
 });
+
+// A description or comment over the old 32768-character cap is a bounds question the catalog byte
+// limit already answers; it was reported as a malformed payload and the whole read was lost (#4235).
+it("reads a description longer than 32768 characters that still fits the catalog limit", async () => {
+  const description = "x".repeat(40_000);
+  const f = fixture({ ...ISSUE, fields: { ...ISSUE.fields, description } });
+  const result = await f.run("jira.issue", { issueKey: "SYN-1" });
+  expect(result.isError).toBeUndefined();
+  expect(result.data.items).toEqual([expect.objectContaining({ key: "SYN-1", description })]);
+});
+it("names a description beyond the catalog byte limit a bounds failure, not a malformed payload", async () => {
+  const f = fixture({ ...ISSUE, fields: { ...ISSUE.fields, description: "x".repeat(70_000) } });
+  expect(await f.run("jira.issue", { issueKey: "SYN-1" })).toEqual({
+    isError: true,
+    data: { outcome: "failed", reason: "bounds-exceeded" },
+  });
+});
+it("names a comment beyond the catalog byte limit a bounds failure, not a malformed payload", async () => {
+  const comments = [COMMENT, { ...COMMENT, id: "11", body: "x".repeat(70_000) }];
+  const f = fixture({ startAt: 0, maxResults: 2, total: 2, comments });
+  const result = await f.run("jira.comments", { issueKey: "SYN-1", maxResults: 2 });
+  expect(result.isError).toBe(true);
+  expect(result.data).toMatchObject({ outcome: "failed", reason: "bounds-exceeded" });
+});

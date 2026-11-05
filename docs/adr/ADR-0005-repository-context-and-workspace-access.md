@@ -91,6 +91,13 @@ advisory metadata instead of falling back to an unbounded raw content read.
 
 ### D2 — Lexical containment plus canonical identity at guarded content-read IO edges
 
+**Content threshold amendment (owner decision, 2026-11-04).** Keiko runs on the user's own device and
+its stores never leave it, so what a person reads and what the model receives lose only the credential
+floor by default. An absent or empty `KEIKO_CONTENT_REDACTION` now preserves like `off`; `on` lowers the
+threshold back to the strict projection, and an unrecognized value still warns and keeps redaction.
+The BFF therefore sets `contentRedaction: "preserve"` on the Chat connected-context workspace unless the
+deployment chose `on`. Path, root, descriptor, deny-list and byte-budget checks are unchanged.
+
 **Authorized content amendment (2026-10-27, #4098).** The existing public read remains the guarded
 content lane. It preserves authorized source bytes only for a `WorkspaceInfo` that carries
 `contentRedaction: "preserve"`; the workspace package never reads the deployment environment. The

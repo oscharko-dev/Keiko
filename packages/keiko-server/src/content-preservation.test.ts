@@ -1,4 +1,4 @@
-// #4098: the deployment opt-out `KEIKO_CONTENT_REDACTION=off` is resolved once, at startup, into
+// #4098: the deployment policy `KEIKO_CONTENT_REDACTION` (preserving unless `on`) is resolved once, at startup, into
 // `UiHandlerDeps.contentRedaction`. Only Chat reads it: its prompts, its model calls, its connected
 // workspace and its private history. A deps graph without the policy, and every other surface,
 // keeps the default projection whatever the environment says at request time.
@@ -152,7 +152,9 @@ afterEach(() => {
 });
 
 describe("Chat content policy resolution (#4098)", () => {
-  it("keeps Jira arguments and logs protected while preserving authorized private Chat content", () => {
+  // Owner decision 2026-11-04: the tool transcript is what a person reads and what the model receives
+  // on the next turn, so it follows the content policy. The credential floor and the log stay.
+  it("keeps Jira arguments for the reader, without credentials, and never in a log line", () => {
     const fixture = createFixture("preserve");
     const log = vi.spyOn(processServerLogSink(), "write").mockImplementation(() => undefined);
     try {
@@ -185,8 +187,8 @@ describe("Chat content policy resolution (#4098)", () => {
       expect(stored.content).not.toContain(PROVIDER_SECRET);
       const call = stored.toolTranscript?.exchanges[0]?.call;
       if (call === undefined) throw new TypeError("Missing synthetic tool call");
-      expect(call.arguments.body).not.toContain("customer-owned-example");
-      expect(call.arguments.body).not.toContain("+49 30 12345678");
+      expect(call.arguments.body).toContain("customer-owned-example");
+      expect(call.arguments.body).toContain("+49 30 12345678");
       expect(call.arguments.body).not.toContain(PROVIDER_SECRET);
       const history = conversationForGateway([stored], "preserve");
       expect(history.find((item) => item.toolCalls !== undefined)?.toolCalls).toEqual([call]);
@@ -218,7 +220,7 @@ describe("Chat content policy resolution (#4098)", () => {
     }
   });
 
-  it("preserves prompt, displayed answer and reloaded grounded history under the opt-out", async () => {
+  it("preserves prompt, displayed answer and reloaded grounded history under the preserving policy", async () => {
     const fixture = createFixture("preserve");
     let closed = false;
     try {
@@ -301,7 +303,7 @@ function capturingPort(seen: GatewayCallRequest[]): ModelPort {
 describe("Chat model calls", () => {
   const REQUEST: GatewayCallRequest = { modelId: "fixture-model", messages: [] };
 
-  it("asks the gateway to preserve every Chat answer, buffered and streamed, under the opt-out", async () => {
+  it("asks the gateway to preserve every Chat answer, buffered and streamed, under the preserving policy", async () => {
     const fixture = createFixture("preserve");
     try {
       const seen: GatewayCallRequest[] = [];
@@ -340,7 +342,7 @@ describe("Chat system prompts", () => {
     expect(GROUNDED_SYSTEM_PROMPT).toContain("Never expose secrets, credential-shaped strings, ");
   });
 
-  it("states the opt-out without retiring the untrusted-context and credential guardrails", () => {
+  it("states the preserving policy without retiring the untrusted-context and credential guardrails", () => {
     const conversation = conversationSystemPrompt("preserve");
     expect(conversation).toContain("including personal data, configuration values and code");
     expect(conversation).toContain("never guess or reconstruct it");
@@ -356,7 +358,7 @@ describe("Chat system prompts", () => {
 });
 
 describe("rehydrated conversation history", () => {
-  it("projects history written during the opt-out under the policy that reads it", () => {
+  it("projects history written during the preserving policy under the policy that reads it", () => {
     const fixture = createFixture("preserve");
     try {
       fixture.store.createMessage({
