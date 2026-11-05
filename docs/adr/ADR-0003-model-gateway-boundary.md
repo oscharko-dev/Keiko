@@ -800,6 +800,8 @@ sidecar turn whose repair ended `empty-again` is answered as final to the runtim
 sidecar drops that reasoning from every later request instead of resending it upstream: reasoning
 fields of prior assistant messages and assistant messages that carry nothing but reasoning never reach
 the gateway request, and `coding-sidecar.gateway.request-validated` records how many it dropped.
+This requires the runtime to preserve reasoning part types; ADR-0137 D8 documents the pinned runtime's
+separate limitation when interrupted reasoning is converted to ordinary assistant text.
 
 **End-to-end budget.** A buffered call as a whole is bounded by `providerRequestBudgetMs(provider)`
 (`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry reserves

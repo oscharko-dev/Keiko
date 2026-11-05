@@ -986,8 +986,8 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   also one that borrows the `coding-workbench` latency profile for its timeout floors (ADR-0003,
   #3873 F23).
 - **Qualified protocol continuation, independent of display.** The sidecar still discards
-  runtime-echoed reasoning and reasoning-only assistant messages, so failed attempts never re-enter
-  a prompt (#3873 F23). Providers omit prior reasoning by default. An explicit
+  runtime-echoed reasoning fields and reasoning-only assistant messages rather than forwarding those
+  fields directly (#3873 F23). Providers omit prior reasoning by default. An explicit
   `providers[].reasoningHistory: "required-with-tools"` requires all historical assistant reasoning
   when a tool catalog is advertised; `"current-turn"` retains only assistants after the last human
   message. `reasoningHistoryField` selects the qualified wire field, `reasoning_content` by default
@@ -1011,6 +1011,16 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   synthetic readiness reply never becomes an uncached historical assistant message.
   The Activity Log records `gateway.reasoning-history` states and byte/message counts only.
   The text beside a tool call remains ordinary assistant content and is preserved (#3907 AC3).
+- **Runtime part types require version qualification.** OpenCode's admitted 2.1.4 source
+  [converts failed or interrupted reasoning to ordinary text](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/session/runner/to-llm-message.ts#L155).
+  The inspected upstream snapshot
+  [drops those reasoning parts instead](https://github.com/anomalyco/opencode/blob/008619ae06cd00dc21f60e4bdb29c04a60b07b6b/packages/core/src/session/runner/to-llm-message.ts#L142).
+  The sidecar cannot recover a part type already lost by the runtime. Qualified profiles reject
+  unknown assistant payloads inside their required history window; `current-turn` does not validate
+  older ordinary text before a later human message, and the default profile does not restore or
+  validate reasoning history. Therefore this contract does not promise removal of failed reasoning
+  that a runtime has relabelled as text. A runtime upgrade or repair needs its own failed-turn replay
+  qualification; readable-text heuristics must not erase legitimate assistant content.
 - **Shown as what it is.** The sidecar hands reasoning to the managed runtime as
   `reasoning_content`; the runtime records it as a reasoning part, and the live safe-activity
   projection carries it beside its assistant message, never inside the answer. The timeline shows
