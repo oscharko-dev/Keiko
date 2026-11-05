@@ -2,6 +2,14 @@
   "version": 1,
   "increases": [
     {
+      "path": "packages/keiko-activity-log/src/server-log.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 6,
+      "to": 8,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-connectors/src/atlassian-write-http.ts",
       "rule": "anti-slop/no-conditional-empty-object-spread",
       "from": 2,
@@ -7736,6 +7744,14 @@
       "to": 4,
       "reason": "dev-cutoff-sync",
       "issue": 3914
+    },
+    {
+      "path": "tests/e2e/support/smoke-test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
     },
     {
       "path": "tests/integration/requirement-inventory-formats.integration.test.ts",
