@@ -78,6 +78,9 @@ export interface CapturePolicyOptions {
   // a governed MemoryForget or MemoryUpdate operation, so callers that want those intents to work
   // must provide a scope-limited resolver.
   readonly resolver?: CaptureMemoryResolver;
+  // Resolves a forget target when the caller can see further than one scope: a person forgetting
+  // a fact does not know which scope the learner chose for it. Falls back to `resolver`.
+  readonly forgetResolver?: CaptureMemoryResolver;
   // Whether `{ kind: "global" }` scope is allowed. Defaults to false (fail-closed) so a stray
   // scope hint cannot silently elevate a candidate to a cross-user fact.
   readonly allowGlobalScope?: boolean;

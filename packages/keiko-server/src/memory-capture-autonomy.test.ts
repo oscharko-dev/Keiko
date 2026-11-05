@@ -30,7 +30,17 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
-import { createInMemoryUiStore } from "./store/index.js";
+import { createInMemoryUiStore, type ChatMessage } from "./store/index.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 
 // A single durable public fact. Body carries no regex-capture trigger (no remember/forget/update/
@@ -611,5 +621,246 @@ describe("mode-aware memory capture journey", () => {
     );
     expect(salience).toEqual([]);
     expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+});
+
+// #4211: a clear forget statement acts at once, in every mode, and across the scopes of the
+// conversation, because the learner chooses a memory's scope and the person does not name it.
+// The conversation's history as the store reports it: one earlier message of the person.
+function withPreviousStatement(
+  deps: UiHandlerDeps,
+  content: string,
+  timestamp = Date.now(),
+): UiHandlerDeps {
+  const message = { id: "m1", role: "user", content, timestamp } as ChatMessage;
+  return { ...deps, store: { ...deps.store, listMessages: () => [message] } };
+}
+
+function captureActivityLog(): BufferedServerLogSink {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  return sink;
+}
+
+describe("explicit remember statement in chat", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it.each(ALL_MODES)("stores and accepts a clear statement at once in %s", async (mode) => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode });
+
+    const actions = await collectMemoryActions(
+      deps,
+      turnRequest("Merke dir bitte: Ich bevorzuge Tabellen. Und was gibt es heute zu tun?"),
+      ctx,
+    );
+
+    expect(actions).toEqual([
+      expect.objectContaining({
+        kind: "candidate",
+        body: "Ich bevorzuge Tabellen.",
+        status: "accepted",
+        requiresApproval: false,
+      }),
+    ]);
+    expect(readByStatus(vault, ctx, "accepted").map((record) => record.body)).toEqual([
+      "Ich bevorzuge Tabellen.",
+    ]);
+  });
+
+  it("keeps one memory with a recorded confirmation when the statement is said again", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    const sink = captureActivityLog();
+
+    await collectMemoryActions(deps, turnRequest("Merke dir, dass ich Tabellen bevorzuge"), ctx);
+    await collectMemoryActions(deps, turnRequest("Merke dir, dass ich Tabellen bevorzuge"), ctx);
+
+    const records = readMemories(vault, ctx);
+    expect(records).toHaveLength(1);
+    const [record] = records;
+    if (record === undefined) throw new Error("expected a memory");
+    expect(vault.getAccessStats([record.id]).get(record.id)?.accessCount).toBe(1);
+    const lines = sink.events.filter((event) => event.op === "memory.explicit.remember");
+    expect(lines.map((line) => line.extra?.outcome)).toEqual(["stored", "confirmed"]);
+    const persisted = expectActivityLogProof(
+      "memory.explicit.remember.line",
+      formatActivityLogProofLine(lines[1] ?? {}),
+    );
+    expect(persisted).toMatchObject({ outcome: "confirmed" });
+    expect(sink.lines().join("\n")).not.toContain("Tabellen");
+  });
+
+  it("refuses a credential with its closed reason and stores nothing", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "autonomous-delivery" });
+
+    const actions = await collectMemoryActions(
+      deps,
+      turnRequest("Merke dir: das Passwort lautet sk-abcdefghijklmnopqrstuvwxyz012345"),
+      ctx,
+    );
+
+    expect(actions).toEqual([{ kind: "rejected", reason: "credential-shape" }]);
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+});
+
+describe("explicit forget statement in chat", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  async function learnedFact(
+    vault: MemoryVaultStore,
+    ctx: ConversationMemoryRuntimeContext,
+    mode: CodingWorkbenchMode,
+    scope: "user" | "project",
+  ): Promise<UiHandlerDeps> {
+    const content = JSON.stringify([
+      {
+        source: "user",
+        body: "The platform team ships releases on a fortnightly cadence.",
+        type: "fact",
+        confidence: 0.95,
+        scope,
+        tags: ["release"],
+      },
+    ]);
+    const deps = makeDeps({ vault, model: content, mode });
+    await captureSalientFromTurn(deps, salienceRequest(mode), ctx, "fake-model", "ok");
+    return deps;
+  }
+
+  it("leaves a tombstone for a statement nothing was stored from, in every mode", async () => {
+    for (const mode of ALL_MODES) {
+      const vault = makeVault();
+      const ctx = context();
+      const statement = "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.";
+      const content = JSON.stringify([
+        { source: "user", body: statement, type: "preference", confidence: 0.95, scope: "user" },
+      ]);
+      const deps = withPreviousStatement(makeDeps({ vault, model: content, mode }), statement);
+      const sink = captureActivityLog();
+
+      const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+      expect(actions).toEqual([
+        expect.objectContaining({ kind: "forget", forgotten: true, requiresConfirmation: false }),
+      ]);
+      const persisted = expectActivityLogProof(
+        "memory.explicit.forget.line",
+        formatActivityLogProofLine(
+          sink.events.find((event) => event.op === "memory.explicit.forget") ?? {},
+        ),
+      );
+      expect(persisted).toMatchObject({ outcome: "forgotten" });
+      expect(sink.lines().join("\n")).not.toContain("Tabellen");
+
+      await captureSalientFromTurn(deps, salienceRequest(mode), ctx, "fake-model", "ok");
+      expect(readMemories(vault, ctx)).toHaveLength(0);
+    }
+  });
+
+  it('does not take an older memory for the statement before "Vergiss das"', async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "user");
+    const deps = withPreviousStatement(learned, "Wie spät ist es?", Date.now() + 60_000);
+
+    const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+    expect(actions).toEqual([expect.objectContaining({ kind: "forget", forgotten: true })]);
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+  });
+
+  it("asks when there is nothing the bare reference could mean", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "autonomous-delivery" });
+
+    const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+    expect(actions).toEqual([{ kind: "rejected", reason: "ambiguous-forget" }]);
+  });
+
+  it.each(ALL_MODES)("forgets the conversation's memory in %s", async (mode) => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = await learnedFact(vault, ctx, mode, "user");
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+
+    const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+    expect(actions).toEqual([
+      expect.objectContaining({ kind: "forget", requiresConfirmation: false, forgotten: true }),
+    ]);
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
+  it("does not relearn the fact it forgot", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = await learnedFact(vault, ctx, "autonomous-delivery", "project");
+    await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+    await captureSalientFromTurn(deps, salienceRequest("autonomous-delivery"), ctx, "m", "ok");
+
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
+  it("forgets a named German fact", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = await learnedFact(vault, ctx, "autonomous-delivery", "project");
+
+    await collectMemoryActions(deps, turnRequest("Vergiss, dass das Team fortnightly ships."), ctx);
+
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
+  it("keeps everything on Vergiss nicht", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = await learnedFact(vault, ctx, "autonomous-delivery", "project");
+
+    const actions = await collectMemoryActions(
+      deps,
+      turnRequest("Vergiss nicht, den Bericht zu schicken"),
+      ctx,
+    );
+
+    expect(actions).toEqual([]);
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+  });
+
+  it("asks and deletes nothing when the reference is ambiguous", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "autonomous-delivery" });
+    await collectMemoryActions(deps, turnRequest("Remember that the release uses vitest"), ctx);
+    await collectMemoryActions(deps, turnRequest("Remember that the deploy uses docker"), ctx);
+
+    const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+    expect(actions).toEqual([{ kind: "rejected", reason: "ambiguous-forget" }]);
+    expect(readMemories(vault, ctx)).toHaveLength(2);
+  });
+
+  it("leaves another conversation's memory alone on a bare reference", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = await learnedFact(vault, ctx, "autonomous-delivery", "project");
+    const other = { ...ctx, conversationId: "another-conversation" as ConversationId };
+
+    const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), other);
+
+    expect(actions).toEqual([{ kind: "rejected", reason: "ambiguous-forget" }]);
+    expect(readMemories(vault, ctx)).toHaveLength(1);
   });
 });

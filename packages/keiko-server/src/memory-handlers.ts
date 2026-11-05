@@ -61,6 +61,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   checkStatusTransition,
+  MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
   MEMORY_FORGET_REASON_USER_REQUEST,
   MEMORY_SCOPE_KINDS,
   MEMORY_STATUSES,
@@ -84,7 +85,9 @@ import {
   replayMemoryCaptureAuditLedger,
   type MemoryCaptureDecision,
 } from "./memory-capture-projection.js";
-import { refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
+import { embedMemoryText, refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
+import { memoryCapturePolicyForDeps } from "./memory-capture-policy.js";
+import { memoryTextSecretEgressRejectionReason } from "@oscharko-dev/keiko-memory-capture";
 import { readJsonRequestBodyOutcome, type JsonRequestBodyOutcome } from "./bounded-request-body.js";
 import { processServerLogSink, processServerLogSinkFor } from "./process-log-sink.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
@@ -1320,6 +1323,7 @@ function executeForgetSelection(
   vault: MemoryVaultStore,
   selector: ForgetSelector,
   reason: MemoryForgetReason,
+  forgetterSurface = "memory-center",
 ): { readonly memoryIds: readonly MemoryId[] } | RouteResult {
   const nowMs = Date.now();
   const authorizedScopes = authorizedMemoryScopes(deps, vault);
@@ -1351,7 +1355,7 @@ function executeForgetSelection(
         tombstone: true,
         reviewerId: operation.reviewerId,
         reason: operation.reason,
-        forgetterSurface: "memory-center",
+        forgetterSurface,
         nowMs: operation.forgottenAt,
       },
     })),
@@ -1410,6 +1414,87 @@ function preflightPrivacyCriticalAudit(
         "Memory audit evidence is unavailable; destructive memory action was not applied.",
       ),
     };
+  }
+}
+
+export type ExplicitMemoryForgetResult = "forgotten" | "refused" | "failed";
+
+// A person's clear "Vergiss das" in a chat, through the one forget implementation: the same audit
+// preflight, authorization, tombstone and deletion as the Memory window. It never throws, because
+// the chat answer is already there; the caller shows the result in a plain sentence.
+export function forgetMemoryFromStatement(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  memoryId: MemoryId,
+  correlationId: string,
+): ExplicitMemoryForgetResult {
+  if (preflightPrivacyCriticalAudit(deps, correlationId) !== undefined) return "failed";
+  try {
+    const result = executeForgetSelection(
+      deps,
+      vault,
+      { kind: "by-id", memoryId },
+      MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
+      "chat-statement",
+    );
+    return isRouteResult(result) ? "refused" : "forgotten";
+  } catch (error) {
+    reportMemoryHandlerFailure(
+      deps,
+      correlationId,
+      "memory.forget.statement",
+      "memory-handlers.forgetMemoryFromStatement",
+      error,
+    );
+    return "failed";
+  }
+}
+
+// "Vergiss das" about a statement nothing was stored from: leaves a tombstone in every scope a later
+// learning pass could choose, so that pass stores nothing. A statement carrying a credential keeps
+// its hash only and never reaches the embedding endpoint.
+export async function forgetStatementNotLearned(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  body: string,
+  scopes: readonly MemoryScope[],
+  correlationId: string,
+): Promise<ExplicitMemoryForgetResult> {
+  if (preflightPrivacyCriticalAudit(deps, correlationId) !== undefined) return "failed";
+  try {
+    // Unlike a stored memory, the statement's scopes need not hold anything yet, so an installation
+    // without scope authorization allows the conversation's own scopes.
+    const { memoryAuthorization } = deps;
+    const allowed =
+      memoryAuthorization === undefined
+        ? scopes
+        : scopes.filter((scope) => scopeAuthorized(scope, memoryAuthorization.authorizedScopes()));
+    if (allowed.length === 0) return "refused";
+    const carriesSecret =
+      memoryTextSecretEgressRejectionReason(body, memoryCapturePolicyForDeps(deps)) !== null;
+    const embedding = carriesSecret ? null : await embedMemoryText(deps, body, "document");
+    const nowMs = Date.now();
+    vault.recordForgottenStatements(
+      allowed.map((scope) => ({
+        scope,
+        body,
+        forgetterSurface: "chat-statement",
+        reviewerId: reviewerIdForMemoryMutation(deps),
+        reason: MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
+        nowMs,
+        ...(embedding === null ? {} : { bodyEmbedding: embedding.vector }),
+      })),
+    );
+    return "forgotten";
+  } catch (error) {
+    reportMemoryHandlerFailure(
+      deps,
+      correlationId,
+      "memory.forget.statement",
+      "memory-handlers.forgetStatementNotLearned",
+      error,
+    );
+    return "failed";
   }
 }
 

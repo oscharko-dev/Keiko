@@ -7,7 +7,8 @@ Accepted (Issue #2546, Epic #2537, Memory M1.1, 2026-07-19). Amended by Issue #2
 Amended by Issue #2864 (2026-07-31) to record that standing and opportunistic maintenance apply
 the same D2 autonomy gate before unattended promotion. Amended by Issue #2885 (2026-08-02) to make
 the mapping apply uniformly to salience, explicit chat intent, voice recap, and
-capture-from-conversation.
+capture-from-conversation. Amended by Issue #4211 (2026-11-05) to add D4b: a person's clear statement
+in a chat acts at once in every mode.
 
 ## Amends
 
@@ -165,6 +166,29 @@ This is the maintenance application of D2 and D4, not a maintenance-local author
 standing and opportunistic entry points both delegate to `runMemoryMaintenance`; neither may call
 the promotion planner through an alternate path or infer authority from the auto-maintenance
 enabled flag.
+
+### D4b — A person's clear statement in a chat acts at once, in every mode
+
+A person's own "Merke dir …" or "Vergiss das" (Issue #4211) is their decision, not unattended
+learning, so D2's mapping does not hold it. It needs no model, no approval and no dialog.
+`memoryExplicitStatementEligible` routes a public, approval-free `explicit-user-instruction`
+candidate through the same promotion lever as D4 in every mode; D3's hard denials stay first, so a
+credential is refused and a sensitive body keeps its approval. Everything learned from natural
+conversation stays under D2. Capture-from-conversation remains a review surface and also stays under D2.
+
+Saying a statement again confirms the existing memory through `recordAccess` instead of storing a
+second record: in the same words without an embedder, and as a paraphrase through the existing
+novelty gate with one. A paraphrase of a forgotten fact is suppressed the same way.
+
+"Vergiss das" reaches what the last turn left behind, in any scope of the conversation and
+including a parked proposal, and goes through the one forget implementation with its audit preflight
+and tombstone. If that turn left nothing, "das" is the statement before it, not an older memory:
+`recordForgottenStatements` writes a tombstone in each scope of the conversation, so a later
+learning pass stores nothing from it. The statement's text is never written, and a statement that
+carries a credential keeps only its hash and never reaches the embedding endpoint. When "das" could
+mean several memories, or there is nothing it could mean, the person is asked in one short sentence
+and nothing is deleted. Each decision is recorded body-free as `memory.explicit.forget` or
+`memory.explicit.remember`.
 
 ### D5 — Capture stays failure-contained and diagnostics stay content-free
 

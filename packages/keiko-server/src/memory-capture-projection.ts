@@ -50,6 +50,7 @@ const CAPTURE_REJECTION_REASONS = [
   "exceeds-length-limit",
   "ambiguous-forget",
   "ambiguous-update",
+  "forget-reference-unresolved",
   "restricted-sensitivity",
   "sensitive-memory-requires-approval",
   "suppressed-by-forget",

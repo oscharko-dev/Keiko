@@ -221,6 +221,19 @@ export function memoryCaptureAutoAcceptEligible(
   );
 }
 
+// A person's own clear "Merke dir" is their decision, not unattended learning, so it holds in every
+// mode. Hard denials stay upstream: a credential never becomes a candidate, and a sensitive body
+// keeps its approval.
+export function memoryExplicitStatementEligible(
+  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+): boolean {
+  return (
+    !outcome.requiresApproval &&
+    outcome.proposal.provenance.sensitivity === "public" &&
+    outcome.proposal.provenance.sourceKind === "explicit-user-instruction"
+  );
+}
+
 // Route every mode-eligible capture through the existing governance promotion plan. This keeps
 // promotion thresholds and future governance changes identical across all capture surfaces.
 export function promoteEligibleMemoryRecord(record: MemoryRecord): MemoryRecord {

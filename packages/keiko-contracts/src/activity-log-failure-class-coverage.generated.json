@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 387,
-  "completeClassCount": 387,
+  "supportedClassCount": 388,
+  "completeClassCount": 388,
   "completeness": "complete",
   "classes": [
     {
@@ -37171,6 +37171,84 @@
             "causeChain": false
           },
           "proofIds": ["embedding.memory.unavailable.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "memory-explicit-statement",
+      "requirementContract": "memory-explicit-statement",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["memory.explicit.forget", "memory.explicit.remember"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "memory.explicit.forget",
+          "mode": "none"
+        },
+        {
+          "op": "memory.explicit.remember",
+          "mode": "none"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["memory.explicit.forget", "memory.explicit.remember"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "memory.explicit.forget",
+          "owner": "keiko-server",
+          "category": "memory",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory.explicit.forget.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "memory.explicit.remember",
+          "owner": "keiko-server",
+          "category": "memory",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory.explicit.remember.line"],
           "replayReferences": [],
           "missingObligations": []
         }

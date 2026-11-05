@@ -18,7 +18,12 @@ import { buildForget, buildProposal, buildUpdate } from "./_envelopes.js";
 import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
 import { memoryTextSecretEgressRejectionReason } from "./capture-safety.js";
-import type { CaptureContext, CaptureOutcome, CapturePolicyOptions } from "./types.js";
+import type {
+  CaptureContext,
+  CaptureMemoryResolver,
+  CaptureOutcome,
+  CapturePolicyOptions,
+} from "./types.js";
 
 // ─── Regex catalogue (narrow, anchored, single-quantifier) ────────────────────
 // All patterns are anchored and use a single open or bounded quantifier. The phrase trailing
@@ -77,10 +82,10 @@ function execFirst(patterns: readonly RegExp[], text: string): RegExpExecArray |
 }
 
 const REMEMBER_PATTERNS: readonly RegExp[] = [
-  /^\s*remember(?:\s+that)?\s+/iu,
-  /^\s*(?:merk|merke)\s+dir(?:\s+bitte)?(?:,?\s+dass)?\s+/iu,
-  /^\s*speicher(?:e)?(?:\s+bitte)?(?:,?\s+dass)?\s+/iu,
-  /^\s*notier(?:e)?(?:\s+bitte)?(?:,?\s+dass)?\s+/iu,
+  /^\s*(?:please\s+)?remember(?:\s+that)?[:,]?\s+/iu,
+  /^\s*(?:bitte\s+)?(?:merk|merke)\s+dir(?:\s+bitte)?(?:,?\s+dass)?[:,]?\s+/iu,
+  /^\s*(?:bitte\s+)?speicher(?:e)?(?:\s+bitte)?(?:,?\s+dass)?[:,]?\s+/iu,
+  /^\s*(?:bitte\s+)?notier(?:e)?(?:\s+bitte)?(?:,?\s+dass)?[:,]?\s+/iu,
 ];
 // Each branch carries its own copy of the trailing "this project/workspace:" scope hint (rather
 // than factoring it into a second matching stage) so a single execFirst pass still yields the
@@ -98,10 +103,55 @@ const REMEMBER_ABOUT_PATTERNS: readonly RegExp[] = [
   /^\s*speicher(?:e)?\s+(?:zu|über|ueber)\s+(?:this\s+(project|workspace)[:,\s]+)?/iu,
 ];
 const FORGET_PATTERNS: readonly RegExp[] = [
-  /^\s*forget(?:\s+about)?\s+/iu,
-  /^\s*vergiss(?:\s+bitte)?(?:\s+(?:alles\s+)?(?:über|ueber|zu|an))?\s+/iu,
+  /^\s*forget(?!\s+not\b)(?:\s+about)?(?:\s+that(?=\s+\S))?\s+/iu,
+  // "Vergiss nicht, ..." means the opposite of forgetting, so it is no forget at all.
+  /^\s*vergiss(?!\s+(?:es\s+|das\s+)?(?:bitte\s+)?nicht\b)(?:\s+bitte)?(?:,?\s+dass)?(?:\s+(?:alles\s+)?(?:über|ueber|zu|an))?\s+/iu,
   /^\s*lösche(?:\s+bitte)?(?:\s+die\s+erinnerung\s+(?:an|zu|über|ueber))?\s+/iu,
 ];
+// A whole statement that takes back what was just said, without naming it.
+const FORGET_REFERENCE_STATEMENTS: readonly (readonly [RegExp, string])[] = [
+  [/^\s*das\s+stimmt\s+nicht\s+mehr[.!]?\s*$/iu, "das"],
+  [/^\s*that(?:'s|\s+is)\s+no\s+longer\s+(?:true|correct|right)[.!]?\s*$/iu, "that"],
+  [/^\s*that(?:'s|\s+is)\s+not\s+(?:true|correct|right)\s+anymore[.!]?\s*$/iu, "that"],
+];
+const FORGET_REFERENCE_WORDS: ReadonlySet<string> = new Set([
+  "das",
+  "dies",
+  "dieses",
+  "es",
+  "that",
+  "this",
+  "it",
+]);
+const FORGET_TARGET_END_MARKS = new Set([" ", "\t", ".", "!", "?", "…"]);
+const FORGET_TARGET_POLITE_TAILS: readonly string[] = [" bitte", " please"];
+
+// Plain string walks: a regex anchored at the end would rescan a long run of spaces per position.
+function trimForgetTarget(target: string): string {
+  let end = target.length;
+  while (end > 0 && FORGET_TARGET_END_MARKS.has(target.charAt(end - 1))) end -= 1;
+  const trimmed = target.slice(0, end);
+  const lower = trimmed.toLowerCase();
+  const tail = FORGET_TARGET_POLITE_TAILS.find((polite) => lower.endsWith(polite));
+  return tail === undefined ? trimmed : trimmed.slice(0, -tail.length).trimEnd();
+}
+
+// Whether a forget target names nothing itself and refers to what the conversation just said.
+export function isMemoryForgetReference(target: string): boolean {
+  return FORGET_REFERENCE_WORDS.has(target.trim().toLowerCase());
+}
+
+function forgetTargetOf(text: string): string | null {
+  for (const [pattern, target] of FORGET_REFERENCE_STATEMENTS) {
+    if (pattern.test(text)) return target;
+  }
+  const prefixMatch = execFirst(FORGET_PATTERNS, text);
+  if (prefixMatch === null) return null;
+  const body = bodyAfterPrefix(prefixMatch, text);
+  const target = body === null ? "" : trimForgetTarget(body);
+  return target === "" ? null : target;
+}
+
 // Any of the four ECMAScript line-terminator code points. `.` (used by the single-regex-capture
 // patterns above) never matches these without the `s`/dotAll flag, so a trimmed body/target
 // containing one means the real content spans more than one line — treated as "not this intent",
@@ -119,6 +169,28 @@ function bodyAfterPrefix(prefixMatch: RegExpExecArray, text: string): string | n
   }
   return trimmed;
 }
+// An explicit statement stores what was stated, not the request that follows it in one message.
+const SENTENCE_END_RE = /[.!?…]+(?=\s+\p{Lu}|\s*$)/gu;
+// One or two letters before a period read as an abbreviation such as "z. B." or "e.g.".
+const WORD_BEFORE_SENTENCE_END_RE = /\p{L}{3}$/u;
+const WORD_TAIL_CHARS = 3;
+
+function firstSentence(line: string): string {
+  for (const match of line.matchAll(SENTENCE_END_RE)) {
+    const before = line.slice(Math.max(0, match.index - WORD_TAIL_CHARS), match.index);
+    if (WORD_BEFORE_SENTENCE_END_RE.test(before)) {
+      return line.slice(0, match.index + match[0].length);
+    }
+  }
+  return line;
+}
+
+function statedFactAfterPrefix(prefixMatch: RegExpExecArray, text: string): string | null {
+  const firstLine = text.slice(prefixMatch[0].length).trim().split(LINE_TERMINATOR_RE, 1)[0];
+  const body = firstLine === undefined ? "" : firstSentence(firstLine.trim());
+  return body === "" ? null : body;
+}
+
 const UPDATE_KEYWORD_PATTERNS: readonly RegExp[] = [
   /^\s*update\s+(?:memory|the\s+memory)\s+about\s+/iu,
   /^\s*aktualisiere(?:\s+bitte)?\s+(?:die\s+)?(?:erinnerung|speicher(?:eintrag)?)\s+(?:zu|zum|zur|über|ueber)\s+/iu,
@@ -194,11 +266,10 @@ type ResolverOutcome =
   | { readonly kind: "unique"; readonly memoryId: MemoryId };
 
 function resolveTarget(
-  policy: CapturePolicyOptions,
+  resolver: CaptureMemoryResolver | undefined,
   target: string,
   scope: MemoryScope,
 ): ResolverOutcome {
-  const resolver = policy.resolver;
   if (resolver === undefined) {
     return { kind: "none" };
   }
@@ -279,7 +350,7 @@ export function tryExtractRemember(
   if (prefixMatch === null) {
     return null;
   }
-  const body = bodyAfterPrefix(prefixMatch, text);
+  const body = statedFactAfterPrefix(prefixMatch, text);
   if (body === null) {
     return null;
   }
@@ -327,11 +398,7 @@ export function tryExtractForget(
   context: CaptureContext,
   policy: CapturePolicyOptions = {},
 ): CaptureOutcome | null {
-  const prefixMatch = execFirst(FORGET_PATTERNS, text);
-  if (prefixMatch === null) {
-    return null;
-  }
-  const target = bodyAfterPrefix(prefixMatch, text);
+  const target = forgetTargetOf(text);
   if (target === null) {
     return null;
   }
@@ -339,9 +406,16 @@ export function tryExtractForget(
   if (!scopeResolution.ok) {
     return scopeResolution.outcome;
   }
-  const resolved = resolveTarget(policy, target, scopeResolution.scope);
+  const resolved = resolveTarget(
+    policy.forgetResolver ?? policy.resolver,
+    target,
+    scopeResolution.scope,
+  );
   if (resolved.kind === "none") {
-    return null;
+    // A bare "Vergiss das" is a clear request about something unnamed: never ignore it.
+    return isMemoryForgetReference(target)
+      ? { kind: "rejected", reason: "forget-reference-unresolved" }
+      : null;
   }
   if (resolved.kind === "ambiguous") {
     return { kind: "rejected", reason: "ambiguous-forget" };
@@ -351,7 +425,7 @@ export function tryExtractForget(
     memoryId: resolved.memoryId,
     reason: MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
   });
-  return { kind: "forget", operation, requiresConfirmation: true };
+  return { kind: "forget", operation, requiresConfirmation: false };
 }
 
 // ─── tryExtractUpdate ────────────────────────────────────────────────────────
@@ -381,7 +455,7 @@ export function tryExtractUpdate(
   if (!scopeResolution.ok) {
     return scopeResolution.outcome;
   }
-  const resolved = resolveTarget(policy, target, scopeResolution.scope);
+  const resolved = resolveTarget(policy.resolver, target, scopeResolution.scope);
   if (resolved.kind === "none") {
     return null;
   }

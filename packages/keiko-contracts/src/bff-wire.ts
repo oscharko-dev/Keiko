@@ -1037,6 +1037,8 @@ export type ConversationMemoryActionWire =
       readonly kind: "forget";
       readonly memoryId: string;
       readonly requiresConfirmation: boolean;
+      // True when the server has already forgotten the memory, so nothing is left to confirm.
+      readonly forgotten?: boolean;
     }
   | { readonly kind: "rejected"; readonly reason: string };
 
