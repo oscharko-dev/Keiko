@@ -2552,6 +2552,7 @@ const activityLogOperationPart0 = () =>
         loss: activityLogLossField(),
         activity: activityLogStringEnumField(true, [
           "initialized",
+          "draft-notifications-ready",
           "input-limit",
           "code-ready",
           "code-language-detected",

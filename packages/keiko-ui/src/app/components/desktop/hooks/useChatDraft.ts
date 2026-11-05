@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useReducer } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useReducer } from "react";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
 import { ChatDraftController, type DraftPhase } from "./chat-draft-controller";
 
@@ -33,8 +34,11 @@ function useDraftController(onReplace: (() => void) | undefined): ChatDraftContr
     () => replacement.current?.(),
   );
   const controller = controllerRef.current;
-  useEffect(() => {
+  useLayoutEffect(() => {
     mounted.current = true;
+    reportClientDiagnostic("Private chat draft notifications ready.", {
+      composerActivity: "draft-notifications-ready",
+    });
     return (): void => {
       mounted.current = false;
       controller.flush();

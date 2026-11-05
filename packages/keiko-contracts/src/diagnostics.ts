@@ -334,6 +334,7 @@ export function isClientMarkdownLayout(value: unknown): value is ClientMarkdownL
 
 export const CLIENT_COMPOSER_ACTIVITIES = [
   "initialized",
+  "draft-notifications-ready",
   "input-limit",
   "code-ready",
   "code-language-detected",
