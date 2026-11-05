@@ -1567,13 +1567,13 @@ describe("pinned native OpenCode plan tool (T19)", () => {
   // The producer runs a model's `bash` call as its `shell` tool when no tool has that name, so the
   // alias must reach the same mode decision as an ordinary `shell` call.
   it.skipIf(skip)(
-    "keeps the person's clipboard and keychain out of a shell's reach, at Full access too",
+    // The keychain service shares this rule; the backend test pins its names. No test runs `security`.
+    "keeps the person's clipboard out of a shell's reach, at Full access too",
     async () => {
       await withRun({ mode: "autonomous-delivery" }, async (run) => {
         for (const command of [
           // A pasteboard nothing uses: this test never reads what the person copied.
           "/usr/bin/pbpaste -pboard ruler > /dev/null",
-          "/usr/bin/security list-keychains > /dev/null",
         ]) {
           const result = await scriptedTurn(run, shell(`${command}; echo "exit=$?"`));
           expect(result, command).not.toContain("exit=0");

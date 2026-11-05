@@ -462,7 +462,15 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
     for (const denied of ["appleevent-send", "lsopen"])
       expect(profile).toContain(`(deny ${denied})`);
     // #4271: named services only; a toolchain's other lookups stay open (see the pin above).
-    for (const service of ["com.apple.pasteboard.1", "com.apple.SecurityServer"])
+    for (const service of [
+      "com.apple.pasteboard.1",
+      "com.apple.pboard",
+      "com.apple.SecurityServer",
+      "com.apple.secd",
+      "com.apple.securityd.xpc",
+      "com.apple.security.agent",
+      "com.apple.SecurityAgent",
+    ])
       expect(profile).toContain(`(global-name "${service}")`);
     expect(profile).toContain('(subpath "/usr/local/var")');
     expect(profile).toContain('(subpath "/accepted/workspace")');

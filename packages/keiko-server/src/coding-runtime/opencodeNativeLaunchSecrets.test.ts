@@ -18,7 +18,9 @@ describe("launch secrets plugin source", () => {
   });
 
   it("reads the kernel's answer back and fails the plugin when a value survived", () => {
-    expect(source).toContain("assertUnreadable(libc, overwriteValues(libc))");
+    // The values the runtime still holds count too: a build whose C environment no longer names them
+    // must not pass with nothing to compare.
+    expect(source).toContain("assertUnreadable(libc, [...overwriteValues(libc), ...known])");
     expect(source).toContain("throw new Error('launch-secret-readable')");
     expect(source).toContain("throw new Error('process-arguments-unavailable')");
   });

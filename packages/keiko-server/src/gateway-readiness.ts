@@ -2636,6 +2636,22 @@ function enqueueWorkbenchProbe(
   return entry.promise;
 }
 
+// A live run needs the gateway, which may serve one model at a time. A proof of a model nobody chose
+// gives way and leaves no verdict, so the next read after the run proves it.
+function withholdForLiveRun(
+  deps: UiHandlerDeps,
+  entry: WorkbenchProbeEntry,
+  key: string,
+  modelId: string,
+  correlationId: string,
+): boolean {
+  if (entry.prioritized || deps.codingRuntimeOrchestrator?.hasLiveRun() !== true) return false;
+  workbenchProbes.delete(key);
+  entry.cancelQueued();
+  logAutomaticReadinessWithheld(deps, modelId, correlationId);
+  return true;
+}
+
 function createWorkbenchProbeEntry(
   deps: UiHandlerDeps,
   target: WorkbenchProbeTarget,
@@ -2656,15 +2672,7 @@ function createWorkbenchProbeEntry(
       entry.settled = true;
       finish();
     },
-    // A live run needs the gateway, which may serve one model at a time. A proof of a model nobody
-    // chose gives way and leaves no verdict, so the next read after the run proves it.
-    withhold: (): boolean => {
-      if (entry.prioritized || deps.codingRuntimeOrchestrator?.hasLiveRun() !== true) return false;
-      workbenchProbes.delete(key);
-      entry.cancelQueued();
-      logAutomaticReadinessWithheld(deps, target.modelId, correlationId);
-      return true;
-    },
+    withhold: (): boolean => withholdForLiveRun(deps, entry, key, target.modelId, correlationId),
     perform: async (): Promise<void> => {
       const controlled =
         deps.gatewayConfig === undefined

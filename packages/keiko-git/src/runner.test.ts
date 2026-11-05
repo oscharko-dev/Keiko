@@ -1092,6 +1092,115 @@ describe("repository-local filter drivers (#4271)", () => {
     }
   });
 
+  // A nested repository is another repository: Git asks it about itself in a child process, under
+  // its own configuration, so the outer listing cannot name its drivers.
+  function nestedFilteredRepository(): {
+    readonly repo: string;
+    readonly marker: string;
+    readonly dirty: () => void;
+  } {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-gitlink-")));
+    const inner = join(repo, "inner");
+    const marker = join(repo, "filter-ran");
+    const seed = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "s"];
+    execFileSync("git", ["init", "-q", repo]);
+    execFileSync("git", ["init", "-q", inner]);
+    writeFileSync(join(inner, ".gitattributes"), "*.txt filter=hostile\n");
+    writeFileSync(join(inner, "a.txt"), "before\n");
+    execFileSync("git", ["add", "."], { cwd: inner });
+    execFileSync("git", seed, { cwd: inner });
+    execFileSync("git", ["add", "inner"], { cwd: repo, stdio: "ignore" });
+    execFileSync("git", seed, { cwd: repo });
+    execFileSync("git", ["config", "filter.hostile.clean", `touch ${marker}; cat`], { cwd: inner });
+    const dirty = (): void => {
+      writeFileSync(join(inner, "a.txt"), "behind\n");
+      utimesSync(join(inner, "a.txt"), new Date(), new Date(Date.now() + 60_000));
+    };
+    return { repo, marker, dirty };
+  }
+
+  it.each([
+    ["status", ["status", "--porcelain"]],
+    ["diff", ["diff", "--stat"]],
+    ["diff-files", ["diff-files"]],
+    ["diff-index", ["diff-index", "HEAD"]],
+  ] as const)("does not run a nested repository's driver for %s", async (_name, args) => {
+    const { repo, marker, dirty } = nestedFilteredRepository();
+    try {
+      dirty();
+      const result = await defaultGitProcessRunner([...GIT_BASE_ARGS, ...args], {
+        cwd: repo,
+        timeoutMs: 10_000,
+        maxBytes: 65_536,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+      // Positive control: plain Git in the same state does run it, so the assertion above can fail.
+      execFileSync("git", ["status", "--porcelain"], { cwd: repo });
+      expect(existsSync(marker)).toBe(true);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it.each([["--ignore-submodules=none"], ["--ignore-submodules"], ["--submodule=diff"]])(
+    "refuses %s, which reopens a nested repository",
+    async (flag) => {
+      const { repo, marker, dirty } = nestedFilteredRepository();
+      try {
+        dirty();
+        const result = await defaultGitProcessRunner([...GIT_BASE_ARGS, "diff", flag], {
+          cwd: repo,
+          timeoutMs: 10_000,
+          maxBytes: 65_536,
+        });
+        expect(result.refusal).toBe("config-override");
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("still shows a nested repository that moved to another commit", async () => {
+    const { repo } = nestedFilteredRepository();
+    try {
+      const inner = join(repo, "inner");
+      writeFileSync(join(inner, "b.md"), "next\n");
+      execFileSync("git", ["add", "b.md"], { cwd: inner });
+      execFileSync(
+        "git",
+        ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "next"],
+        { cwd: inner },
+      );
+      const result = await defaultGitProcessRunner([...GIT_BASE_ARGS, "status", "--porcelain"], {
+        cwd: repo,
+        timeoutMs: 10_000,
+        maxBytes: 65_536,
+      });
+      expect(result.stdout).toContain("inner");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("answers with the listing's failure when a configuration cannot be read", async () => {
+    const { repo, marker } = filteredRepository();
+    try {
+      writeFileSync(join(repo, ".git", "config"), "[broken\n");
+      const result = await defaultGitProcessRunner([...GIT_BASE_ARGS, "status", "--porcelain"], {
+        cwd: repo,
+        timeoutMs: 10_000,
+        maxBytes: 65_536,
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe("");
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("leaves a repository without a driver to the ordinary read", async () => {
     const result = await defaultGitProcessRunner([...GIT_BASE_ARGS, "status", "--porcelain"], {
       cwd: root,

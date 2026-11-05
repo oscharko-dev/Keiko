@@ -167,6 +167,9 @@ export const OPENCODE_GATEWAY_PROVIDER_POLICIES = Object.freeze([
  */
 export const OPENCODE_WITHHELD_BUILT_IN_PLUGINS = Object.freeze([
   "opencode.browser",
+  // It reads and watches `.claude` and `.agents` skill directories, also under the run's private
+  // home, where a shell can write. Keiko admits those skills itself as sanitized copies.
+  "opencode.config.compatibility",
   "opencode.goal",
   "opencode.provider.claude-agent",
   // A local provider asks its default loopback port every 30 s whether a model server runs there,

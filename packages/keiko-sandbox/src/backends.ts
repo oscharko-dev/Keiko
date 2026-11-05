@@ -284,14 +284,17 @@ const NATIVE_LOOPBACK_ONLY_NETWORK_RULES =
   '(allow network-bind (local ip "localhost:*"))';
 
 // The host services that answer with the person's data whatever the file rules say: the clipboard,
-// and the keychain, whose daemon reads the files the rules deny and answers a tool its entry trusts,
-// such as Git's credential helper (#4271). Everything else a toolchain looks up stays reachable;
+// its legacy name, and the keychain, whose daemons read the files the rules deny and answer a tool an
+// entry trusts, such as Git's credential helper (#4271). Everything else a toolchain looks up stays
+// reachable, preferences included: Foundation tools need them, and they hold no credentials;
 // TLS verification goes through trustd, not these. Proved against curl, Git, Node, Python and Xcode
 // tools.
 const NATIVE_HOST_SECRET_SERVICE_RULE =
   "(deny mach-lookup" +
   ' (global-name "com.apple.pasteboard.1")' +
+  ' (global-name "com.apple.pboard")' +
   ' (global-name "com.apple.SecurityServer")' +
+  ' (global-name "com.apple.secd")' +
   ' (global-name "com.apple.securityd.xpc")' +
   ' (global-name "com.apple.security.agent")' +
   ' (global-name "com.apple.SecurityAgent"))';

@@ -1161,9 +1161,10 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
 /**
  * Every built-in plugin of the pinned producer, by id. Every provider plugin but the one that
  * loads the gateway binding's own SDK package (`opencode.provider.dynamic`) serves a provider the
- * gateway-only provider policy refuses (`OPENCODE_GATEWAY_PROVIDER_POLICIES`). The workspace's
- * Claude-compatible skill directories are not read by the runtime under the launch profile; Keiko
- * admits those skills itself as sanitized copies (`codingRuntimeRepositoryItems.ts`).
+ * gateway-only provider policy refuses (`OPENCODE_GATEWAY_PROVIDER_POLICIES`). The runtime reads no
+ * Claude-compatible skill directory under the launch profile: that plugin is withheld
+ * (`OPENCODE_WITHHELD_BUILT_IN_PLUGINS`), and Keiko admits a workspace's skills itself as sanitized
+ * copies (`codingRuntimeRepositoryItems.ts`).
  */
 export const OPENCODE_PLUGIN_DISPOSITIONS = flatten<OpenCodePluginDisposition>([
   nativePlugin(["S01"], ["opencode.tool.input.repair"]),

@@ -308,7 +308,14 @@ describe("automatic Workbench probes — a live run keeps the gateway", () => {
         },
       },
     });
-    return { deps, calls, events, setLive: (next): void => void (live = next) };
+    return {
+      deps,
+      calls,
+      events,
+      setLive: (next): void => {
+        live = next;
+      },
+    };
   }
 
   it("proves the elected model during a run and withholds the one nobody chose", async () => {

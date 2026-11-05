@@ -38,6 +38,11 @@ const LOCAL_READ_CONFIG_ARGS: readonly string[] = [
   "core.fsmonitor=false",
   "-c",
   "core.editor=true",
+  // Neither may hand a nested repository a child process (see NESTED_REPOSITORY_ISOLATION_ARGS).
+  "-c",
+  "diff.submodule=short",
+  "-c",
+  "status.submoduleSummary=false",
 ];
 const NETWORK_CONFIG_ARGS: readonly string[] = [
   "-c",
@@ -244,6 +249,7 @@ const DENIED_CONFIG_EXACT_KEYS_LOWER: ReadonlySet<string> = new Set(
 // enumerate them. `[\s\S]*` (not just "no dot") is deliberate: a subsection that itself contains a
 // dot must still match rather than slip past a narrower pattern — fail closed.
 const DENIED_CONFIG_WILDCARD_PATTERNS: readonly RegExp[] = [
+  /^filter\.[\s\S]*\.(clean|smudge|process|required)$/u,
   /^diff\.[\s\S]*\.textconv$/u,
   /^diff\.[\s\S]*\.command$/u,
   /^pager\.[\s\S]+$/u,
@@ -612,6 +618,32 @@ const FILTER_APPLYING_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "diff-index",
   "ls-files",
 ]);
+// A nested repository is another repository: to learn whether its work tree is dirty, Git starts a
+// child process there, under that repository's configuration, so the listing below cannot name its
+// drivers (#4271). A commit it moved to stays visible, read from its refs with no child; only its
+// uncommitted changes are left to the person opening it. The flag, not `diff.ignoreSubmodules`:
+// a repository's `submodule.<name>.ignore` outranks that setting.
+const NESTED_REPOSITORY_ASKING_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "status",
+  "diff",
+  "diff-files",
+  "diff-index",
+]);
+const NESTED_REPOSITORY_ISOLATION_ARGS: readonly string[] = ["--ignore-submodules=dirty"];
+const NESTED_REPOSITORY_REOPENING_FLAG = /^--(?:ignore-submodules|submodule)(?:=|$)/u;
+
+function withNestedRepositoriesIsolated(args: readonly string[]): readonly string[] {
+  const index = findSubcommandIndex(args);
+  if (index === undefined || !NESTED_REPOSITORY_ASKING_SUBCOMMANDS.has(args[index] ?? "")) {
+    return args;
+  }
+  return [
+    ...args.slice(0, index + 1),
+    ...NESTED_REPOSITORY_ISOLATION_ARGS,
+    ...args.slice(index + 1),
+  ];
+}
+
 const FILTER_DRIVER_KEY = /^filter\.(.+)\.(?:clean|smudge|process|required)$/iu;
 const FILTER_DRIVER_NAME_OVERRIDABLE = /^[^=\n\r\0]+$/u;
 const FILTER_LISTING_MAX_BYTES = 1024 * 1024;
@@ -650,6 +682,15 @@ const localGitProcessRunner = createGitProcessRunnerWithFixedArgs(gitEnv, LOCAL_
 export const defaultGitProcessRunner: GitProcessRunner = async (args, options) => {
   if (!FILTER_APPLYING_SUBCOMMANDS.has(gitSubcommand(args) ?? ""))
     return await localGitProcessRunner(args, options);
+  const reopening = args.find((arg) => NESTED_REPOSITORY_REOPENING_FLAG.test(arg));
+  if (reopening !== undefined) return refusedOptionResult(reopening, "config-override");
+  return await runFilterNeutralized(withNestedRepositoriesIsolated(args), options);
+};
+
+async function runFilterNeutralized(
+  args: readonly string[],
+  options: Parameters<GitProcessRunner>[1],
+): Promise<GitProcessResult> {
   const startedAt = Date.now();
   // The caller's byte bound is about the read's own answer; the listing has its own. The two share
   // the caller's time, so this step cannot extend a deadline.
@@ -662,6 +703,8 @@ export const defaultGitProcessRunner: GitProcessRunner = async (args, options) =
   // stand in for the read's answer.
   if (listing.timedOut || listing.aborted) return { ...listing, stdout: "", stderr: "" };
   if (listing.truncated) return refusedOptionResult("filter", "config-override");
+  // `config --list` fails only when the configuration cannot be read, and then proves nothing.
+  if (listing.exitCode !== 0) return { ...listing, stdout: "" };
   const read = { ...options, timeoutMs: Math.max(1, options.timeoutMs - (Date.now() - startedAt)) };
   const names = filterDriverNames(listing.stdout);
   if (names.length === 0) return await localGitProcessRunner(args, read);
@@ -671,7 +714,7 @@ export const defaultGitProcessRunner: GitProcessRunner = async (args, options) =
     ...LOCAL_READ_CONFIG_ARGS,
     ...filterNeutralizingArgs(names),
   ])(args, read);
-};
+}
 
 export const defaultGitNetworkProcessRunner: GitProcessRunner = createGitProcessRunnerWithFixedArgs(
   networkGitEnv,
