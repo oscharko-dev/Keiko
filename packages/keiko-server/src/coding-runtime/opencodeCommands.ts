@@ -176,6 +176,8 @@ export function readOnceLocationActivated<T>(
   deps: LocationActivationWaitDeps,
   runId: string,
   read: () => Promise<T>,
+  // Reads a caller already spent on this location; the bound holds across them (#4271).
+  readsSpent = 0,
 ): Promise<T> {
   const pause = deps.pause ?? realPause;
   // Each read depends on the previous one's answer, so the reads run one after another.
@@ -194,7 +196,7 @@ export function readOnceLocationActivated<T>(
         throw error;
       }
       const answers = activatingAnswers + 1;
-      if (answers >= LOCATION_LOAD_READS) {
+      if (readsSpent + answers >= LOCATION_LOAD_READS) {
         recordLocationActivationWait(deps.activityLog, runId, "exhausted", answers);
         throw error;
       }
@@ -210,16 +212,22 @@ async function loadedAgents(
   run: CommandsRun,
 ): Promise<readonly OpenCodeV2Agent[]> {
   const pause = deps.pause ?? realPause;
-  // Each read depends on the previous one's answer, so the reads run one after another.
-  const read = async (remaining: number): Promise<readonly OpenCodeV2Agent[]> => {
-    const agents = await readOnceLocationActivated(deps, run.runId, () =>
-      run.client.agents(run.workspaceRoot),
-    );
-    if (agents.length > 0 || remaining <= 1) return agents;
-    await pause(LOCATION_LOAD_PAUSE_MS);
-    return read(remaining - 1);
+  // An empty listing and a late activation mean the same "not loaded yet", so they share one bound:
+  // each late answer takes the runtime five seconds, and multiplied bounds would hold a start for
+  // three minutes.
+  let reads = 0;
+  const readAgents = (): Promise<readonly OpenCodeV2Agent[]> => {
+    reads += 1;
+    return run.client.agents(run.workspaceRoot);
   };
-  return read(LOCATION_LOAD_READS);
+  // Each read depends on the previous one's answer, so the reads run one after another.
+  const read = async (): Promise<readonly OpenCodeV2Agent[]> => {
+    const agents = await readOnceLocationActivated(deps, run.runId, readAgents, reads);
+    if (agents.length > 0 || reads >= LOCATION_LOAD_READS) return agents;
+    await pause(LOCATION_LOAD_PAUSE_MS);
+    return read();
+  };
+  return read();
 }
 
 const COMMANDS_LISTED_OPERATION = defineActivityLogOperation({

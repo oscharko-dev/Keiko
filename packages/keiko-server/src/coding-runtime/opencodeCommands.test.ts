@@ -502,6 +502,33 @@ describe("the subagents and skills a prompt may mention (#3906)", () => {
     });
   });
 
+  // Each late answer takes the runtime five seconds: multiplied bounds would mean 36 reads.
+  it("keeps one bound on the reads when empty and late answers alternate", async () => {
+    let reads = 0;
+    const alternating = harness({
+      pauses: [],
+      agents: () => {
+        reads += 1;
+        return reads % 2 === 0
+          ? Promise.reject(new OpenCodeV2HttpStatusError(503))
+          : Promise.resolve([]);
+      },
+    });
+
+    const outcome = await alternating.port.admitCommand(
+      "run-1",
+      mentioned({ agents: [{ name: "explore" }] }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(reads).toBe(6);
+    expect(
+      alternating.sink.events.filter(
+        (event) => event.op === "coding-runtime.location.activation-wait",
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
   // A runtime that waits for its location's plugins answers 503 when they are late: still loading,
   // so the mention is decided on a later read; the wait stays visible in the Activity Log.
   it("reads again while the location's plugins activate and records that wait", async () => {
@@ -534,13 +561,18 @@ describe("the subagents and skills a prompt may mention (#3906)", () => {
   });
 
   it.each([
-    { outcome: "recovered", level: "info", answers: 1, final: () => Promise.resolve("listed") },
+    {
+      outcome: "recovered",
+      level: "info",
+      answers: 1,
+      final: (): Promise<string> => Promise.resolve("listed"),
+    },
     { outcome: "exhausted", level: "warn", answers: 6, final: undefined },
     {
       outcome: "failed",
       level: "warn",
       answers: 1,
-      final: () => Promise.reject(new Error("socket hang up")),
+      final: (): Promise<string> => Promise.reject(new Error("socket hang up")),
     },
   ])(
     "joins a $outcome wait to its run and proves the emitted line",
