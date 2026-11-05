@@ -6372,6 +6372,7 @@ function resolveProductionRuntimePorts(
       });
       return result.status === "available" ? result.runMetadata : undefined;
     },
+    requiresCompleteReasoningHistory: completeReasoningHistoryPolicy(args.runtimeConfig),
     // #3903 AC1: the chat models a native run's agents may use; each one still has to resolve.
     gatewayCodingModelIds: (): readonly string[] => configuredChatModelIds(args),
     activityLog: processServerLogSink(),
@@ -6388,6 +6389,18 @@ function resolveProductionRuntimePorts(
   };
 }
 
+function completeReasoningHistoryPolicy(
+  config: RuntimeGatewayConfig,
+): (modelId: string) => boolean {
+  return (modelId): boolean =>
+    config
+      .current()
+      ?.providers.some(
+        (provider) =>
+          provider.modelId === modelId && provider.reasoningHistory === "required-with-tools",
+      ) === true;
+}
+
 /**
  * On a fresh installation the server-owned managed worktree root does not exist until the first
  * task workspace is provisioned; the resolver's trusted-root check would then keep an otherwise
@@ -6398,6 +6411,7 @@ function resolveProductionRuntimePorts(
  * read-only-volume problem on the one directory the Coding runtime cannot work without had no
  * observable reason anywhere. Content-free: the error class only — never the path.
  */
+
 function materializedManagedRoot(
   managedTaskWorkspaceRoot: string,
   diagnostics: ServerDiagnosticSink | undefined,

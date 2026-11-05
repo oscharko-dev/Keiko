@@ -504,6 +504,7 @@ async function streamWindowAttempt(
       messages: assembly.messages,
       ...gatewayAssemblyOutputAllocation(assembly),
       logContext: { correlationId: ctx.correlationId },
+      reasoningScope: `chat:${admitted.prepared.chat.id}`,
     },
     deps.store.markdownSkills,
     admitted.gatewayTurn.currentUserMessageId,

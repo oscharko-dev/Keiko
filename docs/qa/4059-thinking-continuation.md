@@ -73,3 +73,20 @@ specific LiteLLM version/customer route is certified. The pinned 2.0.10 API/type
 inspected; its actual legacy executable was not run. Unsupported or untested readiness remains
 unverified. Configure the actual deployed route and rerun its bounded complete round trip before
 claiming deployment compatibility. See [LiteLLM troubleshooting](../troubleshooting/litellm-production-gateway.md).
+
+## Integration with qualified shared reasoning history
+
+The subsequent `dev` integration of #4270 also supplies a shared, transient reasoning-history owner
+for Chat, Harness and explicitly qualified Coding providers. It remains unchanged. Native
+`reasoningContinuation: "required-with-tools"` continues to use the authenticated native session,
+with its context hook, exact credential-floor checks, route binding and retained-session resume.
+It bypasses the transient history preparation. Combining native continuation with `reasoningHistory`
+or `reasoningHistoryField` is invalid at configuration load and at gateway admission. Native wire
+qualification remains `reasoning_content`; shared providers retain their qualified field choice.
+
+The shared serializer and token counter project one reasoning field. The native fingerprint has a
+fixed producer tag, so switching between native and shared `required-with-tools` invalidates prior
+route/tool proofs; existing default and shared fingerprints are unchanged. A permanent test
+reproduces the untagged collision before the correction, and an independent read-only audit checks
+the resolved integration. The Chat transcript keeps the newly corrected tool-before-final-answer
+ordering while preserving private document context.

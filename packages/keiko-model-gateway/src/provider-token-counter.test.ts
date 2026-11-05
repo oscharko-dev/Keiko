@@ -214,3 +214,30 @@ it("retains safe frames and causes from a counter reader failure", async () => {
   });
   expect(JSON.stringify(event)).not.toMatch(/private-/u);
 });
+
+it.each(["reasoning_content", "reasoning"] as const)(
+  "counts the exact %s continuation projection sent to the provider",
+  async (reasoningHistoryField) => {
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+        messages: Record<string, unknown>[];
+      };
+      expect(body.messages).toEqual([
+        { role: "assistant", content: "Ready.", [reasoningHistoryField]: "Completed thinking." },
+      ]);
+      return Promise.resolve(Response.json({ total_tokens: 37 }));
+    });
+    await countProviderPromptTokens(
+      {
+        ...request,
+        messages: [
+          { role: "assistant", content: "Ready.", reasoningContent: "Completed thinking." },
+        ],
+      },
+      { ...provider, reasoningHistoryField },
+      log,
+      fetchImpl,
+    );
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  },
+);

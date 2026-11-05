@@ -797,19 +797,26 @@ repair never ran). Gemma 4 31B streamed through LiteLLM (run `742029841583121825
 motivated this: turn 5 reasoned for about 4,500 tokens and ended empty, the coding runtime retried the
 identical turn six more times, and the failed turns' reasoning stayed in the resent history. A coding
 sidecar turn whose repair ended `empty-again` is answered as final to the runtime (ADR-0173), and the
-sidecar drops failed-turn reasoning from later requests. The default provider policy strips prior
-reasoning fields and counts dropped reasoning-only assistant messages on
-`coding-sidecar.gateway.request-validated`. An explicit provider contract
-`reasoningContinuation: "required-with-tools"` instead serializes exact completed assistant reasoning
-as `reasoning_content` when the native runtime owns an admissible continuation (#4059). This is
-transport state, independent of the reasoning display preference. The native history owner removes
-aborted, unfinished and foreign-model rounds with orphaned tool results before provider serialization
-can reuse them; live and retained run bindings reject model-route changes. The credential floor,
-message/byte/context limits and spend admission apply to all retained state. Missing, conflicting,
-secret-bearing or oversized required state fails closed; it is never replaced with a blank or silently
-truncated. The four-round readiness probe checks two tool-result rounds, a final answer and a later
-user turn, reserving each attempt through the existing spend owner. Default and unrelated provider
-behavior remains unchanged. The Activity Log carries counts and closed outcomes only.
+default/shared sidecar path drops that reasoning from later requests instead of resending it upstream: reasoning
+fields of prior assistant messages and assistant messages that carry nothing but reasoning never reach
+the gateway request, and `coding-sidecar.gateway.request-validated` records how many it dropped.
+This requires the runtime to preserve reasoning part types; ADR-0137 D8 documents the pinned runtime's
+separate limitation when interrupted reasoning is converted to ordinary assistant text.
+
+
+For the authenticated native Coding path, the separate explicit provider policy
+`reasoningContinuation: "required-with-tools"` uses the existing native session as the sole
+continuation owner (#4059). It is mutually exclusive with `reasoningHistory` and
+`reasoningHistoryField`; its qualified wire field remains `reasoning_content`. The native context
+hook reads canonical session context before runtime serialization and excludes aborted, unfinished
+and foreign-model assistant rounds and orphaned tool results. Existing run and retained-session
+route bindings prevent continuation under changed or unproven routes. This native path retains exact
+completed reasoning independently of live display, checks the current credential floor, and applies
+full byte, context and spend limits. Missing, conflicting, secret-bearing or oversized state fails
+closed. It bypasses the shared transient history cache and preserves native resume/fork ownership;
+no additional reasoning store is introduced. Activity evidence contains counts and closed outcomes
+only.
+
 
 **End-to-end budget.** A buffered call as a whole is bounded by `providerRequestBudgetMs(provider)`
 (`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry reserves
@@ -885,6 +892,18 @@ delivered answer delta or the terminal answer commits the stream; nothing is eve
 Reasoning is a body: `chat.response.streamed` records its events and bytes, and
 `gateway.chat.completed` and `gateway.stream.completed` record `reasoningBytes`, `reasoningTokens`
 and `reasoningDisposition` (`none`, `forwarded`, `discarded`), never the text.
+
+Provider continuation is distinct from live display. An explicit provider `reasoningHistory` of
+`required-with-tools` restores all historical assistant reasoning when tools are offered;
+`current-turn` restores only assistants after the latest human message. The wire field is
+`reasoning_content` unless `reasoningHistoryField: "reasoning"` was qualified for that provider.
+The gateway uses only successful, complete responses from bounded transient state, never runtime
+echoes or failed attempts, and applies the current content policy and credential floor. Display
+opt-out does not disable this transport requirement. Missing or ambiguous required continuation
+fails closed; no reasoning enters evidence or exports. ADR-0137 D8 defines bounds, scope, refinement
+and the fresh native-session fallback for full-history providers. The selected wire projection is
+also used by prompt admission and provider token counting.
+
 
 **Coding sidecar streaming (lab ledger F2, #3873, 2026-10-06).** The coding sidecar profile used
 to be hard-coded as non-streaming, so the sidecar read a streaming provider in full before OpenCode

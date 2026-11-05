@@ -34,6 +34,8 @@ import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 export interface SessionContinuationContext {
   readonly continuationRouteDigest?: string | undefined;
   readonly service: CodingSessionContinuity;
+  /** Completed provider reasoning is transient; native history alone cannot restore that contract. */
+  readonly freshReasoningHistory?: boolean | undefined;
   readonly workspaceId: string;
   readonly runtimeVersion: string;
   /** The input window of the run's model, the bound a retained history must fit. */
@@ -70,6 +72,7 @@ export interface RunContinuation {
 }
 
 const BENIGN_REASONS: ReadonlySet<ContinuityReason> = new Set([
+  "reasoning-history-unavailable",
   "disabled",
   "not-native-profile",
   "no-retained-state",
@@ -136,6 +139,10 @@ export function seedContinuation(
 ): RunContinuation | undefined {
   const intent = context.service.take(location.runId);
   if (intent === undefined) return undefined;
+  if (context.freshReasoningHistory === true) {
+    recordFallBack(context, location, intent, "reasoning-history-unavailable");
+    return undefined;
+  }
   const taskId = intent.kind === "resume" ? intent.taskId : intent.sourceTaskId;
   const store = context.service.store;
   if (store === undefined) {

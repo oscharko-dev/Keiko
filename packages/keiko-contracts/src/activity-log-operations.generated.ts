@@ -14421,6 +14421,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: [
+          "reasoning-history-unavailable",
           "disabled",
           "not-native-profile",
           "not-succeeded",
@@ -22095,6 +22096,48 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["gateway-readiness"],
     proofIds: ["gateway.readiness.started.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "gateway.reasoning-history",
+    category: "gateway",
+    owner: "keiko-model-gateway",
+    emitter: "reasoning-history.GatewayReasoningHistory.record",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      state: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["restored", "retained", "unavailable", "capacity-exceeded"],
+      },
+      messageCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      reasoningBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-chat-call", "gateway-stream-call"],
+    proofIds: ["gateway.reasoning-history.lifecycle"],
     releaseImpact: "patch",
   },
   {

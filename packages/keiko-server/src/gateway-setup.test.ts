@@ -13478,3 +13478,21 @@ describe("gateway catalog source persistence", () => {
     await deps.dispose?.();
   });
 });
+
+it("preserves qualified reasoning policy and wire spelling through an unrelated setup save", () => {
+  const config = parseGatewayConfig({
+    providers: [
+      {
+        modelId: "reasoning-fixture",
+        baseUrl: "https://provider.example/v1",
+        apiKey: "fixture-key",
+        reasoningHistory: "current-turn",
+        reasoningHistoryField: "reasoning",
+      },
+    ],
+  });
+  expect(parseGatewayConfig(rawConfigFromCurrent(config, undefined)).providers[0]).toMatchObject({
+    reasoningHistory: "current-turn",
+    reasoningHistoryField: "reasoning",
+  });
+});

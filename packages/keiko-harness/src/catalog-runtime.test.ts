@@ -32,98 +32,107 @@ import { bindHarnessCatalog, captureModelToolCalls } from "./catalog-runtime.js"
 
 const TASK = { taskType: "investigate-bug", input: { description: "Read accepted file" } } as const;
 describe("native harness catalog consumer", () => {
-  it("spans the concrete Gateway and native harness through one canonical settlement", async () => {
-    const catalog = createInitialToolCatalog();
-    const profile = { id: "legacy-native", version: 1 } as const;
-    const projection = compileToolProjection(catalog, profile);
-    const handlers: readonly LegacyPortCatalogHandlerAttestation[] = projection.tools.map(
-      (tool) => {
-        const descriptor = lookupCatalogTool(catalog, tool.toolRef);
-        if (descriptor === undefined) throw new TypeError("Missing native catalog descriptor");
-        return {
-          alias: tool.alias,
-          handlerId: descriptor.handlerRequirement.id,
-          handlerVersion: descriptor.handlerRequirement.contractVersion,
-          catalogAction: tool.alias,
-        };
-      },
-    );
-    const executed: string[] = [];
-    const tools = recordingTool();
-    const productivePort: HarnessDeps["tools"] = {
-      ...tools.port,
-      execute: (request) => {
-        executed.push(request.toolName);
-        return Promise.resolve({
-          toolCallId: request.toolCallId,
-          output: "bounded",
-          durationMs: 1,
-        });
-      },
-    };
-    const binding = createLegacyPortCatalogBinding(catalog, profile, productivePort, handlers);
-    let providerCalls = 0;
-    const adapter: ProviderAdapter = {
-      call: (_request, provider) => {
-        providerCalls += 1;
-        const gatewayCatalog = createGatewayToolCatalogBridge(_request, () => 0);
-        return Promise.resolve(
-          providerCalls === 1
-            ? {
-                modelId: provider.modelId,
-                content: "",
-                finishReason: "tool_calls" as const,
-                toolCalls: gatewayCatalog.bindCalls([
-                  {
-                    id: "call-native-1",
-                    name: "read_file",
-                    arguments: { path: "fixture.txt" },
-                  },
-                ]),
-                structuredOutput: null,
-                usage: {
-                  requestId: "provider-1",
-                  promptTokens: 1,
-                  completionTokens: 1,
-                  latencyMs: 1,
-                  costClass: "low" as const,
-                },
-              }
-            : response(),
-        );
-      },
-    };
-    const config: GatewayConfig = {
-      providers: [
-        {
-          modelId: "m",
-          baseUrl: "https://provider.invalid/v1",
-          apiKey: "fixture-key",
-          timeoutMs: 1_000,
-          maxRetries: 0,
-          retryBaseDelayMs: 1,
+  it.each([undefined, "required-with-tools"] as const)(
+    "spans the concrete Gateway and native harness through one canonical settlement with %s reasoning history",
+    async (reasoningHistory) => {
+      const catalog = createInitialToolCatalog();
+      const profile = { id: "legacy-native", version: 1 } as const;
+      const projection = compileToolProjection(catalog, profile);
+      const handlers: readonly LegacyPortCatalogHandlerAttestation[] = projection.tools.map(
+        (tool) => {
+          const descriptor = lookupCatalogTool(catalog, tool.toolRef);
+          if (descriptor === undefined) throw new TypeError("Missing native catalog descriptor");
+          return {
+            alias: tool.alias,
+            handlerId: descriptor.handlerRequirement.id,
+            handlerVersion: descriptor.handlerRequirement.contractVersion,
+            catalogAction: tool.alias,
+          };
         },
-      ],
-      circuitBreaker: { failureThreshold: 1, cooldownMs: 1_000, halfOpenProbes: 1 },
-    };
-    const gateway = new Gateway(config, { adapter });
-    const session = createSession(
-      TASK,
-      { model: "m", workingDirectory: "/repo", dryRun: false },
-      {
-        model: new GatewayModelPort(gateway),
-        tools: productivePort,
-        bindToolCatalog: binding.factory,
-        sink: new MemoryEventSink(),
-        clock: stubClock().clock,
-      },
-    );
+      );
+      const executed: string[] = [];
+      const tools = recordingTool();
+      const productivePort: HarnessDeps["tools"] = {
+        ...tools.port,
+        execute: (request) => {
+          executed.push(request.toolName);
+          return Promise.resolve({
+            toolCallId: request.toolCallId,
+            output: "bounded",
+            durationMs: 1,
+          });
+        },
+      };
+      const binding = createLegacyPortCatalogBinding(catalog, profile, productivePort, handlers);
+      let providerCalls = 0;
+      const adapter: ProviderAdapter = {
+        call: (_request, provider) => {
+          providerCalls += 1;
+          if (providerCalls === 2)
+            expect(
+              _request.messages.find((message) => message.role === "assistant")?.reasoningContent,
+            ).toBe(reasoningHistory === undefined ? undefined : "Inspect the accepted file.");
+          const gatewayCatalog = createGatewayToolCatalogBridge(_request, () => 0);
+          return Promise.resolve(
+            providerCalls === 1
+              ? {
+                  modelId: provider.modelId,
+                  content: "",
+                  finishReason: "tool_calls" as const,
+                  toolCalls: gatewayCatalog.bindCalls([
+                    {
+                      id: "call-native-1",
+                      name: "read_file",
+                      arguments: { path: "fixture.txt" },
+                    },
+                  ]),
+                  structuredOutput: null,
+                  reasoning: "Inspect the accepted file.",
+                  usage: {
+                    requestId: "provider-1",
+                    promptTokens: 1,
+                    completionTokens: 1,
+                    latencyMs: 1,
+                    costClass: "low" as const,
+                  },
+                }
+              : response(),
+          );
+        },
+      };
+      const config: GatewayConfig = {
+        providers: [
+          {
+            modelId: "m",
+            baseUrl: "https://provider.invalid/v1",
+            apiKey: "fixture-key",
+            timeoutMs: 1_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 1,
+            reasoningHistory,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 1, cooldownMs: 1_000, halfOpenProbes: 1 },
+      };
+      const gateway = new Gateway(config, { adapter });
+      const session = createSession(
+        TASK,
+        { model: "m", workingDirectory: "/repo", dryRun: false },
+        {
+          model: new GatewayModelPort(gateway),
+          tools: productivePort,
+          bindToolCatalog: binding.factory,
+          sink: new MemoryEventSink(),
+          clock: stubClock().clock,
+        },
+      );
 
-    const result = await session.result;
-    expect(result).toMatchObject({ outcome: "completed" });
-    expect(providerCalls).toBe(2);
-    expect(executed).toEqual(["read_file"]);
-  });
+      const result = await session.result;
+      expect(result).toMatchObject({ outcome: "completed" });
+      expect(providerCalls).toBe(2);
+      expect(executed).toEqual(["read_file"]);
+    },
+  );
   it("default dry-run does not bind or advertise productive tools", async () => {
     const model = scriptedModel([response()]);
     const tools = recordingTool([{ name: "run_command", description: "legacy", parameters: {} }]);

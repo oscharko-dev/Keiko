@@ -33,6 +33,7 @@ import type { GatewayOutputRepairOutcome } from "@oscharko-dev/keiko-contracts/r
 import { GatewayPromptAdmission, ProviderPromptCounter } from "./gateway-prompt-admission.js";
 import { findConfiguredCapability } from "./model-selection.js";
 import { carriedReasoning } from "./normalize.js";
+import { GatewayReasoningHistory } from "./reasoning-history.js";
 import {
   activityLogErrorKind,
   logEndpointHost,
@@ -44,7 +45,10 @@ import {
   type ModelGatewayLogContext,
   type ModelGatewayLogSink,
 } from "./observability.js";
-import { toolCallingConfigurationFingerprint } from "./config.js";
+import {
+  assertReasoningPolicyOwner,
+  toolCallingConfigurationFingerprint,
+} from "./provider-identity.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
@@ -126,6 +130,8 @@ function completeTransportUsage(
 }
 
 export interface GatewayDeps {
+  /** Same server-owned configuration generation only; provider bindings are still checked. */
+  readonly reasoningHistorySource?: Gateway | undefined;
   readonly spendBudget?: GatewaySpendBudget | undefined;
   readonly adapter?: ProviderAdapter | undefined;
   readonly clock?: Clock | undefined;
@@ -1318,6 +1324,7 @@ export class Gateway {
   private readonly adapter: ProviderAdapter | undefined;
   private readonly fetchImpl: typeof fetch | undefined;
   private readonly providers: ReadonlyMap<string, ModelProviderConfig>;
+  private readonly reasoningHistory: GatewayReasoningHistory;
   private readonly breakers = new Map<string, CircuitBreaker>();
   private readonly log: ModelGatewayLogSink;
   private readonly configurationCorrelationId: string | undefined;
@@ -1334,6 +1341,9 @@ export class Gateway {
     this.adapter = deps.adapter;
     this.fetchImpl = deps.fetchImpl;
     this.log = resolveLogSink(deps.log);
+    this.reasoningHistory =
+      deps.reasoningHistorySource?.reasoningHistory ??
+      new GatewayReasoningHistory(this.log, () => this.clock.now());
     this.configurationCorrelationId = deps.configurationCorrelationId;
     this.onContextWindowReported = deps.onContextWindowReported;
     this.providers = new Map(config.providers.map((p) => [p.modelId, p]));
@@ -1345,11 +1355,24 @@ export class Gateway {
     capability: ModelCapability,
   ): GatewayCallRequest {
     assertValidGatewaySamplingParameters(request);
+    const provider = this.providers.get(request.modelId);
+    if (provider !== undefined) {
+      assertReasoningPolicyOwner(provider);
+      // Authenticated native continuation already belongs to its retained session. It must not
+      // enter the transient history owner, which intentionally strips unproven runtime echoes.
+      if (provider.reasoningContinuation !== "required-with-tools")
+        request = this.reasoningHistory.prepare(request, provider);
+    }
     if (request.maxOutputTokens !== undefined || this.spendBudget === undefined) return request;
     return {
       ...request,
       maxOutputTokens: deriveContextProfileFromCapability(capability).reservedOutputTokens,
     };
+  }
+
+  /** Server-owned same-generation refinements only. This never changes provider bindings. */
+  joinReasoningHistory(source: Gateway): void {
+    this.reasoningHistory.join(source.reasoningHistory);
   }
 
   private promptAdmission(route: RoutedCall, ids: CallIds): GatewayPromptAdmission {
@@ -1450,6 +1473,7 @@ export class Gateway {
       throw error;
     }
     const forwardsReasoning = this.forwardsReasoning(request);
+    this.reasoningHistory.remember(request, route.provider, result);
     this.logCallCompleted(ids, route, result, elapsed(), forwardsReasoning);
     return withDiscardedUsage(
       recoveredResponse(
@@ -1594,6 +1618,7 @@ export class Gateway {
     this.logToolSchemaRepair(correlationId, repair, state, {
       promptTokens: countGatewayPromptTokens({ ...request, tools }, profile.tokenAccounting, {
         contextWindow: profile.maxInputTokens,
+        reasoningHistoryField: this.providers.get(request.modelId)?.reasoningHistoryField,
       }),
       maxOutputTokens,
       safetyMarginTokens: profile.safetyMarginTokens,
@@ -1707,6 +1732,7 @@ export class Gateway {
     forwardsReasoning: boolean,
     start: number,
   ): GatewayStreamChunk {
+    this.reasoningHistory.remember(state.prepared, state.route.provider, response);
     return this.enrichDone(
       withDiscardedUsage(
         recoveredResponse(withReasoningPolicy(response, forwardsReasoning), state.outputRepair),
@@ -2428,6 +2454,7 @@ export class Gateway {
     const reservation = admit({
       promptTokens: countGatewayPromptTokens(request, profile.tokenAccounting, {
         contextWindow: profile.maxInputTokens,
+        reasoningHistoryField: this.providers.get(request.modelId)?.reasoningHistoryField,
       }),
       maxOutputTokens: request.maxOutputTokens ?? profile.reservedOutputTokens,
       ...(correctsUnusableAttempt ? { correctsUnusableAttempt: true as const } : {}),

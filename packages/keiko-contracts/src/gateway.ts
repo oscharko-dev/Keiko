@@ -826,6 +826,8 @@ export function assertValidGatewaySamplingParameters(parameters: GatewaySampling
 }
 
 export interface GatewayRequest {
+  /** Trusted caller-owned conversation/run identity for transient provider continuation; never wire data. */
+  readonly reasoningScope?: string | undefined;
   /** Server-produced projection/offer. Tool-bearing requests require this exact bound arm. */
   readonly toolCatalog?: GatewayToolAdvertisement | undefined;
   readonly modelId: string;

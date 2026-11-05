@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { reasoningContinuationRouteDigest } from "./provider-identity.js";
+import {
+  assertReasoningPolicyOwner,
+  reasoningContinuationRouteDigest,
+  toolCallingConfigurationFingerprint,
+} from "./provider-identity.js";
 import type { GatewayConfig, ModelProviderConfig } from "./types.js";
 
 function provider(modelId: string, required = false): ModelProviderConfig {
@@ -61,4 +65,45 @@ describe("native reasoning route provenance", () => {
       reasoningContinuationRouteDigest(config([provider("new-embedding"), primary]), "chat"),
     );
   });
+});
+
+describe("shared and native provider identity convergence", () => {
+  it.each([
+    { reasoningHistory: "required-with-tools" as const },
+    { reasoningHistory: "current-turn" as const },
+    { reasoningHistoryField: "reasoning" as const },
+    { reasoningHistoryField: "reasoning_content" as const },
+  ])("binds shared policy %j and refuses its use with native state", (shared) => {
+    const plain = provider("chat");
+    expect(toolCallingConfigurationFingerprint({ ...plain, ...shared })).not.toBe(
+      toolCallingConfigurationFingerprint(plain),
+    );
+    expect(() => {
+      assertReasoningPolicyOwner({ ...provider("chat", true), ...shared });
+    }).toThrow(/cannot be combined/u);
+    expect(() => {
+      assertReasoningPolicyOwner({ ...plain, ...shared });
+    }).not.toThrow();
+  });
+
+  it("invalidates the native primary-route binding when its shared policy changes", () => {
+    const primary = provider("chat");
+    const agent = provider("agent", true);
+    const original = reasoningContinuationRouteDigest(config([primary, agent]), "chat");
+    expect(
+      reasoningContinuationRouteDigest(
+        config([{ ...primary, reasoningHistory: "current-turn" }, agent]),
+        "chat",
+      ),
+    ).not.toBe(original);
+  });
+});
+
+it("distinguishes native session ownership from shared reasoning history", () => {
+  const base = provider("chat");
+  expect(
+    toolCallingConfigurationFingerprint({ ...base, reasoningContinuation: "required-with-tools" }),
+  ).not.toBe(
+    toolCallingConfigurationFingerprint({ ...base, reasoningHistory: "required-with-tools" }),
+  );
 });

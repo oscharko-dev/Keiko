@@ -1338,6 +1338,19 @@ function storedDeploymentIdentity(
     : { deploymentIdentitySha256: provider.deploymentIdentitySha256 };
 }
 
+function storedReasoningHistory(
+  provider: ModelProviderConfig,
+): Pick<ModelProviderConfig, "reasoningHistory" | "reasoningHistoryField"> {
+  return {
+    ...(provider.reasoningHistory === undefined
+      ? {}
+      : { reasoningHistory: provider.reasoningHistory }),
+    ...(provider.reasoningHistoryField === undefined
+      ? {}
+      : { reasoningHistoryField: provider.reasoningHistoryField }),
+  };
+}
+
 function rawProviderFromCurrent(
   provider: ModelProviderConfig,
   capability: ModelCapability | undefined,
@@ -1357,6 +1370,7 @@ function rawProviderFromCurrent(
       : { outputTokenParameter: provider.outputTokenParameter }),
     reasoningContinuation: provider.reasoningContinuation,
     ...tokenCounterMetadata(provider.tokenCounter),
+    ...storedReasoningHistory(provider),
     ...(provider.realtimeAuthMode === undefined
       ? {}
       : { realtimeAuthMode: provider.realtimeAuthMode }),

@@ -111,6 +111,10 @@ export interface ModelProviderConfig {
   readonly reasoningContinuation?: "required-with-tools" | undefined;
   /** Use the configured LiteLLM proxy's authenticated token-counting endpoint. */
   readonly tokenCounter?: "litellm" | undefined;
+  /** Opt-in protocol requirement, independent of the model alias and reasoning display. */
+  readonly reasoningHistory?: "required-with-tools" | "current-turn" | undefined;
+  /** Qualified provider wire spelling; default is the DeepSeek-compatible reasoning_content. */
+  readonly reasoningHistoryField?: "reasoning_content" | "reasoning" | undefined;
   /**
    * SHA-256 digest of the deployment the gateway reported behind this alias when it was last
    * discovered (the underlying model identity of every replica, never the raw values). Present

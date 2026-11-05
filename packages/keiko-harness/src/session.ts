@@ -115,6 +115,7 @@ function buildContext(
   const memory = new MemoryEventSink();
   const plan = resolveTaskPlan(task);
   const ctx: RunContext = {
+    reasoningScope: `harness:${runId}`,
     model: deps.model,
     tools: deps.tools,
     emitter: new Emitter([memory, deps.sink], clock, runId, fingerprint),

@@ -62,7 +62,10 @@ import type {
 } from "./types.js";
 
 export { toolCallingConfigurationFingerprint } from "./provider-identity.js";
-import { toolCallingConfigurationFingerprint } from "./provider-identity.js";
+import {
+  assertReasoningPolicyOwner,
+  toolCallingConfigurationFingerprint,
+} from "./provider-identity.js";
 
 // #3591: raised from 30s so an unconfigured provider's default already tolerates the field
 // customer's slow LiteLLM/vLLM proxy instead of relying solely on the gateway's own silence/budget
@@ -1812,6 +1815,52 @@ function catalogOriginConfig(
   };
 }
 
+function reasoningHistoryConfig(
+  value: unknown,
+  path: string,
+): Pick<ModelProviderConfig, "reasoningHistory"> {
+  return value === undefined
+    ? {}
+    : {
+        reasoningHistory: requireEnum<NonNullable<ModelProviderConfig["reasoningHistory"]>>(
+          value,
+          `${path}.reasoningHistory`,
+          ["required-with-tools", "current-turn"],
+        ),
+      };
+}
+
+function reasoningHistoryFieldConfig(
+  value: unknown,
+  path: string,
+): Pick<ModelProviderConfig, "reasoningHistoryField"> {
+  return value === undefined
+    ? {}
+    : {
+        reasoningHistoryField: requireEnum<"reasoning_content" | "reasoning">(
+          value,
+          `${path}.reasoningHistoryField`,
+          ["reasoning_content", "reasoning"],
+        ),
+      };
+}
+
+function providerReasoningConfig(
+  raw: Record<string, unknown>,
+  path: string,
+): Pick<
+  ModelProviderConfig,
+  "reasoningContinuation" | "reasoningHistory" | "reasoningHistoryField"
+> {
+  const policy = {
+    ...reasoningContinuationConfig(raw.reasoningContinuation, path),
+    ...reasoningHistoryConfig(raw.reasoningHistory, path),
+    ...reasoningHistoryFieldConfig(raw.reasoningHistoryField, path),
+  };
+  assertReasoningPolicyOwner(policy);
+  return policy;
+}
+
 function parseProviderConfig(
   raw: Record<string, unknown>,
   path: string,
@@ -1847,8 +1896,8 @@ function parseProviderConfig(
     ...(apiVersion === undefined ? {} : { apiVersion }),
     ...(realtimeAuthMode === undefined ? {} : { realtimeAuthMode }),
     ...outputTokenParameterConfig(raw.outputTokenParameter, path),
-    ...reasoningContinuationConfig(raw.reasoningContinuation, path),
     ...tokenCounterConfig(raw.tokenCounter, path),
+    ...providerReasoningConfig(raw, path),
     ...deploymentIdentityConfig(raw.deploymentIdentitySha256, path),
     ...catalogOriginConfig(raw.catalogOrigin, path),
     timeoutMs: requireTimerDelayMs(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
