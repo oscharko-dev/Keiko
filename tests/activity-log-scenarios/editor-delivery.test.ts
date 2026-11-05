@@ -10,8 +10,8 @@ import { resetServerLogger } from "../support/activity-log-test-support.js";
 
 import { execFileSync, spawn as nodeSpawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,7 +23,10 @@ import {
   defaultLspSpawnFn,
   LspProcessError,
 } from "../../packages/keiko-server/src/editor/lsp/lspNodeAdapter.js";
-import { writeNodeExecutableFixture } from "../../packages/keiko-server/src/editor/lsp/testing/executableFixture.js";
+import {
+  writeExecutableFixture,
+  writeNodeExecutableFixture,
+} from "../../packages/keiko-server/src/editor/lsp/testing/executableFixture.js";
 import { observedGitRunner } from "../../packages/keiko-server/src/gitProcessActivity.js";
 import { LINE_DIFF_MAX_EDIT_DISTANCE } from "../../packages/keiko-server/src/gitDelivery/lineDiff.js";
 import { runtimeGitDiff } from "../../packages/keiko-server/src/gitDelivery/runtimeGitRead.js";
@@ -36,6 +39,28 @@ import {
   readPersistedActivityLog,
 } from "../support/activity-log-proof.js";
 import { expectActivityLogScenario } from "../support/activity-log-scenario.js";
+
+import { IncomingMessage, ServerResponse } from "node:http";
+import { Socket } from "node:net";
+import { MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
+import {
+  DEFAULT_SUPPORT_QUERY_LIMITS,
+  type SupportQueryResult,
+} from "@oscharko-dev/keiko-activity-log/reader";
+import { buildRedactor, createInMemoryUiStore } from "../../packages/keiko-server/src/index.js";
+import type { RouteContext, UiHandlerDeps } from "../../packages/keiko-server/src/index.js";
+import type { RouteResult } from "../../packages/keiko-server/src/routes.js";
+import { handleEditorLanguageSemanticTokens } from "../../packages/keiko-server/src/editor/languageRoutes.js";
+import { shutdownHostLspPool } from "../../packages/keiko-server/src/editor/lsp/hostLanguageOperation.js";
+import { createFakeLspProcess } from "../../packages/keiko-server/src/editor/lsp/testing/fakeLspProcess.js";
+import { createManagedLspActivationStore } from "../../packages/keiko-server/src/editor/lsp/managedLspActivationStore.js";
+import { createManagedLspControlService } from "../../packages/keiko-server/src/editor/lsp/managedLspControl.js";
+import { createWorkspaceMutexRegistry } from "../../packages/keiko-server/src/task-workspace/mutex.js";
+import type { WorkspaceScriptTrustService } from "../../packages/keiko-server/src/workspace-script-trust.js";
+import {
+  executeSupportQuery,
+  resolveSupportSelection,
+} from "../../packages/keiko-cli/src/support-query-cli.js";
 
 const cleanups: (() => void)[] = [];
 let stateDir: string;
@@ -334,4 +359,415 @@ describe("Activity Log scenario: editor-delivery", () => {
       });
     });
   });
+});
+
+// The semantic-token route must reconstruct from persisted evidence with no optional context.
+// This uses the existing real activation/store boundary and framed in-memory provider, not events
+// supplied directly to the writer. No server listens and the HTTP socket never connects.
+interface TokenReconstructionSample {
+  readonly name: string;
+  readonly data: readonly number[];
+  readonly text: string;
+  readonly mode: "refusal" | "technical" | "served" | "unavailable";
+}
+
+interface TokenReconstructionResources {
+  readonly rawRoot: string;
+  readonly socket: Socket;
+  readonly providers: ReturnType<typeof createFakeLspProcess>[];
+  readonly store: ReturnType<typeof createInMemoryUiStore>;
+}
+
+const tokenReconstructionCorrelation = "semantic-reconstruction-request";
+const tokenPayloadCanary = "PRIVATE_SEMANTIC_DOCUMENT_CANARY";
+
+function writeTokenWorkspace(base: string): { readonly bin: string; readonly workspace: string } {
+  const bin = join(base, "executables");
+  const workspace = join(base, "project");
+  mkdirSync(bin);
+  mkdirSync(workspace);
+  for (const name of ["cargo", "rustc", "rustfmt", "rust-analyzer", "bwrap", "sandbox-exec"]) {
+    writeExecutableFixture(bin, name);
+  }
+  writeFileSync(
+    join(workspace, "Cargo.toml"),
+    "[package]\nname='reconstruction'\nversion='0.1.0'\n",
+  );
+  writeFileSync(join(workspace, "lib.rs"), "struct Value;\n");
+  return { bin, workspace };
+}
+
+async function activateTokenWorkspace(
+  workspace: string,
+  base: string,
+): Promise<ReturnType<typeof createManagedLspControlService>> {
+  const service = createManagedLspControlService({
+    store: createManagedLspActivationStore({ stateDir: join(base, "activation") }),
+    mutex: createWorkspaceMutexRegistry(),
+    workspaceTrust: (): "trusted" => "trusted",
+    runtimeApproved: (): boolean => true,
+    configurationSafe: (): boolean => true,
+    projectEvidence: (): "projected" => "projected",
+    provisioning: (): boolean => true,
+    processEnv: {},
+    disposePoolEntry: (): Promise<void> => Promise.resolve(),
+  });
+  const activation = await service.mutate({
+    root: workspace,
+    language: "rust",
+    actorClass: "localHuman",
+    action: "activate",
+    expectedRevision: 0,
+    idempotencyKey: "reconstruction-activation",
+  });
+  if (activation.kind !== "ok") throw new TypeError("Expected real semantic-token activation");
+  return service;
+}
+
+function tokenRouteContext(socket: Socket, workspace: string, text: string): RouteContext {
+  const req = new IncomingMessage(socket);
+  req.method = "POST";
+  req.complete = true;
+  req.push(
+    Buffer.from(
+      JSON.stringify({
+        schemaVersion: "1",
+        root: workspace,
+        document: { path: "lib.rs", languageId: "rust", text, version: 1 },
+      }),
+      "utf8",
+    ),
+  );
+  req.push(null);
+  return {
+    req,
+    res: new ServerResponse(req),
+    correlationId: tokenReconstructionCorrelation,
+    params: {},
+    url: new URL("http://localhost/api/editor/language/semantic-tokens"),
+  };
+}
+
+function unexpectedTokenTrustOperation(): never {
+  throw new TypeError("Unexpected semantic reconstruction trust operation");
+}
+
+function tokenTrustPort(): WorkspaceScriptTrustService {
+  return {
+    grant: unexpectedTokenTrustOperation,
+    deriveFromTrustedRoot: unexpectedTokenTrustOperation,
+    revoke: unexpectedTokenTrustOperation,
+    status: unexpectedTokenTrustOperation,
+    isTrusted: unexpectedTokenTrustOperation,
+    trustLevelForRoot: (): "trusted" => "trusted",
+    holdsHumanGrantForRoot: unexpectedTokenTrustOperation,
+    admitRunManifest: unexpectedTokenTrustOperation,
+    holdsRunAdmissionForRoot: unexpectedTokenTrustOperation,
+    revokeRunAdmissions: unexpectedTokenTrustOperation,
+  };
+}
+
+function tokenRouteDependencies(
+  resources: TokenReconstructionResources,
+  bin: string,
+  service: ReturnType<typeof createManagedLspControlService>,
+  active: boolean,
+): UiHandlerDeps {
+  return {
+    config: undefined,
+    configPresent: false,
+    get evidenceStore(): never {
+      throw new TypeError("Unexpected semantic evidence-store use");
+    },
+    get registry(): never {
+      throw new TypeError("Unexpected semantic run-registry use");
+    },
+    modelPortFactory(): never {
+      throw new TypeError("Unexpected semantic model-port use");
+    },
+    store: resources.store,
+    redactor: buildRedactor({}),
+    env: { PATH: bin },
+    workspaceScriptTrust: tokenTrustPort(),
+    ...(active ? { managedLspControl: service } : {}),
+    activityLog: processServerLogSink(),
+  };
+}
+
+function tokenProvider(sample: TokenReconstructionSample): ReturnType<typeof createFakeLspProcess> {
+  const provider = createFakeLspProcess({
+    behavior: sample.mode === "technical" ? "unresponsive-request" : "normal",
+    initializeResult: {
+      capabilities: {
+        textDocumentSync: 2,
+        semanticTokensProvider: {
+          full: true,
+          legend: { tokenTypes: ["struct"], tokenModifiers: ["declaration"] },
+        },
+      },
+    },
+    results: {
+      "textDocument/semanticTokens/full": {
+        data: sample.data,
+        ...(sample.mode === "refusal" ? { note: tokenPayloadCanary } : {}),
+      },
+    },
+    onMessage(method): void {
+      if (method === "textDocument/semanticTokens/full" && sample.mode === "technical") {
+        provider.emitError(new TypeError("PRIVATE_SEMANTIC_TRANSPORT_CANARY"));
+      }
+    },
+  });
+  return provider;
+}
+
+async function runTokenRoute(
+  resources: TokenReconstructionResources,
+  sample: TokenReconstructionSample,
+): Promise<void> {
+  const base = realpathSync(resources.rawRoot);
+  const files = writeTokenWorkspace(base);
+  resources.store.createProject(files.workspace, "semantic reconstruction");
+  const control = await activateTokenWorkspace(files.workspace, base);
+  const ctx = tokenRouteContext(resources.socket, files.workspace, sample.text);
+  const provider = tokenProvider(sample);
+  resources.providers.push(provider);
+  const dependencies = tokenRouteDependencies(
+    resources,
+    files.bin,
+    control,
+    sample.mode !== "unavailable",
+  );
+  const startedAtMs = Date.now();
+  const result = await handleEditorLanguageSemanticTokens(ctx, dependencies, {
+    hostLanguageSpawn: () => provider.handle,
+    hostLanguageCommandRules: ["cargo", "rust-analyzer", "rustc", "rustfmt"].map((executable) => ({
+      executable,
+    })),
+    hostLanguageProcessConfig: { maxRestartsInWindow: 0 },
+  });
+  expectTokenRouteResult(sample, result);
+  const reached = provider.receivedMethods().includes("textDocument/semanticTokens/full");
+  expect(reached).toBe(sample.mode !== "unavailable");
+  await proveTokenReconstruction(sample, startedAtMs);
+}
+
+async function closeTokenResources(resources: TokenReconstructionResources): Promise<void> {
+  const errors: unknown[] = [];
+  try {
+    await shutdownHostLspPool();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    for (const provider of resources.providers) {
+      if (!provider.exitEmitted()) provider.handle.kill("SIGKILL");
+    }
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    resources.store.close();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    resources.socket.destroy();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    rmSync(resources.rawRoot, { recursive: true, force: true });
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Semantic reconstruction resource cleanup failed", {
+      cause: errors[0],
+    });
+  }
+}
+
+function createTokenResources(rawRoot: string): TokenReconstructionResources {
+  const socket = new Socket();
+  try {
+    return { rawRoot, socket, providers: [], store: createInMemoryUiStore() };
+  } catch (error) {
+    socket.destroy();
+    throw error;
+  }
+}
+
+async function withTokenReconstruction(sample: TokenReconstructionSample): Promise<void> {
+  const rawRoot = mkdtempSync(join(homedir(), ".keiko-token-reconstruction-"));
+  let resources: TokenReconstructionResources | undefined;
+  let failed = false;
+  let failure: unknown;
+  try {
+    resources = createTokenResources(rawRoot);
+    await runTokenRoute(resources, sample);
+  } catch (error) {
+    failed = true;
+    failure = error;
+  }
+  try {
+    if (resources === undefined) rmSync(rawRoot, { recursive: true, force: true });
+    else await closeTokenResources(resources);
+  } catch (cleanupError) {
+    if (failed)
+      throw new AggregateError([failure, cleanupError], "Token reconstruction cleanup failed", {
+        cause: cleanupError,
+      });
+    throw cleanupError;
+  }
+  if (failed) throw failure;
+}
+
+function expectTokenRouteResult(sample: TokenReconstructionSample, result: RouteResult): void {
+  expect(result.status).toBe(200);
+  if (sample.mode === "served") {
+    expect(result.body).toMatchObject({ schemaVersion: "1", supported: true });
+  } else {
+    expect(result.body).toEqual({ schemaVersion: "1", supported: false });
+  }
+}
+
+async function tokenQuery(
+  selector: Parameters<typeof resolveSupportSelection>[0],
+): Promise<SupportQueryResult> {
+  const selection = await resolveSupportSelection(selector, stateDir);
+  const query = executeSupportQuery(
+    stateDir,
+    selection,
+    {
+      ...DEFAULT_SUPPORT_QUERY_LIMITS,
+      contextMs: 0,
+      maxContextEvents: 0,
+    },
+    { trigger: "query" },
+  ).result;
+  expect(query.metrics.contextEventCount).toBe(0);
+  return query;
+}
+
+function tokenEvidenceLine(op: string): string {
+  const lines = persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
+  expect(lines).toHaveLength(1);
+  const line = lines[0];
+  if (line === undefined) throw new TypeError("Missing semantic-token persisted evidence");
+  return line;
+}
+
+async function proveTokenRefusal(startedAtMs: number): Promise<void> {
+  const log = readPersistedActivityLog(stateDir);
+  const record = expectActivityLogProof(
+    "editor.semantic-tokens.refused.line",
+    tokenEvidenceLine("editor.semantic-tokens.refused"),
+  );
+  expect(record).toMatchObject({
+    correlationId: tokenReconstructionCorrelation,
+    reason: "sanitizer-refused",
+    errorKind: "validation-failed",
+  });
+  expect(record).not.toHaveProperty("frames");
+  expect(record).not.toHaveProperty("causeChain");
+  expect(persistedActivityLogLines(log, "editor.semantic-tokens.settled")).toHaveLength(0);
+  expect(persistedActivityLogLines(log, "server.diagnostic.failure")).toHaveLength(0);
+  const trace = await expectActivityLogScenario("editor-delivery.rejection", {
+    stateDir,
+    startedAtMs,
+    expectedOps: ["editor.semantic-tokens.refused"],
+    queryLimits: { ...DEFAULT_SUPPORT_QUERY_LIMITS, contextMs: 0, maxContextEvents: 0 },
+  });
+  expect(trace.failureClasses).toContain("editor-semantic-token-refusal");
+}
+
+async function proveTokenRequestFailure(startedAtMs: number): Promise<void> {
+  const record = expectActivityLogProof(
+    "editor.semantic-tokens.settled.line",
+    tokenEvidenceLine("editor.semantic-tokens.settled"),
+  );
+  expect(record).toMatchObject({
+    correlationId: tokenReconstructionCorrelation,
+    outcome: "failed",
+    reason: "request-failed",
+    errorKind: "unknown",
+  });
+  const trace = await expectActivityLogScenario("editor-delivery.dependency-failure", {
+    stateDir,
+    startedAtMs,
+    expectedOps: ["server.diagnostic.failure", "editor.semantic-tokens.settled"],
+    queryLimits: { ...DEFAULT_SUPPORT_QUERY_LIMITS, contextMs: 0, maxContextEvents: 0 },
+  });
+  expect(trace.failureClasses).toContain("editor-semantic-token-settlement");
+  expect(
+    persistedActivityLogLines(readPersistedActivityLog(stateDir), "editor.semantic-tokens.refused"),
+  ).toHaveLength(0);
+}
+
+async function proveTokenHealthy(sample: TokenReconstructionSample): Promise<void> {
+  const record = expectActivityLogProof(
+    "editor.semantic-tokens.settled.line",
+    tokenEvidenceLine("editor.semantic-tokens.settled"),
+  );
+  expect(record).toMatchObject({
+    correlationId: tokenReconstructionCorrelation,
+    outcome: sample.mode === "served" ? "served" : "unavailable",
+    reason: sample.mode === "served" ? "available" : "activation-unavailable",
+  });
+  if (sample.mode === "served") expect(record.returnedTokenCount).toBe(1);
+  else expect(record).not.toHaveProperty("returnedTokenCount");
+  const query = await tokenQuery({ correlationId: tokenReconstructionCorrelation, filter: {} });
+  expect(query.events.map((event) => event.parsed.view.op)).toContain(
+    "editor.semantic-tokens.settled",
+  );
+  const log = readPersistedActivityLog(stateDir);
+  expect(persistedActivityLogLines(log, "editor.semantic-tokens.refused")).toHaveLength(0);
+  expect(persistedActivityLogLines(log, "server.diagnostic.failure")).toHaveLength(0);
+}
+
+async function proveTokenReconstruction(
+  sample: TokenReconstructionSample,
+  startedAtMs: number,
+): Promise<void> {
+  const log = readPersistedActivityLog(stateDir);
+  expect(log).not.toContain(tokenPayloadCanary);
+  expect(log).not.toContain("PRIVATE_SEMANTIC_TRANSPORT_CANARY");
+  if (sample.mode === "refusal") await proveTokenRefusal(startedAtMs);
+  else if (sample.mode === "technical") await proveTokenRequestFailure(startedAtMs);
+  else await proveTokenHealthy(sample);
+}
+
+const tokenReconstructionSamples: readonly TokenReconstructionSample[] = [
+  {
+    name: "malformed provider JSON",
+    mode: "refusal",
+    data: [0, 0, 6, 8, 0],
+    text: `struct Value; // ${tokenPayloadCanary}\n`,
+  },
+  {
+    name: "over-cap provider JSON",
+    mode: "refusal",
+    data: Array.from(
+      { length: MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS + 1 },
+      (_entry, index): number[] => [0, index === 0 ? 0 : 1, 1, 0, 0],
+    ).flat(),
+    text: "x".repeat(MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS + 2),
+  },
+  { name: "technical request failure", mode: "technical", data: [], text: "struct Value;\n" },
+  {
+    name: "healthy served response",
+    mode: "served",
+    data: [0, 0, 6, 0, 1],
+    text: "struct Value;\n",
+  },
+  { name: "unavailable activation", mode: "unavailable", data: [], text: "struct Value;\n" },
+];
+
+describe("semantic-token registered reconstruction (#3918)", (): void => {
+  for (const sample of tokenReconstructionSamples) {
+    it(`reconstructs ${sample.name} without optional context`, async (): Promise<void> => {
+      await withTokenReconstruction(sample);
+    });
+  }
 });

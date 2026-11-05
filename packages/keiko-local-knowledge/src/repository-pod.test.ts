@@ -34,7 +34,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
-import { DEFAULT_EMBEDDING, freshStore } from "./_support.js";
+import { DEFAULT_EMBEDDING, freshStore, seedCorruptMixedManualSource } from "./_support.js";
 import { documentIdFor } from "./discovery/types.js";
 import {
   listRepositoryChunkLineRanges,
@@ -769,5 +769,21 @@ describe("repository pod evidence vocabulary parity (M2.12)", () => {
       expect(KNOWN_REPOSITORY_OUTCOMES).toContain(asShared);
       expect(manualOutcomeProof).toContain(asShared);
     }
+  });
+});
+
+describe("repository summary evidence", () => {
+  it("forwards the actual run correlation for an examined mixed manual source", async () => {
+    createShell();
+    seedCorruptMixedManualSource(store, CAPSULE_ID);
+    const events: KnowledgeLogEvent[] = [];
+    const result = await refreshRepositoryPod(
+      indexingDeps(countingAdapter(), { logSink: { write: (event) => events.push(event) } }),
+      { runId: "repository-summary-rejection" },
+    );
+    expect(result.summary.manualRefresh).toBeUndefined();
+    expect(
+      events.filter((event) => event.op === "knowledge.manual-refresh-summary.rejected"),
+    ).toEqual([expect.objectContaining({ correlationId: "repository-summary-rejection" })]);
   });
 });

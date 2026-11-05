@@ -1388,12 +1388,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-local-knowledge/src/knowledge-pods.ts",
-      "owner": "readManualRefreshSummary",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-local-knowledge/src/parsers/_internal.ts",
       "owner": "decodeBytes",
       "kind": "unregistered-catch",
@@ -3754,12 +3748,6 @@
     {
       "path": "packages/keiko-server/src/editor/lsp/hostLanguageOperation.ts",
       "owner": "runHostLanguageOperation",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/editor/lsp/hostLanguageOperation.ts",
-      "owner": "runHostLanguageSemanticTokens",
       "kind": "unregistered-catch",
       "count": 1
     },

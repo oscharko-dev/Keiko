@@ -1,3 +1,4 @@
+import type { KnowledgeLogEvent } from "./knowledge-log.js";
 // Connector-backed Knowledge Pod sink tests (Issue #2242, Epic #2238, ADR-0128 D5).
 //
 // Hermetic and network-free: items arrive as normalized content (the shape the sync lane hands
@@ -14,7 +15,7 @@ import type {
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
 import { DEFAULT_ATLASSIAN_SYNC_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { DEFAULT_EMBEDDING, freshStore } from "./_support.js";
+import { DEFAULT_EMBEDDING, freshStore, seedCorruptMixedManualSource } from "./_support.js";
 import {
   applyConnectorSyncRun,
   createConnectorPodShell,
@@ -795,5 +796,26 @@ describe("resolveConnectorCitationTarget — fail-closed branches", () => {
         documentId: documentId ?? ("" as DocumentId),
       }),
     ).toEqual({ ok: false, reason: "target-unsupported" });
+  });
+});
+
+describe("connector summary evidence", () => {
+  it("forwards the actual run correlation for an examined mixed manual source", () => {
+    createShell();
+    seedCorruptMixedManualSource(store, CAPSULE_ID);
+    const events: KnowledgeLogEvent[] = [];
+    const result = recordUnappliedConnectorSyncRun(
+      {
+        store,
+        capsuleId: CAPSULE_ID,
+        sourceId: SOURCE_ID,
+        logSink: { write: (event) => events.push(event) },
+      },
+      { runId: "connector-summary-rejection", outcome: "cancelled" },
+    );
+    expect(result.summary.manualRefresh).toBeUndefined();
+    expect(
+      events.filter((event) => event.op === "knowledge.manual-refresh-summary.rejected"),
+    ).toEqual([expect.objectContaining({ correlationId: "connector-summary-rejection" })]);
   });
 });

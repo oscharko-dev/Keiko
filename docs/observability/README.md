@@ -46,6 +46,15 @@ and `reportLoss`. The event's own `completeness: complete` and `loss: none` mean
 was recorded successfully, not that the report contains complete server evidence. Closed
 `evidenceScope` and `availabilityReason` describe that distinction without report contents.
 
+For semantic-token fallback, join `editor.semantic-tokens.refused` or
+`editor.semantic-tokens.settled` by the request correlation. `sanitizer-refused` means the observed
+sanitizer declined the response; it does not identify a particular bound. Settlement separates
+served, unavailable, cancelled and failed requests, with a token count only for served results.
+Technical failures also carry the existing redacted server diagnostic. A port failure can leave
+persistence uncertain (`event-location-unknown`), while physical writer failures retain their own
+loss accounting. Neither token data nor document content is available in these records. See
+[ADR-0132 D18](../adr/ADR-0132-managed-multi-language-lsp-activation-and-configuration.md#d18--cross-language-operations-are-negotiation-gated-and-semantic-tokens-roll-out-by-evidence).
+
 `client.files-scope.decision` joins source ownership and grounding-queue decisions to their actual
 actions. Current queue/retry records identify `mutationSurface` as `files`, `local-knowledge` or
 `git-change`. The shared closed decision vocabulary covers restoration, release, ambiguity,
