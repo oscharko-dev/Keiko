@@ -565,7 +565,8 @@ export type CodingWorkbenchRuntimeUnavailableReason =
   | "gateway-service-absent"
   | "gateway-service-stopped"
   | "gateway-service-stale"
-  | "gateway-service-unknown";
+  | "gateway-service-unknown"
+  | "gateway-service-unqualified";
 
 export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbenchRuntimeUnavailableReason[] =
   Object.freeze([
@@ -582,6 +583,7 @@ export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbe
     "gateway-service-stopped",
     "gateway-service-stale",
     "gateway-service-unknown",
+    "gateway-service-unqualified",
   ] as const);
 
 /**

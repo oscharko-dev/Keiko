@@ -725,6 +725,7 @@ const GATEWAY_SERVICE_MESSAGE_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKe
   ["gateway-service-stopped", "codingWorkbench.gatewayService.stopped"],
   ["gateway-service-stale", "codingWorkbench.gatewayService.stale"],
   ["gateway-service-unknown", "codingWorkbench.gatewayService.unknown"],
+  ["gateway-service-unqualified", "codingWorkbench.gatewayService.unqualified"],
 ]);
 
 /** The sentence naming what the human can do about the Windows broker, when that is the cause. */

@@ -1202,6 +1202,9 @@ describe("gatewayServiceMessageKey", () => {
     expect(gatewayServiceMessageKey("gateway-service-unknown")).toBe(
       "codingWorkbench.gatewayService.unknown",
     );
+    expect(gatewayServiceMessageKey("gateway-service-unqualified")).toBe(
+      "codingWorkbench.gatewayService.unqualified",
+    );
     expect(gatewayServiceMessageKey("runtime-unqualified")).toBeUndefined();
     expect(gatewayServiceMessageKey("constructor")).toBeUndefined();
     expect(gatewayServiceMessageKey(undefined)).toBeUndefined();

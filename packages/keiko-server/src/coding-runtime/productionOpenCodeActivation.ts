@@ -222,7 +222,7 @@ export type ProductionOpenCodeActivationResult =
       readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass;
       /** What the activated runtime is, from its verified release metadata (#3904 AC4). */
       readonly runtimeVersion: CodingWorkbenchRuntimeVersion;
-      /** Present only for a released Windows runtime, whose launches need the broker (#4068). */
+      /** Present only for a Windows runtime, whose every launch needs the broker (#4068). */
       readonly windowsGatewayService?: WindowsGatewayServiceProbe;
       readonly unavailableReason?: undefined;
     }
@@ -429,14 +429,26 @@ export function resolveProductionOpenCodeActivation(
   };
 }
 
-function windowsGatewayServiceFacts(
+/**
+ * Every Windows launch carries the gateway policy, and only the installed broker can enforce it. A
+ * Windows runtime that yields no broker pin therefore refuses every start (ADR-0043), so readiness
+ * must not offer one. No host state changes this, hence a constant rather than a probe.
+ */
+const UNQUALIFIED_WINDOWS_RUNTIME: {
+  readonly windowsGatewayService: WindowsGatewayServiceProbe;
+} = {
+  windowsGatewayService: { unavailableReason: () => "gateway-service-unqualified" },
+};
+
+export function windowsGatewayServiceFacts(
   input: Pick<ProductionOpenCodeActivationInput, "activityLog">,
   portable: ResolvedPortableOpenCodeRuntime,
 ): { readonly windowsGatewayService?: WindowsGatewayServiceProbe } {
-  if (!("platformAssurance" in portable)) return {};
+  if (portable.target !== "windows-x64") return {};
+  if (!("platformAssurance" in portable)) return UNQUALIFIED_WINDOWS_RUNTIME;
   const helperSha256 = releasedWindowsGatewayHelperPin(portable);
   return helperSha256 === undefined
-    ? {}
+    ? UNQUALIFIED_WINDOWS_RUNTIME
     : {
         windowsGatewayService: createWindowsGatewayServiceProbe({
           helperPath: portable.nativeHelperPath,

@@ -1196,6 +1196,30 @@ A live authority expiry and a real SQLite lock held by the running original runt
 open. This suite needs a staged runtime and no CI lane runs it on Windows, so the hermetic spelling
 cases are what guards the repair in CI.
 
+## A Windows checkout offered a Start that could never work (W12)
+
+A real attempt on this host, on the running dev UI, failed with
+`stage=start:reason=sidecar-unmanaged`. The selected workspace was the Keiko checkout, and the dev
+lane stages the runtime inside it. That refusal is correct on any platform: a run must not be able to
+write to its own runtime.
+
+Tracing what another repository would reach found the defect behind it. **Readiness reported
+`runtimeAvailable: true` for a runtime that refuses every start.** Composition binds the gateway
+policy into every Windows run (ADR-0043), the native backend enforces it only through the installed
+broker, and only a release-qualified package may use the broker (D19). So every Windows dev and
+evaluation run stops before a helper starts. That refusal is intended and unchanged, and no
+unconfined fallback was added. Readiness, the Workbench and `dev:start` now say so with the closed
+reason `gateway-service-unqualified`. The sentence names no command, because
+`keiko gateway-service install` refuses such a runtime.
+
+Failure-first on this host: the composed backend refused the spawn for both lanes while readiness
+still answered otherwise, and the six new assertions failed before the repair. The live route on this
+host read `runtimeAvailable: true`, `origin: dev-checkout` before it.
+
+Limits: no coding run has started on this host, so W6, W8, W12 and W15 gain no execution evidence. A
+real run on Windows needs a release-qualified package with an installed broker, or an owner decision
+to let a checkout use the broker, and in either case the open workspace-grant design above.
+
 ## Update impact
 
 Release-impacting supervisor reliability fix: retain inherited-handle storage through Windows

@@ -544,7 +544,7 @@ function composedProfileReadiness(
 
 // Both branches name themselves. The available branch's `??` is the fail-closed default: an
 // unthreaded dep yields `undefined`, and `undefined` must never serialize into a verified claim
-// (audit F-01). A released Windows runtime is available only while its broker is ready (#4068).
+// (audit F-01). A Windows runtime is available only while a broker it may use is ready (#4068).
 function runtimeAvailabilityFacts(
   deps: UiHandlerDeps,
 ): Pick<

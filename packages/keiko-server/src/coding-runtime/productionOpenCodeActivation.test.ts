@@ -365,6 +365,33 @@ describe("production OpenCode activation", () => {
     });
   });
 
+  // #4068: activation still succeeds, because the rest of the Workbench works. Only starting a run
+  // cannot, and readiness has to say so before anyone presses Start.
+  it("states that a staged Windows dev lane cannot start a coding run", () => {
+    const staged = devLaneFixture("windows-x64");
+    const result = resolveProductionOpenCodeActivation(
+      activationInput(
+        { ...staged.env, KEIKO_UI_PORT: "1983" },
+        { platform: "win32", arch: "x64", stateDir: join(staged.root, "runtime-state") },
+      ),
+    );
+
+    expect(result.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unqualified");
+  });
+
+  it("has no Windows gateway fact for a macOS dev lane", () => {
+    const staged = devLaneFixture();
+    const result = resolveProductionOpenCodeActivation(
+      activationInput(
+        { ...staged.env, KEIKO_UI_PORT: "1983" },
+        { stateDir: join(staged.root, "runtime-state") },
+      ),
+    );
+
+    expect(result.unavailableReason).toBeUndefined();
+    expect(result.windowsGatewayService).toBeUndefined();
+  });
+
   it("prefers an injected secure-read port over dev-lane construction", () => {
     const staged = devLaneFixture();
     const result = resolveProductionOpenCodeActivation(

@@ -442,7 +442,9 @@ Windows refusal leaves the same evidence a support report can reconstruct. Produ
 and release-qualified native lanes. Process-tree qualification alone cannot authorize an unconfined
 network launch. Until a native backend can enforce the policy, starting that run refuses before
 spawning a Windows helper and records `runtime.confinement.failed`; omitting the policy to keep a
-launch working is a fail-open defect. The macOS app-sandbox, npm-runtime and explicit dev lanes
+launch working is a fail-open defect. Since D19 only a release-qualified package may use the broker
+that enforces it, so Windows dev and evaluation lanes refuse every start, and readiness reports
+`gateway-service-unqualified` instead of offering one. The macOS app-sandbox, npm-runtime and explicit dev lanes
 enforce the same policy through Seatbelt. A generic supervisor-prepared loopback wrapper never bypasses the exact gateway policy:
 both prepared and direct backend launches derive the final wrapper from the same server-owned
 policy. The sealed helper receives that exact wrapper in its existing launch packet.

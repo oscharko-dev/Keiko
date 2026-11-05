@@ -183,6 +183,23 @@ describe("dev-start runtime health gate", () => {
 
     expect(health).toBe("runtime: unavailable (runtime-unqualified)");
   });
+
+  // #4068: the rest of the dev UI works on a Windows checkout, whose lane cannot start a coding run.
+  // Failing the gate here would time out every Windows dev:start against a healthy server.
+  it("passes a Windows lane that states it cannot start coding runs, and says so", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        runtimeAvailable: false,
+        runtimeUnavailableReason: "gateway-service-unqualified",
+      }),
+    });
+
+    const health = await requiredRuntimeHealth("http://127.0.0.1:1", true);
+
+    expect(health).toBe("ok · coding runs unavailable (gateway-service-unqualified)");
+    expect(healthyDevServer(health)).toBe(true);
+  });
 });
 
 describe("dev-start coding runtime lifecycle", () => {

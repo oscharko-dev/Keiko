@@ -590,6 +590,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Das Windows-Runtime-Gateway passt nicht zu dieser Keiko-Version. Führe im Terminal aus: keiko gateway-service repair. Windows fragt einmal nach der Freigabe.",
   "codingWorkbench.gatewayService.unknown":
     "Keiko konnte den Zustand des Windows-Runtime-Gateways nicht lesen. Führe im Terminal aus: keiko gateway-service status",
+  "codingWorkbench.gatewayService.unqualified":
+    "Dieser Keiko-Build kann unter Windows keine Coding-Läufe starten. Sie brauchen das Windows-Runtime-Gateway, das nur ein freigegebenes Keiko-Paket nutzen kann. Ein anderes Repository zu wählen, ändert daran nichts.",
   "codingWorkbench.setup.repairAndBind": "Reparieren und binden",
   "codingWorkbench.setup.repairing": "Wird repariert…",
   "codingWorkbench.setup.runtimeUnavailable":

@@ -343,6 +343,8 @@ async function fetchOk(url, validate = async () => true) {
   return (await validate(response)) ? "ok" : "unexpected response";
 }
 
+const WINDOWS_LANE_WITHOUT_RUNS = "gateway-service-unqualified";
+
 export async function codingRuntimeHealth(baseUrl, fetchFn = globalThis.fetch) {
   const response = await fetchFn(`${baseUrl}${CODING_RUNTIME_READINESS_PATH}`, {
     cache: "no-store",
@@ -366,6 +368,9 @@ export async function codingRuntimeHealth(baseUrl, fetchFn = globalThis.fetch) {
     typeof body?.runtimeUnavailableReason === "string"
       ? body.runtimeUnavailableReason
       : "invalid-readiness";
+  // A Windows checkout's lane cannot start a coding run (#4068, ADR-0043), and the rest of the dev UI
+  // works. Failing the gate on this one reason would time out every Windows dev:start.
+  if (reason === WINDOWS_LANE_WITHOUT_RUNS) return `ok · coding runs unavailable (${reason})`;
   return `unavailable (${reason})`;
 }
 

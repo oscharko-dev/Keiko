@@ -20,6 +20,17 @@ describe("Coding Workbench translations", () => {
     expect(translateCodingWorkbench("de", key)).toContain(command);
   });
 
+  // No command repairs this, so none may be suggested: `keiko gateway-service install` refuses a
+  // runtime that is not release-qualified.
+  it("says an unqualified Windows runtime cannot start coding runs, offering no command", () => {
+    const key = "codingWorkbench.gatewayService.unqualified";
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en).toContain("cannot start coding runs");
+    expect(de).toContain("keine Coding-Läufe starten");
+    for (const text of [en, de]) expect(text).not.toContain("keiko gateway-service");
+  });
+
   it.each([
     "codingWorkbench.setup.runtimeUnavailable",
     "codingWorkbench.alert.runtimeUnqualified",

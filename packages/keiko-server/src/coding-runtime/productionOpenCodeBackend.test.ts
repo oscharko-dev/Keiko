@@ -31,6 +31,7 @@ import * as gatewayBackend from "./devLaneRuntimeProcessBackend.js";
 import * as nativeBackend from "./nativeRuntimeProcessBackend.js";
 import {
   createRuntimeGatewayConfinement,
+  GATEWAY_UNSUPPORTED_ON_HOST_REASON,
   type RuntimeGatewayFilesystem,
 } from "@oscharko-dev/keiko-sandbox";
 import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
@@ -63,8 +64,13 @@ import type {
   ProductionOpenCodeBackendInput,
   ResolvedPortableOpenCodeRuntime,
 } from "./productionOpenCodeBackend.js";
+import { windowsGatewayServiceFacts } from "./productionOpenCodeActivation.js";
 import type { QualifiedPortableOpenCodeRuntime } from "./productionPortableCodingRuntime.js";
 import type { ProductionRuntimeBackendInput } from "./productionCodingRuntimeResolver.js";
+import type {
+  RuntimeProcessBackend,
+  RuntimeSupervisorLaunchRequest,
+} from "./runtimeProcessSupervisor.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 import type { OperatorPluginRegistry } from "./opencodeOperatorPlugins.js";
@@ -548,6 +554,66 @@ describe("production OpenCode backend composition", () => {
       }
     },
   );
+
+  // #4068: composition binds the gateway policy into every Windows run (ADR-0043), and the native
+  // backend can enforce it only through the installed broker, which only a release-qualified package
+  // may use. So these lanes refuse every start, and readiness must not offer one.
+  it.each(["dev", "evaluation"] as const)(
+    "refuses every %s Windows run before a helper starts, and readiness says so",
+    (lane) => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-windows-unqualified-lane-"));
+      try {
+        const portable: ResolvedPortableOpenCodeRuntime =
+          lane === "dev"
+            ? windowsDevLaneRuntime(root)
+            : {
+                ...releaseQualifiedNativeRuntime(root),
+                platformAssurance: "evaluation-unqualified",
+              };
+        const request = runInput(root);
+        const factory = vi.spyOn(nativeBackend, "createNativeRuntimeProcessBackend");
+        createProductionOpenCodeBackend(backendInput(root, portable)).createRun(request);
+        const created = factory.mock.results.at(-1)?.value as RuntimeProcessBackend;
+
+        expect(() =>
+          created.spawnOwnedTree({
+            runId: request.minted.authorityRef.runId,
+            treeBindingId: request.minted.treeBindingId,
+          } as RuntimeSupervisorLaunchRequest),
+        ).toThrow(GATEWAY_UNSUPPORTED_ON_HOST_REASON);
+        expect(
+          windowsGatewayServiceFacts({}, portable).windowsGatewayService?.unavailableReason(),
+        ).toBe("gateway-service-unqualified");
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it("asks the installed broker for a release-qualified Windows runtime", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-windows-released-lane-"));
+    try {
+      const portable: ResolvedPortableOpenCodeRuntime = {
+        ...releaseQualifiedNativeRuntime(root),
+        nativeHelperSha256: "a".repeat(64),
+      };
+      const facts = windowsGatewayServiceFacts({ activityLog: { write: vi.fn() } }, portable);
+
+      // The fixture's helper is no executable, so the status read runs to no exit at all.
+      expect(facts.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("has no Windows gateway fact for another platform's runtime", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-linux-released-lane-"));
+    try {
+      expect(windowsGatewayServiceFacts({}, releaseQualifiedLinuxRuntime(root))).toEqual({});
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 
   it("composes a release-qualified Linux run through the namespace gateway backend", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-linux-gateway-composition-"));
