@@ -1413,9 +1413,6 @@
       "anti-slop/no-reflect-get": 1,
       "anti-slop/no-unknown-returns": 1
     },
-    "packages/keiko-contracts/src/__tests__/support/parser-type-contract.ts": {
-      "anti-slop/no-unknown-returns": 1
-    },
     "packages/keiko-contracts/src/__tests__/support/physical-task-catalog-contract.ts": {
       "anti-slop-effect/prefer-effect-match": 1,
       "anti-slop/no-known-value-widening": 2,
