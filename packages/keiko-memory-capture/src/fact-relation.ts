@@ -131,16 +131,21 @@ function equalWordsComparison(
 }
 
 // A person has one of these at a time, so a new value replaces the old one. The preposition decides:
-// "Arbeitet bei Acme" names one employer, "Arbeitet mit Excel" one of many tools. Each pattern
-// captures the slot's value.
+// "Arbeitet bei Acme" names one employer, "Arbeitet mit Excel" one of many tools. A few words may
+// stand between ("Ich arbeite jetzt bei Foo"). Each pattern ends where the slot's value begins.
+const BETWEEN = String.raw`(?:[\p{L}\p{N}]+\s+){0,3}?`;
 const SINGLE_VALUE_SLOT_RES: readonly RegExp[] = [
-  /(?:^|[^\p{L}])arbeite\p{L}*\s+(?:bei|fur|fuer)\s+([\p{L}\p{N}]+)/u,
-  /(?:^|[^\p{L}])works?\s+(?:at|for)\s+([\p{L}\p{N}]+)/u,
-  /(?:^|[^\p{L}])wohn\p{L}*\s+in\s+([\p{L}\p{N}]+)/u,
-  /(?:^|[^\p{L}])lives?\s+in\s+([\p{L}\p{N}]+)/u,
-  /(?:^|[^\p{L}])heiss\p{L}*\s+([\p{L}\p{N}]+)/u,
-  /(?:^|[^\p{L}])(?:named|called)\s+([\p{L}\p{N}]+)/u,
+  new RegExp(String.raw`(?:^|[^\p{L}])arbeite\p{L}*\s+${BETWEEN}(?:bei|fur|fuer)\s+`, "u"),
+  new RegExp(String.raw`(?:^|[^\p{L}])works?\s+${BETWEEN}(?:at|for)\s+`, "u"),
+  new RegExp(String.raw`(?:^|[^\p{L}])wohn\p{L}*\s+${BETWEEN}in\s+`, "u"),
+  new RegExp(String.raw`(?:^|[^\p{L}])lives?\s+${BETWEEN}in\s+`, "u"),
+  // The verb, never the adjective: "Heißt Alex", "Ich heiße Alex", not "heiße Schokolade".
+  /(?:^|[^\p{L}])(?:heisst|ich\s+heisse)\s+/u,
+  /(?:^\s*|(?:is|am|i['’]m|be)\s+)(?:named|called)\s+/u,
 ];
+// The value ends where the next phrase begins: "Acme" in "bei Acme mit Excel".
+const VALUE_END_RE =
+  /\s(?:mit|seit|als|im|in|am|an|auf|fur|fuer|wegen|weil|und|oder|with|as|since|from|on|at|for|because|and|or)\s|[,;:.!?]/u;
 // One preference at a time for one purpose: "Bevorzugt Tabellen für Zahlen". Using or liking
 // something does not end using or liking another thing.
 const CHOSEN_PREFERENCE_RE = anyWordPattern([
@@ -150,10 +155,49 @@ const CHOSEN_PREFERENCE_RE = anyWordPattern([
   "lieber",
   "rather",
 ]);
+// "Ich nutze jetzt auch Python" adds a fact; only a replacing word makes it a change.
+const ADDITIVE_RE = anyWordPattern([
+  "auch",
+  "ebenfalls",
+  "zusätzlich",
+  "zusaetzlich",
+  "außerdem",
+  "ausserdem",
+  "also",
+  "too",
+  "as well",
+]);
+const REPLACING_RE = anyWordPattern([
+  "nicht mehr",
+  "kein(?:e|en)? mehr",
+  "stattdessen",
+  "statt",
+  "anstatt",
+  "no longer",
+  "anymore",
+  "instead",
+  "rather than",
+]);
 
-function slotValues(text: string): readonly (string | undefined)[] {
-  const normalized = normalizeMemoryText(text);
-  return SINGLE_VALUE_SLOT_RES.map((slot) => slot.exec(normalized)?.[1]);
+// The words of each one-at-a-time slot's value, or undefined where the text has no such slot.
+function slotValues(text: string): readonly (readonly string[] | undefined)[] {
+  const normalized = `${normalizeMemoryText(text)} `;
+  return SINGLE_VALUE_SLOT_RES.map((slot) => {
+    const match = slot.exec(normalized);
+    if (match === null) return undefined;
+    const rest = normalized.slice(match.index + match[0].length);
+    const end = VALUE_END_RE.exec(rest);
+    return factWords(end === null ? rest : rest.slice(0, end.index));
+  });
+}
+
+function sameWords(a: readonly string[], b: readonly string[]): boolean {
+  return unmatched(a, b).length === 0 && unmatched(b, a).length === 0;
+}
+
+// Whether a statement only adds to what is known: "auch", "also", without "nicht mehr" or "instead".
+export function addsRatherThanReplaces(text: string): boolean {
+  return ADDITIVE_RE.test(text) && !REPLACING_RE.test(text);
 }
 
 function sharesSingleValueSlot(a: string, b: string): boolean {
@@ -161,13 +205,22 @@ function sharesSingleValueSlot(a: string, b: string): boolean {
   return slotValues(a).some((value, index) => value !== undefined && valuesB[index] !== undefined);
 }
 
+// A chosen preference changes when exactly one word differs on each side and the rest, its purpose
+// and context, stays: "lange Antworten in Chats" is no change of "kurze Antworten in Meetings".
+function preferenceChanged(a: string, b: string): boolean {
+  if (!CHOSEN_PREFERENCE_RE.test(a) || !CHOSEN_PREFERENCE_RE.test(b)) return false;
+  const wordsA = factWords(a);
+  const wordsB = factWords(b);
+  return unmatched(wordsA, wordsB).length === 1 && unmatched(wordsB, wordsA).length === 1;
+}
+
 // Whether the value of a one-at-a-time slot differs: the new employer, not a new tool beside it.
 function singleValueChanged(a: string, b: string): boolean {
-  if (CHOSEN_PREFERENCE_RE.test(a) && CHOSEN_PREFERENCE_RE.test(b)) return true;
+  if (preferenceChanged(a, b)) return true;
   const valuesB = slotValues(b);
   return slotValues(a).some((value, index) => {
     const other = valuesB[index];
-    return value !== undefined && other !== undefined && !sameFactWord(value, other);
+    return value !== undefined && other !== undefined && !sameWords(value, other);
   });
 }
 
@@ -275,7 +328,7 @@ function labelledChange(
   evidence: string,
   related: KnownFact,
 ): FactRelationDecision | null {
-  if (!sameSubject(body, related.body)) return null;
+  if (!sameSubject(body, related.body) || addsRatherThanReplaces(evidence)) return null;
   // A model label alone replaces only a one-at-a-time value; anything else needs a stated change.
   if (
     compareFacts(body, related.body) === "slot-changed" &&
@@ -340,6 +393,7 @@ function statementChanges(statement: string, fact: KnownFact): boolean {
   return (
     comparison === "slot-changed" &&
     STATED_CHANGE_RE.test(statement) &&
+    !addsRatherThanReplaces(statement) &&
     sameSubject(statement, fact.body)
   );
 }

@@ -24,7 +24,17 @@ const FRAME_WORDS = new Set([
   "gern",
   "gerne",
   "immer",
+  // When a fact holds says nothing about what it is: "Ich arbeite inzwischen bei Foo".
+  "aktuell",
+  "currently",
+  "derzeit",
+  "inzwischen",
   "jetzt",
+  "kunftig",
+  "kuenftig",
+  "mittlerweile",
+  "momentan",
+  "nowadays",
   "lieber",
   "ll",
   "m",
@@ -145,9 +155,18 @@ function keepingValueMarks(text: string): string {
     .replace(/(\p{N})\.(?=\p{N})/gu, "$1point");
 }
 
+// The tokenizer stems long words ("inzwischen" becomes "inzwisch"), so each list also holds the
+// tokens its words become.
+function withTokens(words: ReadonlySet<string>): ReadonlySet<string> {
+  return new Set([...words, ...[...words].flatMap((word) => tokenizeMemoryText(word))]);
+}
+
+const FRAME_TOKENS = withTokens(FRAME_WORDS);
+const NEGATION_TOKENS = withTokens(NEGATION_WORDS);
+
 export function factWords(text: string): readonly string[] {
   return tokenizeMemoryText(keepingValueMarks(text)).filter(
-    (word) => !FRAME_WORDS.has(word) && !NEGATION_WORDS.has(word),
+    (word) => !FRAME_TOKENS.has(word) && !NEGATION_TOKENS.has(word),
   );
 }
 

@@ -70,7 +70,10 @@ export function buildProposal(input: ProposalBuildInput, confidence: number): Me
       ...(input.evidenceSpan !== undefined && { evidenceSpan: input.evidenceSpan }),
       ...(input.sourceMessageIds !== undefined && { sourceMessageIds: input.sourceMessageIds }),
     },
-    validity: { validFrom, ...(input.validUntil !== undefined && { validUntil: input.validUntil }) },
+    validity: {
+      validFrom,
+      ...(input.validUntil !== undefined && { validUntil: input.validUntil }),
+    },
     initialStatus: "proposed",
   };
   return proposal;

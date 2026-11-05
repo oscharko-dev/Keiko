@@ -228,10 +228,17 @@ D2 lets a fact through.
   payload, and a stated end in the future closes validity; both are parsed from the words, never
   taken from the model. A stated end that has passed means the fact is over, so nothing is stored.
 - **Admission.** The span appears verbatim at clause boundaries and is not a question, request,
-  quotation, hypothesis, irony, doubt, opinion ("Ich glaube"), denial or past statement. The fact
-  is about the person: labelled `self`, with a first-person word, and naming no one else (a titled
-  person, a relation word or another person's pronoun). "Wir" and "X und ich" wait for project
-  memory. Credentials, IBANs, phone numbers and customer identifiers are refused. Every body word comes from the span
+  quotation, hypothesis, irony, hedge ("Ich glaube, …"), denial or past statement. Tense and
+  pronouns are judged on the claim itself, not on its reason or condition, so "Ich nutze Tabellen,
+  weil sie übersichtlich sind" stands; a decision, switch or migration made in the past holds now.
+  The fact is about the person: labelled `self`, with a first-person word, and naming no one else:
+  a titled person, a relation behind a possessive or genitive, a family word, a role a determiner
+  points at ("dem Kunden", but not "mit Kunden" or "die Kunden-Tickets"), a partner, another
+  person's pronoun in the claim, or a reason in which someone else wants, says or recommends
+  something ("weil Anna es so will"). "Wir" and "X und ich" wait for project memory. Two limits are
+  accepted: a bare first name outside these forms cannot be told from a German noun, and an English
+  role behind a determiner ("the customer database") is treated as a person, because privacy
+  outranks recall. Credentials, IBANs, phone numbers and customer identifiers are refused. Every body word comes from the span
   except a short predicate vocabulary, with the same polarity, where a verb that rejects its object
   ("hasse", "avoid") and "ohne" count as negation. Each drop is one closed reason.
 - **Confidence** is derived from what the checks saw, never from the model:
@@ -240,8 +247,10 @@ D2 lets a fact through.
 - **Relation.** The model labels `new`, `same`, `update` or `contradiction`; checks confirm it. A
   reversal, a changed number or a changed polarity replaces the older fact on its own. A new value
   in the same slot, or a stated change ("ab jetzt", "from now on"), replaces it only with the
-  model's label. A shared preference verb alone is no slot, so "Tabellen" and "Tee" both stand;
-  living, working and names are single-valued slots. A claim of sameness that neither the lexical
+  model's label. A shared preference verb alone is no slot, so "Tabellen" and "Tee" both stand.
+  The model's label alone replaces only a one-at-a-time value: an employer ("arbeitet bei"), a home
+  ("wohnt in"), a name, or a chosen preference for the same purpose. Another tool or liking needs a
+  stated change, and a statement that only adds ("auch", "also") never replaces. A claim of sameness that neither the lexical
   nor the semantic duplicate gate confirms stores nothing. A changed value is never a duplicate.
 - **Supersession** reuses the `supersedes` edge, the `superseded` status and the closed validity of
   the human correction path, in one transaction with a precondition on the older fact. Where D2

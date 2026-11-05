@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  factReplacedByStatement,
   compareFacts,
   decideFactRelation,
   mostSimilarFacts,
@@ -232,6 +233,43 @@ describe("mostSimilarFacts", () => {
       factId: "old",
       basis: "slot-changed",
     });
+  });
+
+  it.each([
+    ["Ich arbeite jetzt bei Foo", "Arbeitet bei Acme"],
+    ["Ich arbeite inzwischen bei Foo", "Arbeitet bei Acme"],
+    ["Ich wohne jetzt in Köln", "Wohnt in Berlin"],
+    ["I now work at Foo", "Works at Acme"],
+  ])("lets a stated move with a word between replace the value: %s", (statement, old) => {
+    expect(factReplacedByStatement(statement, [{ id: "old", body: old }])).toMatchObject({
+      id: "old",
+    });
+  });
+
+  it.each([
+    ["Ich nutze jetzt auch Python", "Nutzt Excel"],
+    ["I also like Python now", "Likes Excel"],
+    ["Ich arbeite jetzt auch bei Foo", "Arbeitet bei Acme"],
+  ])("keeps the old fact when %s only adds to it", (statement, old) => {
+    expect(factReplacedByStatement(statement, [{ id: "old", body: old }])).toBeNull();
+    expect(decide(statement, statement, "update", old)).toEqual({ kind: "new" });
+  });
+
+  it.each([
+    ["Wohnt in der Türkei", "Wohnt in der Schweiz"],
+    ["Arbeitet bei der Sparkasse", "Arbeitet bei der Volksbank"],
+    ["Lives in San Francisco", "Lives in San Diego"],
+    ["Wohnt in Bad Homburg", "Wohnt in Bad Soden"],
+  ])("reads the whole value of a slot: %s", (body, old) => {
+    expect(decide(body, body, "update", old)).toMatchObject({ kind: "supersede" });
+  });
+
+  it.each([
+    ["Mag heiße Schokolade", "Mag heißen Kaffee"],
+    ["Uses a tool called Jira", "Uses a tool called Slack"],
+    ["Bevorzugt kurze Antworten in Meetings", "Bevorzugt lange Antworten in Chats"],
+  ])("does not read %s as a one-at-a-time value", (body, old) => {
+    expect(decide(body, body, "update", old)).toEqual({ kind: "new" });
   });
 
   it("still replaces a use on a stated change", () => {
