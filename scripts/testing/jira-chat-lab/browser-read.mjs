@@ -1,27 +1,29 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
+import { workspaceStorageArgs } from "../../lib/workspace-storage-fixture.mjs";
 import { readPrivateFile } from "./lab-client.mjs";
-import { connectPodFromPanel, readyChip } from "./browser-connections.mjs";
+import { assertVerifiedPod, connectPodFromPanel, verifyPodAction } from "./browser-connections.mjs";
 import { consentCardCount, establishedReadGrant } from "./read-grant.mjs";
 
 function stage(value) {
   console.log(JSON.stringify({ operation: "jira-chat-live-browser", stage: value }));
 }
-export async function openBrowser(chat) {
+export async function openBrowser(chat, origin) {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
+    baseURL: origin,
     viewport: { width: 1440, height: 1100 },
     locale: "en-US",
   });
   const page = await context.newPage();
   page.setDefaultTimeout(20000);
   await page.addInitScript(
-    ({ id, title }) => {
+    ({ argument: { id, title }, storageKeys }) => {
       const seeded = "keiko.jira-browser-fixture.seeded.v1";
       if (globalThis.window.sessionStorage.getItem(seeded) !== "true") {
         globalThis.window.localStorage.setItem(
-          "keiko.workspace.v4",
+          storageKeys.workspace,
           JSON.stringify([
             {
               id: "jira-browser-chat",
@@ -36,11 +38,11 @@ export async function openBrowser(chat) {
             },
           ]),
         );
-        globalThis.window.localStorage.removeItem("keiko.conns.v1");
+        globalThis.window.localStorage.removeItem(storageKeys.connections);
         globalThis.window.sessionStorage.setItem(seeded, "true");
       }
     },
-    { id: chat.id, title: chat.title },
+    await workspaceStorageArgs(page, { id: chat.id, title: chat.title }),
   );
   return { browser, page };
 }
@@ -55,11 +57,11 @@ export async function createPod(page, session) {
   await form
     .getByLabel("API token", { exact: true })
     .fill(readPrivateFile(join(session.directory, "secrets", "api-token")).trim());
-  await form.getByRole("button", { name: "Create Jira Pod", exact: true }).click();
-  const verify = hub.getByTestId("acx-connector").filter({ hasText: "Browser Jira" });
-  // A new Pod is unverified, so its one visible repair action is "Verify connection".
-  await verify.getByRole("button", { name: "Verify connection", exact: true }).click();
-  await readyChip(verify).waitFor();
+  const verified = await verifyPodAction(page, () =>
+    form.getByRole("button", { name: "Create Jira Pod", exact: true }).click(),
+  );
+  const card = hub.getByTestId("acx-connector").filter({ hasText: "Browser Jira" });
+  await assertVerifiedPod(page, card, verified);
   stage("pod-verified");
   await page.getByRole("button", { name: "Local Knowledge", exact: true }).click();
 }
@@ -106,7 +108,7 @@ async function confirmCompleted(observe, region) {
   throw new TypeError("Browser Chat completion timed out");
 }
 export async function runBrowserRead({ origin, fragment, chat, session, observe }) {
-  const { browser, page } = await openBrowser(chat);
+  const { browser, page } = await openBrowser(chat, origin);
   try {
     await page.goto(origin + fragment);
     stage("page-open");

@@ -1,4 +1,5 @@
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -96,12 +97,37 @@ describe("planCleanTargets", () => {
     expect(targets).not.toContain(join(root, "packages", "keiko-escape", "dist"));
   });
 
+  it("removes UI tsc and Next.js outputs through the clean CLI while preserving source", () => {
+    root = makeRoot("clean-ui-");
+    writeJson(root, "package.json", {
+      name: "synthetic-root",
+      private: true,
+      workspaces: ["packages/*"],
+    });
+    writeJson(root, "packages/keiko-ui/package.json", {
+      name: "@oscharko-dev/keiko-ui",
+    });
+    for (const output of ["dist", ".next", "out"]) {
+      writeJson(root, `packages/keiko-ui/${output}/generated.json`, { generated: true });
+    }
+    writeJson(root, "packages/keiko-ui/src/source.json", { source: true });
+
+    execFileSync(process.execPath, [join(REPO_ROOT, "scripts/clean.mjs"), `--root=${root}`]);
+
+    for (const output of ["dist", ".next", "out"]) {
+      expect(existsSync(join(root, "packages/keiko-ui", output))).toBe(false);
+    }
+    expect(existsSync(join(root, "packages/keiko-ui/src/source.json"))).toBe(true);
+    expect(existsSync(join(root, "packages/keiko-ui/package.json"))).toBe(true);
+  });
+
   it("covers every live workspace package except UI with package clean targets", async () => {
     const packages = await collectWorkspacePackages(REPO_ROOT);
     const cleanTargets = await planCleanTargets(REPO_ROOT);
 
     for (const pkg of packages) {
       if (pkg.name === "@oscharko-dev/keiko-ui") {
+        expect(cleanTargets).toContain(join(pkg.dir, "dist"));
         expect(cleanTargets).toContain(join(pkg.dir, ".next"));
         expect(cleanTargets).toContain(join(pkg.dir, "out"));
         continue;

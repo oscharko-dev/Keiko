@@ -29,7 +29,7 @@ import {
   type AtlassianHttpRequest,
   type AtlassianHttpResult,
 } from "@oscharko-dev/keiko-connectors";
-import type { AtlassianPrivateTarget } from "@oscharko-dev/keiko-contracts";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   isSafeAtlassianConnectorBaseUrl,
   canonicalAtlassianConnectorBaseUrl,
@@ -46,6 +46,8 @@ import {
   atlassianHttpRequestLifecycle,
   type AtlassianHttpLifecycleOptions,
 } from "./httpRequestLifecycle.js";
+import { isAtlassianTargetAdmission, type AtlassianTargetAdmission } from "./targetAdmission.js";
+import { recordTargetAdmission } from "./targetAdmissionActivity.js";
 
 // Hard per-request ceiling: the largest ADR-0128 D3 budget (bulk sync pagination). Requests ask
 // for less (the verify probe asks for 30 000 ms); a hostile or buggy caller can never widen it.
@@ -79,7 +81,10 @@ export function exceedsBodyByteCeiling(bytes: number, ceilingBytes: number): boo
 }
 
 export interface CreateAtlassianHttpPortOptions extends AtlassianHttpLifecycleOptions {
-  readonly privateTargets?: () => readonly AtlassianPrivateTarget[];
+  /** Derived from current saved Data Center metadata; never a request-body authority flag. */
+  readonly targetAdmission?:
+    ((signal: AbortSignal) => Promise<AtlassianTargetAdmission | undefined>) | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly deniedLoopbackPorts?: () => readonly number[];
   readonly baseUrl: string;
   readonly authRef: string;
@@ -96,7 +101,7 @@ function boundedTimeoutMs(requested: number): number {
 }
 
 // Inherit transport settings only. Model-provider private/metadata opt-ins never authorize
-// a connector. Exact file-owned target admission is applied below for the current request.
+// a connector. The saved connector's exact target admission is applied below.
 function forwardedConnectorEgressConfig(
   base: OutboundHttpEgressConfig | undefined,
 ): OutboundHttpEgressConfig {
@@ -117,24 +122,58 @@ function forwardedConnectorEgressConfig(
   };
 }
 
-function connectorEgressConfig(options: CreateAtlassianHttpPortOptions): OutboundHttpEgressConfig {
-  const baseUrl = canonicalAtlassianConnectorBaseUrl(options.baseUrl);
-  const admitted =
-    baseUrl === undefined
-      ? undefined
-      : options.privateTargets?.().find((target) => target.baseUrl === baseUrl);
+function admissionEgressConfig(
+  options: CreateAtlassianHttpPortOptions,
+  addressClass: AtlassianTargetAdmission["addressClass"],
+): OutboundHttpEgressConfig {
   return {
     ...forwardedConnectorEgressConfig(options.egress?.()),
-    denyLoopback: admitted?.addressClass !== "loopback",
+    denyLoopback: addressClass !== "loopback",
+    allowPrivateNetwork: addressClass === "private",
+    requiredTargetClass: addressClass,
     pinProxiedConnectTarget: true,
-    ...(admitted === undefined
-      ? {}
-      : {
-          allowPrivateNetwork: admitted.addressClass === "private",
-          requiredTargetClass: admitted.addressClass,
-        }),
     deniedLoopbackPorts: options.deniedLoopbackPorts?.() ?? [],
   };
+}
+
+function recordAdmission(
+  options: CreateAtlassianHttpPortOptions,
+  outcome: "admitted" | "blocked" | "failed",
+  addressClass?: AtlassianTargetAdmission["addressClass"],
+): void {
+  recordTargetAdmission(
+    options.activityLog ?? processServerLogSink(),
+    options.correlationId ?? UNKNOWN_CORRELATION_ID,
+    options.targetAdmission === undefined ? "default-public" : "saved-data-center",
+    outcome,
+    addressClass,
+  );
+}
+
+async function connectorEgressConfig(
+  options: CreateAtlassianHttpPortOptions,
+  base: URL,
+  signal: AbortSignal,
+): Promise<OutboundHttpEgressConfig | undefined> {
+  try {
+    const admission = await options.targetAdmission?.(signal);
+    if (
+      options.targetAdmission !== undefined &&
+      (!isAtlassianTargetAdmission(admission) ||
+        admission.baseUrl !== canonicalAtlassianConnectorBaseUrl(base.toString()))
+    ) {
+      recordAdmission(options, "blocked");
+      return undefined;
+    }
+    const addressClass = admission?.addressClass ?? "public";
+    const egress = admissionEgressConfig(options, addressClass);
+    const blocked = outboundTargetBlockedReason(base, egress) !== undefined;
+    recordAdmission(options, blocked ? "blocked" : "admitted", addressClass);
+    return blocked ? undefined : egress;
+  } catch (error) {
+    recordAdmission(options, "failed");
+    throw error;
+  }
 }
 
 // Both direct and proxied connects use the gateway's vetted address set. An explicit admission
@@ -234,17 +273,18 @@ export function createGatewayAtlassianHttpPort(
   return async (input: AtlassianHttpRequest): Promise<AtlassianHttpResult> => {
     const request = Object.freeze({ ...input });
     const target = assertAllowlistedTarget(base, request.url);
-    const egress = connectorEgressConfig(options);
-    if (outboundTargetBlockedReason(target, egress) !== undefined) return { kind: "network-error" };
+    const signal = AbortSignal.timeout(boundedTimeoutMs(request.timeoutMs));
     const lifecycle = atlassianHttpRequestLifecycle(
       { ...options, correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
       request,
     );
     try {
+      const egress = await connectorEgressConfig(options, base, signal);
+      if (egress === undefined) return { kind: "network-error" };
       const response = await gatewayFetch(target.toString(), {
         method: request.method,
         prepareHeaders: lifecycle.prepareHeaders,
-        signal: AbortSignal.timeout(boundedTimeoutMs(request.timeoutMs)),
+        signal,
         egress,
         log: processServerLogSink(),
         logContext: { correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
@@ -255,6 +295,7 @@ export function createGatewayAtlassianHttpPort(
       return { kind: "response", status: response.status };
     } catch (error) {
       lifecycle.rethrowFailure();
+      if (error instanceof AtlassianCredentialCustodyError) throw error;
       return classifyTransportError(error);
     }
   };
@@ -367,20 +408,21 @@ export function createGatewayAtlassianHttpBodyPort(
   return async (input: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult> => {
     const request = Object.freeze({ ...input });
     const target = assertAllowlistedTarget(base, request.url);
-    const egress = connectorEgressConfig(options);
-    if (outboundTargetBlockedReason(target, egress) !== undefined) return { kind: "network-error" };
     assertValidRequestBody(request);
+    const signal = composeBodyRequestSignal(request);
     const lifecycle = atlassianHttpRequestLifecycle(
       { ...options, correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
       request,
     );
     try {
+      const egress = await connectorEgressConfig(options, base, signal);
+      if (egress === undefined) return { kind: "network-error" };
       const response = await gatewayFetch(target.toString(), {
         method: request.method,
         prepareHeaders: lifecycle.prepareHeaders,
         singleAttempt: request.method !== "GET",
         ...requestBody(request),
-        signal: composeBodyRequestSignal(request),
+        signal,
         egress,
         log: processServerLogSink(),
         logContext: { correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
@@ -399,6 +441,7 @@ export function createGatewayAtlassianHttpBodyPort(
       };
     } catch (error) {
       lifecycle.rethrowFailure();
+      if (error instanceof AtlassianCredentialCustodyError) throw error;
       return classifyTransportError(error);
     }
   };

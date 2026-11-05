@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { readFile } from "node:fs/promises";
 
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
@@ -79,26 +80,29 @@ async function seedFocusProfile(
 }
 
 async function seedSettingsWindow(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("keiko.theme", "dark");
-    window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-2529-settings",
-          type: "settings",
-          x: 24,
-          y: 24,
-          w: 1180,
-          h: 900,
-          z: 10,
-          cfg: {},
-          max: false,
-        },
-      ]),
-    );
-  });
+  await page.addInitScript(
+    ({ storageKeys }) => {
+      window.localStorage.setItem("keiko.theme", "dark");
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "issue-2529-settings",
+            type: "settings",
+            x: 24,
+            y: 24,
+            w: 1180,
+            h: 900,
+            z: 10,
+            cfg: {},
+            max: false,
+          },
+        ]),
+      );
+    },
+    await workspaceStorageArgs(page, undefined),
+  );
 }
 
 async function openEditorSettings(page: Page): Promise<ReturnType<Page["locator"]>> {

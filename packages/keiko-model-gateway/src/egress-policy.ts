@@ -2,7 +2,7 @@ import { isIP } from "node:net";
 import type { OutboundHttpEgressConfig } from "./types.js";
 
 export type OutboundTargetClass =
-  "public" | "loopback" | "private" | "link-local" | "metadata" | "multicast";
+  "public" | "loopback" | "private" | "link-local" | "metadata" | "multicast" | "unspecified";
 
 export function normalizeHost(hostname: string): string {
   return hostname.toLowerCase().replace(/^\[/u, "").replace(/\]$/u, "");
@@ -55,9 +55,18 @@ function isCarrierGradeNatIpv4(parts: readonly [number, number, number, number])
   return a === 100 && b >= 64 && b <= 127;
 }
 
-function isReservedOrMulticastIpv4(parts: readonly [number, number, number, number]): boolean {
+function isMulticastOrReservedHighIpv4(parts: readonly [number, number, number, number]): boolean {
   const [a] = parts;
-  return a === 0 || a >= 224;
+  return a >= 224;
+}
+
+function isUnspecifiedIpv4(parts: readonly [number, number, number, number]): boolean {
+  return parts.every((part) => part === 0);
+}
+
+function isZeroNetworkIpv4(parts: readonly [number, number, number, number]): boolean {
+  const [a] = parts;
+  return a === 0;
 }
 
 function isIetfProtocolAssignmentIpv4(parts: readonly [number, number, number, number]): boolean {
@@ -80,14 +89,16 @@ interface Ipv4ClassificationRule {
 // so it must be checked first to win the more specific classification.
 function ipv4ClassificationRules(): readonly Ipv4ClassificationRule[] {
   return [
+    { targetClass: "unspecified", matches: isUnspecifiedIpv4 },
     { targetClass: "loopback", matches: isLoopbackIpv4 },
     { targetClass: "metadata", matches: isMetadataIpv4 },
     { targetClass: "link-local", matches: isLinkLocalIpv4 },
+    { targetClass: "multicast", matches: isMulticastOrReservedHighIpv4 },
     { targetClass: "private", matches: isRfc1918TenIpv4 },
     { targetClass: "private", matches: isRfc1918OneSeventyTwoIpv4 },
     { targetClass: "private", matches: isRfc1918OneNinetyTwoIpv4 },
     { targetClass: "private", matches: isCarrierGradeNatIpv4 },
-    { targetClass: "private", matches: isReservedOrMulticastIpv4 },
+    { targetClass: "private", matches: isZeroNetworkIpv4 },
     { targetClass: "private", matches: isIetfProtocolAssignmentIpv4 },
     { targetClass: "private", matches: isBenchmarkingIpv4 },
   ];
@@ -98,22 +109,22 @@ function classifyIpv4(parts: readonly [number, number, number, number]): Outboun
   return rule?.targetClass ?? "public";
 }
 
-function mappedIpv4FromIpv6(hostname: string): string | undefined {
-  const prefix = "::ffff:";
-  return hostname.startsWith(prefix) ? hostname.slice(prefix.length) : undefined;
-}
-
-function firstIpv6Hextet(hostname: string): number {
-  const first = hostname.split(":", 1)[0] ?? "";
-  return first.length === 0 ? 0 : Number.parseInt(first, 16);
+function ipv6HexLiteral(hostname: string): string {
+  const literal = hostname.split("%", 1)[0] ?? hostname;
+  const separator = literal.lastIndexOf(":");
+  const tail = parseIpv4(literal.slice(separator + 1));
+  if (tail === undefined) return literal;
+  const high = (tail[0] << 8) | tail[1];
+  const low = (tail[2] << 8) | tail[3];
+  return `${literal.slice(0, separator + 1)}${high.toString(16)}:${low.toString(16)}`;
 }
 
 const IPV6_HEXTET_COUNT = 8;
 
 // Fully expand a compressed or already-expanded IPv6 literal into its 8 hextets, so embedded-IPv4
 // forms (IPv4-mapped, NAT64) can be decoded regardless of how the "::" run happens to fall. Returns
-// undefined for anything that is not a plain hex-group literal (e.g. a trailing dotted-quad, which
-// `mappedIpv4FromIpv6` already covers for the common "::ffff:a.b.c.d" case).
+// undefined for anything that is not a plain hex-group literal. A validated dotted IPv4 tail
+// and any scope suffix are normalized by ipv6HexLiteral before expansion.
 function expandIpv6Hextets(hostname: string): readonly number[] | undefined {
   const compressedAt = hostname.indexOf("::");
   const headText = compressedAt === -1 ? hostname : hostname.slice(0, compressedAt);
@@ -140,8 +151,7 @@ function hextetPairToIpv4(
 }
 
 // RFC 4291 IPv4-mapped address (::ffff:0:0/96) in fully-expanded hextet form, e.g. the loopback
-// alias `0:0:0:0:0:ffff:7f00:1` that the literal "::ffff:" prefix check in `mappedIpv4FromIpv6`
-// does not match.
+// alias `0:0:0:0:0:ffff:7f00:1`. Decode every spelling before deciding its address class.
 function mappedIpv4FromHextets(
   hextets: readonly number[],
 ): readonly [number, number, number, number] | undefined {
@@ -183,24 +193,19 @@ function classifyIpv6ByHextets(hextets: readonly number[]): OutboundTargetClass 
   return isIpv6Multicast(hextets) ? "multicast" : undefined;
 }
 
-function classifyIpv6ByPrefix(hostname: string): OutboundTargetClass {
-  const first = firstIpv6Hextet(hostname);
+function classifyIpv6ByPrefix(hextets: readonly number[]): OutboundTargetClass {
+  const first = hextets[0] ?? 0;
   if (Number.isInteger(first) && first >= 0xfe80 && first <= 0xfebf) return "link-local";
   if (Number.isInteger(first) && (first & 0xfe00) === 0xfc00) return "private";
   return "public";
 }
 
 function classifyIpv6(hostname: string): OutboundTargetClass {
-  if (hostname === "::1") return "loopback";
-  if (hostname === "::") return "private";
-  const mapped = mappedIpv4FromIpv6(hostname);
-  if (mapped !== undefined) {
-    const ipv4 = parseIpv4(mapped);
-    return ipv4 === undefined ? "private" : classifyIpv4(ipv4);
-  }
-  const hextets = expandIpv6Hextets(hostname);
-  const byHextets = hextets === undefined ? undefined : classifyIpv6ByHextets(hextets);
-  return byHextets ?? classifyIpv6ByPrefix(hostname);
+  const hextets = expandIpv6Hextets(ipv6HexLiteral(hostname));
+  if (hextets === undefined) throw new TypeError("Invalid IPv6 address");
+  if (hextets.every((value) => value === 0)) return "unspecified";
+  if (hextets.slice(0, 7).every((value) => value === 0) && hextets[7] === 1) return "loopback";
+  return classifyIpv6ByHextets(hextets) ?? classifyIpv6ByPrefix(hextets);
 }
 
 export function classifyOutboundHost(hostname: string): OutboundTargetClass | undefined {
@@ -212,13 +217,16 @@ export function classifyOutboundHost(hostname: string): OutboundTargetClass | un
   return undefined;
 }
 
-// "multicast" has no legitimate override anywhere in the codebase and stays blocked
+// "multicast" and "unspecified" have no legitimate override and stay blocked
 // unconditionally. "metadata"/"link-local" stay blocked for the generic `allowPrivateNetwork`
 // opt-in (a scoped opt-in for the "private" class only -- it must never re-permit cloud-metadata
 // or link-local addresses, AUDIT-SEC-002) but MAY be re-permitted by the much narrower
 // `allowLinkLocalAndMetadata` opt-in, which only the model-gateway setup route ever sets, and
 // only after its own dedicated env-flag-gated check already approved the exact submitted URL.
-const ALWAYS_BLOCKED_TARGET_CLASSES: ReadonlySet<OutboundTargetClass> = new Set(["multicast"]);
+const ALWAYS_BLOCKED_TARGET_CLASSES: ReadonlySet<OutboundTargetClass> = new Set([
+  "multicast",
+  "unspecified",
+]);
 const PRIVATE_NETWORK_OVERRIDABLE_TARGET_CLASSES: ReadonlySet<OutboundTargetClass> = new Set([
   "metadata",
   "link-local",

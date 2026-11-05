@@ -8,6 +8,7 @@ import {
   redeemCodingAppSessionPairingOnBoot,
 } from "@/lib/coding-app-session-client";
 import { AppShell } from "./AppShell";
+import { WorkspacePersistenceBoundary } from "./WorkspacePersistenceBoundary";
 
 function pairingFragmentPresent(): boolean {
   return window.location.hash.startsWith(CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX);
@@ -48,5 +49,9 @@ export function KeikoDesktop(): ReactNode {
       window.removeEventListener("hashchange", onHashChange);
     };
   }, [router]);
-  return <AppShell />;
+  return (
+    <WorkspacePersistenceBoundary>
+      <AppShell />
+    </WorkspacePersistenceBoundary>
+  );
 }

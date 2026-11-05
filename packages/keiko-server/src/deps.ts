@@ -531,6 +531,10 @@ import {
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 import { createBrowserApprovalService } from "./coding-app-session/browserApproval.js";
 import type { SessionPairingPort } from "./coding-app-session/sessionPairingPort.js";
+import {
+  resolveLauncherBrowser,
+  type LauncherBrowser,
+} from "./coding-app-session/launcherBrowser.js";
 import { resolveLauncherSessionPairingPort } from "./coding-app-session/launcherSessionPairingPort.js";
 import { CodingAppSessionDenialWindows } from "./coding-app-session/denialWindows.js";
 import { abortCodingRunSessionLeases } from "./coding-app-session/codingRunSessionLease.js";
@@ -967,6 +971,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
    * present, in which case it fails closed to a content-free projection.
    */
   readonly codingAppSessionChannel?: CodingAppSessionChannel | undefined;
+  /** Content-free native handoff; never returns proof or cookies to its requester. */
+  readonly launcherBrowser?: LauncherBrowser | undefined;
   // KEIKO-0838 follow-up (#2906 round 3): graph-scoped pairing/rotate denial-window counters for
   // the aggregate diagnostic in codingAppSessionRoutes.ts. One instance per composed deps graph
   // (see assembleUiHandlerDeps), reset on disposal, so two independently composed `UiHandlerDeps`
@@ -1376,6 +1382,7 @@ export interface BuildHandlerDepsOptions extends AgentAuthorityRegistryDependenc
    * composition must never construct or fall back to the fake — a missing port fails closed.
    */
   readonly sessionPairingPort?: SessionPairingPort | undefined;
+  readonly launcherBrowser?: LauncherBrowser | undefined;
   /**
    * Bounded content source the app-session channel projects to a paired session. Absent in this
    * wave's production composition (content routing is W1.5+); tests inject a deterministic payload.
@@ -4609,7 +4616,6 @@ function atlassianConnectorCredentialFields(
       onLivePodInvalidated: (podId, generation, correlationId) => {
         invalidateJiraPodChats(args.bundle.uiStore, podId, generation, correlationId, accessOwners);
       },
-      networkConfig: () => args.runtimeConfig.current()?.atlassian,
       configPath: args.runtimeConfig.storagePath,
       env: args.options.env,
       egress: () => args.runtimeConfig.current()?.egress ?? args.egress,
@@ -5640,6 +5646,7 @@ type RuntimeUiHandlerDeps = ReturnType<typeof codingSidecarGatewayModelSourceFie
   Pick<
     UiHandlerDeps,
     | "codingAppSessionChannel"
+    | "launcherBrowser"
     | "registry"
     | "modelPortFactory"
     | "codingWorkbenchEvidenceStore"
@@ -5659,6 +5666,7 @@ function buildRuntimeUiHandlerDeps(
   );
   return {
     codingAppSessionChannel: services.codingAppSessionChannel,
+    launcherBrowser: args.options.launcherBrowser ?? resolveLauncherBrowser(args.options.env),
     registry: args.options.registry ?? createRunRegistry(),
     modelPortFactory: args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),
     ...codingSidecarGatewayModelSourceFields(args),

@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -59,9 +60,9 @@ async function verifyChatModel(request: APIRequestContext): Promise<void> {
 
 async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<void> {
   await page.addInitScript(
-    ({ chatId, title }) => {
+    ({ argument: { chatId, title }, storageKeys }) => {
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "memory-journal-chat",
@@ -76,9 +77,9 @@ async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<v
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { chatId: chat.id, title: chat.title },
+    await workspaceStorageArgs(page, { chatId: chat.id, title: chat.title }),
   );
 }
 

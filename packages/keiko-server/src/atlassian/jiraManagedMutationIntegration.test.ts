@@ -47,11 +47,13 @@ import { executeJiraChatMutation } from "./jiraChatMutation.js";
 import { executeJiraChatDraft, jiraDraftChildIntent } from "./jiraChatDraft.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
+import { verifyStoredCredential } from "./credentialVerification.js";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 import type { JiraChatToolMutationIntent as ChatToolMutationIntent } from "../store/chatToolMutationTypes.js";
 import { jiraChatMutationOutcome } from "./jiraChatMutationOutcome.js";
 
 const cleanup: (() => void | Promise<void>)[] = [];
+const BASE_URL = "https://203.0.113.10/context";
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
@@ -173,6 +175,29 @@ async function scriptedRefusal(mode: RemoteMode, request: Request): Promise<Resp
     headers: { "content-type": "application/json" },
   });
 }
+/** The same bounded Data Center probes production verification consumes, with no DNS or socket. */
+function verificationProbe(path: string): ReturnType<typeof response> | undefined {
+  if (path.endsWith("/serverInfo")) {
+    return response({
+      version: "10.3.26",
+      versionNumbers: [10, 3, 26],
+      deploymentType: "Data Center",
+    });
+  }
+  if (path.endsWith("/myself")) {
+    return response({ name: "synthetic-user", key: "synthetic-key", active: true });
+  }
+  return undefined;
+}
+function fixtureReadResult(
+  mode: RemoteMode,
+  path: string,
+  state: SyntheticJira,
+  writes: number,
+): ReturnType<typeof fixtureRead> {
+  if (mode === "readback-denied" && writes > 0) return response({}, 403);
+  return verificationProbe(path) ?? fixtureRead(path, state);
+}
 function remote(
   mode: RemoteMode,
   beforeWrite: () => void,
@@ -206,9 +231,7 @@ function remote(
       if (refusal !== undefined) return refusal;
       const result =
         request.method === "GET"
-          ? mode === "readback-denied" && writes > 0
-            ? response({}, 403)
-            : fixtureRead(path, state)
+          ? fixtureReadResult(mode, path, state, writes)
           : await fixtureWriteResult(request, path, state);
       if (request.method !== "GET" && mode === "lost-response")
         throw new TypeError("Synthetic connection loss after commit");
@@ -234,10 +257,14 @@ async function fixtureWriteResult(
     bytes: new Uint8Array(await request.arrayBuffer()),
   });
 }
-function mutationCredentials(fetchImpl: typeof fetch): {
+async function mutationCredentials(
+  fetchImpl: typeof fetch,
+  activityLog: ReturnType<typeof createBufferedServerLogSink>,
+  verifyConnection = true,
+): Promise<{
   credentials: AtlassianConnectorCredentialDeps;
   metadata: AtlassianCredentialMetadata;
-} {
+}> {
   const directory = mkdtempSync(join(realpathSync(tmpdir()), "keiko-jira-mutation-custody-"));
   cleanup.push(() => {
     rmSync(directory, { recursive: true, force: true });
@@ -247,6 +274,7 @@ function mutationCredentials(fetchImpl: typeof fetch): {
     env: { KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: randomBytes(32).toString("base64") },
     egress: () => undefined,
     fetchImpl,
+    activityLog,
   });
   const metadata = credentials.custody.create(
     {
@@ -254,13 +282,20 @@ function mutationCredentials(fetchImpl: typeof fetch): {
       deployment: "data-center",
       authScheme: "bearer-pat",
       displayName: "Synthetic mutation Jira",
-      baseUrl: "https://jira.example.invalid/context",
+      baseUrl: BASE_URL,
       apiToken: ["synthetic", "test", "pat"].join("-"),
       livePodCreationRequestId: randomUUID(),
     },
     "a".repeat(64),
   );
-  return { credentials, metadata };
+  if (!verifyConnection) return { credentials, metadata };
+  expect(await verifyStoredCredential(credentials, metadata, "mutation-fixture-verification")).toBe(
+    "ok",
+  );
+  const verified = credentials.custody.getMetadata(metadata.authRef);
+  if (verified === undefined) throw new Error("Expected verified synthetic Jira metadata");
+  expect(verified).toMatchObject({ livePod: { verificationStatus: "ok" } });
+  return { credentials, metadata: verified };
 }
 async function fixture(
   mode: RemoteMode = "confirmed",
@@ -284,7 +319,7 @@ async function fixture(
   const jira = remote(mode, () => {
     expect(db.journal.find(activeInvocation)?.phase).toBe("dispatched");
   });
-  const { credentials, metadata } = mutationCredentials(jira.fetch);
+  const { credentials, metadata } = await mutationCredentials(jira.fetch, db.logs);
   const executeMutation: JiraManagedMutationExecutor<
     CatalogHandlerContext<ConversationConsumer>
   > = (operation, args, context, execute) => {
@@ -326,13 +361,13 @@ async function fixture(
       arguments: args,
       deselected: [],
       context,
-      connection: { deployment: "data-center", baseUrl: "https://jira.example.invalid/context" },
+      connection: { deployment: "data-center", baseUrl: BASE_URL },
     });
   };
   const provider = createJiraProviderForCatalog<CatalogHandlerContext<ConversationConsumer>>(
     () => ({
       deployment: "data-center",
-      baseUrl: "https://jira.example.invalid/context",
+      baseUrl: BASE_URL,
       http: vi.fn(() => {
         throw new Error("Mutation must use the journal-owned HTTP port");
       }),
@@ -450,7 +485,7 @@ it.each(SINGLE_MUTATIONS)(
         data: {
           outcome: "succeeded",
           issueKey: "SYN-1",
-          browseUrl: "https://jira.example.invalid/context/browse/SYN-1",
+          browseUrl: `${BASE_URL}/browse/SYN-1`,
         },
       },
     });
@@ -462,10 +497,10 @@ it.each(SINGLE_MUTATIONS)(
     });
     expect(f.writes()).toBe(1);
     expect(JSON.stringify(f.offered)).not.toMatch(
-      /synthetic-test-pat|jira\.example|synthetic-ref/u,
+      /synthetic-test-pat|203\.0\.113\.10|synthetic-ref/u,
     );
     expect(f.logs.lines().join()).not.toMatch(
-      /synthetic-test-pat|jira\.example|Synthetic comment|SYN-1/u,
+      /synthetic-test-pat|203\.0\.113\.10|Synthetic comment|SYN-1/u,
     );
   },
 );
@@ -668,7 +703,7 @@ it("runs a backlog draft through the real gateway/binder/SDK as journaled item c
             ref: "one",
             state: "created",
             issueKey: "SYN-1",
-            browseUrl: "https://jira.example.invalid/context/browse/SYN-1",
+            browseUrl: `${BASE_URL}/browse/SYN-1`,
           },
         ],
       },
@@ -687,7 +722,36 @@ it("runs a backlog draft through the real gateway/binder/SDK as journaled item c
     result: { data: { outcome: "succeeded", items: [{ ref: "one", state: "created" }] } },
   });
   expect(f.writes()).toBe(1);
-  expect(f.logs.lines().join()).not.toMatch(/synthetic-test-pat|jira\.example|SYN-1/u);
+  expect(f.logs.lines().join()).not.toMatch(/synthetic-test-pat|203\.0\.113\.10|SYN-1/u);
+});
+
+it("requires saved target admission before the SDK fixture can dispatch any HTTP", async () => {
+  const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(Response.json({})));
+  const logs = createBufferedServerLogSink();
+  const { credentials, metadata } = await mutationCredentials(fetchImpl, logs, false);
+  expect(
+    await credentials.httpBodyPortFactory(
+      metadata,
+      "mutation-missing-admission",
+    )({
+      method: "GET",
+      url: `${BASE_URL}/rest/api/2/myself`,
+      timeoutMs: 1000,
+      maxBodyBytes: 4096,
+    }),
+  ).toEqual({ kind: "network-error" });
+  expect(fetchImpl).not.toHaveBeenCalled();
+  const admission = logs.events.filter((event) => event.op === "atlassian.target.admission");
+  expect(admission).toHaveLength(1);
+  for (const event of admission) {
+    const line = formatActivityLogProofLine(event);
+    expect(expectRegisteredActivityLogLine("atlassian.target.admission", line)).toMatchObject({
+      source: "saved-data-center",
+      outcome: "blocked",
+    });
+    expect(line).not.toMatch(/203\.0\.113\.10|synthetic-test-pat|Authorization|Bearer/u);
+    expect(line).not.toContain(metadata.authRef);
+  }
 });
 
 it("treats a draft whose items all exist already as a completed no-op, not a tool error (#4178)", async () => {

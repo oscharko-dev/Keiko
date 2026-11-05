@@ -911,7 +911,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: [],
+      state: ["atlassian.target.admission"],
       end: [
         "atlassian.connection.checked",
         "atlassian.credential.created",
@@ -926,6 +926,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "atlassian.credential.created",
       "atlassian.credential.listed",
       "atlassian.credential.updated",
+      "atlassian.target.admission",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
@@ -934,6 +935,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "atlassian.credential.listed",
       "atlassian.credential.rejected",
       "atlassian.credential.updated",
+      "atlassian.target.admission",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
@@ -941,6 +943,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "atlassian.credential.created",
       "atlassian.credential.listed",
       "atlassian.credential.updated",
+      "atlassian.target.admission",
     ],
     requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
     requiredFrameOperations: [],
@@ -1668,12 +1671,17 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
         "coding-app-session.expired",
         "coding-app-session.operation.state",
       ],
-      end: ["coding-app-session.local-session.confirmed", "coding-app-session.paired"],
+      end: [
+        "coding-app-session.browser-open",
+        "coding-app-session.local-session.confirmed",
+        "coding-app-session.paired",
+      ],
       failure: [],
       loss: [],
     },
     requiredCausalOperations: [
       "coding-app-session.browser-approval.state",
+      "coding-app-session.browser-open",
       "coding-app-session.expired",
       "coding-app-session.local-session.confirmed",
       "coding-app-session.operation.state",
@@ -1682,6 +1690,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLossOperations: [],
     requiredProofOperations: [
       "coding-app-session.browser-approval.state",
+      "coding-app-session.browser-open",
       "coding-app-session.expired",
       "coding-app-session.local-session.confirmed",
       "coding-app-session.operation.state",
@@ -1690,6 +1699,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "coding-app-session.browser-approval.state",
+      "coding-app-session.browser-open",
       "coding-app-session.expired",
       "coding-app-session.local-session.confirmed",
       "coding-app-session.operation.state",

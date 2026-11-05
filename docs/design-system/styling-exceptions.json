@@ -826,7 +826,6 @@
     {
       "source": "packages/keiko-ui/src/app/local-knowledge/capsule-detail.module.css",
       "globalSelectors": [
-        ".lk-badge",
         ".lk-btn",
         ".lk-capsule-name",
         ".lkd-actions-group",
@@ -871,25 +870,6 @@
         "sourceSetupTitle",
         "specificFilesDisclosure",
         "specificFilesSummary"
-      ]
-    },
-    {
-      "source": "packages/keiko-ui/src/app/local-knowledge/create-capsule-dialog.module.css",
-      "globalSelectors": [],
-      "unprefixedLocalClasses": [
-        "accessField",
-        "accessHeading",
-        "accessHelp",
-        "accessHelpButton",
-        "accessHint",
-        "accessOption",
-        "accessOptionBadge",
-        "accessOptionCopy",
-        "accessOptionDescription",
-        "accessOptionDisabled",
-        "accessOptionTitle",
-        "accessOptions",
-        "accessTooltip"
       ]
     },
     {

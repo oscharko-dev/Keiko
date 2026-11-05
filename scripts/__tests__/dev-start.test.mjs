@@ -20,6 +20,7 @@ const {
   ensureDevCodingRuntime,
   healthyDevServer,
   maybeOpenPairedBrowser,
+  reopenDevBrowser,
   npmCommand,
   pairedDevBrowserUrl,
   prepareRunnerCriticalSection,
@@ -705,5 +706,25 @@ describe("prepareRunnerCriticalSection (KEIKO-0719 race close)", () => {
     expect(existsSync(join(stateDirectory, "dev-ui.pid.json"))).toBe(false);
     await expect(prepareRunnerCriticalSection({})).resolves.toBeUndefined();
     await expect(prepareRunnerCriticalSection()).resolves.toBeUndefined();
+  });
+});
+
+describe("reopening the running dev browser", () => {
+  it("requests only the fixed native handoff without retrieving proof", async () => {
+    const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ state: "opened" }) });
+    expect(await reopenDevBrowser(1983, fetch)).toBe(true);
+    expect(fetch).toHaveBeenCalledWith(
+      "http://localhost:1983/api/coding-workbench/app-session/open-browser",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ origin: "http://localhost:1983" }),
+        headers: expect.objectContaining({ Origin: "http://localhost:1983", "X-Keiko-CSRF": "1" }),
+      }),
+    );
+  });
+  it.each(["busy", "unavailable", "failed"])("keeps a %s outcome unsuccessful", async (state) => {
+    expect(
+      await reopenDevBrowser(1983, async () => ({ ok: true, json: async () => ({ state }) })),
+    ).toBe(false);
   });
 });

@@ -1,4 +1,3 @@
-import type { AtlassianPrivateTarget } from "@oscharko-dev/keiko-contracts";
 // Issue #2241 — gatewayFetch-backed AtlassianHttpPort adapter tests. Hermetic: an injected
 // fetchImpl fake replaces the platform fetch, so no request leaves the process. Asserts the
 // ADR-0128 D2/D3 posture directly: the Authorization header is materialised only at the outbound
@@ -631,27 +630,27 @@ const INTERNAL_BASE_URLS = [
 ] as const;
 
 describe("Atlassian connector egress posture", () => {
-  it("admits only the exact configured private origin, port, path and address class", async () => {
+  it("admits only the saved private origin, port and context path", async () => {
     const { fetchImpl, calls } = fetchFake(200);
-    const privateTargets = (): readonly AtlassianPrivateTarget[] => [
-      { baseUrl: "https://10.0.0.5:8443/jira", addressClass: "private" as const },
-    ];
-    for (const baseUrl of [
-      "https://10.0.0.5:8443/jira",
+    const baseUrl = "https://10.0.0.5:8443/jira";
+    const connection = createGatewayAtlassianHttpPort({
+      baseUrl,
+      authRef: AUTH_REF,
+      credentials: resolver(),
+      fetchImpl,
+      targetAdmission: () => Promise.resolve({ baseUrl, addressClass: "private" }),
+    });
+    expect(
+      await connection({ method: "GET", url: `${baseUrl}/rest/api/2/myself`, timeoutMs: 100 }),
+    ).toEqual({ kind: "response", status: 200 });
+    for (const otherBaseUrl of [
       "https://10.0.0.5:8444/jira",
       "https://10.0.0.6:8443/jira",
       "https://10.0.0.5:8443/other",
     ]) {
-      const result = await createGatewayAtlassianHttpPort({
-        baseUrl,
-        authRef: AUTH_REF,
-        credentials: resolver(),
-        privateTargets,
-        fetchImpl,
-      })({ method: "GET", url: `${baseUrl}/rest/api/2/myself`, timeoutMs: 100 });
-      expect(result.kind).toBe(
-        baseUrl === "https://10.0.0.5:8443/jira" ? "response" : "network-error",
-      );
+      await expect(
+        connection({ method: "GET", url: `${otherBaseUrl}/rest/api/2/myself`, timeoutMs: 100 }),
+      ).rejects.toThrow(AtlassianCredentialCustodyError);
     }
     expect(calls).toHaveLength(1);
   });
@@ -660,13 +659,14 @@ describe("Atlassian connector egress posture", () => {
     const { fetchImpl, calls } = fetchFake(200);
     let enabled = true;
     const baseUrl = "https://127.0.0.1:18443/jira";
-    const privateTargets = (): readonly AtlassianPrivateTarget[] =>
-      enabled ? [{ baseUrl, addressClass: "loopback" as const }] : [];
+    const targetAdmission = (): Promise<
+      { baseUrl: string; addressClass: "loopback" } | undefined
+    > => Promise.resolve(enabled ? { baseUrl, addressClass: "loopback" } : undefined);
     const connection = createGatewayAtlassianHttpPort({
       baseUrl,
       authRef: AUTH_REF,
       credentials: resolver(),
-      privateTargets,
+      targetAdmission,
       fetchImpl,
     });
     const request = { method: "GET" as const, url: `${baseUrl}/rest/api/2/myself`, timeoutMs: 100 };
@@ -678,7 +678,7 @@ describe("Atlassian connector egress posture", () => {
       baseUrl,
       authRef: AUTH_REF,
       credentials: resolver(),
-      privateTargets,
+      targetAdmission,
       deniedLoopbackPorts: () => [18443],
       fetchImpl,
     });
@@ -877,7 +877,7 @@ describe("Atlassian connector egress posture — proxied DNS-rebinding refusal (
           baseUrl,
           authRef: AUTH_REF,
           credentials: resolver(),
-          privateTargets: () => [{ baseUrl, addressClass: "private" }],
+          targetAdmission: () => Promise.resolve({ baseUrl, addressClass: "private" }),
           egress: () => (proxied ? { httpsProxy: `http://127.0.0.1:${String(port)}` } : undefined),
         })({ method: "GET", url: `${baseUrl}/rest/api/2/myself`, timeoutMs: 1000 });
         expect(result).toEqual({ kind: "network-error" });

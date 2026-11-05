@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, writeFileSync, type Stats } from "node:fs";
@@ -182,49 +183,52 @@ function windowById(page: Page, id: string): Locator {
 }
 
 async function seedWorkspace(page: Page, mode: ModeCase): Promise<void> {
-  await page.addInitScript((theme) => {
-    window.localStorage.setItem("keiko.theme", theme);
-    window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-2060-project",
-          type: "project",
-          x: 124,
-          y: 118,
-          w: 280,
-          h: 240,
-          z: 1,
-          cfg: {},
-          max: false,
-        },
-        {
-          id: "issue-2060-plugins",
-          type: "plugins",
-          x: 432,
-          y: 150,
-          w: 330,
-          h: 250,
-          z: 2,
-          cfg: {},
-          max: false,
-        },
-        {
-          id: "issue-2060-automations",
-          type: "automations",
-          x: 792,
-          y: 118,
-          w: 290,
-          h: 240,
-          z: 3,
-          cfg: {},
-          max: false,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, mode.theme);
+  await page.addInitScript(
+    ({ argument: theme, storageKeys }) => {
+      window.localStorage.setItem("keiko.theme", theme);
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "issue-2060-project",
+            type: "project",
+            x: 124,
+            y: 118,
+            w: 280,
+            h: 240,
+            z: 1,
+            cfg: {},
+            max: false,
+          },
+          {
+            id: "issue-2060-plugins",
+            type: "plugins",
+            x: 432,
+            y: 150,
+            w: 330,
+            h: 250,
+            z: 2,
+            cfg: {},
+            max: false,
+          },
+          {
+            id: "issue-2060-automations",
+            type: "automations",
+            x: 792,
+            y: 118,
+            w: 290,
+            h: 240,
+            z: 3,
+            cfg: {},
+            max: false,
+          },
+        ]),
+      );
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, mode.theme),
+  );
 }
 
 async function openMode(page: Page, mode: ModeCase): Promise<void> {

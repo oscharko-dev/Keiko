@@ -69,7 +69,14 @@ async function fetchRaw(path: string): Promise<RawResponse> {
 }
 
 async function fetchRawWithInit(path: string, init: RequestInit): Promise<RawResponse> {
-  const response = await fetch(`${baseUrl()}${path}`, init);
+  const headers = new Headers(init.headers);
+  if (path === "/api/workspace/state" && init.method === "PUT") {
+    const ownership = JSON.parse((await fetchRaw(path)).text) as {
+      workspace: { storageId: string };
+    };
+    headers.set("X-Keiko-Workspace-Storage", ownership.workspace.storageId);
+  }
+  const response = await fetch(`${baseUrl()}${path}`, { ...init, headers });
   return { status: response.status, headers: response.headers, text: await response.text() };
 }
 

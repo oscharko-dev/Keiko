@@ -2824,7 +2824,7 @@ export type {
   validateManualRefreshChangeSummary,
 } from "./html-manual-refresh.js";
 
-// ─── HTML Manual Knowledge Pod live create/refresh job (Issue #2063) ────────────────
+// ─── HTML Manual Knowledge Pod retained refresh job (Issue #2063) ────────────────
 export type {
   HtmlManualPodJobOperation,
   HtmlManualPodJobState,
@@ -2834,7 +2834,6 @@ export type {
   HtmlManualPodJobRemediation,
   HtmlManualPodJob,
   HtmlManualPodRefreshRequest,
-  HtmlManualPodCreateRequest,
 } from "./html-manual-job.js";
 export type {
   HTML_MANUAL_POD_JOB_SCHEMA_VERSION,
@@ -2842,7 +2841,6 @@ export type {
   HTML_MANUAL_POD_JOB_STATES,
   HTML_MANUAL_POD_JOB_PHASES,
   validateHtmlManualPodRefreshRequest,
-  validateHtmlManualPodCreateRequest,
 } from "./html-manual-job.js";
 
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────

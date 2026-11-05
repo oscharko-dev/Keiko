@@ -152,6 +152,17 @@ let activePrincipal = "synthetic-operator";
 let fixtureAuthorityRegistry: EditorAgentAuthorityRegistry;
 let fixtureApprovalRegistry: AtlassianActionApprovalRegistry;
 
+// These response-observation cases use a fake transport, not DNS. Arrange the private
+// server-owned binding independently; the real admission/DNS path has its own integration suite.
+function bindSyntheticTarget(metadata: AtlassianCredentialMetadata): void {
+  expect(
+    createAtlassianCredentialMetadataStore({ configPath }).bindTargetAdmission(metadata, {
+      baseUrl: metadata.baseUrl,
+      addressClass: "public",
+    }),
+  ).toBeDefined();
+}
+
 function livePodCreateInput(): Record<string, unknown> {
   return {
     provider: "jira",
@@ -801,6 +812,7 @@ describe("end-to-end verify through the gateway transport adapter", () => {
         livePodCreateInput(),
         jiraChatActorDigest(baseDeps(real)),
       );
+      bindSyntheticTarget(created);
       expect(await (await verifyCredentialRequest(created.authRef)).json()).toMatchObject({
         status: "auth-failed",
       });
@@ -1062,6 +1074,7 @@ describe("end-to-end verify through the gateway transport adapter", () => {
         fetchImpl: (): Promise<Response> => Promise.resolve(new Response("{}", { status })),
       });
       const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
+      bindSyntheticTarget(created);
       const probe = real.custody.beginVerification(created.authRef);
       if (probe === undefined) throw new Error("Expected verification ticket");
       real.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
@@ -1114,6 +1127,7 @@ describe("end-to-end verify through the gateway transport adapter", () => {
           ),
       });
       const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
+      bindSyntheticTarget(created);
       const probe = real.custody.beginVerification(created.authRef);
       if (probe === undefined) throw new Error("Expected verification ticket");
       real.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
@@ -1174,6 +1188,7 @@ describe("end-to-end verify through the gateway transport adapter", () => {
       },
     });
     const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
+    bindSyntheticTarget(created);
     const probe = real.custody.beginVerification(created.authRef);
     if (probe === undefined) throw new Error("Expected verification ticket");
     real.custody.finishVerification(created.authRef, 1, probe.revision, "ok");

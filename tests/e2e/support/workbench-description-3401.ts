@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./workspace-storage.js";
 import { expect, type Page, type Route } from "@playwright/test";
 import { activeWorkspace } from "./coding-workbench-live-runtime-fixtures.js";
 
@@ -205,9 +206,9 @@ export async function seedWorkbenchDescriptionWindow(page: Page, root: string): 
   );
   await installTaskHistoryRoute(page, root, instance);
   await page.addInitScript(
-    ({ repositoryRoot }) => {
+    ({ argument: { repositoryRoot }, storageKeys }) => {
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "issue-3401-workbench-window",
@@ -223,9 +224,9 @@ export async function seedWorkbenchDescriptionWindow(page: Page, root: string): 
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { repositoryRoot: root },
+    await workspaceStorageArgs(page, { repositoryRoot: root }),
   );
 }
 

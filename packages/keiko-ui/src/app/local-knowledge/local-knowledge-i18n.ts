@@ -33,7 +33,6 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
   "localKnowledge.row.details": "Details",
   "localKnowledge.row.detailsLabel": "Open details for Knowledge Pod {name}",
   "localKnowledge.row.disconnectLabel": "Disconnect Knowledge Pod {name}",
-  "localKnowledge.row.disconnecting": "Disconnecting…",
   "localKnowledge.picker.loading": "Loading Knowledge Pods…",
   "localKnowledge.picker.loadFailed": "Failed to load Knowledge Pods.",
   "localKnowledge.picker.retry": "Try again",
@@ -59,8 +58,6 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
   "localKnowledge.row.cancelIndexingLabel": "Cancel indexing for Knowledge Pod {name}",
   "localKnowledge.row.cancelling": "Cancelling…",
   "localKnowledge.row.startIndexingLabel": "Start indexing Knowledge Pod {name}",
-  "localKnowledge.row.attachSourceTitle": "Attach a source before indexing this Knowledge Pod.",
-  "localKnowledge.row.attachSourceHint": "Attach a source before indexing.",
   "localKnowledge.row.index": "Index",
   "localKnowledge.row.indexing": "Indexing…",
   "localKnowledge.readiness.ready": "Ready",
@@ -227,33 +224,9 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
   "localKnowledge.manualRefresh.reason.indexFailed":
     "Indexing failed during refresh. Pages that were being re-indexed at the time of failure may be temporarily unsearchable until a future successful refresh repairs them.",
   "localKnowledge.create.title": "Create Knowledge Pod",
-  "localKnowledge.create.description":
-    "Name this Knowledge Pod, then connect a source and start indexing from its page.",
+  "localKnowledge.create.description": "Name this Knowledge Pod.",
   "localKnowledge.create.nameLabel": "Knowledge Pod display name",
   "localKnowledge.create.validation.nameRequired": "Pod display name is required.",
-  "localKnowledge.create.access.legend": "Access",
-  "localKnowledge.create.access.hint": "Choose who may use this Knowledge Pod.",
-  "localKnowledge.create.access.helpLabel": "Explain Knowledge Pod access",
-  "localKnowledge.create.access.help":
-    "Access controls where this Knowledge Pod can be used. Local keeps it private to this Keiko instance. Shareable will allow trusted sharing later.",
-  "localKnowledge.create.access.local": "Local",
-  "localKnowledge.create.access.localDescription":
-    "Only this Keiko instance can use this Knowledge Pod; it is not shared or synchronized.",
-  "localKnowledge.create.access.shareable": "Shareable",
-  "localKnowledge.create.access.shareableDescription":
-    "Planned for sharing with selected Keiko users or other Keiko instances.",
-  "localKnowledge.create.access.shareableTooltip":
-    "Coming later: share Knowledge Pods with trusted Keiko users or Keiko instances. Until then, new Knowledge Pods remain local and private here.",
-  "localKnowledge.create.access.comingSoon": "Coming soon",
-  "localKnowledge.create.policy.legend": "Model use",
-  "localKnowledge.create.policy.hint":
-    "Choose what Keiko may do with this Knowledge Pod's content.",
-  "localKnowledge.create.policy.standard": "Use configured models",
-  "localKnowledge.create.policy.standardDescription":
-    "Searchable and citable as soon as it is indexed. Excerpts and questions go to the embedding and answer models configured for this installation.",
-  "localKnowledge.create.policy.sealedLocal": "Sealed local",
-  "localKnowledge.create.policy.sealedLocalDescription":
-    "Content is never sent to an external model, never used to write answers and never released as raw text. Only local, on-device embedding and reranking are permitted. A sealed pod stays out of search and answers until you change this choice.",
   "localKnowledge.create.creating": "Creating...",
   "localKnowledge.create.submit": "Create Knowledge Pod",
   "localKnowledge.overview.backToWorkspace": "Back to Workspace",
@@ -735,7 +708,6 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
   "localKnowledge.row.details": "Details",
   "localKnowledge.row.detailsLabel": "Details zu Knowledge Pod {name} öffnen",
   "localKnowledge.row.disconnectLabel": "Knowledge Pod {name} trennen",
-  "localKnowledge.row.disconnecting": "Wird getrennt…",
   "localKnowledge.picker.loading": "Knowledge Pods werden geladen…",
   "localKnowledge.picker.loadFailed": "Knowledge Pods konnten nicht geladen werden.",
   "localKnowledge.picker.retry": "Erneut versuchen",
@@ -761,9 +733,6 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
   "localKnowledge.row.cancelIndexingLabel": "Indexierung für Knowledge Pod {name} abbrechen",
   "localKnowledge.row.cancelling": "Wird abgebrochen…",
   "localKnowledge.row.startIndexingLabel": "Indexierung für Knowledge Pod {name} starten",
-  "localKnowledge.row.attachSourceTitle":
-    "Verbinde eine Quelle, bevor du diesen Knowledge Pod indexierst.",
-  "localKnowledge.row.attachSourceHint": "Verbinde eine Quelle vor dem Indexieren.",
   "localKnowledge.row.index": "Indexieren",
   "localKnowledge.row.indexing": "Wird indexiert…",
   "localKnowledge.readiness.ready": "Bereit",
@@ -931,34 +900,10 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
   "localKnowledge.manualRefresh.reason.indexFailed":
     "Die Indexierung ist bei der Aktualisierung fehlgeschlagen. Seiten, die zum Zeitpunkt des Fehlers neu indexiert wurden, sind möglicherweise vorübergehend nicht durchsuchbar, bis eine spätere erfolgreiche Aktualisierung sie repariert.",
   "localKnowledge.create.title": "Knowledge Pod erstellen",
-  "localKnowledge.create.description":
-    "Benenne diesen Knowledge Pod, verbinde eine Quelle und starte die Indexierung auf seiner Seite.",
+  "localKnowledge.create.description": "Benenne diesen Knowledge Pod.",
   "localKnowledge.create.nameLabel": "Anzeigename des Knowledge Pod",
   "localKnowledge.create.validation.nameRequired":
     "Der Anzeigename des Knowledge Pod ist erforderlich.",
-  "localKnowledge.create.access.legend": "Zugriff",
-  "localKnowledge.create.access.hint": "Lege fest, wo dieser Knowledge Pod genutzt werden darf.",
-  "localKnowledge.create.access.helpLabel": "Zugriff auf Knowledge Pods erläutern",
-  "localKnowledge.create.access.help":
-    "Der Zugriff legt fest, wo dieser Knowledge Pod genutzt werden darf. Lokal bleibt er privat auf dieser Keiko-Instanz. Teilbar wird später eine gezielte Freigabe ermöglichen.",
-  "localKnowledge.create.access.local": "Lokal",
-  "localKnowledge.create.access.localDescription":
-    "Nur diese Keiko-Instanz kann diesen Knowledge Pod nutzen. Er wird nicht geteilt oder synchronisiert.",
-  "localKnowledge.create.access.shareable": "Teilbar",
-  "localKnowledge.create.access.shareableDescription":
-    "Geplant für die Freigabe an ausgewählte Keiko-Nutzer oder andere Keiko-Instanzen.",
-  "localKnowledge.create.access.shareableTooltip":
-    "Kommt später: Knowledge Pods gezielt mit vertrauenswürdigen Keiko-Nutzern oder Keiko-Instanzen teilen. Bis dahin bleiben neue Knowledge Pods hier lokal und privat.",
-  "localKnowledge.create.access.comingSoon": "Bald verfügbar",
-  "localKnowledge.create.policy.legend": "Modellnutzung",
-  "localKnowledge.create.policy.hint":
-    "Lege fest, was Keiko mit den Inhalten dieses Knowledge Pod tun darf.",
-  "localKnowledge.create.policy.standard": "Konfigurierte Modelle nutzen",
-  "localKnowledge.create.policy.standardDescription":
-    "Nach der Indexierung sofort durchsuchbar und zitierbar. Auszüge und Fragen gehen an die für diese Installation konfigurierten Embedding- und Antwortmodelle.",
-  "localKnowledge.create.policy.sealedLocal": "Lokal versiegelt",
-  "localKnowledge.create.policy.sealedLocalDescription":
-    "Inhalte werden nie an ein externes Modell gesendet, nie zum Formulieren von Antworten verwendet und nie als Rohtext freigegeben. Erlaubt sind nur lokales Embedding und Reranking auf diesem Gerät. Ein versiegelter Pod bleibt aus Suche und Antworten ausgeschlossen, bis du die Auswahl änderst.",
   "localKnowledge.create.creating": "Wird erstellt…",
   "localKnowledge.create.submit": "Knowledge Pod erstellen",
   "localKnowledge.overview.backToWorkspace": "Zurück zum Arbeitsbereich",

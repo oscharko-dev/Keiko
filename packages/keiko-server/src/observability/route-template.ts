@@ -207,6 +207,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "native-file-dialog",
   "navigate",
   "open",
+  "open-browser",
   "operations",
   "order",
   "orphans",

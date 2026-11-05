@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import {
   expect,
   test,
@@ -37,27 +38,30 @@ async function registerProject(request: APIRequestContext, root: string): Promis
 }
 
 async function seedSettingsWindow(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("keiko.theme", "dark");
-    window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-2282-settings",
-          type: "settings",
-          x: 24,
-          y: 24,
-          w: 1320,
-          h: 980,
-          z: 10,
-          cfg: {},
-          max: false,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  });
+  await page.addInitScript(
+    ({ storageKeys }) => {
+      window.localStorage.setItem("keiko.theme", "dark");
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "issue-2282-settings",
+            type: "settings",
+            x: 24,
+            y: 24,
+            w: 1320,
+            h: 980,
+            z: 10,
+            cfg: {},
+            max: false,
+          },
+        ]),
+      );
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, undefined),
+  );
 }
 
 async function openLanguages(page: Page): Promise<Locator> {

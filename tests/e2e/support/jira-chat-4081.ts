@@ -1,8 +1,10 @@
+import { workspaceStorageArgs } from "./workspace-storage.js";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, type Locator } from "@playwright/test";
 import type { Chat, ChatMessage } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { AtlassianCredentialPublicMetadata } from "@oscharko-dev/keiko-contracts";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
 import { mintLauncherPairingAttestation } from "../../../packages/keiko-server/src/coding-app-session/launcherSessionPairingPort.js";
 
@@ -26,6 +28,7 @@ export const JIRA_BROWSER_COPY = {
     url: "Base URL",
     token: "API token",
     verify: "Verify connection",
+    more: "More actions:",
     connectors: "Connectors",
     access: "Access",
     askForApproval: "Ask for approval",
@@ -39,6 +42,7 @@ export const JIRA_BROWSER_COPY = {
     url: "Basis-URL",
     token: "API-Token",
     verify: "Verbindung prüfen",
+    more: "Weitere Aktionen:",
     connectors: "Konnektoren",
     access: "Zugriff",
     askForApproval: "Um Genehmigung bitten",
@@ -75,10 +79,10 @@ export async function openJiraChat(
   const state = fixture();
   const chat = state.chats[name];
   await page.addInitScript(
-    ({ id, title, locale }) => {
+    ({ argument: { id, title, locale }, storageKeys }) => {
       window.localStorage.setItem("keiko.locale", locale);
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "jira-fixture-chat",
@@ -93,9 +97,9 @@ export async function openJiraChat(
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { id: chat.id, title: chat.title, locale },
+    await workspaceStorageArgs(page, { id: chat.id, title: chat.title, locale }),
   );
   const fragment = encodeCodingAppSessionPairingFragment(
     mintLauncherPairingAttestation({
@@ -119,6 +123,39 @@ interface CreateOptions {
   readonly activate?: (control: Locator) => Promise<void>;
   readonly inspectForm?: (form: Locator, hub: Locator) => Promise<void>;
 }
+
+async function assertCreatedPodVerified(
+  page: Page,
+  card: Locator,
+  name: string,
+  copy: (typeof JIRA_BROWSER_COPY)[JiraBrowserLocale],
+  response: Awaited<ReturnType<Page["waitForResponse"]>>,
+  activate: (control: Locator) => Promise<void>,
+): Promise<void> {
+  expect(response.status()).toBe(200);
+  const verified = (await response.json()) as { readonly authRef: string; readonly status: string };
+  expect(verified.status).toBe("ok");
+  const result = await api(page, "/api/atlassian-connectors/credentials");
+  expect(result.status).toBe(200);
+  const { credentials } = result.body as {
+    readonly credentials: readonly AtlassianCredentialPublicMetadata[];
+  };
+  const credential = credentials.find((item) => item.authRef === verified.authRef);
+  expect(credential?.displayName).toBe(name);
+  if (credential?.authScheme !== "bearer-pat" || credential.livePod === undefined) {
+    throw new Error("Created Jira Pod is missing canonical verification metadata");
+  }
+  expect(credential.livePod.verificationStatus).toBe("ok");
+  expect(credential.livePod.verificationRevision).toBeGreaterThan(0);
+  expect(credential.livePod.verificationInProgress).toBe(false);
+  // The healthy embedded card keeps its secondary Verify action in the menu, without a chip.
+  await activate(card.getByRole("button", { name: `${copy.more} ${name}`, exact: true }));
+  const verify = card.getByRole("menuitem", { name: copy.verify, exact: true });
+  await expect(verify).toBeVisible();
+  await verify.press("Escape");
+  await expect(card.getByTestId("acx-pod-state")).toHaveCount(0);
+}
+
 export async function createAndConnect(
   page: Page,
   region: Locator,
@@ -135,10 +172,16 @@ export async function createAndConnect(
   await form.getByLabel(copy.label, { exact: true }).fill(name);
   await form.getByLabel(copy.url, { exact: true }).fill(fixture().jiraBaseUrl);
   await form.getByLabel(copy.token, { exact: true }).fill("synthetic-jira-browser-fixture-pat");
+  const verification = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      /^\/api\/atlassian-connectors\/credentials\/[^/]+\/verify$/u.test(
+        new URL(response.url()).pathname,
+      ),
+  );
   await activate(form.getByRole("button", { name: copy.create, exact: true }));
   const card = hub.getByTestId("acx-connector").filter({ hasText: name });
-  await activate(card.getByRole("button", { name: copy.verify, exact: true }));
-  await expect(card.locator('[data-status="ok"]')).toBeVisible();
+  await assertCreatedPodVerified(page, card, name, copy, await verification, activate);
   await activate(page.getByRole("button", { name: copy.hub, exact: true }));
   await activate(connectorsTrigger(region, options.locale ?? "en"));
   const pod = connectorsPanel(page, options.locale ?? "en").getByRole("switch", {

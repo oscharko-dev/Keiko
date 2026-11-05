@@ -2000,10 +2000,10 @@
       "failureClass": "atlassian-credential-custody",
       "requirementContract": "atlassian-credential-custody",
       "productSurfaces": ["keiko-server"],
-      "lifecycleTransitions": ["end", "failure"],
+      "lifecycleTransitions": ["end", "failure", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": [],
+        "state": ["atlassian.target.admission"],
         "end": [
           "atlassian.connection.checked",
           "atlassian.credential.created",
@@ -2033,6 +2033,10 @@
         {
           "op": "atlassian.credential.updated",
           "mode": "correlation"
+        },
+        {
+          "op": "atlassian.target.admission",
+          "mode": "correlation"
         }
       ],
       "lossSignals": [],
@@ -2040,7 +2044,8 @@
         "atlassian.connection.checked",
         "atlassian.credential.created",
         "atlassian.credential.listed",
-        "atlassian.credential.updated"
+        "atlassian.credential.updated",
+        "atlassian.target.admission"
       ],
       "replayReferences": [],
       "operations": [
@@ -2188,6 +2193,42 @@
             "causeChain": false
           },
           "proofIds": ["atlassian.credential.updated.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "atlassian.target.admission",
+          "owner": "keiko-server",
+          "category": "setup",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "addressClass",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "source",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["atlassian.target.admission.line"],
           "replayReferences": [],
           "missingObligations": []
         }
@@ -7466,13 +7507,21 @@
           "coding-app-session.expired",
           "coding-app-session.operation.state"
         ],
-        "end": ["coding-app-session.local-session.confirmed", "coding-app-session.paired"],
+        "end": [
+          "coding-app-session.browser-open",
+          "coding-app-session.local-session.confirmed",
+          "coding-app-session.paired"
+        ],
         "failure": [],
         "loss": []
       },
       "causalEdges": [
         {
           "op": "coding-app-session.browser-approval.state",
+          "mode": "correlation"
+        },
+        {
+          "op": "coding-app-session.browser-open",
           "mode": "correlation"
         },
         {
@@ -7495,6 +7544,7 @@
       "lossSignals": [],
       "resourceSignals": [
         "coding-app-session.browser-approval.state",
+        "coding-app-session.browser-open",
         "coding-app-session.expired",
         "coding-app-session.local-session.confirmed",
         "coding-app-session.operation.state",
@@ -7553,6 +7603,30 @@
             "causeChain": false
           },
           "proofIds": ["coding-app-session.browser-approval.state.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "coding-app-session.browser-open",
+          "owner": "keiko-server",
+          "category": "http",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-app-session.browser-open.outcome"],
           "replayReferences": [],
           "missingObligations": []
         },

@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useReducer } from "react";
 import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
 import { ChatDraftController, type DraftPhase } from "./chat-draft-controller";
+import { dirty } from "./chat-draft-state";
 
 export interface ChatDraftPersistence {
   readonly phase: DraftPhase;
   readonly pending: boolean;
+  readonly hasUnsavedChanges: boolean;
   readonly retry: () => Promise<void>;
   readonly prepareClose: () => Promise<boolean>;
   readonly isCloseReady: () => boolean;
@@ -48,6 +50,7 @@ export function useChatDraft(chatId: string | undefined, onReplace?: () => void)
   const redemptions = useCodingAppSessionRedemptions();
   const key = chatId ?? "";
   const entry = controller.entry(key);
+  const hasUnsavedChanges = dirty(entry);
   const setText = useCallback(
     (text: string): void => controller.setText(key, text),
     [controller, key],
@@ -72,13 +75,23 @@ export function useChatDraft(chatId: string | undefined, onReplace?: () => void)
     () => ({
       phase: entry.phase,
       pending: entry.pending,
+      hasUnsavedChanges,
       retry,
       keepLocal,
       restoreSaved,
       prepareClose,
       isCloseReady,
     }),
-    [entry.phase, entry.pending, retry, keepLocal, restoreSaved, prepareClose, isCloseReady],
+    [
+      entry.phase,
+      entry.pending,
+      hasUnsavedChanges,
+      retry,
+      keepLocal,
+      restoreSaved,
+      prepareClose,
+      isCloseReady,
+    ],
   );
   return { text: entry.text, setText, persistence, controller };
 }

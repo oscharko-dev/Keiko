@@ -62,8 +62,10 @@ describe("classifyOutboundHost IPv4 edge ranges", () => {
     ["8.64.0.1", "public"],
     ["0.0.0.1", "private"],
     ["223.255.255.255", "public"],
-    ["224.0.0.0", "private"],
-    ["255.255.255.255", "private"],
+    ["224.0.0.0", "multicast"],
+    ["239.255.255.255", "multicast"],
+    ["240.0.0.0", "multicast"],
+    ["255.255.255.255", "multicast"],
     ["192.0.0.1", "private"],
     ["192.0.1.1", "public"],
     ["8.0.0.1", "public"],
@@ -133,6 +135,18 @@ describe("outbound blocked-reason helpers keep metadata/link-local/multicast blo
     const reason = outboundAddressBlockedReason("ff02::1", { allowPrivateNetwork: true });
     expect(reason).toBe("multicast address");
   });
+
+  it.each(["224.0.0.1", "239.255.255.255", "240.0.0.1", "255.255.255.255"])(
+    "always blocks the multicast or reserved IPv4 address %s",
+    (address) => {
+      expect(
+        outboundAddressBlockedReason(address, {
+          allowPrivateNetwork: true,
+          allowLinkLocalAndMetadata: true,
+        }),
+      ).toBe("multicast address");
+    },
+  );
 
   it("still allows an RFC-1918 private address once allowPrivateNetwork is on", () => {
     const reason = outboundAddressBlockedReason("10.0.0.5", { allowPrivateNetwork: true });

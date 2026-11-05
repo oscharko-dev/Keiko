@@ -60,6 +60,38 @@ describe("private chat drafts", () => {
     expect(result.current.text).toBe("A pending");
   });
 
+  it("distinguishes an unsuccessful initial read from an unsaved user edit", async () => {
+    vi.mocked(readChatDraft).mockRejectedValueOnce(new TypeError("offline"));
+    const { result } = renderHook(() => useChatDraft("a"));
+    await waitFor(() => expect(result.current.persistence.phase).toBe("load-failed"));
+    expect(result.current.text).toBe("");
+    expect(result.current.persistence.hasUnsavedChanges).toBe(false);
+    expect(result.current.controller.hasUnsaved()).toBe(false);
+    expect(writeChatDraft).not.toHaveBeenCalled();
+  });
+
+  it("keeps a save failure stable while typing and resumes only after recovery", async () => {
+    vi.useFakeTimers();
+    const draft = controller();
+    await draft.refresh("a");
+    draft.setText("a", "local");
+    vi.mocked(writeChatDraft).mockRejectedValueOnce(new TypeError("offline"));
+    await draft.save("a");
+    draft.setText("a", "newer local");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(draft.entry("a")).toMatchObject({ text: "newer local", phase: "failed" });
+    expect(writeChatDraft).toHaveBeenCalledOnce();
+    await expect(draft.prepareClose()).resolves.toBe(false);
+    await draft.refresh("a");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(writeChatDraft).toHaveBeenLastCalledWith("a", {
+      text: "newer local",
+      expectedRevision: 0,
+    });
+    expect(draft.entry("a").phase).toBe("saved");
+    expect(draft.hasUnsaved()).toBe(false);
+  });
+
   it("debounces typing and writes the authoritative expected revision", async () => {
     vi.useFakeTimers();
     const draft = controller();

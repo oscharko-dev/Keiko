@@ -3,6 +3,29 @@
 Source-publication acceptance checkpoint: **46/55** (#4082 AC1/AC2/AC3/AC4/AC5, #4089 AC1/AC2/AC3/AC4/AC5/AC7, #4083 AC1/AC2/AC3/AC4/AC5/AC6/AC7, #4084 AC1/AC2/AC3/AC4/AC6, #4091 AC1/AC2/AC3/AC5/AC6, #4085 AC1/AC2/AC3/AC4/AC5/AC7, #4086 AC1/AC2/AC3/AC4/AC5/AC7, #4087 AC1/AC2/AC3/AC6/AC8/AC9).
 All local qualification is complete at this publication checkpoint. The nine integrated gate criteria await the delivered-head GitHub verdict and review settlement. Their live acceptance state is maintained in the [canonical child issues](https://github.com/oscharko-dev/Keiko/issues/4081); this versioned report records the evidence available before that verdict.
 
+## Local connection repair — 2026-11-04
+
+The owner removed the second, file-only private-target approval from ordinary Jira Data Center
+setup. The saved connector URL now owns its exact origin, port and context path. Explicit
+connection verification determines and privately retains its address class automatically;
+subsequent requests keep the same class, DNS/socket pinning, TLS validation and credential custody.
+Metadata/link-local targets, Keiko listener ports, path escapes and redirects remain refused.
+Neither a Chat request nor a global private-egress setting grants a different target.
+
+The running synthetic Docker lab was independently checked on this date: digest-pinned Jira
+10.3.26, PostgreSQL 16 and the HTTPS frontend were running, published ports were loopback-only,
+the certificate was current and the test license was valid. Jira initially had no projects or
+API-user fixtures despite reporting `RUNNING`. The documented basic seed then created two
+synthetic projects, four non-admin test identities with private PAT files and three issues.
+Readback confirmed three issues, one project visible to the API actor and no administrator
+permission. Trusted HTTPS and PAT reads passed; the untrusted CA was refused.
+
+The rebuilt product passed the browser connection flow: one Create submission verified the
+connection automatically, and reloading retained its verified metadata. This connection check
+does not establish complete Chat or mutation acceptance. Counts, artifacts and full-acceptance
+statements below describe their original source-publication checkpoints; the historical
+trust/admission-removal probe exercised the former file-owned policy.
+
 ## Final qualification checkpoint — complete live groups and literal acceptance audit
 
 The original 55 statements were reread against the actual implementation and retained proofs.

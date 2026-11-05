@@ -95,8 +95,20 @@ This shapes the product _and_ how you work on it:
   safety state; that state must never make the Editor discoverable or executable as an agent
   session. Chat repository search and the separate Coding Workbench are outside this retirement.
   Shared runtime contracts remain only where active consumers need them (ADR-0061).
+- **Knowledge Pod scope (owner decision, 2026-11-04):** Knowledge Pods use local storage and have
+  no sharing roadmap or sharing placeholders. The ordinary Create Knowledge Pod dialog asks only
+  for a name; the existing server-side `standard` default supplies model-use policy. Model routing
+  belongs to the central gateway configuration. Local pod storage does not imply local model
+  providers. Preserve existing model-use policy, containment and audit guards; see
+  [Knowledge Pods](docs/local-knowledge/knowledge-pods.md).
+- Local browser connection uses the trusted native launcher and existing single-use fragment
+  redemption. The one-click open request returns only a closed outcome, never proof or cookies;
+  preserve server-owned destinations, fixed browser targets, launch bounds and authenticated APIs.
 - **Never** weaken a trust boundary, evidence redaction, or a governance gate to make something
   pass. Fail closed. If a gate blocks you, the gate is usually right.
+- Desktop layout restoration is bound to the current UI database's existing persisted installation
+  identity. Preserve the same-store restart path; never replay unowned browser window references
+  into another data store or clear chats and files to hide a broken restoration (ADR-0027).
 - Portable updates must not require an Apple Developer subscription (ADR-0121 D7). Verify macOS
   handoff copies against the exact current artifact digests in the validated plan after managed
   registration admission; preserve candidate authenticity, containment and process ownership.
