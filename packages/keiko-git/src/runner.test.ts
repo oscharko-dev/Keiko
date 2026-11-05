@@ -1025,6 +1025,20 @@ describe("repository-local filter drivers (#4271)", () => {
     return { repo, marker };
   }
 
+  // A read with a small byte bound (a bounded diff preview) must still get its own answer.
+  it("reads the configuration under its own bound, not the read's", async () => {
+    const { repo } = filteredRepository();
+    writeFileSync(join(repo, "untracked-file-with-a-long-name.txt"), "x\n");
+    const read = await defaultGitProcessRunner(["-C", repo, "status", "--porcelain"], {
+      cwd: repo,
+      maxBytes: 8,
+      timeoutMs: 10_000,
+    });
+    expect(read.stdout).not.toContain("filter.");
+    expect(read.stdout.length).toBeGreaterThan(0);
+    expect(Buffer.byteLength(read.stdout)).toBeLessThanOrEqual(8);
+  });
+
   it.each([
     ["status", ["status", "--porcelain"]],
     ["diff", ["diff", "--stat"]],

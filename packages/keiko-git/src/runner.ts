@@ -614,6 +614,7 @@ const FILTER_APPLYING_SUBCOMMANDS: ReadonlySet<string> = new Set([
 ]);
 const FILTER_DRIVER_KEY = /^filter\.(.+)\.(?:clean|smudge|process|required)$/iu;
 const FILTER_DRIVER_NAME_OVERRIDABLE = /^[^=\n\r\0]+$/u;
+const FILTER_LISTING_MAX_BYTES = 1024 * 1024;
 
 // The listing must read the configuration the read itself will use, so it keeps the caller's `-C`.
 function configNamesArgs(args: readonly string[]): readonly string[] {
@@ -649,18 +650,27 @@ const localGitProcessRunner = createGitProcessRunnerWithFixedArgs(gitEnv, LOCAL_
 export const defaultGitProcessRunner: GitProcessRunner = async (args, options) => {
   if (!FILTER_APPLYING_SUBCOMMANDS.has(gitSubcommand(args) ?? ""))
     return await localGitProcessRunner(args, options);
-  const listing = await localGitProcessRunner(configNamesArgs(args), options);
-  // Outside a repository the listing is empty and the read fails on its own; a listing cut short
-  // cannot prove there is no driver, so that read does not run.
-  if (listing.truncated || listing.timedOut || listing.aborted) return listing;
+  const startedAt = Date.now();
+  // The caller's byte bound is about the read's own answer; the listing has its own. The two share
+  // the caller's time, so this step cannot extend a deadline.
+  const listing = await localGitProcessRunner(configNamesArgs(args), {
+    ...options,
+    maxBytes: FILTER_LISTING_MAX_BYTES,
+  });
+  // Outside a repository the listing is empty and the read fails on its own. A listing cut short
+  // cannot prove there is no driver, so that read does not run, and configuration names never
+  // stand in for the read's answer.
+  if (listing.timedOut || listing.aborted) return { ...listing, stdout: "", stderr: "" };
+  if (listing.truncated) return refusedOptionResult("filter", "config-override");
+  const read = { ...options, timeoutMs: Math.max(1, options.timeoutMs - (Date.now() - startedAt)) };
   const names = filterDriverNames(listing.stdout);
-  if (names.length === 0) return await localGitProcessRunner(args, options);
+  if (names.length === 0) return await localGitProcessRunner(args, read);
   if (!names.every((name) => FILTER_DRIVER_NAME_OVERRIDABLE.test(name)))
     return refusedOptionResult("filter", "config-override");
   return await createGitProcessRunnerWithFixedArgs(gitEnv, [
     ...LOCAL_READ_CONFIG_ARGS,
     ...filterNeutralizingArgs(names),
-  ])(args, options);
+  ])(args, read);
 };
 
 export const defaultGitNetworkProcessRunner: GitProcessRunner = createGitProcessRunnerWithFixedArgs(

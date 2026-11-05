@@ -27,6 +27,8 @@ export interface GitRepositoryMembership {
 export interface GitMembershipFailure {
   readonly ok: false;
   readonly result: GitProcessResult;
+  /** Git answered for a work tree that does not contain the directory it was asked about. */
+  readonly redirected?: true;
 }
 
 export interface GitMembershipSuccess {
@@ -80,7 +82,7 @@ export async function resolveGitMembership(
     return { ok: false, result };
   }
   if (await isWorktreeRedirected(directory, resolve(toplevel))) {
-    return { ok: false, result: worktreeRedirectedResult(result) };
+    return { ok: false, result: worktreeRedirectedResult(result), redirected: true };
   }
   return {
     ok: true,
@@ -103,9 +105,11 @@ export async function resolveGitMembership(
 // all contain the directory they are asked about; only a redirect does not. Such a folder is an
 // ordinary folder to Keiko, which is what `not a git repository` already means to every consumer.
 async function isWorktreeRedirected(directory: string, toplevel: string): Promise<boolean> {
-  // A directory Git just answered for but that can no longer be resolved proves nothing: fail closed.
-  return await realpath(directory).then(
-    (real) => !containsPath(toplevel, real),
+  // Both sides resolve, because one location has several spellings (`/var` is `/private/var` on
+  // macOS). A directory Git just answered for that can no longer be resolved proves nothing: fail
+  // closed.
+  return await Promise.all([realpath(toplevel), realpath(directory)]).then(
+    ([realToplevel, realDirectory]) => !containsPath(realToplevel, realDirectory),
     () => true,
   );
 }
