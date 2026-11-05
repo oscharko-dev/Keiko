@@ -6480,10 +6480,12 @@
       "anti-slop/require-safety-comment-for-type-assertion": 1
     },
     "packages/keiko-server/src/browser-routes.test.ts": {
-      "anti-slop/no-chained-type-assertions": 9,
+      "anti-slop/no-chained-type-assertions": 2,
       "anti-slop/no-known-value-widening": 2,
-      "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 40
+      "anti-slop/no-runtime-typeof": 2,
+      "anti-slop/no-unknown-parameters": 3,
+      "anti-slop/no-unknown-returns": 2,
+      "anti-slop/require-safety-comment-for-type-assertion": 26
     },
     "packages/keiko-server/src/browser.ts": {
       "anti-slop/no-conditional-empty-object-spread": 2,
@@ -6631,7 +6633,7 @@
       "anti-slop/no-known-value-widening": 2
     },
     "packages/keiko-server/src/chat-stream-handlers.test.ts": {
-      "anti-slop/no-chained-type-assertions": 32,
+      "anti-slop/no-chained-type-assertions": 30,
       "anti-slop/no-conditional-empty-object-spread": 2,
       "anti-slop/no-known-value-widening": 9,
       "anti-slop/no-reflect-get": 4,
@@ -6640,7 +6642,7 @@
       "anti-slop/no-unknown-returns": 6,
       "anti-slop/no-unsafe-dictionary-type": 4,
       "anti-slop/no-widen-then-assert": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 84
+      "anti-slop/require-safety-comment-for-type-assertion": 80
     },
     "packages/keiko-server/src/chat-stream-handlers.ts": {
       "anti-slop/no-conditional-empty-object-spread": 2,
@@ -8889,13 +8891,12 @@
       "anti-slop/require-safety-comment-for-type-assertion": 4
     },
     "packages/keiko-server/src/command-runner-routes.test.ts": {
-      "anti-slop/no-chained-type-assertions": 7,
       "anti-slop/no-conditional-empty-object-spread": 1,
       "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-runtime-typeof": 1,
       "anti-slop/no-unknown-parameters": 2,
       "anti-slop/no-unknown-returns": 2,
-      "anti-slop/require-safety-comment-for-type-assertion": 23
+      "anti-slop/require-safety-comment-for-type-assertion": 9
     },
     "packages/keiko-server/src/command-runner-routes.ts": {
       "anti-slop/no-conditional-empty-object-spread": 2,
@@ -13025,12 +13026,11 @@
       "anti-slop/no-unknown-parameters": 1
     },
     "packages/keiko-server/src/runtime/containerRoutes.test.ts": {
-      "anti-slop/no-chained-type-assertions": 7,
       "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-runtime-typeof": 1,
       "anti-slop/no-unknown-parameters": 2,
       "anti-slop/no-unknown-returns": 2,
-      "anti-slop/require-safety-comment-for-type-assertion": 24
+      "anti-slop/require-safety-comment-for-type-assertion": 10
     },
     "packages/keiko-server/src/runtime/containerRoutes.ts": {
       "anti-slop/no-conditional-empty-object-spread": 2,
@@ -13107,7 +13107,10 @@
     },
     "packages/keiko-server/src/sse.test.ts": {
       "anti-slop/no-chained-type-assertions": 6,
-      "anti-slop/no-known-value-widening": 1,
+      "anti-slop/no-known-value-widening": 4,
+      "anti-slop/no-runtime-typeof": 4,
+      "anti-slop/no-unknown-parameters": 5,
+      "anti-slop/no-unknown-returns": 7,
       "anti-slop/require-safety-comment-for-type-assertion": 13
     },
     "packages/keiko-server/src/sse.ts": {
@@ -13628,14 +13631,14 @@
       "anti-slop/no-unknown-parameters": 2
     },
     "packages/keiko-server/src/terminal-routes.test.ts": {
-      "anti-slop/no-chained-type-assertions": 10,
+      "anti-slop/no-chained-type-assertions": 3,
       "anti-slop/no-conditional-empty-object-spread": 2,
       "anti-slop/no-known-value-widening": 2,
       "anti-slop/no-runtime-typeof": 3,
-      "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unknown-returns": 1,
+      "anti-slop/no-unknown-parameters": 2,
+      "anti-slop/no-unknown-returns": 2,
       "anti-slop/no-unsafe-dictionary-type": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 34
+      "anti-slop/require-safety-comment-for-type-assertion": 20
     },
     "packages/keiko-server/src/terminal-routes.ts": {
       "anti-slop/no-conditional-empty-object-spread": 5,
@@ -20900,6 +20903,9 @@
       "anti-slop/no-unsafe-dictionary-type": 1,
       "anti-slop/require-safety-comment-for-type-assertion": 1
     },
+    "tests/support/atlassian-sync-activity-log.ts": {
+      "anti-slop/no-known-value-widening": 1
+    },
     "tests/support/editor-request-parser-contract.ts": {
       "anti-slop/no-known-value-widening": 7,
       "anti-slop/no-object-parameters": 1,
@@ -20941,6 +20947,13 @@
     },
     "tests/support/recording-log-sink.ts": {
       "anti-slop/no-known-value-widening": 2
+    },
+    "tests/support/sse-subscription-observations.ts": {
+      "anti-slop/no-chained-type-assertions": 5,
+      "anti-slop/no-known-value-widening": 2,
+      "anti-slop/no-unknown-parameters": 4,
+      "anti-slop/no-unknown-returns": 4,
+      "anti-slop/require-safety-comment-for-type-assertion": 10
     },
     "tests/support/support-report-fixtures.ts": {
       "anti-slop/no-runtime-typeof": 2,
