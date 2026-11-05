@@ -37776,7 +37776,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["request-failed", "source-skipped", "request-refused", "provider-busy"],
+        values: [
+          "request-failed",
+          "source-skipped",
+          "request-refused",
+          "provider-busy",
+          "request-cancelled",
+        ],
       },
       validationReasons: {
         type: "string-array",

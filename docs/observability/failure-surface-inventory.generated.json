@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "561466522e4e3dddb97ef56ea67e8a7660cfed8225c0bf2a1a36a5fff3765d7f"
+    "catalogDigest": "6c21ee8c2b2b1d696a764f2d22018762eaa584cf1299607450b4e2dd78a60808"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2895,6 +2895,7 @@
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
       "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts",
       "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
+      "packages/keiko-server/src/gateway-readiness.cancellation.test.ts",
       "packages/keiko-server/src/grounded-qa-multi-source.test.ts"
     ],
     "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],
@@ -3045,6 +3046,7 @@
     ],
     "tool-catalog.invocation-settled.emitted-line": [
       "packages/keiko-server/src/tool-catalog/catalogNonCodingConsumer.test.ts",
+      "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.test.ts",
       "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.test.ts"
     ],
     "tool-catalog.invocation-started.emitted-line": [
