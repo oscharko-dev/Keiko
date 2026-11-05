@@ -128,6 +128,38 @@ describe("OpenCode V2 event stream (#4271)", () => {
     );
   });
 
+  // #4271 audit: a stop while the stream waits is the caller's own cancellation. Naming it an idle
+  // runtime sent the operator after a hang that never happened.
+  it.each([
+    ["while connecting", (init: RequestInit | undefined): Response => silentAfter([], init)],
+    ["while reading", (init: RequestInit | undefined): Response => silentAfter([frame("a")], init)],
+  ])(
+    "names the caller's own abort %s as a cancellation, not an idle runtime",
+    async (_, respond) => {
+      const caller = new AbortController();
+      const collected = collect(
+        createOpenCodeV2HttpClient({
+          endpoint: "http://127.0.0.1:4096",
+          password: "test-password",
+          eventIdleTimeoutMs: 60_000,
+          fetch: (_input, init) => Promise.resolve(respond(init)),
+        }).events(caller.signal),
+      );
+      setTimeout(() => {
+        caller.abort();
+      }, 5);
+      await expect(collected).rejects.toThrow("opencode-v2-event-cancelled");
+    },
+  );
+
+  it("names a stream already cancelled before it opens a cancellation", async () => {
+    const caller = new AbortController();
+    caller.abort();
+    await expect(
+      collect(client((init) => silentAfter([], init)).events(caller.signal)),
+    ).rejects.toThrow("opencode-v2-event-cancelled");
+  });
+
   it("keeps a stream alive that only sends heartbeats, past the idle deadline", async () => {
     const beats = 6;
     const body = new ReadableStream<Uint8Array>({

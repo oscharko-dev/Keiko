@@ -1197,6 +1197,9 @@ function expectNativeCompactionActivity(harness: NativeCompactionHarness): void 
     new Set(records.map((record) => `${String(record.compactionIdSha256)}:${String(record.event)}`))
       .size,
   ).toBe(records.length);
+  // #4271: the 2.2.5 producer says whether the summary kept messages verbatim; the line carries it.
+  expect(records[0]).toMatchObject({ retainedTail: false });
+  expect(records[1]).toMatchObject({ retainedTail: true });
   expect(records[2]).toMatchObject({
     compactionErrorKind: "OpenCodeCompactionFailure",
     finishReason: "error",

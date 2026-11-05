@@ -1151,13 +1151,17 @@ async function* openEvents(
   // One deadline for connecting and for every read, renewed by each chunk, heartbeats included. A
   // runtime that accepts the connection and then stops answering keeps its process alive, so
   // nothing else would ever end this wait.
+  // The caller's own stop is a cancellation, named apart from the idle deadline (#4271 audit).
+  if (signal.aborted) throw new Error("opencode-v2-event-cancelled");
   const watchdog = new AbortController();
-  const abort = (): void => {
+  const idle = (): void => {
     watchdog.abort(new Error("opencode-v2-event-idle"));
   };
-  if (signal.aborted) abort();
-  else signal.addEventListener("abort", abort, { once: true });
-  const timer = setTimeout(abort, idleTimeoutMs);
+  const abort = (): void => {
+    watchdog.abort(new Error("opencode-v2-event-cancelled"));
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(idle, idleTimeoutMs);
   timer.unref();
   try {
     const response = await fetchFn(new URL("/api/event", endpoint), {
