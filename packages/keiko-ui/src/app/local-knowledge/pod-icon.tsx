@@ -9,11 +9,10 @@ export function PodIcon({
   readonly kind: "capsule" | "capsule-set" | "jira-live";
   readonly size?: number;
 }): ReactNode {
-  // i18n-exempt: Jira is a product trademark.
   return kind === "jira-live" ? (
     <Image
       src="/assets/brands/jira.svg?v=ad20a139"
-      alt="Jira"
+      alt={/* i18n-exempt: Jira is a product trademark. */ "Jira"}
       width={size}
       height={size}
       unoptimized
