@@ -25,6 +25,7 @@
 import type { DocumentId, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
 import { CancelledError } from "@oscharko-dev/keiko-security";
 
+import { csvParser } from "./parsers/csv-parser.js";
 import { docxParser } from "./parsers/docx-parser.js";
 import { htmlParser } from "./parsers/html-parser.js";
 import { pdfParser } from "./parsers/pdf-parser.js";
@@ -40,7 +41,7 @@ import { xlsxParser } from "./parsers/xlsx-parser.js";
 
 // ─── Public contract ───────────────────────────────────────────────────────────
 
-export type BoundedDocumentFormat = "docx" | "xlsx" | "pdf" | "html";
+export type BoundedDocumentFormat = "docx" | "xlsx" | "pdf" | "html" | "csv";
 
 export type BoundedDocumentExtractionOutcome =
   // Text was extracted (possibly truncated to the output cap).
@@ -97,7 +98,8 @@ export interface BoundedDocumentExtractionResult {
   readonly text: string;
   // UTF-8 byte length of `text`.
   readonly extractedBytes: number;
-  // True when the extracted text was clipped to the output cap.
+  // True when content was dropped: the text was clipped to the output cap, or the parser stopped
+  // at its unit or object limit. A false value means the text is the whole document.
   readonly truncated: boolean;
   // Parser diagnostics (codes only, no absolute paths). Safe to surface in bounded form.
   readonly diagnostics: readonly ParserDiagnostic[];
@@ -110,6 +112,8 @@ const DEFAULT_DOCUMENT_ID = "bounded-document" as DocumentId;
 const DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const PDF_MEDIA = "application/pdf";
+const CSV_MEDIA = "text/csv";
+const TSV_MEDIA = "text/tab-separated-values";
 const HTML_MEDIA = "text/html";
 const XHTML_MEDIA = "application/xhtml+xml";
 
@@ -133,6 +137,12 @@ interface FormatCandidate extends FormatBinding {
 const FORMAT_CANDIDATES: readonly FormatCandidate[] = Object.freeze([
   { format: "docx", parser: docxParser, extensions: ["docx"], mediaTypes: [DOCX_MEDIA] },
   { format: "xlsx", parser: xlsxParser, extensions: ["xlsx"], mediaTypes: [XLSX_MEDIA] },
+  {
+    format: "csv",
+    parser: csvParser,
+    extensions: ["csv", "tsv", "tab"],
+    mediaTypes: [CSV_MEDIA, TSV_MEDIA],
+  },
   { format: "pdf", parser: pdfParser, extensions: ["pdf"], mediaTypes: [PDF_MEDIA] },
   {
     format: "html",
@@ -178,6 +188,32 @@ function clampToUtf8Bytes(
   const slice = encoded.subarray(0, maxBytes);
   const clamped = new TextDecoder("utf-8", { fatal: false }).decode(slice).replace(/\uFFFD$/u, "");
   return { text: clamped, truncated: true };
+}
+
+// Cuts the projected text at the end of the last table row that fits, so a row is never clipped
+// mid-cell. A text whose first row alone exceeds the cap (or one without row units) falls back to
+// the byte clamp.
+function clampOutput(
+  result: InternalParserResult,
+  maxBytes: number,
+): { readonly text: string; readonly truncated: boolean } {
+  const text = result.normalizedText ?? "";
+  const clamped = clampToUtf8Bytes(text, maxBytes);
+  if (!clamped.truncated) return clamped;
+  let rowEnd = 0;
+  for (const unit of result.units) {
+    if (unit.kind === "csv-row" && unit.characterEnd <= clamped.text.length) {
+      rowEnd = Math.max(rowEnd, unit.characterEnd);
+    }
+  }
+  return rowEnd > 0 ? { text: text.slice(0, rowEnd), truncated: true } : clamped;
+}
+
+// A parser that stopped at its unit or object limit dropped content, whatever the output cap does.
+function stoppedAtParserLimit(result: InternalParserResult): boolean {
+  return (
+    hasDiagnostic(result, "UNIT_LIMIT_REACHED") || hasDiagnostic(result, "OBJECT_LIMIT_REACHED")
+  );
 }
 
 // ─── Outcome classification ──────────────────────────────────────────────────────
@@ -378,7 +414,7 @@ export async function extractBoundedDocumentText(
   if (classification !== "ok") {
     return failure(classification, binding.format, result.diagnostics);
   }
-  const clamped = clampToUtf8Bytes(result.normalizedText ?? "", options.maxOutputBytes);
+  const clamped = clampOutput(result, options.maxOutputBytes);
   if (clamped.text.length === 0) {
     return failure("empty", binding.format, result.diagnostics);
   }
@@ -387,7 +423,7 @@ export async function extractBoundedDocumentText(
     format: binding.format,
     text: clamped.text,
     extractedBytes: utf8ByteLength(clamped.text),
-    truncated: clamped.truncated,
+    truncated: clamped.truncated || stoppedAtParserLimit(result),
     diagnostics: result.diagnostics,
   };
 }

@@ -14,7 +14,8 @@
 ## Context
 
 The owner decision of 2026-10-27 (#4098), recorded in ADR-0005 D2 and ADR-0022 D4, permits a
-deployment content-policy opt-out through `KEIKO_CONTENT_REDACTION=off` for Chat. In that mode the
+deployment content policy through `KEIKO_CONTENT_REDACTION` for Chat; since the owner decision of
+2026-11-04 the preserving policy is its default and `on` is the lowered threshold. In that mode the
 existing guarded public read preserves authorized content only for a workspace that carries
 `contentRedaction: "preserve"`; it does not expose or substitute the editor raw-read subpath. The
 lane separation, coordinate ownership and filesystem guards in this ADR remain in force.

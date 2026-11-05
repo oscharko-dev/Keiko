@@ -64,8 +64,10 @@ function issueDetails(
   const result = referenceDetails(fields, includeDescription);
   if (fields.assignee === null) result.assigneeEmpty = true;
   if (includeDescription && fields.description !== undefined) {
+    // Length is judged once, by the catalog byte limit, where it is a bounds failure; a string that
+    // passes here and fails there must not be reported as a malformed payload.
     const description = fields.description ?? "";
-    if (!text(description, 32768)) return undefined;
+    if (typeof description !== "string") return undefined;
     result.description = description;
   }
   if (fields.labels !== undefined) {
@@ -108,7 +110,7 @@ function comment(value: unknown): CatalogJsonObject | undefined {
   if (
     raw === undefined ||
     !isSafeAtlassianIdentifier(raw.id) ||
-    !text(raw.body, 32768) ||
+    typeof raw.body !== "string" ||
     !text(raw.created, 64)
   )
     return undefined;
@@ -189,6 +191,13 @@ function singleIssueResult(
     ? { data }
     : jiraReadFailure("bounds-exceeded");
 }
+/** A comment body no catalog string can carry: a bounds failure of the whole page, named as such. */
+function oversizedCommentBody(comments: unknown): boolean {
+  return (asArray(comments) ?? []).some((entry) => {
+    const body = asRecord(entry)?.body;
+    return typeof body === "string" && !jiraProjectionTextFits(body);
+  });
+}
 export function jiraIssueReadResult(
   name: string,
   baseUrl: string,
@@ -198,6 +207,8 @@ export function jiraIssueReadResult(
   selectedFields: readonly string[] = [],
 ): ManagedMcpToolResult {
   if (name === "jira.issue") return singleIssueResult(body, selectedFields, baseUrl);
+  if (name === "jira.comments" && oversizedCommentBody(body.comments))
+    return jiraReadFailure("bounds-exceeded");
   return name === "jira.search"
     ? page(
         body,

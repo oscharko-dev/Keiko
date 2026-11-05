@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7e15a01fe7db2d54110e1a594cb7c9ad8574674b4a0e64f8d281afd20f870429"
+    "catalogDigest": "c81dbc14c56b79666abdce0f1561cfa03c1620e7959c45eaca7942922a87ada6"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 634,
-    "proofCount": 656,
-    "resolvedProofCount": 656,
-    "failureClassCount": 390,
+    "operationCount": 635,
+    "proofCount": 657,
+    "resolvedProofCount": 657,
+    "failureClassCount": 391,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -542,6 +542,7 @@
         "indexing.document.extraction-failed",
         "indexing.document.extraction-started",
         "indexing.document.failed",
+        "indexing.document.page-read-failed",
         "indexing.document.skipped",
         "indexing.job.finished",
         "indexing.job.received",
@@ -963,6 +964,7 @@
     "document-chunking-gap": ["memory-knowledge.dependency-failure"],
     "document-embedding-gap": ["memory-knowledge.dependency-failure"],
     "document-extraction": ["memory-knowledge.dependency-failure"],
+    "document-page-read": ["memory-knowledge.dependency-failure"],
     "document-extraction-gap": ["memory-knowledge.dependency-failure"],
     "document-extraction-stall": ["memory-knowledge.dependency-failure"],
     "document-indexing": ["memory-knowledge.dependency-failure"],
@@ -2509,6 +2511,9 @@
     ],
     "indexing.document.failed.class": [
       "packages/keiko-local-knowledge/src/indexing/orchestrator-activity-log.test.ts"
+    ],
+    "indexing.document.page-read-failed.stage": [
+      "packages/keiko-local-knowledge/src/indexing/page-read-activity.test.ts"
     ],
     "indexing.document.skipped.reason": [
       "packages/keiko-local-knowledge/src/indexing/orchestrator-activity-log.test.ts"

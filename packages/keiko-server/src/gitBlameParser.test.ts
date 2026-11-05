@@ -67,6 +67,34 @@ describe("parseGitBlamePorcelain", () => {
     expect(parsed.lines[0]).toMatchObject({ line: 8, author: "Grace Hopper" });
   });
 
+  // The blame of a line does not depend on what the line says: a source line that is not valid
+  // UTF-8 (a Latin-1 file) decodes with U+FFFD, and its author and commit are still known.
+  it("keeps the blame of a line whose own content has a replacement character", () => {
+    const parsed = parseGitBlamePorcelain(
+      [
+        record("a".repeat(40), 1, "Ada", 1_752_172_800, "First", "plain"),
+        record("a".repeat(40), 2, "Ada", 1_752_172_800, "First", "Gr\uFFFD\uFFFDe latin1 line"),
+        record("b".repeat(40), 3, "Grace", 1_752_172_800, "Second", "plain"),
+      ].join("\n"),
+      { maxLines: 10, processTruncated: false },
+    );
+
+    expect(parsed).toMatchObject({ totalLines: 3, truncated: false });
+    expect(parsed.lines.map((line) => line.line)).toEqual([1, 2, 3]);
+    expect(JSON.stringify(parsed)).not.toContain("latin1");
+  });
+
+  it.each(["author", "summary"])("still drops a record whose %s is not valid UTF-8", (name) => {
+    const damaged = record("a".repeat(40), 1, "Ada", 1_752_172_800, "First", "plain").replace(
+      name === "author" ? "author Ada" : "summary First",
+      `${name} Br\uFFFDken`,
+    );
+    const parsed = parseGitBlamePorcelain(damaged, { maxLines: 10, processTruncated: false });
+
+    expect(parsed.lines).toHaveLength(0);
+    expect(parsed.truncated).toBe(true);
+  });
+
   it("enforces the requested line cap while preserving the pre-cap count", () => {
     const input = [1, 2, 3]
       .map((line) => record("c".repeat(40), line, "Author", 1_752_172_800, "Summary", "source"))

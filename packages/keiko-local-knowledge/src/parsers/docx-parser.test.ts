@@ -387,9 +387,12 @@ describe("docxParser", () => {
       }),
       buildParserOptions({ maxBytes: 4096 }),
     );
-    expect(result.diagnostics[0]?.code).toBe("MALFORMED_INPUT");
+    // #4235: a part that inflates beyond its size ceiling is a size refusal with its own code and
+    // message, not a malformed package; a compression-ratio breach stays MALFORMED_INPUT (see the
+    // structure tests).
+    expect(result.diagnostics[0]?.code).toBe("OVERSIZED_FILE");
     expect(result.diagnostics[0]?.message).toBe(
-      "docx parser rejected malformed or unsupported document",
+      "docx part exceeds the inflated size limit of the parser",
     );
   });
 

@@ -1,9 +1,9 @@
 // Shared document-relative offset bookkeeping for PDF extractors (Issue #1286).
 //
-// Pages are separated by "\n\n" (two characters) — the same separator the existing full-buffer
-// PDF parser used (`pageTexts.join("\n\n")`) — so chunk character offsets stay aligned with the
-// persisted normalized text regardless of whether a document was extracted in one pass or window
-// by window. Empty pages still emit PageRecords, but do not append searchable text.
+// Pages are separated by "\n\n", a block break, unless a paragraph goes on across the page; the
+// caller then names what joins the two. Chunk character offsets stay aligned with the persisted
+// normalized text regardless of whether a document was extracted in one pass or window by window.
+// Empty pages still emit PageRecords, but do not append searchable text.
 
 import type { DocumentId, PageRecord, ParsedUnit } from "@oscharko-dev/keiko-contracts";
 
@@ -30,11 +30,16 @@ export class WindowTextBuilder {
     this.windowStart = cursor;
   }
 
-  addPage(pageNumber: number, pageText: string, pageLabel?: string): AddedPage {
+  addPage(
+    pageNumber: number,
+    pageText: string,
+    pageLabel?: string,
+    separator: string = PAGE_SEPARATOR,
+  ): AddedPage {
     const hasText = pageText.length > 0;
     if (hasText && this.anyPageEmitted) {
-      this.appended += PAGE_SEPARATOR;
-      this.cursor += PAGE_SEPARATOR.length;
+      this.appended += separator;
+      this.cursor += separator.length;
     }
     const characterStart = this.cursor;
     const characterEnd = characterStart + pageText.length;

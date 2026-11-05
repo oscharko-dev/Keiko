@@ -1511,6 +1511,16 @@ retains a single `no-evidence` marker, and budget clipping remains `budget-clipp
 
 ### D4 — The summary is structurally redaction-free, and we prove it
 
+**Content threshold amendment (owner decision, 2026-11-04).** Keiko runs on the user's own device and
+its stores never leave it, so what a person reads and what the model receives lose only the credential
+floor by default. An absent or empty `KEIKO_CONTENT_REDACTION` now preserves like `off`; `on` lowers the
+threshold back to the strict projection, and an unrecognized value still warns and keeps redaction.
+The preserving lane described below is therefore the default for Chat, and `deps.redactor`, which every
+live payload passes, follows the same policy. Evidence, audit records, memory proposals and Quality
+Intelligence use `strictRedactor`. The Activity Log has its own stricter sink and carries no personal
+data (ADR-0173). A store written before this change keeps its stored text; a preserving workspace uses
+its own index snapshot, so the first connected-folder question may rebuild it.
+
 **Authorized content amendment (owner decision, 2026-10-27, #4098).** A user permitted to read
 connected documents must be able to receive their contents under the deployment's processing
 policy. `KEIKO_CONTENT_REDACTION=off`, resolved once at server startup, gives Chat a preserving

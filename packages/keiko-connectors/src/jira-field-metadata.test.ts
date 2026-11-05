@@ -857,3 +857,26 @@ describe("schema-type matrix (#4176)", () => {
     ).toMatchObject({ ok: false, fieldId: "customfield_10500" });
   });
 });
+
+describe("control characters in rich text (#4235)", () => {
+  const rich = (value: string, deployment: "data-center" | "cloud"): boolean => {
+    const result = parseJiraFieldMetadata([field("description", "string")]);
+    if (!result.ok) throw new Error("Invalid fixture");
+    return validateJiraFieldChanges(result.fields, { description: value }, "edit", deployment).ok;
+  };
+
+  it.each(["data-center", "cloud"] as const)(
+    "refuses a control character other than a line break or tab (%s)",
+    (deployment) => {
+      for (const bad of ["a\u0000b", "a\u001b[31mb", "a\u0007b", "a\u0085b", "a\u007fb"])
+        expect(rich(bad, deployment)).toBe(false);
+    },
+  );
+
+  it.each(["data-center", "cloud"] as const)(
+    "keeps real line breaks and tabs in a description (%s)",
+    (deployment) => {
+      expect(rich("Goal\r\n\tfirst\nsecond", deployment)).toBe(true);
+    },
+  );
+});

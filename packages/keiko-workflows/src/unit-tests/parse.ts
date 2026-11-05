@@ -7,6 +7,8 @@
 // so there is no ReDoS surface (steering note F). Redaction happens at the workflow boundary,
 // not here: this module is pure string parsing.
 
+import { closingFenceIndex, openingFenceLength } from "../markdown-fence.js";
+
 export interface ParsedModelOutput {
   // The proposed unified diff (raw, unredacted). Empty string when no diff content was found.
   readonly diff: string;
@@ -16,7 +18,6 @@ export interface ParsedModelOutput {
   readonly knownGaps: string | undefined;
 }
 
-const FENCE = "```";
 const COVERED_HEADING = "## covered behavior";
 const GAPS_HEADING = "## known gaps";
 
@@ -30,13 +31,11 @@ interface FenceExtraction {
 // the diff and an empty remainder (the no-fence fallback).
 function extractFencedDiff(content: string): FenceExtraction {
   const lines = content.split("\n");
-  const openIndex = lines.findIndex((line) => line.trimStart().startsWith(FENCE));
+  const openIndex = lines.findIndex((line) => openingFenceLength(line) > 0);
   if (openIndex === -1) {
     return { diff: content.trim(), rest: "" };
   }
-  const closeIndex = lines.findIndex(
-    (line, idx) => idx > openIndex && line.trimStart().startsWith(FENCE),
-  );
+  const closeIndex = closingFenceIndex(lines, openIndex) ?? -1;
   if (closeIndex === -1) {
     // An opening fence with no close: treat everything after the opener as the diff.
     return {

@@ -2098,7 +2098,9 @@ function splitSseBuffer(buffer: string): {
   readonly lines: readonly string[];
   readonly rest: string;
 } {
-  const segments = buffer.split("\n");
+  // Every SSE line ending counts: CRLF, a bare CR and LF. A CR that ends a chunk is a complete line
+  // ending whether or not an LF follows, and the LF that arrives later is only a blank line.
+  const segments = buffer.split(/\r\n|\r|\n/);
   const rest = segments.pop() ?? "";
   return { lines: segments, rest };
 }
@@ -2115,7 +2117,9 @@ function parseSseLine(rawLine: string): SseLineResult {
   if (line.length === 0 || !line.startsWith("data:")) {
     return { kind: "skip" };
   }
-  const payload = line.slice("data:".length).trimStart();
+  const payload = line.slice("data:".length).trim();
+  // An empty data field carries no event (WHATWG SSE: an empty data buffer dispatches nothing).
+  if (payload.length === 0) return { kind: "skip" };
   if (payload === "[DONE]") {
     return { kind: "done" };
   }

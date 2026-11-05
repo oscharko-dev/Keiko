@@ -472,10 +472,22 @@ function detectTextEncoding(bytes: Uint8Array): TextEncoding {
   return inferUtf16Encoding(bytes) ?? "utf-8";
 }
 
+// A capped UTF-16 slice keeps whole code units, and drops a trailing high surrogate whose low
+// half the cap cut off: the fatal decoder would otherwise take the clean text for binary.
+function validUtf16PrefixLength(bytes: Uint8Array, littleEndian: boolean): number {
+  const even = bytes.length - (bytes.length % 2);
+  if (even < 2) return even;
+  const high = bytes[even - (littleEndian ? 1 : 2)] ?? 0;
+  const isHighSurrogate = high >= 0xd8 && high <= 0xdb;
+  return isHighSurrogate ? even - 2 : even;
+}
+
 function validTextPrefixLength(bytes: Uint8Array): number {
   const encoding = detectTextEncoding(bytes);
   if (encoding === "utf-8") return validUtf8PrefixLength(bytes);
-  if (encoding === "utf-16le" || encoding === "utf-16be") return bytes.length - (bytes.length % 2);
+  if (encoding === "utf-16le" || encoding === "utf-16be") {
+    return validUtf16PrefixLength(bytes, encoding === "utf-16le");
+  }
   return bytes.length - (bytes.length % 4);
 }
 

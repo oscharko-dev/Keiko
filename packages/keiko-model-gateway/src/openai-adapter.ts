@@ -790,7 +790,14 @@ interface ToolCallDeltaEntry {
   readonly name: string;
   readonly argumentsText: string;
 }
-type ToolCallAccumulator = Map<number, ToolCallDeltaEntry>;
+// Tracks its largest index as entries arrive, so placing a fragment never rescans every key.
+class ToolCallAccumulator extends Map<number, ToolCallDeltaEntry> {
+  maxIndex = Number.NEGATIVE_INFINITY;
+  override set(key: number, value: ToolCallDeltaEntry): this {
+    if (key > this.maxIndex) this.maxIndex = key;
+    return super.set(key, value);
+  }
+}
 
 // Standard OpenAI-compatible streaming shape: `delta.tool_calls` carries one fragment per call,
 // indexed by `index`, with `id`/`function.name` arriving once and `function.arguments` arriving as
@@ -863,7 +870,7 @@ function positionalToolCallIndex(
   ) {
     return position;
   }
-  return Math.max(...accumulator.keys()) + 1;
+  return accumulator.maxIndex + 1;
 }
 
 function applyToolCallDelta(
@@ -984,10 +991,10 @@ export class ProviderResponseInvalidError extends ProviderError {
 // this constant, let alone that limit).
 const MAX_REDACT_DEPTH = 32;
 
-// How a model value is scrubbed: `redact()` (configured literals plus heuristic secret shapes) for
-// content, structured output and every tool except the changeset edit, or the configured literals
-// alone for changeset-edit arguments, which are workspace file content (#4009). `changed` counts
-// the strings the scrub altered.
+// How a model value is scrubbed: the call's content policy for content, structured output and tool
+// arguments, `redact()` (configured literals plus heuristic shapes) for arguments that leave for the
+// public internet, or the configured literals alone for changeset-edit arguments, which are workspace
+// file content (#4009). `changed` counts the strings the scrub altered.
 interface ValueScrub {
   readonly secrets: readonly string[];
   readonly text: (value: string) => string;
@@ -1041,7 +1048,7 @@ function redactRecord(
 
 // #4098: a call keeps the default content projection unless its caller asked to preserve
 // authorized content (`GatewayCallRequest.contentRedaction`, set by Chat under the deployment
-// opt-out alone). Tool-call arguments never follow it.
+// policy).
 function contentPolicy(request: GatewayCallRequest): ContentRedactionPolicy {
   return request.contentRedaction === "preserve" ? "preserve" : "redact";
 }
@@ -1049,16 +1056,38 @@ function contentPolicy(request: GatewayCallRequest): ContentRedactionPolicy {
 // A tool call's name is matched against the offered catalog. The governed changeset edit executes
 // its arguments exactly as they arrive: an `oldString` must match its file and a `newString` is the
 // content that gets written, so they lose only the configured provider secrets, never text that
-// merely looks like a credential (#4009). Every other tool's arguments are displayed (`question`)
-// or sent outward (`keiko_research_fetch`), so they keep the full heuristic redaction.
+// merely looks like a credential (#4009). `keiko_research_fetch` goes out to the public internet, so
+// its arguments always keep the full heuristic redaction. Every other tool's arguments follow the
+// call's content policy: a Jira draft or a `question` is what a person reads, and under `preserve`
+// keeps its dates, IBANs and standard names (owner decision 2026-11-04), losing the credential floor.
+const OUTWARD_TOOL_NAME = "keiko_research_fetch";
+
+function contentScrub(secrets: readonly string[], policy: ContentRedactionPolicy): ValueScrub {
+  return policy === "preserve"
+    ? { secrets, text: (value) => redactContent(value, "preserve", secrets), changed: 0 }
+    : heuristicScrub(secrets);
+}
+
+function toolArgumentScrub(
+  name: string,
+  secrets: readonly string[],
+  exactContent: ValueScrub,
+  isExactContentTool: (alias: string) => boolean,
+  policy: ContentRedactionPolicy,
+): ValueScrub {
+  if (isExactContentTool(name)) return exactContent;
+  return contentScrub(secrets, name === OUTWARD_TOOL_NAME ? "redact" : policy);
+}
+
 function redactToolCall(
   call: NormalizedToolCall,
   secrets: readonly string[],
   exactContent: ValueScrub,
   isExactContentTool: (alias: string) => boolean,
+  policy: ContentRedactionPolicy,
 ): NormalizedToolCall {
   const name = redact(call.name, secrets);
-  const scrub = isExactContentTool(name) ? exactContent : heuristicScrub(secrets);
+  const scrub = toolArgumentScrub(name, secrets, exactContent, isExactContentTool, policy);
   return {
     ...call,
     name,
@@ -1082,7 +1111,7 @@ function redactResponse(
     ...response,
     content: redactContent(response.content, policy, secrets),
     toolCalls: response.toolCalls.map((call) =>
-      redactToolCall(call, secrets, exactContent, isExactContentTool),
+      redactToolCall(call, secrets, exactContent, isExactContentTool, policy),
     ),
     structuredOutput: redactRecord(response.structuredOutput, secrets, policy),
     ...(response.reasoning === undefined
@@ -1544,7 +1573,7 @@ function newStreamAccumulator(): StreamAccumulator {
     prompt: 0,
     completion: 0,
     usage: undefined,
-    toolCalls: new Map(),
+    toolCalls: new ToolCallAccumulator(),
   };
 }
 

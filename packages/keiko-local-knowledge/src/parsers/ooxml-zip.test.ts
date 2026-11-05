@@ -28,17 +28,9 @@ async function failureOf(run: Promise<unknown>): Promise<unknown> {
 describe("readOoxmlZipEntries plan options", () => {
   const options = buildParserOptions();
 
-  it("rejects a part listed twice by default", async () => {
+  it("rejects a part listed twice", async () => {
     const error = await failureOf(readOoxmlZipEntries(TWICE, options, options.now(), PLAN));
     expect(classifyOoxmlZipError(error)).toBe("malformed");
-  });
-
-  it("lets the later listing win when duplicates are replaced", async () => {
-    const parts = await readOoxmlZipEntries(TWICE, options, options.now(), {
-      ...PLAN,
-      duplicateParts: "replace",
-    });
-    expect([...parts]).toEqual([["a/one.xml", "second"]]);
   });
 
   it("leaves the walk unbounded when the plan carries no entry or total ceiling", async () => {
@@ -66,15 +58,9 @@ describe("readOoxmlZipEntries plan options", () => {
     expect(classifyOoxmlZipError(total)).toBe("malformed");
   });
 
-  it("honours an abort signal unless the plan opts out of the scan budget", async () => {
+  it("honours an abort signal", async () => {
     const aborted = buildParserOptions({ signal: AbortSignal.abort() });
     const stopped = await failureOf(readOoxmlZipEntries(TWICE, aborted, aborted.now(), PLAN));
     expect(classifyOoxmlZipError(stopped)).toBe("cancelled");
-    const parts = await readOoxmlZipEntries(TWICE, aborted, aborted.now(), {
-      ...PLAN,
-      duplicateParts: "replace",
-      scanBudget: "none",
-    });
-    expect(parts.get("a/one.xml")).toBe("second");
   });
 });

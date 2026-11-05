@@ -48,3 +48,20 @@ describe("unified diff source observations", () => {
     expect(observe).toHaveBeenCalledExactlyOnceWith([]);
   });
 });
+
+describe("a format-patch signature after the last hunk", () => {
+  const HUNK = "--- a/x.txt\n+++ b/x.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n";
+
+  it.each(["-- \n2.40.0\n", "--\n2.40.0\n"])(
+    "ends the patch at %j, not at an extra line",
+    (tail) => {
+      const parsed = parseUnifiedDiff(`${HUNK}${tail}`);
+      expect(parsed.files).toHaveLength(1);
+      expect(parsed.files[0]).toMatchObject({ path: "x.txt", addedLines: 1, removedLines: 1 });
+    },
+  );
+
+  it("still rejects a genuine extra removed line once the hunk budget is spent", () => {
+    expect(() => parseUnifiedDiff(`${HUNK}-extra\n`)).toThrow(PatchParseError);
+  });
+});

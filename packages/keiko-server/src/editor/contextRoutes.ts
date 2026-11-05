@@ -31,6 +31,7 @@ import {
   buildLocalKnowledgeScope,
   retrieveEditorLocalKnowledge,
 } from "./localKnowledgeRetrieval.js";
+import { strictRedactor } from "../content-redactor.js";
 
 const MAX_CONTEXT_BODY_BYTES = 64 * 1024;
 const MAX_CONTEXT_CHANGED_FILES = 64;
@@ -172,7 +173,7 @@ export async function handleEditorContext(
     const wire = toCodingContextWirePack(pack);
     const evidenceRunId = recordCodingContextEvidence(
       deps.evidenceStore,
-      deps.redactor,
+      strictRedactor(deps),
       wire,
       nowMs,
     );

@@ -1148,12 +1148,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-local-knowledge/src/crawl/link-extract.ts",
-      "owner": "decodeEntityBody",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-local-knowledge/src/crawl/scope-guard.ts",
       "owner": "decodePathComponent",
       "kind": "unregistered-catch",
@@ -1432,12 +1426,6 @@
     {
       "path": "packages/keiko-local-knowledge/src/parsers/docx-parser.ts",
       "owner": "asyncParse",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-local-knowledge/src/parsers/json-parser.ts",
-      "owner": "parseJsonValue",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -4714,12 +4702,6 @@
     {
       "path": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts",
       "owner": "VerifiedCommitController.persist",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/gitDiffParser.ts",
-      "owner": "decodeQuotedPath",
       "kind": "unregistered-catch",
       "count": 1
     },

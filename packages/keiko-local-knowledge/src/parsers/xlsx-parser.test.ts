@@ -89,8 +89,10 @@ function zipEntries(entries: readonly ZipEntryFixture[]): Uint8Array {
   return Uint8Array.from(Buffer.concat([...localParts, ...centralParts, end]));
 }
 
+// A test replaces a part of the fixture workbook; a package never lists a part twice.
 function workbookZip(extraEntries: readonly ZipEntryFixture[] = []): Uint8Array {
-  return zipEntries([
+  const replaced = new Set(extraEntries.map((entry) => entry.name));
+  const base: readonly ZipEntryFixture[] = [
     {
       name: "xl/workbook.xml",
       content:
@@ -115,8 +117,8 @@ function workbookZip(extraEntries: readonly ZipEntryFixture[] = []): Uint8Array 
         "</sheetData></worksheet>",
       ].join(""),
     },
-    ...extraEntries,
-  ]);
+  ];
+  return zipEntries([...base.filter((entry) => !replaced.has(entry.name)), ...extraEntries]);
 }
 
 describe("xlsxParser", () => {

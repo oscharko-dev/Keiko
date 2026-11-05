@@ -12,18 +12,26 @@
 //     prefix names a second identifier; a bare `ID title` line needs that second identifier; a
 //     separated (`ID: title`), bracketed or table-row identifier always counts.
 //   * Units come from blocks (an identifier line or recorded section heading plus its body), table
-//     rows, and statements: a sentence with an obligation phrase and no identifier.
+//     rows, and statements: a sentence with an obligation phrase and no identifier. A requirement
+//     listed over several rows of a table is one unit; a table whose header names other things
+//     (`Code | Bedeutung`) defines none, and its identifier rows are counted as rejected.
 //   * A block ends at the next identifier, a heading or section boundary and, in flat text, at a
 //     blank line unless the next line is a key line (priority, criteria, metadata), the block has no
-//     body yet, the next paragraph leads into a key line, or an unfinished sentence goes on: a PDF
-//     page break is a blank line anywhere in a block. Wrapped lines of a paragraph are merged before
-//     sentences are read.
+//     body yet, the next paragraph leads into a key line, an unfinished sentence goes on, or criteria
+//     or prose of the unit run on ahead of the next unit: under the parsers' block contract the parts
+//     of one requirement are separate blocks. Wrapped lines of a paragraph are merged before
+//     sentences are read. A rule line ends a block with a body in every kind of text.
+//   * A record line joins fields with a middle dot or a pipe, or runs them together: every field is
+//     read for itself, a field no vocabulary names is presentation, and the sentence behind a value
+//     that cannot run on (an identifier, a known priority) is the statement.
 //   * Flat text has no recorded headings, so a short line without a closing mark is a chapter heading
 //     and not this block's body: directly ahead of the next unit after a finished line, or behind the
 //     block's closing field (priority, metadata, a criteria list) whatever follows it.
 //   * When an identifier is defined several times (table of contents, then the section), the
-//     definition with a body, priority or criteria wins; an empty listing never displaces it. Two
-//     bodies with different content are reported as conflicting, never resolved silently.
+//     definition with a statement or criteria wins; a listing without them (a table of contents, an
+//     overview table) never displaces it and adds only the priority the definition does not state.
+//     Two bodies with different content, or two different priorities, are reported as conflicting,
+//     never resolved silently.
 //   * A statement without an identifier gets `DRV-<8 letters>`: the SHA-256 of the document identity
 //     and its normalized wording (a second identical sentence of the same document is told apart by
 //     occurrence). It survives edits elsewhere and renumbering, and changes with the wording.
@@ -35,23 +43,42 @@ import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import {
   continueProjectedRow,
-  endsInParagraphCell,
+  continuesProjectedTable,
+  extendedRow,
+  isDocumentProjection,
+  isPlainProjection,
+  isPointerRecord,
+  isProjectedLine,
+  isSameRequirement,
+  isSeparatorRow,
+  namedCellsOf,
+  namedColumns,
   openProjectedRow,
-  parseProjectedRow,
-  tableCells,
+  parseContinuationRow,
   parseTableHeader,
   parseTableRow,
+  parseUnidentifiedRow,
+  projectedCells,
+  readingOfProjectedTable,
+  startsWithIdentifier,
+  tableCells,
   type ColumnRoles,
+  type ProjectedCells,
   type ProjectedRow,
+  type RowAddition,
+  type TableReading,
   type TableRow,
+  type UnidentifiedRow,
 } from "./requirementTable.js";
 import {
   ID_START,
+  ID_VALUE_FIELD,
   LIST_MARKER,
   MARKDOWN_HEADING,
   bare,
   collapse,
   idPrefix,
+  isThematicBreak,
   lineAt,
   splitLines,
   trimTrailingMarks,
@@ -146,7 +173,11 @@ interface Candidate extends Definition {
   readonly headingLine: boolean;
   /** Set when the recorded section, not the line, defines the unit. */
   readonly section?: RequirementInventorySection;
+  /** Lines after the first that continue a title the text hard-wrapped; they are not body. */
+  readonly titleLines?: number;
   readonly row?: RowFields;
+  /** The last line of a row: a multi-line cell and further rows of the same requirement. */
+  readonly rowLastLine?: number;
 }
 interface RowFields {
   readonly priority?: string;
@@ -157,9 +188,17 @@ interface RowFields {
 const SEPARATOR = /^\s*(?:[:–—]|-(?=\s)|[.)](?=\s|$))/u;
 const SLIDE_LABEL = /^(?:Slide|Folie|Seite|Page)\s+\d+\s*[:.\-–—]\s*/iu;
 const CRITERION_NUMBER = /^AC[\s-]?\d+\s*[:.)-]\s*/iu;
+const RESULT_LINE = /^\s*=\s/u;
 const MERGED_ITEMS = /(?<=[.!?])(?=\p{Lu})/u;
-/** Presentation text joins the fields of a record on one line with a middle dot. */
-const FIELD_SEPARATOR = " · ";
+/** A field label: one or two words, then a colon. Text is collapsed, so spaces come singly. */
+const FIELD_HEAD_SOURCE = String.raw`\p{Lu}[\p{L}\p{N}_/-]*(?: [\p{L}\p{N}_/-]+)? ?:(?: |$)`;
+const FIELD_HEAD = new RegExp(`^${FIELD_HEAD_SOURCE}`, "u");
+/** Presentation text joins the fields of a record on one line with a middle dot or a pipe. */
+const FIELD_JOINT = new RegExp(` [·|] (?=${FIELD_HEAD_SOURCE})`, "u");
+const VALUE_END = / [·|](?: |$)/u;
+/** A metadata value that ends like this goes on in the next line. */
+const VALUE_GOES_ON = /[,·|/–—-]$/u;
+const SENTENCE_START = /^\p{Lu}\p{Ll}/u;
 const SENTENCE_BREAK = /(?<=[.!?])\s+(?=\p{Lu})/u;
 const TITLE_FALLBACK_CHARS = 80;
 const STATEMENT_MIN_CHARS = 12;
@@ -169,6 +208,8 @@ const LOWER_CASE_START = /^\p{Ll}/u;
 const HEADING_START = /^[\p{Lu}\d]/u;
 const HEADING_MAX_CHARS = 80;
 const NUMBERED_ITEM = /^\s*\d+[.)]\s+/u;
+/** A clause number of a specification (`3.1.2 Das System muss…`): several levels, then a capital. */
+const NUMBERED_CLAUSE = /^\s*\d+(?:\.\d+)+\.?\s+\p{Lu}/u;
 
 interface Context {
   readonly lines: readonly Line[];
@@ -226,12 +267,40 @@ function classifyText(
   return { kind: heading ? "heading" : "weak", id, title };
 }
 
-function rowCandidate(row: TableRow, line: number): Candidate {
+interface RowDraft {
+  row: TableRow;
+  readonly table: number;
+  readonly line: number;
+  lastLine: number;
+}
+
+/** A row that states an obligation and holds no identifier. */
+interface UnidentifiedDraft {
+  row: UnidentifiedRow;
+  readonly table: number;
+  readonly line: number;
+  lastLine: number;
+}
+
+interface TableScan {
+  readonly drafts: RowDraft[];
+  readonly unidentified: UnidentifiedDraft[];
+  /** Every line of a projected row and of a defining pipe row: no text of its own. */
+  readonly lines: Set<number>;
+  /** Identifier rows of tables whose header names other things. */
+  readonly foreign: Set<number>;
+  /** Number of the table in progress; rows of two tables are never one requirement. */
+  table: number;
+}
+
+function rowCandidate(draft: RowDraft): Candidate {
+  const { row } = draft;
   return {
     kind: "row",
     id: row.id,
     title: row.title,
-    line,
+    line: draft.line,
+    rowLastLine: draft.lastLine,
     headingLine: true,
     row: {
       statement: row.statement,
@@ -245,40 +314,276 @@ function isDefinedRow(row: TableRow | undefined, vocabulary: CompiledVocabulary)
   return row !== undefined && !vocabulary.reservedPrefixes.has(idPrefix(row.id).toUpperCase());
 }
 
-function tableCandidates(context: Context): readonly Candidate[] {
-  const found: Candidate[] = [];
-  let roles: ColumnRoles | undefined;
-  context.lines.forEach((line, index) => {
-    const cells = tableCells(line.text);
-    if (cells === undefined) return;
-    const header = parseTableHeader(cells, context.vocabulary);
-    if (header !== undefined) roles = header;
-    const row = header === undefined ? parseTableRow(cells, roles, context.vocabulary) : undefined;
-    if (isDefinedRow(row, context.vocabulary)) found.push(rowCandidate(row, index));
-  });
-  return found;
+interface RowSpan {
+  readonly line: number;
+  readonly lastLine: number;
 }
 
-/** Rows of a workbook extraction (`Sheet!2: ID=FR-1 | Titel=Foo`), with their multi-line cells. */
-function projectedCandidates(context: Context): readonly Candidate[] {
-  const found: Candidate[] = [];
-  let open: { readonly row: ProjectedRow; readonly line: number } | undefined;
-  const close = (): void => {
-    const parsed = open === undefined ? undefined : parseProjectedRow(open.row, context.vocabulary);
-    if (open !== undefined && isDefinedRow(parsed, context.vocabulary))
-      found.push(rowCandidate(parsed, open.line));
+/** A row of the same requirement extends the row above it; any other row starts a unit. */
+function addRow(scan: TableScan, row: TableRow, span: RowSpan): void {
+  const last = scan.drafts.at(-1);
+  if (last?.table === scan.table && isSameRequirement(last.row, row)) {
+    last.row = extendedRow(last.row, row);
+    last.lastLine = span.lastLine;
+    return;
+  }
+  scan.drafts.push({ row, table: scan.table, ...span });
+}
+
+/** The requirement the row above belongs to; an explicit and a derived one take turns in a table. */
+function latestRowOwner(scan: TableScan): RowDraft | UnidentifiedDraft | undefined {
+  const explicit = scan.drafts.at(-1);
+  const derived = scan.unidentified.at(-1);
+  const inTable = [explicit, derived].filter((draft) => draft?.table === scan.table);
+  return inTable.reduce<RowDraft | UnidentifiedDraft | undefined>(
+    (latest, draft) =>
+      latest === undefined || (draft !== undefined && draft.line > latest.line) ? draft : latest,
+    undefined,
+  );
+}
+
+function addToLastRow(scan: TableScan, addition: RowAddition, lastLine: number): boolean {
+  const owner = latestRowOwner(scan);
+  if (owner === undefined) return false;
+  // Without identifiers a row with its own statement is a requirement of its own.
+  if (owner === scan.unidentified.at(-1) && addition.statement.length > 0) return false;
+  owner.row = extendedRow(owner.row, addition);
+  owner.lastLine = lastLine;
+  return true;
+}
+
+/** A row without an identifier is a requirement if its statement cell states an obligation. */
+function readUnidentifiedRow(
+  context: Context,
+  scan: TableScan,
+  { cells, roles }: { readonly cells: readonly string[]; readonly roles: ColumnRoles },
+  span: RowSpan,
+): boolean {
+  const row = parseUnidentifiedRow(cells, roles, context.vocabulary);
+  if (row === undefined || !obligationStatement(context.vocabulary, row.statement)) return false;
+  scan.unidentified.push({ row, table: scan.table, ...span });
+  return true;
+}
+
+/** Reads a row of a table that defines requirements; true when it became part of one. */
+function readRow(
+  context: Context,
+  scan: TableScan,
+  { cells, roles }: ProjectedCells,
+  span: RowSpan,
+): boolean {
+  const row = parseTableRow(cells, roles, context.vocabulary);
+  if (row !== undefined) {
+    if (!isDefinedRow(row, context.vocabulary)) return false;
+    addRow(scan, row, span);
+    return true;
+  }
+  if (roles === undefined) return false;
+  const addition = parseContinuationRow(cells, roles, context.vocabulary);
+  if (addition !== undefined && addToLastRow(scan, addition, span.lastLine)) return true;
+  return readUnidentifiedRow(context, scan, { cells, roles }, span);
+}
+
+interface PipeTable {
+  readonly reading: TableReading;
+  readonly columns: number;
+  /** A blank line since the last row: a page break, or the end of the table. */
+  readonly gap: boolean;
+}
+
+/** The table a pipe line that names no columns opens: its first cell tells a row from a header. */
+function openPipeTable(context: Context, scan: TableScan, cells: readonly string[]): PipeTable {
+  scan.table += 1;
+  return {
+    reading: startsWithIdentifier(cells)
+      ? { kind: "positional" }
+      : { kind: "foreign", named: namedColumns(cells, context.vocabulary) },
+    columns: cells.length,
+    gap: false,
+  };
+}
+
+function readPipeRow(
+  context: Context,
+  scan: TableScan,
+  { reading }: PipeTable,
+  cells: readonly string[],
+  index: number,
+): void {
+  if (reading.kind === "foreign") {
+    if (startsWithIdentifier(cells)) scan.foreign.add(index);
+    else if (reading.named !== undefined) {
+      readUnidentifiedRow(
+        context,
+        scan,
+        { cells, roles: reading.named },
+        { line: index, lastLine: index },
+      );
+    }
+    return;
+  }
+  const roles = reading.kind === "roles" ? reading.roles : undefined;
+  if (readRow(context, scan, { cells, roles }, { line: index, lastLine: index })) {
+    scan.lines.add(index);
+  }
+}
+
+function readPipeLine(
+  context: Context,
+  scan: TableScan,
+  table: PipeTable | undefined,
+  cells: readonly string[],
+  index: number,
+): PipeTable {
+  const header = startsWithIdentifier(cells)
+    ? undefined
+    : parseTableHeader(cells, context.vocabulary);
+  if (header !== undefined) {
+    scan.table += 1;
+    return { reading: { kind: "roles", roles: header }, columns: cells.length, gap: false };
+  }
+  const goesOn = table !== undefined && (!table.gap || table.columns === cells.length);
+  const current = goesOn ? { ...table, gap: false } : openPipeTable(context, scan, cells);
+  if (!isSeparatorRow(cells)) readPipeRow(context, scan, current, cells, index);
+  return current;
+}
+
+function pipeTableCandidates(context: Context, scan: TableScan): void {
+  let table: PipeTable | undefined;
+  context.lines.forEach((line, index) => {
+    // The pipes of a projected row separate labelled cells, not the columns of a pipe table.
+    const cells = isProjectedLine(line.text) ? undefined : tableCells(line.text);
+    if (cells !== undefined) table = readPipeLine(context, scan, table, cells, index);
+    else if (table !== undefined)
+      table = collapse(line.text).length === 0 ? { ...table, gap: true } : undefined;
+  });
+}
+
+interface OpenRow {
+  readonly row: ProjectedRow;
+  readonly line: number;
+  lastLine: number;
+}
+
+function readProjectedTable(context: Context, scan: TableScan, rows: readonly OpenRow[]): void {
+  if (rows.length === 0) return;
+  scan.table += 1;
+  const reading = readingOfProjectedTable(
+    rows.map((open) => open.row),
+    context.vocabulary,
+  );
+  for (const { row, line, lastLine } of rows) {
+    for (let index = line; index <= lastLine; index += 1) scan.lines.add(index);
+    if (reading.kind === "foreign") {
+      if (startsWithIdentifier(row.cells)) scan.foreign.add(line);
+      else readUnidentifiedRow(context, scan, namedCellsOf(row), { line, lastLine });
+    } else {
+      readRow(context, scan, projectedCells(row, reading), { line, lastLine });
+    }
+  }
+}
+
+type RowLineEffect = "goes-on" | "ends-row" | "ends-table";
+
+/** What a line that opens no row does to the row above it; a line of its cell extends that cell. */
+function endsProjectedRow(raw: string): boolean {
+  return isPointerRecord(raw) || isPlainProjection(raw);
+}
+
+function afterRowLine(open: OpenRow, line: Line, index: number, context: Context): RowLineEffect {
+  // The parsers keep a row whole: a blank line is never inside a cell, it ends the table.
+  if (collapse(line.text).length === 0) return "ends-table";
+  if (endsProjectedRow(line.text)) return "ends-row";
+  continueProjectedRow(open.row, line.text, context.vocabulary);
+  open.lastLine = index;
+  return "goes-on";
+}
+
+/** Rows of a table extraction (`Sheet!2: ID=FR-1 | Titel=Foo`), with their multi-line cells. */
+function projectedTableCandidates(context: Context, scan: TableScan): void {
+  let rows: OpenRow[] = [];
+  let open: OpenRow | undefined;
+  const closeTable = (): void => {
+    readProjectedTable(context, scan, rows);
+    rows = [];
     open = undefined;
   };
   context.lines.forEach((line, index) => {
     const started = openProjectedRow(line.text, context.vocabulary);
-    const blank = collapse(line.text).length === 0;
-    const breaks = blank && open !== undefined && !endsInParagraphCell(open.row);
-    if (started !== undefined || breaks || startsSection(context.starts, line)) close();
-    if (started !== undefined) open = { row: started, line: index };
-    else if (open !== undefined) continueProjectedRow(open.row, line.text, context.vocabulary);
+    const last = rows.at(-1)?.row;
+    const changesTable =
+      started !== undefined && last !== undefined && !continuesProjectedTable(last, started);
+    if (changesTable || startsSection(context.starts, line)) closeTable();
+    if (started !== undefined) {
+      open = { row: started, line: index, lastLine: index };
+      rows.push(open);
+      return;
+    }
+    const effect = open === undefined ? "goes-on" : afterRowLine(open, line, index, context);
+    if (effect === "ends-table") closeTable();
+    else if (effect === "ends-row") open = undefined;
   });
-  close();
-  return found;
+  closeTable();
+}
+
+function scanTables(context: Context): TableScan {
+  const scan: TableScan = {
+    drafts: [],
+    unidentified: [],
+    lines: new Set(),
+    foreign: new Set(),
+    table: 0,
+  };
+  pipeTableCandidates(context, scan);
+  projectedTableCandidates(context, scan);
+  return scan;
+}
+
+const TITLE_CONTINUATION_LINES_MAX = 3;
+const TITLE_MAX_CHARS = 240;
+
+/** Whether the line is plain wrapped text: no marker, heading, section start, key or table row. */
+function isPlainContinuation(
+  context: Context,
+  index: number,
+  tableLines: ReadonlySet<number>,
+): boolean {
+  const line = context.lines[index];
+  if (line === undefined || tableLines.has(index)) return false;
+  const text = bare(line.text);
+  return (
+    LOWER_CASE_START.test(text) &&
+    !LIST_MARKER.test(line.text) &&
+    !MARKDOWN_HEADING.test(line.text) &&
+    !startsSection(context.starts, line) &&
+    !isKeyLine(text, context.vocabulary)
+  );
+}
+
+/**
+ * A title the text hard-wrapped: plain text has no layout, so the evidence is the text itself. A title
+ * without a closing mark whose next line (no blank line between) goes on in lower case is one title
+ * around a line break, not a title and a body that happens to start in lower case.
+ */
+function wrappedTitle(
+  context: Context,
+  index: number,
+  title: string,
+  tableLines: ReadonlySet<number>,
+): { readonly title: string; readonly titleLines: number } | undefined {
+  let joined = title;
+  let extra = 0;
+  while (
+    extra < TITLE_CONTINUATION_LINES_MAX &&
+    joined.length > 0 &&
+    joined.length < TITLE_MAX_CHARS &&
+    !CLOSING_MARK.test(joined) &&
+    isPlainContinuation(context, index + extra + 1, tableLines)
+  ) {
+    joined = collapse(`${joined} ${bare(lineAt(context.lines, index + extra + 1).text)}`);
+    extra += 1;
+  }
+  return extra === 0 ? undefined : { title: joined, titleLines: extra };
 }
 
 function lineCandidates(context: Context, tableLines: ReadonlySet<number>): readonly Candidate[] {
@@ -287,7 +592,11 @@ function lineCandidates(context: Context, tableLines: ReadonlySet<number>): read
     if (tableLines.has(index)) return;
     const heading = MARKDOWN_HEADING.test(line.text) || startsSection(context.starts, line);
     const definition = classifyText(bare(line.text), heading, context.vocabulary);
-    if (definition !== undefined) found.push({ ...definition, line: index, headingLine: true });
+    if (definition === undefined) return;
+    const wrapped = heading
+      ? undefined
+      : wrappedTitle(context, index, definition.title, tableLines);
+    found.push({ ...definition, ...wrapped, line: index, headingLine: true });
   });
   return found;
 }
@@ -325,9 +634,9 @@ function sectionCandidate(
   return { ...definition, line: index, headingLine, section };
 }
 
-function findCandidates(context: Context): readonly Candidate[] {
-  const rows = [...tableCandidates(context), ...projectedCandidates(context)];
-  const tableLines = new Set(rows.map((row) => row.line));
+function findCandidates(context: Context, tables: TableScan): readonly Candidate[] {
+  const rows = tables.drafts.map((draft) => rowCandidate(draft));
+  const tableLines = new Set([...tables.lines, ...tables.foreign]);
   const fromLines = lineCandidates(context, tableLines);
   const fromSections = context.sections.flatMap(
     (section) => sectionCandidate(context, fromLines, section) ?? [],
@@ -353,6 +662,10 @@ interface Block {
 interface Scan {
   hasBody: boolean;
   inCriteria: boolean;
+  /** The criteria list so far has list markers, so a paragraph without one is not an item. */
+  markedCriteria: boolean;
+  /** The last line already read as prose up to the next unit. */
+  proseThrough: number;
 }
 
 function isKeyLine(text: string, vocabulary: CompiledVocabulary): boolean {
@@ -364,14 +677,23 @@ function isKeyLine(text: string, vocabulary: CompiledVocabulary): boolean {
   );
 }
 
-function advanceScan(scan: Scan, text: string, vocabulary: CompiledVocabulary): void {
-  if (vocabulary.criteriaKey.test(text)) scan.inCriteria = true;
-  else if (vocabulary.statementKey.test(text)) {
+function advanceScanSegment(scan: Scan, text: string, vocabulary: CompiledVocabulary): void {
+  if (vocabulary.criteriaKey.test(text)) {
+    scan.inCriteria = true;
+    scan.markedCriteria = false;
+  } else if (vocabulary.statementKey.test(text)) {
     scan.inCriteria = false;
     scan.hasBody = true;
   } else if (vocabulary.priorityKey.test(text) || vocabulary.metaKey.test(text))
     scan.inCriteria = false;
   else if (!scan.inCriteria) scan.hasBody = true;
+}
+
+/** The scan reads a line the way the interpreter does, so a field inline in a line counts. */
+function advanceScan(scan: Scan, text: string, vocabulary: CompiledVocabulary): void {
+  for (const segment of segmentsOf(text, vocabulary)) {
+    advanceScanSegment(scan, segment, vocabulary);
+  }
 }
 
 function nextNonBlank(lines: readonly Line[], from: number, limit: number): number {
@@ -391,23 +713,8 @@ function leadsIntoKeyLine(context: Context, from: number, limit: number): boolea
 }
 
 /** A line without a closing mark, then one starting in lower case: one sentence around a break. */
-function sentenceGoesOn(context: Context, blank: number, next: number): boolean {
-  const before = bare(lineAt(context.lines, blank - 1).text);
-  return (
-    before.length > 0 &&
-    !CLOSING_MARK.test(before) &&
-    LOWER_CASE_START.test(bare(lineAt(context.lines, next).text))
-  );
-}
-
-/** In flat text a blank line ends the block unless the block evidently goes on behind it. */
-function continuesAfterBlank(context: Context, scan: Scan, blank: number, limit: number): boolean {
-  const next = nextNonBlank(context.lines, blank + 1, limit);
-  if (next < 0) return false;
-  const raw = lineAt(context.lines, next).text;
-  if (isKeyLine(bare(raw), context.vocabulary) || !scan.hasBody) return true;
-  if (scan.inCriteria && LIST_MARKER.test(raw)) return true;
-  return sentenceGoesOn(context, blank, next) || leadsIntoKeyLine(context, next, limit);
+function sentenceGoesOn(before: string, next: string): boolean {
+  return !CLOSING_MARK.test(bare(before)) && LOWER_CASE_START.test(bare(next));
 }
 
 function isHeadingShaped(raw: string, before: string, context: Context): boolean {
@@ -415,6 +722,71 @@ function isHeadingShaped(raw: string, before: string, context: Context): boolean
   if (text.length > HEADING_MAX_CHARS || CLOSING_MARK.test(text)) return false;
   if (!HEADING_START.test(text) || isKeyLine(text, context.vocabulary)) return false;
   return NUMBERED_ITEM.test(raw) ? !NUMBERED_ITEM.test(before) : !LIST_MARKER.test(raw);
+}
+
+/** A list with markers takes only marked paragraphs; one without takes a paragraph per criterion. */
+function criteriaGoOn(context: Context, scan: Scan, raw: string, before: string): boolean {
+  if (NUMBERED_ITEM.test(raw) && !NUMBERED_ITEM.test(before)) return false;
+  if (LIST_MARKER.test(raw)) return true;
+  if (scan.markedCriteria) return false;
+  if (isKeyLine(bare(before), context.vocabulary)) return true;
+  return !(CLOSING_MARK.test(bare(before)) && isHeadingShaped(raw, before, context));
+}
+
+/** Whether the line can be prose of the unit: no chapter, no table, and no closing field before. */
+function readsAsProseOfUnit(context: Context, raw: string, before: string): boolean {
+  return (
+    !isKeyLine(bare(before), context.vocabulary) &&
+    !endsProjectedRow(raw) &&
+    !isDocumentProjection(raw) &&
+    tableCells(raw) === undefined &&
+    !isHeadingShaped(raw, before, context)
+  );
+}
+
+interface BlankLinePlace {
+  readonly index: number;
+  readonly last: number;
+  readonly limit: number;
+}
+
+/**
+ * Between two units of one chapter prose belongs to the unit before it, unless it announces the
+ * next one. Behind the last unit nothing says so. The lines are read once per block.
+ */
+function runsIntoNextUnit(
+  context: Context,
+  scan: Scan,
+  from: number,
+  place: BlankLinePlace,
+): boolean {
+  const { last, limit } = place;
+  if (limit >= context.lines.length - 1) return false;
+  if (from <= scan.proseThrough) return true;
+  let before = lineAt(context.lines, last).text;
+  for (let index = from; index <= limit; index += 1) {
+    const raw = lineAt(context.lines, index).text;
+    if (bare(raw).length > 0) {
+      if (!readsAsProseOfUnit(context, raw, before)) return false;
+      before = raw;
+    }
+  }
+  if (bare(before).endsWith(":")) return false;
+  scan.proseThrough = limit;
+  return true;
+}
+
+/** In flat text a blank line ends a block; the unit goes on only with what evidently belongs to it. */
+function continuesAfterBlank(context: Context, scan: Scan, place: BlankLinePlace): boolean {
+  const { index, last, limit } = place;
+  const next = nextNonBlank(context.lines, index + 1, limit);
+  if (next < 0) return false;
+  const raw = lineAt(context.lines, next).text;
+  const before = lineAt(context.lines, last).text;
+  if (isKeyLine(bare(raw), context.vocabulary) || !scan.hasBody) return true;
+  if (scan.inCriteria) return criteriaGoOn(context, scan, raw, before);
+  if (sentenceGoesOn(before, raw) || leadsIntoKeyLine(context, next, limit)) return true;
+  return runsIntoNextUnit(context, scan, next, place);
 }
 
 /** What precedes a chapter heading is finished: a closed sentence, a list item or a key value. */
@@ -458,34 +830,53 @@ function leavesBlock(context: Context, candidate: Candidate, line: Line): boolea
     : line.start >= sectionEnd;
 }
 
-function endsFlatBlock(
-  context: Context,
-  scan: Scan,
-  positions: { readonly index: number; readonly last: number; readonly limit: number },
-): boolean {
-  const { index, last, limit } = positions;
+function endsFlatBlock(context: Context, scan: Scan, positions: BlankLinePlace): boolean {
+  const { index, last } = positions;
   const raw = lineAt(context.lines, index).text;
   return bare(raw).length === 0
-    ? !continuesAfterBlank(context, scan, index, limit)
+    ? !continuesAfterBlank(context, scan, positions)
     : startsChapter(context, scan, raw, last);
 }
 
-function lastLineOf(context: Context, candidate: Candidate, limit: number): number {
-  if (candidate.kind === "row") return candidate.line;
-  const structured = candidate.section?.characterEnd !== undefined || candidate.kind === "heading";
-  const scan: Scan = { hasBody: false, inCriteria: false };
-  let last = candidate.line;
-  for (let index = candidate.line + 1; index <= limit; index += 1) {
+/** The last line of the unit's head: its first line plus the lines a wrapped title runs over. */
+function headLastLine(candidate: Candidate): number {
+  return candidate.line + (candidate.titleLines ?? 0);
+}
+
+function isStructured(candidate: Candidate): boolean {
+  return candidate.section?.characterEnd !== undefined || candidate.kind === "heading";
+}
+
+/** Takes one line into the scan; false for a blank line, which leaves the scan as it is. */
+function scanBodyLine(scan: Scan, raw: string, vocabulary: CompiledVocabulary): boolean {
+  const text = bare(raw);
+  if (text.length === 0) return false;
+  advanceScan(scan, text, vocabulary);
+  if (scan.inCriteria && LIST_MARKER.test(raw)) scan.markedCriteria = true;
+  return true;
+}
+
+function lastBodyLine(context: Context, candidate: Candidate, limit: number): number {
+  const structured = isStructured(candidate);
+  const scan: Scan = { hasBody: false, inCriteria: false, markedCriteria: false, proseThrough: -1 };
+  const head = headLastLine(candidate);
+  let last = head;
+  for (let index = head + 1; index <= limit; index += 1) {
     const line = lineAt(context.lines, index);
-    if (leavesBlock(context, candidate, line)) break;
+    const rule = isThematicBreak(line.text);
+    // Directly under the head a rule underlines the heading; behind a body it ends the block.
+    if (leavesBlock(context, candidate, line) || (rule && last > head)) break;
+    if (rule) continue;
     if (!structured && endsFlatBlock(context, scan, { index, last, limit })) break;
-    const text = bare(line.text);
-    if (text.length > 0) {
-      advanceScan(scan, text, context.vocabulary);
-      last = index;
-    }
+    if (scanBodyLine(scan, line.text, context.vocabulary)) last = index;
   }
   return structured ? last : withoutTrailingHeadings(context, candidate, last);
+}
+
+function lastLineOf(context: Context, candidate: Candidate, limit: number): number {
+  return candidate.kind === "row"
+    ? (candidate.rowLastLine ?? candidate.line)
+    : lastBodyLine(context, candidate, limit);
 }
 
 function buildBlocks(context: Context, candidates: readonly Candidate[]): readonly Block[] {
@@ -498,7 +889,7 @@ function buildBlocks(context: Context, candidates: readonly Candidate[]): readon
       : (candidate.section?.characterStart ?? head.start);
     return {
       candidate,
-      first: candidate.line + (candidate.headingLine ? 1 : 0),
+      first: headLastLine(candidate) + (candidate.headingLine ? 1 : 0),
       last,
       start,
       end: lineAt(context.lines, last).end,
@@ -524,24 +915,69 @@ function statementOf(full: string): Pick<Interpreted, "statement" | "fullStateme
     : { statement: full.slice(0, STATEMENT_MAX_CHARS), fullStatement: full };
 }
 
-type Mode = "text" | "criteria" | "meta";
+type Mode = "text" | "criteria" | "note" | "label";
 interface BodyState {
   readonly statement: string[];
   readonly criteria: string[];
   priority: string | undefined;
   mode: Mode;
+  /** A marked criterion without a closing mark: the next unmarked line is its wrapped remainder. */
+  criterionOpen: boolean;
+  /** The criteria list has markers. Behind a blank line a paragraph without one is not an item. */
+  criteriaMarked: boolean;
+  /** A blank line ended the block before: the next line wraps nothing. */
+  afterBlank: boolean;
+  /** A metadata value that ended open: the next line still belongs to it. */
+  labelOpen: boolean;
 }
 
 function stripCriterionNumber(value: string): string {
   return collapse(value.replace(CRITERION_NUMBER, ""));
 }
 
+/** The fields of a record line; a line that is no record, with a key it names, is one piece. */
+function recordPieces(text: string, vocabulary: CompiledVocabulary): readonly string[] {
+  if (!FIELD_HEAD.test(text)) return [text];
+  const pieces = text.split(FIELD_JOINT);
+  return pieces.length > 1 && pieces.some((piece) => isKeyLine(piece, vocabulary))
+    ? pieces
+    : [text];
+}
+
+/** A statement key counts inside a line only behind another field; a statement may name the word. */
+function inlineFields(piece: string, vocabulary: CompiledVocabulary): readonly string[] {
+  const opensWithField = vocabulary.priorityKey.test(piece) || vocabulary.metaKey.test(piece);
+  const statement = opensWithField ? vocabulary.inlineStatementKey.exec(piece) : null;
+  if (statement === null) return piece.split(vocabulary.inlineKey);
+  return [
+    ...piece.slice(0, statement.index).split(vocabulary.inlineKey),
+    ...piece.slice(statement.index).split(vocabulary.inlineKey),
+  ];
+}
+
+/** `Jira: KRED-29 Der Kunde ...`, `Priorität: Hoch Der Kunde ...`: a value that cannot run on. */
+function withSentenceApart(field: string, vocabulary: CompiledVocabulary): readonly string[] {
+  const lead = (vocabulary.metaKey.test(field) ? ID_VALUE_FIELD : vocabulary.priorityLead).exec(
+    field,
+  );
+  if (lead === null) return [field];
+  const rest = collapse(field.slice(lead[0].length));
+  return SENTENCE_START.test(rest) ? [lead[0], rest] : [field];
+}
+
 /** One extractor line, split where it carries several fields. */
 function segmentsOf(raw: string, vocabulary: CompiledVocabulary): readonly string[] {
-  return bare(raw)
-    .split(vocabulary.inlineKey)
+  const pieces = recordPieces(bare(raw), vocabulary);
+  const fields = pieces
+    .flatMap((piece) => inlineFields(piece, vocabulary))
     .map((value) => collapse(value))
-    .filter((segment) => segment.length > 0);
+    .filter((field) => field.length > 0);
+  // In a record, a field no vocabulary names is presentation like its neighbours.
+  const named =
+    pieces.length > 1
+      ? fields.filter((field) => !FIELD_HEAD.test(field) || isKeyLine(field, vocabulary))
+      : fields;
+  return named.flatMap((field) => withSentenceApart(field, vocabulary));
 }
 
 function keyValue(segment: string, key: RegExp): string | undefined {
@@ -558,37 +994,102 @@ function readStatementLabel(state: BodyState, value: string): void {
 
 function readCriteria(state: BodyState, criteria: string): void {
   state.mode = "criteria";
+  state.criterionOpen = false;
+  state.criteriaMarked = false;
   for (const item of criteria.split(MERGED_ITEMS)) {
     const criterion = stripCriterionNumber(item);
     if (criterion.length > 0) state.criteria.push(criterion);
   }
 }
 
-function readSegment(state: BodyState, segment: string, vocabulary: CompiledVocabulary): void {
+function appendCriterion(state: BodyState, text: string, marked: boolean): void {
+  const last = state.criteria.length - 1;
+  if (state.criterionOpen && !marked && last >= 0) {
+    state.criteria[last] = collapse(`${state.criteria[last] ?? ""} ${text}`);
+  } else {
+    state.criteria.push(text);
+  }
+}
+
+/**
+ * One extractor line of a criteria list. A PDF reports a wrapped list item as several lines, so an
+ * unmarked line continues a marked item that has not closed. A list without markers has no such
+ * evidence and keeps one criterion per line.
+ */
+function readCriterionLine(state: BodyState, segment: string, marked: boolean): void {
+  if (state.afterBlank && state.criteriaMarked && !marked) {
+    state.mode = "text";
+    state.statement.push(segment);
+    return;
+  }
+  state.criteriaMarked ||= marked;
+  const text = stripCriterionNumber(segment);
+  appendCriterion(state, text, marked);
+  state.criterionOpen = (marked || state.criterionOpen) && !CLOSING_MARK.test(text);
+}
+
+function readKeyField(state: BodyState, segment: string, vocabulary: CompiledVocabulary): boolean {
   const priority = keyValue(segment, vocabulary.priorityKey);
   const criteria = keyValue(segment, vocabulary.criteriaKey);
   const label = keyValue(segment, vocabulary.statementKey);
   if (priority !== undefined) {
-    state.priority = collapse(trimTrailingMarks(priority.split(FIELD_SEPARATOR)[0] ?? ""));
+    state.priority = collapse(trimTrailingMarks(priority.split(VALUE_END)[0] ?? ""));
     state.mode = "text";
-  } else if (criteria !== undefined) {
-    readCriteria(state, criteria);
-  } else if (label !== undefined) {
-    readStatementLabel(state, label);
-  } else if (vocabulary.metaKey.test(segment)) {
-    state.mode = "meta";
-  } else if (state.mode === "criteria") {
-    state.criteria.push(stripCriterionNumber(segment));
-  } else if (state.mode === "text") {
-    state.statement.push(segment);
+  } else if (criteria !== undefined) readCriteria(state, criteria);
+  else if (label !== undefined) readStatementLabel(state, label);
+  else if (vocabulary.noteKey.test(segment)) state.mode = "note";
+  else if (vocabulary.metaKey.test(segment)) {
+    state.mode = "label";
+    state.labelOpen = VALUE_GOES_ON.test(segment);
+  } else return false;
+  return true;
+}
+
+/** Behind a metadata value text is content again, unless the line evidently carries the value on. */
+function readBehindLabel(state: BodyState, segment: string): void {
+  if (state.labelOpen || LOWER_CASE_START.test(segment)) {
+    state.labelOpen = VALUE_GOES_ON.test(segment);
+    return;
   }
+  state.mode = "text";
+  state.statement.push(segment);
+}
+
+function readSegment(
+  state: BodyState,
+  segment: string,
+  vocabulary: CompiledVocabulary,
+  marked: boolean,
+): void {
+  if (readKeyField(state, segment, vocabulary)) return;
+  if (state.mode === "label") readBehindLabel(state, segment);
+  else if (state.mode === "criteria") readCriterionLine(state, segment, marked);
+  else if (state.mode === "text") state.statement.push(segment);
 }
 
 function interpretBody(bodyLines: readonly Line[], vocabulary: CompiledVocabulary): Interpreted {
-  const state: BodyState = { statement: [], criteria: [], priority: undefined, mode: "text" };
-  for (const line of bodyLines)
+  const state: BodyState = {
+    statement: [],
+    criteria: [],
+    priority: undefined,
+    mode: "text",
+    criterionOpen: false,
+    criteriaMarked: false,
+    afterBlank: false,
+    labelOpen: false,
+  };
+  for (const line of bodyLines) {
+    if (isThematicBreak(line.text)) continue;
+    if (bare(line.text).length === 0) {
+      state.criterionOpen = false;
+      state.afterBlank = true;
+      continue;
+    }
+    const marked = LIST_MARKER.test(line.text);
     for (const segment of segmentsOf(line.text, vocabulary))
-      readSegment(state, segment, vocabulary);
+      readSegment(state, segment, vocabulary, marked);
+    state.afterBlank = false;
+  }
   return {
     ...(state.priority === undefined || state.priority.length === 0
       ? {}
@@ -611,7 +1112,8 @@ function interpretRow(row: RowFields): Interpreted {
   };
 }
 
-function shorten(value: string): string {
+/** The title of a requirement that has none of its own: the start of its statement. */
+export function titleFromStatement(value: string): string {
   return value.length <= TITLE_FALLBACK_CHARS
     ? value
     : `${value.slice(0, TITLE_FALLBACK_CHARS - 1).trimEnd()}…`;
@@ -675,7 +1177,7 @@ interface EntryParts {
 
 function toEntry(context: Context, parts: EntryParts): RequirementInventoryEntry {
   const { id, interpreted } = parts;
-  const title = parts.title.length > 0 ? parts.title : shorten(interpreted.statement);
+  const title = parts.title.length > 0 ? parts.title : titleFromStatement(interpreted.statement);
   return Object.freeze({
     id,
     idOrigin: parts.idOrigin,
@@ -708,6 +1210,18 @@ interface RawUnit {
   readonly entry: RequirementInventoryEntry;
   readonly hasBody: boolean;
   readonly block: Block;
+  readonly parts: EntryParts;
+}
+
+/** A sentence on the line of the identifier states the requirement; it needs no line of its own. */
+function withTitleStatement(
+  unit: { readonly title: string; readonly interpreted: Interpreted },
+  vocabulary: CompiledVocabulary,
+): { readonly title: string; readonly interpreted: Interpreted } {
+  if (unit.interpreted.statement.length > 0 || !obligationStatement(vocabulary, unit.title)) {
+    return unit;
+  }
+  return { title: "", interpreted: { ...unit.interpreted, ...statementOf(unit.title) } };
 }
 
 function rawUnit(context: Context, block: Block): RawUnit {
@@ -716,8 +1230,11 @@ function rawUnit(context: Context, block: Block): RawUnit {
     candidate.row === undefined
       ? interpretBody(context.lines.slice(block.first, block.last + 1), context.vocabulary)
       : interpretRow(candidate.row);
-  const { title, interpreted } = withTitleTag(candidate.title, body, context.vocabulary);
-  const entry = toEntry(context, {
+  const { title, interpreted } = withTitleStatement(
+    withTitleTag(candidate.title, body, context.vocabulary),
+    context.vocabulary,
+  );
+  const parts: EntryParts = {
     id: candidate.id,
     idOrigin: "explicit",
     unitKind: candidate.row === undefined ? "block" : "table-row",
@@ -726,12 +1243,13 @@ function rawUnit(context: Context, block: Block): RawUnit {
     sectionPath: sectionPathAt(context.sections, block.start),
     start: block.start,
     end: block.end,
-  });
+  };
+  const entry = toEntry(context, parts);
   const hasBody =
     interpreted.statement.length > 0 ||
     interpreted.criteria.length > 0 ||
     interpreted.priority !== undefined;
-  return { candidate, entry, hasBody, block };
+  return { candidate, entry, hasBody, block, parts };
 }
 
 // ─── Acceptance and selection ────────────────────────────────────────────────
@@ -745,17 +1263,37 @@ function prefixCorroboration(units: readonly RawUnit[]): ReadonlyMap<string, Rea
   return byPrefix;
 }
 
+/** What only a requirement says of itself: a priority, criteria or an obligation. */
+function statesRequirement({ entry }: RawUnit, vocabulary: CompiledVocabulary): boolean {
+  return (
+    entry.priority !== undefined ||
+    entry.acceptanceCriteria.length > 0 ||
+    vocabulary.modal.test(entry.title) ||
+    vocabulary.modal.test(entry.statement)
+  );
+}
+
 /** A requirement context: a separated or table identifier, a body, or a second identifier. */
-function accepted(unit: RawUnit, corroboration: ReadonlyMap<string, ReadonlySet<string>>): boolean {
+function accepted(
+  unit: RawUnit,
+  corroboration: ReadonlyMap<string, ReadonlySet<string>>,
+  vocabulary: CompiledVocabulary,
+): boolean {
   const { kind, id } = unit.candidate;
   if (kind === "strong" || kind === "row") return true;
-  const corroborated = (corroboration.get(idPrefix(id))?.size ?? 0) >= 2;
-  return kind === "heading" ? unit.hasBody || corroborated : corroborated;
+  if ((corroboration.get(idPrefix(id))?.size ?? 0) >= 2) return true;
+  return kind === "heading" ? unit.hasBody : statesRequirement(unit, vocabulary);
+}
+
+/** Statement or criteria: what makes a definition of more than a listing. */
+function hasContent({ entry }: RawUnit): boolean {
+  return entry.statement.length > 0 || entry.acceptanceCriteria.length > 0;
 }
 
 function richness(unit: RawUnit): readonly number[] {
   const { entry } = unit;
   return [
+    hasContent(unit) ? 1 : 0,
     unit.hasBody ? 1 : 0,
     entry.acceptanceCriteria.length > 0 ? 1 : 0,
     entry.priority === undefined ? 0 : 1,
@@ -779,7 +1317,22 @@ interface Selection {
   readonly referenceOnly: number;
 }
 
-function selectDefinitions(units: readonly RawUnit[]): Selection {
+function disagree(left: RawUnit, right: RawUnit): boolean {
+  if (hasContent(left) && hasContent(right) && left.entry.digest !== right.entry.digest)
+    return true;
+  const [a, b] = [left.entry.priority, right.entry.priority];
+  return a !== undefined && b !== undefined && foldTerm(a) !== foldTerm(b);
+}
+
+/** The definition, with the priority only a listing of the same identifier states. */
+function withListedPriority(context: Context, best: RawUnit, group: readonly RawUnit[]): RawUnit {
+  const listed = group.find((unit) => unit.entry.priority !== undefined)?.entry.priority;
+  if (best.entry.priority !== undefined || listed === undefined) return best;
+  const parts = { ...best.parts, interpreted: { ...best.parts.interpreted, priority: listed } };
+  return { ...best, parts, entry: toEntry(context, parts) };
+}
+
+function selectDefinitions(context: Context, units: readonly RawUnit[]): Selection {
   const groups = new Map<string, RawUnit[]>();
   for (const unit of units) {
     const group = groups.get(unit.candidate.id) ?? [];
@@ -795,10 +1348,10 @@ function selectDefinitions(units: readonly RawUnit[]): Selection {
       undefined,
     );
     if (best === undefined) continue;
-    chosen.push(best);
-    const bodies = group.filter((unit) => unit.hasBody);
-    if (bodies.some((unit) => unit.entry.digest !== best.entry.digest)) conflicting.push(id);
-    referenceOnly += group.filter((unit) => !unit.hasBody && unit !== best).length;
+    chosen.push(withListedPriority(context, best, group));
+    const others = group.filter((unit) => unit !== best);
+    if (others.some((unit) => disagree(unit, best))) conflicting.push(id);
+    referenceOnly += others.filter((unit) => !hasContent(unit)).length;
   }
   conflicting.sort(compareStrings);
   return { chosen, conflicting, referenceOnly };
@@ -844,8 +1397,9 @@ interface Paragraph {
   readonly end: number;
 }
 
+/** A list item, a numbered clause, or the result line a calculation closes with. */
 function startsParagraph(raw: string): boolean {
-  return LIST_MARKER.test(raw);
+  return LIST_MARKER.test(raw) || RESULT_LINE.test(raw) || NUMBERED_CLAUSE.test(raw);
 }
 
 /** Wrapped lines of one paragraph, merged; list items, headings and blank lines break it. */
@@ -863,6 +1417,7 @@ function paragraphsOf(context: Context, covered: ReadonlySet<number>): readonly 
       covered.has(index) ||
       text.length === 0 ||
       MARKDOWN_HEADING.test(line.text) ||
+      isThematicBreak(line.text) ||
       tableCells(line.text) !== undefined
     ) {
       close();
@@ -894,48 +1449,122 @@ function conditionalObligation(vocabulary: CompiledVocabulary, statement: string
 /** A sentence that states an obligation of a named subject (ISO/IEC/IEEE 29148 form). */
 function obligationStatement(vocabulary: CompiledVocabulary, statement: string): boolean {
   if (statement.length < STATEMENT_MIN_CHARS || !vocabulary.modal.test(statement)) return false;
+  if (RESULT_LINE.test(statement)) return false;
   return (
     !vocabulary.subjectlessModal.test(statement) || conditionalObligation(vocabulary, statement)
   );
 }
 
-function statementUnits(context: Context, covered: ReadonlySet<number>): readonly RawUnit[] {
-  const occurrences = new Map<string, number>();
-  const units: RawUnit[] = [];
+/** The derived identifier of a wording; a repeated wording is told apart by its occurrence. */
+class DerivedIds {
+  private readonly occurrences = new Map<string, number>();
+
+  constructor(private readonly documentKey: string) {}
+
+  next(statement: string): string {
+    const wording = normalizedWording(statement);
+    const occurrence = this.occurrences.get(wording) ?? 0;
+    this.occurrences.set(wording, occurrence + 1);
+    return derivedRequirementId(this.documentKey, statement, occurrence);
+  }
+}
+
+interface DerivedPlace {
+  readonly start: number;
+  readonly end: number;
+  readonly first: number;
+  readonly last: number;
+}
+
+function derivedUnit(
+  context: Context,
+  fields: Pick<EntryParts, "id" | "unitKind" | "title" | "interpreted">,
+  place: DerivedPlace,
+): RawUnit {
+  const { start, end, first, last } = place;
+  const candidate: Candidate = {
+    kind: "strong",
+    id: fields.id,
+    title: "",
+    line: -1,
+    headingLine: false,
+  };
+  const parts: EntryParts = {
+    ...fields,
+    idOrigin: "derived",
+    sectionPath: sectionPathAt(context.sections, start),
+    start,
+    end,
+  };
+  const block: Block = { candidate, first, last, start, end };
+  return { candidate, entry: toEntry(context, parts), hasBody: true, block, parts };
+}
+
+/** A requirement without an identifier, before its place in the document gives it one. */
+interface DerivedSeed {
+  readonly statement: string;
+  readonly start: number;
+  readonly unit: (id: string) => RawUnit;
+}
+
+function statementSeeds(context: Context, covered: ReadonlySet<number>): readonly DerivedSeed[] {
+  const seeds: DerivedSeed[] = [];
   for (const paragraph of paragraphsOf(context, covered)) {
     for (const sentence of paragraph.text.split(SENTENCE_BREAK)) {
       const statement = collapse(sentence);
       if (!obligationStatement(context.vocabulary, statement)) continue;
-      const wording = normalizedWording(statement);
-      const occurrence = occurrences.get(wording) ?? 0;
-      occurrences.set(wording, occurrence + 1);
-      const id = derivedRequirementId(context.documentKey, statement, occurrence);
-      const candidate: Candidate = { kind: "strong", id, title: "", line: -1, headingLine: false };
-      const entry = toEntry(context, {
-        id,
-        idOrigin: "derived",
-        unitKind: "statement",
-        title: "",
-        interpreted: { ...statementOf(statement), criteria: [] },
-        sectionPath: sectionPathAt(context.sections, paragraph.start),
+      seeds.push({
+        statement,
         start: paragraph.start,
-        end: paragraph.end,
+        unit: (id) =>
+          derivedUnit(
+            context,
+            {
+              id,
+              unitKind: "statement",
+              title: "",
+              interpreted: { ...statementOf(statement), criteria: [] },
+            },
+            { start: paragraph.start, end: paragraph.end, first: 0, last: 0 },
+          ),
       });
-      const block: Block = {
-        candidate,
-        first: 0,
-        last: 0,
-        start: paragraph.start,
-        end: paragraph.end,
-      };
-      units.push({ candidate, entry, hasBody: true, block });
     }
   }
-  return units;
+  return seeds;
 }
 
-function coveredLines(blocks: readonly Block[]): ReadonlySet<number> {
-  const covered = new Set<number>();
+function unidentifiedRowSeeds(
+  context: Context,
+  drafts: readonly UnidentifiedDraft[],
+): readonly DerivedSeed[] {
+  return drafts.map(({ row, line, lastLine }) => {
+    const start = lineAt(context.lines, line).start;
+    return {
+      statement: row.statement,
+      start,
+      unit: (id) =>
+        derivedUnit(
+          context,
+          { id, unitKind: "table-row", title: row.title, interpreted: interpretRow(row) },
+          { start, end: lineAt(context.lines, lastLine).end, first: line, last: lastLine },
+        ),
+    };
+  });
+}
+
+/**
+ * The occurrence number of a repeated wording follows the document, whatever form each occurrence
+ * has: text appended later never takes the identifier of a requirement that stands before it.
+ */
+function derivedUnits(context: Context, seeds: readonly DerivedSeed[]): readonly RawUnit[] {
+  const ids = new DerivedIds(context.documentKey);
+  return [...seeds]
+    .sort((a, b) => a.start - b.start)
+    .map((seed) => seed.unit(ids.next(seed.statement)));
+}
+
+function coveredLines(blocks: readonly Block[], tables: TableScan): ReadonlySet<number> {
+  const covered = new Set<number>(tables.lines);
   for (const block of blocks)
     for (let index = block.candidate.line; index <= block.last; index += 1) covered.add(index);
   return covered;
@@ -954,17 +1583,24 @@ export function deriveRequirementInventory(input: RequirementInventoryInput): Re
     vocabulary: compileRequirementVocabulary(input.vocabulary),
     documentKey: input.documentKey,
   };
-  const blocks = buildBlocks(context, findCandidates(context));
+  const tables = scanTables(context);
+  const blocks = buildBlocks(context, findCandidates(context, tables));
   const units = blocks.map((block) => rawUnit(context, block));
   const corroboration = prefixCorroboration(units);
-  const kept = units.filter((unit) => accepted(unit, corroboration));
+  const kept = units.filter((unit) => accepted(unit, corroboration, context.vocabulary));
   const rejected = new Set(units.filter((unit) => !kept.includes(unit)).map((unit) => unit.block));
-  const selection = selectDefinitions(kept);
-  const statements = statementUnits(
-    context,
-    coveredLines(blocks.filter((block) => !rejected.has(block))),
-  );
-  const all = [...selection.chosen, ...statements].map((unit) => unit.entry);
+  const selection = selectDefinitions(context, kept);
+  const derived = derivedUnits(context, [
+    ...unidentifiedRowSeeds(context, tables.unidentified),
+    ...statementSeeds(
+      context,
+      coveredLines(
+        blocks.filter((block) => !rejected.has(block)),
+        tables,
+      ),
+    ),
+  ]);
+  const all = [...selection.chosen, ...derived].map((unit) => unit.entry);
   all.sort((a, b) => a.characterStart - b.characterStart);
   const bound = Math.max(1, Math.trunc(input.maxEntries ?? REQUIREMENT_INVENTORY_ENTRIES_MAX));
   return Object.freeze({
@@ -973,6 +1609,6 @@ export function deriveRequirementInventory(input: RequirementInventoryInput): Re
     truncated: all.length > bound,
     conflictingIds: Object.freeze(selection.conflicting),
     referenceOnlyCount: selection.referenceOnly,
-    rejectedCandidateCount: rejected.size,
+    rejectedCandidateCount: rejected.size + tables.foreign.size,
   });
 }

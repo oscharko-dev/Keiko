@@ -121,6 +121,7 @@ import { createCodingSafeActivityProjection } from "./coding-runtime/codingSafeA
 import { resolvePrDescriptionApplicationServiceForContext } from "./gitDelivery/prDescriptionRoutes.js";
 import { createUpdateRemediationManager } from "./update-remediation.js";
 import { createUpdateLocalStateManager } from "./update-local-state.js";
+import { strictRedactor } from "./content-redactor.js";
 
 const tmpDirs: string[] = [];
 
@@ -508,6 +509,29 @@ async function drain<T>(stream: AsyncIterable<T>): Promise<readonly T[]> {
   const out: T[] = [];
   for await (const event of stream) out.push(event);
   return out;
+}
+
+// Every table and column whose text holds the needle, as `table.column`, sorted.
+function plaintextColumnsHolding(db: DatabaseSync, needle: string): readonly string[] {
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+    readonly name: string;
+  }[];
+  return tables
+    .flatMap(({ name: table }) => {
+      const columns = db.prepare(`PRAGMA table_info("${table}")`).all() as {
+        readonly name: string;
+      }[];
+      return columns
+        .filter(({ name: column }) =>
+          db
+            .prepare(
+              `SELECT 1 FROM "${table}" WHERE instr(CAST("${column}" AS TEXT), :needle) > 0 LIMIT 1`,
+            )
+            .get({ needle }),
+        )
+        .map(({ name: column }) => `${table}.${column}`);
+    })
+    .sort((left, right) => left.localeCompare(right));
 }
 
 function readAllStoreBytes(dbPath: string): Buffer {
@@ -1969,7 +1993,8 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const sourceDir = tmp("lk-src-");
     const uiDbPath = join(uiDir, "keiko-ui.db");
     const heading = "Server Heading ZGRZZY-SERVER-1322";
-    const html = `<html><body><h1>${heading}</h1><p>retrieval needle for encrypted heading citations</p></body></html>`;
+    const anchor = "anchor-zgrzzy-server-1322";
+    const html = `<html><body><h1 id="${anchor}">${heading}</h1><p>retrieval needle for encrypted heading citations</p></body></html>`;
     writeFileSync(join(sourceDir, "guide.html"), html, "utf8");
 
     const deps = buildUiHandlerDeps({
@@ -2043,10 +2068,19 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       deps.memoryVault?.close();
     }
 
+    // An anchor is metadata alone and stays out of every byte of the store. A heading is also text
+    // of the document since #4235, and document text has one plaintext home: the lexical index
+    // (ADR-0047). It may be found there and in no other column of any table.
     const bytes = readAllStoreBytes(knowledgeDbPath);
-    expect(bytes.includes(Buffer.from(heading, "utf8"))).toBe(false);
+    expect(bytes.includes(Buffer.from(anchor, "utf8"))).toBe(false);
     const raw = new DatabaseSync(knowledgeDbPath);
     try {
+      expect(plaintextColumnsHolding(raw, "ZGRZZY-SERVER-1322")).toEqual([
+        "chunk_lexical_fts.exact_text",
+        "chunk_lexical_fts.text",
+        "chunk_lexical_index.exact_text",
+        "chunk_lexical_index.text",
+      ]);
       const row = raw
         .prepare("SELECT heading_path_json FROM parsed_units WHERE heading_path_json IS NOT NULL")
         .get() as { readonly heading_path_json: string };
@@ -2258,8 +2292,47 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     deps.memoryVault?.close();
   });
 
+  // Owner decision 2026-11-04. Everything a person reads and the model receives goes through
+  // `deps.redactor`; everything stored as evidence, audit or memory goes through `strictRedactor`.
   it.each([
-    [undefined, "redact", "default", "info"],
+    [undefined, true],
+    ["on", false],
+    ["off", true],
+    ["OFF", false],
+  ] as const)(
+    "with KEIKO_CONTENT_REDACTION=%j the reader's projection keeps standards and dates: %s",
+    async (value, keepsContent) => {
+      const stateDir = tmp("content-threshold-state-");
+      const secret = "synthetic-configured-infrastructure-value";
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: tmp("content-threshold-evidence-"),
+        uiDbPath: join(stateDir, "keiko-ui.db"),
+        env: {
+          KEIKO_DEFAULT_API_KEY: secret,
+          ...(value === undefined ? {} : { KEIKO_CONTENT_REDACTION: value }),
+        },
+      });
+      try {
+        const contents = ["pacs.008.001.08", "camt.053.001.08", "Stand: 12.03.2026 10:15"];
+        for (const content of contents) {
+          expect(deps.redactor(content) === content).toBe(keepsContent);
+          expect(strictRedactor(deps)(content)).not.toBe(content);
+        }
+        const credential = `key ${secret} Authorization: Bearer fixture-token-value`;
+        for (const projected of [deps.redactor(credential), strictRedactor(deps)(credential)]) {
+          expect(projected).not.toContain(secret);
+          expect(projected).not.toContain("fixture-token-value");
+        }
+      } finally {
+        await deps.dispose?.();
+      }
+    },
+  );
+
+  it.each([
+    [undefined, "preserve", "default", "info"],
+    ["on", "redact", "on", "info"],
     ["off", "preserve", "off", "info"],
     ["OFF", "redact", "invalid", "warn"],
   ] as const)(

@@ -1,8 +1,8 @@
 // The one bounded OOXML package reader, shared by the docx, xlsx and pptx parsers. Input stays in
-// memory and every inflated entry is capped by size and compression ratio. Unless a plan opts
-// out, the central-directory walk honours the entry count, the deadline and the caller's abort
-// signal, the inflated total is capped, and an archive that lists the same wanted part twice is
-// rejected instead of guessing which one is authoritative.
+// memory and every inflated entry is capped by size and compression ratio. The central-directory walk
+// honours the entry count, the deadline and the caller's abort signal, the inflated total is capped,
+// and an archive that lists the same wanted part twice is rejected instead of guessing which one is
+// authoritative.
 
 import { Buffer } from "node:buffer";
 
@@ -12,6 +12,7 @@ import type { ParserOptions } from "./types.js";
 
 const OOXML_SCAN_BUDGET_EXCEEDED = Symbol("keiko:ooxml:scanBudgetExceeded");
 const OOXML_SCAN_CANCELLED = Symbol("keiko:ooxml:scanCancelled");
+const OOXML_ENTRY_OVERSIZED = Symbol("keiko:ooxml:entryOversized");
 const MAX_INFLATE_RATIO = 100;
 
 export interface OoxmlZipReadPlan {
@@ -25,16 +26,6 @@ export interface OoxmlZipReadPlan {
   readonly maxEntryInflatedBytes: number;
   /** Ceiling on all inflated entries together; absent = only the per-entry ceiling applies. */
   readonly maxTotalInflatedBytes?: number;
-  /**
-   * Whether the central-directory walk honours the caller's deadline and abort signal between
-   * entries. Defaults to `enforced`; `none` leaves the walk uncooperative.
-   */
-  readonly scanBudget?: "enforced" | "none";
-  /**
-   * What a second listing of a wanted part does: `reject` fails the read (default), `replace`
-   * lets the later listing win.
-   */
-  readonly duplicateParts?: "reject" | "replace";
 }
 
 // A password-protected Office file is not an OOXML ZIP package: Office wraps the encrypted package
@@ -83,6 +74,15 @@ function hasMarker(error: unknown, marker: symbol): boolean {
   );
 }
 
+/**
+ * True when a part (or the package) inflates beyond its size ceiling. This is a size refusal, not
+ * a malformed package, so callers can report it as such; a compression-ratio breach stays
+ * malformed.
+ */
+export function isOoxmlEntryOversized(error: unknown): boolean {
+  return hasMarker(error, OOXML_ENTRY_OVERSIZED);
+}
+
 /** Maps a reader failure onto the diagnostic family the caller should emit. */
 export function classifyOoxmlZipError(error: unknown): OoxmlZipFailure {
   if (hasMarker(error, OOXML_SCAN_CANCELLED)) return "cancelled";
@@ -113,13 +113,13 @@ function openZip(bytes: Uint8Array, format: string): Promise<yauzl.ZipFile> {
 
 function assertEntryDeclaredSize(entry: yauzl.Entry, plan: OoxmlZipReadPlan, total: number): void {
   if (entry.uncompressedSize > plan.maxEntryInflatedBytes) {
-    throw new Error(`${plan.format} entry inflated size exceeds limit`);
+    throw markedError(`${plan.format} entry inflated size exceeds limit`, OOXML_ENTRY_OVERSIZED);
   }
   if (
     plan.maxTotalInflatedBytes !== undefined &&
     total + entry.uncompressedSize > plan.maxTotalInflatedBytes
   ) {
-    throw new Error(`${plan.format} package inflated size exceeds limit`);
+    throw markedError(`${plan.format} package inflated size exceeds limit`, OOXML_ENTRY_OVERSIZED);
   }
   if (
     entry.compressedSize > 0 &&
@@ -131,7 +131,6 @@ function assertEntryDeclaredSize(entry: yauzl.Entry, plan: OoxmlZipReadPlan, tot
 
 function scanStop(limits: ScanLimits, entriesSeen: number): Error | undefined {
   const { plan, options, startedAt } = limits;
-  if (plan.scanBudget === "none") return undefined;
   if (options.signal?.aborted === true) {
     return markedError(`${plan.format} zip scan cancelled`, OOXML_SCAN_CANCELLED);
   }
@@ -181,7 +180,9 @@ function readEntryBytes(
         if (settled) return;
         inflatedBytes += chunk.byteLength;
         if (inflatedBytes > ceiling) {
-          rejectOnce(new Error(`${plan.format} inflated stream exceeds limit`));
+          rejectOnce(
+            markedError(`${plan.format} inflated stream exceeds limit`, OOXML_ENTRY_OVERSIZED),
+          );
           return;
         }
         chunks.push(chunk);
@@ -208,7 +209,7 @@ async function inflateWantedEntry(
   plan: OoxmlZipReadPlan,
   progress: ScanProgress,
 ): Promise<void> {
-  if (plan.duplicateParts !== "replace" && progress.parts.has(entry.fileName)) {
+  if (progress.parts.has(entry.fileName)) {
     throw new Error(`${plan.format} package lists a part twice`);
   }
   assertEntryDeclaredSize(entry, plan, progress.totalInflated);

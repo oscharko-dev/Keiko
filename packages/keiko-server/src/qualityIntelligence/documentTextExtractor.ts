@@ -9,39 +9,51 @@ import { readFile, stat } from "node:fs/promises";
 import { extractBoundedDocumentText } from "@oscharko-dev/keiko-local-knowledge";
 import type {
   QiAsyncDocumentTextExtractor,
+  QiDocumentFailure,
   QiDocumentTextExtractionInput,
 } from "./runIngestion.js";
 
 const DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const PDF_MEDIA_TYPE = "application/pdf";
+const HTML_MEDIA_TYPE = "text/html";
 const QI_DOCUMENT_PARSE_TIMEOUT_MS = 5_000;
 const QI_DOCUMENT_PARSE_MAX_UNITS = 5_000;
 
-function mediaTypeFor(input: QiDocumentTextExtractionInput): string {
-  return input.format === "pdf" ? PDF_MEDIA_TYPE : DOCX_MEDIA_TYPE;
-}
+const MEDIA_TYPES: Readonly<Record<QiDocumentTextExtractionInput["format"], string>> = {
+  pdf: PDF_MEDIA_TYPE,
+  docx: DOCX_MEDIA_TYPE,
+  html: HTML_MEDIA_TYPE,
+};
+
+type BoundedRead =
+  | { readonly kind: "bytes"; readonly bytes: Uint8Array }
+  | { readonly kind: "failed"; readonly failure: QiDocumentFailure };
 
 async function boundedReadDocumentBytes(
   input: QiDocumentTextExtractionInput,
-): Promise<Uint8Array | undefined> {
+): Promise<BoundedRead> {
   try {
     const stats = await stat(input.path);
-    if (!stats.isFile() || stats.size > input.maxInputBytes) return undefined;
+    if (!stats.isFile()) return { kind: "failed", failure: "unreadable" };
+    if (stats.size > input.maxInputBytes) return { kind: "failed", failure: "oversized" };
     const bytes = await readFile(input.path);
-    return bytes.byteLength > input.maxInputBytes ? undefined : bytes;
+    return bytes.byteLength > input.maxInputBytes
+      ? { kind: "failed", failure: "oversized" }
+      : { kind: "bytes", bytes };
   } catch {
-    return undefined;
+    // The caller names the closed reason ("unreadable") in the ingestion error it raises.
+    return { kind: "failed", failure: "unreadable" };
   }
 }
 
 export const extractQiDocumentText: QiAsyncDocumentTextExtractor = async (input) => {
-  const bytes = await boundedReadDocumentBytes(input);
-  if (bytes === undefined) return undefined;
+  const read = await boundedReadDocumentBytes(input);
+  if (read.kind === "failed") return { failure: read.failure };
   const extracted = await extractBoundedDocumentText(
     {
-      bytes,
+      bytes: read.bytes,
       extension: input.format,
-      mediaType: mediaTypeFor(input),
+      mediaType: MEDIA_TYPES[input.format],
     },
     {
       maxInputBytes: input.maxInputBytes,
@@ -52,5 +64,9 @@ export const extractQiDocumentText: QiAsyncDocumentTextExtractor = async (input)
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     },
   );
-  return extracted.outcome === "extracted" ? extracted.text : undefined;
+  // The parser's own cut is passed on: the text is already within budget, so the ingestion byte
+  // bound alone could not tell the user that part of the document is missing.
+  return extracted.outcome === "extracted"
+    ? { text: extracted.text, truncated: extracted.truncated }
+    : { failure: extracted.outcome };
 };

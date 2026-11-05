@@ -96,7 +96,8 @@ parser reports as `ENCRYPTED_PDF`. Both map to the `encrypted` outcome. OCR is o
 ## Evidence semantics
 
 - Document excerpts carry a distinct `document-extract` provenance kind. Line ranges index the
-  extracted-text projection (DOCX paragraph / XLSX row / PDF page lines), not original on-screen
+  extracted-text projection (DOCX text and table-row lines, where a paragraph may span lines at its
+  soft breaks / XLSX row / PDF logical lines, rebuilt from the page layout), not original on-screen
   lines; the model prompt labels them `Document evidence (<FORMAT>, extracted text)` and the browser
   citation carries a `documentFormat` discriminator + format badge.
 - Extracted document content is **not** persisted as a Local Knowledge capsule, vector, index, or

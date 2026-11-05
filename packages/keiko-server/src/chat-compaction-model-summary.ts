@@ -59,6 +59,7 @@ import { logChatCompactionSummaryWork } from "./chat-continuity-log.js";
 import { MAX_TIMER_DELAY_MS } from "./abort-race.js";
 import { GATEWAY_ROUTE_DEADLINE_GRACE_MS } from "./gateway-route-deadline.js";
 import { depsRoot } from "./request-deps-root.js";
+import { withChatContentPolicy } from "./content-redactor.js";
 
 const UNCONFIGURED_MODEL_SUMMARY_TIMEOUT_MS = 15_000;
 const pendingSummaryInputs = new WeakMap<
@@ -219,7 +220,8 @@ export async function enrichChatCompactionWithModelSummary(
       return;
     }
     logInferredFactClassification(input.correlationId, facts);
-    const model = deps.modelPortFactory(input.modelId);
+    const port = deps.modelPortFactory(input.modelId);
+    const model = port === undefined ? undefined : withChatContentPolicy(deps, port);
     const responseMode = modelSummaryResponseMode(deps, input.modelId);
     const modelSummary =
       model === undefined
