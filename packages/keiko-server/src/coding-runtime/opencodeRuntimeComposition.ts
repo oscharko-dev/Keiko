@@ -155,6 +155,7 @@ import {
   commandDisplayText,
   createOpenCodeCommandPresentation,
   createOpenCodeCommandsRunPort,
+  readOnceLocationActivated,
   recordCommandPostRefused,
   type OpenCodeCommandPresentation,
   type OpenCodeCommandsRunPort,
@@ -1488,7 +1489,7 @@ async function selectPrimaryAgent(
   }
   const current = run.agent ?? DEFAULT_CODING_WORKBENCH_AGENT;
   if (requested === undefined || requested === current) return true;
-  if (!(await customAgentListed(run, requested, diagnostics))) return false;
+  if (!(await customAgentListed(run, requested, diagnostics, activityLog))) return false;
   try {
     await run.client.switchAgent(run.sessionId, requested);
   } catch (error) {
@@ -1509,10 +1510,13 @@ async function customAgentListed(
   run: ReadyRun,
   requested: CodingWorkbenchAgent,
   diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
 ): Promise<boolean> {
   if (isCodingWorkbenchBuiltInAgent(requested)) return true;
   try {
-    const listed = await run.client.primaryAgents(run.workspaceRoot);
+    const listed = await readOnceLocationActivated({ activityLog }, run.runId, () =>
+      run.client.primaryAgents(run.workspaceRoot),
+    );
     if (listed.some((agent) => agent.name === requested)) return true;
     recordOpenCodeTurnFailure(diagnostics, run, "agent-unsupported");
     return false;

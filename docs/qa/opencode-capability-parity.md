@@ -722,19 +722,19 @@ table with an owner. The diff unit test pins both fixtures.
 | `admitted`                              | 36              | 0            |
 | `covered`                               | 6               | 0            |
 | `keiko-operation`                       | 9               | 6            |
-| `refused`                               | 98              | 35           |
+| `refused`                               | 118             | 35           |
 | refused: `leaves-machine`               | 8               | 4            |
 | refused: `keiko-owns-workspace-binding` | 8               | 0            |
-| refused: `keiko-owns-authority`         | 6               | 0            |
+| refused: `keiko-owns-authority`         | 8               | 0            |
 | refused: `keiko-owns-configuration`     | 5               | 1            |
 | refused: `keiko-owns-credentials`       | 12              | 6            |
-| refused: `experimental-unadmitted`      | 19              | 0            |
+| refused: `experimental-unadmitted`      | 37              | 0            |
 | refused: `host-surface`                 | 19              | 17           |
 | refused: `not-yet-implemented`          | 21              | 7            |
 | refused: `producer-inert`               | 0               | 0            |
-| Total                                   | 149             | 41           |
+| Total                                   | 169             | 41           |
 
-#### HTTP operations (149)
+#### HTTP operations (169)
 
 | operationId                                      | Endpoint                                                                   | Disposition       | Detail                                                                              | Owner | Rows     |
 | ------------------------------------------------ | -------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------- | ----- | -------- |
@@ -752,9 +752,21 @@ table with an owner. The diff unit test pins both fixtures.
 | `debug.location.evict`                           | `DELETE /api/debug/location`                                               | `refused`         | `host-surface`                                                                      | #3899 | S18      |
 | `debug.location.list`                            | `GET /api/debug/location`                                                  | `refused`         | `host-surface`                                                                      | #3899 | S18      |
 | `event.subscribe`                                | `GET /api/event`                                                           | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
+| `experimental.artifacts.create`                  | `POST /api/experimental/artifacts`                                         | `refused`         | `experimental-unadmitted`                                                           | #4271 | -        |
+| `experimental.artifacts.delete`                  | `DELETE /api/experimental/artifacts/{artifactID}`                          | `refused`         | `experimental-unadmitted`                                                           | #4271 | -        |
+| `experimental.artifacts.get`                     | `GET /api/experimental/artifacts/{artifactID}`                             | `refused`         | `experimental-unadmitted`                                                           | #4271 | -        |
+| `experimental.artifacts.list`                    | `GET /api/experimental/artifacts`                                          | `refused`         | `experimental-unadmitted`                                                           | #4271 | -        |
+| `experimental.artifacts.providers`               | `GET /api/experimental/artifacts/providers`                                | `refused`         | `experimental-unadmitted`                                                           | #4271 | -        |
+| `experimental.artifacts.update`                  | `PATCH /api/experimental/artifacts/{artifactID}`                           | `refused`         | `experimental-unadmitted`                                                           | #4271 | -        |
+| `experimental.artifacts.view`                    | `GET /api/experimental/artifacts/{artifactID}/view/*`                      | `refused`         | `experimental-unadmitted`                                                           | #4271 | -        |
 | `experimental.config.update`                     | `PATCH /api/experimental/config`                                           | `refused`         | `keiko-owns-configuration`                                                          | #3903 | C06      |
+| `experimental.fs.unwatch`                        | `DELETE /api/experimental/fs/watch`                                        | `refused`         | `keiko-owns-authority`                                                              | #3900 | T06      |
+| `experimental.fs.watch`                          | `POST /api/experimental/fs/watch`                                          | `refused`         | `keiko-owns-authority`                                                              | #3900 | T06      |
 | `experimental.fs.write`                          | `POST /api/experimental/fs/write`                                          | `refused`         | `keiko-owns-authority`                                                              | #3900 | T06      |
-| `experimental.generate.text`                     | `POST /api/experimental/generate`                                          | `refused`         | `experimental-unadmitted`                                                           | #3908 | -        |
+| `experimental.generate.decisions`                | `POST /api/experimental/generate/decisions`                                | `refused`         | `experimental-unadmitted`                                                           | #3908 | -        |
+| `experimental.generate.image`                    | `POST /api/experimental/generate/image`                                    | `refused`         | `experimental-unadmitted`                                                           | #3908 | -        |
+| `experimental.generate.text`                     | `POST /api/experimental/generate/text`                                     | `refused`         | `experimental-unadmitted`                                                           | #3908 | -        |
+| `experimental.generate.textLegacy`               | `POST /api/experimental/generate`                                          | `refused`         | `experimental-unadmitted`                                                           | #3908 | -        |
 | `experimental.integration.wellknown.add`         | `POST /api/experimental/integration/wellknown`                             | `refused`         | `leaves-machine`                                                                    | #3905 | S11      |
 | `experimental.mcp.add`                           | `PUT /api/experimental/mcp/{server}`                                       | `refused`         | `not-yet-implemented`                                                               | #3903 | C04      |
 | `experimental.mcp.client`                        | `GET /api/experimental/client-mcp`                                         | `refused`         | `host-surface`                                                                      | #3899 | C04      |
@@ -762,16 +774,35 @@ table with an owner. The diff unit test pins both fixtures.
 | `experimental.mcp.connect`                       | `POST /api/experimental/mcp/{server}/connect`                              | `refused`         | `not-yet-implemented`                                                               | #3903 | C04      |
 | `experimental.mcp.disconnect`                    | `POST /api/experimental/mcp/{server}/disconnect`                           | `refused`         | `not-yet-implemented`                                                               | #3903 | C04      |
 | `experimental.mcp.remove`                        | `DELETE /api/experimental/mcp/{server}`                                    | `refused`         | `not-yet-implemented`                                                               | #3903 | C04      |
+| `experimental.media.get`                         | `GET /api/experimental/media/{hash}`                                       | `refused`         | `experimental-unadmitted`                                                           | #4271 | -        |
 | `experimental.migration.v1.status`               | `GET /api/experimental/migration/v1`                                       | `refused`         | `experimental-unadmitted`                                                           | #3908 | -        |
+| `experimental.persistentPty.connect`             | `GET /api/experimental/persistent-pty/{ptyID}/connect`                     | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `experimental.persistentPty.connectToken`        | `POST /api/experimental/persistent-pty/{ptyID}/connect-token`              | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `experimental.persistentPty.create`              | `POST /api/experimental/session/{sessionID}/terminal`                      | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `experimental.persistentPty.get`                 | `GET /api/experimental/persistent-pty/{ptyID}`                             | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `experimental.persistentPty.handoff`             | `POST /api/experimental/persistent-pty/handoff`                            | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `experimental.persistentPty.list`                | `GET /api/experimental/session/{sessionID}/terminal`                       | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `experimental.persistentPty.read`                | `GET /api/experimental/session/{sessionID}/terminal/read`                  | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `experimental.persistentPty.remove`              | `DELETE /api/experimental/persistent-pty/{ptyID}`                          | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `experimental.persistentPty.shutdown`            | `POST /api/experimental/persistent-pty/shutdown`                           | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `experimental.persistentPty.snapshot`            | `GET /api/experimental/persistent-pty/{ptyID}/snapshot`                    | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `experimental.persistentPty.update`              | `PUT /api/experimental/persistent-pty/{ptyID}`                             | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `experimental.schedule.create`                   | `POST /api/experimental/schedule`                                          | `refused`         | `experimental-unadmitted`                                                           | #4271 | -        |
+| `experimental.schedule.delete`                   | `DELETE /api/experimental/schedule/{scheduleID}`                           | `refused`         | `experimental-unadmitted`                                                           | #4271 | -        |
+| `experimental.schedule.get`                      | `GET /api/experimental/schedule/{scheduleID}`                              | `refused`         | `experimental-unadmitted`                                                           | #4271 | -        |
+| `experimental.schedule.list`                     | `GET /api/experimental/schedule`                                           | `refused`         | `experimental-unadmitted`                                                           | #4271 | -        |
+| `experimental.schedule.pause`                    | `POST /api/experimental/schedule/{scheduleID}/pause`                       | `refused`         | `experimental-unadmitted`                                                           | #4271 | -        |
+| `experimental.schedule.resume`                   | `POST /api/experimental/schedule/{scheduleID}/resume`                      | `refused`         | `experimental-unadmitted`                                                           | #4271 | -        |
 | `experimental.session.export`                    | `GET /api/experimental/session/{sessionID}/export`                         | `keiko-operation` | Coding History task export (local, redacted) (`coding-runtime/codingTaskExport.ts`) | -     | S05      |
 | `experimental.session.import`                    | `POST /api/experimental/session/import`                                    | `keiko-operation` | Coding History task import (local, redacted) (`coding-runtime/codingTaskImport.ts`) | -     | S05      |
 | `experimental.session.instructions.entry.list`   | `GET /api/experimental/session/{sessionID}/instructions/entries`           | `refused`         | `experimental-unadmitted`                                                           | #3900 | C03      |
 | `experimental.session.instructions.entry.put`    | `PUT /api/experimental/session/{sessionID}/instructions/entries/{key}`     | `refused`         | `experimental-unadmitted`                                                           | #3900 | C03      |
 | `experimental.session.instructions.entry.remove` | `DELETE /api/experimental/session/{sessionID}/instructions/entries/{key}`  | `refused`         | `experimental-unadmitted`                                                           | #3900 | C03      |
+| `experimental.session.log`                       | `GET /api/experimental/session/{sessionID}/log`                            | `refused`         | `experimental-unadmitted`                                                           | #3908 | S01      |
 | `experimental.session.skill`                     | `POST /api/experimental/session/{sessionID}/skill`                         | `refused`         | `not-yet-implemented`                                                               | #3903 | T17      |
 | `experimental.session.stats`                     | `GET /api/experimental/session/stats`                                      | `refused`         | `experimental-unadmitted`                                                           | #3899 | S18      |
 | `experimental.session.wait`                      | `POST /api/experimental/session/{sessionID}/wait`                          | `refused`         | `experimental-unadmitted`                                                           | #3908 | S01      |
-| `experimental.voice.instructions`                | `POST /api/experimental/voice/session/{sessionID}/instructions`            | `refused`         | `leaves-machine`                                                                    | #3899 | -        |
+| `experimental.usage.limits`                      | `GET /api/experimental/usage/limits`                                       | `refused`         | `experimental-unadmitted`                                                           | #3908 | -        |
 | `experimental.voice.models`                      | `GET /api/experimental/voice/models`                                       | `refused`         | `leaves-machine`                                                                    | #3899 | -        |
 | `experimental.voice.session`                     | `POST /api/experimental/voice/session`                                     | `refused`         | `leaves-machine`                                                                    | #3899 | -        |
 | `form.list`                                      | `GET /api/form`                                                            | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
@@ -799,8 +830,8 @@ table with an owner. The diff unit test pins both fixtures.
 | `permission.saved.list`                          | `GET /api/permission/saved`                                                | `refused`         | `keiko-owns-authority`                                                              | #3899 | S16      |
 | `permission.saved.remove`                        | `DELETE /api/permission/saved/{id}`                                        | `refused`         | `keiko-owns-authority`                                                              | #3899 | S16      |
 | `permission.saved.update`                        | `PATCH /api/permission/saved/{id}`                                         | `refused`         | `keiko-owns-authority`                                                              | #3899 | S16      |
-| `persistentPty.connect`                          | `GET /api/experimental/persistent-pty/{ptyID}/connect`                     | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
 | `plugin.check`                                   | `POST /api/plugin/check`                                                   | `refused`         | `leaves-machine`                                                                    | #3903 | C05      |
+| `plugin.gui`                                     | `GET /api/plugin/gui`                                                      | `refused`         | `leaves-machine`                                                                    | #3903 | C05      |
 | `plugin.list`                                    | `GET /api/plugin`                                                          | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `plugin.update`                                  | `POST /api/plugin/update`                                                  | `refused`         | `leaves-machine`                                                                    | #3903 | C05      |
 | `project.list`                                   | `GET /api/project`                                                         | `refused`         | `keiko-owns-workspace-binding`                                                      | #3902 | S17      |
@@ -817,16 +848,6 @@ table with an owner. The diff unit test pins both fixtures.
 | `reference.list`                                 | `GET /api/reference`                                                       | `refused`         | `not-yet-implemented`                                                               | #3900 | C08      |
 | `rpc.call`                                       | `POST /api/rpc/{rpcID}/{method}`                                           | `refused`         | `host-surface`                                                                      | #3899 | C05      |
 | `server.connect`                                 | `GET /auth/connect/{code}`                                                 | `refused`         | `host-surface`                                                                      | #3899 | S18      |
-| `server.experimental.persistentPty.connectToken` | `POST /api/experimental/persistent-pty/{ptyID}/connect-token`              | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
-| `server.experimental.persistentPty.create`       | `POST /api/experimental/session/{sessionID}/terminal`                      | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
-| `server.experimental.persistentPty.get`          | `GET /api/experimental/persistent-pty/{ptyID}`                             | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
-| `server.experimental.persistentPty.handoff`      | `POST /api/experimental/persistent-pty/handoff`                            | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
-| `server.experimental.persistentPty.list`         | `GET /api/experimental/session/{sessionID}/terminal`                       | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
-| `server.experimental.persistentPty.read`         | `GET /api/experimental/session/{sessionID}/terminal/read`                  | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
-| `server.experimental.persistentPty.remove`       | `DELETE /api/experimental/persistent-pty/{ptyID}`                          | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
-| `server.experimental.persistentPty.shutdown`     | `POST /api/experimental/persistent-pty/shutdown`                           | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
-| `server.experimental.persistentPty.snapshot`     | `GET /api/experimental/persistent-pty/{ptyID}/snapshot`                    | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
-| `server.experimental.persistentPty.update`       | `PUT /api/experimental/persistent-pty/{ptyID}`                             | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
 | `server.info`                                    | `GET /api/info`                                                            | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `server.pair`                                    | `POST /api/pair`                                                           | `refused`         | `host-surface`                                                                      | #3899 | S18      |
 | `session.active`                                 | `GET /api/session/active`                                                  | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
@@ -850,7 +871,6 @@ table with an owner. The diff unit test pins both fixtures.
 | `session.inbox.update`                           | `PATCH /api/session/{sessionID}/inbox/{inboxID}`                           | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `session.interrupt`                              | `POST /api/session/{sessionID}/interrupt`                                  | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `session.list`                                   | `GET /api/session`                                                         | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
-| `session.log`                                    | `GET /api/experimental/session/{sessionID}/log`                            | `refused`         | `experimental-unadmitted`                                                           | #3908 | S01      |
 | `session.message.get`                            | `GET /api/session/{sessionID}/message/{messageID}`                         | `covered`         | through `session.message.list`                                                      | -     | S01      |
 | `session.message.list`                           | `GET /api/session/{sessionID}/message`                                     | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `session.move`                                   | `POST /api/session/{sessionID}/move`                                       | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
@@ -976,21 +996,21 @@ A refusal is an open, owned gap, never parity evidence. Two facts found while ma
 
 | Disposition                             | Settings |
 | --------------------------------------- | -------- |
-| `keiko-set`                             | 63       |
+| `keiko-set`                             | 68       |
 | `keiko-operation`                       | 15       |
-| `refused`                               | 154      |
+| `refused`                               | 165      |
 | refused: `leaves-machine`               | 6        |
 | refused: `keiko-owns-workspace-binding` | 3        |
-| refused: `keiko-owns-authority`         | 11       |
-| refused: `keiko-owns-configuration`     | 94       |
+| refused: `keiko-owns-authority`         | 10       |
+| refused: `keiko-owns-configuration`     | 106      |
 | refused: `keiko-owns-credentials`       | 8        |
 | refused: `experimental-unadmitted`      | 4        |
 | refused: `host-surface`                 | 0        |
 | refused: `not-yet-implemented`          | 20       |
 | refused: `producer-inert`               | 8        |
-| Total                                   | 232      |
+| Total                                   | 248      |
 
-#### Settings (232)
+#### Settings (248)
 
 | Setting                                                           | Disposition       | Detail                                                                                            | Owner | Rows     |
 | ----------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------- | ----- | -------- |
@@ -1036,13 +1056,21 @@ A refusal is an open, owned gap, never parity evidence. Two facts found while ma
 | `enterprise`                                                      | `refused`         | `leaves-machine`                                                                                  | #3904 | S05      |
 | `enterprise.url`                                                  | `refused`         | `leaves-machine`                                                                                  | #3904 | S05      |
 | `experimental`                                                    | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | T19      |
+| `experimental.artifacts`                                          | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | C05      |
 | `experimental.background_compaction`                              | `refused`         | `experimental-unadmitted`                                                                         | #3904 | S08      |
+| `experimental.image_generate`                                     | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | C05      |
+| `experimental.image_generate.model`                               | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
+| `experimental.image_generate.model.model`                         | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
+| `experimental.image_generate.model.providerID`                    | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
+| `experimental.image_generate.model.variant`                       | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `experimental.location_idle_timeout`                              | `refused`         | `experimental-unadmitted`                                                                         | #3899 | S01      |
+| `experimental.media_blob`                                         | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | C05      |
 | `experimental.policies`                                           | `refused`         | `keiko-owns-authority`                                                                            | #3903 | S16, C06 |
 | `experimental.policies.action`                                    | `refused`         | `keiko-owns-authority`                                                                            | #3903 | S16, C06 |
 | `experimental.policies.effect`                                    | `refused`         | `keiko-owns-authority`                                                                            | #3903 | S16, C06 |
 | `experimental.policies.resource`                                  | `refused`         | `keiko-owns-authority`                                                                            | #3903 | S16, C06 |
 | `experimental.portable_shell_scanner`                             | `refused`         | `experimental-unadmitted`                                                                         | #3901 | S16      |
+| `experimental.schedules`                                          | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | C05      |
 | `experimental.subagent_depth`                                     | `refused`         | `experimental-unadmitted`                                                                         | #3903 | T16      |
 | `experimental.todo`                                               | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | T19      |
 | `formatter`                                                       | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | C07      |
@@ -1104,7 +1132,7 @@ A refusal is an open, owned gap, never parity evidence. Two facts found while ma
 | `permissions.action`                                              | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S16, C08 |
 | `permissions.effect`                                              | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S16, C08 |
 | `permissions.resource`                                            | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S16, C08 |
-| `plugins`                                                         | `refused`         | `keiko-owns-authority`                                                                            | #3903 | C05      |
+| `plugins`                                                         | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | C05      |
 | `plugins.options`                                                 | `refused`         | `keiko-owns-authority`                                                                            | #3903 | C05      |
 | `plugins.package`                                                 | `refused`         | `keiko-owns-authority`                                                                            | #3903 | C05      |
 | `policies`                                                        | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S11      |
@@ -1118,6 +1146,7 @@ A refusal is an open, owned gap, never parity evidence. Two facts found while ma
 | `providers.*.compatibility`                                       | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.compatibility.cacheFormat`                           | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.compatibility.maxTokensField`                        | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
+| `providers.*.compatibility.mediaInput`                            | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.compatibility.reasoningField`                        | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S12      |
 | `providers.*.compatibility.requireAssistantAfterTool`             | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.compatibility.requireFinishReason`                   | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
@@ -1145,6 +1174,7 @@ A refusal is an open, owned gap, never parity evidence. Two facts found while ma
 | `providers.*.models.*.compatibility`                              | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.models.*.compatibility.cacheFormat`                  | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.models.*.compatibility.maxTokensField`               | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
+| `providers.*.models.*.compatibility.mediaInput`                   | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.models.*.compatibility.reasoningField`               | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S12      |
 | `providers.*.models.*.compatibility.requireAssistantAfterTool`    | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.models.*.compatibility.requireFinishReason`          | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
@@ -1176,9 +1206,12 @@ A refusal is an open, owned gap, never parity evidence. Two facts found while ma
 | `providers.*.models.*.releaseDate`                                | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.models.*.settings`                                   | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.models.*.settings.*`                                 | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
+| `providers.*.models.*.settings.cache`                             | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
+| `providers.*.models.*.settings.cache.ttl`                         | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.models.*.settings.compaction`                        | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.models.*.settings.compaction.type`                   | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.models.*.settings.encoding`                          | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
+| `providers.*.models.*.type`                                       | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.models.*.variants`                                   | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S12      |
 | `providers.*.models.*.variants.body`                              | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S12      |
 | `providers.*.models.*.variants.headers`                           | `refused`         | `keiko-owns-credentials`                                                                          | #3905 | S11      |
@@ -1193,6 +1226,8 @@ A refusal is an open, owned gap, never parity evidence. Two facts found while ma
 | `providers.*.package`                                             | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S11      |
 | `providers.*.settings`                                            | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S11      |
 | `providers.*.settings.*`                                          | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S11      |
+| `providers.*.settings.cache`                                      | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
+| `providers.*.settings.cache.ttl`                                  | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.settings.chunkTimeout`                               | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S11      |
 | `providers.*.settings.compaction`                                 | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `providers.*.settings.compaction.type`                            | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
@@ -1211,6 +1246,7 @@ A refusal is an open, owned gap, never parity evidence. Two facts found while ma
 | `shell`                                                           | `refused`         | `keiko-owns-configuration`                                                                        | #3901 | T10, T11 |
 | `skills`                                                          | `refused`         | `keiko-owns-configuration`                                                                        | #3903 | T17, C06 |
 | `snapshots`                                                       | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S04      |
+| `timezone`                                                        | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `tool_output`                                                     | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S09      |
 | `tool_output.max_bytes`                                           | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S09      |
 | `tool_output.max_lines`                                           | `refused`         | `keiko-owns-configuration`                                                                        | #3899 | S09      |
@@ -1259,10 +1295,10 @@ and `report`), and Keiko admits those skills itself as sanitized copies (T17).
 | --------------- | ------- |
 | `native`        | 30      |
 | `configuration` | 20      |
-| `refused`       | 40      |
-| Total           | 90      |
+| `refused`       | 42      |
+| Total           | 92      |
 
-#### Built-in plugins (90)
+#### Built-in plugins (92)
 
 | Plugin                                    | Disposition     | Detail                                                     | Owner | Rows               |
 | ----------------------------------------- | --------------- | ---------------------------------------------------------- | ----- | ------------------ |
@@ -1287,6 +1323,7 @@ and `report`), and Keiko admits those skills itself as sanitized copies (T17).
 | `opencode.config.tool-output`             | `configuration` | applies `tool_output`                                      | -     | S09                |
 | `opencode.config.websearch`               | `configuration` | applies `websearch`                                        | -     | T15                |
 | `opencode.config.worktree`                | `configuration` | applies `worktree`                                         | -     | S17                |
+| `opencode.goal`                           | `refused`       | `not-yet-implemented`                                      | #4271 | C02                |
 | `opencode.mcp.codemode.defaults`          | `configuration` | applies `mcp.servers.*.codemode`                           | -     | C04, T21           |
 | `opencode.models.dev`                     | `refused`       | `leaves-machine`                                           | #3905 | S11                |
 | `opencode.plan`                           | `native`        | runs as in standalone OpenCode                             | -     | C01                |
@@ -1301,9 +1338,9 @@ and `report`), and Keiko admits those skills itself as sanitized copies (T17).
 | `opencode.provider.azure`                 | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
 | `opencode.provider.cerebras`              | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
 | `opencode.provider.chatgpt`               | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
+| `opencode.provider.claude-agent`          | `refused`       | `keiko-owns-configuration`                                 | #4271 | S11                |
 | `opencode.provider.cloudflare.ai.gateway` | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
 | `opencode.provider.cloudflare.workers.ai` | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
-| `opencode.provider.cohere`                | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
 | `opencode.provider.databricks`            | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
 | `opencode.provider.digitalocean`          | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
 | `opencode.provider.dynamic`               | `native`        | runs as in standalone OpenCode                             | -     | S11                |
@@ -1321,23 +1358,24 @@ and `report`), and Keiko admits those skills itself as sanitized copies (T17).
 | `opencode.provider.openai-context-caps`   | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
 | `opencode.provider.opencode`              | `refused`       | `leaves-machine`                                           | #3905 | S11                |
 | `opencode.provider.openrouter`            | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
-| `opencode.provider.perplexity`            | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
 | `opencode.provider.poe`                   | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
 | `opencode.provider.prompt-cache-key`      | `configuration` | applies `providers.*.compatibility.supportsPromptCacheKey` | -     | S11                |
 | `opencode.provider.sap.ai.core`           | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
 | `opencode.provider.snowflake.cortex`      | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
-| `opencode.provider.vercel`                | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
 | `opencode.provider.vllm`                  | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
 | `opencode.provider.xai`                   | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
 | `opencode.provider.zenmux`                | `refused`       | `keiko-owns-configuration`                                 | #3905 | S11                |
 | `opencode.skill`                          | `native`        | runs as in standalone OpenCode                             | -     | T17                |
+| `opencode.tool.artifact`                  | `refused`       | `experimental-unadmitted`                                  | #4271 | C05                |
 | `opencode.tool.edit`                      | `native`        | runs as in standalone OpenCode                             | -     | T05                |
 | `opencode.tool.glob`                      | `native`        | runs as in standalone OpenCode                             | -     | T03                |
 | `opencode.tool.grep`                      | `native`        | runs as in standalone OpenCode                             | -     | T04                |
+| `opencode.tool.image-generate`            | `refused`       | `experimental-unadmitted`                                  | #4271 | C05                |
 | `opencode.tool.input.repair`              | `native`        | runs as in standalone OpenCode                             | -     | S01                |
 | `opencode.tool.patch`                     | `native`        | runs as in standalone OpenCode                             | -     | T08                |
 | `opencode.tool.question`                  | `native`        | runs as in standalone OpenCode                             | -     | T18                |
 | `opencode.tool.read`                      | `native`        | runs as in standalone OpenCode                             | -     | T01, T02           |
+| `opencode.tool.schedule`                  | `refused`       | `experimental-unadmitted`                                  | #4271 | C05                |
 | `opencode.tool.shell`                     | `native`        | runs as in standalone OpenCode                             | -     | T10, T11, T12, T13 |
 | `opencode.tool.skill`                     | `native`        | runs as in standalone OpenCode                             | -     | T17                |
 | `opencode.tool.subagent`                  | `native`        | runs as in standalone OpenCode                             | -     | T16                |

@@ -1216,9 +1216,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   execution, so Ask for approval and Supervised workspace ask before a program starts and a
   refusal blocks it before it runs. The human reviews the program itself: its text, split at line
   breaks into the bounded review resources (64 × 2,048 characters; a longer line is refused as too
-  large to review), is the ask's resource and is never logged. `fetch` is a Code Mode primitive that
-  neither hook sees inside an admitted program: the kernel egress rule governs it (loopback below
-  Full access).
+  large to review), is the ask's resource and is never logged. A `fetch` inside an admitted program
+  asserts the `webfetch` permission since OpenCode 2.2, so the policy decides it like the ordinary
+  tool; the kernel egress rule stays underneath (loopback below Full access).
 - **A Code Mode session move stays inside the task workspace (#3903 AC4).** The policy plugin sends
   `opencode_session_move`'s `directory` and the session it names to the policy. The run's own
   session may move to an existing directory inside the task workspace, named by its absolute,

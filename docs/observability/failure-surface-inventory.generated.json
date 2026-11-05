@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8ee946ff23630040edfae55e9df1648aa4523a918f0caa96bf40ace03cf395ca"
+    "catalogDigest": "f06f70f8902643153a62720956ab983c2c1c10ccb0c11a52914974ec1fab3b76"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 631,
-    "proofCount": 653,
-    "resolvedProofCount": 653,
+    "operationCount": 632,
+    "proofCount": 654,
+    "resolvedProofCount": 654,
     "failureClassCount": 388,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -378,6 +378,7 @@
         "coding-runtime.initial-turn.stop-failed",
         "coding-runtime.jira-pod",
         "coding-runtime.linked-files.resolved",
+        "coding-runtime.location.activation-wait",
         "coding-runtime.mcp-authorization",
         "coding-runtime.mcp-credentials",
         "coding-runtime.mcp-relay",
@@ -1681,6 +1682,9 @@
     ],
     "coding-runtime.linked-files.resolved.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeNativeLinkedFiles.test.ts"
+    ],
+    "coding-runtime.location.activation-wait.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeCommands.test.ts"
     ],
     "coding-runtime.mcp-authorization.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeNativeMcpAuthorization.test.ts"

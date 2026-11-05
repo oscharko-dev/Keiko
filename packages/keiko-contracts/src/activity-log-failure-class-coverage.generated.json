@@ -12274,6 +12274,7 @@
         "state": [
           "coding-runtime.commands.listed",
           "coding-runtime.inbox.action",
+          "coding-runtime.location.activation-wait",
           "coding-runtime.mentions.listed",
           "coding-runtime.prompt-inputs.settled"
         ],
@@ -12291,6 +12292,10 @@
           "mode": "correlation"
         },
         {
+          "op": "coding-runtime.location.activation-wait",
+          "mode": "correlation"
+        },
+        {
           "op": "coding-runtime.mentions.listed",
           "mode": "correlation"
         },
@@ -12303,6 +12308,7 @@
       "resourceSignals": [
         "coding-runtime.commands.listed",
         "coding-runtime.inbox.action",
+        "coding-runtime.location.activation-wait",
         "coding-runtime.mentions.listed",
         "coding-runtime.prompt-inputs.settled"
       ],
@@ -12433,6 +12439,48 @@
             "causeChain": true
           },
           "proofIds": ["coding-runtime.inbox.action.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "coding-runtime.location.activation-wait",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "activatingAnswerCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "runId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-runtime.location.activation-wait.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         },

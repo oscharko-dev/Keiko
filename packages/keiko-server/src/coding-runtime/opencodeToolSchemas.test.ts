@@ -753,10 +753,10 @@ describe("deriveGatewayCatalogReadiness", () => {
   });
 });
 
-// Captured directly from a real OpenCode 2.1.4 provider call in the direct profile. The gateway
+// Captured directly from a real OpenCode provider call in the direct profile. The gateway
 // must accept its closed top-level schemas while rejecting altered tools, including the two
 // empty-parameter tools.
-describe("OpenCode 2.1.4 real advertisement fidelity", () => {
+describe("OpenCode real advertisement fidelity", () => {
   it("accepts the unchanged live-captured tools with the current verification projection", () => {
     expect(hasExactOpenCodeVisibleToolContract(realAdvertisementFixture())).toBe(true);
   });

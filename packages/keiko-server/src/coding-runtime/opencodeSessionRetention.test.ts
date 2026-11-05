@@ -55,6 +55,8 @@ interface RuntimeDatabaseOptions {
   readonly without?: readonly string[];
   /** Schema changes applied after the runtime's own tables exist (a drift control). */
   readonly alter?: string;
+  /** The admitted runtime whose tables the database has; the pinned one by default. */
+  readonly schema?: string;
 }
 
 /**
@@ -65,28 +67,32 @@ interface RuntimeDatabaseOptions {
 function runtimeDatabase(path: string, options: RuntimeDatabaseOptions = {}): void {
   const database = new DatabaseSync(path);
   try {
-    createTables(database, options.without ?? []);
+    createTables(database, options.without ?? [], options.schema ?? VERSION);
     if (options.alter !== undefined) database.exec(options.alter);
     insertSession(database, SESSION_ID, options.session ?? {});
     for (let index = 0; index < (options.extraSessions ?? 0); index += 1) {
       insertSession(database, `ses_extra_${String(index)}`, {});
     }
-    for (let index = 0; index < (options.messages ?? 3); index += 1) {
-      database
-        .prepare("INSERT INTO session_message (id, session_id, data) VALUES (?, ?, ?)")
-        .run(`msg_${String(index)}`, SESSION_ID, `SECRET-CONVERSATION-${String(index)}`);
-    }
+    insertMessages(database, options.messages ?? 3);
     insertRows(database, options.rows ?? {});
   } finally {
     database.close();
   }
 }
 
-function createTables(database: DatabaseSync, without: readonly string[]): void {
-  const contract = OPENCODE_PERSISTENCE_SCHEMAS[VERSION] ?? {};
+function createTables(database: DatabaseSync, without: readonly string[], version: string): void {
+  const contract = OPENCODE_PERSISTENCE_SCHEMAS[version] ?? {};
   for (const [table, columns] of Object.entries(contract)) {
     if (without.includes(table)) continue;
     database.exec(`CREATE TABLE "${table}" (${columns.map((name) => `"${name}"`).join(", ")})`);
+  }
+}
+
+function insertMessages(database: DatabaseSync, count: number): void {
+  for (let index = 0; index < count; index += 1) {
+    database
+      .prepare("INSERT INTO session_message (id, session_id, data) VALUES (?, ?, ?)")
+      .run(`msg_${String(index)}`, SESSION_ID, `SECRET-CONVERSATION-${String(index)}`);
   }
 }
 
@@ -284,12 +290,15 @@ describe("retaining a settled run's session state", () => {
     ["a credential", { rows: { credential: 1 } }, "credential-present"],
     ["an account", { rows: { account: 1 } }, "credential-present"],
     ["a control account", { rows: { control_account: 1 } }, "credential-present"],
-    ["a queued input", { rows: { session_pending: 1 } }, "pending-input"],
+    ["a schedule", { rows: { schedule: 1 } }, "pending-input"],
     ["an inbox entry", { rows: { session_inbox: 1 } }, "pending-input"],
     ["a suspended session", { session: { time_suspended: 5 } }, "pending-input"],
     ["a staged undo", { session: { revert: '{"messageID":"msg_1"}' } }, "revert-staged"],
     ["key-value state", { rows: { kv: 1 } }, "schema-unknown", "kv-rows"],
     ["a remote workspace", { rows: { workspace: 1 } }, "schema-unknown", "workspace-rows"],
+    ["a background job", { rows: { job: 1 } }, "schema-unknown", "job-rows"],
+    ["a stored blob", { rows: { blob: 1 } }, "schema-unknown", "blob-rows"],
+    ["a blob reference", { rows: { blob_ref: 1 } }, "schema-unknown", "blob-rows"],
     ["another workspace directory", { session: { directory: "/elsewhere" } }, "session-mismatch"],
     ["another runtime version", { session: { version: "2.0.10" } }, "session-mismatch"],
     ["a child session", { session: { parent_id: "ses_parent" } }, "session-mismatch"],
@@ -363,8 +372,7 @@ describe("retaining a settled run's session state", () => {
   it("retains and restores the still-admitted 2.0.10 producer's database", () => {
     const f = fixture({
       session: { version: "2.0.10" },
-      alter:
-        "ALTER TABLE project DROP COLUMN time_active; ALTER TABLE project DROP COLUMN time_archived;",
+      schema: "2.0.10",
     });
     const before = sha256(f.source);
 
@@ -381,8 +389,7 @@ describe("retaining a settled run's session state", () => {
   ] as const)("refuses persisted %s in the admitted 2.0.10 schema", (table, reason) => {
     const f = fixture({
       session: { version: "2.0.10" },
-      alter:
-        "ALTER TABLE project DROP COLUMN time_active; ALTER TABLE project DROP COLUMN time_archived;",
+      schema: "2.0.10",
       rows: { [table]: 1 },
     });
 
@@ -390,8 +397,22 @@ describe("retaining a settled run's session state", () => {
     expect(entryNames(f)).toEqual([]);
   });
 
+  it("refuses a queued input in the 2.1.4 schema, which still has the table", () => {
+    const f = fixture({
+      session: { version: "2.1.4" },
+      schema: "2.1.4",
+      rows: { session_pending: 1 },
+    });
+
+    expect(retain(f, { runtimeVersion: "2.1.4" })).toMatchObject({
+      ok: false,
+      reason: "pending-input",
+    });
+    expect(entryNames(f)).toEqual([]);
+  });
+
   it("refuses a 2.1.4 schema claiming to be a 2.0.10 session", () => {
-    const f = fixture({ session: { version: "2.0.10" } });
+    const f = fixture({ session: { version: "2.0.10" }, schema: "2.1.4" });
 
     expect(retain(f, { runtimeVersion: "2.0.10" })).toEqual({
       ok: false,
@@ -429,13 +450,13 @@ describe("retaining a settled run's session state", () => {
   });
 
   it("refuses an oversized database and leaves the task's previous entry as it was", () => {
-    const f = fixture({}, { maxDatabaseBytes: 100_000 });
+    const f = fixture({}, { maxDatabaseBytes: 200_000 });
     expect(retain(f)).toMatchObject({ ok: true });
     const kept = sha256(join(entryDirectory(f), "opencode.db"));
 
     runtimeDatabase(join(f.root, "big.db"), { messages: 3 });
     const big = new DatabaseSync(join(f.root, "big.db"));
-    big.exec(`UPDATE session_message SET data = '${"x".repeat(200_000)}'`);
+    big.exec(`UPDATE session_message SET data = '${"x".repeat(400_000)}'`);
     big.close();
     const result = f.store.retain({
       binding: binding(),

@@ -29,6 +29,7 @@ import {
   OPENCODE_PINNED_VERSION,
   projectedGatewaySchema,
 } from "../opencodeToolSchemas.js";
+import { openCodeRuntimeVersionPin } from "../opencodeRuntimeVersions.js";
 import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   projectOpenCodeV2ProtocolSurface,
@@ -45,7 +46,8 @@ import {
 const BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
 const RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
 const RECEIPT = `sha256:${"0".repeat(64)}`;
-const PROTOCOL_SCHEMA_SHA256 = "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9";
+const PROTOCOL_SCHEMA_SHA256 =
+  openCodeRuntimeVersionPin(OPENCODE_PINNED_VERSION)?.rawSchemaSha256 ?? "";
 const MAX_FAKE_BODY_BYTES = 1024 * 1024;
 const MAX_FAKE_AGENT_STEPS = 12;
 const FAKE_SESSION_ID = "ses_functional0000000001";

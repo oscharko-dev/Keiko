@@ -1226,11 +1226,11 @@ describe("pinned native OpenCode built-in agent restrictions", () => {
         const before = run.facade.requests.length;
         const result = await scriptedTurn(
           run,
-          { name: "bash", arguments: { command: "touch HALLUCINATED" } },
+          { name: "hallucinated_tool", arguments: { command: "touch HALLUCINATED" } },
           "Run the scripted call.",
         );
         expect(result.length).toBeGreaterThan(0);
-        expect(result).toMatch(/bash/u);
+        expect(result).toMatch(/hallucinated_tool/u);
         expect(existsSync(join(run.fixture.workspace, "HALLUCINATED"))).toBe(false);
         expect(run.facade.requests).toHaveLength(before);
         expect(await run.service.client.permissions()).toEqual([]);
@@ -1283,7 +1283,7 @@ describe("pinned native OpenCode Code Mode semantics", () => {
         // The management tools exist only inside Code Mode, never as top-level tools.
         expect(names.filter((name) => name.startsWith("opencode_"))).toEqual([]);
         const catalog = firstSystemPrompt(run.gateway);
-        expect(catalog).toContain("They cannot be called directly");
+        expect(catalog).toContain("cannot be called directly");
         expect(NESTED_CODE_MODE_TOOLS).toHaveLength(8);
         for (const nested of NESTED_CODE_MODE_TOOLS)
           expect(catalog).toContain(`tools.opencode.${nested}(`);
@@ -1490,10 +1490,10 @@ describe("pinned native OpenCode Code Mode semantics", () => {
     120_000,
   );
 
-  // `fetch` is a Code Mode primitive. Neither hook sees it: the only governance is the enclosing
-  // `execute` call's code and the kernel's egress rule (loopback only below Full access).
+  // A Code Mode `fetch` asserts the `webfetch` permission, so the policy decides it like the
+  // ordinary tool; the kernel's egress rule stays underneath (loopback only below Full access).
   it.skipIf(skip)(
-    "performs fetch without a permission event and leaves egress to the kernel boundary",
+    "evaluates the webfetch permission for a Code Mode fetch and keeps the kernel boundary",
     async () => {
       await withRun({ policyPlugin: "absent", probe: "on" }, async (run) => {
         const loopback = await probedTurn(
@@ -1506,6 +1506,7 @@ describe("pinned native OpenCode Code Mode semantics", () => {
         expect(loopback.result).toBe("503");
         expect(hookTrail(loopback.events)).toEqual([
           "tool.execute.before:execute",
+          "permission.evaluate:webfetch",
           "tool.execute.after:execute",
         ]);
         const external = await probedTurn(

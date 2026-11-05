@@ -1493,7 +1493,7 @@ describe("pinned native OpenCode plan tool (T19)", () => {
   // producer change to any tool's parameters is a reviewed diff before admission, and the gateway
   // admits exactly that advertisement. `KEIKO_WRITE_OPENCODE_TOOL_SCHEMAS=1` rewrites the fixture.
   it.skipIf(skip)(
-    "advertises exactly the committed 2.1.4 tool schemas, and the gateway admits them",
+    "advertises exactly the committed tool schemas, and the gateway admits them",
     async () => {
       await withRun({}, async (run) => {
         await scriptedTurn(run, PLAN_CALL);
@@ -1528,7 +1528,7 @@ describe("pinned native OpenCode plan tool (T19)", () => {
   // projection that drifts from the producer's bytes fails here rather than at a customer's first
   // turn. `KEIKO_WRITE_OPENCODE_TOOL_SCHEMAS=1` rewrites the fixture.
   it.skipIf(skip)(
-    "advertises exactly the committed 2.1.4 direct-profile tool schemas, and the gateway admits them",
+    "advertises exactly the committed direct-profile tool schemas, and the gateway admits them",
     async () => {
       await withRun({ toolProfile: "direct" }, async (run) => {
         await run.client.prompt(run.sessionId, "Answer without calling a tool.");
@@ -1546,6 +1546,31 @@ describe("pinned native OpenCode plan tool (T19)", () => {
           writeFileSync(fixture, `${JSON.stringify(advertised, null, 2)}\n`);
         expect(advertised).toEqual(JSON.parse(readFileSync(fixture, "utf8")));
         expect(hasExactOpenCodeVisibleToolContract(advertised)).toBe(true);
+      });
+    },
+    120_000,
+  );
+
+  // The producer runs a model's `bash` call as its `shell` tool when no tool has that name, so the
+  // alias must reach the same mode decision as an ordinary `shell` call.
+  it.skipIf(skip)(
+    "governs a model's bash alias as the shell tool it runs, in the strictest and the widest mode",
+    async () => {
+      const aliased = { name: "bash", arguments: { command: "touch ALIASED" } };
+      await withRun({ mode: "governed-assist", approveAsks: false }, async (run) => {
+        await scriptedTurn(run, aliased);
+        expect(existsSync(join(run.fixture.workspace, "ALIASED"))).toBe(false);
+        expect(run.facade.decisions).toEqual([
+          expect.objectContaining({ permission: "shell", effect: "ask" }),
+        ]);
+      });
+      await withRun({ mode: "autonomous-delivery" }, async (run) => {
+        const result = await scriptedTurn(run, aliased);
+        expect(existsSync(join(run.fixture.workspace, "ALIASED"))).toBe(true);
+        expect(result).toContain('ran as "shell"');
+        expect(run.facade.decisions).toEqual([
+          expect.objectContaining({ permission: "shell", effect: "allow" }),
+        ]);
       });
     },
     120_000,

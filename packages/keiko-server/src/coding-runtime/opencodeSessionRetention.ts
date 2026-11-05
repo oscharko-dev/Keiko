@@ -109,6 +109,8 @@ export type RetentionRefusal =
 export type RetentionAuditCheck =
   | "kv-rows"
   | "workspace-rows"
+  | "job-rows"
+  | "blob-rows"
   | "copy-unreadable"
   | "audit-unreadable"
   | "count-invalid"
@@ -688,6 +690,9 @@ const CLASS_REFUSALS = [
 const UNKNOWN_STATE_CHECKS: Readonly<Record<string, RetentionAuditCheck>> = {
   kv: "kv-rows",
   workspace: "workspace-rows",
+  job: "job-rows",
+  blob: "blob-rows",
+  blob_ref: "blob-rows",
 };
 
 interface SessionRow {

@@ -23,7 +23,6 @@ import { resolveOpenCodeRipgrep } from "./opencodeRipgrepLaunch.js";
 import type { RipgrepRuntimeManifest } from "./ripgrepRuntime.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import {
-  NPM_LANE_PREVIOUS_RUNTIME_APPROVALS,
   NPM_LANE_RUNTIME_APPROVALS,
   type NpmLaneRuntimeApproval,
 } from "./npmLaneRuntimeApprovals.js";
@@ -183,8 +182,8 @@ describe("npm-lane OpenCode discovery", () => {
   it("declares the native protocol for a helper of the current approved source and no other", () => {
     const install = globalInstall();
     const currentSource = NPM_LANE_RUNTIME_APPROVALS["macos-arm64"].helperSourceTreeSha256;
-    const previousSource =
-      NPM_LANE_PREVIOUS_RUNTIME_APPROVALS["macos-arm64"].helperSourceTreeSha256;
+    // The helper source of the retired 1.1.3 packages: published bytes that only ever spoke text IO.
+    const previousSource = "97a7a11c6dc2e1512b976c846141e0459d26094097a77b822dc7b895ad3bb4aa";
     for (const [sourceTreeSha256, expected] of [
       [currentSource, "KSR3/KSS3"],
       [previousSource, undefined],

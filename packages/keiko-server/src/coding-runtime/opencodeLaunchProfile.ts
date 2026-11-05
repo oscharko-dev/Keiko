@@ -159,6 +159,33 @@ export const OPENCODE_GATEWAY_PROVIDER_POLICIES = Object.freeze([
     effect: "allow",
   }),
 ]);
+/**
+ * Built-in plugins no run loads, each a refused disposition of the service inventory. Removing a
+ * plugin at its source keeps its command, tool and permission rules out of the run. The browser
+ * plugin matters for more than its tools: its `skill` rule for one resource follows Keiko's whole
+ * `skill` denial, and the producer only hides a tool whose last matching rule denies everything.
+ */
+export const OPENCODE_WITHHELD_BUILT_IN_PLUGINS = Object.freeze([
+  "opencode.browser",
+  "opencode.goal",
+  "opencode.provider.claude-agent",
+  "opencode.tool.artifact",
+  "opencode.tool.image-generate",
+  "opencode.tool.schedule",
+]);
+
+const OPENCODE_PLUGIN_REMOVALS = Object.freeze(
+  OPENCODE_WITHHELD_BUILT_IN_PLUGINS.map((plugin) => `-${plugin}`),
+);
+
+/** Experimental switches stated explicitly, so a changed producer default cannot open one. */
+const OPENCODE_CLOSED_EXPERIMENTS = Object.freeze({
+  artifacts: false,
+  image_generate: false,
+  media_blob: false,
+  schedules: false,
+});
+
 export const OPENCODE_RUNTIME_READINESS_PROMPT = "Keiko runtime readiness handshake.";
 const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;
 
@@ -554,8 +581,10 @@ function createGovernedOpenCodeV2Config(
     default_agent: "build",
     providers: fixedOpenCodeV2Provider(contextGeometry, { image: false, pdf: false }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
+    plugins: OPENCODE_PLUGIN_REMOVALS,
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
+    experimental: OPENCODE_CLOSED_EXPERIMENTS,
     permissions,
   };
 }
@@ -623,12 +652,13 @@ function createNativeOpenCodeV2Config(
       ? {}
       : { agents: agentModels.agents }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
+    plugins: OPENCODE_PLUGIN_REMOVALS,
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     // The producer offers its plan tool (`todowrite`) only under this switch; Keiko classifies the
     // update as a read in every mode and projects it as the plan card (parity row T19, owner
     // decision of 2026-10-24).
-    experimental: { todo: true },
+    experimental: { ...OPENCODE_CLOSED_EXPERIMENTS, todo: true },
     // The operator's admitted MCP servers, and nothing else (#3903, `opencodeNativeMcp.ts`).
     mcp,
     // The operator's accepted external references, as the producer's own local references

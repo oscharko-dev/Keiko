@@ -86,4 +86,14 @@ describe("the one OpenCode version boundary", () => {
     });
     expect(offenders).toEqual([]);
   });
+
+  it("refuses a restated digest of the current pin outside the pin source", () => {
+    const pin = OPENCODE_RUNTIME_VERSION_PINS[0];
+    const digests = [pin?.rawSchemaSha256, pin?.protocolSurfaceSha256];
+    const offenders = repositorySources()
+      .filter(({ path }) => !VERSION_FACT_MODULES.has(path))
+      .filter(({ text }) => digests.some((digest) => digest !== undefined && text.includes(digest)))
+      .map(({ path }) => path);
+    expect(offenders).toEqual([]);
+  });
 });

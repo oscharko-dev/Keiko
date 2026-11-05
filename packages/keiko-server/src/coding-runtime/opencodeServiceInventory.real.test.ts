@@ -6,7 +6,10 @@ import type { Readable } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
-import { buildOpenCodeLaunchProfile } from "./opencodeLaunchProfile.js";
+import {
+  buildOpenCodeLaunchProfile,
+  OPENCODE_WITHHELD_BUILT_IN_PLUGINS,
+} from "./opencodeLaunchProfile.js";
 import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   projectOpenCodeV2ProtocolSurface,
@@ -79,7 +82,11 @@ function walkCli(binary: string, root: string, prefix: readonly string[] = []): 
   return subcommands.flatMap((name) => walkCli(binary, root, [...prefix, name]));
 }
 
-function launchService(binary: string, root: string): { child: Child; password: string } {
+function launchService(
+  binary: string,
+  root: string,
+  withholdPlugins = true,
+): { child: Child; password: string } {
   const state = join(root, "service-state");
   const workspace = join(root, "workspace");
   const profile = buildOpenCodeLaunchProfile({
@@ -96,9 +103,11 @@ function launchService(binary: string, root: string): { child: Child; password: 
     mkdirSync(path, { recursive: true, mode: 0o700 });
   mkdirSync(join(state, "tmp"), { recursive: true, mode: 0o700 });
   mkdirSync(workspace, { recursive: true });
-  writeFileSync(join(state, "config", "opencode", "opencode.json"), profile.config, {
-    mode: 0o600,
-  });
+  writeFileSync(
+    join(state, "config", "opencode", "opencode.json"),
+    withholdPlugins ? profile.config : configWithoutPluginRemovals(profile.config),
+    { mode: 0o600 },
+  );
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
   if (password === undefined) throw new Error("fixture-password-missing");
   // No model call is made: the gateway binding only has to resolve, so it points at a closed port.
@@ -151,6 +160,11 @@ async function stopChild(child: Child): Promise<void> {
   });
 }
 
+function configWithoutPluginRemovals(config: string): string {
+  const { plugins: _plugins, ...rest } = JSON.parse(config) as Readonly<Record<string, unknown>>;
+  return JSON.stringify(rest);
+}
+
 /** The built-in plugins, once the runtime lists them: its first listing can still be empty. */
 async function loadedBuiltinPlugins(
   client: ReturnType<typeof createOpenCodeV2HttpClient>,
@@ -163,7 +177,51 @@ async function loadedBuiltinPlugins(
   return extractOpenCodeBuiltinPlugins(await client.plugins());
 }
 
+/** The installed plugins and the slash commands a run of this configuration offers. */
+async function offeredByConfiguration(
+  binary: string,
+  withholdPlugins: boolean,
+): Promise<{ readonly plugins: readonly string[]; readonly commands: readonly string[] }> {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-withheld-plugins-")));
+  prepareIsolatedRoot(root);
+  const launched = launchService(binary, root, withholdPlugins);
+  try {
+    const client = createOpenCodeV2HttpClient({
+      endpoint: await childEndpoint(launched.child),
+      password: launched.password,
+    });
+    const plugins = await loadedBuiltinPlugins(client);
+    const commands = (await client.commands()).map((command) => command.name);
+    return { plugins, commands };
+  } finally {
+    await stopChild(launched.child);
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 describe("pinned OpenCode complete service inventory", () => {
+  // `/goal` starts model turns on its own, and the Claude Agent provider spawns a process of its
+  // own. The control proves that the removal is what keeps them out, not an absent producer feature.
+  it.skipIf(BINARY === undefined || RESOURCE_ROOT === undefined)(
+    "offers no withheld plugin and no /goal under Keiko's profile, and both without its removals",
+    async () => {
+      if (BINARY === undefined) throw new Error("fixture-binary-missing");
+      const binary = realpathSync(BINARY);
+      const governed = await offeredByConfiguration(binary, true);
+      expect(
+        governed.plugins.filter((id) => OPENCODE_WITHHELD_BUILT_IN_PLUGINS.includes(id)),
+      ).toEqual([]);
+      expect(governed.commands).not.toContain("goal");
+
+      const control = await offeredByConfiguration(binary, false);
+      expect(control.plugins).toEqual(
+        expect.arrayContaining([...OPENCODE_WITHHELD_BUILT_IN_PLUGINS]),
+      );
+      expect(control.commands).toContain("goal");
+    },
+    180_000,
+  );
+
   it.skipIf(BINARY === undefined || RESOURCE_ROOT === undefined)(
     "serves exactly the operations and commands of the committed producer-derived inventory",
     async () => {
@@ -182,12 +240,15 @@ describe("pinned OpenCode complete service inventory", () => {
         const version = (await client.info()).version;
         expect(version).toBe(OPENCODE_PINNED_VERSION);
         const document = await client.document();
+        // The profile withholds these at the source: the producer ships them, and no run loads them.
+        const loaded = await loadedBuiltinPlugins(client);
+        expect(loaded.filter((id) => OPENCODE_WITHHELD_BUILT_IN_PLUGINS.includes(id))).toEqual([]);
         const live = {
           version: OPENCODE_PINNED_VERSION,
           operations: extractOpenCodeServiceOperations(document),
           cliCommands: walkCli(binary, root).sort(),
           configurationPaths: extractOpenCodeConfigurationPaths(document),
-          plugins: await loadedBuiltinPlugins(client),
+          plugins: [...loaded, ...OPENCODE_WITHHELD_BUILT_IN_PLUGINS].sort(),
         };
         if (WRITE_FIXTURE)
           writeFileSync(fixtureUrl(live.version), `${JSON.stringify(live, null, 2)}\n`);

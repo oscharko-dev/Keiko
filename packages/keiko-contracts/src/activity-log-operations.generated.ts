@@ -10260,6 +10260,49 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "coding-runtime.location.activation-wait",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "coding-runtime.opencodeCommands.recordLocationActivationWait",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      runId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 128,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["exhausted", "recovered"],
+      },
+      activatingAnswerCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["coding-runtime-prompt-inputs"],
+    proofIds: ["coding-runtime.location.activation-wait.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "coding-runtime.mcp-authorization",
     category: "security",
     owner: "keiko-server",
@@ -14425,6 +14468,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "kv-rows",
           "workspace-rows",
+          "job-rows",
+          "blob-rows",
           "copy-unreadable",
           "audit-unreadable",
           "count-invalid",

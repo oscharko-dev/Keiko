@@ -2433,6 +2433,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       state: [
         "coding-runtime.commands.listed",
         "coding-runtime.inbox.action",
+        "coding-runtime.location.activation-wait",
         "coding-runtime.mentions.listed",
         "coding-runtime.prompt-inputs.settled",
       ],
@@ -2443,6 +2444,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredCausalOperations: [
       "coding-runtime.commands.listed",
       "coding-runtime.inbox.action",
+      "coding-runtime.location.activation-wait",
       "coding-runtime.mentions.listed",
       "coding-runtime.prompt-inputs.settled",
     ],
@@ -2450,6 +2452,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProofOperations: [
       "coding-runtime.commands.listed",
       "coding-runtime.inbox.action",
+      "coding-runtime.location.activation-wait",
       "coding-runtime.mentions.listed",
       "coding-runtime.prompt-inputs.settled",
     ],
@@ -2457,6 +2460,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredResourceOperations: [
       "coding-runtime.commands.listed",
       "coding-runtime.inbox.action",
+      "coding-runtime.location.activation-wait",
       "coding-runtime.mentions.listed",
       "coding-runtime.prompt-inputs.settled",
     ],
