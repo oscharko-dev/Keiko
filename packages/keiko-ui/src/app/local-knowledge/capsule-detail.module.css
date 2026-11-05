@@ -353,18 +353,12 @@
 }
 
 .capsuleRowInfo {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  display: block;
 }
 
 .capsuleRowInfo :global(.lk-capsule-name) {
+  display: block;
   min-width: 0;
-}
-
-.capsuleRowInfo :global(.lk-badge) {
-  flex: none;
 }
 
 @media (max-width: 760px) {

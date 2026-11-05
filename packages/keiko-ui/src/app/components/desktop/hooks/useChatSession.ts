@@ -1580,6 +1580,7 @@ export interface UseChatSessionResult {
   readonly configuredModelsAvailable?: boolean | undefined;
   readonly configuredModelIds?: readonly string[] | undefined;
   readonly modelCatalogRead?: ChatModelCatalogRead | undefined;
+  readonly modelCatalogStatus?: "unknown" | "loading" | "ready" | "failed" | undefined;
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   // Undefined when no usable model is offered or a deliberate choice is temporarily held.
@@ -1698,6 +1699,7 @@ interface SessionState {
   catalogCapabilities: readonly ModelCapability[];
   catalogSource: ClientModelCatalogEvidence["source"];
   catalogCorrelationId: string | undefined;
+  modelCatalogStatus: "unknown" | "loading" | "ready" | "failed";
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   selectedModel: string | undefined;
@@ -1791,6 +1793,7 @@ const INITIAL_STATE: SessionState = {
   catalogCapabilities: [],
   catalogSource: "bootstrap",
   catalogCorrelationId: undefined,
+  modelCatalogStatus: "unknown",
   activeProject: undefined,
   activeChat: undefined,
   selectedModel: undefined,
@@ -2571,6 +2574,7 @@ function sessionCatalogState(
   | "catalogCapabilities"
   | "catalogSource"
   | "catalogCorrelationId"
+  | "modelCatalogStatus"
 > {
   return {
     models: capabilities.filter(isUsableConversationModel),
@@ -2582,6 +2586,7 @@ function sessionCatalogState(
     catalogCapabilities: capabilities,
     catalogSource: source,
     catalogCorrelationId: correlationId,
+    modelCatalogStatus: "ready",
   };
 }
 
@@ -2704,6 +2709,7 @@ function clearSessionModelsForPendingRefresh(previous: SessionState): SessionSta
     ...previous,
     models: [],
     catalogCorrelationId: undefined,
+    modelCatalogStatus: "loading",
     // Pinned choreography: the selection is invalidated synchronously so no send can target
     // a model that may no longer exist — but the id is remembered so the success path can
     // restore it against the refreshed catalog instead of falling back to the first ready
@@ -2714,6 +2720,10 @@ function clearSessionModelsForPendingRefresh(previous: SessionState): SessionSta
     restorableModelId: remembered.id,
     restorableModelElected: remembered.elected,
   };
+}
+
+function noEligibleSessionModels(state: SessionState, loading: boolean): boolean {
+  return !loading && state.modelCatalogStatus === "ready" && state.models.length === 0;
 }
 
 // Sonar S2004 — extracted out of streamUngrounded's `.catch` handler (itself already nested
@@ -3743,6 +3753,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       if (result.kind === "failure") {
         catalogError = result.message;
         setError(result.message);
+        setState((previous) => ({ ...previous, modelCatalogStatus: "failed" }));
         return;
       }
       const recoveredError = catalogError;
@@ -5467,7 +5478,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           },
     [state.catalogCapabilities, state.catalogSource, state.catalogCorrelationId],
   );
-  const noEligibleModels = !loading && state.models.length === 0;
+  const noEligibleModels = noEligibleSessionModels(state, loading);
   const draftRevision = draftRevisionRef.current;
 
   return useMemo<UseChatSessionResult>(
@@ -5480,6 +5491,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       configuredModelsAvailable: state.configuredModelsAvailable,
       configuredModelIds: state.configuredModelIds,
       modelCatalogRead,
+      modelCatalogStatus: state.modelCatalogStatus,
       activeProject: state.activeProject,
       activeChat: state.activeChat,
       selectedModel: state.selectedModel,
@@ -5541,6 +5553,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.configuredModelsAvailable,
       state.configuredModelIds,
       modelCatalogRead,
+      state.modelCatalogStatus,
       state.activeProject,
       state.activeChat,
       state.selectedModel,

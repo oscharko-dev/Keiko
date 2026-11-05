@@ -4,7 +4,7 @@
 // caller sees. Hermetic: every case injects `fetchImpl`, so no socket, DNS lookup, or proxy
 // negotiation happens.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { gatewayFetch, OutboundHttpEgressError } from "./http.js";
 import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
 import {
@@ -349,6 +349,30 @@ describe("gatewayFetch — activity log", () => {
     expect(failedPersisted).toMatchObject({ endpointClass: "loopback" });
     expect(JSON.stringify(failed)).not.toContain("127.0.0.1");
     expect(ops(log.events)).not.toContain("http.gateway.fetch.completed");
+  });
+
+  it("records an unspecified-address refusal without address, credentials or body", async () => {
+    const log = recorder();
+    const prepareHeaders = vi.fn(() => new Headers({ authorization: "Bearer synthetic-only" }));
+    await expect(
+      gatewayFetch("http://0.0.0.0:9/private-path", {
+        prepareHeaders,
+        body: "synthetic-private-body",
+        fetchImpl: respondWith(200),
+        egress: { allowPrivateNetwork: true, allowLinkLocalAndMetadata: true },
+        log: log.sink,
+      }),
+    ).rejects.toBeInstanceOf(OutboundHttpEgressError);
+    const failed = eventFor(log.events, "http.gateway.fetch.failed");
+    expect(
+      expectActivityLogProof(
+        "http.gateway.fetch.failed.emitted-line",
+        formatActivityLogProofLine(failed),
+      ),
+    ).toMatchObject({ endpointClass: "unspecified" });
+    expect(prepareHeaders).not.toHaveBeenCalled();
+    for (const forbidden of ["0.0.0.0", "private-path", "synthetic-private-body", "synthetic-only"])
+      expect(JSON.stringify(log.events)).not.toContain(forbidden);
   });
 
   it("labels a transport rejection with the error kind and no message text", async () => {

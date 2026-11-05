@@ -5,11 +5,12 @@ import { readPrivateFile } from "./lab-client.mjs";
 import { jsonRequest } from "./chat-read.mjs";
 import {
   assertPodNotConnected,
+  assertVerifiedPod,
   checked,
   closeConnectors,
   openConnectors,
   podSwitch,
-  readyChip,
+  verifyPodAction,
 } from "./browser-connections.mjs";
 import { establishedReadGrant } from "./read-grant.mjs";
 
@@ -111,8 +112,11 @@ async function rotate(page, card, context, identity) {
 }
 async function reverify(page, card, context, identity) {
   // The token replacement left the Pod unverified, so "Verify connection" is the visible action.
-  await card.getByRole("button", { name: "Verify connection", exact: true }).click();
-  await readyChip(card).waitFor();
+  const result = await verifyPodAction(page, () =>
+    card.getByRole("button", { name: "Verify connection", exact: true }).click(),
+  );
+  assert.equal(result.authRef, identity.authRef);
+  await assertVerifiedPod(page, card, identity);
   const verified = (await credentials(context)).find((item) => item.authRef === identity.authRef);
   assert.equal(verified.livePod.verificationStatus, "ok");
   assert.equal(
@@ -121,7 +125,7 @@ async function reverify(page, card, context, identity) {
   );
   const hub = await reloadHub(page);
   const persisted = hub.getByTestId("acx-connector").filter({ hasText: "Renamed browser Jira" });
-  await readyChip(persisted).waitFor();
+  await assertVerifiedPod(page, persisted, identity);
   const afterReload = (await credentials(context)).find(
     (item) => item.authRef === identity.authRef,
   );

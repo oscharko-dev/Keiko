@@ -24,6 +24,23 @@ analysis for authorization, persistence, migrations, updater, supply-chain and w
 
 ## Local development
 
+Desktop window layouts belong to the current UI database, not merely its browser origin. The
+desktop resolves the existing database installation identity before restoring windows; restarting
+the same data store preserves its layout. Replacing a data store must not replay former chat or
+repository references. Preserve unowned legacy browser snapshots, and never clear chat or file
+content to repair layout restoration. See ADR-0027 for the storage and revision preconditions.
+
+The local starter opens a connected browser automatically. If a session expires or the dev BFF
+restarts, **Connect browser** opens a connected window directly, without a comparison code or a
+second browser. The native handoff keeps private API authentication intact and returns no credentials
+to the request. Running `npm run dev:start` again can reopen the running instance.
+
+Knowledge Pods remain local, with no sharing roadmap or sharing placeholders (owner decision,
+2026-11-04). The ordinary creation dialog asks only for a name and uses the existing server-side
+`standard` policy default. Model routing stays in the central gateway configuration; local pod
+storage does not imply local model providers. Keep existing policy, containment and audit guards.
+See [Knowledge Pods](docs/local-knowledge/knowledge-pods.md) for the compatibility contract.
+
 ```bash
 npm install                # install all workspaces from the single root lockfile
 npm run provision:usearch  # ONCE per checkout — see AGENTS.md §2

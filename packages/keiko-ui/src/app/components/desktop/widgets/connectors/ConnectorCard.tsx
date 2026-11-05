@@ -19,6 +19,7 @@ import { VerifyConnectionStatus } from "./VerifyConnectionStatus";
 import { useConnectorCard, type CardController } from "./useConnectorCard";
 import { ConnectorUpdateForm } from "./ConnectorUpdateForm";
 import { LivePodActions, LivePodHeader, livePodState } from "./LivePodCard";
+import styles from "./connectors.module.css";
 
 export interface ConnectorCardProps {
   readonly connector: AtlassianConnectorMetadata;
@@ -26,6 +27,7 @@ export interface ConnectorCardProps {
   readonly onDeleted: (authRef: string) => void;
   readonly onUpdated: (metadata: AtlassianConnectorMetadata) => void;
   readonly pollIntervalMs?: number;
+  readonly embedded?: boolean;
 }
 
 function CardHeader({
@@ -229,9 +231,11 @@ function CardError({ error }: { readonly error: string | undefined }): ReactNode
 function LiveConnectorCard({
   connector,
   ctrl,
+  embedded,
 }: {
   readonly connector: AtlassianConnectorMetadata;
   readonly ctrl: CardController;
+  readonly embedded: boolean;
 }): ReactNode {
   const verification = cardVerification(connector, ctrl);
   const state = livePodState(
@@ -241,12 +245,19 @@ function LiveConnectorCard({
   );
   const managing = ctrl.confirming || ctrl.editing !== undefined;
   return (
-    <li className="acx-card" data-testid="acx-connector" data-auth-ref={connector.authRef}>
+    <li
+      className={`acx-card ${styles.cmpPodCard}`}
+      data-testid="acx-connector"
+      data-auth-ref={connector.authRef}
+    >
       <LivePodHeader
         connector={connector}
         state={state}
+        embedded={embedded}
         actions={
-          managing ? null : <LivePodActions connector={connector} ctrl={ctrl} state={state} />
+          managing ? null : (
+            <LivePodActions connector={connector} ctrl={ctrl} state={state} embedded={embedded} />
+          )
         }
       />
       <CardError error={ctrl.error} />
@@ -261,9 +272,11 @@ export function ConnectorCard({
   onDeleted,
   onUpdated,
   pollIntervalMs,
+  embedded = false,
 }: ConnectorCardProps): ReactNode {
   const ctrl = useConnectorCard(client, connector, onDeleted, onUpdated);
-  if (isLivePod(connector)) return <LiveConnectorCard connector={connector} ctrl={ctrl} />;
+  if (isLivePod(connector))
+    return <LiveConnectorCard connector={connector} ctrl={ctrl} embedded={embedded} />;
   const canSync = connector.deployment !== "data-center";
   const { status, verifying } = cardVerification(connector, ctrl);
   const syncPollProps = pollIntervalMs === undefined ? {} : { pollIntervalMs };

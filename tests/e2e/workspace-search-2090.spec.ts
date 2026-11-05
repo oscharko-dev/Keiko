@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -124,12 +125,15 @@ async function workspaceSearch(
 }
 
 async function seedWindows(page: Page, windows: readonly Record<string, unknown>[]): Promise<void> {
-  await page.addInitScript((entries) => {
-    window.localStorage.setItem("keiko.theme", "dark");
-    window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
-    window.localStorage.setItem("keiko.workspace.v4", JSON.stringify(entries));
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, windows);
+  await page.addInitScript(
+    ({ argument: entries, storageKeys }) => {
+      window.localStorage.setItem("keiko.theme", "dark");
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.setItem(storageKeys.workspace, JSON.stringify(entries));
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, windows),
+  );
 }
 
 // The APP-SHELL shortcuts below are product shortcuts, and the product resolves their modifier from

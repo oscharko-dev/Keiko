@@ -152,6 +152,32 @@ describe("Jira Pod lifecycle in the existing Hub", () => {
     expect(card).toHaveTextContent("Check the account and token, then verify again.");
     expect(within(card).getByTestId("acx-verify-status")).toBeEmptyDOMElement();
   });
+  it.each([
+    { status: "unverified" as const, label: "Not verified yet" },
+    { status: "auth-failed" as const, label: "Authentication failed" },
+  ])(
+    "keeps $label and its repair action visible in the embedded overview",
+    async ({ status, label }) => {
+      if (LIVE.deployment !== "data-center" || LIVE.livePod === undefined)
+        throw new TypeError("Missing Live Pod fixture");
+      const connector = { ...LIVE, livePod: { ...LIVE.livePod, verificationStatus: status } };
+      render(
+        <AtlassianConnectorsPanel
+          client={client({ listConnectors: vi.fn(async () => [connector]) })}
+          jiraLive
+        />,
+      );
+      const card = await screen.findByTestId("acx-connector");
+      expect(within(card).getByTestId("acx-pod-state")).toHaveTextContent(label);
+      expect(card).not.toHaveTextContent(connector.baseUrl);
+      expect(within(card).getByRole("button", { name: "Verify connection" })).toHaveClass(
+        "lk-btn-primary",
+      );
+      expect(within(card).getByRole("button", { name: "Add to workspace" })).not.toHaveClass(
+        "lk-btn-primary",
+      );
+    },
+  );
   it("exposes Live actions without Data indexing, sync, export or invented storage state", async () => {
     render(<AtlassianConnectorsPanel client={client()} jiraLive />);
     const card = await screen.findByTestId("acx-connector");

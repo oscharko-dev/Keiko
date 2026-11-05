@@ -11,12 +11,15 @@ import {
 // form advances to the verify phase, which never renders the token). It is never echoed into a
 // response type, persisted, or logged. Base-URL entry mirrors the contract validation
 // (`isSafeAtlassianConnectorBaseUrl`) with immediate inline feedback. After save, an inline
-// verify-connection step renders the closed status union as actionable copy.
+// verify-connection step renders the closed status union as actionable copy for standalone
+// connectors. Jira Pod creation verifies once automatically and reads current server metadata.
 
 import { useId, useState, type ReactNode, type SubmitEvent } from "react";
 import type { AtlassianConnectorProvider } from "@oscharko-dev/keiko-contracts";
 import { isSafeAtlassianConnectorBaseUrl } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { ApiError } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { bffRequestErrorKind } from "@/lib/http";
 
 import type {
   CreateAtlassianConnectorInput,
@@ -31,7 +34,7 @@ import { useConnectorOperation } from "./useConnectorOperation";
 
 export type AddConnectorClient = Pick<
   AtlassianConnectorsClient,
-  "createConnector" | "verifyConnector"
+  "createConnector" | "verifyConnector" | "listConnectors"
 >;
 
 export interface AddConnectorFormProps {
@@ -103,7 +106,7 @@ const TEXT_FIELDS: readonly TextFieldConfig[] = [
   },
 ];
 
-// Input syntax only: exact private-target admission stays with the server's operator policy.
+// Input syntax only: exact target admission belongs to the server's saved-connection policy.
 function hasHttpsAddress(value: string): boolean {
   try {
     const url = new URL(value);
@@ -154,9 +157,52 @@ interface EntryController {
   readonly errors: FieldErrors;
   readonly submitError: string | undefined;
   readonly busy: boolean;
+  readonly verifying: boolean;
   readonly setText: (name: TextFieldName, value: string) => void;
   readonly setProvider: (provider: AtlassianConnectorProvider) => void;
   readonly submit: (event: SubmitEvent) => void;
+}
+
+function recordPostCreateFailure(error: unknown): void {
+  reportClientDiagnostic("Connector operation failed.", {
+    kind: "other",
+    correlationId: error instanceof ApiError ? error.correlationId : undefined,
+    errorKind: bffRequestErrorKind(error),
+  });
+}
+
+async function verifyCreatedJiraPod(
+  client: AddConnectorClient,
+  metadata: AtlassianConnectorMetadata,
+): Promise<AtlassianConnectorMetadata | undefined> {
+  try {
+    await client.verifyConnector(metadata.authRef);
+  } catch (error) {
+    recordPostCreateFailure(error);
+  }
+  try {
+    return (await client.listConnectors()).find((item) => item.authRef === metadata.authRef);
+  } catch (error) {
+    recordPostCreateFailure(error);
+    // Creation already succeeded. Keep its unverified record so the Hub offers repair, never
+    // reinterpret a failed verify/read as permission to replay the secret-bearing create.
+    return metadata;
+  }
+}
+
+async function createAndVerifyConnector(
+  client: AddConnectorClient,
+  input: CreateAtlassianConnectorInput,
+  jiraLive: boolean,
+  onVerifying: () => void,
+): Promise<{
+  readonly authRef: string;
+  readonly metadata: AtlassianConnectorMetadata | undefined;
+}> {
+  const metadata = await client.createConnector(input);
+  if (!jiraLive) return { authRef: metadata.authRef, metadata };
+  onVerifying();
+  return { authRef: metadata.authRef, metadata: await verifyCreatedJiraPod(client, metadata) };
 }
 
 function useAddConnectorEntry(
@@ -169,42 +215,42 @@ function useAddConnectorEntry(
   const [fields, setFields] = useState<EntryFields>(DEFAULT_FIELDS);
   const [creationId] = useState(() => crypto.randomUUID());
   const operation = useConnectorOperation(creationId);
+  const [verifying, setVerifying] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
   const setText = (name: TextFieldName, value: string): void => {
     setFields((current) => ({ ...current, [name]: value }));
-  };
-  const setProvider = (provider: AtlassianConnectorProvider): void => {
-    setFields((current) => ({ ...current, provider }));
-  };
-  const run = (): void => {
-    const input = connectorInput(fields, jiraLive, creationId);
-    setFields((current) => ({ ...current, token: "" }));
-    operation.run(
-      "create",
-      () => client.createConnector(input),
-      (metadata) => {
-        setFields(DEFAULT_FIELDS);
-        onCreated(metadata);
-        onVerifyPhase(metadata.authRef);
-      },
-      (error: unknown) =>
-        !jiraLive && error instanceof ApiError ? error.message : t("atlassianConnectors.retry"),
-    );
   };
   const submit = (event: SubmitEvent): void => {
     event.preventDefault();
     if (operation.busy) return;
     const nextErrors = validateEntry(fields, jiraLive);
     setErrors(nextErrors);
-    if (Object.keys(nextErrors).length === 0) run();
+    if (Object.keys(nextErrors).length > 0) return;
+    const input = connectorInput(fields, jiraLive, creationId);
+    setFields((current) => ({ ...current, token: "" }));
+    operation.run(
+      "create",
+      () => createAndVerifyConnector(client, input, jiraLive, () => setVerifying(true)),
+      (result) => {
+        setFields(DEFAULT_FIELDS);
+        setVerifying(false);
+        if (result.metadata !== undefined) onCreated(result.metadata);
+        onVerifyPhase(result.authRef);
+      },
+      (error: unknown) =>
+        !jiraLive && error instanceof ApiError ? error.message : t("atlassianConnectors.retry"),
+    );
   };
   return {
     fields,
     errors,
     submitError: operation.error,
     busy: operation.busy,
+    verifying,
     setText,
-    setProvider,
+    setProvider: (provider): void => {
+      setFields((current) => ({ ...current, provider }));
+    },
     submit,
     jiraLive,
   };
@@ -290,7 +336,8 @@ function EntryFieldsView({
   );
 }
 
-function submitLabelKey(busy: boolean, jiraLive: boolean): MessageKey {
+function submitLabelKey(busy: boolean, jiraLive: boolean, verifying: boolean): MessageKey {
+  if (busy && verifying) return "atlassianConnectors.verify.verifying";
   if (busy) return "atlassianConnectors.add.saving";
   return jiraLive ? "atlassianConnectors.live.add" : "atlassianConnectors.add.submit";
 }
@@ -306,7 +353,12 @@ function EntryForm({
   const prefix = useId();
   const { submitError, busy } = controller;
   return (
-    <form className="acx-form" data-testid="acx-add-form" onSubmit={controller.submit}>
+    <form
+      className="acx-form"
+      data-testid="acx-add-form"
+      aria-busy={busy}
+      onSubmit={controller.submit}
+    >
       <EntryFieldsView controller={controller} prefix={prefix} />
       {submitError !== undefined ? (
         <p className="acx-error" role="alert">
@@ -315,7 +367,7 @@ function EntryForm({
       ) : null}
       <div className="acx-actions">
         <button type="submit" className="lk-btn lk-btn-primary" disabled={busy}>
-          {t(submitLabelKey(busy, controller.jiraLive))}
+          {t(submitLabelKey(busy, controller.jiraLive, controller.verifying))}
         </button>
         <button type="button" className="lk-btn" onClick={onClose} disabled={busy}>
           {t("atlassianConnectors.add.cancel")}

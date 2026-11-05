@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -130,19 +131,22 @@ async function registerProject(request: APIRequestContext, root: string): Promis
  * themed render rather than an attribute poked onto <html> after hydration.
  */
 async function seedShell(page: Page, theme: A11yTheme): Promise<void> {
-  await page.addInitScript((value) => {
-    window.localStorage.setItem("keiko.locale", "en");
-    window.localStorage.setItem("keiko.theme", value);
-  }, theme);
+  await page.addInitScript(
+    ({ argument: value }) => {
+      window.localStorage.setItem("keiko.locale", "en");
+      window.localStorage.setItem("keiko.theme", value);
+    },
+    await workspaceStorageArgs(page, theme),
+  );
 }
 
 async function seedWindow(page: Page, entry: Record<string, unknown>): Promise<void> {
   await page.addInitScript(
-    ({ key, win }) => {
+    ({ argument: { key, win }, storageKeys }) => {
       window.localStorage.setItem(key, JSON.stringify([win]));
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { key: WORKSPACE_KEY, win: entry },
+    await workspaceStorageArgs(page, { key: WORKSPACE_KEY, win: entry }),
   );
 }
 

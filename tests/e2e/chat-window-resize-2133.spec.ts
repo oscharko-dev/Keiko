@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -90,9 +91,9 @@ async function seedLongTranscript(request: APIRequestContext, fixture: ChatFixtu
 
 async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<void> {
   await page.addInitScript(
-    ({ chatId, title }) => {
+    ({ argument: { chatId, title }, storageKeys }) => {
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "e2e-chat-resize-window",
@@ -107,9 +108,9 @@ async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<v
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { chatId: chat.id, title: chat.title },
+    await workspaceStorageArgs(page, { chatId: chat.id, title: chat.title }),
   );
 }
 

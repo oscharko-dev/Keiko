@@ -512,12 +512,19 @@ function windowAssumed(config: GatewayConfig, modelId: string): boolean {
   );
 }
 
-export interface ContextWindowRetryInput {
+export interface ContextWindowRetryInput<Result = unknown> {
   readonly modelId: string;
   readonly surface: "chat-buffered" | "chat-stream" | "grounded";
   readonly correlationId: string | undefined;
   /** False once the failed attempt already showed content, which a retry would repeat. */
   readonly retryable?: (() => boolean) | undefined;
+  /** Only the failed second attempt may settle work retained across this adopted-window retry. */
+  readonly settleRetryFailure?:
+    | ((
+        failure: unknown,
+        originalFailure: unknown,
+      ) => Result | undefined | Promise<Result | undefined>)
+    | undefined;
 }
 
 function plannedContextWindow(deps: UiHandlerDeps, modelId: string): number | undefined {
@@ -543,7 +550,8 @@ function adoptedWindowAfter(
  * Runs one model attempt and, when the provider's overflow answer taught Keiko the deployment's
  * real window (adopted synchronously by the Gateway's report hook), re-plans and sends it exactly
  * once more. The attempt callback must assemble its prompt from the CURRENT context profile, so the
- * second run fits the adopted window. Any other failure — and a second overflow — propagates.
+ * second run fits the adopted window. A retained tool turn may settle a failed retry through its
+ * existing terminal boundary; otherwise that failure, including a second overflow, propagates.
  */
 /** What an attempt knows about the retry around it. */
 export interface ContextWindowAttempt {
@@ -559,7 +567,7 @@ export interface ContextWindowAttempt {
 
 export async function withAdoptedContextWindowRetry<T>(
   deps: UiHandlerDeps,
-  input: ContextWindowRetryInput,
+  input: ContextWindowRetryInput<T>,
   attempt: (context: ContextWindowAttempt) => Promise<T>,
 ): Promise<T> {
   const planned = plannedContextWindow(deps, input.modelId);
@@ -573,7 +581,13 @@ export async function withAdoptedContextWindowRetry<T>(
     recordSafely(CONTEXT_WINDOW_RETRY.op, correlationIdOrUnknown(input.correlationId), () => {
       logRetry(input, planned, adopted);
     });
-    return await attempt({ retrying: true, retryFollows: () => false });
+    try {
+      return await attempt({ retrying: true, retryFollows: () => false });
+    } catch (error_) {
+      const settled = await input.settleRetryFailure?.(error_, error);
+      if (settled !== undefined) return settled;
+      throw error_;
+    }
   }
 }
 

@@ -1,21 +1,19 @@
 // Real Jira/HTTPS qualification of production custody, adapter and domain verification.
 import assert from "node:assert/strict";
-import { verifyJiraDataCenterConnection } from "@oscharko-dev/keiko-connectors";
 import { withProductPort } from "./product-port.mjs";
 
 const [tokenPath, tlsDirectory] = process.argv.slice(2);
 if (!tokenPath || !tlsDirectory)
   throw new TypeError("Usage: verify-connection.mjs <private-pat-file> <private-tls-directory>");
 
-await withProductPort(tokenPath, tlsDirectory, async ({ port, baseUrl, network }) => {
+await withProductPort(tokenPath, tlsDirectory, async ({ verify, network }) => {
   for (const scenario of [
-    { name: "trusted-https", admitted: true, trusted: true, expected: "ok" },
-    { name: "untrusted-certificate", admitted: true, trusted: false, expected: "tls-failed" },
-    { name: "admission-revoked", admitted: false, trusted: true, expected: "unreachable" },
+    { name: "trusted-https", trusted: true, expected: "ok" },
+    { name: "untrusted-certificate", trusted: false, expected: "tls-failed" },
+    { name: "stored-connection-reused", trusted: true, expected: "ok" },
   ]) {
-    network.admitted = scenario.admitted;
     network.trusted = scenario.trusted;
-    const outcome = await verifyJiraDataCenterConnection(port, baseUrl);
+    const outcome = await verify();
     console.log(
       JSON.stringify({
         operation: "jira-lab-connection",

@@ -35,6 +35,7 @@ describe("explicit live model qualification configuration", () => {
       await configureModel(f.deps, "chat-model", f.session, f.path, options);
       const saved = JSON.parse(readFileSync(f.path, "utf8"));
       expect(saved.providers).toHaveLength(1);
+      expect(saved.atlassian).toBeUndefined();
       expect(saved.providers[0].maxRetries).toBe(options?.modelRetries ?? 0);
       expect(saved.capabilities).toHaveLength(1);
       expect(saved.capabilities[0].toolCallingVerification.status).toBe("verified");

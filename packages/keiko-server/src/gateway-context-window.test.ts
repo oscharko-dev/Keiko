@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assumedChatCapability,
+  CallerAttemptAdmissionError,
   createDefaultChatCapability,
   createDefaultEmbeddingCapability,
   findConfiguredCapability,
@@ -475,6 +476,57 @@ describe("withAdoptedContextWindowRetry", () => {
     error.reportedContextWindowTokens = window;
     return error;
   }
+
+  it("settles only the failed adopted retry with its exact original overflow", async () => {
+    const { deps } = fixture(assumedChatCapability(MODEL));
+    const original = overflow(8192);
+    const refusal = new CallerAttemptAdmissionError("Synthetic retry preflight refusal");
+    let attempts = 0;
+    const settle = vi.fn(() => "retained answer");
+    const answer = await withAdoptedContextWindowRetry(
+      deps,
+      {
+        modelId: MODEL,
+        surface: "grounded",
+        correlationId: "retry-settlement",
+        settleRetryFailure: settle,
+      },
+      () => {
+        attempts++;
+        if (attempts === 1) {
+          adoptReportedContextWindow(
+            deps,
+            { modelId: MODEL, contextWindowTokens: 8192, correlationId: "retry-settlement" },
+            "provider-overflow",
+          );
+          return Promise.reject(original);
+        }
+        return Promise.reject(refusal);
+      },
+    );
+    expect(answer).toBe("retained answer");
+    expect(attempts).toBe(2);
+    expect(settle).toHaveBeenCalledExactlyOnceWith(refusal, original);
+  });
+
+  it("keeps an ordinary caller refusal outside retry settlement", async () => {
+    const { deps } = fixture(assumedChatCapability(MODEL));
+    const refusal = new CallerAttemptAdmissionError("Synthetic original caller refusal");
+    const settle = vi.fn(() => "must not replace a refusal");
+    await expect(
+      withAdoptedContextWindowRetry(
+        deps,
+        {
+          modelId: MODEL,
+          surface: "grounded",
+          correlationId: "caller-refusal",
+          settleRetryFailure: settle,
+        },
+        () => Promise.reject(refusal),
+      ),
+    ).rejects.toBe(refusal);
+    expect(settle).not.toHaveBeenCalled();
+  });
 
   it("re-plans and retries once after the overflow taught Keiko the real window", async () => {
     const sink = capture();

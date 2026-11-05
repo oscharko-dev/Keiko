@@ -28,6 +28,20 @@ function metadata(authRef: string): AtlassianCredentialMetadata {
   };
 }
 
+function dataCenter(authRef = AUTH_REF_A): AtlassianCredentialMetadata {
+  return {
+    schemaVersion: "1",
+    authRef,
+    provider: "jira",
+    deployment: "data-center",
+    generation: 1,
+    displayName: "Team Jira",
+    baseUrl: "https://jira.example:8443/context",
+    authScheme: "bearer-pat",
+    createdAt: 1_700_000_000_000,
+  };
+}
+
 let tempDir: string;
 let configPath: string;
 
@@ -115,5 +129,108 @@ describe("createAtlassianCredentialMetadataStore", () => {
     const store = createAtlassianCredentialMetadataStore({ configPath });
     expect(store.list()).toEqual([]);
     expect(store.delete(AUTH_REF_A)).toBe(false);
+  });
+});
+
+describe("private Data Center target admissions", () => {
+  it("adds an admission to a version-1 store and retains it across restart and credential updates", () => {
+    const store = createAtlassianCredentialMetadataStore({ configPath });
+    const original = dataCenter();
+    store.insert(original);
+    expect(store.getTargetAdmission(original)).toBeUndefined();
+    const admission = { baseUrl: original.baseUrl, addressClass: "private" as const };
+    expect(store.bindTargetAdmission(original, admission)).toEqual(admission);
+
+    const restarted = createAtlassianCredentialMetadataStore({ configPath });
+    expect(restarted.getTargetAdmission(original)).toEqual(admission);
+    const updated = { ...original, generation: 2, displayName: "Renamed Jira" };
+    restarted.insert(updated);
+    restarted.insert(dataCenter(AUTH_REF_B));
+    expect(restarted.getTargetAdmission(original)).toBeUndefined();
+    expect(restarted.getTargetAdmission(updated)).toEqual(admission);
+    expect(restarted.get(updated.authRef)).not.toHaveProperty("targetAdmission");
+    expect(restarted.list()).toHaveLength(2);
+    if (process.platform !== "win32")
+      expect(statSync(atlassianCredentialMetadataPath(configPath)).mode & 0o777).toBe(0o600);
+  });
+
+  it("removes the binding together with its credential and cannot recreate a deleted identity", () => {
+    const store = createAtlassianCredentialMetadataStore({ configPath });
+    const original = dataCenter();
+    const admission = { baseUrl: original.baseUrl, addressClass: "private" as const };
+    store.insert(original);
+    store.bindTargetAdmission(original, admission);
+    expect(store.delete(original.authRef)).toBe(true);
+    expect(store.getTargetAdmission(original)).toBeUndefined();
+    expect(store.bindTargetAdmission(original, admission)).toBeUndefined();
+    const file = JSON.parse(readFileSync(atlassianCredentialMetadataPath(configPath), "utf8")) as {
+      targetAdmissions: Record<string, unknown>;
+    };
+    expect(file.targetAdmissions).not.toHaveProperty(original.authRef);
+  });
+
+  it("refuses stale generations, other base URLs and address-class switches without changing the binding", () => {
+    const store = createAtlassianCredentialMetadataStore({ configPath });
+    const original = dataCenter();
+    const current = { ...original, generation: 2 };
+    const admission = { baseUrl: original.baseUrl, addressClass: "private" as const };
+    store.insert(current);
+    expect(store.bindTargetAdmission(original, admission)).toBeUndefined();
+    expect(
+      store.bindTargetAdmission({ ...current, baseUrl: "https://other.example" }, admission),
+    ).toBeUndefined();
+    expect(
+      store.bindTargetAdmission(current, { ...admission, baseUrl: "https://other.example" }),
+    ).toBeUndefined();
+    expect(store.bindTargetAdmission(current, admission)).toEqual(admission);
+    expect(
+      store.bindTargetAdmission(current, { ...admission, addressClass: "public" }),
+    ).toBeUndefined();
+    expect(store.getTargetAdmission(current)).toEqual(admission);
+    expect(() => {
+      store.insert({ ...current, baseUrl: "https://other.example" });
+    }).toThrow(AtlassianCredentialMetadataStoreError);
+    expect(store.getTargetAdmission(current)).toEqual(admission);
+  });
+
+  it("does not grant Cloud credentials a Data Center admission", () => {
+    const store = createAtlassianCredentialMetadataStore({ configPath });
+    const cloud = metadata(AUTH_REF_A);
+    store.insert(cloud);
+    const admission = { baseUrl: cloud.baseUrl, addressClass: "public" as const };
+    expect(store.bindTargetAdmission(cloud, admission)).toBeUndefined();
+    expect(store.getTargetAdmission(cloud)).toBeUndefined();
+  });
+
+  it.each(
+    [
+      null,
+      [],
+      { missing: { baseUrl: "https://jira.example:8443/context", addressClass: "private" } },
+      { [AUTH_REF_A]: { baseUrl: "https://other.example", addressClass: "private" } },
+      { [AUTH_REF_A]: { baseUrl: "https://jira.example:8443/context", addressClass: "metadata" } },
+      { [AUTH_REF_A]: { baseUrl: "https://jira.example:8443/context", addressClass: "loopback" } },
+      {
+        [AUTH_REF_A]: {
+          baseUrl: "https://jira.example:8443/context",
+          addressClass: "private",
+          extra: true,
+        },
+      },
+    ].map((targetAdmissions) => ({ targetAdmissions })),
+  )("fails closed on a malformed private admission map (%j)", ({ targetAdmissions }) => {
+    const store = createAtlassianCredentialMetadataStore({ configPath });
+    const original = dataCenter();
+    store.insert(original);
+    writeFileSync(
+      atlassianCredentialMetadataPath(configPath),
+      JSON.stringify({ version: 1, credentials: { [AUTH_REF_A]: original }, targetAdmissions }),
+    );
+    expect(() => store.list()).toThrow(AtlassianCredentialMetadataStoreError);
+    expect(() => store.getTargetAdmission(original)).toThrow(AtlassianCredentialMetadataStoreError);
+    expect(() =>
+      store.bindTargetAdmission(original, { baseUrl: original.baseUrl, addressClass: "private" }),
+    ).toThrow(AtlassianCredentialMetadataStoreError);
+    expect(() => store.delete(original.authRef)).toThrow(AtlassianCredentialMetadataStoreError);
   });
 });

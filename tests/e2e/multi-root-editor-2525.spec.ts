@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
@@ -28,9 +29,9 @@ async function registerProject(page: Page, root: string, name: string): Promise<
 
 async function seedFilesWindow(page: Page, root: string): Promise<void> {
   await page.addInitScript(
-    ({ key, projectRoot }) => {
+    ({ argument: { key, projectRoot }, storageKeys }) => {
       window.localStorage.setItem("keiko.theme", "dark");
-      window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
       const seededKey = `${key}.issue-2525-seeded`;
       if (window.sessionStorage.getItem(seededKey) === "1") return;
       window.localStorage.setItem(
@@ -62,7 +63,7 @@ async function seedFilesWindow(page: Page, root: string): Promise<void> {
       );
       window.sessionStorage.setItem(seededKey, "1");
     },
-    { key: WORKSPACE_KEY, projectRoot: root },
+    await workspaceStorageArgs(page, { key: WORKSPACE_KEY, projectRoot: root }),
   );
 }
 
@@ -132,7 +133,10 @@ async function verifyResponsiveExplorer(page: Page): Promise<void> {
 }
 
 async function storedWorkspace(page: Page): Promise<string> {
-  return page.evaluate((key) => window.localStorage.getItem(key) ?? "", WORKSPACE_KEY);
+  return page.evaluate(
+    ({ argument: key }) => window.localStorage.getItem(key) ?? "",
+    await workspaceStorageArgs(page, WORKSPACE_KEY),
+  );
 }
 
 // A card shows the project name and its canonical path; the path is unique to one fixture, so the

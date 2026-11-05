@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
@@ -163,28 +164,31 @@ async function interceptGovernedMergeRoutes(page: Page, ledger: RouteLedger): Pr
 const PROJECT_REFERENCE = "issue-478-governed-project";
 
 async function seedGovernedMergeWindow(page: Page): Promise<void> {
-  await page.addInitScript((projectRef) => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-478-governed-merge",
-          type: "governedMerge",
-          x: 24,
-          y: 24,
-          w: 600,
-          h: 860,
-          z: 20,
-          cfg: {
-            projectPath: projectRef,
-            headBranchName: "claude/issue-478-merge-governance",
+  await page.addInitScript(
+    ({ argument: projectRef, storageKeys }) => {
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "issue-478-governed-merge",
+            type: "governedMerge",
+            x: 24,
+            y: 24,
+            w: 600,
+            h: 860,
+            z: 20,
+            cfg: {
+              projectPath: projectRef,
+              headBranchName: "claude/issue-478-merge-governance",
+            },
+            max: true,
           },
-          max: true,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, PROJECT_REFERENCE);
+        ]),
+      );
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, PROJECT_REFERENCE),
+  );
 }
 
 function ensureEvidenceDir(): void {

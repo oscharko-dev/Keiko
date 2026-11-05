@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./workspace-storage.js";
 /**
  * Issue #1377 — reusable editor browser-regression helper library.
  *
@@ -316,19 +317,19 @@ export async function seedEditorWindow(
           ...(opts.openFiles === undefined ? {} : { openFiles: [...opts.openFiles] }),
         };
   await page.addInitScript(
-    ({ window: editorWindow, lsKey, resetKey, resetWorkspace }) => {
+    ({ argument: { window: editorWindow, lsKey, resetKey, resetWorkspace }, storageKeys }) => {
       if (resetWorkspace && window.sessionStorage.getItem(resetKey) !== "1") {
         window.localStorage.removeItem(lsKey);
         window.sessionStorage.setItem(resetKey, "1");
       }
       window.localStorage.setItem("keiko.theme", editorWindow.theme);
-      window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
       if (window.localStorage.getItem(lsKey) === null) {
         window.localStorage.setItem(lsKey, JSON.stringify([editorWindow.entry]));
       }
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    {
+    await workspaceStorageArgs(page, {
       lsKey: WORKSPACE_LS_KEY,
       resetKey: `${WORKSPACE_LS_KEY}:seed-reset:${windowId}`,
       resetWorkspace: opts.resetWorkspace ?? false,
@@ -346,7 +347,7 @@ export async function seedEditorWindow(
           max: opts.maximized ?? false,
         },
       },
-    },
+    }),
   );
 }
 
@@ -450,12 +451,15 @@ interface PersistedEditorWindow {
 
 /** Read the persisted editor window entry from keiko.workspace.v4 (or null if absent). */
 export async function readPersistedEditorWindow(page: Page): Promise<PersistedEditorWindow | null> {
-  return page.evaluate((lsKey) => {
-    const raw = window.localStorage.getItem(lsKey);
-    if (raw === null) return null;
-    const wins = JSON.parse(raw) as readonly ({ type?: string } & PersistedEditorWindow)[];
-    return wins.find((win) => win.type === "editor") ?? null;
-  }, WORKSPACE_LS_KEY);
+  return page.evaluate(
+    ({ argument: lsKey }) => {
+      const raw = window.localStorage.getItem(lsKey);
+      if (raw === null) return null;
+      const wins = JSON.parse(raw) as readonly ({ type?: string } & PersistedEditorWindow)[];
+      return wins.find((win) => win.type === "editor") ?? null;
+    },
+    await workspaceStorageArgs(page, WORKSPACE_LS_KEY),
+  );
 }
 
 /** Read the persisted first-pane tab order from the editor window's serialized layout (or null). */

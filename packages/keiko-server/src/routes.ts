@@ -155,6 +155,7 @@ import {
 } from "./coding-codex-subscription.js";
 import { CODING_CONTEXT_ROUTE_GROUP } from "./coding-context/codingContextRoutes.js";
 import { CODING_RUNTIME_ROUTE_GROUP } from "./coding-runtime/codingRuntimeRoutes.js";
+import { handleLauncherBrowserOpen } from "./coding-app-session/launcherBrowserRoutes.js";
 import { CODING_APP_SESSION_ROUTE_GROUP } from "./coding-app-session/codingAppSessionRoutes.js";
 import { BROWSER_APPROVAL_ROUTES } from "./coding-app-session/browserApprovalRoutes.js";
 import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
@@ -342,7 +343,6 @@ import {
   handleUpdateLocalKnowledgeCapsule,
 } from "./local-knowledge-handlers.js";
 import {
-  handleCreateHtmlManualPod,
   handleGetHtmlManualPodJob,
   handleRefreshHtmlManualPod,
 } from "./manual/manual-pod-routes.js";
@@ -1306,12 +1306,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/local-knowledge/capsules/:capsuleId/reindex",
     handler: handleReindexLocalKnowledgeCapsule,
   },
-  // Issue #2063 — live HTML Manual Knowledge Pod create/refresh trigger + job status poll.
-  {
-    method: "POST",
-    pattern: "/api/local-knowledge/manual-pods/create",
-    handler: handleCreateHtmlManualPod,
-  },
+  // Retained HTML manual refresh and job status for existing pods.
   {
     method: "POST",
     pattern: "/api/local-knowledge/manual-pods/refresh",
@@ -1735,6 +1730,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // fetch/snapshot + stream surface. It does not widen the permanently content-free runtime SSE
   // union above; content-bearing reads fail closed to a content-free projection without a session.
   ...CODING_APP_SESSION_ROUTE_GROUP,
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/app-session/open-browser",
+    handler: handleLauncherBrowserOpen,
+  },
   ...BROWSER_APPROVAL_ROUTES,
   // #1989 coding-context intake: governed GitHub/Jira reads behind default-false connector
   // authorization, the server deployment ceiling, and connector-scope grants. Context stays

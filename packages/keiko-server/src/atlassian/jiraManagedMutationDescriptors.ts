@@ -3,13 +3,10 @@ import {
   JIRA_ATTACHMENT_NAME_MAX_BYTES,
   JIRA_ATTACHMENT_SOURCE_KINDS,
   JIRA_DRAFT_DIGEST_PATTERN,
-  JIRA_DRAFT_ID_PATTERN,
   JIRA_DRAFT_ITEM_STATES,
   JIRA_DRAFT_PAGE_ITEMS_MAX,
-  JIRA_DRAFT_REF_PATTERN,
   JIRA_DRAFT_REFUSALS,
   JIRA_DRAFT_RESULT_ROWS_MAX,
-  JIRA_FIELD_ID_PATTERN,
   JIRA_FIELD_VALIDATION_FAILURES,
   JIRA_MUTATION_DETAIL_LIMITS,
   JIRA_MUTATION_OPERATIONS,
@@ -21,7 +18,11 @@ import {
 import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  compileExternalCatalogSchema,
+  createToolDescriptor,
+  createToolRef,
+} from "@oscharko-dev/keiko-tool-catalog";
 import { object, text } from "./jiraManagedSchemas.js";
 import {
   JIRA_ISSUE_LINKS_MAX,
@@ -99,7 +100,19 @@ const ATTACHMENT_SOURCE = {
     ["kind", "path"],
   ),
 };
-const DRAFT_REF = { ...text(32), pattern: JIRA_DRAFT_REF_PATTERN };
+// Equivalent to the handler patterns within their existing length bounds. Separate linear
+// constraints retain the standard dialect's conservative regex admission without exceptions.
+const DRAFT_REF = {
+  ...text(32),
+  allOf: [{ pattern: "^[A-Za-z]" }, { pattern: "^[A-Za-z0-9_-]{1,32}$" }],
+};
+const DRAFT_RELATION_FIELD = {
+  ...text(64),
+  anyOf: [
+    { allOf: [{ pattern: "^[a-zA-Z]" }, { pattern: "^[a-zA-Z0-9]+$" }] },
+    { pattern: String.raw`^customfield_\d{1,16}$` },
+  ],
+};
 const DRAFT_LINKS = {
   type: "array",
   maxItems: JIRA_ISSUE_LINKS_MAX,
@@ -128,7 +141,7 @@ const JIRA_DRAFT_ITEM_SCHEMA = object(
     parent: {
       ...object(
         {
-          fieldId: { ...text(64), pattern: JIRA_FIELD_ID_PATTERN },
+          fieldId: DRAFT_RELATION_FIELD,
           ref: DRAFT_REF,
           issueKey: ISSUE_KEY,
         },
@@ -428,19 +441,31 @@ const DEFINITIONS: Readonly<
       "Propose a backlog of related issues (epics, stories, tasks, bugs, sub-tasks) as one draft the human approves once. Items name each other by ref and are created in dependency order; an item whose parent or linked item was not created is skipped (blockedBy), and an existing issue is reconciled, not created again. Use it whenever more than one issue is to be created, a parent and children to any depth. Send up to " +
       String(JIRA_DRAFT_PAGE_ITEMS_MAX) +
       " items here; stage a larger draft of any size with jira.draft-stage, then pass its draftId and draftDigest here, so it is approved once. Never split one backlog into several approvals. Items left pending continue with the same draftId and draftDigest, nothing created twice.",
-    input: object(
-      {
-        items: {
-          type: "array",
-          minItems: 1,
-          maxItems: JIRA_DRAFT_PAGE_ITEMS_MAX,
-          items: JIRA_DRAFT_ITEM_SCHEMA,
-        },
-        draftId: { ...text(36), pattern: JIRA_DRAFT_ID_PATTERN },
-        draftDigest: { ...text(64), pattern: JIRA_DRAFT_DIGEST_PATTERN },
-      },
-      [],
-    ),
+    // The existing explicit JSON Schema dialect expresses the handler's two closed forms;
+    // optional sibling properties would also advertise empty, partial and mixed arguments.
+    input: compileExternalCatalogSchema({
+      type: "object",
+      oneOf: [
+        object(
+          {
+            items: {
+              type: "array",
+              minItems: 1,
+              maxItems: JIRA_DRAFT_PAGE_ITEMS_MAX,
+              items: JIRA_DRAFT_ITEM_SCHEMA,
+            },
+          },
+          ["items"],
+        ),
+        object(
+          {
+            draftId: { ...text(36), format: "uuid", pattern: "^[0-9a-f-]{36}$" },
+            draftDigest: { ...text(64), pattern: JIRA_DRAFT_DIGEST_PATTERN },
+          },
+          ["draftId", "draftDigest"],
+        ),
+      ],
+    }),
     result: DRAFT_RESULT_SCHEMA,
     // Up to one result row per item, within the catalog's result ceilings; a larger result is
     // reported by counts and key ranges, never cut (#4178).

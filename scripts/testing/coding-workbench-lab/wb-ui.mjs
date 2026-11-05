@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "@playwright/test";
 import { isMainModule } from "../../lib/is-main-module.mjs";
+import { workspaceStorageArgs } from "../../lib/workspace-storage-fixture.mjs";
 import {
   CSRF_HEADERS,
   TERMINAL_STATES,
@@ -80,22 +81,25 @@ const POLL_MS = 3000;
 const UI_TIMEOUT_MS = 60_000;
 
 /** Opens the Workbench window bound to the lab repository, as the desktop would restore it. */
-async function seedWorkbenchWindow(page, repo) {
-  await page.addInitScript((root) => {
-    const windowState = {
-      id: "lab-workbench",
-      type: "coding",
-      x: 20,
-      y: 20,
-      w: 1400,
-      h: 1000,
-      z: 10,
-      zoom: 1,
-      cfg: { repositoryPath: root },
-      max: false,
-    };
-    globalThis.localStorage.setItem("keiko.workspace.v4", JSON.stringify([windowState]));
-  }, repo);
+export async function seedWorkbenchWindow(page, repo) {
+  await page.addInitScript(
+    ({ argument: root, storageKeys }) => {
+      const windowState = {
+        id: "lab-workbench",
+        type: "coding",
+        x: 20,
+        y: 20,
+        w: 1400,
+        h: 1000,
+        z: 10,
+        zoom: 1,
+        cfg: { repositoryPath: root },
+        max: false,
+      };
+      globalThis.localStorage.setItem(storageKeys.workspace, JSON.stringify([windowState]));
+    },
+    await workspaceStorageArgs(page, repo),
+  );
 }
 
 async function waitForWorkbench(page) {

@@ -103,14 +103,16 @@ function ConnectorList({
   client,
   ctrl,
   pollIntervalMs,
+  embedded,
 }: {
   readonly connectors: readonly AtlassianConnectorMetadata[];
   readonly client: AtlassianConnectorsClient;
   readonly ctrl: ConnectorsController;
   readonly pollIntervalMs: number | undefined;
+  readonly embedded: boolean;
 }): ReactNode {
   return (
-    <ul className="acx-list">
+    <ul className={`acx-list ${styles.cmpPodList}`}>
       {connectors.map((connector) => (
         <ConnectorCard
           key={connector.authRef}
@@ -118,6 +120,7 @@ function ConnectorList({
           client={client}
           onDeleted={ctrl.onDeleted}
           onUpdated={ctrl.onCreated}
+          embedded={embedded}
           {...(pollIntervalMs === undefined ? {} : { pollIntervalMs })}
         />
       ))}
@@ -125,20 +128,26 @@ function ConnectorList({
   );
 }
 
-function ConnectorsHeading({
+function AddConnectorButton({
   jiraLive,
-  id,
+  setAdding,
 }: {
   readonly jiraLive: boolean;
-  readonly id: string;
+  readonly setAdding: (adding: boolean) => void;
 }): ReactNode {
   const t = useTranslate();
-  // Embedded in the Knowledge Pods page, the panel's own section heading names this list.
-  if (jiraLive) return null;
   return (
-    <h2 className="acx-section-title" id={id}>
-      {t("atlassianConnectors.section.connectors")}
-    </h2>
+    <button
+      type="button"
+      className={
+        jiraLive
+          ? `lk-btn lk-btn-primary lk-btn-lg ${styles.cmpCreatePodButton}`
+          : "lk-btn lk-btn-primary"
+      }
+      onClick={() => setAdding(true)}
+    >
+      {t(jiraLive ? "atlassianConnectors.live.add" : "atlassianConnectors.add.open")}
+    </button>
   );
 }
 
@@ -155,7 +164,6 @@ function AddConnectorAction({
   readonly adding: boolean;
   readonly setAdding: (adding: boolean) => void;
 }): ReactNode {
-  const t = useTranslate();
   if (adding)
     return (
       <AddConnectorForm
@@ -168,17 +176,66 @@ function AddConnectorAction({
         }}
       />
     );
+  if (jiraLive) return null;
   return (
     <div className="acx-actions">
-      {/* On the Knowledge Pods page the page's own create action stays the one primary button. */}
-      <button
-        type="button"
-        className={`lk-btn ${jiraLive ? "lk-btn-ghost" : "lk-btn-primary"}`}
-        onClick={() => setAdding(true)}
-      >
-        {t(jiraLive ? "atlassianConnectors.live.add" : "atlassianConnectors.add.open")}
-      </button>
+      <AddConnectorButton jiraLive={false} setAdding={setAdding} />
     </div>
+  );
+}
+
+function ConnectorsHeading({
+  jiraLive,
+  headingId,
+  adding,
+  setAdding,
+}: {
+  readonly jiraLive: boolean;
+  readonly headingId: string;
+  readonly adding: boolean;
+  readonly setAdding: (adding: boolean) => void;
+}): ReactNode {
+  const t = useTranslate();
+  if (!jiraLive)
+    return (
+      <h2 className="acx-section-title" id={headingId}>
+        {t("atlassianConnectors.section.connectors")}
+      </h2>
+    );
+  return (
+    <header className={`lk-header ${styles.cmpEmbeddedToolbar}`}>
+      <h2 className={`lk-title ${styles.cmpPodTitle}`} id={headingId}>
+        {t("atlassianConnectors.live.title")}
+      </h2>
+      {adding ? null : <AddConnectorButton jiraLive setAdding={setAdding} />}
+    </header>
+  );
+}
+
+function ConnectorsFeedback({
+  state,
+  empty,
+  jiraLive,
+}: {
+  readonly state: Pick<ConnectorsController, "error" | "loading">;
+  readonly empty: boolean;
+  readonly jiraLive: boolean;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <>
+      {state.error !== undefined ? (
+        <p className="acx-error" role="alert">
+          {state.error}
+        </p>
+      ) : null}
+      {state.loading ? <p className="acx-muted">{t("atlassianConnectors.loading")}</p> : null}
+      {!state.loading && empty ? (
+        <p className={`acx-empty ${styles.cmpPodEmpty}`}>
+          {t(jiraLive ? "atlassianConnectors.live.empty" : "atlassianConnectors.empty")}
+        </p>
+      ) : null}
+    </>
   );
 }
 
@@ -186,14 +243,11 @@ function ConnectorsSection({
   client,
   pollIntervalMs,
   jiraLive,
-  labelledBy,
 }: {
   readonly client: AtlassianConnectorsClient;
   readonly pollIntervalMs: number | undefined;
   readonly jiraLive: boolean;
-  readonly labelledBy: string | undefined;
 }): ReactNode {
-  const t = useTranslate();
   const ctrl = useConnectors(client);
   useCredentialChanges(ctrl.reload);
   const headingId = useId();
@@ -202,24 +256,24 @@ function ConnectorsSection({
   );
   const [adding, setAdding] = useState(false);
   return (
-    <section className="acx-section" aria-labelledby={labelledBy ?? headingId}>
-      <ConnectorsHeading jiraLive={jiraLive} id={headingId} />
-      {ctrl.error !== undefined ? (
-        <p className="acx-error" role="alert">
-          {ctrl.error}
-        </p>
-      ) : null}
-      {ctrl.loading ? <p className="acx-muted">{t("atlassianConnectors.loading")}</p> : null}
-      {!ctrl.loading && connectors.length === 0 && !adding ? (
-        <p className="acx-empty">
-          {t(jiraLive ? "atlassianConnectors.live.empty" : "atlassianConnectors.empty")}
-        </p>
-      ) : null}
+    <section className={`acx-section ${styles.cmpPodSection}`} aria-labelledby={headingId}>
+      <ConnectorsHeading
+        jiraLive={jiraLive}
+        headingId={headingId}
+        adding={adding}
+        setAdding={setAdding}
+      />
+      <ConnectorsFeedback
+        state={ctrl}
+        empty={connectors.length === 0 && !adding}
+        jiraLive={jiraLive}
+      />
       <ConnectorList
         connectors={connectors}
         client={client}
         ctrl={ctrl}
         pollIntervalMs={pollIntervalMs}
+        embedded={jiraLive}
       />
       <AddConnectorAction
         client={client}
@@ -244,21 +298,9 @@ function JiraLivePodsSection({
   readonly client: AtlassianConnectorsClient;
   readonly pollIntervalMs: number | undefined;
 }): ReactNode {
-  const t = useTranslate();
-  const titleId = useId();
   return (
     <div className={`acx-panel ${styles.scope} ${styles.cmpEmbedded}`} data-testid="acx-panel">
-      <header>
-        <h2 className={`lk-section-head ${styles.cmpEmbeddedTitle}`} id={titleId}>
-          {t("atlassianConnectors.live.title")}
-        </h2>
-      </header>
-      <ConnectorsSection
-        client={client}
-        pollIntervalMs={pollIntervalMs}
-        jiraLive
-        labelledBy={titleId}
-      />
+      <ConnectorsSection client={client} pollIntervalMs={pollIntervalMs} jiraLive />
     </div>
   );
 }
@@ -276,12 +318,7 @@ export function AtlassianConnectorsPanel({
         <h1 className="acx-title">{t("atlassianConnectors.title")}</h1>
         <p className="acx-subtitle">{t("atlassianConnectors.subtitle")}</p>
       </header>
-      <ConnectorsSection
-        client={client}
-        pollIntervalMs={pollIntervalMs}
-        jiraLive={false}
-        labelledBy={undefined}
-      />
+      <ConnectorsSection client={client} pollIntervalMs={pollIntervalMs} jiraLive={false} />
       <ConnectorApprovalsPanel client={client} />
     </div>
   );

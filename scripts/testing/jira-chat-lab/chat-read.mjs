@@ -261,9 +261,6 @@ export async function configureModel(deps, modelId, session, configPath, options
   const raw = {
     providers: [provider, ...additionalProviders],
     capabilities: [capability, ...embeddingCapabilities],
-    atlassian: {
-      privateTargets: [{ baseUrl: "https://127.0.0.1:18443", addressClass: "loopback" }],
-    },
     egress: { caBundlePath: join(session.directory, "secrets", "tls", "ca.pem") },
   };
   const parsed = parseGatewayConfig(raw, env);

@@ -111,9 +111,11 @@ export interface GroundedSynthesisAttemptOptions {
   readonly signal?: AbortSignal | undefined;
   readonly deadlineAtMs?: number | undefined;
   readonly nowMs?: (() => number) | undefined;
+  readonly retryFollows?: ((error: unknown) => boolean) | undefined;
 }
 
 export interface GroundedSynthesisAttemptTracker {
+  readonly retryFollows?: ((error: unknown) => boolean) | undefined;
   readonly admission: NonNullable<GatewayCallRequest["attemptAdmission"]>;
   /** A complete tool-call response is orchestration; its physical usage remains charged. */
   confirmToolRound(): void;
@@ -169,6 +171,7 @@ export function createGroundedSynthesisAttemptAdmission(
   };
   return {
     admission,
+    retryFollows: synthesisRetryDecision(budget, options),
     remainingSynthesisCalls: budget.remaining,
     confirmToolRound(): void {
       confirmObservedToolRound(latest);
@@ -179,6 +182,31 @@ export function createGroundedSynthesisAttemptAdmission(
       settleFailedAttempt(settleFallback, promptTokens, failure);
     },
   };
+}
+
+function synthesisRetryDecision(
+  budget: GroundedSynthesisCallBudget,
+  options: GroundedSynthesisAttemptOptions,
+): GroundedSynthesisAttemptTracker["retryFollows"] {
+  return options.retryFollows === undefined
+    ? undefined
+    : (error): boolean => retryWithinSynthesisGrant(budget, options, error);
+}
+
+function retryWithinSynthesisGrant(
+  budget: GroundedSynthesisCallBudget,
+  options: GroundedSynthesisAttemptOptions,
+  error: unknown,
+): boolean {
+  const pending = budget.pendingUsage();
+  return (
+    budget.remaining() > 0 &&
+    pending.promptTokens < options.inputTokensMax &&
+    pending.completionTokens < options.outputTokensMax &&
+    options.signal?.aborted !== true &&
+    (options.deadlineAtMs === undefined || (options.nowMs ?? Date.now)() < options.deadlineAtMs) &&
+    options.retryFollows?.(error) === true
+  );
 }
 
 function settleFailedAttempt(
