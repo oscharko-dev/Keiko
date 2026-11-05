@@ -2558,6 +2558,47 @@ describe("private OpenCode run control", () => {
     }
   });
 
+  // #4271: a subagent's question is the run's too. Its live frame signals the Workbench once the run's
+  // session tree proves the session a child of the run; an unproven or foreign session still signals
+  // nothing (the pin above).
+  it("observes a proven child session's live question frame and no unproven session's", async () => {
+    const questionObservations: string[] = [];
+    const childSessions: Record<string, unknown>[] = [];
+    let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const fixture = await startBridgeFixture(facade, undefined, {
+      childSessions,
+      questionObservations,
+      onSseStart: (controller) => {
+        stream = controller;
+      },
+    });
+    try {
+      const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+      childSessions.push(
+        { id: "ses_child", parentID: "ses_tool", location: { directory: workspaceRoot } },
+        { id: "ses_elsewhere", parentID: "ses_tool", location: { directory: "/elsewhere" } },
+        { id: "ses_foreign", location: { directory: workspaceRoot } },
+      );
+      await vi.waitFor(() => {
+        expect(stream).toBeDefined();
+      });
+      const frame = (id: string, sessionID: string): Uint8Array =>
+        new TextEncoder().encode(
+          `data: {"id":"${id}","type":"form.created","data":{"form":{"id":"frm_${id}","sessionID":"${sessionID}"}}}\n\n`,
+        );
+      stream?.enqueue(frame("evt_elsewhere", "ses_elsewhere"));
+      stream?.enqueue(frame("evt_foreign", "ses_foreign"));
+      stream?.enqueue(frame("evt_unknown", "ses_unknown"));
+      stream?.enqueue(frame("evt_child", "ses_child"));
+      await vi.waitFor(() => {
+        expect(questionObservations).toContain("evt_child");
+      });
+      expect(questionObservations).toEqual(["evt_child"]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   // The ask as the generated V2 plugin sends it for one keiko_verification call (#3612). A file edit
   // asks no one: its change review is its one approval (ADR-0124 D6).
   const governedAsk = (callId: string): Promise<Record<string, unknown>> =>

@@ -4010,6 +4010,7 @@
     "not-a-repository",
     "not-a-template",
     "not-allowed-for-profile",
+    "opencode-runtime-composition.child-question",
     "opencode-runtime-composition.facade-execute",
     "opencode-runtime-composition.native-mcp-completion",
     "opencode-runtime-composition.native-mcp-recovery",

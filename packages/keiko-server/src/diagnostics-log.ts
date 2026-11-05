@@ -750,6 +750,9 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   // A native OpenCode child session's ancestry could not be read from the runtime's session list;
   // the child's permission ask is refused because nothing proves it belongs to the run (#3897).
   "native-session-ancestry-failed",
+  // A subagent's live question signal failed after its session was classified; the Workbench still
+  // reads the child's question on its next question read (#4271).
+  "child-question-signal-failed",
   // #3903 AC4: the managed task-workspace owner failed an approved Code Mode `worktree_create`
   // without a classified answer; the request is refused and the producer's own call stays blocked.
   "native-worktree-provision-failed",

@@ -2411,7 +2411,11 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     the workspace). Run authority and revision checks stay with the callers. The producer's General
     and Explore agents deny `question`, so a child form arises only for an agent whose rules allow
     it; the lane is correct for it either way. Refusing a child's question interrupts the child
-    only, and its parent continues with the failed subagent call. An owned form the lane cannot
+    only, and its parent continues with the failed subagent call. The live signal that prompts
+    the Workbench to read follows the same proof (#4271): a `form.created` frame of the primary
+    signals at once, a frame of another session only once the session tree proves that session an
+    owned child, so a subagent's question appears without waiting for the next unrelated read; an
+    unproven or foreign session signals nothing. An owned form the lane cannot
     show (more than 32 fields or options, a hidden or conditional field, or a field type no answer
     can be given for) is dismissed through the session that asked, as a refusal would be: the
     runtime would otherwise wait for an answer nobody can give, and the validation bound stays.
