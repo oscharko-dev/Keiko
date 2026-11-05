@@ -287,6 +287,45 @@ describe("parseGatewayConfig", () => {
     ).toThrow(/tokenCounter must be one of/u);
   });
 
+  it.each(["required-with-tools", "current-turn"] as const)(
+    "qualifies the explicit %s reasoning protocol without alias inference",
+    (reasoningHistory) => {
+      const config = parseGatewayConfig(
+        rawWithProvider((provider) => ({
+          ...provider,
+          reasoningHistory,
+          reasoningHistoryField: "reasoning",
+        })),
+      );
+      expect(config.providers[0]).toMatchObject({
+        reasoningHistory,
+        reasoningHistoryField: "reasoning",
+      });
+      const provider = config.providers[0];
+      if (provider === undefined) throw new TypeError("Missing provider fixture");
+      expect(toolCallingConfigurationFingerprint(provider)).not.toBe(
+        toolCallingConfigurationFingerprint({ ...provider, reasoningHistory: undefined }),
+      );
+      expect(toolCallingConfigurationFingerprint(provider)).not.toBe(
+        toolCallingConfigurationFingerprint({
+          ...provider,
+          reasoningHistoryField: "reasoning_content",
+        }),
+      );
+    },
+  );
+
+  it.each(["reasoningHistory", "reasoningHistoryField"])(
+    "rejects an unknown %s protocol value",
+    (field) => {
+      expect(() =>
+        parseGatewayConfig(
+          rawWithProvider((provider) => ({ ...provider, [field]: "guess-from-name" })),
+        ),
+      ).toThrow(/must be one of/u);
+    },
+  );
+
   it("rejects endpoint API version without the Azure deployment endpoint style", () => {
     expect(() =>
       parseGatewayConfig(

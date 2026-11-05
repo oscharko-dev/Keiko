@@ -37,6 +37,7 @@ function buildRequest(ctx: RunContext): GatewayRequest {
   const toolCatalog = ctx.plan.allowsTools ? catalogAdvertisement(ctx) : undefined;
   return {
     modelId: ctx.modelId,
+    reasoningScope: ctx.reasoningScope,
     messages: ctx.messages,
     ...(toolCatalog === undefined ? {} : { toolCatalog }),
   };

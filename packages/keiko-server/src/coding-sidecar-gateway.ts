@@ -20,6 +20,7 @@ import {
   findConfiguredCapability,
   resolveCodingSafeSidecarGatewayProfile,
   ProviderResponseInvalidError,
+  ReasoningHistoryUnavailableError,
   ResponseRedactionError,
   type Gateway,
   type GatewayCallRequest,
@@ -2754,8 +2755,14 @@ const PROVIDER_REJECTION_CHUNK = {
   error: { code: 400, type: "invalid_request_error", message: PROVIDER_REJECTION_MESSAGE },
 } as const;
 
-function providerRejectionError(): RouteResult {
-  return { status: 400, body: errorBody("BAD_REQUEST", PROVIDER_REJECTION_MESSAGE) };
+function providerRejectionMessage(error: unknown): string {
+  return error instanceof ReasoningHistoryUnavailableError
+    ? "Model continuation is unavailable. Start a new coding task."
+    : PROVIDER_REJECTION_MESSAGE;
+}
+
+function providerRejectionError(error?: unknown): RouteResult {
+  return { status: 400, body: errorBody("BAD_REQUEST", providerRejectionMessage(error)) };
 }
 
 /**
@@ -3387,6 +3394,7 @@ function requestForGatewayDelivery(
   delivery: GatewayChatDelivery,
   signal: AbortSignal,
   retryObserver: GatewayRetryObserver,
+  runId: string,
 ): GatewayCallRequest {
   const request: GatewayCallRequest = {
     ...buildChatRequest(
@@ -3403,6 +3411,7 @@ function requestForGatewayDelivery(
       },
     ),
     retryObserver,
+    reasoningScope: `coding:${runId}`,
   };
   return delivery.protectRequest?.(request) ?? request;
 }
@@ -3454,6 +3463,7 @@ async function dispatchGatewayChat(
         delivery,
         cancellation.signal,
         retries.observer,
+        runId,
       ),
       runId,
       cancellation,
@@ -3550,9 +3560,10 @@ function settleFailedGatewayChat(
   const refusal = bufferedStream === undefined ? refusalAnswer(ctx, runId, error) : undefined;
   if (refusal !== undefined) return refusal;
   const refused = !cancelled && runtimeRetry === "refused";
-  if (bufferedStream === undefined) return refused ? providerRejectionError() : unavailableError();
+  if (bufferedStream === undefined)
+    return refused ? providerRejectionError(error) : unavailableError();
   return refused
-    ? settleBufferedOpenAiStreamRejection(bufferedStream)
+    ? settleBufferedOpenAiStreamRejection(bufferedStream, error)
     : settleBufferedOpenAiStreamError(bufferedStream, "error");
 }
 
@@ -3759,7 +3770,7 @@ async function streamGatewayChat(
     });
     emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
     settlePromptTokenReservation(deps, promptTokenReservation);
-    return runtimeRetry === "refused" ? providerRejectionError() : unavailableError();
+    return runtimeRetry === "refused" ? providerRejectionError(error) : unavailableError();
   }
   const session = createGatewayStreamSession(ctx, dispatch, iterator);
   try {
@@ -3814,7 +3825,7 @@ async function pumpGatewayStreamWithCancellation(
         turnFailureRecorded,
       );
     }
-    settleGatewayStreamError(session, runtimeRetry, outputRepairOf(error));
+    settleGatewayStreamError(session, error, runtimeRetry, outputRepairOf(error));
   } finally {
     stopHeartbeat();
     cancellationSignal.removeEventListener("abort", cancelIterator);
@@ -4265,6 +4276,7 @@ function logGatewayCompletionUsage(
 
 function settleGatewayStreamError(
   session: GatewayStreamSession,
+  error: unknown,
   runtimeRetry: RuntimeRetry,
   repair?: GatewayOutputRepairOutcome,
 ): void {
@@ -4275,7 +4287,7 @@ function settleGatewayStreamError(
   recordSessionOutcome(session, "failed", settledRepair(repair));
   if (runtimeRetry === "refused") {
     const { ctx, id, created, modelId, cancellation } = session;
-    writeStreamRejection({ ctx, id, created, modelId, transport: cancellation.transport });
+    writeStreamRejection({ ctx, id, created, modelId, transport: cancellation.transport }, error);
   } else {
     writeSessionTerminal(session, "error");
   }
@@ -4402,17 +4414,22 @@ function settleBufferedOpenAiStreamError(
 
 function settleBufferedOpenAiStreamRejection(
   session: BufferedOpenAiStreamSession,
+  error?: unknown,
 ): typeof STREAMING {
   session.stopHeartbeat();
-  writeStreamRejection(session);
+  writeStreamRejection(session, error);
   return STREAMING;
 }
 
 // The turn's final answer when the provider rejected it for good: an error chunk the runtime reads
 // as HTTP 400, then the stream's end.
-function writeStreamRejection(stream: OpenAiSseStreamIdentity): void {
+function writeStreamRejection(stream: OpenAiSseStreamIdentity, error?: unknown): void {
   const { ctx, transport } = stream;
-  writeOpenAiSse(ctx, PROVIDER_REJECTION_CHUNK, transport);
+  writeOpenAiSse(
+    ctx,
+    { error: { ...PROVIDER_REJECTION_CHUNK.error, message: providerRejectionMessage(error) } },
+    transport,
+  );
   if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.end("data: [DONE]\n\n");
 }
 
