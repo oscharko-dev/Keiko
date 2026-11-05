@@ -87,6 +87,8 @@ export interface CapturePolicyOptions {
   // Optional override for the scope kind. When unset, scope-inference picks the most specific
   // coordinate available on the context (project > workspace > workflow > user).
   readonly scopeKind?: MemoryScopeKind;
+  // Where a person's "Merke dir" lands when neither the statement nor scopeKind names a scope.
+  readonly rememberScopeKind?: MemoryScopeKind;
   // Hard cap on body length BEFORE secret scanning. Captures longer than this reject with
   // `exceeds-length-limit`. The default mirrors the contract validator's body cap.
   readonly maxBodyChars?: number;

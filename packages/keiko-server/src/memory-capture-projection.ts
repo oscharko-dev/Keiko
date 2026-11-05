@@ -46,6 +46,7 @@ const CAPTURE_REJECTION_REASONS = [
   "raw-log-content",
   "customer-identifier",
   "denied-category",
+  "instruction-override",
   "empty-content",
   "exceeds-length-limit",
   "ambiguous-forget",

@@ -41,7 +41,7 @@ function reusableScopedMemory(
     );
 }
 
-function reuseCapturedMemory(
+export function reuseCapturedMemory(
   vault: MemoryVaultStore,
   existing: MemoryRecord,
   record: MemoryRecord,
@@ -86,7 +86,7 @@ export function confirmRestatedMemory(
   return existing === undefined ? undefined : confirmExistingMemory(vault, existing, record);
 }
 
-export function confirmExistingMemory(
+function confirmExistingMemory(
   vault: MemoryVaultStore,
   existing: MemoryRecord,
   record: MemoryRecord,

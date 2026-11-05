@@ -22,6 +22,8 @@ export type RejectionReason =
   | "raw-log-content"
   | "customer-identifier"
   | "denied-category"
+  // A memory that tells the assistant to drop its rules would reach every later answer as a fact.
+  | "instruction-override"
   | "empty-content"
   | "exceeds-length-limit"
   | "ambiguous-forget"

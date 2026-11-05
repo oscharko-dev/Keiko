@@ -8,7 +8,7 @@
   "truth": [
     {
       "key": "format-preference",
-      "seed": "Ich bevorzuge Tabellen.",
+      "seed": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
       "must": true,
       "private": true,
       "terms": [["Tabelle*"]]
@@ -16,7 +16,7 @@
   ],
   "turns": [
     {
-      "user": "Merke dir bitte: Ich bevorzuge Tabellen. Und was steht heute an?",
+      "user": "Merke dir bitte: Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst. Und was steht heute an?",
       "learner": []
     }
   ],

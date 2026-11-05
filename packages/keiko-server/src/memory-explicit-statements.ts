@@ -12,9 +12,9 @@ import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/types.js";
 import {
-  confirmExistingMemory,
   confirmRestatedMemory,
   persistCapturedMemory,
+  reuseCapturedMemory,
   type PersistedCapturedMemory,
 } from "./memory-capture-persistence.js";
 import type { MemoryCaptureSuppressionReason } from "./memory-capture-policy.js";
@@ -121,7 +121,8 @@ async function storeUnlessKnownParaphrase(
   if (existing === undefined) throw new Error("Merged memory disappeared during capture.");
   return {
     kind: "persisted",
-    persisted: confirmExistingMemory(vault, existing, candidate),
+    // The novelty gate has already recorded this confirmation on the merge.
+    persisted: reuseCapturedMemory(vault, existing, candidate),
     confirmed: true,
   };
 }

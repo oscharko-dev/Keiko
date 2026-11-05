@@ -173,8 +173,12 @@ A person's own "Merke dir …" or "Vergiss das" (Issue #4211) is their decision,
 learning, so D2's mapping does not hold it. It needs no model, no approval and no dialog.
 `memoryExplicitStatementEligible` routes a public, approval-free `explicit-user-instruction`
 candidate through the same promotion lever as D4 in every mode; D3's hard denials stay first, so a
-credential is refused and a sensitive body keeps its approval. Everything learned from natural
+credential is refused and a sensitive body keeps its approval. An instruction to drop the assistant's
+rules is refused as `instruction-override` on every capture path, because it would reach each later
+answer as a fact; an ordinary wish about how to answer stays a memory. Everything learned from natural
 conversation stays under D2. Capture-from-conversation remains a review surface and also stays under D2.
+Such a statement lands in the private user scope unless it names a project or workspace, and the
+learner does not read its turn, so it cannot store the statement itself.
 
 Saying a statement again confirms the existing memory through `recordAccess` instead of storing a
 second record: in the same words without an embedder, and as a paraphrase through the existing

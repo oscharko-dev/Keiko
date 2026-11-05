@@ -1790,6 +1790,7 @@ function captureMemoryActions(
     {
       ...memoryCapturePolicyForDeps(deps, {
         resolver: createMemoryTargetResolver(deps.memoryVault),
+        rememberScopeKind: "user",
         forgetResolver: createMemoryForgetResolver(deps.memoryVault, {
           scopes: conversationMemoryScopes(context),
           conversationId: context.conversationId,
@@ -4130,6 +4131,7 @@ function collectCanonicalTurnLocalMemoryActions(
         buildCaptureContext(context, request.clientTurnId, messageOrdinal),
         memoryCapturePolicyForDeps(deps, {
           resolver: createMemoryTargetResolver(vault),
+          rememberScopeKind: "user",
           forgetResolver: createMemoryForgetResolver(vault, {
             scopes,
             conversationId: context.conversationId,

@@ -17,7 +17,7 @@ import {
 import { buildForget, buildProposal, buildUpdate } from "./_envelopes.js";
 import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
-import { memoryTextSecretEgressRejectionReason } from "./capture-safety.js";
+import { memoryTextCaptureRejectionReason } from "./capture-safety.js";
 import type {
   CaptureContext,
   CaptureMemoryResolver,
@@ -104,10 +104,19 @@ const REMEMBER_ABOUT_PATTERNS: readonly RegExp[] = [
 ];
 const FORGET_PATTERNS: readonly RegExp[] = [
   /^\s*forget(?!\s+not\b)(?:\s+about)?(?:\s+that(?=\s+\S))?\s+/iu,
-  // "Vergiss nicht, ..." means the opposite of forgetting, so it is no forget at all.
-  /^\s*vergiss(?!\s+(?:es\s+|das\s+)?(?:bitte\s+)?nicht\b)(?:\s+bitte)?(?:,?\s+dass)?(?:\s+(?:alles\s+)?(?:über|ueber|zu|an))?\s+/iu,
+  /^\s*vergiss(?:\s+bitte)?,?\s+dass\s+(?:alles\s+)?(?:über|ueber|zu|an)\s+/iu,
+  /^\s*vergiss(?:\s+bitte)?,?\s+dass\s+/iu,
+  /^\s*vergiss(?:\s+bitte)?\s+(?:alles\s+)?(?:über|ueber|zu|an)\s+/iu,
+  /^\s*vergiss(?:\s+bitte)?\s+/iu,
   /^\s*lösche(?:\s+bitte)?(?:\s+die\s+erinnerung\s+(?:an|zu|über|ueber))?\s+/iu,
 ];
+// "Vergiss nicht, ..." means the opposite of forgetting, so it is no forget at all.
+const VERGISS_NICHT_RE = /^\s*vergiss\s+(?:es\s+|das\s+)?(?:bitte\s+)?nicht\b/iu;
+
+function forgetPrefixMatch(text: string): RegExpExecArray | null {
+  return VERGISS_NICHT_RE.test(text) ? null : execFirst(FORGET_PATTERNS, text);
+}
+
 // A whole statement that takes back what was just said, without naming it.
 const FORGET_REFERENCE_STATEMENTS: readonly (readonly [RegExp, string])[] = [
   [/^\s*das\s+stimmt\s+nicht\s+mehr[.!]?\s*$/iu, "das"],
@@ -145,7 +154,7 @@ function forgetTargetOf(text: string): string | null {
   for (const [pattern, target] of FORGET_REFERENCE_STATEMENTS) {
     if (pattern.test(text)) return target;
   }
-  const prefixMatch = execFirst(FORGET_PATTERNS, text);
+  const prefixMatch = forgetPrefixMatch(text);
   if (prefixMatch === null) return null;
   const body = bodyAfterPrefix(prefixMatch, text);
   const target = body === null ? "" : trimForgetTarget(body);
@@ -170,16 +179,24 @@ function bodyAfterPrefix(prefixMatch: RegExpExecArray, text: string): string | n
   return trimmed;
 }
 // An explicit statement stores what was stated, not the request that follows it in one message.
-const SENTENCE_END_RE = /[.!?…]+(?=\s+\p{Lu}|\s*$)/gu;
+const SENTENCE_MARKS_RE = /[.!?…]+/gu;
+const STARTS_UPPERCASE_RE = /^\p{Lu}/u;
 // One or two letters before a period read as an abbreviation such as "z. B." or "e.g.".
 const WORD_BEFORE_SENTENCE_END_RE = /\p{L}{3}$/u;
 const WORD_TAIL_CHARS = 3;
 
+function nextSentenceStartsAt(line: string, index: number): boolean {
+  const rest = line.slice(index);
+  const next = rest.trimStart();
+  return next === "" || (next.length < rest.length && STARTS_UPPERCASE_RE.test(next));
+}
+
 function firstSentence(line: string): string {
-  for (const match of line.matchAll(SENTENCE_END_RE)) {
+  for (const match of line.matchAll(SENTENCE_MARKS_RE)) {
+    const end = match.index + match[0].length;
     const before = line.slice(Math.max(0, match.index - WORD_TAIL_CHARS), match.index);
-    if (WORD_BEFORE_SENTENCE_END_RE.test(before)) {
-      return line.slice(0, match.index + match[0].length);
+    if (nextSentenceStartsAt(line, end) && WORD_BEFORE_SENTENCE_END_RE.test(before)) {
+      return line.slice(0, end);
     }
   }
   return line;
@@ -225,7 +242,7 @@ function execThatsWrongBody(text: string): RegExpExecArray | null {
 // Helper: secret scan + reject the body if it fires. Length enforcement happens in capture.ts
 // preflight before the explicit extractors run.
 function rejectIfUnsafe(body: string, policy: CapturePolicyOptions): CaptureOutcome | null {
-  const reason = memoryTextSecretEgressRejectionReason(body, policy);
+  const reason = memoryTextCaptureRejectionReason(body, policy);
   if (reason !== null) {
     return { kind: "rejected", reason };
   }
@@ -305,11 +322,19 @@ function rejectOnScopeConflict(
 
 function mergePolicyScopeKind(
   policy: CapturePolicyOptions,
-  explicitScopeKind: ExplicitScopeKind | undefined,
+  explicitScopeKind: NonNullable<CapturePolicyOptions["scopeKind"]> | undefined,
 ): CapturePolicyOptions {
   if (explicitScopeKind === undefined) return policy;
   if (policy.scopeKind !== undefined) return policy;
   return { ...policy, scopeKind: explicitScopeKind };
+}
+
+// A statement that names no scope falls back to the caller's choice for remember statements.
+function rememberScopePolicy(
+  policy: CapturePolicyOptions,
+  explicitScopeKind: NonNullable<CapturePolicyOptions["scopeKind"]> | undefined,
+): CapturePolicyOptions {
+  return mergePolicyScopeKind(policy, explicitScopeKind ?? policy.rememberScopeKind);
 }
 
 // Reads the capturing group added to REMEMBER_ABOUT_PATTERNS. Returns undefined when the "about
@@ -368,8 +393,7 @@ export function tryExtractRemember(
   const explicitScopeKind = explicitScopeKindFromAboutMatch(aboutPrefixMatch);
   const conflictOutcome = rejectOnScopeConflict(policy, explicitScopeKind, context);
   if (conflictOutcome !== null) return conflictOutcome;
-  const effectivePolicy = mergePolicyScopeKind(policy, explicitScopeKind);
-  const scopeResolution = scopeOrReject(context, effectivePolicy);
+  const scopeResolution = scopeOrReject(context, rememberScopePolicy(policy, explicitScopeKind));
   if (!scopeResolution.ok) {
     return scopeResolution.outcome;
   }
@@ -390,6 +414,16 @@ export function tryExtractRemember(
     1.0,
   );
   return { kind: "candidate", proposal, requiresApproval: decision.requiresApproval };
+}
+
+// A message the explicit path owns. The learner must not read it as well: it would store the
+// statement itself, "Vergiss, dass ..." included.
+export function isExplicitMemoryStatement(text: string): boolean {
+  return (
+    forgetTargetOf(text) !== null ||
+    execFirst(REMEMBER_ABOUT_PATTERNS, text) !== null ||
+    execFirst(REMEMBER_PATTERNS, text) !== null
+  );
 }
 
 // ─── tryExtractForget ────────────────────────────────────────────────────────
