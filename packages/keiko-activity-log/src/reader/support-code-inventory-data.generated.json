@@ -1359,6 +1359,7 @@
     "keiko-server/coding-runtime/opencodePromptInputs",
     "keiko-server/coding-runtime/opencodeProtocol",
     "keiko-server/coding-runtime/opencodeProtocolSurface",
+    "keiko-server/coding-runtime/opencodeRealRuntimeFixture/_support",
     "keiko-server/coding-runtime/opencodeReconciler",
     "keiko-server/coding-runtime/opencodeRemoteSkills",
     "keiko-server/coding-runtime/opencodeRevert",
