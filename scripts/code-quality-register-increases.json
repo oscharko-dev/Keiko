@@ -5106,12 +5106,28 @@
       "issue": 3918
     },
     {
+      "path": "packages/keiko-local-knowledge/src/_support.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 3,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-local-knowledge/src/bounded-ooxml-package.ts",
       "rule": "anti-slop/no-conditional-empty-object-spread",
       "from": 0,
       "to": 1,
       "reason": "dev-cutoff-sync",
       "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/connector-pod.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 8,
+      "to": 9,
+      "reason": "test-witness",
+      "issue": 3918
     },
     {
       "path": "packages/keiko-local-knowledge/src/conversation/grounded-answer-runner.ts",
@@ -5144,6 +5160,22 @@
       "to": 28,
       "reason": "dev-cutoff-sync",
       "issue": 3914
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/knowledge-pods.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 76,
+      "to": 82,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/manual-pod-refresh.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 5,
+      "to": 6,
+      "reason": "test-witness",
+      "issue": 3918
     },
     {
       "path": "packages/keiko-local-knowledge/src/parsers/ooxml-zip.test.ts",
@@ -5296,6 +5328,142 @@
       "to": 2,
       "reason": "dev-cutoff-sync",
       "issue": 3914
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/serialize.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/serialize.test.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/serialize.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 4,
+      "to": 5,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/serialize.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 3,
+      "to": 12,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/serialize.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 2,
+      "to": 4,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/serialize.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/serialize.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 4,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault-log.test.ts",
+      "rule": "anti-slop-effect/prefer-effect-match",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault-log.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault-log.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault-log.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 1,
+      "to": 4,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault.test.ts",
+      "rule": "anti-slop/no-array-filter-map",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault.test.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 1,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/vault.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 183,
+      "to": 201,
+      "reason": "test-witness",
+      "issue": 3918
     },
     {
       "path": "packages/keiko-model-gateway/src/__fixtures__/speech-routing-contract.ts",
@@ -6242,6 +6410,14 @@
       "issue": 3914
     },
     {
+      "path": "packages/keiko-server/src/atlassian/syncRoutes.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 11,
+      "to": 14,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-server/src/chat-activity.ts",
       "rule": "anti-slop/no-conditional-empty-object-spread",
       "from": 5,
@@ -6666,6 +6842,30 @@
       "issue": 3914
     },
     {
+      "path": "packages/keiko-server/src/editor/languageRoutes.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-server/src/editor/languageRoutes.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 8,
+      "to": 9,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-server/src/editor/lsp/hostLanguageOperation.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 37,
+      "to": 38,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-server/src/editor/verificationRunner.test.ts",
       "rule": "anti-slop/no-conditional-empty-object-spread",
       "from": 0,
@@ -6704,6 +6904,14 @@
       "to": 4,
       "reason": "dev-cutoff-sync",
       "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/files.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 6,
+      "to": 7,
+      "reason": "test-witness",
+      "issue": 3918
     },
     {
       "path": "packages/keiko-server/src/grounded-gateway-error-status.ts",
@@ -6776,6 +6984,22 @@
       "to": 4,
       "reason": "dev-cutoff-sync",
       "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/local-knowledge-handlers.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 149,
+      "to": 150,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-server/src/manual/manual-pod-service.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 21,
+      "to": 24,
+      "reason": "test-witness",
+      "issue": 3918
     },
     {
       "path": "packages/keiko-server/src/markdown-skill-jira-template-routes.test.ts",
@@ -6856,6 +7080,22 @@
       "to": 2,
       "reason": "dev-cutoff-sync",
       "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/process-log-sink.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-server/src/process-log-sink.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
     },
     {
       "path": "packages/keiko-server/src/requirement-changes.test.ts",
@@ -8376,6 +8616,54 @@
       "to": 4,
       "reason": "dev-cutoff-sync",
       "issue": 3914
+    },
+    {
+      "path": "tests/activity-log-scenarios/bff.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 7,
+      "to": 9,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/activity-log-scenarios/editor-delivery.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/activity-log-scenarios/editor-delivery.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "tests/activity-log-scenarios/memory-knowledge.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/activity-log-scenarios/memory-knowledge.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 1,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/activity-log-scenarios/memory-knowledge.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 6,
+      "to": 10,
+      "reason": "test-witness",
+      "issue": 3918
     },
     {
       "path": "tests/integration/requirement-inventory-formats.integration.test.ts",
