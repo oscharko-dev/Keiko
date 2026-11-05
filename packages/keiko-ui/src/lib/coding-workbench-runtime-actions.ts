@@ -64,6 +64,7 @@ export interface CodingWorkbenchRuntimeActions {
   readonly refreshRuntime: () => Promise<void>;
   readonly refreshRun: () => Promise<void>;
   readonly start: (taskIntent: string, options: CodingWorkbenchStartOptions) => Promise<void>;
+  readonly cancelStart: () => void;
   readonly decideApproval: (decision: CodingWorkbenchRuntimeApprovalDecision) => Promise<void>;
   readonly stop: () => Promise<void>;
   readonly takeover: () => Promise<void>;
@@ -109,6 +110,7 @@ function createCodingWorkbenchRuntimeActions({
   } = resources;
   const {
     acknowledgeRecovery,
+    cancelStart,
     decideApproval,
     pause,
     resume,
@@ -138,6 +140,7 @@ function createCodingWorkbenchRuntimeActions({
     refreshRuntime,
     refreshRun,
     start,
+    cancelStart,
     decideApproval,
     stop,
     takeover,
@@ -167,6 +170,7 @@ export function useCodingWorkbenchRuntimeActions(
   } = resources;
   const {
     acknowledgeRecovery,
+    cancelStart,
     decideApproval,
     pause,
     resume,
@@ -195,6 +199,7 @@ export function useCodingWorkbenchRuntimeActions(
         },
         mutations: {
           acknowledgeRecovery,
+          cancelStart,
           decideApproval,
           pause,
           resume,
@@ -210,6 +215,7 @@ export function useCodingWorkbenchRuntimeActions(
       }),
     [
       acknowledgeRecovery,
+      cancelStart,
       decideApproval,
       dispatch,
       inboxAction,

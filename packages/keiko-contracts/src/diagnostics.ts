@@ -2165,6 +2165,8 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   "pending-decision-focused",
   "repository-trust-bound",
   "changeset-review-prepared",
+  // The person gave up a start that had no run yet (#4271).
+  "start-cancelled",
   // A history task from another repository than the active one was returned and not activated: the
   // operator switched repositories, an ordinary transition and not a failure.
   "history-repository-switched",
@@ -2266,6 +2268,7 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
       readonly workspaceId: string;
     }
   | { readonly interaction: "changeset-review-prepared"; readonly fileCount: number }
+  | { readonly interaction: "start-cancelled" }
   | { readonly interaction: "history-repository-switched" }
   | { readonly interaction: "event-stream-reconnecting" }
   | { readonly interaction: "history-workspace-switched" }
@@ -2326,6 +2329,7 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   },
   "agent-selected": { agent: (value) => isSetMember(value, CODING_WORKBENCH_AGENT_KIND_SET) },
   "pending-decision-focused": {},
+  "start-cancelled": {},
   "history-repository-switched": {},
   "event-stream-reconnecting": {},
   "history-workspace-switched": {},

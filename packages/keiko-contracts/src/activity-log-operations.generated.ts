@@ -4941,6 +4941,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "pending-decision-focused",
           "repository-trust-bound",
           "changeset-review-prepared",
+          "start-cancelled",
           "history-repository-switched",
           "event-stream-reconnecting",
           "history-workspace-switched",

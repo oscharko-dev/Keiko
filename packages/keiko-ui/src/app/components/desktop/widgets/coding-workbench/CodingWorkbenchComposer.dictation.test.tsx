@@ -98,6 +98,7 @@ function actions(): TaskComposerActions {
     onResume: vi.fn(),
     onSend: vi.fn(),
     onStop: vi.fn(),
+    onCancelStart: vi.fn(),
   };
 }
 
@@ -107,6 +108,7 @@ function renderComposer(taskIntent: string, runId?: string): void {
       taskIntent={taskIntent}
       onTaskIntentChange={vi.fn()}
       actions={actions()}
+      startCancellable={false}
       canStart
       canResume
       runState="idle"

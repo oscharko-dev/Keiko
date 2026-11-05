@@ -1726,6 +1726,7 @@ function WorkbenchColumns({
       startBusy={
         issuePending || (state.mutation.kind === "start" && state.mutation.status === "pending")
       }
+      startCancellable={state.mutation.kind === "start" && state.mutation.status === "pending"}
       startBlockedReason={startBlocker}
       projectMemoryEnabled={projectMemoryEnabled}
       onProjectMemoryEnabledChange={setProjectMemoryEnabled}

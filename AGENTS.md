@@ -1094,7 +1094,7 @@ title or path ever enters the line (ADR-0137 D4).
 `client.coding-workbench.interaction` records, at info and on the routine budget, what the human
 did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
 progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom
-agent's name), a jump to a pending decision, a repository bound for trust (its two body-free ids)
+agent's name), a start the human gave up before it had a run (`start-cancelled`), a jump to a pending decision, a repository bound for trust (its two body-free ids)
 and a changeset received for review (`fileCount`). It also records a history task of another
 repository or workspace that was not activated (`history-repository-switched`,
 `history-workspace-switched`; #4118) and a refused editor bridge registration

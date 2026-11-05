@@ -962,6 +962,46 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       );
     });
 
+    // #4271: only ending the request tells the server to create no run, and it may have lost that
+    // race, so the window reads the run instead of assuming there is none.
+    it("ends a cancelled start's request without a failure and re-reads the run", async () => {
+      const held = holdCalls();
+      const { mutations, dispatch, refreshRun } = renderMutations(
+        readyRunState(null, { canStart: true }),
+      );
+
+      await act(async () => {
+        const start = mutations.start("write the failing test first", {
+          projectMemoryEnabled: true,
+        });
+        await vi.waitFor(() => {
+          expect(held).toHaveLength(1);
+        });
+        mutations.cancelStart();
+        await start;
+      });
+
+      expect(held[0]?.signal?.aborted).toBe(true);
+      expect(refreshRun).toHaveBeenCalledOnce();
+      expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
+      expect(dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "mutation-failed" }),
+      );
+      expect(reportClientDiagnostic).not.toHaveBeenCalledWith(
+        expect.objectContaining({ stage: "mutation" }),
+      );
+    });
+
+    it("cancels nothing when no start is pending", async () => {
+      const { mutations, dispatch, refreshRun } = renderMutations(awaitingApprovalState());
+      await act(async () => {
+        mutations.cancelStart();
+        await Promise.resolve();
+      });
+      expect(refreshRun).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
     it("leaves a pending mutation alone when Stop has no run to stop", async () => {
       const held = holdCalls();
       const { mutations, dispatch } = renderMutations(readyRunState(null, { canStart: true }));

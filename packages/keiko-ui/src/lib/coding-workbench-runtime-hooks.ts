@@ -2,6 +2,7 @@ import type { CodingWorkbenchStartOptions } from "./coding-workbench-runtime-act
 import { ApiError } from "./api";
 import { newClientCorrelationId } from "./bff-correlation";
 import { reportGatewayProfileRefresh, reportClientDiagnostic } from "./client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "./coding-workbench-interaction";
 import { bffRequestErrorKind } from "./http";
 import { requestCodingAppSessionReinspection } from "./coding-app-session-client";
 import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject } from "react";
@@ -82,6 +83,8 @@ export interface RuntimeResources {
 
 export interface RuntimeMutationActions {
   readonly start: (taskIntent: string, options: CodingWorkbenchStartOptions) => Promise<void>;
+  /** Gives up a start that has no run yet; the server then creates none (#4271). */
+  readonly cancelStart: () => void;
   readonly decideApproval: (decision: CodingWorkbenchRuntimeApprovalDecision) => Promise<void>;
   readonly stop: () => Promise<void>;
   readonly takeover: () => Promise<void>;
@@ -470,7 +473,7 @@ function isServerConflict(error: unknown): boolean {
   );
 }
 
-/** One enqueued mutation. Its controller is aborted, with the preemption reason, only by Stop. */
+/** One enqueued mutation. Its controller is aborted with the preemption reason by Stop or by a cancelled start. */
 interface PendingMutation {
   readonly kind: CodingWorkbenchMutationKind;
   readonly controller: AbortController;
@@ -577,11 +580,33 @@ type EnqueueMutation = (
   preempting?: boolean,
 ) => Promise<void>;
 
-function useRuntimeMutationQueue(input: RuntimeMutationQueueInput): EnqueueMutation {
+interface RuntimeMutationQueue {
+  readonly enqueueMutation: EnqueueMutation;
+  readonly cancelStart: () => void;
+}
+
+// Ending the start's request is what tells the server to create no run. The request may have lost
+// that race, so the window re-reads: a run that already exists appears with its own Stop.
+function cancelPendingStart(
+  { refreshRun, dispatch }: RuntimeMutationQueueInput,
+  pending: ReadonlySet<PendingMutation>,
+): void {
+  const starts = [...pending].filter((entry) => entry.kind === "start");
+  if (starts.length === 0) return;
+  for (const entry of starts) entry.controller.abort(new CodingWorkbenchPreemptedError());
+  dispatch({ kind: "mutation-complete" });
+  reportCodingWorkbenchInteraction({ interaction: "start-cancelled" });
+  void refreshRun();
+}
+
+function useRuntimeMutationQueue(input: RuntimeMutationQueueInput): RuntimeMutationQueue {
   const { stateRef, refreshRun, dispatch } = input;
   const mutationTail = useRef<Promise<void>>(Promise.resolve());
   const [pending] = useState(() => new Set<PendingMutation>());
-  return useCallback(
+  const cancelStart = useCallback((): void => {
+    cancelPendingStart({ stateRef, refreshRun, dispatch }, pending);
+  }, [dispatch, pending, refreshRun, stateRef]);
+  const enqueueMutation = useCallback<EnqueueMutation>(
     (kind, prepare, preempting = false): Promise<void> => {
       const entry: PendingMutation = { kind, controller: new AbortController() };
       if (preempting) preemptForStop(pending);
@@ -599,12 +624,13 @@ function useRuntimeMutationQueue(input: RuntimeMutationQueueInput): EnqueueMutat
     },
     [dispatch, pending, refreshRun, stateRef],
   );
+  return { enqueueMutation, cancelStart };
 }
 
 export function useCodingWorkbenchRuntimeMutations(
   input: RuntimeMutationQueueInput,
 ): RuntimeMutationActions {
-  const enqueueMutation = useRuntimeMutationQueue(input);
+  const { enqueueMutation, cancelStart } = useRuntimeMutationQueue(input);
   const start = useCallback(
     (taskIntent: string, options: CodingWorkbenchStartOptions): Promise<void> =>
       enqueueMutation("start", (current) => createStartMutation(taskIntent, current, options)),
@@ -677,6 +703,7 @@ export function useCodingWorkbenchRuntimeMutations(
   );
   return {
     start,
+    cancelStart,
     decideApproval,
     stop,
     takeover,
