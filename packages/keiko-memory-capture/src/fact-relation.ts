@@ -214,6 +214,13 @@ function preferenceChanged(a: string, b: string): boolean {
   return unmatched(wordsA, wordsB).length === 1 && unmatched(wordsB, wordsA).length === 1;
 }
 
+// A changed preference keeps its context: "light mode in the terminal" is no change of "dark mode in
+// the editor". Other facts are not preferences, so this leaves them alone.
+function keepsPreferenceContext(a: string, b: string): boolean {
+  if (!CHOSEN_PREFERENCE_RE.test(a) || !CHOSEN_PREFERENCE_RE.test(b)) return true;
+  return preferenceChanged(a, b);
+}
+
 // Whether the value of a one-at-a-time slot differs: the new employer, not a new tool beside it.
 function singleValueChanged(a: string, b: string): boolean {
   if (preferenceChanged(a, b)) return true;
@@ -394,7 +401,8 @@ function statementChanges(statement: string, fact: KnownFact): boolean {
     comparison === "slot-changed" &&
     STATED_CHANGE_RE.test(statement) &&
     !addsRatherThanReplaces(statement) &&
-    sameSubject(statement, fact.body)
+    sameSubject(statement, fact.body) &&
+    keepsPreferenceContext(statement, fact.body)
   );
 }
 

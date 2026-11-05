@@ -272,6 +272,21 @@ describe("mostSimilarFacts", () => {
     expect(decide(body, body, "update", old)).toEqual({ kind: "new" });
   });
 
+  it("keeps a preference in another context on a stated change", () => {
+    expect(
+      factReplacedByStatement("I now prefer light mode in the terminal", [
+        { id: "old", body: "Prefers dark mode in the editor" },
+      ]),
+    ).toBeNull();
+  });
+
+  it("stays linear on one long word", () => {
+    const word = "a".repeat(50_000);
+    const started = performance.now();
+    expect(compareFacts(`Nutzt ${word}`, "Nutzt Excel")).toBe("different");
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+
   it("still replaces a use on a stated change", () => {
     expect(
       decide(

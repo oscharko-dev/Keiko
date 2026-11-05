@@ -149,10 +149,13 @@ const MIN_SHARED_STEM = 4;
 
 // "C#" and "C++" are different languages and "3.3" is not "3", so they stay one word.
 function keepingValueMarks(text: string): string {
-  return text
-    .replace(/(\p{L}[\p{L}\p{N}]*)\+\+/gu, "$1plusplus")
-    .replace(/(\p{L}[\p{L}\p{N}]*)#/gu, "$1sharp")
-    .replace(/(\p{N})\.(?=\p{N})/gu, "$1point");
+  return (
+    text
+      // Only from a word's start, so a long word is scanned once.
+      .replace(/(?<![\p{L}\p{N}])(\p{L}[\p{L}\p{N}]*)\+\+/gu, "$1plusplus")
+      .replace(/(?<![\p{L}\p{N}])(\p{L}[\p{L}\p{N}]*)#/gu, "$1sharp")
+      .replace(/(\p{N})\.(?=\p{N})/gu, "$1point")
+  );
 }
 
 // The tokenizer stems long words ("inzwischen" becomes "inzwisch"), so each list also holds the

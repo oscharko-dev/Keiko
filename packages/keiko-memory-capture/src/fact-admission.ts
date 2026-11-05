@@ -154,10 +154,28 @@ const POSSESSIVE_ONLY_RELATION_WORDS = [
 ];
 const FAMILY_RE = anyWordPattern(FAMILY_WORDS);
 // A person named through their relation to someone else: "Annas Chef", "Sam's boss".
+// The name's capital is checked apart, since \p{Lu} matches either case under the /i flag.
 const GENITIVE_RELATION_RE = new RegExp(
-  String.raw`(?:^|[^\p{L}])\p{Lu}\p{L}*(?:s|['’]s)\s+(?:${[...RELATION_WORDS, ...POSSESSIVE_ONLY_RELATION_WORDS].join("|")})(?![\p{L}\p{N}])`,
-  "iu",
+  String.raw`(?:^|[^\p{L}])(\p{L}+?)(?:s|['’]s)\s+(?:${[...RELATION_WORDS, ...POSSESSIVE_ONLY_RELATION_WORDS].join("|")})(?![\p{L}\p{N}])`,
+  "giu",
 );
+const CAPITAL_START_RE = /^\p{Lu}/u;
+// Words ending in "s" that are no one's name: "Das Team", "This client", "his manager".
+const NOT_A_NAME = new Set([
+  "da",
+  "de",
+  "die",
+  "thi",
+  "hi",
+  "it",
+  "u",
+  "a",
+  "i",
+  "wa",
+  "ha",
+  "alle",
+  "jede",
+]);
 const POINTED_ROLE_RE = new RegExp(
   String.raw`(?:^|[^\p{L}])${DETERMINER}\s+(?:\p{L}+\s+)?(${ROLE_WORDS.join("|")})(?![\p{L}\p{N}])`,
   "giu",
@@ -223,9 +241,12 @@ const UNCERTAIN_RE = anyWordPattern([
   "although no",
   // A hedge opens a claim: "Ich glaube, ich nutze Jira", "I think I use Jira". The same verb with an
   // object states a fact: "Ich schätze Klarheit", "Ich denke in Tabellen", "I believe in testing".
-  String.raw`(?:glaube|denke|vermute|schätze|schaetze)(?=\s*(?:,|dass|ich|es|das|schon|mal|eher|wohl)(?![\p{L}]))`,
+  // A hedge unless a preposition makes it a fact about the person: "Ich denke in Tabellen", "Ich
+  // glaube an Gott", "I believe in testing". "Ich schätze Klarheit" values one plain object.
+  String.raw`(?:glaube|denke|vermute)(?!\s+(?:in|an|auf|über|ueber|daran|dran)(?![\p{L}]))`,
+  String.raw`(?:schätze|schaetze)(?!\s+[\p{L}-]+(?:\s+[\p{L}-]+)?\s*[.!]?\s*$)`,
   String.raw`i\s+(?:think|believe|guess|suppose)(?!\s+(?:in|of|about)(?![\p{L}]))`,
-  String.raw`(?:glaube|denke|vermute|schätze|schaetze|think|guess|suppose)\s*$`,
+  String.raw`(?:think|guess|suppose)\s*$`,
 ]);
 const PAST_RE = anyWordPattern([
   "früher",
@@ -339,8 +360,16 @@ const PRETERITE_RE = anyWordPattern([
 const ME_AND_OTHER_RE =
   /(?:(?:^|[,;:])\s*(?:\p{L}+\s+(?:und|and)\s+(?:ich|i)|(?:ich|i)\s+(?:und|and)\s+\p{L}+)|(?:^|[^\p{L}])\p{L}+\s+und\s+ich\s+\p{L}+en|(?:^|[^\p{L}])\p{L}+en\s+\p{L}+\s+und\s+ich)(?![\p{L}\p{N}])/iu;
 // A partner named by the relation itself: "Ich lebe mit Peter zusammen", "I am married to Sam".
+// English marks no plural on the verb, so a capitalized word before "and I" is the pair anywhere:
+// "Today Anna and I use Jira". Once the person spoke as "I", "and I" joins their own clauses: "I like
+// Vim and I use Linux". The pronoun "I" itself is always capital.
+const ENGLISH_PAIR_RE = /(?:^|[^\p{L}])\p{Lu}\p{Ll}+\s+and\s+I(?![\p{L}\p{N}])/u;
+const ENGLISH_I_RE = /(?:^|[^\p{L}])I(?![\p{L}\p{N}])/u;
 const PARTNER_RE =
-  /(?:^|[^\p{L}])(?:(?:lebe|wohne)\s+mit\s+\S+\s+zusammen|bin\s+mit\s+\S+\s+verheiratet|(?:am|i['’]m)\s+married\s+to|(?:live|lives)\s+with\s+(?!(?:my|a|an|the)\s))/iu;
+  /(?:^|[^\p{L}])(?:(?:lebe|wohne)\s+mit\s+\S+\s+zusammen|bin\s+mit\s+\S+\s+verheiratet|(?:am|i['’]m)\s+married\s+to\s+(?!(?:my|a|an|the)\s))/iu;
+// "I live with Sam" names someone; "I live with legacy code" or "two cats" does not.
+const LIVE_WITH_NAME_RE =
+  /(?:^|[^\p{L}])(?:[Ll]ive|[Ll]ives)\s+with\s+\p{Lu}\p{Ll}+(?:\s*(?:[.,;!?]|$)|\s+(?:and|together)(?![\p{L}]))/u;
 // Lower case only: the formal "Sie" and "Ihnen" address the reader, not someone else. A capital one
 // opens the claim or a clause after a colon: "Er hilft mir".
 const GERMAN_OTHER_PRONOUN_RE =
@@ -393,7 +422,9 @@ const ENGLISH_ATTRIBUTION_RE = anyWordPattern([
   String.raw`decide(?:s|d)?`,
   String.raw`tells?`,
   "told",
-  // Not "like": "because it feels like home" compares, it wants nothing.
+  // "likes" and "liked" have a subject; the bare "like" compares: "it feels like home".
+  String.raw`likes`,
+  "liked",
   String.raw`prefer(?:s|red)?`,
   String.raw`recommend(?:s|ed)?`,
   String.raw`suggest(?:s|ed)?`,
@@ -406,8 +437,11 @@ const ENGLISH_ATTRIBUTION_RE = anyWordPattern([
 const FIRST_PERSON_SUBJECT_RE = anyWordPattern(["ich", "i"]);
 // A thing or nobody in particular wants nothing of the person: "weil es so entschieden wurde",
 // "weil das Tool es so will", "because it suggests". A role behind a determiner is judged as a role.
+// "der", "die" or "the" may stand before a person ("weil der Peter es will", "the CTO"), so only a
+// lower-case thing behind them is impersonal; "das" and "es" never name a person.
 const IMPERSONAL_REASON_RE =
-  /^\s*(?:es|das|dies\p{L}*|man|der|die|den|dem|ein\p{L}*|it|this|that|there|the|a|an)(?![\p{L}\p{N}])/iu;
+  /^\s*(?:es|das|dies\p{L}*|man|eines?|it|this|that|there)(?![\p{L}\p{N}])/iu;
+const ARTICLE_BEFORE_THING_RE = /^\s*(?:[Tt]he|[Aa]n?)\s+\p{Ll}/u;
 // Each conjunct of a reason has its own subject: "weil ich es will und Anna es mag".
 const CONJUNCT_RE = /\s(?:und|oder|aber|and|or|but)\s/iu;
 // An English role is a compound when a capital word follows: "Customer Relationship Tool".
@@ -416,7 +450,24 @@ const CAPITAL_WORD_RE = /^\s+\p{Lu}/u;
 // The person's own role names a relation word without being about anyone else: "Ich bin Manager".
 // "Ich bin der Chef von Anna" still names Anna, so a role followed by "von" or "of" stays.
 const OWN_ROLE_RE =
-  /(?:^|[^\p{L}])(?:ich bin|i am|i['’]m)\s+(?:(?:an?|the|ein|eine|der|die|das)\s+)?\p{L}+(?![\p{L}])(?!\s+(?:\p{L}+\s+)?(?:von|of|für|fuer|for)\s)/giu;
+  /(?:^|[^\p{L}])(?:ich bin|i am|i['’]m)\s+(?:(?:an?|the|ein|eine|der|die|das)\s+)?\p{L}+(?![\p{L}])/giu;
+// A role between people names the other one: "Ich bin der Vorgesetzte von Anna", "I'm Sam's boss".
+// "I'm an employee of Foo" names an organization.
+const ROLE_TOWARD_OTHER_RE = new RegExp(
+  String.raw`(?:^|[^\p{L}])(?:ich bin|i am|i['’]m)\s+(?:(?:an?|the|ein|eine|der|die|das)\s+)?(?:${[
+    String.raw`kolleg(?:e|in)`,
+    String.raw`chef(?:in)?`,
+    String.raw`vorgesetzte[r]?`,
+    String.raw`freund(?:in)?`,
+    String.raw`nachbar(?:in)?`,
+    String.raw`colleague`,
+    String.raw`coworker`,
+    "boss",
+    "neighbou?r",
+    "mentor",
+  ].join("|")})\s+(?:von|of)\s+(\p{L}+)`,
+  "giu",
+);
 // A person asking for something states no fact about themselves, even when the request names them:
 // "Erkläre mir bitte Kafka", "Give me a summary". "Tabellen gefallen mir" keeps its object at the end.
 const POLITE_REQUEST_RE = anyWordPattern(["bitte", "please"]);
@@ -527,7 +578,8 @@ export function reasonNamesOtherPerson(text: string): boolean {
           (part) =>
             attribution.test(part) &&
             !FIRST_PERSON_SUBJECT_RE.test(part) &&
-            !IMPERSONAL_REASON_RE.test(part),
+            !IMPERSONAL_REASON_RE.test(part) &&
+            !ARTICLE_BEFORE_THING_RE.test(part),
         ),
     );
   return (
@@ -547,13 +599,34 @@ function pointsAtPerson(text: string): boolean {
   });
 }
 
+function speaksAsEnglishPair(evidence: string): boolean {
+  const pair = ENGLISH_PAIR_RE.exec(evidence);
+  return pair !== null && !ENGLISH_I_RE.test(evidence.slice(0, pair.index));
+}
+
+function capitalFollows(text: string, pattern: RegExp): boolean {
+  return [...text.matchAll(pattern)].some((match) => {
+    const name = match[1] ?? "";
+    return CAPITAL_START_RE.test(name) && !NOT_A_NAME.has(name.toLowerCase());
+  });
+}
+
+// "Annas Chef", "Ich bin der Vorgesetzte von Anna", "Ich lebe mit Peter zusammen".
+function namesRelatedPerson(text: string): boolean {
+  return (
+    capitalFollows(text, GENITIVE_RELATION_RE) ||
+    capitalFollows(text, ROLE_TOWARD_OTHER_RE) ||
+    PARTNER_RE.test(text) ||
+    LIVE_WITH_NAME_RE.test(text)
+  );
+}
+
 // Whether a text names someone other than the person. Private memory holds nothing about others.
 export function namesOtherPerson(text: string): boolean {
   if (
     TITLED_PERSON_RE.test(text) ||
     RELATION_RE.test(text) ||
-    GENITIVE_RELATION_RE.test(text) ||
-    PARTNER_RE.test(text) ||
+    namesRelatedPerson(text) ||
     reasonNamesOtherPerson(text)
   ) {
     return true;
@@ -588,10 +661,15 @@ function contextDropReason(
   return isDeniedByPrefix(prefix) ? "negated-context" : null;
 }
 
+// "Wir", "Anna und ich", "Today Anna and I": a statement for more than the person.
+function speaksForMore(evidence: string): boolean {
+  return WE_RE.test(evidence) || ME_AND_OTHER_RE.test(evidence) || speaksAsEnglishPair(evidence);
+}
+
 function subjectDropReason(about: string, evidence: string): FactDropReason | null {
   if (about.trim().toLowerCase() !== "self") return "not-self";
   if (TITLED_PERSON_RE.test(evidence) || RELATION_RE.test(evidence)) return "third-party";
-  if (WE_RE.test(evidence) || ME_AND_OTHER_RE.test(evidence)) return "we-statement";
+  if (speaksForMore(evidence)) return "we-statement";
   if (!FIRST_PERSON_RE.test(evidence) && !CHANGE_WITHOUT_SUBJECT_RE.test(evidence)) {
     return "no-first-person";
   }
