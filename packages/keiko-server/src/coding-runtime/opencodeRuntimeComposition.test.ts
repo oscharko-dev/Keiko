@@ -868,6 +868,7 @@ interface StartBridgeControl {
 interface FixtureContinuity {
   readonly service: CodingSessionContinuity;
   readonly workspaceId: string;
+  readonly freshReasoningHistory?: boolean;
   /** False leaves every session route to the fixture's own. */
   readonly serveSessions: boolean;
   readonly sessions: string[];
@@ -883,6 +884,7 @@ function optionalSessionContinuity(control: StartBridgeControl | undefined): {
   readonly sessionContinuity?: {
     readonly service: CodingSessionContinuity;
     readonly workspaceId: string;
+    readonly freshReasoningHistory?: boolean | undefined;
   };
 } {
   return control?.continuity === undefined
@@ -891,6 +893,7 @@ function optionalSessionContinuity(control: StartBridgeControl | undefined): {
         sessionContinuity: {
           service: control.continuity.service,
           workspaceId: control.continuity.workspaceId,
+          freshReasoningHistory: control.continuity.freshReasoningHistory,
         },
       };
 }
@@ -11193,6 +11196,25 @@ describe.each(["native", "direct", "code-mode"] as const)("%s session continuity
   const tools = { readToolProfile: (): typeof profile => profile } as const;
   const facade = (): CodingToolFacade => ({
     execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+  });
+
+  it("keeps a synthetic readiness answer outside a fresh full-history provider session", async () => {
+    const world = continuedWorld({ sessions: [], messages: [] });
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...tools,
+      continuity: { ...world.continuity, freshReasoningHistory: true },
+    });
+    try {
+      expect(world.calls.checkouts).toHaveLength(0);
+      expect(world.continuity.requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+        "POST /api/session",
+        "POST /api/session",
+        "DELETE /api/session/ses_scratch_2",
+      ]);
+      expect(world.continuity.sessions).toEqual(["ses_scratch_1"]);
+    } finally {
+      await fixture.stop();
+    }
   });
 
   it("resumes the retained session: seeded before the start, proved in a scratch session, shown from what the run adds", async () => {

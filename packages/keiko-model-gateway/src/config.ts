@@ -74,6 +74,8 @@ export function toolCallingConfigurationFingerprint(provider: ModelProviderConfi
     // The deployment the gateway reports behind the alias (#3905). Appended only once observed, so
     // a provider whose discovery never saw one keeps the digest its earlier proofs were issued for.
     ...(provider.deploymentIdentitySha256 === undefined ? [] : [provider.deploymentIdentitySha256]),
+    ...(provider.reasoningHistory === undefined ? [] : [provider.reasoningHistory]),
+    ...(provider.reasoningHistoryField === undefined ? [] : [provider.reasoningHistoryField]),
   ];
   return sha256Hex(canonicalise(binding));
 }
@@ -1826,6 +1828,36 @@ function catalogOriginConfig(
   };
 }
 
+function reasoningHistoryConfig(
+  value: unknown,
+  path: string,
+): Pick<ModelProviderConfig, "reasoningHistory"> {
+  return value === undefined
+    ? {}
+    : {
+        reasoningHistory: requireEnum<NonNullable<ModelProviderConfig["reasoningHistory"]>>(
+          value,
+          `${path}.reasoningHistory`,
+          ["required-with-tools", "current-turn"],
+        ),
+      };
+}
+
+function reasoningHistoryFieldConfig(
+  value: unknown,
+  path: string,
+): Pick<ModelProviderConfig, "reasoningHistoryField"> {
+  return value === undefined
+    ? {}
+    : {
+        reasoningHistoryField: requireEnum<"reasoning_content" | "reasoning">(
+          value,
+          `${path}.reasoningHistoryField`,
+          ["reasoning_content", "reasoning"],
+        ),
+      };
+}
+
 function parseProviderConfig(
   raw: Record<string, unknown>,
   path: string,
@@ -1862,6 +1894,8 @@ function parseProviderConfig(
     ...(realtimeAuthMode === undefined ? {} : { realtimeAuthMode }),
     ...outputTokenParameterConfig(raw.outputTokenParameter, path),
     ...tokenCounterConfig(raw.tokenCounter, path),
+    ...reasoningHistoryConfig(raw.reasoningHistory, path),
+    ...reasoningHistoryFieldConfig(raw.reasoningHistoryField, path),
     ...deploymentIdentityConfig(raw.deploymentIdentitySha256, path),
     ...catalogOriginConfig(raw.catalogOrigin, path),
     timeoutMs: requireTimerDelayMs(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),

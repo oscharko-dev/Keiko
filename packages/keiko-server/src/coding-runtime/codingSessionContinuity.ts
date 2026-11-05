@@ -47,6 +47,7 @@ export type ContinuityIntent =
 
 /** The closed vocabulary of why a run did not continue a session, or why retention did not act. */
 export type ContinuityReason =
+  | "reasoning-history-unavailable"
   | "disabled"
   | "not-native-profile"
   | "not-succeeded"
@@ -239,6 +240,7 @@ const SESSION_CONTINUITY_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: [
+        "reasoning-history-unavailable",
         "disabled",
         "not-native-profile",
         "not-succeeded",

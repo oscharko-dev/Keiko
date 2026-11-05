@@ -800,6 +800,8 @@ sidecar turn whose repair ended `empty-again` is answered as final to the runtim
 sidecar drops that reasoning from every later request instead of resending it upstream: reasoning
 fields of prior assistant messages and assistant messages that carry nothing but reasoning never reach
 the gateway request, and `coding-sidecar.gateway.request-validated` records how many it dropped.
+This requires the runtime to preserve reasoning part types; ADR-0137 D8 documents the pinned runtime's
+separate limitation when interrupted reasoning is converted to ordinary assistant text.
 
 **End-to-end budget.** A buffered call as a whole is bounded by `providerRequestBudgetMs(provider)`
 (`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry reserves
@@ -875,6 +877,18 @@ delivered answer delta or the terminal answer commits the stream; nothing is eve
 Reasoning is a body: `chat.response.streamed` records its events and bytes, and
 `gateway.chat.completed` and `gateway.stream.completed` record `reasoningBytes`, `reasoningTokens`
 and `reasoningDisposition` (`none`, `forwarded`, `discarded`), never the text.
+
+Provider continuation is distinct from live display. An explicit provider `reasoningHistory` of
+`required-with-tools` restores all historical assistant reasoning when tools are offered;
+`current-turn` restores only assistants after the latest human message. The wire field is
+`reasoning_content` unless `reasoningHistoryField: "reasoning"` was qualified for that provider.
+The gateway uses only successful, complete responses from bounded transient state, never runtime
+echoes or failed attempts, and applies the current content policy and credential floor. Display
+opt-out does not disable this transport requirement. Missing or ambiguous required continuation
+fails closed; no reasoning enters evidence or exports. ADR-0137 D8 defines bounds, scope, refinement
+and the fresh native-session fallback for full-history providers. The selected wire projection is
+also used by prompt admission and provider token counting.
+
 
 **Coding sidecar streaming (lab ledger F2, #3873, 2026-10-06).** The coding sidecar profile used
 to be hard-coded as non-streaming, so the sidecar read a streaming provider in full before OpenCode

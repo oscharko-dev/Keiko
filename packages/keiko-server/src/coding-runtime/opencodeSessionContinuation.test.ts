@@ -1022,3 +1022,28 @@ describe("retaining a settled run", () => {
     expect(JSON.stringify(lines(h))).not.toContain(TASK);
   });
 });
+
+describe("provider continuation and native history", () => {
+  it.each([
+    { kind: "resume", taskId: TASK },
+    { kind: "fork", sourceTaskId: TASK, boundary: { kind: "end" } },
+  ] as const)(
+    "uses existing history replay instead of copying incomplete $kind protocol state",
+    (intent) => {
+      const h = harness();
+      h.service.declare(RUN, intent);
+      expect(
+        seedContinuation({ ...h.context, freshReasoningHistory: true }, location()),
+      ).toBeUndefined();
+      expect(h.calls.checkouts).toHaveLength(0);
+      expect(h.service.outcome(RUN)).toEqual({
+        kind: "fresh",
+        reason: "reasoning-history-unavailable",
+      });
+      expect(lines(h).at(-1)).toMatchObject({
+        outcome: "fresh",
+        reason: "reasoning-history-unavailable",
+      });
+    },
+  );
+});

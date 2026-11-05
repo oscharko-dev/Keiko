@@ -982,18 +982,46 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
 - **Default on, operator opt-out.** A coding turn's gateway call, which carries the explicit
   `reasoningDelivery: "forward"` that only the coding sidecar route sets, forwards the model's
   reasoning unless the gateway configuration sets `codingReasoningDisplay: "off"`; with the switch off
-  the gateway still parses the reasoning and discards it. Every other surface always discards it,
+  the gateway still parses reasoning and suppresses its display. Other surfaces do not receive it,
   also one that borrows the `coding-workbench` latency profile for its timeout floors (ADR-0003,
   #3873 F23).
-- **Never resent upstream.** The runtime records the forwarded reasoning in its history and sends it
-  back with later requests. The sidecar drops it there: the reasoning fields of prior assistant
-  messages never reach the gateway request, and an assistant message that carries nothing but
-  reasoning (no answer text, no tool call) is dropped and counted
-  (`droppedReasoningMessageCount` on `coding-sidecar.gateway.request-validated`), so a failed turn's
-  reasoning does not grow the prompt of the attempts that follow it (#3873 F23). The answer text a
-  model wrote beside its tool calls is not reasoning: the gateway resends it as written, as a
-  standalone OpenCode run does, and sends `content: null` only for a tool-calling turn without
-  text (#3907 AC3; `toolCallTextMessageCount` on the same line).
+- **Qualified protocol continuation, independent of display.** The sidecar still discards
+  runtime-echoed reasoning fields and reasoning-only assistant messages rather than forwarding those
+  fields directly (#3873 F23). Providers omit prior reasoning by default. An explicit
+  `providers[].reasoningHistory: "required-with-tools"` requires all historical assistant reasoning
+  when a tool catalog is advertised; `"current-turn"` retains only assistants after the last human
+  message. `reasoningHistoryField` selects the qualified wire field, `reasoning_content` by default
+  or `reasoning` for a provider that requires that spelling. No alias-name inference enables it.
+  The gateway captures the successful complete response before display suppression; failed,
+  cancelled and output-truncated attempts do not supply continuation. Its state is memory-only,
+  bounded to 2,048 entries and 32 MiB (reasoning plus assistant payloads). A successful restore
+  refreshes both expiry and eviction priority; idle entries expire
+  after 30 minutes on the next lookup. Keys bind the trusted session/run, provider configuration,
+  most recent human message and exact assistant payload. Conflicting successful reasoning for
+  an identical payload is ambiguous and refused. Chat's split persisted tool pairs may be restored
+  only against the exact saved group, including its original prose and parallel calls; fitting old
+  tool observations does not change the response identity. Runtime echoes never populate this state.
+  Provider prompt admission and the token counter include the same reasoning projection as transport.
+  Same-generation context-window refinements join state, including in-flight writers; actual
+  generation changes start independent state (old admitted references stay pinned). Missing required
+  state after restart, expiry or capacity eviction requires a fresh session rather
+  than an invented reasoning placeholder. Full-history providers therefore use the existing fresh
+  Coding session/history replay path for native resume and fork requests; current-turn providers
+  can resume after a new human message. This is a deliberate continuity limit of transient state.
+  A full-history provider's startup handshake also uses a scratch session on a fresh run, so a
+  synthetic readiness reply never becomes an uncached historical assistant message.
+  The Activity Log records `gateway.reasoning-history` states and byte/message counts only.
+  The text beside a tool call remains ordinary assistant content and is preserved (#3907 AC3).
+- **Runtime part types require version qualification.** OpenCode's admitted 2.1.4 source
+  [converts failed or interrupted reasoning to ordinary text](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/session/runner/to-llm-message.ts#L155).
+  The inspected upstream snapshot
+  [drops those reasoning parts instead](https://github.com/anomalyco/opencode/blob/008619ae06cd00dc21f60e4bdb29c04a60b07b6b/packages/core/src/session/runner/to-llm-message.ts#L142).
+  The sidecar cannot recover a part type already lost by the runtime. Qualified profiles reject
+  unknown assistant payloads inside their required history window; `current-turn` does not validate
+  older ordinary text before a later human message, and the default profile does not restore or
+  validate reasoning history. Therefore this contract does not promise removal of failed reasoning
+  that a runtime has relabelled as text. A runtime upgrade or repair needs its own failed-turn replay
+  qualification; readable-text heuristics must not erase legitimate assistant content.
 - **Shown as what it is.** The sidecar hands reasoning to the managed runtime as
   `reasoning_content`; the runtime records it as a reasoning part, and the live safe-activity
   projection carries it beside its assistant message, never inside the answer. The timeline shows
