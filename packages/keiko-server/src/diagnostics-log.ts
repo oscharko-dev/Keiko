@@ -63,6 +63,7 @@ const DIAGNOSTIC_OUTCOMES = [
   "source-skipped",
   "request-refused",
   "provider-busy",
+  "request-cancelled",
 ] as const;
 
 const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
@@ -501,16 +502,45 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
   return fields;
 }
 
-function closedDiagnosticErrorKind(errorClass: string): ActivityLogErrorKind {
+// Ordered class rules: the first matching pattern wins. A class name is code-declared, so a
+// pattern here classifies the KIND of failure without ever reading error text.
+const DIAGNOSTIC_CLASS_KIND_RULES: readonly Readonly<{
+  pattern: RegExp;
+  result: ActivityLogErrorKind;
+}>[] = [
+  { pattern: /timeout/iu, result: "timeout" },
+  { pattern: /cancel|abort/iu, result: "cancelled" },
+  { pattern: /rate.?limit/iu, result: "rate-limited" },
+  { pattern: /permission|forbidden|authority/iu, result: "permission-denied" },
+  { pattern: /unavailable|connection|transport/iu, result: "unavailable" },
+];
+
+// Node reports a lost connection as `TypeError: fetch failed` whose CAUSE carries the system code,
+// so the class alone ("TypeError") cannot tell an outage from a Keiko defect. The code is a bounded
+// machine token (never text); only these reachability and deadline families are recognised.
+const DIAGNOSTIC_CODE_KIND_RULES: readonly Readonly<{
+  pattern: RegExp;
+  result: ActivityLogErrorKind;
+}>[] = [
+  { pattern: /^(?:ETIMEDOUT|UND_ERR_(?:HEADERS|BODY|CONNECT)_TIMEOUT)$/u, result: "timeout" },
+  {
+    pattern:
+      /^(?:ECONN[A-Z]+|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|EPIPE|EAI_AGAIN|UND_ERR_(?:SOCKET|CLOSED))$/u,
+    result: "unavailable",
+  },
+];
+
+function closedDiagnosticErrorKind(errorClass: string, code?: string): ActivityLogErrorKind {
   if (errorClass === "CallerAttemptAdmissionError") return "authority-denied";
   const registered = activityLogErrorKindOr(errorClass, "internal");
   if (registered !== "internal" || errorClass === "internal") return registered;
-  if (/timeout/iu.test(errorClass)) return "timeout";
-  if (/cancel/iu.test(errorClass)) return "cancelled";
-  if (/rate.?limit/iu.test(errorClass)) return "rate-limited";
-  if (/permission|forbidden|authority/iu.test(errorClass)) return "permission-denied";
-  if (/unavailable|connection|transport/iu.test(errorClass)) return "unavailable";
-  return "internal";
+  const byClass = DIAGNOSTIC_CLASS_KIND_RULES.find(({ pattern }) => pattern.test(errorClass));
+  if (byClass !== undefined) return byClass.result;
+  const byCode =
+    code === undefined
+      ? undefined
+      : DIAGNOSTIC_CODE_KIND_RULES.find(({ pattern }) => pattern.test(code));
+  return byCode?.result ?? "internal";
 }
 
 function activityLogDiagnosticOperation(operation: string): string {
@@ -532,11 +562,12 @@ function diagnosticActivityLogEvent(record: ServerDiagnosticRecord): ServerLogEv
       level:
         record.diagnosticOutcome === "source-skipped" ||
         record.diagnosticOutcome === "request-refused" ||
-        record.diagnosticOutcome === "provider-busy"
+        record.diagnosticOutcome === "provider-busy" ||
+        record.diagnosticOutcome === "request-cancelled"
           ? "warn"
           : "error",
       correlationId: record.correlationId,
-      errorKind: closedDiagnosticErrorKind(record.errorClass),
+      errorKind: closedDiagnosticErrorKind(record.errorClass, record.code),
     },
     fields,
   );
@@ -827,6 +858,21 @@ function nonEmpty(values: readonly string[]): readonly string[] | undefined {
 // `causeChain` (ADR-0173 D3) reuse `stack-frames.ts`'s reducers rather than re-deriving them: a
 // second stack reducer here would either duplicate that module's dist-anchoring and bounds, or,
 // worse, drift from them.
+// The first machine `code` along a bounded `cause` chain, for a wrapper that carries none of its
+// own (undici's `TypeError: fetch failed` holds the socket code one level down). Hostile accessors
+// degrade to absence through `safeProperty`; a cyclic chain stops at the first repeat.
+function causeMachineCode(error: unknown): string | undefined {
+  const seen = new Set<unknown>([error]);
+  let current: unknown = safeProperty(error, "cause");
+  for (let depth = 0; depth < 5 && current !== undefined && !seen.has(current); depth += 1) {
+    seen.add(current);
+    const code = machineToken(safeProperty(current, "code"));
+    if (code !== undefined) return code;
+    current = safeProperty(current, "cause");
+  }
+  return undefined;
+}
+
 export function describeError(error: unknown): {
   readonly errorClass: string;
   readonly code?: string | undefined;
@@ -845,7 +891,7 @@ export function describeError(error: unknown): {
   const detail = providerErrorDetail(error);
   return {
     errorClass: contentFreeErrorClass(error),
-    code: machineToken(safeProperty(error, "code")),
+    code: machineToken(safeProperty(error, "code")) ?? causeMachineCode(error),
     gatewayRequestId: machineToken(safeProperty(error, "requestId")),
     httpStatus: detail.httpStatus,
     retryAfterMs: detail.retryAfterMs,

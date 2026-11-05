@@ -50,7 +50,11 @@ import {
   currentGatewayConfig,
 } from "./deps.js";
 import { newCorrelationId } from "./correlation.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticRecord,
+} from "./diagnostics-log.js";
 import type { RerankSelection } from "./grounded-rerank-facade.js";
 import { requestRerankerProbe, rerankerProbePassed } from "./gateway-reranker-probe.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -1143,11 +1147,24 @@ function reportProbeFailure(
     redact: (message): string => String(deps.redactor(message)),
   });
   // #4115: a probe that outwaited a busy provider is a warning, not a gateway error.
-  emitServerDiagnostic(
-    deps.diagnostics,
-    busySignal(warning) === undefined ? record : { ...record, diagnosticOutcome: "provider-busy" },
-  );
+  emitServerDiagnostic(deps.diagnostics, probeFailureRecord(deps, record, warning));
   return result(name, "failed", start, evidence, warning);
+}
+
+// A probe the server itself cancelled (shutdown, a replaced configuration) ended because Keiko
+// stopped it, not because the gateway failed: the readiness signal is already aborted and the
+// failure is an abort. That is a closed warning outcome, never an error that opens an incident.
+function probeFailureRecord(
+  deps: UiHandlerDeps,
+  record: ServerDiagnosticRecord,
+  warning: string,
+): ServerDiagnosticRecord {
+  if (deps.gatewayReadinessSignal?.aborted === true && record.errorClass === "AbortError") {
+    return { ...record, diagnosticOutcome: "request-cancelled" };
+  }
+  return busySignal(warning) === undefined
+    ? record
+    : { ...record, diagnosticOutcome: "provider-busy" };
 }
 
 // #4115: an overload status turns the probe away like a timeout outwaits it, so it carries the same
