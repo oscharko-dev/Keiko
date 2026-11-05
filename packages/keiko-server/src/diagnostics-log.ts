@@ -681,6 +681,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "A gateway readiness probe could not be completed.",
   "A detached capsule indexing run failed before reaching a terminal state.",
   "The coding sidecar gateway stream failed mid-response.",
+  "The coding sidecar gateway stream failed before the first response chunk.",
   "Audit or evidence persistence failed.",
   "Private context checkpoint persistence failed.",
   "Debug production service composition failed.",
