@@ -10,6 +10,7 @@ import type { UpdateStartupNoticeContentProps } from "./UpdateStartupNoticeConte
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { UpdatePreflightReport } from "@/lib/types";
 import { hasStartupUpdateSignal, startupUpdateNoticeKind } from "./update-copy";
+import styles from "./UpdateWindow.module.css";
 
 const NoticeContent = dynamic(
   () =>
@@ -38,7 +39,7 @@ function NoticeLoadFailure({
       <span className="update-notice-body">
         <span>{t("updates.notice.loadFailed")}</span>
       </span>
-      <span className="update-notice-actions">
+      <span className={`update-notice-actions ${styles.cmpNoticeActions}`}>
         <button
           type="button"
           className="update-notice-primary"
