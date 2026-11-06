@@ -5715,6 +5715,32 @@ describe("private OpenCode tool bridge", () => {
     }
   });
 
+  it("records no preparation failure for a start its caller abandoned", async () => {
+    const diagnostics = persistedDiagnostics();
+    const controller = new AbortController();
+    const configDocuments = vi.fn((): Promise<readonly Readonly<Record<string, unknown>>[]> => {
+      controller.abort();
+      return Promise.reject(new Error("PRIVATE_ABANDONED"));
+    });
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        readToolProfile: () => "native",
+        signal: controller.signal,
+        configDocuments,
+        expectedStart: expect.objectContaining({ ok: false }) as Readonly<Record<string, unknown>>,
+      },
+    );
+    try {
+      expect(configDocuments).toHaveBeenCalledTimes(1);
+      expect(diagnostics.read()).not.toContain("opencode-runtime-composition.prepare");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("does not diagnose a history read cancelled by normal run disposal", async () => {
     const diagnostics = persistedDiagnostics();
     const streams: ReadableStreamDefaultController<Uint8Array>[] = [];

@@ -2562,7 +2562,9 @@ async function prepare(
   try {
     return await materializePrepare(input, bridge, runs, request, runRoot);
   } catch (error) {
-    recordPrepareFailure(input.diagnostics, request.runId, error);
+    // A start the caller abandoned is no failure; the start's own outcome records it.
+    if (request.signal?.aborted !== true)
+      recordPrepareFailure(input.diagnostics, request.runId, error);
     await disposeFailedPrepare(
       bridge,
       runRoot,

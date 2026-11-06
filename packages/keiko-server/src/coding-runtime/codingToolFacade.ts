@@ -446,10 +446,7 @@ async function executePlainAction(
     const outcome = await runDelegate();
     return project(request, outcome);
   } catch (error) {
-    // A handler that threw because its caller went away was cancelled; it did not fail.
-    if (input.signal?.aborted === true) return empty("cancelled");
-    emitToolHandlerFailure(diagnostics, request.actionId, error);
-    return projected("failed");
+    return handlerThrew(input.signal, request.actionId, error, diagnostics);
   }
 }
 
@@ -518,10 +515,27 @@ async function executeClaimedEdit(
     const result = await runDelegate();
     return isAborted(signal) ? empty("cancelled") : project(request, result);
   } catch (error) {
-    if (isAborted(signal)) return empty("cancelled");
-    emitToolHandlerFailure(diagnostics, request.actionId, error);
-    return projected("failed");
+    return handlerThrew(signal, request.actionId, error, diagnostics);
   }
+}
+
+// A handler that threw its own abort because its caller went away was cancelled and records no
+// failure. Any other throw is recorded, also when an abort raced it, so the defect stays visible;
+// a caller that left is still answered cancelled.
+function handlerThrew(
+  signal: AbortSignal | undefined,
+  actionId: string,
+  error: unknown,
+  diagnostics: ServerDiagnosticSink | undefined,
+): CodingToolResult {
+  const aborted = signal?.aborted === true;
+  const abortCaused = aborted && (error === signal.reason || isAbortError(error));
+  if (!abortCaused) emitToolHandlerFailure(diagnostics, actionId, error);
+  return aborted ? empty("cancelled") : projected("failed");
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }
 
 function isAborted(signal: AbortSignal): boolean {

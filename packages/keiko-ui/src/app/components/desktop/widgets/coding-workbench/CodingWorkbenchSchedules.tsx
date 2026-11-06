@@ -7,7 +7,10 @@ import type {
 import { controlCodingSchedule, fetchCodingSchedules } from "@/lib/coding-schedules-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
-import { useCodingWorkbenchTranslate, type CodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import {
+  useCodingWorkbenchTranslate,
+  type CodingWorkbenchTranslate,
+} from "./coding-workbench-i18n";
 import styles from "./CodingHistory.module.css";
 
 /**

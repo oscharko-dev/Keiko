@@ -1504,10 +1504,7 @@ function WorkbenchHeader({
         runRevision={state.run.value?.revision}
         pauseReason={state.run.value?.pauseReason}
       />
-      <CodingWorkbenchSchedules
-        taskId={columns.history.detail?.task.id}
-        runActive={runIsActive}
-      />
+      <CodingWorkbenchSchedules taskId={columns.history.detail?.task.id} runActive={runIsActive} />
     </header>
   );
 }

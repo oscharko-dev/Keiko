@@ -2842,30 +2842,42 @@ describe("a governed handler that throws", () => {
   });
 
   // Audit 2026-11-06 (#4271): a handler that threw because its caller went away was recorded as a
-  // failure and answered failed.
-  it("answers cancelled, and records no failure, when the handler threw after its caller left", async () => {
+  // failure and answered failed; a real failure that raced the abort must still be recorded.
+  async function abortedRead(
+    thrown: (reason: Error) => Error,
+  ): Promise<{ readonly status: unknown; readonly records: ServerDiagnosticRecord[] }> {
     const { records, sink } = recorder();
     const ports = facade();
     const controller = new AbortController();
     ports.delegate.execute = vi.fn(() => {
       controller.abort();
-      return Promise.reject(new HandlerBoom(DISCARDED));
+      // An abort without a reason carries the platform's AbortError, an Error.
+      return Promise.reject(thrown(controller.signal.reason as Error));
     });
-    const subject = createCodingToolFacade(ports, { diagnostics: sink });
-
-    await expect(
-      subject.execute({
-        body: JSON.stringify({
-          action: "read",
-          relativePath: "src/example.ts",
-          actionId: "tool:call_throw",
-          idempotencyKey: "idempotency-throw",
-        }),
-        capability,
-        signal: controller.signal,
+    const result = await createCodingToolFacade(ports, { diagnostics: sink }).execute({
+      body: JSON.stringify({
+        action: "read",
+        relativePath: "src/example.ts",
+        actionId: "tool:call_throw",
+        idempotencyKey: "idempotency-throw",
       }),
-    ).resolves.toMatchObject({ status: "cancelled" });
-    expect(records).toEqual([]);
+      capability,
+      signal: controller.signal,
+    });
+    return { status: result.status, records };
+  }
+
+  it("answers cancelled, and records no failure, when the handler threw its caller's abort", async () => {
+    const own = await abortedRead((reason) => reason);
+    expect(own).toEqual({ status: "cancelled", records: [] });
+    const named = await abortedRead(() => new DOMException("aborted", "AbortError"));
+    expect(named).toEqual({ status: "cancelled", records: [] });
+  });
+
+  it("records a real failure that raced its caller's abort, and answers cancelled", async () => {
+    const raced = await abortedRead(() => new HandlerBoom(DISCARDED));
+    expect(raced.status).toBe("cancelled");
+    expectRecorded(raced.records);
   });
 
   it("records a claimed edit failure and still answers failed", async () => {
