@@ -279,11 +279,30 @@ measured:
 
 ## Seed gates
 
-Not run yet.
+Under owner decision 3, the seed gates ran once on the final review code, after the holdout. The run
+started at 13:54 UTC on 2026-11-06 from `c26c21bd4` with a fresh state directory, with the same pair
+and variant as the holdout, and finished at 14:52 UTC. The evidence is `evidence.json` (sha256
+`b5f7644e88b1356a6dc30d64ccfa1f5df01282655f73c14a68eb9828f6524603`).
+
+The seed gate fails. It needs every required seed found. The run found 10 of 13 required seeds and
+raised one false alarm on a clean control:
+
+| Seed                                              | Role          | Outcome     |
+| ------------------------------------------------- | ------------- | ----------- |
+| synthetic-off-by-one-boundary                     | required      | missed      |
+| synthetic-nullish-dereference-after-optional      | required      | incomplete  |
+| workspace-relative-candidate-resolved-against-cwd | required      | incomplete  |
+| synthetic-clean-named-constants                   | clean control | false alarm |
+
+The other 13 cases came out as expected: the other 10 required seeds were found, the advisory seed
+was found, and the other two clean controls stayed clean. Of the 17 reviews, 14 settled
+`complete`, 2 `incomplete/model-failed` and 1 `incomplete/deadline-exceeded`. The median wall time per
+review was 99 s.
 
 ## Decision
 
-The offline gate fails on coverage. Children 9 to 12 of epic #4130 stay closed, and the review
+The offline gate fails. The holdout fails on coverage, and the seed gate fails on one missed and two
+incomplete required seeds. Children 9 to 12 of epic #4130 stay closed, and the review
 area stays off by default (`KEIKO_REVIEW_ENABLED`). What to change before a new measurement is an
 owner decision. Settlements show budget exhaustion, unprocessed files and deadlines as the main
 causes. A new measurement needs a new holdout, because ADR-0182 D9 runs a holdout once.
