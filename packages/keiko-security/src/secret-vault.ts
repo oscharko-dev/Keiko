@@ -52,13 +52,16 @@ import { chmodIfPresent, ensureDirHardened, FILE_MODE } from "./fs-hardening.js"
 // `emitKeychainFallback` is the shared `security.keychain.fallback` reporter so this file's own
 // keychain reader (below) reports the identical shape as `readMacosKeychainSecret`'s.
 import {
+  createKeychainSecretMemo,
   emitKeychainFallback,
   KEYCHAIN_SPAWN_TIMEOUT_MS,
   emitKeychainWithheld,
   keychainItemNotFound,
   keychainWithheldReason,
   MACOS_SECURITY_EXECUTABLE,
+  processKeychainSecretMemo,
   realKeychainWithheld,
+  type KeychainSecretMemo,
 } from "./macos-keychain.js";
 // Independent activity-log seam (ADR-0019, w4a-security-log-port).
 import {
@@ -435,8 +438,9 @@ function keyFromEnv(
 }
 
 // The macOS `security` CLI invocation, isolated behind a one-line seam so the keychain reader logic
-// (read-hit, read-miss-then-generate, generate-failure) is unit-testable with a fake runner.
-export type KeychainCommandRunner = (args: readonly string[]) => string;
+// (read-hit, read-miss-then-generate, generate-failure) is unit-testable with a fake runner. `input`
+// is written to the command's stdin; a key travels there, never in the argument vector.
+export type KeychainCommandRunner = (args: readonly string[], input?: string) => string;
 
 // The spawn is bounded for the reason the shared owner documents [GEN-MAINT-COUPLING-006]: a locked,
 // absent, or policy-withheld keychain makes `security` raise a modal dialog instead of returning, and
@@ -446,13 +450,14 @@ export function createKeychainCommandRunner(
   executable = MACOS_SECURITY_EXECUTABLE,
   timeoutMs = KEYCHAIN_SPAWN_TIMEOUT_MS,
 ): KeychainCommandRunner {
-  return (args: readonly string[]): string => {
+  return (args: readonly string[], input?: string): string => {
     if (executable === MACOS_SECURITY_EXECUTABLE && realKeychainWithheld()) {
       throw new Error("The real keychain is withheld from this process.");
     }
     return execFileSync(executable, args, {
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
+      ...(input === undefined ? {} : { input }),
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
       timeout: timeoutMs,
       killSignal: "SIGKILL",
     });
@@ -460,6 +465,20 @@ export function createKeychainCommandRunner(
 }
 
 const defaultKeychainCommandRunner = createKeychainCommandRunner();
+
+// The production runner shares the process memo with `readMacosKeychainSecret`; an injected runner
+// gets a memo of its own, so a test proves the reuse without the real keychain.
+const injectedRunnerMemos = new WeakMap<KeychainCommandRunner, KeychainSecretMemo>();
+
+function keychainMemoFor(runCommand: KeychainCommandRunner): KeychainSecretMemo {
+  if (runCommand === defaultKeychainCommandRunner) return processKeychainSecretMemo;
+  let memo = injectedRunnerMemos.get(runCommand);
+  if (memo === undefined) {
+    memo = createKeychainSecretMemo();
+    injectedRunnerMemos.set(runCommand, memo);
+  }
+  return memo;
+}
 
 // Builds the default keychain-backed key access for a service. Exported with an injectable runner so
 // the reader/generate branches are deterministically testable without the real login keychain.
@@ -478,6 +497,9 @@ export function createKeychainVaultKeyAccess(
       return undefined;
     }
     const account = userInfo().username;
+    const memo = keychainMemoFor(runCommand);
+    const remembered = memo.get(keychainService, account);
+    if (remembered !== undefined) return Buffer.from(remembered, "base64");
     const elapsedMs = startSecurityLogTimer();
     let found: string;
     try {
@@ -499,12 +521,15 @@ export function createKeychainVaultKeyAccess(
       emitKeychainFallback(sink, error, elapsedMs);
       return undefined;
     }
+    let key: Buffer;
     try {
-      return decodeKeyOrThrow(found);
+      key = decodeKeyOrThrow(found);
     } catch {
       // A stored value we cannot decode is replaced, as before.
       return generateKeychainKey(keychainService, account, runCommand);
     }
+    memo.remember(keychainService, account, found);
+    return key;
   };
 }
 
@@ -514,19 +539,18 @@ function generateKeychainKey(
   runCommand: KeychainCommandRunner,
 ): Buffer | undefined {
   const key = randomBytes(KEY_BYTES);
+  // Not remembered: the next read asks the keychain which key won (see `KeychainSecretMemo`).
+  keychainMemoFor(runCommand).forget(keychainService, account);
+  const encoded = key.toString("base64");
   try {
-    runCommand([
-      "add-generic-password",
-      // `-U` updates an existing item; without it `security` rejects a duplicate (status 45) and
-      // the "replace an undecodable stored key" path above would never actually replace anything.
-      "-U",
-      "-s",
-      keychainService,
-      "-a",
-      account,
-      "-w",
-      key.toString("base64"),
-    ]);
+    // The key goes over stdin, never in the argument vector, which every process of the same user
+    // can read; bare `-w` makes `security` read it twice, as `writeMacosKeychainSecret` documents.
+    // `-U` updates an existing item; without it `security` rejects a duplicate (status 45) and
+    // the "replace an undecodable stored key" path above would never actually replace anything.
+    runCommand(
+      ["add-generic-password", "-U", "-s", keychainService, "-a", account, "-w"],
+      `${encoded}\n${encoded}\n`,
+    );
     return key;
   } catch {
     return undefined;
