@@ -91,6 +91,7 @@ const FIRST_PERSON_RE = anyWordPattern([
   "me",
   "mine",
 ]);
+const SUBJECT_RE = anyWordPattern(["ich", "i", "wir", "we"]);
 const WE_RE = anyWordPattern(["wir", "unser(?:e|em|en|er|es)?", "uns", "we", "our", "ours"]);
 // The person names the group as their team or project: "als Team", "in unserem Projekt", "our team".
 // Another group's name is no marker: "The marketing team decided that we ship on Fridays".
@@ -653,8 +654,70 @@ const SPEECH_VERBS = new Set([
   "believed",
   "stated",
   "reckons",
+  "say",
+  "tell",
+  "think",
+  "believe",
+  "claim",
 ]);
-const OTHER_PERSON_WORDS = new Set(["er", "sie", "ihr", "man", "du", "he", "she", "they", "you"]);
+const OTHER_PERSON_WORDS = new Set([
+  "er",
+  "sie",
+  "ihr",
+  "man",
+  "du",
+  "jemand",
+  "niemand",
+  "alle",
+  "jeder",
+  "viele",
+  "leute",
+  "he",
+  "she",
+  "they",
+  "you",
+  "everyone",
+  "everybody",
+  "someone",
+  "somebody",
+  "nobody",
+  "people",
+  "others",
+]);
+// A noun after one of these names someone even when typed in lower case: "the doctor", "mein chef".
+const PERSON_DETERMINERS = new Set([
+  "the",
+  "a",
+  "an",
+  "my",
+  "your",
+  "his",
+  "her",
+  "our",
+  "their",
+  "every",
+  "each",
+  "der",
+  "die",
+  "den",
+  "dem",
+  "ein",
+  "eine",
+  "einem",
+  "einen",
+  "mein",
+  "meine",
+  "meinem",
+  "dein",
+  "deine",
+  "sein",
+  "seine",
+  "ihre",
+  "unser",
+  "unsere",
+]);
+// The person speaking: "I told Anna", "sagte ich Anna" report the person's own words.
+const SELF_SPEAKERS = new Set(["ich", "i", "wir", "we"]);
 const NOT_A_PERSON = new Set([
   "ich",
   "i",
@@ -878,27 +941,40 @@ function attributes(text: string): boolean {
   if (ATTRIBUTION_MARKER_RE.test(text) || ATTRIBUTED_RE.test(text)) return true;
   if (PERFECT_SPEECH_RE.test(text)) return true;
   const words = text.split(/[^\p{L}]+/u);
-  return words.some(
-    (word, at) =>
-      SPEECH_VERBS.has(word) && (isOtherPerson(words[at - 1]) || isOtherPerson(words[at + 1])),
-  );
+  return words.some((word, at) => SPEECH_VERBS.has(word) && speaksForAnother(words, at));
 }
 
-function isOtherPerson(word: string | undefined): boolean {
-  if (word === undefined) return false;
+// Another person stands before the verb, or after it while the person is not the one speaking.
+function speaksForAnother(words: readonly string[], at: number): boolean {
+  if (isOtherPerson(words, at - 1)) return true;
+  const neighbours = [words[at - 1], words[at + 1]].map((word) => word?.toLowerCase() ?? "");
+  if (neighbours.some((word) => SELF_SPEAKERS.has(word))) return false;
+  return isOtherPerson(words, at + 1);
+}
+
+function isOtherPerson(words: readonly string[], at: number): boolean {
+  const word = words[at];
+  if (word === undefined || word === "") return false;
   const lower = word.toLowerCase();
   if (NOT_A_PERSON.has(lower)) return false;
-  return OTHER_PERSON_WORDS.has(lower) || /^\p{Lu}/u.test(word);
+  if (OTHER_PERSON_WORDS.has(lower) || /^\p{Lu}/u.test(word)) return true;
+  return PERSON_DETERMINERS.has(words[at - 1]?.toLowerCase() ?? "");
 }
 
 // The words up to the person's own subject frame the claim like the words before it: "Anna says I
-// like tables", "Stell dir vor, ich ...". A claim without a subject has no such opening.
+// like tables", "My colleague says I ...", "Stell dir vor, ich ...". A possessive or object form
+// ("mein", "mir", "my") ends the opening only where no subject follows. A claim without either has
+// no opening.
 function openingToSubject(evidence: string): string {
-  const ends = [FIRST_PERSON_RE, WE_RE].flatMap((pattern) => {
+  return openingTo(evidence, [SUBJECT_RE]) ?? openingTo(evidence, [FIRST_PERSON_RE, WE_RE]) ?? "";
+}
+
+function openingTo(evidence: string, patterns: readonly RegExp[]): string | null {
+  const ends = patterns.flatMap((pattern) => {
     const match = pattern.exec(evidence);
     return match === null ? [] : [match.index + match[0].length];
   });
-  return ends.length === 0 ? "" : evidence.slice(0, Math.min(...ends));
+  return ends.length === 0 ? null : evidence.slice(0, Math.min(...ends));
 }
 
 // "Wir", "Anna und ich", "Today Anna and I": a statement for more than the person.
