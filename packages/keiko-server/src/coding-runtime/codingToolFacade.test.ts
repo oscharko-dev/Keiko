@@ -2841,6 +2841,33 @@ describe("a governed handler that throws", () => {
     expectRecorded(records);
   });
 
+  // Audit 2026-11-06 (#4271): a handler that threw because its caller went away was recorded as a
+  // failure and answered failed.
+  it("answers cancelled, and records no failure, when the handler threw after its caller left", async () => {
+    const { records, sink } = recorder();
+    const ports = facade();
+    const controller = new AbortController();
+    ports.delegate.execute = vi.fn(() => {
+      controller.abort();
+      return Promise.reject(new HandlerBoom(DISCARDED));
+    });
+    const subject = createCodingToolFacade(ports, { diagnostics: sink });
+
+    await expect(
+      subject.execute({
+        body: JSON.stringify({
+          action: "read",
+          relativePath: "src/example.ts",
+          actionId: "tool:call_throw",
+          idempotencyKey: "idempotency-throw",
+        }),
+        capability,
+        signal: controller.signal,
+      }),
+    ).resolves.toMatchObject({ status: "cancelled" });
+    expect(records).toEqual([]);
+  });
+
   it("records a claimed edit failure and still answers failed", async () => {
     const { records, sink } = recorder();
     const ports = facade();

@@ -191,10 +191,12 @@ function askContentKey(runId: string, event: SidecarPermissionEvent): string | u
 }
 
 // A waiter that joined an open prompt: it gets the prompt's decision, or its own cancellation when
-// its caller goes away first, without disturbing the prompt or the other waiters.
+// its caller goes away first, without disturbing the prompt or the other waiters. `left` runs after
+// a waiter went away on its own, so a prompt nobody waits for any more can be withdrawn.
 function joinedWaiter(
   waiters: Set<(outcome: OpenCodeV2ApprovalOutcome) => void>,
   joinerSignal: AbortSignal,
+  left: () => void,
 ): Promise<OpenCodeV2ApprovalOutcome> {
   return new Promise<OpenCodeV2ApprovalOutcome>((joined) => {
     const finish = (outcome: OpenCodeV2ApprovalOutcome): void => {
@@ -204,6 +206,7 @@ function joinedWaiter(
     };
     const onJoinerAbort = (): void => {
       finish("cancelled");
+      left();
     };
     if (joinerSignal.aborted) {
       finish("cancelled");
@@ -214,8 +217,9 @@ function joinedWaiter(
   });
 }
 
-// Puts the ask to the human and settles it once: the decision, the one human-decision wait, or the
-// caller going away, whichever comes first.
+// Puts the ask to the human and settles it once: the decision, the one human-decision wait, or every
+// caller going away, whichever comes first. The asker that opened the prompt going away cancels only
+// its own wait while a joined asker still waits for the same decision.
 function humanDecision(
   pending: Map<string, Pending>,
   runId: string,
@@ -226,6 +230,7 @@ function humanDecision(
 ): Promise<OpenCodeV2ApprovalOutcome> {
   return new Promise<OpenCodeV2ApprovalOutcome>((resolve) => {
     const waiters = new Set<(outcome: OpenCodeV2ApprovalOutcome) => void>();
+    let openerWaits = true;
     const settle = (outcome: OpenCodeV2ApprovalOutcome): void => {
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
@@ -234,10 +239,15 @@ function humanDecision(
       for (const waiter of waiters) waiter(outcome);
       waiters.clear();
     };
+    const withdrawUnwaited = (): void => {
+      if (!openerWaits && waiters.size === 0) settle("cancelled");
+    };
     const join = (joinerSignal: AbortSignal): Promise<OpenCodeV2ApprovalOutcome> =>
-      joinedWaiter(waiters, joinerSignal);
+      joinedWaiter(waiters, joinerSignal, withdrawUnwaited);
     const onAbort = (): void => {
-      settle("cancelled");
+      openerWaits = false;
+      resolve("cancelled");
+      withdrawUnwaited();
     };
     const timer = setTimeout(() => {
       settle("expired");

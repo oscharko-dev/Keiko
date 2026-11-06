@@ -5683,6 +5683,38 @@ describe("private OpenCode tool bridge", () => {
     }
   });
 
+  // Audit 2026-11-06 (#4271): a failed preparation ended the start with no trace of its cause on
+  // the Activity Log, so the defect behind it could not be located from the log.
+  it("records why a native run's preparation failed, body-free", async () => {
+    const diagnostics = persistedDiagnostics();
+    const failure = new Error("PRIVATE_PREPARE", { cause: new TypeError("PRIVATE_CAUSE") });
+    failure.stack =
+      "Error: PRIVATE_PREPARE\n    at read (/private/packages/keiko-server/dist/coding-runtime/opencodeRuntimeComposition.js:12:3)";
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        readToolProfile: () => "native",
+        configDocuments: () => Promise.reject(failure),
+        expectedStart: expect.objectContaining({ ok: false }) as Readonly<Record<string, unknown>>,
+      },
+    );
+    try {
+      expect(
+        expectPersistedDiagnostic(diagnostics.read(), "opencode-runtime-composition.prepare"),
+      ).toMatchObject({
+        diagnosticSummary: "runtime-start-failed",
+        code: "config-materialization-failed",
+        frames: ["packages/keiko-server/dist/coding-runtime/opencodeRuntimeComposition.js:12:3"],
+        causeChain: ["TypeError"],
+      });
+      expect(diagnostics.read()).not.toContain("PRIVATE_");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("does not diagnose a history read cancelled by normal run disposal", async () => {
     const diagnostics = persistedDiagnostics();
     const streams: ReadableStreamDefaultController<Uint8Array>[] = [];

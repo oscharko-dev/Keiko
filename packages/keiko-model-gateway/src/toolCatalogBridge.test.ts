@@ -881,11 +881,10 @@ describe("provider invocation batch bounds", () => {
     const log: ModelGatewayLogEvent[] = [];
     const subject = adapter(() => Promise.resolve(toolCallsResponse(calls)), log);
     const response = await subject.call({ ...request(), toolCatalog: advertisement() }, CONFIG);
-    expect(response.toolCalls.map((call) => call.id)).toEqual([
-      "duplicate-id",
-      "keiko-call-1",
-      "keiko-call-2",
-    ]);
+    const ids = response.toolCalls.map((call) => call.id);
+    expect(ids[0]).toBe("duplicate-id");
+    expect(ids[1]).toMatch(/^keiko-call-[0-9a-f]{12}-1$/u);
+    expect(ids[2]).toMatch(/^keiko-call-[0-9a-f]{12}-2$/u);
     expect(log.filter((event) => event.op === "gateway.tool-catalog.call-bound")).toHaveLength(3);
     expect(log.some((event) => event.op === "gateway.tool-catalog.rejected")).toBe(false);
   });

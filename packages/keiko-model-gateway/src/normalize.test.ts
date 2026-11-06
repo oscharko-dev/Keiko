@@ -314,7 +314,9 @@ describe("parseNormalizedToolCalls call ids", () => {
     expect(calls.map((entry) => entry.id)).toEqual(["call_1", "fc-2.x:3"]);
   });
 
-  it("mints a stable id for a missing, empty, over-long or unusable one", () => {
+  const MINTED = /^keiko-call-([0-9a-f]{12})-(\d+)$/u;
+
+  it("mints an id for a missing, empty, over-long or unusable one", () => {
     const calls = parseNormalizedToolCalls([
       call(undefined),
       call(""),
@@ -322,13 +324,22 @@ describe("parseNormalizedToolCalls call ids", () => {
       call("has space"),
       call("good"),
     ]);
-    expect(calls.map((entry) => entry.id)).toEqual([
-      "keiko-call-0",
-      "keiko-call-1",
-      "keiko-call-2",
-      "keiko-call-3",
-      "good",
-    ]);
+    const ids = calls.map((entry) => entry.id);
+    expect(ids[4]).toBe("good");
+    const minted = ids.slice(0, 4).map((id) => MINTED.exec(id));
+    expect(minted.map((match) => match?.[2])).toEqual(["0", "1", "2", "3"]);
+    // One response shares one response part.
+    expect(new Set(minted.map((match) => match?.[1])).size).toBe(1);
+  });
+
+  // Audit 2026-11-06 (#4271): the native bridge keys an invocation by session and call id, so a
+  // later response that minted the same id made a new edit a conflicting replay and refused it.
+  it("never mints the same id in two responses", () => {
+    const first = parseNormalizedToolCalls([call("")]).map((entry) => entry.id);
+    const second = parseNormalizedToolCalls([call("")]).map((entry) => entry.id);
+    expect(first[0]).toMatch(MINTED);
+    expect(second[0]).toMatch(MINTED);
+    expect(second[0]).not.toBe(first[0]);
   });
 
   it("renames only the repeat of a duplicate and never collides with a sibling's own id", () => {
@@ -341,13 +352,8 @@ describe("parseNormalizedToolCalls call ids", () => {
     const ids = calls.map((entry) => entry.id);
     expect(ids[0]).toBe("same");
     expect(ids[2]).toBe("keiko-call-2");
-    expect(ids[1]).toBe("keiko-call-1");
-    expect(ids[3]).toBe("keiko-call-3");
+    expect(MINTED.exec(ids[1] ?? "")?.[2]).toBe("1");
+    expect(MINTED.exec(ids[3] ?? "")?.[2]).toBe("3");
     expect(new Set(ids).size).toBe(ids.length);
-  });
-
-  it("resolves a collision between a minted id and a later provider id", () => {
-    const ids = parseNormalizedToolCalls([call(""), call("keiko-call-0")]).map((entry) => entry.id);
-    expect(ids).toEqual(["keiko-call-0-1", "keiko-call-0"]);
   });
 });

@@ -102,6 +102,14 @@ describe("CodingToolInvocationRegistry (Issue #2332)", () => {
         }),
       ).kind,
     ).toBe("invalid");
+    // Audit 2026-11-06 (#4271): eviction splits identity keys at NUL, so a part holding one is
+    // never staged.
+    expect(large.stage(stagedEdit({ actionId: "a\u0000b", idempotencyKey: "nul" })).kind).toBe(
+      "invalid",
+    );
+    expect(large.stage(stagedEdit({ actionId: "nul", idempotencyKey: "a\u0000b" })).kind).toBe(
+      "invalid",
+    );
     // A payload far above the old 256 KiB, up to the request bound, is staged.
     expect(
       large.stage(

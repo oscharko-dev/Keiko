@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -458,14 +458,20 @@ function mavenRunBinding(input: NativeBuildSettingsInput, home: string): MavenRu
  * writes lands in the run's own repository.
  */
 function javaProperties(home: string, input: NativeBuildSettingsInput): Record<string, string> {
-  const tail =
-    nativeBuildCacheAdmitted(input.mode) && input.readOnlyMavenRepository !== undefined
-      ? {
-          "maven.repo.local.tail": input.readOnlyMavenRepository,
-          "maven.repo.local.tail.ignoreAvailability": "true",
-        }
-      : {};
-  return { "user.home": home, ...tail };
+  const tail = chainedMavenCache(input);
+  return {
+    "user.home": home,
+    ...(tail === undefined
+      ? {}
+      : { "maven.repo.local.tail": tail, "maven.repo.local.tail.ignoreAvailability": "true" }),
+  };
+}
+
+/** The read-only cache Maven chains, when one is admitted; Maven splits the tail at commas. */
+function chainedMavenCache(input: NativeBuildSettingsInput): string | undefined {
+  const cache = input.readOnlyMavenRepository;
+  if (!nativeBuildCacheAdmitted(input.mode) || cache === undefined) return undefined;
+  return cache.includes(",") ? undefined : cache;
 }
 
 /**
@@ -476,6 +482,8 @@ function linkMavenWrapperDists(home: string, input: NativeBuildSettingsInput): v
   if (input.readOnlyMavenWrapperDists === undefined) return;
   const link = join(home, ".m2", "wrapper", "dists");
   mkdirSync(dirname(link), { recursive: true, mode: 0o700 });
+  // A repeated preparation of the same run root replaces its own link instead of failing.
+  rmSync(link, { force: true });
   symlinkSync(input.readOnlyMavenWrapperDists, link, "dir");
 }
 
@@ -512,7 +520,7 @@ function recordNativeBuildSettingsAdmitted(
         mavenSettings: result.mavenSettings,
         npmConfig: result.npmConfig,
         gradleProperties: result.gradleProperties,
-        mavenCache: readOnlyDisposition(input.mode, input.readOnlyMavenRepository),
+        mavenCache: readOnlyDisposition(input.mode, chainedMavenCache(input)),
         mavenWrapper: readOnlyDisposition(input.mode, input.readOnlyMavenWrapperDists),
         strippedElementCount: result.strippedElementCount,
         droppedLineCount: result.droppedLineCount,

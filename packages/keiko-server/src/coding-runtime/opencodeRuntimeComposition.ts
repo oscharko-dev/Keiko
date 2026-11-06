@@ -1962,6 +1962,26 @@ function recordCompositionDisposalFailure(
   });
 }
 
+/** The run never starts; without this line its cause would leave no trace on the Activity Log. */
+function recordPrepareFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+): void {
+  const detail = describeError(error);
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.opencode-composition",
+    source: "opencode-runtime-composition.prepare",
+    errorClass: contentFreeErrorClass(error),
+    message: "runtime-start-failed",
+    code: "config-materialization-failed",
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  });
+}
+
 async function disposeFailedPrepare(
   bridge: ToolBridgeController,
   runRoot: string,
@@ -2541,7 +2561,8 @@ async function prepare(
   const runRoot = join(input.stateBaseRoot, request.runId);
   try {
     return await materializePrepare(input, bridge, runs, request, runRoot);
-  } catch {
+  } catch (error) {
+    recordPrepareFailure(input.diagnostics, request.runId, error);
     await disposeFailedPrepare(
       bridge,
       runRoot,

@@ -544,8 +544,10 @@ function validExpiry(value: string): boolean {
   return Number.isFinite(Date.parse(value));
 }
 
+// The identity keys join their parts with NUL, and eviction splits them there again: a part that
+// held a NUL would split wrongly and could alias another identity, so it is never staged.
 function nonEmpty(value: string): boolean {
-  return value.length > 0 && value.length <= 512;
+  return value.length > 0 && value.length <= 512 && !value.includes("\u0000");
 }
 
 function expiryFor(request: CodingToolInvocationStage, now: number): number {

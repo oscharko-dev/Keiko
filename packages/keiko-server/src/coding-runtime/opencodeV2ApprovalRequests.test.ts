@@ -617,6 +617,34 @@ describe("OpenCode V2 approval requests for native asks (#3897)", () => {
     await expect(stay).resolves.toMatchObject({ outcome: "denied" });
   });
 
+  // Audit 2026-11-06 (#4271): the asker that opened a shared prompt going away cancelled every
+  // joined asker too, although their callers still waited for the decision.
+  it("keeps a shared prompt open for its joiners when the asker that opened it goes away", async () => {
+    const approvals = createOpenCodeV2ApprovalRequests();
+    const ask = asked();
+    const opener = new AbortController();
+    const opened = nativeRequest(approvals, ask, "per_native_opener", { signal: opener.signal });
+    const joined = nativeRequest(approvals, ask, "per_native_joiner");
+    opener.abort();
+    await expect(opened).resolves.toMatchObject({ outcome: "cancelled" });
+    expect(approvals.resolve(RUN_ID, "per_native_opener", true)).toBe(true);
+    await expect(joined).resolves.toMatchObject({ outcome: "approved" });
+  });
+
+  it("withdraws a shared prompt once the opener and every joiner went away", async () => {
+    const approvals = createOpenCodeV2ApprovalRequests();
+    const ask = asked();
+    const opener = new AbortController();
+    const joiner = new AbortController();
+    const opened = nativeRequest(approvals, ask, "per_native_last_open", { signal: opener.signal });
+    const joined = nativeRequest(approvals, ask, "per_native_last_join", { signal: joiner.signal });
+    opener.abort();
+    joiner.abort();
+    await expect(opened).resolves.toMatchObject({ outcome: "cancelled" });
+    await expect(joined).resolves.toMatchObject({ outcome: "cancelled" });
+    expect(approvals.resolve(RUN_ID, "per_native_last_open", true)).toBe(false);
+  });
+
   it("refuses a second ask under a request id that is still pending, leaving the first intact", async () => {
     const approvals = createOpenCodeV2ApprovalRequests();
     const ask = asked();

@@ -446,6 +446,8 @@ async function executePlainAction(
     const outcome = await runDelegate();
     return project(request, outcome);
   } catch (error) {
+    // A handler that threw because its caller went away was cancelled; it did not fail.
+    if (input.signal?.aborted === true) return empty("cancelled");
     emitToolHandlerFailure(diagnostics, request.actionId, error);
     return projected("failed");
   }
@@ -516,6 +518,7 @@ async function executeClaimedEdit(
     const result = await runDelegate();
     return isAborted(signal) ? empty("cancelled") : project(request, result);
   } catch (error) {
+    if (isAborted(signal)) return empty("cancelled");
     emitToolHandlerFailure(diagnostics, request.actionId, error);
     return projected("failed");
   }

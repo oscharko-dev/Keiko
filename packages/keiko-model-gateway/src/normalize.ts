@@ -1,6 +1,8 @@
 // Provider payload → NormalizedResponse. The internal contract is strict and small
 // so workflows fail closed when a provider response is unsafe or malformed.
 
+import { randomBytes } from "node:crypto";
+
 import {
   MalformedToolCallError,
   ModelRefusalError,
@@ -111,19 +113,24 @@ const USABLE_TOOL_CALL_ID = /^[A-Za-z0-9_.:-]{1,128}$/u;
 // A provider may omit a call id, send one the catalog bridge cannot carry (empty, over 128 characters,
 // other characters) or repeat one across parallel calls. None of that is the model's fault, and the
 // bridge refuses such a batch whole, which used to end the turn. The first layer that sees the ids
-// replaces each unusable or repeated id with a stable `keiko-call-<position>` that no sibling holds,
-// so every valid call of the batch still runs. A usable, first-seen id is never touched.
+// replaces each unusable or repeated id with `keiko-call-<response>-<position>` that no sibling holds,
+// so every valid call of the batch still runs. A usable, first-seen id is never touched. The
+// response part is random: the coding runtime keys an invocation by its session and call id, so a
+// minted id that a later response repeated would make a new call look like a replay of an old one.
 function normalizeToolCallIds(calls: readonly NormalizedToolCall[]): readonly NormalizedToolCall[] {
   const held = new Set<string>();
   const kept = new Set(calls.map((call) => call.id).filter((id) => USABLE_TOOL_CALL_ID.test(id)));
+  let response: string | undefined;
   return calls.map((call, position) => {
     if (USABLE_TOOL_CALL_ID.test(call.id) && !held.has(call.id)) {
       held.add(call.id);
       return call;
     }
-    let id = `${SYNTHESIZED_TOOL_CALL_ID_PREFIX}${String(position)}`;
+    response ??= randomBytes(6).toString("hex");
+    const minted = `${SYNTHESIZED_TOOL_CALL_ID_PREFIX}${response}-${String(position)}`;
+    let id = minted;
     for (let attempt = 1; kept.has(id) || held.has(id); attempt += 1) {
-      id = `${SYNTHESIZED_TOOL_CALL_ID_PREFIX}${String(position)}-${String(attempt)}`;
+      id = `${minted}-${String(attempt)}`;
     }
     held.add(id);
     return { ...call, id };

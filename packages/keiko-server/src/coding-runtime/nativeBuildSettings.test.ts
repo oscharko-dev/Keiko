@@ -230,6 +230,40 @@ describe("prepareNativeBuildSettings (#4271)", () => {
     expect(log.events[0]?.extra).toMatchObject({ mavenCache: "read-only" });
   });
 
+  it("chains no cache whose path Maven would split at a comma, and records none", () => {
+    const { realHome, stateRoot } = fixture();
+    const log = sink();
+    const result = prepareNativeBuildSettings({
+      runId: "run-0007",
+      mode: "supervised-coding",
+      realHome,
+      stateRoot,
+      readOnlyMavenRepository: join(realHome, "a,b", ".m2", "repository"),
+      activityLog: log.sink,
+    });
+    expect(result.javaProperties).toEqual({ "user.home": join(stateRoot, "home") });
+    expect(log.events[0]?.extra).toMatchObject({ mavenCache: "none" });
+  });
+
+  it("replaces its own wrapper link when the same run root is prepared again", () => {
+    const { realHome, stateRoot } = fixture();
+    const dists = join(realHome, ".m2", "wrapper", "dists");
+    mkdirSync(dists, { recursive: true });
+    const input = {
+      runId: "run-0008",
+      mode: "supervised-coding",
+      realHome,
+      stateRoot,
+      readOnlyMavenWrapperDists: dists,
+      activityLog: sink().sink,
+    };
+    prepareNativeBuildSettings(input);
+    expect(() => prepareNativeBuildSettings(input)).not.toThrow();
+    expect(realpathSync(join(stateRoot, "home", ".m2", "wrapper", "dists"))).toBe(
+      realpathSync(dists),
+    );
+  });
+
   it("links the Maven wrapper's read-only distributions into the private home below Full access", () => {
     const { realHome, stateRoot } = fixture();
     const dists = join(realHome, ".m2", "wrapper", "dists");
