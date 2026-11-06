@@ -3141,6 +3141,7 @@ describe("POST /api/diagnostics/client", () => {
   it.each([
     ["chat bind", "chat-bind"],
     ["command palette", "command-palette"],
+    ["window palette", "window-palette"],
   ])("logs both phases of %s under the stage's own correlation id", async (stageId, logStage) => {
     const sink = captureServerLog();
     for (const body of [

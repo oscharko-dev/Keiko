@@ -1,5 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 import { TYPE_ORDER, WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import { Palette } from "./Palette";
 
@@ -282,5 +287,29 @@ describe("Palette", () => {
       hasFocusSpy.mockRestore();
     }
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+// #4271: opening the window launcher is routine, so it is recorded as an info-level stage that
+// starts on open and settles on close under one correlation, never as a warning-level note.
+describe("Palette stage evidence", () => {
+  it("records its open and close as the window palette stage", () => {
+    const reports: (ClientDiagnosticMeta | undefined)[] = [];
+    setClientDiagnosticWriter((_message, meta) => reports.push(meta));
+    try {
+      const { unmount } = render(
+        <Palette types={WIN_TYPES} order={ORDER} onAdd={vi.fn()} onClose={vi.fn()} />,
+      );
+      unmount();
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+    const stages = reports.flatMap((meta) => (meta?.stageReport ? [meta] : []));
+    expect(stages.map((meta) => [meta.stageReport?.stage, meta.stageReport?.phase])).toEqual([
+      ["window palette", "started"],
+      ["window palette", "settled"],
+    ]);
+    expect(stages[1]?.correlationId).toBe(stages[0]?.correlationId);
+    expect(reports.every((meta) => meta?.stageReport !== undefined)).toBe(true);
   });
 });

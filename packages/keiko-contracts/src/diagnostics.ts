@@ -1038,6 +1038,7 @@ export const CLIENT_STAGE_IDS = [
   "files widget chunk",
   "chat bind",
   "command palette",
+  "window palette",
   "chat history deletion",
   "files directory load",
   "files source preview",
