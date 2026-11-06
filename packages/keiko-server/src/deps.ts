@@ -1,3 +1,4 @@
+import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { createNativeMcpMutationJournal } from "./coding-runtime/opencodeNativeMcpMutationJournal.js";
 import type { ChatToolTurnPort } from "./chat-tool-turn.js";
 import {
@@ -11,6 +12,11 @@ import {
   createConfiguredMcpConnections,
   type ConfiguredMcpConnections,
 } from "./mcp/mcpConfiguredConnections.js";
+import type {
+  JiraDraftStore,
+  JiraReportComplianceChecker,
+  JiraReportStore,
+} from "@oscharko-dev/keiko-connectors";
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import {
   installJiraChatCatalogRuntime,
@@ -212,6 +218,7 @@ import {
   processServerLogSinkFor,
 } from "./process-log-sink.js";
 import { currentOpenSseStreamCount, markServerShuttingDown } from "./sse-write.js";
+import { stopChatCompactionWork } from "./chat-compaction-model-call.js";
 import type { ServerLogSink } from "./observability/index.js";
 import { closeFileServerLogSinks, resolveRuntimeStateDir } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -537,6 +544,7 @@ import { CodingAppSessionDenialWindows } from "./coding-app-session/denialWindow
 import { abortCodingRunSessionLeases } from "./coding-app-session/codingRunSessionLease.js";
 import {
   admitCodingRunModel,
+  awaitCodingRunModelReadiness,
   createOpenCodeGatewayReadinessRegistry,
   type OpenCodeGatewayReadinessRegistry,
 } from "./coding-sidecar-gateway.js";
@@ -557,6 +565,7 @@ import { resolveProductionOpenCodeActivation } from "./coding-runtime/production
 import {
   configuredReviewRunBudget,
   createProductionReviewRuntimeService,
+  type ReviewRunBudget,
 } from "./review/runtime/production.js";
 import type { ReviewRuntimeService } from "./review/runtime/instance.js";
 import type { ReviewRulesSettingsPort } from "./review/runtime/rulesFile.js";
@@ -1032,6 +1041,12 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly atlassianSyncJobRegistry?: AtlassianSyncJobRegistry | undefined;
   /** Lazy application-owned managed host; shared by ordinary Chat turns and bound Pods. */
   readonly jiraChatCatalog?: JiraChatCatalogRuntime;
+  /** In-memory Jira reports (#4181): the tool resumes them and the export route reads them. */
+  readonly jiraReportStore?: JiraReportStore;
+  /** In-memory staged backlog drafts (#4178): the staging tool appends, approval and runs read. */
+  readonly jiraDraftStore?: JiraDraftStore;
+  /** The shared template checker (#4177); absent until a template set is active. */
+  readonly jiraReportChecker?: JiraReportComplianceChecker;
   /** Accepted Chat turn scope reused by grounded preparation, tools and answer repair. */
   readonly chatToolTurn?: ChatToolTurnPort;
   readonly mcpChatCatalog?: McpChatCatalogRuntime;
@@ -1040,6 +1055,9 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // Shared resolved Coding/connector ceiling. Production always sets it; incomplete injected deps
   // fail closed instead of accepting any request-supplied ceiling.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
+  // Authority Envelope budget of one accepted Chat tool turn (#4175). Absent uses the backlog-sized
+  // default; composition may narrow it, never a request.
+  readonly chatToolTurnBudget?: ChatToolAuthorityEnvelope["budget"] | undefined;
   // Optional injectable ports for the coding-context intake route (#1989 wiring). Production
   // composes real ports from env/workspace when absent; tests inject deterministic fakes.
   readonly codingContextGitHubPort?: GitHubCodeContextApiPort | undefined;
@@ -1764,6 +1782,26 @@ function setRuntimeGateway(
   state.listeners.notify(correlationId);
 }
 
+// Capabilities live beside the providers, so identical providers mean identical connections.
+function sameCatalogConnections(
+  current: GatewayConfig | undefined,
+  active: GatewayConfig,
+): boolean {
+  return (
+    current !== undefined && JSON.stringify(current.providers) === JSON.stringify(active.providers)
+  );
+}
+
+function refineRuntimeCatalog(
+  state: RuntimeGatewayState,
+  next: GatewayConfig,
+  correlationId?: string,
+): void {
+  state.configured = mergeConfiguredGateway(state, next);
+  state.config = next;
+  state.listeners.notify(correlationId);
+}
+
 function replaceRuntimeCatalog(
   state: RuntimeGatewayState,
   active: GatewayConfig,
@@ -1771,6 +1809,12 @@ function replaceRuntimeCatalog(
   correlationId?: string,
 ): boolean {
   if (state.generation !== observedGeneration) return false;
+  if (sameCatalogConnections(state.config, active)) {
+    // A capability-only refinement of unchanged connections (a readiness or tool-calling proof)
+    // keeps the generation: turns admitted against these exact connections remain valid (#4175).
+    refineRuntimeCatalog(state, active, correlationId);
+    return true;
+  }
   const previous = new Map(state.config?.providers.map((provider) => [provider.modelId, provider]));
   const next = new Map(active.providers.map((provider) => [provider.modelId, provider]));
   state.configured = mergeConfiguredGateway(state, active);
@@ -1828,9 +1872,7 @@ function runtimeCatalogFacets(
     replaceCatalog: (active, generation, correlationId): boolean =>
       replaceRuntimeCatalog(state, active, generation, correlationId),
     refine(next, correlationId): void {
-      state.configured = mergeConfiguredGateway(state, next);
-      state.config = next;
-      state.listeners.notify(correlationId);
+      refineRuntimeCatalog(state, next, correlationId);
     },
   };
 }
@@ -4576,6 +4618,12 @@ interface UiHandlerDepsAssemblyArgs {
   readonly mcpConnections?: ConfiguredMcpConnections | undefined;
   /** The Jira Pods a Coding run may be started with; absent without the managed MCP relay. */
   readonly codingJiraPods?: CodingJiraPods | undefined;
+  /** The model check a coding run's start awaits; bound once the deps graph that runs it exists. */
+  readonly codingModelReadiness?: CodingModelReadinessBinding | undefined;
+}
+
+interface CodingModelReadinessBinding {
+  check?: (modelId: string | undefined, correlationId: string | undefined) => Promise<void>;
 }
 
 function codingSidecarGatewayModelSourceFields(
@@ -5013,10 +5061,9 @@ function buildMcpServices(args: UiHandlerDepsAssemblyArgs): {
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const { mcpSettings, mcpConnections, mcpAuthorization, codingJiraPods } = buildMcpServices(args);
   const dapRuntime = createDapRuntimeReference(args.options);
-  const services = assembleUiHandlerRuntimeServices(
-    { ...args, mcpConnections, codingJiraPods },
-    dapRuntime,
-  );
+  const codingModelReadiness: CodingModelReadinessBinding = {};
+  const runtimeArgs = { ...args, mcpConnections, codingJiraPods, codingModelReadiness };
+  const services = assembleUiHandlerRuntimeServices(runtimeArgs, dapRuntime);
   // #3399: one shared hook instance, so recordStatus/readStatus coordinate through the SAME
   // in-process expected-version cache (createPrDescriptionReceiptStatusHooks's own contract) rather
   // than each call building an independent, uncoordinated bridge over the same durable store.
@@ -5067,7 +5114,13 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       mcpConnections,
     ),
   };
-  return attachComposedUiHandlerDeps(args, services, prDescriptionGeneration, codingJiraPods, deps);
+  return attachComposedUiHandlerDeps(
+    args,
+    services,
+    prDescriptionGeneration,
+    { codingJiraPods, codingModelReadiness },
+    deps,
+  );
 }
 
 /** The surfaces that attach to the composed graph itself, in their required order. */
@@ -5075,9 +5128,13 @@ function attachComposedUiHandlerDeps(
   args: UiHandlerDepsAssemblyArgs,
   services: UiHandlerRuntimeServices,
   prDescriptionGeneration: ReturnType<typeof createProductionPrDescriptionGeneration>,
-  codingJiraPods: CodingJiraPods | undefined,
+  coding: {
+    readonly codingJiraPods: CodingJiraPods | undefined;
+    readonly codingModelReadiness: CodingModelReadinessBinding;
+  },
   deps: UiHandlerDeps,
 ): UiHandlerDeps {
+  const { codingJiraPods, codingModelReadiness } = coding;
   attachWorkbenchDescriptionSupport(
     args,
     services.codingRuntimeControlPlane,
@@ -5085,7 +5142,7 @@ function attachComposedUiHandlerDeps(
     prDescriptionGeneration,
     deps,
   );
-  attachRepositorySemanticSearch(services.codingRuntimeControlPlane, deps);
+  attachCodingRuntimeDeps(services.codingRuntimeControlPlane, codingModelReadiness, deps);
   attachReviewServicesLifecycle(args, deps);
   installCodingJiraPods(deps, codingJiraPods);
   return installConversationReadinessInitialization(installChatToolCatalogs(deps, args.options));
@@ -5122,6 +5179,40 @@ function composeReviewDeps(
       qualifications: undefined,
     },
   };
+}
+
+/** The review run budget each assembly resolved; one diagnostic per assembly when it is invalid. */
+const reviewRunBudgets = new WeakMap<UiHandlerDepsAssemblyArgs, ReviewRunBudget | null>();
+
+/**
+ * The Reviewer run's budget, resolved once per deps assembly (R4130-018). An operator value out of
+ * range leaves the review runtime and the review run service uncomposed, so the review routes
+ * answer 503, and records one diagnostic; it never fails server start.
+ */
+function reviewRunBudget(args: UiHandlerDepsAssemblyArgs): ReviewRunBudget | undefined {
+  const known = reviewRunBudgets.get(args);
+  if (known !== undefined) return known ?? undefined;
+  let budget: ReviewRunBudget | null = null;
+  try {
+    budget = configuredReviewRunBudget(
+      args.options.env,
+      configuredRuntimeEnvelopeBounds(args.options.env),
+    );
+  } catch (error) {
+    emitServerDiagnostic(
+      args.options.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: args.bootstrapCorrelationId,
+        operation: "review.runtime.budget",
+        source: "review.bootstrap",
+        error,
+        summary: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+        redact: (message): string => message,
+      }),
+    );
+  }
+  reviewRunBudgets.set(args, budget);
+  return budget ?? undefined;
 }
 
 /** What the review model policy reads: the live gateway configuration and the environment. */
@@ -5245,6 +5336,8 @@ function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandler
   const reviewServices = deps.reviewServices;
   const store = args.bundle.reviewRunStore;
   if (reviewServices === undefined || store === undefined) return;
+  const budget = reviewRunBudget(args);
+  if (budget === undefined) return;
   const activityLog = args.options.activityLog ?? processServerLogSink();
   const reviewRunService = reviewRunServiceFactory(args.options.reviewEvaluationSwitches)({
     store,
@@ -5272,10 +5365,7 @@ function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandler
         awaitInitializedConversationReadiness(deps, modelId, correlationId),
     },
     activityLog,
-    reviewerPromptBudget: configuredReviewRunBudget(
-      args.options.env,
-      configuredRuntimeEnvelopeBounds(args.options.env),
-    ).promptTokenBudget,
+    reviewerPromptBudget: budget.promptTokenBudget,
   });
   Object.assign(deps, { reviewRunService });
   attachPairQualificationService(args, deps, reviewServices, activityLog);
@@ -5336,15 +5426,14 @@ function composeReviewRuntimeService(
   if (reviewServices === undefined || args.options.codingRuntimeProductionPorts !== undefined) {
     return undefined;
   }
+  const budget = reviewRunBudget(args);
+  if (budget === undefined) return undefined;
   try {
     return createProductionReviewRuntimeService({
       ...reviewRuntimeActivation(args),
       stateDir: dirname(args.resolvedUiDbPath),
       reviewWorktreeRoot: reviewServices.reviewRoot,
-      budget: configuredReviewRunBudget(
-        args.options.env,
-        configuredRuntimeEnvelopeBounds(args.options.env),
-      ),
+      budget,
       verificationRunner: services.peripherals.verificationRunner,
       readWorkspaceHead: readProductionWorkspaceHead,
       resolveManagedModelProfile: (modelId, reasoningEffort) =>
@@ -5378,13 +5467,21 @@ function composeReviewRuntimeService(
   }
 }
 
-/** Activates the OpenCode runtime for one review instance under the review sidecar routes. */
+type ReviewRuntimeActivationResult = ReturnType<
+  Parameters<typeof createProductionReviewRuntimeService>[0]["activate"]
+>;
+
+/**
+ * Activates the OpenCode runtime for one review instance under the review sidecar routes. An
+ * unavailable activation hands its closed reason to the review runtime service, which logs it on
+ * the review's `start-failed` line (R4130-019).
+ */
 function reviewRuntimeActivation(
   args: UiHandlerDepsAssemblyArgs,
 ): Pick<Parameters<typeof createProductionReviewRuntimeService>[0], "activate"> {
   return {
-    activate: (request) =>
-      resolveProductionOpenCodeActivation({
+    activate: (request): ReviewRuntimeActivationResult => {
+      const activation = resolveProductionOpenCodeActivation({
         env: args.options.env,
         runtimeStateDir: request.runtimeStateDir,
         runtimeEvidence: request.runtimeEvidence,
@@ -5398,7 +5495,9 @@ function reviewRuntimeActivation(
           return result.status === "available" ? result.runMetadata : undefined;
         },
         activityLog: processServerLogSink(),
-      }).ports,
+      });
+      return activation.ports ?? { unavailableReason: activation.unavailableReason };
+    },
   };
 }
 
@@ -5441,6 +5540,7 @@ export function installConversationReadinessInitialization(deps: UiHandlerDeps):
     refreshGatewayCatalog: startup.refresh,
     dispose: async (): Promise<void> => {
       unsubscribe?.();
+      await stopChatCompactionWork(deps);
       const conversationShutdown = stopConfiguredConversationReadiness(deps);
       await startup.stop();
       await conversationShutdown;
@@ -5634,6 +5734,18 @@ function createUiCodingRuntimeRepositoryInstructions(
 // derived from the assembled deps graph, which does not exist when the resolver is composed. A
 // composition without a knowledge store binds a lease that opens no provider, and the search stays
 // lexical and says so.
+// The coding runtime reaches two services of the finished graph: repository semantic search, and
+// the model check a run's start awaits (customer 1.3.4).
+function attachCodingRuntimeDeps(
+  codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
+  readiness: CodingModelReadinessBinding,
+  deps: UiHandlerDeps,
+): void {
+  attachRepositorySemanticSearch(codingRuntimeControlPlane, deps);
+  readiness.check = (modelId, correlationId): Promise<void> =>
+    awaitCodingRunModelReadiness(deps, modelId, correlationId);
+}
+
 function attachRepositorySemanticSearch(
   codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
   deps: UiHandlerDeps,
@@ -6747,6 +6859,8 @@ function runtimeWorkspaceAuthority(
         reasoningEffort,
         args.runtimeConfig,
       ),
+    prepareManagedModel: (modelId, correlationId): Promise<void> =>
+      args.codingModelReadiness?.check?.(modelId, correlationId) ?? Promise.resolve(),
   };
 }
 

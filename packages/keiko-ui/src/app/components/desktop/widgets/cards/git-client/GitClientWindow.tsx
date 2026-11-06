@@ -1938,7 +1938,7 @@ export function GitClientWindow({
     ],
   );
 
-  const syncView = deriveSyncView(activeSummary, summaryRead.loading);
+  const syncView = deriveSyncView(activeSummary, summaryRead.loading, t);
   const toolbarRepositories = repositoryToolbarList(
     repositories,
     selectedPath,

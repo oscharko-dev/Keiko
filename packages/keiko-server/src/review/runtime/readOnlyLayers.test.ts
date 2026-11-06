@@ -12,6 +12,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { REVIEW_RUNTIME_TOOL_NAMES } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../../tests/support/activity-log-proof.js";
 import { createBufferedServerLogSink } from "../../../../../tests/support/buffered-server-log.js";
 import { createCodingToolAuthorityPort } from "../../coding-runtime/codingToolAuthorityPort.js";
 import { createCodingToolFacade } from "../../coding-runtime/codingToolFacade.js";
@@ -200,6 +204,19 @@ function envelope(
   return { authority } as unknown as CodingWorkbenchRuntimeAuthorityEnvelope;
 }
 
+/** The ordinary Coding Workbench authority for one mode, as the runtime authority service grants it. */
+function codingAuthority(
+  mode: "governed-assist" | "supervised-coding" | "autonomous-delivery",
+): CodingWorkbenchRuntimeAuthorityEnvelope {
+  return envelope({
+    effectiveMode: mode,
+    actionClasses: codingRuntimeActionClassesForMode(mode, false),
+    connectorScopes: codingRuntimeConnectorScopesForMode(mode),
+    commandPolicy: codingRuntimeCommandPolicyForMode(mode),
+    networkPolicy: codingRuntimeNetworkPolicyForMode(mode, false),
+  });
+}
+
 const identity = { actionId: "action-1", idempotencyKey: "key-1" } as const;
 const EDIT_REQUEST: CodingToolActionRequest = {
   ...identity,
@@ -229,9 +246,30 @@ const WRITE_SHELL_WEB_GIT: readonly CodingToolActionRequest[] = [
   { ...identity, action: "connector", scope: "source-control.write" },
   { ...identity, action: "verification", verifierId: "test" },
 ];
+// R4130-009: actions that need only `workspace-read` but are not review tools. The authority port
+// alone must refuse each of them for the review authority.
+const READ_CLASS_NON_REVIEW: readonly CodingToolActionRequest[] = [
+  { ...identity, action: "skill", skillId: "skill-1" },
+  { ...identity, action: "skill-discover" },
+  { ...identity, action: "child-agent", objective: "read a.ts", maxToolCalls: 4 },
+  { ...identity, action: "git", operation: "read" },
+];
 const REVIEW_REQUESTS: readonly CodingToolActionRequest[] = [
   { ...identity, action: "read", relativePath: "src/a.ts", startLine: 1, maxLines: 10 },
   { ...identity, action: "discover", query: "a", maxResults: 5 },
+  {
+    ...identity,
+    action: "search",
+    repositoryRequest: {
+      kind: "search",
+      mode: "literal",
+      query: "a",
+      caseSensitive: false,
+      includeGlobs: [],
+      excludeGlobs: [],
+      maxResults: 5,
+    },
+  },
   { ...identity, action: "review-report", report: {} },
 ];
 
@@ -263,16 +301,55 @@ describe("layer 3 -- the review authority grants workspace-read only, checked on
     }
   });
 
+  it("denies skills, skill discovery, child agents and Git reads, and logs each denial", () => {
+    const log = createBufferedServerLogSink();
+    const admission = createCodingToolAuthorityPort(
+      {
+        revalidateCapabilityForMutation: vi.fn(() => ({
+          ok: true as const,
+          envelope: reviewAuthority,
+        })),
+        resolveCapabilityForDelegation: vi.fn(() => ({
+          ok: true as const,
+          envelope: reviewAuthority,
+        })),
+      },
+      authorityContext(),
+      { activityLog: log },
+    );
+    for (const request of READ_CLASS_NON_REVIEW) {
+      const admitted = admission.admit("capability", request);
+      expect(admitted, request.action).toMatchObject({ ok: false });
+      expect(admitted, request.action).not.toMatchObject({ approvalRequired: true });
+    }
+    const denied = log.events.filter(
+      (event) => event.op === "coding-runtime.tool-authority.denied",
+    );
+    expect(denied.map((event) => event.extra?.action)).toEqual(
+      READ_CLASS_NON_REVIEW.map((request) => request.action),
+    );
+    expect(denied.every((event) => event.extra?.readOnlyAuthority === true)).toBe(true);
+    const persisted = expectActivityLogProof(
+      "coding-runtime.tool-authority.denied.emitted-line",
+      formatActivityLogProofLine(denied[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ action: "skill", readOnlyAuthority: true });
+  });
+
   it("failure-first: the ordinary Ask-for-approval coding authority admits an edit", () => {
-    const coding = envelope({
-      effectiveMode: "governed-assist",
-      actionClasses: codingRuntimeActionClassesForMode("governed-assist", false),
-      connectorScopes: codingRuntimeConnectorScopesForMode("governed-assist"),
-      commandPolicy: codingRuntimeCommandPolicyForMode("governed-assist"),
-      networkPolicy: codingRuntimeNetworkPolicyForMode("governed-assist", false),
-    });
+    const coding = codingAuthority("governed-assist");
     expect(port(coding).admit("capability", EDIT_REQUEST).ok).toBe(true);
   });
+
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "failure-first: the ordinary %s coding authority still admits skills, child agents and Git reads",
+    (mode) => {
+      const admission = port(codingAuthority(mode));
+      for (const request of READ_CLASS_NON_REVIEW) {
+        expect(admission.admit("capability", request).ok, request.action).toBe(true);
+      }
+    },
+  );
 });
 
 describe("layer 4 -- the tool facade and the catalog bridge refuse every non-read action", () => {
@@ -325,7 +402,7 @@ describe("layer 4 -- the tool facade and the catalog bridge refuse every non-rea
     for (const request of REVIEW_REQUESTS) {
       await facade.execute({ body: body(request), capability: "capability" });
     }
-    expect(delegated).toEqual(["read", "discover", "review-report"]);
+    expect(delegated).toEqual(["read", "discover", "search", "review-report"]);
   });
 
   it("failure-first: without review authority the permissive facade delegates a command", async () => {

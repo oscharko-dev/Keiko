@@ -86,6 +86,50 @@ describe("review runtime Activity Log proofs", () => {
     });
   });
 
+  it("proves review.run.runtime-stopped for an instance that could not start (R4130-019)", () => {
+    const line = onlyLine((sink) => {
+      logReviewRuntimeStopped(sink, CORRELATION, {
+        instanceId: INSTANCE,
+        trigger: "start-failed",
+        idleDurationMs: 0,
+        runCount: 0,
+        startFailure: "loopback-unavailable",
+      });
+    });
+    expect(expectActivityLogProof("review.run.runtime-stopped.line", line)).toMatchObject({
+      trigger: "start-failed",
+      startFailure: "loopback-unavailable",
+    });
+  });
+
+  // Not through `onlyLine`: this line carries the Keiko code frames of its error, which are
+  // repository-relative source locations, the sanctioned body-free stack (AGENTS.md section 8).
+  it("proves review.run.rules-file for a failed read with its cause (R4130-022)", () => {
+    const capture = captureActivityLog();
+    logReviewRulesFile(capture.sink, {
+      correlationId: CORRELATION,
+      runId: RUN_ID,
+      outcome: "read-failed",
+      byteCount: 0,
+      failure: {
+        failureClass: "timeout",
+        error: new Error("rules read timed out", { cause: new TypeError("inner") }),
+      },
+    });
+    expect(capture.events).toHaveLength(1);
+    const [event] = capture.events;
+    if (event === undefined) throw new TypeError("expected one event");
+    const line = formatActivityLogProofLine(event);
+    const proof = expectActivityLogProof("review.run.rules-file.line", line);
+    expect(proof).toMatchObject({ outcome: "read-failed", failureClass: "timeout" });
+    expect(Array.isArray(proof.causeChain)).toBe(true);
+    expect(Array.isArray(proof.frames)).toBe(true);
+    expect(event).toMatchObject({ correlationId: CORRELATION, errorKind: "timeout" });
+    for (const forbidden of ["rules read timed out", "inner", RUN_ID]) {
+      expect(line).not.toContain(forbidden);
+    }
+  });
+
   it("proves review.run.profile-refused with its closed reason", () => {
     const line = onlyLine((sink) => {
       logReviewProfileRefused(sink, CORRELATION, "native-profile", "profile");
@@ -98,7 +142,12 @@ describe("review runtime Activity Log proofs", () => {
 
   it("proves review.run.rules-file with a run digest, never the run id or the rules", () => {
     const line = onlyLine((sink) => {
-      logReviewRulesFile(sink, RUN_ID, "too-large", 20_000);
+      logReviewRulesFile(sink, {
+        correlationId: CORRELATION,
+        runId: RUN_ID,
+        outcome: "too-large",
+        byteCount: 20_000,
+      });
     });
     expect(expectActivityLogProof("review.run.rules-file.line", line)).toMatchObject({
       outcome: "too-large",
@@ -122,7 +171,7 @@ describe("review runtime Activity Log proofs", () => {
         sink,
         RUN_ID,
         { status: "accepted", accepted: 1, remaining: 7 },
-        { fingerprint: "f".repeat(64), report: REPORT },
+        { accepted: { fingerprint: "f".repeat(64), report: REPORT } },
       );
     });
     expect(expectActivityLogProof("review.finding.reported.line", line)).toMatchObject({
@@ -131,6 +180,23 @@ describe("review runtime Activity Log proofs", () => {
       severity: "high",
       evidenceCount: 1,
       acceptedCount: 1,
+    });
+  });
+
+  it("proves a duplicate report with the run's duplicate count (R4130-025)", () => {
+    const line = onlyLine((sink) => {
+      logReviewFindingReported(
+        sink,
+        RUN_ID,
+        { status: "duplicate", accepted: 1, remaining: 7 },
+        { accepted: { fingerprint: "f".repeat(64), report: REPORT }, duplicateCount: 2 },
+      );
+    });
+    expect(expectActivityLogProof("review.finding.reported.line", line)).toMatchObject({
+      outcome: "duplicate",
+      acceptedCount: 1,
+      duplicateCount: 2,
+      fingerprintDigest: "f".repeat(64),
     });
   });
 

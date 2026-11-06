@@ -41,9 +41,10 @@ import {
   logReviewRuntimeStarted,
   logReviewRuntimeStopped,
   type ReviewRuntimePlacement,
+  type ReviewRuntimeStartFailure,
   type ReviewRuntimeStopTrigger,
 } from "./activity-log.js";
-import type { ReviewRuntimeComposition } from "./composition.js";
+import type { ReviewRuntimeComposeRefusal, ReviewRuntimeComposition } from "./composition.js";
 import {
   createReviewFindingIntake,
   type ReviewCandidateFinding,
@@ -111,7 +112,7 @@ export interface ReviewRuntimeServiceDeps {
   readonly compose: (
     instanceId: string,
     reviewReportPort: (runId: string) => GovernedCodingToolPort<"review-report"> | undefined,
-  ) => ReviewRuntimeComposition | undefined;
+  ) => ReviewRuntimeComposition | ReviewRuntimeComposeRefusal;
   /** What the self-check reads for a composed instance about to run one review. */
   readonly layersFor: (
     composition: ReviewRuntimeComposition,
@@ -240,8 +241,12 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
   ): LiveInstance | undefined {
     const startedAt = this.now();
     const slot: LiveInstance["slot"] = { intake: undefined, pending: undefined };
-    const composition = this.deps.compose(randomUUID(), reviewReportPortFor(slot));
-    if (composition === undefined) return undefined;
+    const instanceId = randomUUID();
+    const composition = this.deps.compose(instanceId, reviewReportPortFor(slot));
+    if ("startFailure" in composition) {
+      this.startFailed(instanceId, composition.startFailure, correlationId);
+      return undefined;
+    }
     const live: LiveInstance = {
       composition,
       slot,
@@ -259,6 +264,21 @@ class ReviewRuntimeServiceImpl implements ReviewRuntimeService, ServiceContext {
       placement,
     );
     return live;
+  }
+
+  /** Names why no instance could be started, under the review's correlation (R4130-019). */
+  public startFailed(
+    instanceId: string,
+    startFailure: ReviewRuntimeStartFailure,
+    correlationId: string | undefined,
+  ): void {
+    logReviewRuntimeStopped(this.deps.activityLog, correlationId, {
+      instanceId,
+      trigger: "start-failed",
+      idleDurationMs: 0,
+      runCount: 0,
+      startFailure,
+    });
   }
 
   public arm(key: string, live: LiveInstance): void {
@@ -332,6 +352,11 @@ interface ServiceContext {
     placement?: ReviewRuntimePlacement,
   ): LiveInstance | undefined;
   quarantine(key: string, live: LiveInstance): void;
+  startFailed(
+    instanceId: string,
+    startFailure: ReviewRuntimeStartFailure,
+    correlationId: string | undefined,
+  ): void;
   arm(key: string, live: LiveInstance): void;
 }
 
@@ -351,7 +376,10 @@ function acquireInstance(
   const live = context.instances.get(key);
   if (live === undefined) return context.start(key, request.correlationId);
   if (!live.composition.controlPlane.orchestrator.hasLiveRun()) return live;
-  if (context.quarantined.has(key)) return undefined;
+  if (context.quarantined.has(key)) {
+    context.startFailed(randomUUID(), "quarantine-limit", request.correlationId);
+    return undefined;
+  }
   context.quarantine(key, live);
   return context.start(key, request.correlationId, "beside-quarantined");
 }
@@ -364,13 +392,19 @@ async function readRules(
     return await readReviewRulesFromBase({
       repositoryRoot: request.repositoryRoot,
       baseSha: request.baseSha,
-      path: context.deps.rulesSettings?.rulesPath(request.repositoryRoot),
+      path: context.deps.rulesSettings?.rulesPath(request.repositoryRoot, request.correlationId),
       runner: context.deps.runner(),
       abortSignal: request.signal,
     });
   } catch (error) {
     if (!(error instanceof ReviewRulesReadError)) throw error;
-    logReviewRulesFile(context.deps.activityLog, request.reviewRunId, "read-failed", 0);
+    logReviewRulesFile(context.deps.activityLog, {
+      correlationId: request.correlationId,
+      runId: request.reviewRunId,
+      outcome: "read-failed",
+      byteCount: 0,
+      failure: { failureClass: error.failure, error },
+    });
     return undefined;
   }
 }
@@ -401,7 +435,12 @@ async function prepareAndRun(
 ): Promise<ReviewRuntimeRunResult> {
   const rules = await readRules(context, request);
   if (rules === undefined) return { ok: false, reason: "rules-read-failed" };
-  logReviewRulesFile(context.deps.activityLog, request.reviewRunId, rules.outcome, rules.byteCount);
+  logReviewRulesFile(context.deps.activityLog, {
+    correlationId: request.correlationId,
+    runId: request.reviewRunId,
+    outcome: rules.outcome,
+    byteCount: rules.byteCount,
+  });
   if (rules.outcome !== "loaded" && rules.outcome !== "absent") {
     return { ok: false, reason: "rules-file-invalid", rules: rules.outcome };
   }

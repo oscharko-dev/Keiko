@@ -241,6 +241,43 @@ export async function gitReviewCommitExists(
   return { ok: true, value: result.exitCode === 0 };
 }
 
+/**
+ * The best common ancestor of a review target's base and head (`git merge-base`): the commit a
+ * pull request's head branched from, which its diff starts at (R4130-008). `undefined` when the
+ * two commits share no history; a missing object or any other failure is not an answer.
+ */
+export async function resolveGitReviewMergeBase(
+  ctx: GitReviewOperationContext,
+  request: { readonly cwd: string; readonly baseSha: string; readonly headSha: string },
+): Promise<GitReviewOperationResult<string | undefined>> {
+  const baseSha = assertObjectId(request.baseSha, "baseSha");
+  const headSha = assertObjectId(request.headSha, "headSha");
+  const args = ["merge-base", "--end-of-options", baseSha, headSha];
+  const result = await run(ctx, request.cwd, args, [1]);
+  if (result.exitCode === 1 && result.refusal === undefined && result.stdout === "") {
+    return { ok: true, value: undefined };
+  }
+  if (!succeeded(result)) return { ok: false, result };
+  const value = result.stdout.trim();
+  return OBJECT_ID.test(value) ? { ok: true, value } : { ok: false, result };
+}
+
+/**
+ * Whether the repository is a shallow clone (`rev-parse --is-shallow-repository`). A shallow clone
+ * hides history behind its boundary, so a missing merge base there is not proof that two commits
+ * are unrelated (R4130-036). Reading it changes nothing; Keiko never deepens the user's clone.
+ */
+export async function gitReviewRepositoryIsShallow(
+  ctx: GitReviewOperationContext,
+  request: { readonly cwd: string },
+): Promise<GitReviewOperationResult<boolean>> {
+  const result = await run(ctx, request.cwd, ["rev-parse", "--is-shallow-repository"]);
+  if (!succeeded(result)) return { ok: false, result };
+  const answer = result.stdout.trim();
+  if (answer === "true") return { ok: true, value: true };
+  return answer === "false" ? { ok: true, value: false } : { ok: false, result };
+}
+
 export function createGitReviewRef(
   ctx: GitReviewOperationContext,
   request: { readonly cwd: string; readonly ref: string; readonly sha: string },
@@ -458,7 +495,10 @@ export async function grepGitReviewTree(
   const perFile = assertGrepCount(request.maxCountPerFile);
   const args = ["grep", "--no-color", "-I", "-F", "-n", "-z", "--full-name"];
   const result = await ctx.runner(
-    [...GIT_BASE_ARGS, ...args, `--max-count=${String(perFile)}`, "-e", literal, sha, "--"],
+    // R4130-026: the literal is stuck to `-e` as one token. As a separate token, a literal such as
+    // `-cp` or `--exec` trips the runner's whole-argv option refusals. Git's option parser reads
+    // the rest of `-e<literal>` as the pattern; `git grep` has no `--regexp=` long form.
+    [...GIT_BASE_ARGS, ...args, `--max-count=${String(perFile)}`, `-e${literal}`, sha, "--"],
     {
       cwd: request.cwd,
       timeoutMs: ctx.timeoutMs ?? DEFAULT_TIMEOUT_MS,

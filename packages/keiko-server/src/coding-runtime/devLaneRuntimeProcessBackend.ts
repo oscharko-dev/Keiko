@@ -57,6 +57,7 @@ import type {
 import {
   prepareRuntimeGatewayProcessSandbox,
   recordRuntimeGatewayConfinementSpawned,
+  runtimeProfileAttestsGit,
 } from "./runtimeGatewayProcessSandbox.js";
 
 // macOS: the host's process table with kernel identities, read by `/usr/bin/perl` outside every
@@ -260,14 +261,14 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     setLaunchPhase("platform-identity");
     assertPlatformIdentity(this.platform, this.identity);
     const { executable, cwd } = resolveLaunchPaths(this.runtimeRoot, request, setLaunchPhase);
-    const gitExecutable = this.attestedGit(setLaunchPhase);
+    const gitExecutable = this.attestedGit(setLaunchPhase, policy.profile);
     setLaunchPhase("sandbox-plan");
     const sandboxMember = this.admitsSandboxMember(policy);
     const decision = this.plannedLaunch(request, policy, { executable, cwd }, gitExecutable);
     setLaunchPhase("process-spawn");
     const child = this.spawnRuntime(decision.command, decision.args, {
       cwd,
-      env: runtimeEnvironment(request.env, gitExecutable, policy.profile),
+      env: runtimeEnvironment(request.env, gitExecutable),
       detached: true,
       launcherDiagnostics: linuxGatewayLauncherBackend(decision.attestation.backend),
       sandboxMember,
@@ -349,7 +350,9 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
 
   private attestedGit(
     setLaunchPhase: (phase: DevLaneLaunchPhase) => void,
+    profile: RuntimeGatewayConfinement["profile"],
   ): AttestedDarwinGitExecutable | undefined {
+    if (!runtimeProfileAttestsGit(profile)) return undefined;
     setLaunchPhase("git-attestation");
     return platformGitExecutable(this.identity, this.resolveGitExecutable);
   }
@@ -509,21 +512,14 @@ function platformGitExecutable(
   return identity.platform === "darwin" ? resolveGitExecutable() : undefined;
 }
 
+// The gateway profile sees the attested Git only; the native profile (#3897) keeps the launcher's
+// allowlisted PATH, so the agent's shell finds the project's toolchains and the host's Git.
 function runtimeEnvironment(
   environment: Readonly<Record<string, string>>,
   gitExecutable: AttestedDarwinGitExecutable | undefined,
-  profile: RuntimeGatewayConfinement["profile"] = "keiko-gateway",
 ): Readonly<Record<string, string>> {
   if (gitExecutable === undefined) return { ...environment };
-  // The native profile (#3897) keeps the launcher's allowlisted PATH so the agent's shell finds
-  // the project's toolchains, with the attested Git first; the gateway profile sees Git only.
-  const gitDirectory = dirname(gitExecutable.path);
-  const inherited = environment.PATH;
-  const path =
-    profile === "keiko-native" && inherited !== undefined && inherited.length > 0
-      ? `${gitDirectory}:${inherited}`
-      : gitDirectory;
-  return { ...environment, PATH: path };
+  return { ...environment, PATH: dirname(gitExecutable.path) };
 }
 
 function recordConfinementFailure(

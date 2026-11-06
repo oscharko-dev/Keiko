@@ -1241,6 +1241,13 @@ function jiraPodField(jiraPodId: string | undefined): { readonly jiraPodId?: str
   return jiraPodId === undefined ? {} : { jiraPodId };
 }
 
+/** The human's MCP server selection as an optional key, so a start without one adds none. */
+function mcpServersField(mcpServers: readonly string[] | undefined): {
+  readonly mcpServers?: readonly string[];
+} {
+  return mcpServers === undefined ? {} : { mcpServers };
+}
+
 /** The first prompt's references and slash command as optional keys, so an absent one adds no key. */
 function promptInputFields(
   request: Pick<CodingWorkbenchRuntimeStartRequest, "references" | "command" | "mentions">,
@@ -4456,6 +4463,7 @@ export class CodingRuntimeOrchestrator {
         ...agentField(request.agent),
         ...promptInputFields(request),
         ...jiraPodField(request.jiraPodId),
+        ...mcpServersField(request.mcpServers),
         workspaceId: active.instance.workspaceId,
         workspaceRoot: active.binding.activeRoot,
         serverPrincipal: principal,

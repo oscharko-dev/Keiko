@@ -5,7 +5,7 @@
 
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGitReviewProcessRunner } from "@oscharko-dev/keiko-git";
 import type {
   ReviewRunSettlement,
@@ -13,7 +13,9 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
 import type { RouteResult } from "../../routes.js";
-import { git } from "../reviewFixtures.test-support.js";
+import { defaultServerDiagnosticSink } from "../../diagnostics-log.js";
+import { reviewEvidenceDigest } from "../activity-log.js";
+import { commitFile, git } from "../reviewFixtures.test-support.js";
 import {
   handleReviewRunCancel,
   handleReviewRunDiff,
@@ -184,8 +186,9 @@ describe("review run service: every settlement of the child 1 table (AC1)", () =
   });
 
   // #4138: a review started more than the readiness lifetime after the model last answered was
-  // refused for a stale observation; the run now checks each role model again before admission.
-  it("checks each role model again before it admits the run", async () => {
+  // refused for a stale observation; after the policy admits the pair, the run checks each role
+  // model again before it evaluates eligibility.
+  it("checks each role model again before it evaluates eligibility", async () => {
     const lapsed = capability("reviewer-model", { conversationReady: false });
     const capabilities: Record<string, typeof lapsed | undefined> = { "reviewer-model": lapsed };
     const checked: string[] = [];
@@ -200,6 +203,34 @@ describe("review run service: every settlement of the child 1 table (AC1)", () =
 
     expect(checked).toEqual(["reviewer-model", "checker-model"]);
     expect(settlement).toEqual({ kind: "complete" });
+  });
+
+  // R4130-003: the policy admission runs before anything reads or loads a role model, so a model
+  // the policy refuses is never read, made ready, probed or called for the run.
+  it("reads no role model capability when the policy refuses the pair", async () => {
+    const reads: string[] = [];
+    const capabilities = new Proxy(
+      {},
+      {
+        getOwnPropertyDescriptor: (_target, key): undefined => {
+          reads.push(String(key));
+          return undefined;
+        },
+      },
+    );
+    const ensured: string[] = [];
+    const settlement = await settlementOf({
+      capabilities,
+      admit: () => false,
+      ensureReady: (modelId) => {
+        ensured.push(modelId);
+        return Promise.resolve();
+      },
+    });
+    expect(settlement).toEqual({ kind: "skipped", reason: "policy-invalid" });
+    expect(reads).toEqual([]);
+    expect(ensured).toEqual([]);
+    expect(harness?.runtimeRequests).toEqual([]);
   });
 
   it("skips with target-changed, no-reviewable-changes and worktree-failed", async () => {
@@ -555,6 +586,76 @@ describe("review run service: stale heads and the reviewed diff (AC5)", () => {
   });
 });
 
+describe("review run service: the reviewed diff of renamed and unusual paths", () => {
+  const RENAMED_BASE = ["one", "two", "three", "four", "five", "six", "seven", "eight"];
+
+  function diffRoute(h: ReviewRunHarness, runId: string, path: string): Promise<RouteResult> {
+    return handleReviewRunDiff(
+      h.ctx(`/api/git-review/runs/${runId}/diff?path=${encodeURIComponent(path)}`, {
+        params: { runId },
+      }),
+      h.deps(),
+    );
+  }
+
+  // R4130-015: the base blob was looked up under the new path, so a renamed file with two edited
+  // lines was served as one hunk that adds every line.
+  it("diffs a renamed file against its base path", async () => {
+    const h = setUp({ runtime: reviewerFiling([]) });
+    git(h.repo, "checkout", "-q", "-b", "rename-base", "main");
+    commitFile(h.repo, "src/a.ts", `${RENAMED_BASE.join("\n")}\n`, "a");
+    git(h.repo, "checkout", "-q", "-b", "rename-head");
+    git(h.repo, "mv", "src/a.ts", "src/b.ts");
+    const edited = RENAMED_BASE.map((line) => (line === "three" ? "THREE" : line));
+    commitFile(h.repo, "src/b.ts", `${edited.join("\n")}\n`, "rename");
+    git(h.repo, "checkout", "-q", "main");
+    const view = await settled(
+      h,
+      await start(
+        h,
+        startBody({
+          target: { kind: "local-range", baseRef: "rename-base", headRef: "rename-head" },
+        }),
+      ),
+    );
+    expect(h.store.coverageEntries(view.runId)).toContainEqual(
+      expect.objectContaining({ path: "src/b.ts", previousPath: "src/a.ts" }),
+    );
+    const served = await diffRoute(h, view.runId, "src/b.ts");
+    expect(served.body).toMatchObject({ status: "available", path: "src/b.ts" });
+    const diff = (served.body as { readonly diff: string }).diff;
+    expect(diff).toContain("-three");
+    expect(diff).toContain("+THREE");
+    expect(diff).not.toContain("@@ -0,0 ");
+  });
+
+  // R4130-024: the hardened path read throws for a control character; the route answered an
+  // opaque 500 and never wrote its declared diagnostic.
+  it("refuses a covered path with a control character as objects-unavailable", async () => {
+    const record = vi.spyOn(defaultServerDiagnosticSink, "record");
+    const h = setUp({ runtime: reviewerFiling([]) });
+    git(h.repo, "checkout", "-q", "-b", "tab-head", "topic");
+    commitFile(h.repo, "docs/a\tb.md", "tabbed\n", "tab");
+    git(h.repo, "checkout", "-q", "main");
+    const view = await settled(
+      h,
+      await start(
+        h,
+        startBody({ target: { kind: "local-range", baseRef: "main", headRef: "tab-head" } }),
+      ),
+    );
+    expect(h.store.coverageEntries(view.runId).map((entry) => entry.path)).toContain(
+      "docs/a\tb.md",
+    );
+    const served = await diffRoute(h, view.runId, "docs/a\tb.md");
+    expect(served).toMatchObject({ status: 200, body: { status: "objects-unavailable" } });
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "review.run.diff", correlationId: "corr-review-run" }),
+    );
+    record.mockRestore();
+  });
+});
+
 describe("review run service: reads, dry run and evaluation switches", () => {
   it("serves the record, history and review states", async () => {
     const h = setUp({
@@ -659,12 +760,13 @@ describe("review run service: fault injection", () => {
     });
     const result = await start(h);
     await h.service.whenSettled(runOf(result).runId);
-    const settledLine = h.log.events.find((event) => event.op === "review.run.settled");
-    expect(settledLine).toMatchObject({
-      extra: { settlement: "abandoned", reason: "interrupted", presentedCount: 0 },
-    });
+    const settledLines = (): readonly unknown[] =>
+      h.log.events.filter((event) => event.op === "review.run.settled");
+    // No write settled the row, so the run has not ended in the Activity Log yet (R4130-029).
+    expect(settledLines()).toHaveLength(0);
     noWorktreeLeft(h, runOf(result).runId);
-    // The stored row stays unsettled; the next start settles it the same way.
+    // The stored row stays unsettled; the next start settles it the same way and writes the run's
+    // one terminal line.
     const restarted = createReviewRunService({
       store: new ReviewRunStore(h.db),
       reviewServices: h.services,
@@ -677,7 +779,141 @@ describe("review run service: fault injection", () => {
       kind: "abandoned",
       reason: "interrupted",
     });
+    expect(settledLines()).toHaveLength(1);
+    expect(settledLines()[0]).toMatchObject({
+      extra: { settlement: "abandoned", reason: "interrupted", presentedCount: 0 },
+    });
     await restarted.dispose();
+  });
+
+  function diskFull(): Error {
+    return Object.assign(new Error("database or disk is full"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 13,
+    });
+  }
+
+  // R4130-017: one failed settlement write left the row `settling`; every later start was refused
+  // 409 REVIEW_ACTIVE and a cancel 409 REVIEW_SETTLED until the server restarted.
+  it("settles the row minimally when only the full record cannot be written", async () => {
+    const h = setUp({
+      runtime: reviewerFiling([reportAt(3, "high")]),
+      counterCheck: counterCheckBy({ 3: "confirmed" }),
+      store: (db) => {
+        const store = new ReviewRunStore(db);
+        const settle = store.settle.bind(store);
+        store.settle = (runId, rows, record): void => {
+          if (rows.length > 0) throw diskFull();
+          settle(runId, rows, record);
+        };
+        return store;
+      },
+    });
+    const first = runOf(await start(h));
+    await h.service.whenSettled(first.runId);
+    expect(h.store.get(first.runId)).toMatchObject({
+      phase: "settled",
+      settlement: { kind: "abandoned", reason: "interrupted" },
+    });
+    const second = await start(h, startBody({ clientRequestId: "client-request-2" }));
+    expect(second.status).toBe(202);
+  });
+
+  it("settles a stuck row at the next start or cancel when no write succeeded", async () => {
+    const failing = { settle: true };
+    const h = setUp({
+      runtime: reviewerFiling([]),
+      store: (db) => {
+        const store = new ReviewRunStore(db);
+        const settle = store.settle.bind(store);
+        store.settle = (runId, rows, record): void => {
+          if (failing.settle) throw diskFull();
+          settle(runId, rows, record);
+        };
+        return store;
+      },
+    });
+    const first = runOf(await start(h));
+    await h.service.whenSettled(first.runId);
+    expect(h.store.get(first.runId)?.phase).toBe("settling");
+    failing.settle = false;
+    // R4130-029: the run ends once in the Activity Log, when its stored row settles.
+    const settledLines = (runId: string): number =>
+      h.log
+        .withOp("review.run.settled")
+        .filter((line) => line.extra?.runDigest === reviewEvidenceDigest("run", runId)).length;
+    expect(settledLines(first.runId)).toBe(0);
+    const cancelled = handleReviewRunCancel(
+      h.ctx(`/api/git-review/runs/${first.runId}/cancel`, { params: { runId: first.runId } }),
+      h.deps(),
+    );
+    expect(cancelled.status).toBe(409);
+    expect(h.store.get(first.runId)?.settlement).toEqual({
+      kind: "abandoned",
+      reason: "interrupted",
+    });
+    expect(settledLines(first.runId)).toBe(1);
+    failing.settle = true;
+    const stuck = runOf(await start(h, startBody({ clientRequestId: "client-request-2" })));
+    await h.service.whenSettled(stuck.runId);
+    failing.settle = false;
+    const third = await start(h, startBody({ clientRequestId: "client-request-3" }));
+    expect(third.status).toBe(202);
+    expect(h.store.get(stuck.runId)?.settlement).toEqual({
+      kind: "abandoned",
+      reason: "interrupted",
+    });
+    expect(settledLines(stuck.runId)).toBe(1);
+    expect(settledLines(first.runId)).toBe(1);
+  });
+
+  // R4130-020: a store read that threw during settling rejected the run's unawaited `done`
+  // promise, which exits the CLI process on an unhandled rejection.
+  it("announces abandoned/interrupted when a store read fails during settling", async () => {
+    const record = vi.spyOn(defaultServerDiagnosticSink, "record");
+    const reads = { fail: false };
+    const h = setUp({
+      runtime: reviewerFiling([]),
+      store: (db) => {
+        const store = new ReviewRunStore(db);
+        const get = store.get.bind(store);
+        const setPhase = store.setPhase.bind(store);
+        store.setPhase = (runId, phase, at): void => {
+          setPhase(runId, phase, at);
+          if (phase === "settling") reads.fail = true;
+        };
+        store.get = (runId): ReturnType<ReviewRunStore["get"]> => {
+          if (reads.fail) throw new Error("database is locked");
+          return get(runId);
+        };
+        return store;
+      },
+    });
+    const run = runOf(await start(h));
+    const frames: unknown[] = [];
+    h.service.subscribe(run.runId, {
+      onEvent: (frame) => frames.push(frame),
+      onClose: () => undefined,
+    });
+    await expect(h.service.whenSettled(run.runId)).resolves.toBeUndefined();
+    // R4130-030: the run's checkout is removed although settling threw before its removal.
+    noWorktreeLeft(h, run.runId);
+    expect(frames).toContainEqual(
+      expect.objectContaining({
+        kind: "settled",
+        settlement: { kind: "abandoned", reason: "interrupted" },
+      }),
+    );
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "review.run.persist",
+        correlationId: "corr-review-run",
+      }),
+    );
+    reads.fail = false;
+    const next = await start(h, startBody({ clientRequestId: "client-request-2" }));
+    expect(next.status).toBe(202);
+    record.mockRestore();
   });
 
   it("interrupts a run whose phase record cannot be written", async () => {

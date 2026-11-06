@@ -2,8 +2,10 @@
 // the presentation with the pure rules, persist the record (findings and settlement in one
 // transaction), remove the review worktree while its private refs stay for the diff route, and
 // record `review.run.settled`. A record that cannot be written (a full disk) settles the run
-// `abandoned/interrupted`: nothing it found is presented, and the next start settles the stored
-// row the same way.
+// `abandoned/interrupted`: nothing it found is presented, a minimal record settles the stored row
+// the same way, and when that write fails too, the next start or cancel of the repository does.
+// `review.run.settled` is the run's one terminal line: it is written when the stored row settles,
+// so a row that only the later recovery settles is logged there and not here (R4130-029).
 
 import type { ReviewRunSettlement } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
@@ -94,31 +96,58 @@ function verdictCounts(
   };
 }
 
+const INTERRUPTED: ReviewRunSettlement = { kind: "abandoned", reason: "interrupted" };
+
+function settleRecord(
+  deps: ReviewSettleDeps,
+  ctx: ReviewRunContext,
+  state: ReviewRunState,
+  rows: readonly ReviewFindingRow[],
+  settlement: ReviewRunSettlement,
+): void {
+  deps.store.settle(ctx.runId, rows, {
+    settlement,
+    settledAt: deps.now(),
+    candidateCount: rows.length,
+    reviewer: state.reviewerTotals,
+    counterChecker: state.counterCheckerTotals,
+    runtimeCleanup: state.runtimeCleanup,
+  });
+}
+
+/** Which record settled the stored row: the full one, the minimal one, or none. */
+type ReviewPersisted = "full" | "minimal" | "none";
+
+/**
+ * Persists the record. When it cannot be written, a minimal record without findings settles the
+ * row `abandoned/interrupted`, so a transient write failure cannot leave the repository's one
+ * active-run slot taken until a restart (R4130-017).
+ */
 function persist(
   deps: ReviewSettleDeps,
   ctx: ReviewRunContext,
   state: ReviewRunState,
   rows: readonly ReviewFindingRow[],
   settlement: ReviewRunSettlement,
-): boolean {
+): ReviewPersisted {
   try {
-    deps.store.settle(ctx.runId, rows, {
-      settlement,
-      settledAt: deps.now(),
-      candidateCount: rows.length,
-      reviewer: state.reviewerTotals,
-      counterChecker: state.counterCheckerTotals,
-      runtimeCleanup: state.runtimeCleanup,
-    });
-    return true;
+    settleRecord(deps, ctx, state, rows, settlement);
+    return "full";
   } catch (error) {
     reportReviewFailure("review.run.persist", ctx.correlationId, error);
-    return false;
   }
+  try {
+    settleRecord(deps, ctx, state, [], INTERRUPTED);
+    return "minimal";
+  } catch (error) {
+    reportReviewFailure("review.run.persist", ctx.correlationId, error);
+  }
+  return "none";
 }
 
-async function removeWorktree(
-  deps: ReviewSettleDeps,
+/** Removes the run's checkout; a failure is reported, never thrown. */
+export async function removeReviewWorktree(
+  deps: Pick<ReviewSettleDeps, "reviewServices">,
   ctx: ReviewRunContext,
   state: ReviewRunState,
   settlement: ReviewRunSettlement,
@@ -133,9 +162,9 @@ async function removeWorktree(
 }
 
 async function staleAtSettlement(deps: ReviewSettleDeps, ctx: ReviewRunContext): Promise<boolean> {
-  const row = deps.store.get(ctx.runId);
-  if (row === undefined) return false;
   try {
+    const row = deps.store.get(ctx.runId);
+    if (row === undefined) return false;
     return await deps.stale.isStale(row, ctx.correlationId);
   } catch (error) {
     reportReviewFailure("review.target.provider-read", ctx.correlationId, error);
@@ -163,12 +192,29 @@ export async function settleRunRecord(
     uncheckedCandidates: state.uncheckedCandidates,
   });
   const rows = findingRows(presentationCandidates(state), ctx, deps.excluded, computed);
-  const recorded = persist(deps, ctx, state, rows, computed);
-  const settlement: ReviewRunSettlement = recorded
-    ? computed
-    : { kind: "abandoned", reason: "interrupted" };
+  const persisted = persist(deps, ctx, state, rows, computed);
+  const recorded = persisted === "full";
+  const settlement = recorded ? computed : INTERRUPTED;
   const presentedCount = recorded ? rows.filter((row) => row.presented).length : 0;
-  await removeWorktree(deps, ctx, state, settlement);
+  await removeReviewWorktree(deps, ctx, state, settlement);
+  if (persisted !== "none") {
+    logSettled(deps, ctx, state, { settlement, rows, presentedCount, stale });
+  }
+  return { settlement, presentedCount };
+}
+
+function logSettled(
+  deps: ReviewSettleDeps,
+  ctx: ReviewRunContext,
+  state: ReviewRunState,
+  outcome: {
+    readonly settlement: ReviewRunSettlement;
+    readonly rows: readonly ReviewFindingRow[];
+    readonly presentedCount: number;
+    readonly stale: boolean;
+  },
+): void {
+  const { settlement, rows, presentedCount, stale } = outcome;
   logReviewRunSettled(deps.activityLog, ctx.correlationId, {
     runId: ctx.runId,
     settlement,
@@ -180,5 +226,4 @@ export async function settleRunRecord(
     stale,
     runtimeCleanup: state.runtimeCleanup,
   });
-  return { settlement, presentedCount };
 }

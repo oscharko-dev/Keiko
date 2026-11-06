@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+
 import { useContext } from "react";
 import type { ReactNode } from "react";
 import { WsContext } from "../../context/WsContext";
@@ -10,6 +12,7 @@ import { Icons } from "../../Icons";
 import type { IconName } from "../../Icons";
 
 export function InspectorPanel(): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   const { active, winCount } = useContext(WsContext);
   const translate = useTranslate();
 
@@ -22,7 +25,7 @@ export function InspectorPanel(): ReactNode {
   return (
     <div className="tw-pad">
       <div className="rb-section-label" style={{ marginTop: 0 }}>
-        Active window
+        {tUi("inspectorPanel.ui.activeWindow")}
       </div>
       {active !== null && def !== null ? (
         <>
@@ -37,25 +40,25 @@ export function InspectorPanel(): ReactNode {
           </div>
           <div className="rb-rows">
             <div className="rb-row">
-              <span className="rb-row-k">Size</span>
+              <span className="rb-row-k">{tUi("inspectorPanel.ui.size")}</span>
               <span className="rb-row-v mono">
                 {Math.round(active.w)} × {Math.round(active.h)}
               </span>
             </div>
             <div className="rb-row">
-              <span className="rb-row-k">Position</span>
+              <span className="rb-row-k">{tUi("inspectorPanel.ui.position")}</span>
               <span className="rb-row-v mono">
                 {Math.round(active.x)}, {Math.round(active.y)}
               </span>
             </div>
             <div className="rb-row">
-              <span className="rb-row-k">State</span>
+              <span className="rb-row-k">{tUi("inspectorPanel.ui.state")}</span>
               <span className="rb-row-v mono">{active.max ? "maximized" : "floating"}</span>
             </div>
           </div>
           {cfgRows.length > 0 && (
             <>
-              <div className="rb-section-label">Configuration</div>
+              <div className="rb-section-label">{tUi("inspectorPanel.ui.configuration")}</div>
               <div className="rb-rows">
                 {cfgRows.map(([k, v]) => {
                   // GEN-UI-VISUAL-004 — surface the full value on hover and to AT via title, and
@@ -75,35 +78,37 @@ export function InspectorPanel(): ReactNode {
               </div>
             </>
           )}
-          <div className="rb-section-label insp-governance">Governance</div>
+          <div className="rb-section-label insp-governance">
+            {tUi("inspectorPanel.ui.governance")}
+          </div>
           <div className="rb-rows insp-governance" data-testid="insp-governance">
             <div className="rb-row">
-              <span className="rb-row-k">Authority</span>
+              <span className="rb-row-k">{tUi("inspectorPanel.ui.authority")}</span>
               <span className="rb-row-v mono">{WIN_META[active.type].authority}</span>
             </div>
             <div className="rb-row">
-              <span className="rb-row-k">Persistence</span>
+              <span className="rb-row-k">{tUi("inspectorPanel.ui.persistence")}</span>
               <span className="rb-row-v mono">{WIN_META[active.type].persistence}</span>
             </div>
             <div className="rb-row">
-              <span className="rb-row-k">Trust</span>
+              <span className="rb-row-k">{tUi("inspectorPanel.ui.trust")}</span>
               <span className="rb-row-v mono">
                 {WIN_META[active.type].trustBoundary.join(", ")}
               </span>
             </div>
             <div className="rb-row">
-              <span className="rb-row-k">Lifecycle</span>
+              <span className="rb-row-k">{tUi("inspectorPanel.ui.lifecycle")}</span>
               <span className="rb-row-v mono">{WIN_META[active.type].lifecycle.join(" → ")}</span>
             </div>
           </div>
         </>
       ) : (
-        <div className="insp-empty">No window focused</div>
+        <div className="insp-empty">{tUi("inspectorPanel.ui.noWindowFocused")}</div>
       )}
-      <div className="rb-section-label">Workspace</div>
+      <div className="rb-section-label">{tUi("inspectorPanel.ui.workspace")}</div>
       <div className="rb-rows">
         <div className="rb-row">
-          <span className="rb-row-k">Open windows</span>
+          <span className="rb-row-k">{tUi("inspectorPanel.ui.openWindows")}</span>
           <span className="rb-row-v mono">{winCount}</span>
         </div>
       </div>

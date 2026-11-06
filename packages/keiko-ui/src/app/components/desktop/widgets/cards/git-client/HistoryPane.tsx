@@ -112,7 +112,7 @@ export function HistoryPane({
   if (loading && history === null) {
     return (
       <output className="rv-empty" style={LOADING_STATE_STYLE}>
-        Loading history…
+        {t("gitClientWindow.ui.loadingHistory")}
       </output>
     );
   }
@@ -120,7 +120,7 @@ export function HistoryPane({
     return (
       <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
         <ActivityIcon size={20} />
-        <p style={SUBTLE_TEXT_STYLE}>Commit history appears after selecting a repository.</p>
+        <p style={SUBTLE_TEXT_STYLE}>{t("gitClientWindow.ui.historyAfterSelect")}</p>
       </div>
     );
   }
@@ -128,7 +128,7 @@ export function HistoryPane({
     return (
       <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
         <ActivityIcon size={20} />
-        <p style={SUBTLE_TEXT_STYLE}>History is unavailable for this repository.</p>
+        <p style={SUBTLE_TEXT_STYLE}>{t("gitClientWindow.ui.historyUnavailable")}</p>
       </div>
     );
   }
@@ -136,7 +136,7 @@ export function HistoryPane({
     return (
       <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
         <ActivityIcon size={20} />
-        <p style={SUBTLE_TEXT_STYLE}>No commits yet. Make a commit to start history.</p>
+        <p style={SUBTLE_TEXT_STYLE}>{t("gitClientWindow.ui.noCommits")}</p>
       </div>
     );
   }
@@ -154,7 +154,7 @@ export function HistoryPane({
         </output>
       ) : null}
       <ul
-        aria-label="Commit history"
+        aria-label={t("gitClientWindow.ui.commitHistory")}
         style={{ ...NATIVE_LIST_KEEP_PADDING_STYLE, ...HISTORY_LIST_STYLE }}
       >
         {entries.map((entry, index) => {
@@ -274,21 +274,21 @@ export function CommitDetailMeta({ entry }: { readonly entry: GitHistoryEntry })
           color: "var(--fg-muted)",
         }}
       >
-        <dt>Commit</dt>
+        <dt>{t("gitClientWindow.ui.commit")}</dt>
         <dd className="mono" style={{ margin: 0, color: "var(--fg)", overflowWrap: "anywhere" }}>
           {entry.sha}
         </dd>
-        <dt>Short SHA</dt>
+        <dt>{t("gitClientWindow.ui.shortSha")}</dt>
         <dd className="mono" style={{ margin: 0, color: "var(--fg)" }}>
           {entry.shortSha}
         </dd>
-        <dt>Parents</dt>
+        <dt>{t("gitClientWindow.ui.parents")}</dt>
         <dd style={{ margin: 0, color: "var(--fg)" }}>{entry.parentCount}</dd>
-        <dt>Changed files</dt>
+        <dt>{t("gitClientWindow.ui.changedFilesCount")}</dt>
         <dd style={{ margin: 0, color: "var(--fg)" }}>{entry.changedFileCount}</dd>
-        <dt>Refs</dt>
+        <dt>{t("gitClientWindow.ui.refs")}</dt>
         <dd style={{ margin: 0, color: "var(--fg)" }}>
-          {entry.refs.length === 0 ? "None" : entry.refs.join(", ")}
+          {entry.refs.length === 0 ? t("gitClientWindow.ui.none") : entry.refs.join(", ")}
         </dd>
       </dl>
     </section>

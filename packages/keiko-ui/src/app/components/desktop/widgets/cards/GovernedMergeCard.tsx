@@ -11,6 +11,7 @@
 // rejection / recovery states. Outcome is conveyed by TEXT + icon, never colour alone (WCAG 2.2 AA). Styling
 // uses inline styles backed by existing CSS custom properties so globals.css is untouched (ADR-0051 gate).
 
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { useCallback, useId, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import {
@@ -24,6 +25,12 @@ import {
   type GitDeliveryMergeStrategy,
 } from "@/lib/api";
 import { Icons } from "../../Icons";
+import {
+  GovernedEmpty,
+  GovernedField,
+  GovernedFieldRow,
+  GovernedPolicyFacts,
+} from "./governed-delivery-shared";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const GitIcon = Icons.git;
@@ -281,32 +288,51 @@ interface FieldsProps {
   readonly onChange: <K extends keyof MergeForm>(key: K, value: MergeForm[K]) => void;
 }
 
+function MergeBranchFields({ form, busy, onChange }: FieldsProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
+  return (
+    <GovernedFieldRow
+      disabled={busy}
+      fields={[
+        {
+          label: t("governedDelivery.ui.baseBranch"),
+          value: form.baseBranchName,
+          onChange: (v) => onChange("baseBranchName", v),
+        },
+        {
+          label: t("governedDelivery.ui.headBranch"),
+          value: form.headBranchName,
+          onChange: (v) => onChange("headBranchName", v),
+        },
+      ]}
+    />
+  );
+}
+
 function MergeTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
   const prNumberHintId = useId();
   const prIdInvalid = form.prExternalId !== "" && !isValidPrNumber(form.prExternalId);
   return (
-    <section style={SECTION_STYLE} aria-label="Merge target">
+    <section style={SECTION_STYLE} aria-label={t("governedDelivery.ui.mergeTarget")}>
       <h3 style={HEADING_STYLE}>
-        <GitIcon size={12} /> Merge target
+        <GitIcon size={12} /> {t("governedDelivery.ui.mergeTarget")}
       </h3>
       <div style={ROW_STYLE}>
+        <GovernedField
+          label={t("governedDelivery.ui.repository")}
+          value={form.ownerAndRepo}
+          disabled={busy}
+          onChange={(v) => onChange("ownerAndRepo", v)}
+        />
         <label style={{ ...LABEL_STYLE, flex: 1 }}>
-          Repository (owner/repo){" "}
-          <input
-            style={FIELD_STYLE}
-            value={form.ownerAndRepo}
-            disabled={busy}
-            onChange={(e) => onChange("ownerAndRepo", e.target.value)}
-          />
-        </label>
-        <label style={{ ...LABEL_STYLE, flex: 1 }}>
-          Pull Request number{" "}
+          {t("governedDelivery.ui.prNumber")}{" "}
           <input
             style={FIELD_STYLE}
             value={form.prExternalId}
             disabled={busy}
             onChange={(e) => onChange("prExternalId", e.target.value)}
-            aria-label="Pull Request number"
+            aria-label={t("governedDelivery.ui.prNumber")}
             inputMode="numeric"
             aria-invalid={prIdInvalid}
             aria-describedby={prIdInvalid ? prNumberHintId : undefined}
@@ -317,33 +343,12 @@ function MergeTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
               data-testid="gm-pr-number-hint"
               style={{ font: "var(--text-caption)", color: "var(--feedback-danger)", margin: 0 }}
             >
-              Enter the numeric Pull Request number, for example 1499.
+              {t("governedDelivery.ui.prNumberHint")}
             </p>
           ) : null}
         </label>
       </div>
-      <div style={ROW_STYLE}>
-        <label style={{ ...LABEL_STYLE, flex: 1 }}>
-          Base branch{" "}
-          <input
-            style={FIELD_STYLE}
-            value={form.baseBranchName}
-            disabled={busy}
-            onChange={(e) => onChange("baseBranchName", e.target.value)}
-            aria-label="Base branch"
-          />
-        </label>
-        <label style={{ ...LABEL_STYLE, flex: 1 }}>
-          Head branch{" "}
-          <input
-            style={FIELD_STYLE}
-            value={form.headBranchName}
-            disabled={busy}
-            onChange={(e) => onChange("headBranchName", e.target.value)}
-            aria-label="Head branch"
-          />
-        </label>
-      </div>
+      <MergeBranchFields form={form} busy={busy} onChange={onChange} />
     </section>
   );
 }
@@ -361,25 +366,26 @@ function StrategySelector({
   readonly busy: boolean;
   readonly onChange: <K extends keyof MergeForm>(key: K, value: MergeForm[K]) => void;
 }): ReactNode {
+  const t = useOptionalWidgetTranslate();
   const eligible = preview?.eligibleStrategies ?? [];
   const requestedIneligible = preview !== null && !preview.requestedStrategyEligible;
   return (
-    <section style={SECTION_STYLE} aria-label="Merge strategy">
+    <section style={SECTION_STYLE} aria-label={t("governedDelivery.ui.mergeStrategy")}>
       <h3 style={HEADING_STYLE}>
-        <GitIcon size={12} /> Strategy
+        <GitIcon size={12} /> {t("governedDelivery.ui.strategy")}
       </h3>
       <label style={LABEL_STYLE}>
-        Merge strategy{" "}
+        {t("governedDelivery.ui.mergeStrategy")}{" "}
         <select
           style={FIELD_STYLE}
           value={form.mergeStrategy}
           disabled={busy || eligible.length === 0}
           onChange={(e) => onChange("mergeStrategy", e.target.value)}
-          aria-label="Merge strategy"
+          aria-label={t("governedDelivery.ui.mergeStrategy")}
           data-testid="gm-strategy"
         >
           {eligible.length === 0 ? (
-            <option value="">Run preview to load eligible strategies</option>
+            <option value="">{t("governedDelivery.ui.runPreview")}</option>
           ) : (
             eligible.map((strategy) => (
               <option key={strategy} value={strategy}>
@@ -403,9 +409,9 @@ function StrategySelector({
           checked={form.deleteBranchAfterMerge}
           disabled={busy}
           onChange={(e) => onChange("deleteBranchAfterMerge", e.target.checked)}
-          aria-label="Delete head branch after merge"
+          aria-label={t("governedDelivery.ui.deleteBranch")}
         />{" "}
-        Delete head branch after merge
+        {t("governedDelivery.ui.deleteBranch")}
       </label>
     </section>
   );
@@ -418,37 +424,50 @@ function MergeReadinessPanel({
 }: {
   readonly preview: GitDeliveryMergePreviewResponse;
 }): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   return (
     <section
       style={SECTION_STYLE}
-      aria-label="Readiness"
+      aria-label={tUi("governedDelivery.ui.readiness")}
       aria-live="polite"
       data-testid="gm-readiness"
     >
       <h3 style={HEADING_STYLE}>
-        <InfoIcon size={12} /> Readiness
+        <InfoIcon size={12} /> {tUi("governedDelivery.ui.readiness")}
       </h3>
       <p style={KV_LABEL} data-field="mergeable">
-        Mergeable: {preview.readiness.mergeable ? "yes" : "no"}
+        {tUi("governedDelivery.ui.mergeable", {
+          value: tUi(
+            preview.readiness.mergeable ? "governedDelivery.ui.yes" : "governedDelivery.ui.no",
+          ),
+        })}
       </p>
-      <p style={KV_LABEL} data-field="recommendation">
-        Recommendation: {preview.recommendation}
-      </p>
-      <p style={KV_LABEL} data-field="policy">
-        Policy: {preview.policyOutcome}
-        {preview.policyBlockReason !== undefined ? ` (${preview.policyBlockReason})` : ""}
-      </p>
+      <GovernedPolicyFacts
+        recommendation={preview.recommendation}
+        policyOutcome={preview.policyOutcome}
+        policyBlockReason={preview.policyBlockReason}
+      />
       <p style={KV_LABEL} data-field="risk">
-        Risk: {preview.riskClass} (severity {preview.riskSeverity})
+        {tUi("governedDelivery.ui.riskSeverity", {
+          riskClass: preview.riskClass,
+          severity: preview.riskSeverity,
+        })}
       </p>
       <p style={KV_LABEL} data-field="approval">
-        Final approval required: {preview.requiresApproval ? "yes" : "no"}
+        {tUi("governedDelivery.ui.approvalRequired", {
+          value: tUi(
+            preview.requiresApproval ? "governedDelivery.ui.yes" : "governedDelivery.ui.no",
+          ),
+        })}
       </p>
       {preview.readiness.blockers.length > 0 ? (
         <ul style={{ margin: 0, paddingLeft: "var(--space-4)", font: "var(--text-caption)" }}>
           {preview.readiness.blockers.map((blocker) => (
             <li key={blocker.code} style={{ color: "var(--fg-muted)" }} data-blocker={blocker.code}>
-              blocker: {blocker.code} ({blocker.remediation})
+              {tUi("governedDelivery.ui.blocker", {
+                code: blocker.code,
+                remediation: blocker.remediation,
+              })}
               {blocker.actionHint !== undefined ? ` → ${blocker.actionHint}` : ""}
             </li>
           ))}
@@ -469,28 +488,26 @@ function MergeApprovalGate({
   readonly busy: boolean;
   readonly onChange: (next: boolean) => void;
 }): ReactNode {
+  const t = useOptionalWidgetTranslate();
   return (
     <section
       style={SECTION_STYLE}
-      aria-label="High-risk merge confirmation"
+      aria-label={t("governedDelivery.ui.highRiskAria")}
       data-testid="gm-approval"
     >
       <h3 style={HEADING_STYLE}>
-        <InfoIcon size={12} /> High-risk confirmation
+        <InfoIcon size={12} /> {t("governedDelivery.ui.highRisk")}
       </h3>
-      <p style={KV_LABEL}>
-        This merge is policy-gated as high risk. Confirm explicitly before merging; the server still
-        enforces the approval token.
-      </p>
+      <p style={KV_LABEL}>{t("governedDelivery.ui.highRiskHint")}</p>
       <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
         <input
           type="checkbox"
           checked={confirmed}
           disabled={busy}
           onChange={(e) => onChange(e.target.checked)}
-          aria-label="I confirm this high-risk merge"
+          aria-label={t("governedDelivery.ui.confirmHighRisk")}
         />{" "}
-        I confirm this high-risk merge
+        {t("governedDelivery.ui.confirmHighRisk")}
       </label>
     </section>
   );
@@ -592,6 +609,8 @@ function GovernedMergeBody({
   readonly titleId: string;
   readonly liveId: string;
 }): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
+  const t = useOptionalWidgetTranslate();
   const [form, setForm] = useState<MergeForm>(() =>
     initialForm({ headBranchName, ownerAndRepo, baseBranchName, prExternalId }),
   );
@@ -669,7 +688,7 @@ function GovernedMergeBody({
       aria-labelledby={titleId}
     >
       <h2 id={titleId} style={{ ...HEADING_STYLE, font: "var(--text-title)" }}>
-        <GitIcon size={14} /> Merge
+        <GitIcon size={14} /> {tUi("governedDelivery.ui.merge")}
       </h2>
       <p
         id={liveId}
@@ -704,7 +723,7 @@ function GovernedMergeBody({
           disabled={async.busy || !canPreview}
           onClick={onPreview}
         >
-          Preview
+          {tUi("governedDelivery.ui.preview")}
         </button>
         <button
           type="button"
@@ -713,7 +732,7 @@ function GovernedMergeBody({
           onClick={onExecute}
           data-testid="gm-submit"
         >
-          Merge Pull Request
+          {t("governedDelivery.ui.mergePr")}
         </button>
       </div>
       <MergeOutcome outcome={visibleOutcome} error={visibleError} />
@@ -746,17 +765,9 @@ export function GovernedMergeCard({
 }: GovernedMergeCardProps): ReactNode {
   const titleId = useId();
   const liveId = useId();
+  const t = useOptionalWidgetTranslate();
   if (projectId === undefined || projectId === "") {
-    return (
-      <div
-        data-testid="gm-empty"
-        style={{ padding: "var(--space-4)", color: "var(--fg-muted)", font: "var(--text-body-sm)" }}
-      >
-        <p>
-          <GitIcon size={13} /> Select a project to open a merge.
-        </p>
-      </div>
-    );
+    return <GovernedEmpty testId="gm-empty" text={t("governedDelivery.ui.selectProjectMerge")} />;
   }
   return (
     <GovernedMergeBody

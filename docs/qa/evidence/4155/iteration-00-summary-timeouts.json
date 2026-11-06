@@ -1,0 +1,72 @@
+{
+  "sourceHead": "67638d66e2afb4501bb0187b55c47f8373f09b2e",
+  "productTreeDigest": "d7e7bff39a5a8f88efc901c5b1a6d2bdd312e1fd34813e17b55a40b8cb9cce93",
+  "productDigestMethod": "sorted-tracked-input-paths-and-sha256-v1",
+  "distributionDigest": "eee0f9cac0df44b3f3ad4c2cec5f7ec6d329d7814dfcb9e30176dc8bbb15e132",
+  "compilerDigest": "3722b30210616a13a3213ded11575ba6b2dbab10c32a5ef67afca8513e27017e",
+  "nodeVersion": "v24.22.0",
+  "buildProvenance": {
+    "schemaVersion": 1,
+    "producer": "native-forced-packages-build",
+    "sourceHead": "67638d66e2afb4501bb0187b55c47f8373f09b2e",
+    "productTreeDigest": "d7e7bff39a5a8f88efc901c5b1a6d2bdd312e1fd34813e17b55a40b8cb9cce93",
+    "productDigestMethod": "sorted-tracked-input-paths-and-sha256-v1",
+    "distributionDigest": "eee0f9cac0df44b3f3ad4c2cec5f7ec6d329d7814dfcb9e30176dc8bbb15e132",
+    "compilerDigest": "3722b30210616a13a3213ded11575ba6b2dbab10c32a5ef67afca8513e27017e",
+    "nodeVersion": "v24.22.0"
+  },
+  "measurementKind": "native-runtime-diagnostic-observation-not-answer-quality",
+  "observedAt": "2026-10-30T15:27:48.370021+00:00",
+  "diagnosticSnapshotSha256": "28d6a06150c962c15a5b002a39d08a9a29a0d89a9fc6652f076bb398017e7f1f",
+  "summaryTimeoutMsInSubject": 15000,
+  "observedTimeoutRejections": 6,
+  "totalSummaryAttempts": null,
+  "failureRate": null,
+  "denominatorLimitation": "Diagnostic stdout records rejected summaries; successful-attempt inventory is not established by this snapshot.",
+  "events": [
+    {
+      "timestamp": "2026-10-30T14:33:09.129Z",
+      "operation": "chat.compaction.summary",
+      "source": "chat.compaction.model-summary",
+      "errorClass": "SummaryRejected",
+      "code": "timed-out"
+    },
+    {
+      "timestamp": "2026-10-30T14:36:17.438Z",
+      "operation": "chat.compaction.summary",
+      "source": "chat.compaction.model-summary",
+      "errorClass": "SummaryRejected",
+      "code": "timed-out"
+    },
+    {
+      "timestamp": "2026-10-30T14:41:50.291Z",
+      "operation": "chat.compaction.summary",
+      "source": "chat.compaction.model-summary",
+      "errorClass": "SummaryRejected",
+      "code": "timed-out"
+    },
+    {
+      "timestamp": "2026-10-30T14:57:49.732Z",
+      "operation": "chat.compaction.summary",
+      "source": "chat.compaction.model-summary",
+      "errorClass": "SummaryRejected",
+      "code": "timed-out"
+    },
+    {
+      "timestamp": "2026-10-30T14:58:56.331Z",
+      "operation": "chat.compaction.summary",
+      "source": "chat.compaction.model-summary",
+      "errorClass": "SummaryRejected",
+      "code": "timed-out"
+    },
+    {
+      "timestamp": "2026-10-30T15:00:50.655Z",
+      "operation": "chat.compaction.summary",
+      "source": "chat.compaction.model-summary",
+      "errorClass": "SummaryRejected",
+      "code": "timed-out"
+    }
+  ],
+  "diagnosticSnapshotBytes": 2106,
+  "diagnosticSnapshotMethod": "append-only-log-prefix-sha256-v1"
+}

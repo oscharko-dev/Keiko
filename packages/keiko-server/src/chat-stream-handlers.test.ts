@@ -12,6 +12,7 @@ import { runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 // Behavioural tests for the desktop chat SSE streaming handler (#152). The regression these guard:
 // the streamed prompt previously built the gateway messages BEFORE persisting the current user turn,
 // so prompt assembly omitted it — a fresh chat sent `[system]`
@@ -710,6 +711,7 @@ function contextSelectionFixture(
 function assertContextSelectionEvidence(
   event: ServerLogEvent | undefined,
   expected: NonNullable<ReturnType<typeof selectGatewayPromptAssembly>>,
+  actualPromptTokens: number,
 ): void {
   const line = formatActivityLogProofLine(event ?? {});
   const persisted = expectActivityLogProof("chat.context.selected.budget", line);
@@ -719,7 +721,7 @@ function assertContextSelectionEvidence(
     compactedHistoryMessages: expected.compaction?.itemsBefore,
     tokensBefore: expected.compaction?.tokensBefore,
     tokensAfter: expected.compaction?.tokensAfter,
-    promptTokens: expected.diagnostics.totalEstimatedTokens,
+    promptTokens: actualPromptTokens,
     inputBudget: expected.diagnostics.profile.effectiveInputBudget,
     imageCount: 0,
     imageReserveTokens: 0,
@@ -1433,14 +1435,19 @@ describe("desktop chat SSE streaming handler", () => {
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     const captured = captureResWithEvents();
     const atProvider: ServerLogEvent[] = [];
+    let sent: GatewayCallRequest | undefined;
     const fail = (): never => {
       atProvider.push(...sink.events.filter((event) => event.op === "chat.context.selected"));
       if (failure === "cancelled") captured.emitClose();
       throw failure === "timeout" ? new TimeoutError("fixture") : new CancelledError("fixture");
     };
     const model: ModelPort = {
-      call: () => Promise.resolve().then(fail),
-      callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+      call: (request) => {
+        sent = request;
+        return Promise.resolve().then(fail);
+      },
+      callStream: async function* (request): AsyncGenerator<GatewayStreamChunk> {
+        sent = request;
         yield await Promise.resolve().then(fail);
       },
     };
@@ -1464,7 +1471,15 @@ describe("desktop chat SSE streaming handler", () => {
     await handlers[mode](ctx, dependencies);
     expect(atProvider).toHaveLength(1);
     expect(sink.events.filter((event) => event.op === "chat.context.selected")).toEqual(atProvider);
-    assertContextSelectionEvidence(atProvider[0], fixture.expected());
+    if (sent === undefined) throw new TypeError("Missing provider request");
+    assertContextSelectionEvidence(
+      atProvider[0],
+      fixture.expected(),
+      countGatewayPromptTokens(
+        sent,
+        currentContextProfileForModel(dependencies, CHAT_MODEL)?.tokenAccounting,
+      ),
+    );
   });
 
   it("rejects a tokenless plain stream on a grounded chat before admission or SSE", async () => {

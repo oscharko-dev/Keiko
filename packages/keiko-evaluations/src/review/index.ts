@@ -7,23 +7,38 @@ export {
   loadReviewHarvestDataset,
   parseReviewHarvestDataset,
   ReviewDatasetError,
+  reviewHarvestDatasetDigest,
 } from "./dataset.js";
-export { findingOverlapsThread, labelReviewThread, matchReviewFinding } from "./labels.js";
+export {
+  findingOverlapsThread,
+  labelReviewThread,
+  matchReviewFinding,
+  scoreReviewFindings,
+  threadOverlap,
+} from "./labels.js";
 export type { ReviewFindingMatch } from "./labels.js";
 export { REVIEW_EVALUATION_MANIFEST } from "./manifest.js";
 export { meterModelPort, resolveReviewModel } from "./model.js";
 export type { MeteredModelPort, ReviewModelOptions } from "./model.js";
-export { ReviewHoldoutViolationError, reviewSplitOf, runReviewReplay } from "./replay.js";
+export {
+  rescoreReviewReplayRun,
+  ReviewHoldoutViolationError,
+  reviewReplaySelectionOf,
+  reviewSplitOf,
+  runReviewReplay,
+} from "./replay.js";
 export type {
   ReviewHoldoutViolationCode,
   ReviewReplayOptions,
   ReviewReplayPort,
   ReviewReplayPortResult,
+  ReviewReplayRescoreInput,
   ReviewReplayTarget,
 } from "./replay.js";
 export {
   countReviewOutcomes,
   evaluateReviewPrecisionGate,
+  reviewNotCompleteShare,
   summarizeReviewPrecision,
 } from "./precision-gate.js";
 export { KEIKO_CONSUMER_SEEDS } from "./consumer-seeds.js";
@@ -52,9 +67,11 @@ export {
   REVIEW_EVAL_SCHEMA_VERSION,
   REVIEW_EVALUATION_SPLITS,
   REVIEW_FINDING_OUTCOMES,
+  REVIEW_HARVEST_SCHEMA_VERSION,
   REVIEW_PRODUCERS,
   REVIEW_REGION_CHANGES,
   REVIEW_REPLAY_PURPOSES,
+  REVIEW_REPLAY_SELECTIONS,
   REVIEW_REPLY_CLASSIFICATIONS,
   REVIEW_SEED_OUTCOMES,
   REVIEW_THREAD_LABELS,
@@ -75,6 +92,7 @@ export {
   type ReviewReplayFinding,
   type ReviewReplayPullRequestResult,
   type ReviewReplayPurpose,
+  type ReviewReplaySelection,
   type ReviewReplayRun,
   type ReviewReplyClassification,
   type ReviewRunCost,

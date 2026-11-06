@@ -1,4 +1,4 @@
-// The review run records (Issue #4136): migration 55's tables, one active run per repository
+// The review run records (Issue #4136): migration 59's tables, one active run per repository
 // enforced by the database, idempotent client request ids, settlement, history and retained refs.
 
 import { DatabaseSync } from "node:sqlite";

@@ -155,14 +155,20 @@ while another mutation is pending. Closed values and one duration only.
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
 and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal
-responses cannot establish that continuation. Refusals distinguish model or
+responses cannot establish that continuation. A turn call whose admission merely expired is checked
+once more like a new request and proceeds only on a fresh positive observation (a second admission
+line records that decision). Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
-accounting. A verified model nobody asked for in 15 minutes is neither renewed nor recovered in
-the background; `gateway.readiness.renewal.paused` records that pause (`paused`: `renewal`,
-`recovery`; optional `idleMs`), and the model's next conversation request verifies it on demand
-(#4103). See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+accounting. Each chat model is checked once per connection at startup; nothing
+renews or recovers a model on a timer. A conversation request, a coding run start, a Workbench
+model choice (`check=1`), opening the Workbench or a model list, or a page load checks a model that is not ready now; only an observed
+failure waits out the 30 s not-ready cooldown. Other Workbench reads never start a check. The
+Workbench profile describes the model chosen in its picker (`modelId`): `model-verification-pending`
+only while a check of that model runs, an expired or unknown answer usable with
+`verification: "unverified"`, and its `verification` is that model's own observation, not the
+gateway-wide state (customer 1.3.4). The Workbench's tool-calling probe that the gateway never answered is no verdict (`tool-calling-unverified`) and is retried only when someone asks: startup, a page load or a `check=1` read when the Workbench opens or a model is chosen; a stale proof runs again once. See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
@@ -511,7 +517,7 @@ refusals from `GATEWAY_CONTEXT_OVERFLOW` without asserting exact unknown output 
 Prompt fitting retains separate model and remaining caller input caps. Mandatory overhead that
 fits the model but exceeds the caller allowance uses the caller refusal; overhead that exceeds
 the model retains context-overflow handling. Best-effort citation repair keeps the completed
-answer when its remaining input allowance cannot fund the repair.
+answer when its remaining input allowance or synthesis attempt slots cannot fund the repair.
 Unrelated gateway retries and separately bounded entailment/embedding stages retain their existing
 contracts without supplying another synthesis attempt. Normalized output is buffered before
 publication; rejected declarations cannot escape through streamed chunks. The existing allocator's
@@ -632,7 +638,8 @@ from them, never a heuristic secret shape; every other tool's arguments keep the
 `gateway.tool-arguments.redacted` records the tool-call and changed-string counts at `warn`.
 A model answer that exhausted its output budget, or ended after reasoning, without a tool call or a
 final answer gets one steered repair from the gateway on a call that asks for it with the explicit
-`answerRepair: "steered"` (the coding sidecar route alone; #3873, F17, F23), and the log records it
+`answerRepair: "steered"` (the coding sidecar route and every round of a Chat tool turn; #3873, F17,
+F23, S09 of epic #4173), and the log records it
 in closed words only: `gateway.retry.scheduled` names it with `reason=output-exhausted-repair` or
 `reason=empty-answer-repair` (`retryable-error` on every ordinary retry), and
 `coding-sidecar.gateway.outcome` and `coding-sidecar.gateway.turn-failed` record `repairAttempted`

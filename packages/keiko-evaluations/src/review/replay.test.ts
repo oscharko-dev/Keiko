@@ -7,7 +7,9 @@ import { describe, expect, it } from "vitest";
 import { createScriptedModelPort } from "../scripted-model.js";
 import { REVIEW_EVALUATION_MANIFEST } from "./manifest.js";
 import {
+  rescoreReviewReplayRun,
   ReviewHoldoutViolationError,
+  reviewReplaySelectionOf,
   reviewSplitOf,
   runReviewReplay,
   type ReviewReplayOptions,
@@ -143,6 +145,29 @@ describe("runReviewReplay scoring", () => {
     expect(run.pullRequests[0]?.findings[0]?.matchedThreadIds).toEqual(["a-hit"]);
   });
 
+  it("credits one hit per matched thread and scores restatements as duplicates", async () => {
+    // R4130-014: two findings on one changed thread add one hit, not two.
+    const run = await runReviewReplay(
+      options({
+        model: {
+          mode: "offline",
+          modelId: "scripted-reviewer",
+          factory: () =>
+            createScriptedModelPort([
+              reviewResponse([
+                finding({ file: "src/a.ts", startLine: 10, endLine: 10 }),
+                finding({ file: "src/a.ts", startLine: 12, endLine: 12 }),
+              ]),
+            ]),
+        },
+      }),
+    );
+    expect(run.pullRequests[0]?.findings.map((entry) => entry.outcome)).toEqual([
+      "hit",
+      "duplicate",
+    ]);
+  });
+
   it("meters cost from the scripted model's reported usage and the injected clock", async () => {
     const run = await runReviewReplay(options({}));
     expect(run.pullRequests[0]?.cost).toEqual({
@@ -174,5 +199,72 @@ describe("runReviewReplay scoring", () => {
     expect(run.pullRequests).toEqual([
       expect.objectContaining({ number: DEV_B, findings: [], settlement: { kind: "complete" } }),
     ]);
+  });
+});
+
+describe("runReviewReplay selection", () => {
+  // R4130-011: the run says whether it reviewed the split's default selection.
+  it("records the default selection when no subset was asked for", async () => {
+    expect((await runReviewReplay(options({}))).selection).toBe("default");
+  });
+
+  it("records an explicit list equal to the default selection as the default selection", async () => {
+    expect((await runReviewReplay(options({ pullRequests: [DEV_A] }))).selection).toBe("default");
+    expect(reviewReplaySelectionOf(history, "holdout", [HOLDOUT])).toBe("default");
+  });
+
+  it("records any other explicit list as a subset", () => {
+    expect(reviewReplaySelectionOf(history, "development", [DEV_A, DEV_B])).toBe("subset");
+    expect(reviewReplaySelectionOf(history, "development", [])).toBe("subset");
+    expect(reviewReplaySelectionOf(history, "development", [DEV_A, DEV_A])).toBe("subset");
+  });
+});
+
+describe("rescoreReviewReplayRun", () => {
+  // Stored reviews are scored again from their finding locations and the dataset alone.
+  const stale = {
+    schemaVersion: 1 as const,
+    datasetDigest: `sha256:${"f".repeat(64)}`,
+    holdoutFromPullRequest: BOUNDARY,
+    split: "development" as const,
+    purpose: "evaluation" as const,
+    tuningInputs: [],
+    modelId: "scripted-reviewer",
+    pullRequests: [
+      {
+        number: DEV_A,
+        settlement: { kind: "complete" as const },
+        cost: { modelCalls: 1, inputTokens: 1, outputTokens: 1, wallTimeMs: 1 },
+        findings: [11, 12, 99].map((line) => ({
+          file: "src/a.ts",
+          startLine: line,
+          endLine: line,
+          category: "correctness" as const,
+          severity: "high" as const,
+          outcome: "hit" as const,
+          matchedThreadIds: [],
+        })),
+      },
+    ],
+  };
+
+  it("recomputes every outcome, the selection and the dataset digest", () => {
+    const run = rescoreReviewReplayRun(stale, history);
+    expect(run.datasetDigest).toBe(history.digest);
+    expect(run.selection).toBe("default");
+    expect(run.pullRequests[0]?.findings.map((entry) => entry.outcome)).toEqual([
+      "hit",
+      "duplicate",
+      "unmatched",
+    ]);
+    expect(run.pullRequests[0]?.findings[0]?.matchedThreadIds).toEqual(["a-hit"]);
+  });
+
+  it("refuses a stored pull request the dataset does not hold", () => {
+    const unknown = {
+      ...stale,
+      pullRequests: stale.pullRequests.map((entry) => ({ ...entry, number: BOUNDARY - 5 })),
+    };
+    expect(() => rescoreReviewReplayRun(unknown, history)).toThrow(ReviewHoldoutViolationError);
   });
 });

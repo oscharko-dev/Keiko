@@ -7,7 +7,8 @@ import {
   evaluateReviewPrecisionGate,
   summarizeReviewPrecision,
 } from "./precision-gate.js";
-import { renderReviewPrecision } from "./render.js";
+import { REVIEW_EVALUATION_MANIFEST } from "./manifest.js";
+import { formatWilson, renderReviewPrecision } from "./render.js";
 import type {
   ReviewFindingOutcome,
   ReviewReplayFinding,
@@ -31,17 +32,32 @@ function replayed(
   };
 }
 
-function run(pullRequests: ReviewReplayRun["pullRequests"]): ReviewReplayRun {
+function run(
+  pullRequests: ReviewReplayRun["pullRequests"],
+  overrides: Partial<ReviewReplayRun> = {},
+): ReviewReplayRun {
   return {
     schemaVersion: 1,
     datasetDigest: `sha256:${"0".repeat(64)}`,
     holdoutFromPullRequest: 3000,
     split: "holdout",
     purpose: "evaluation",
+    selection: "default",
     tuningInputs: [],
     modelId: "scripted-reviewer",
     pullRequests,
+    ...overrides,
   };
+}
+
+type PullRequestResult = ReviewReplayRun["pullRequests"][number];
+
+function reviewed(
+  number: number,
+  findings: readonly ReviewReplayFinding[],
+  settlement: PullRequestResult["settlement"] = { kind: "complete" },
+): PullRequestResult {
+  return { number, settlement, findings, cost: cost(1, 1, 1) };
 }
 
 const cost = (inputTokens: number, outputTokens: number, wallTimeMs: number): ReviewRunCost => ({
@@ -71,23 +87,36 @@ const sample = run([
 ]);
 
 describe("countReviewOutcomes", () => {
-  it("rates only decided findings and keeps every other outcome as an absolute count", () => {
+  // Owner decision 2026-11-04 (R4130-006): the gated actionable rate counts undecided findings
+  // against the agent; hits over hits plus false alarms is reported apart as the acceptance rate.
+  // Duplicates joining the denominator is the implementation's rule for R4130-014. This replaces
+  // the earlier pin of hits over decided findings.
+  it("rates hits over hits, false alarms, undecided and duplicate findings", () => {
     const counts = countReviewOutcomes([
       replayed("hit"),
       replayed("false-alarm"),
       replayed("undecided"),
+      replayed("duplicate"),
       replayed("unmeasured"),
       replayed("unmatched"),
     ]);
     expect(counts).toEqual({
-      findings: 5,
+      findings: 6,
       hit: 1,
       falseAlarm: 1,
       undecided: 1,
+      duplicate: 1,
       unmeasured: 1,
       unmatched: 1,
-      actionableRate: wilsonInterval(1, 2),
+      actionableRate: wilsonInterval(1, 4),
+      acceptanceRate: wilsonInterval(1, 2),
     });
+  });
+
+  it("counts an ignored finding against the actionable rate but not the acceptance rate", () => {
+    const counts = countReviewOutcomes([replayed("hit"), replayed("undecided")]);
+    expect(counts.actionableRate).toEqual(wilsonInterval(1, 2));
+    expect(counts.acceptanceRate).toEqual(wilsonInterval(1, 1));
   });
 
   it("never counts an unmatched finding as actionable", () => {
@@ -108,7 +137,8 @@ describe("summarizeReviewPrecision", () => {
       undecided: 1,
       unmatched: 1,
     });
-    expect(summary.overall.actionableRate).toEqual(wilsonInterval(2, 3));
+    expect(summary.overall.actionableRate).toEqual(wilsonInterval(2, 4));
+    expect(summary.overall.acceptanceRate).toEqual(wilsonInterval(2, 3));
   });
 
   it("breaks the counts down per category and per severity, each with its own interval", () => {
@@ -130,6 +160,7 @@ describe("summarizeReviewPrecision", () => {
     expect(summary).toMatchObject({
       split: "holdout",
       purpose: "evaluation",
+      selection: "default",
       holdoutFromPullRequest: 3000,
     });
   });
@@ -142,11 +173,91 @@ describe("summarizeReviewPrecision", () => {
 });
 
 describe("evaluateReviewPrecisionGate", () => {
+  const passing = run([
+    reviewed(3001, [replayed("hit"), replayed("hit"), replayed("false-alarm")]),
+    reviewed(3002, [replayed("unmatched"), replayed("undecided")]),
+  ]);
+
   it("passes at or above the minimum actionable rate within the finding limit", () => {
-    expect(evaluateReviewPrecisionGate(summarizeReviewPrecision(sample))).toEqual({
+    expect(evaluateReviewPrecisionGate(summarizeReviewPrecision(passing))).toEqual({
       verdict: "pass",
       reasons: [],
     });
+  });
+
+  it("fails when ignored findings pull the actionable rate below the minimum", () => {
+    // R4130-006: 2 hits, no false alarm and 3 undecided findings is 2/5, although the
+    // acceptance rate is 2/2.
+    const ignored = run([
+      reviewed(3001, [replayed("hit"), replayed("undecided"), replayed("undecided")]),
+      reviewed(3002, [replayed("hit"), replayed("undecided")]),
+    ]);
+    const summary = summarizeReviewPrecision(ignored);
+    expect(summary.overall.acceptanceRate.rate).toBe(1);
+    const result = evaluateReviewPrecisionGate(summary);
+    expect(result.verdict).toBe("fail");
+    expect(result.reasons).toEqual([expect.stringMatching(/actionable rate 2\/5/u)]);
+  });
+
+  it("counts duplicates against the rate, so one restated hit cannot carry a run", () => {
+    // R4130-014: one credited hit and two duplicates on the same thread is 1/3.
+    const restated = run([
+      reviewed(3001, [replayed("hit"), replayed("duplicate"), replayed("duplicate")]),
+    ]);
+    const summary = summarizeReviewPrecision(restated);
+    expect(summary.overall).toMatchObject({ hit: 1, duplicate: 2 });
+    expect(evaluateReviewPrecisionGate(summary).verdict).toBe("fail");
+  });
+
+  it.each([
+    ["a development run", { split: "development", purpose: "evaluation" }],
+    ["a tuning run", { split: "development", purpose: "tuning" }],
+    ["a holdout subset", { selection: "subset" }],
+  ] as const)("is unmeasured for %s, whatever its rate", (_name, overrides) => {
+    // R4130-011: only a holdout evaluation over the default selection is gate evidence.
+    const result = evaluateReviewPrecisionGate(
+      summarizeReviewPrecision(run(passing.pullRequests, overrides)),
+    );
+    expect(result.verdict).toBe("unmeasured");
+    expect(result.reasons).toContain("not a holdout evaluation over the default selection");
+  });
+
+  it("fails when too many reviews did not settle complete", () => {
+    // R4130-011's scenario: 150 of 153 reviews end incomplete before they report anything, and
+    // the rest give 2 hits and 1 false alarm.
+    const incomplete = Array.from({ length: 150 }, (_, index) =>
+      reviewed(3100 + index, [], { kind: "incomplete", reason: "budget-exhausted" }),
+    );
+    const summary = summarizeReviewPrecision(
+      run([
+        reviewed(3001, [replayed("hit"), replayed("false-alarm")]),
+        reviewed(3002, [replayed("hit")]),
+        reviewed(3003, []),
+        ...incomplete,
+      ]),
+    );
+    const result = evaluateReviewPrecisionGate(summary);
+    expect(result.verdict).toBe("fail");
+    expect(result.reasons).toEqual([
+      expect.stringMatching(/150 of 153 reviews \(98\.0 %\) did not settle complete/u),
+    ]);
+  });
+
+  it("allows a not-complete share up to the manifest ceiling", () => {
+    const ceiling = REVIEW_EVALUATION_MANIFEST.maximumNotCompleteShare;
+    expect(ceiling).toBe(0.2);
+    const atCeiling = run([
+      reviewed(3001, [replayed("hit")]),
+      ...[3002, 3003, 3004].map((number) => reviewed(number, [])),
+      reviewed(3005, [], { kind: "skipped", reason: "no-reviewable-changes" }),
+    ]);
+    expect(evaluateReviewPrecisionGate(summarizeReviewPrecision(atCeiling)).verdict).toBe("pass");
+  });
+
+  it("is unmeasured when the run reviewed no pull request", () => {
+    expect(evaluateReviewPrecisionGate(summarizeReviewPrecision(run([]))).verdict).toBe(
+      "unmeasured",
+    );
   });
 
   it("fails below the minimum actionable rate", () => {
@@ -192,12 +303,18 @@ describe("evaluateReviewPrecisionGate", () => {
     );
   });
 
-  it("renders the verdict, the counts and the intervals", () => {
+  it("renders the verdict, the counts, both rates and the not-complete share", () => {
     const summary = summarizeReviewPrecision(sample);
     const text = renderReviewPrecision(summary, evaluateReviewPrecisionGate(summary));
-    expect(text).toContain("- Verdict: pass");
-    expect(text).toContain("| All | 5 | 2 | 1 | 1 | 0 | 1 | 66.7 % (2/3; 95 % CI");
-    expect(text).toContain("| category performance | 0 | 0 | 0 | 0 | 0 | 0 | — (0/0) |");
+    expect(text).toContain("- Verdict: fail (1 of 2 reviews (50.0 %) did not settle complete");
+    expect(text).toContain("- Split: holdout (evaluation, default selection)");
+    expect(text).toContain("- Reviews not settled complete: 1 of 2 (50.0 %; ceiling 20.0 %)");
+    expect(text).toContain(
+      `| All | 5 | 2 | 1 | 1 | 0 | 0 | 1 | ${formatWilson(wilsonInterval(2, 4))} | ${formatWilson(wilsonInterval(2, 3))} |`,
+    );
+    expect(text).toContain(
+      "| category performance | 0 | 0 | 0 | 0 | 0 | 0 | 0 | — (0/0) | — (0/0) |",
+    );
     expect(text).toContain("2000.00 input tokens");
   });
 });

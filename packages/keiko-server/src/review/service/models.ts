@@ -56,14 +56,24 @@ export type ReviewModelValidation =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: "policy-invalid" | "model-unavailable" };
 
-/** Validates both role models; an ineligible model wins over a temporarily unavailable one. */
-export function validateReviewRoleModels(
+/**
+ * The operator and user policy alone (R4130-003): a run checks it before anything reads, probes or
+ * calls a role model, so a model the policy refuses never receives traffic for that run.
+ */
+export function admitReviewRoleModels(
+  port: ReviewModelPort,
+  models: ReviewRoleModels,
+  correlationId?: string,
+): boolean {
+  return port.admit?.(models, correlationId) !== false;
+}
+
+/** Eligibility of both admitted role models; an ineligible model wins over an unavailable one. */
+export function evaluateReviewRoleModels(
   port: ReviewModelPort,
   models: ReviewRoleModels,
   nowMs: number,
-  correlationId?: string,
 ): ReviewModelValidation {
-  if (port.admit?.(models, correlationId) === false) return { ok: false, reason: "policy-invalid" };
   const verdicts = [
     evaluateReviewRoleEligibility(
       port.capability(models.reviewerModelId),
@@ -83,4 +93,17 @@ export function validateReviewRoleModels(
     return { ok: false, reason: "model-unavailable" };
   }
   return { ok: true };
+}
+
+/** Admission, then eligibility, of both role models (the dry run's check). */
+export function validateReviewRoleModels(
+  port: ReviewModelPort,
+  models: ReviewRoleModels,
+  nowMs: number,
+  correlationId?: string,
+): ReviewModelValidation {
+  if (!admitReviewRoleModels(port, models, correlationId)) {
+    return { ok: false, reason: "policy-invalid" };
+  }
+  return evaluateReviewRoleModels(port, models, nowMs);
 }

@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+
 // Shared presentational primitives for the Git client staging + commit surface (Issue #1575,
 // Epic #1571). Carried forward in behaviour from the removed GovernedGitFlowCard (contract §2
 // "replace"): the status pill, the uppercase field label, the typed-code list, and the
@@ -143,6 +145,7 @@ export function MutationOutcome({
   readonly error: string | null;
   readonly testid?: string;
 }): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   if (error !== null) {
     return (
       <div
@@ -155,7 +158,7 @@ export function MutationOutcome({
         }}
       >
         <StatusPill tone="danger">
-          <InfoIcon size={11} /> Error
+          <InfoIcon size={11} /> {tUi("gitClientWindow.ui.error")}
         </StatusPill>
         <p style={{ ...SUBTLE_TEXT_STYLE, color: "var(--fg)" }}>{error}</p>
       </div>

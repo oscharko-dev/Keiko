@@ -7,6 +7,7 @@ import { createBufferedServerLogSink } from "../../../tests/support/buffered-ser
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { FinishReason } from "@oscharko-dev/keiko-contracts";
 import type {
   ChunkId,
   CapsuleSetId,
@@ -38,6 +39,7 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import {
   AuthenticationError,
+  CallerAttemptAdmissionError,
   CancelledError,
   ConfigInvalidError,
   TransportError,
@@ -45,6 +47,7 @@ import {
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { OWN_ASSESSMENT_PROMPT_RULE } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
+import { isKnowledgePodRetrievalActivitySafeText } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity";
 import {
   applyReferenceRerankResults,
   buildKnowledgePodRetrievalActivity,
@@ -831,10 +834,39 @@ function firstLexicalSupport(answer: GroundedAnswer): "weak" | undefined {
   return answer.citations[0]?.lexicalSupport;
 }
 
+type WeakSupportCallKind = "query-transform" | "judge" | "answer";
+
+function weakSupportCallKind(
+  request: Parameters<ModelPort["call"]>[0],
+  judgeVerdict: "supported" | "unsupported" | undefined,
+): WeakSupportCallKind {
+  if (request.messages[0]?.content.includes("Rewrite broad") === true) return "query-transform";
+  return judgeVerdict !== undefined && request.responseFormat !== undefined ? "judge" : "answer";
+}
+
+// The fake model's reply: a query rewrite, the judge's verdict, or the answer (a citation repair
+// answers with `repair` when one is configured).
+function weakSupportReply(
+  kind: WeakSupportCallKind,
+  input: {
+    readonly answerText: string;
+    readonly judgeVerdict: "supported" | "unsupported" | undefined;
+    readonly repair: AskOptions["repair"];
+  },
+): { readonly content: string; readonly finishReason: FinishReason } {
+  if (kind === "query-transform")
+    return { content: '{"queries":["release"]}', finishReason: "stop" };
+  if (kind === "judge")
+    return { content: JSON.stringify({ verdict: input.judgeVerdict }), finishReason: "stop" };
+  return input.repair ?? { content: input.answerText, finishReason: "stop" };
+}
+
 interface AskOptions {
   readonly groundedAnswers?: { readonly ownAssessment?: "allowed" | "disabled" };
   // Receives the system prompt of every answer-generation call.
   readonly systemPrompts?: string[];
+  // What the model answers a citation repair with; absent repeats the first answer.
+  readonly repair?: { readonly content: string; readonly finishReason: FinishReason };
 }
 
 function lexicalSupports(answer: GroundedAnswer): readonly ("weak" | undefined)[] {
@@ -872,17 +904,22 @@ describe("weakly supported citations", () => {
     const chat = rescueStore.updateChat(created.id, {
       localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
     });
+    let answerCalls = 0;
     const fakeModel: ModelPort = {
       call: (request) => {
-        const isQueryTransform = request.messages[0]?.content.includes("Rewrite broad") === true;
-        const isJudge = judgeVerdict !== undefined && request.responseFormat !== undefined;
-        if (!isQueryTransform && !isJudge)
+        const kind = weakSupportCallKind(request, judgeVerdict);
+        if (kind === "answer") {
           options.systemPrompts?.push(request.messages[0]?.content ?? "");
-        const reply = isQueryTransform ? '{"queries":["release"]}' : answerText;
+          answerCalls += 1;
+        }
+        const reply = weakSupportReply(kind, {
+          answerText,
+          judgeVerdict,
+          repair: answerCalls > 1 ? options.repair : undefined,
+        });
         return Promise.resolve({
           modelId: "chat-model",
-          content: isJudge ? JSON.stringify({ verdict: judgeVerdict }) : reply,
-          finishReason: "stop" as const,
+          ...reply,
           toolCalls: [],
           structuredOutput: null,
           usage: {
@@ -1133,6 +1170,80 @@ describe("weakly supported citations", () => {
       );
       const line = sink.events.find((event) => event.op === "search.answer.assessed");
       expect(line?.extra).toMatchObject({ policy: "disabled", outcome: "neutralized" });
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  // S12 of epic #4173 (Gemma): the citation repair regenerates the whole answer with the output
+  // grant that is left. Cut at that limit, it must not replace the complete first answer, and the
+  // log says why the answer kept no citation.
+  it("keeps the complete answer when the citation repair is cut at its output limit", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const complete =
+        "The release checklist covers signing, notarization and upload, each step in order.";
+      const answer = await askWith(complete, "repair-cut", undefined, "corr-repair-cut", {
+        repair: { content: "The release checklist covers signing [1", finishReason: "length" },
+      });
+
+      expect(answer.content).toBe(complete);
+      const reconciled = sink.events.find((event) => event.op === "search.citations.reconciled");
+      expect(reconciled?.correlationId).toBe("corr-repair-cut");
+      expect(reconciled?.extra).toMatchObject({
+        citationRepairDisposition: "rejected-truncated",
+        attachedCount: 0,
+      });
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it.each(["content_filter", "error", "cancelled"] as const)(
+    "keeps the complete answer when the citation repair ended with finish reason %s",
+    async (finishReason) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      try {
+        const complete =
+          "The release checklist covers signing, notarization and upload, each step in order.";
+        const answer = await askWith(complete, `repair-${finishReason}`, undefined, undefined, {
+          repair: { content: "The release checklist covers signing [1].", finishReason },
+        });
+
+        expect(answer.content).toBe(complete);
+        const reconciled = sink.events.find((event) => event.op === "search.citations.reconciled");
+        expect(reconciled?.extra).toMatchObject({
+          citationRepairDisposition: "rejected-truncated",
+          attachedCount: 0,
+        });
+      } finally {
+        resetServerLogger();
+      }
+    },
+  );
+
+  it("records an applied citation repair on the reconciliation line", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const answer = await askWith(
+        "The release checklist covers signing, notarization and upload, each step in order.",
+        "repair-applied",
+        undefined,
+        "corr-repair-applied",
+        {
+          repair: {
+            content: "The release checklist covers signing, notarization and upload [1].",
+            finishReason: "stop",
+          },
+        },
+      );
+
+      expect(answer.citations).toHaveLength(1);
+      const reconciled = sink.events.find((event) => event.op === "search.citations.reconciled");
+      expect(reconciled?.extra).toMatchObject({ citationRepairDisposition: "applied" });
     } finally {
       resetServerLogger();
     }
@@ -3239,6 +3350,100 @@ describe("local-knowledge retrieval activity", () => {
     }
   });
 
+  it("keeps the activity when a UUID pod or source id is PII-shaped and its opaque replacement must stay safe (#4179)", async () => {
+    // Real Pod and source ids are UUIDs. About one in four UUIDs carries a digit run the PII scan
+    // reads as a phone number, so the builder swaps it for an opaque id; that replacement used to
+    // be a bare hash prefix and failed the same scan for roughly one in eleven inputs. These two
+    // ids are such cases, so on a large grounded turn the whole activity was dropped.
+    const podUuid = "9589a1dd-2370-4853-848c-f2c3e9a43d3e" as KnowledgeCapsuleId;
+    const sourceUuid = "93598338-82bb-43aa-81f3-ec7573ab185d" as KnowledgeSourceId;
+    expect(isKnowledgePodRetrievalActivitySafeText(podUuid)).toBe(false);
+    expect(isKnowledgePodRetrievalActivitySafeText(sourceUuid)).toBe(false);
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Requirements Pod",
+        capsuleId: podUuid,
+        sourceId: sourceUuid,
+      });
+      const capsuleValue = requireCapsule(knowledgeStore, podUuid);
+      const records: ServerDiagnosticRecord[] = [];
+      const input = {
+        store: knowledgeStore,
+        sources: [
+          {
+            selected: selectedActivityScope(capsuleValue),
+            result: {
+              references: [retrievalActivityReference(podUuid, sourceUuid)],
+              citationCounts: new Map([[String(podUuid), 1]]),
+              noEvidence: false,
+            },
+          },
+        ],
+        diagnostics: {
+          record: (record: ServerDiagnosticRecord): void => {
+            records.push(record);
+          },
+        },
+      } as const;
+
+      const activity = tryBuildKnowledgePodRetrievalActivity(input);
+
+      expect(records).toEqual([]);
+      expect(activity?.pods[0]?.podId).toMatch(/^pod-[a-f0-9]{16}$/u);
+      expect(activity?.pods[0]?.sourceIds[0]).toMatch(/^source-[a-f0-9]{16}$/u);
+      expect(isKnowledgePodRetrievalActivitySafeText(activity?.pods[0]?.podId)).toBe(true);
+      expect(isKnowledgePodRetrievalActivitySafeText(activity?.pods[0]?.sourceIds[0])).toBe(true);
+      expect(JSON.stringify(activity)).not.toContain(podUuid);
+      expect(JSON.stringify(activity)).not.toContain(sourceUuid);
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("joins the fail-closed diagnostic to the request correlation id when one is available", async () => {
+    const sourceId = "src-diagnostic-correlated" as KnowledgeSourceId;
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Correlated Capsule",
+        capsuleId: "cap-diagnostic-correlated",
+        sourceId,
+      });
+      const capsuleValue = requireCapsule(knowledgeStore, seeded.capsuleId);
+      const records: ServerDiagnosticRecord[] = [];
+      const activity = tryBuildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [
+          {
+            selected: selectedActivityScope(capsuleValue),
+            result: {
+              references: [retrievalActivityReference(seeded.capsuleId, sourceId)],
+              citationCounts: new Map([[String(seeded.capsuleId), -1]]),
+              noEvidence: false,
+            },
+          },
+        ],
+        diagnostics: {
+          record: (record: ServerDiagnosticRecord): void => {
+            records.push(record);
+          },
+        },
+        correlationId: "req-4179-correlated",
+      });
+
+      expect(activity).toBeUndefined();
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ correlationId: "req-4179-correlated" });
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
   it("merges duplicate pod rows when two sources resolve the same Knowledge Pod", async () => {
     // AUDIT-E1816-002: two connector scopes that both resolve the same capsule previously emitted
     // two activity rows sharing the identical podId, which collide on the client's list key and
@@ -3949,6 +4154,11 @@ describe("gatewayErrorStatus", () => {
   it("maps a non-retryable, non-authentication gateway error to 502", () => {
     expect(gatewayErrorStatus(new ConfigInvalidError("bad config"))).toBe(502);
   });
+  // Lab S12 of epic #4173 (Qwen): an exhausted grounded synthesis grant reached the browser as 502.
+  // A caller's own attempt or token cap is the nonretryable 403 on every route (ADR-0171).
+  it("maps a caller attempt-admission refusal to 403", () => {
+    expect(gatewayErrorStatus(new CallerAttemptAdmissionError("grant exhausted"))).toBe(403);
+  });
 });
 
 describe("mapGroundedAskError", () => {
@@ -3998,6 +4208,11 @@ describe("mapGroundedAskError", () => {
   it.each([
     { slug: "gateway", cause: new TransportError("private-cause-canary"), status: 503 },
     { slug: "unexpected", cause: new Error("private-cause-canary"), status: 500 },
+    {
+      slug: "attempt-admission",
+      cause: new CallerAttemptAdmissionError("private-cause-canary"),
+      status: 403,
+    },
   ])(
     "correlates and diagnoses a $slug failure from the real Knowledge Pod handler",
     async ({ slug, cause, status }) => {

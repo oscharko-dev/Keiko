@@ -62,15 +62,26 @@ describe("review Activity Log proofs", () => {
         targetKind: "pull-request",
         baseSha: SHA,
         headSha: SHA,
+        mergeBaseSha: SHA,
         isCrossRepository: true,
         baseFetched: false,
         fetchDurationMs: 12,
         durationMs: 30,
       });
     });
-    expect(expectActivityLogProof("review.target.resolved.line", line)).toMatchObject({
-      targetKind: "pull-request",
-      isCrossRepository: true,
+    const persisted = expectActivityLogProof("review.target.resolved.line", line);
+    expect(persisted).toMatchObject({ targetKind: "pull-request", isCrossRepository: true });
+    expect(persisted.mergeBaseShaDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(line).not.toContain(SHA);
+  });
+
+  it("proves review.target.refused for a target without a merge base (R4130-008)", () => {
+    const line = onlyLine((sink) => {
+      logReviewTargetRefused(sink, CORRELATION, "local-range", "no-merge-base");
+    });
+    expect(expectActivityLogProof("review.target.refused.line", line)).toMatchObject({
+      level: "warn",
+      reason: "no-merge-base",
     });
   });
 

@@ -226,14 +226,45 @@ describe("pull request targets", () => {
         `refs/keiko-review/${review.namespace}/7/base-${advancedBase}`,
       ].sort(),
     );
+    // R4130-008: the diff starts where the head branched off, never at the advanced base tip.
+    if (!resolution.ok) throw new Error(resolution.reason);
+    expect(resolution.target.baseSha).toBe(advancedBase);
+    expect(resolution.mergeBaseSha).toBe(baseSha);
     const [line] = log.withOp("review.target.resolved");
     expect(line?.extra).toMatchObject({
       targetKind: "pull-request",
       baseFetched: true,
       isCrossRepository: true,
     });
+    expect(line?.extra?.mergeBaseShaDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(line?.extra?.mergeBaseShaDigest).not.toBe(line?.extra?.baseShaDigest);
     expect(JSON.stringify(line)).not.toContain(headSha);
+    expect(JSON.stringify(line)).not.toContain(baseSha);
     expect(JSON.stringify(log.events)).not.toContain(repo);
+  });
+
+  it("refuses a pull request whose head shares no history with its base as no-merge-base", async () => {
+    git(author, "checkout", "-q", "--orphan", "unrelated");
+    const unrelated = commitFile(author, "other.txt", "other\n", "unrelated root");
+    git(author, "push", "-q", bare, `${unrelated}:refs/pull/8/head`);
+    const review = reviewServices(() => ({
+      availability: "available",
+      pullRequest: detail({ number: 8, headSha: unrelated }),
+    }));
+    expect(
+      await review.resolveTarget({
+        repositoryRoot: repo,
+        runId: "run-unrelated",
+        request: { kind: "pull-request", number: 8 },
+      }),
+    ).toEqual({ ok: false, reason: "no-merge-base" });
+    expect(log.withOp("review.target.refused").map((line) => line.extra?.reason)).toEqual([
+      "no-merge-base",
+    ]);
+    expect(log.withOp("review.target.resolved")).toEqual([]);
+    // The fetched head ref is recorded for the retention sweep, which removes it.
+    expect(await review.sweepRefs("daily")).toEqual({ deleted: 1, retained: 0, failed: 0 });
+    expect(privateRefs()).toEqual([]);
   });
 
   it("refuses a pull request whose head carries a malformed tree: fsck rejects it at fetch", async () => {
@@ -380,11 +411,69 @@ describe("local range targets", () => {
       baseRef: "main",
       headRef: "topic",
     });
+    expect(resolution.mergeBaseSha).toBe(baseSha);
     expect(resolution.privateRefs).toHaveLength(1);
     expect(resolution.privateRefs[0]).toMatch(
       /^refs\/keiko-review\/k[a-f0-9]{16}\/local\/r-[a-f0-9]{24}$/u,
     );
     expect(repositoryStateDigest(repo)).toEqual(before);
+  });
+
+  it("diffs a local range from its merge base after the base branch moved on (R4130-008)", async () => {
+    git(repo, "checkout", "-q", "-b", "topic");
+    const topic = commitFile(repo, "topic.txt", "topic\n", "topic");
+    git(repo, "checkout", "-q", "main");
+    const advanced = commitFile(repo, "later.txt", "later\n", "later");
+    const review = reviewServices(() => ({ availability: "failed" }));
+    const resolution = await review.resolveTarget({
+      repositoryRoot: repo,
+      runId: "run-local-advanced",
+      request: { kind: "local-range", baseRef: "main", headRef: "topic" },
+    });
+    if (!resolution.ok) throw new Error(resolution.reason);
+    expect(resolution.target).toMatchObject({ baseSha: advanced, headSha: topic });
+    expect(resolution.mergeBaseSha).toBe(baseSha);
+  });
+
+  // R4130-036: a shallow clone hides the fork point, so the refusal names the shallow history
+  // instead of claiming the commits are unrelated. Keiko does not deepen the user's clone.
+  it("refuses a local range in a shallow clone whose base moved as shallow-history", async () => {
+    git(author, "checkout", "-q", "main");
+    commitFile(author, "later.txt", "later\n", "later");
+    git(author, "push", "-q", bare, "main", "feature");
+    const shallow = join(fixture.root, "shallow");
+    const args = ["clone", "-q", "--depth", "1", "--no-single-branch", `file://${bare}`, shallow];
+    git(fixture.root, "-c", "protocol.file.allow=always", ...args);
+    git(shallow, "branch", "-q", "topic", "origin/feature");
+    const before = repositoryStateDigest(shallow);
+    const review = reviewServices(() => ({ availability: "failed" }));
+    expect(
+      await review.resolveTarget({
+        repositoryRoot: shallow,
+        runId: "run-shallow",
+        request: { kind: "local-range", baseRef: "main", headRef: "topic" },
+      }),
+    ).toEqual({ ok: false, reason: "shallow-history" });
+    expect(log.withOp("review.target.refused").map((line) => line.extra?.reason)).toEqual([
+      "shallow-history",
+    ]);
+    expect(git(shallow, "rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(repositoryStateDigest(shallow)).toEqual(before);
+  });
+
+  it("refuses a local range without a common ancestor as no-merge-base and keeps no ref", async () => {
+    git(repo, "checkout", "-q", "--orphan", "unrelated");
+    commitFile(repo, "other.txt", "other\n", "unrelated root");
+    git(repo, "checkout", "-q", "main");
+    const review = reviewServices(() => ({ availability: "failed" }));
+    expect(
+      await review.resolveTarget({
+        repositoryRoot: repo,
+        runId: "run-local-unrelated",
+        request: { kind: "local-range", baseRef: "main", headRef: "unrelated" },
+      }),
+    ).toEqual({ ok: false, reason: "no-merge-base" });
+    expect(privateRefs()).toEqual([]);
   });
 
   it("refuses option-shaped, qualified, malformed and missing refs", async () => {

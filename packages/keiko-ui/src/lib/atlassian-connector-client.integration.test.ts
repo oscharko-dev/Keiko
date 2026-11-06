@@ -387,8 +387,9 @@ describe.each(["en", "de"] as const)("Data Center verification in the real %s Hu
           name: locale === "en" ? "Verify connection" : "Verbindung prüfen",
         }),
       );
-      const notice = await within(card).findByTestId("acx-verify-status");
-      expect(notice).toHaveAttribute("data-status", scenario.status);
+      // The card's one live region exists before the check; it is filled with the outcome.
+      const notice = within(card).getByTestId("acx-verify-status");
+      await waitFor(() => expect(notice).toHaveAttribute("data-status", scenario.status));
       expect(notice).toHaveTextContent(scenario[locale]);
       expect(within(card).getByRole("status")).toBe(notice);
       if (scenario.status === "auth-failed") expect(notice).not.toHaveTextContent(/e-?mail/iu);
@@ -419,13 +420,17 @@ it("removes the Hub's verified state after a revoked PAT fails real re-verificat
   const { metadata, card } = await mountedDataCenterHub("en");
   responses.push(...verifiedDataCenterResponses());
   await userEvent.click(within(card).getByRole("button", { name: "Verify connection" }));
-  expect(await within(card).findByTestId("acx-verify-status")).toHaveAttribute("data-status", "ok");
+  await waitFor(() =>
+    expect(within(card).getByTestId("acx-verify-status")).toHaveAttribute("data-status", "ok"),
+  );
   const verified = (await listAtlassianConnectors()).find(
     (item) => item.authRef === metadata.authRef,
   );
   assert(verified?.deployment === "data-center");
   responses.push(new Response(privateProviderDetail, { status: 401 }));
-  await userEvent.click(within(card).getByRole("button", { name: "Verify connection" }));
+  // A verified Pod keeps its secondary actions, re-verification included, in the "…" menu.
+  await userEvent.click(within(card).getByRole("button", { name: /^More actions:/u }));
+  await userEvent.click(within(card).getByRole("menuitem", { name: "Verify connection" }));
   await waitFor(() =>
     expect(within(card).getByTestId("acx-verify-status")).toHaveAttribute(
       "data-status",

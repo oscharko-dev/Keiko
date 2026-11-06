@@ -3,7 +3,6 @@
   "ignoreDependencies": [
     "axe-core",
     "@oscharko-dev/keiko-memory-consolidation",
-    "@oscharko-dev/keiko-quality-intelligence",
     "@oscharko-dev/keiko-sandbox",
     "fallow",
     "ws"
@@ -17,6 +16,9 @@
         "src/**/*.ts!",
         "scripts/*.mjs!",
         "scripts/testing/coding-workbench-lab/*.mjs",
+        "scripts/testing/memory-lab/run.mjs",
+        "scripts/testing/memory-lab/rhythm.mjs",
+        "scripts/testing/memory-lab/usage.mjs",
         "scripts/testing/chat-skills-lab/run.mjs",
         "scripts/testing/chat-skills-lab/serve.mjs",
         "scripts/testing/chat-skills-lab/verify-tests.mjs",
@@ -38,9 +40,13 @@
         "scripts/testing/jira-chat-lab/restricted-chat.mjs",
         "scripts/testing/jira-chat-lab/seed-content.mjs",
         "scripts/testing/jira-chat-lab/seed.mjs",
+        "scripts/testing/jira-chat-lab/requirements/scorecard.mjs",
+        "scripts/testing/jira-chat-lab/requirements/seed-estimates.mjs",
+        "scripts/testing/jira-chat-lab/requirements/seed-projects.mjs",
         "scripts/testing/jira-chat-lab/session.mjs",
         "scripts/testing/jira-chat-lab/verify-connection.mjs",
-        "scripts/testing/jira-chat-lab/tls-front.mjs"
+        "scripts/testing/jira-chat-lab/tls-front.mjs",
+        "scripts/__tests__/fixtures/work-lock-lane/lane.mjs"
       ],
       "project": ["src/**/*.ts", "scripts/**/*.mjs", "tests/**/*.{ts,mts,mjs}", "native/**/*.mjs"],
       "ignore": [

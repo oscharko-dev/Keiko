@@ -40,6 +40,11 @@ describe("summarizeReviewBaseline", () => {
     expect(coderabbit?.acceptanceRate).toEqual(wilsonInterval(2, 3));
   });
 
+  it("reports the gated actionable rate, which counts undecided threads against the producer", () => {
+    // R4130-006: 2 hits of 4 hits, false alarms and undecided threads.
+    expect(coderabbit?.actionableRate).toEqual(wilsonInterval(2, 4));
+  });
+
   it("counts refutations as confirmed, contradicted or unmeasured", () => {
     expect(coderabbit?.refutations).toEqual({
       total: 3,
@@ -95,10 +100,10 @@ describe("summarizeReviewBaseline", () => {
   it("renders absolute counts and intervals for every producer", () => {
     const text = renderReviewBaseline(baseline);
     expect(text).toContain(
-      `| CodeRabbit | 2 | 5 | 2.50 | ${formatWilson(wilsonInterval(2, 4))} | 1 | 3 (1 confirmed, 1 contradicted) | 2 / 1 / 1 | ${formatWilson(wilsonInterval(2, 3))} |`,
+      `| CodeRabbit | 2 | 5 | 2.50 | ${formatWilson(wilsonInterval(2, 4))} | 1 | 3 (1 confirmed, 1 contradicted) | 2 / 1 / 1 | ${formatWilson(wilsonInterval(2, 4))} | ${formatWilson(wilsonInterval(2, 3))} |`,
     );
     expect(text).toContain(
-      "| Codex | 0 | 0 | — | — (0/0) | 0 | 0 (0 confirmed, 0 contradicted) | 0 / 0 / 0 | — (0/0) |",
+      "| Codex | 0 | 0 | — | — (0/0) | 0 | 0 (0 confirmed, 0 contradicted) | 0 / 0 / 0 | — (0/0) | — (0/0) |",
     );
     expect(formatWilson(wilsonInterval(1, 2))).toBe("50.0 % (1/2; 95 % CI 9.5-90.5 %)");
   });

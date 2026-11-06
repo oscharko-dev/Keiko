@@ -1,12 +1,18 @@
 // Loading the review harvest dataset (Issue #4132). The dataset is written by
-// `scripts/review-harvest.mjs`, which owns its digest; this side only checks the shape, fail closed,
-// before any replay or baseline reads it. A dataset that carries an unknown key, a body or a login
-// is rejected rather than silently ignored: the closed key set is what keeps it body-free.
+// `scripts/review-harvest.mjs`; this side checks the shape, fail closed, before any replay or
+// baseline reads it. A dataset that carries an unknown key, a body or a login is rejected rather
+// than silently ignored: the closed key set is what keeps it body-free. The loader also recomputes
+// the canonical-JSON content digest (the harvest's own rule) and refuses a file whose stored
+// `digest` no longer matches its content (R4130-010), so an edited label cannot pass as the dataset
+// the manifest pins.
 
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+
 import {
+  REVIEW_HARVEST_SCHEMA_VERSION,
   REVIEW_PRODUCERS,
   REVIEW_REGION_CHANGES,
   REVIEW_REPLY_CLASSIFICATIONS,
@@ -43,6 +49,8 @@ const THREAD_KEYS = new Set([
   "outdated",
   "reply",
   "regionChange",
+  "headStartLine",
+  "headEndLine",
   "bodyDigest",
 ]);
 const PULL_REQUEST_KEYS = new Set([
@@ -127,19 +135,37 @@ function anchor(
   return { startLine, endLine, fileLevel };
 }
 
+function headAnchor(
+  fields: Fields,
+  path: string,
+  lineAnchor: boolean,
+): Pick<ReviewHarvestThread, "headStartLine" | "headEndLine"> {
+  const headStartLine = lineOrNull(fields.headStartLine, `${path}.headStartLine`);
+  const headEndLine = lineOrNull(fields.headEndLine, `${path}.headEndLine`);
+  const absent = headStartLine === null && headEndLine === null;
+  const ordered = headStartLine !== null && headEndLine !== null && headStartLine <= headEndLine;
+  if (!(absent || (lineAnchor && ordered))) {
+    throw new ReviewDatasetError(path, "has an inconsistent head anchor");
+  }
+  return { headStartLine, headEndLine };
+}
+
 function thread(value: unknown, path: string): ReviewHarvestThread {
   const fields = record(value, path, THREAD_KEYS);
+  const lineAnchor = anchor(fields, path);
+  const side = oneOf(fields.side, ["left", "right"], `${path}.side`);
   return {
     id: text(fields.id, `${path}.id`),
     producer: oneOf(fields.producer, REVIEW_PRODUCERS, `${path}.producer`),
     path: text(fields.path, `${path}.path`),
-    ...anchor(fields, path),
-    side: oneOf(fields.side, ["left", "right"], `${path}.side`),
+    ...lineAnchor,
+    side,
     reviewedCommit: commitOrNull(fields.reviewedCommit, `${path}.reviewedCommit`),
     resolved: flag(fields.resolved, `${path}.resolved`),
     outdated: flag(fields.outdated, `${path}.outdated`),
     reply: reply(fields.reply, `${path}.reply`),
     regionChange: oneOf(fields.regionChange, REVIEW_REGION_CHANGES, `${path}.regionChange`),
+    ...headAnchor(fields, path, side === "right" && !lineAnchor.fileLevel),
     bodyDigest: text(fields.bodyDigest, `${path}.bodyDigest`, DIGEST),
   };
 }
@@ -227,13 +253,18 @@ function rules(value: unknown): ReviewHarvestDataset["rules"] {
 /** Validates an already-parsed dataset value; throws `ReviewDatasetError` on the first problem. */
 export function parseReviewHarvestDataset(value: unknown): ReviewHarvestDataset {
   const fields = record(value, "$");
-  if (fields.schemaVersion !== 1) throw new ReviewDatasetError("schemaVersion", "must be 1");
+  if (fields.schemaVersion !== REVIEW_HARVEST_SCHEMA_VERSION) {
+    throw new ReviewDatasetError(
+      "schemaVersion",
+      `must be ${String(REVIEW_HARVEST_SCHEMA_VERSION)}`,
+    );
+  }
   const pullRequests = list(fields.pullRequests, "pullRequests").map((entry, index) =>
     pullRequest(entry, `pullRequests.${String(index)}`),
   );
   ascending(pullRequests);
   return {
-    schemaVersion: 1,
+    schemaVersion: REVIEW_HARVEST_SCHEMA_VERSION,
     repository: text(fields.repository, "repository"),
     rules: rules(fields.rules),
     population: population(fields.population),
@@ -243,9 +274,32 @@ export function parseReviewHarvestDataset(value: unknown): ReviewHarvestDataset 
   };
 }
 
-/** Reads and validates a dataset file; a `.gz` name is decompressed first. */
+/**
+ * The content digest of a dataset body (every field except `digest`): SHA-256 over canonical JSON,
+ * the same rule as `reviewHarvestDatasetDigest` in `scripts/lib/review-harvest-records.mjs`.
+ */
+export function reviewHarvestDatasetDigest(content: unknown): string {
+  return `sha256:${sha256Hex(canonicalise(content))}`;
+}
+
+function assertContentDigest(value: unknown, recorded: string): void {
+  const content = Object.fromEntries(
+    Object.entries(value as Fields).filter(([key]) => key !== "digest"),
+  );
+  if (reviewHarvestDatasetDigest(content) !== recorded) {
+    throw new ReviewDatasetError("digest", "does not match the dataset content");
+  }
+}
+
+/**
+ * Reads and validates a dataset file; a `.gz` name is decompressed first. The stored digest must
+ * equal the recomputed content digest.
+ */
 export function loadReviewHarvestDataset(path: string): ReviewHarvestDataset {
   const bytes = readFileSync(path);
   const textContent = (path.endsWith(".gz") ? gunzipSync(bytes) : bytes).toString("utf8");
-  return parseReviewHarvestDataset(JSON.parse(textContent) as unknown);
+  const value = JSON.parse(textContent) as unknown;
+  const dataset = parseReviewHarvestDataset(value);
+  assertContentDigest(value, dataset.digest);
+  return dataset;
 }

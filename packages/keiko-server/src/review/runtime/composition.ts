@@ -26,6 +26,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchMode,
+  CodingWorkbenchRuntimeUnavailableReason,
   ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingRuntimePurpose } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
@@ -54,6 +55,7 @@ import { CodingRuntimeLaunchRejectedError } from "../../coding-runtime/launchFai
 import { resolveProductionRuntimeContext } from "../../coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import type { ServerDiagnosticSink } from "../../diagnostics-log.js";
 import type { ServerLogSink } from "../../observability/index.js";
+import { activationStartFailure, type ReviewRuntimeStartFailure } from "./activity-log.js";
 import { runMigrations } from "../../store/schema.js";
 import type { WorkspaceRootAccess } from "../../task-workspace/workspace-root-access.js";
 import type { UiHandlerDeps } from "../../deps.js";
@@ -68,6 +70,16 @@ type ReviewRuntimeActivatedPorts = Pick<
   ProductionCodingRuntimeResolverInput,
   "backend" | "editorAgentClient" | "secureWorkspaceTextRead"
 >;
+
+/** No OpenCode runtime can be activated for the instance; the reason is the coding runtime's own. */
+interface ReviewRuntimeActivationUnavailable {
+  readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason;
+}
+
+/** Why `composeReviewRuntime` composed nothing; the service logs it on `start-failed` (R4130-019). */
+export interface ReviewRuntimeComposeRefusal {
+  readonly startFailure: ReviewRuntimeStartFailure;
+}
 
 interface ReviewRuntimeActivationRequest {
   /** `<stateDir>/review-runtime`: every per-run state directory of the instance lives below it. */
@@ -84,10 +96,10 @@ export interface ReviewRuntimeCompositionInput {
   readonly runtimeStateDir: string;
   /** The server-owned root every review worktree lives under (Issue #4133). */
   readonly reviewWorktreeRoot: string;
-  /** Activates the OpenCode runtime for this instance; `undefined` when none is available. */
+  /** Activates the OpenCode runtime for this instance, or names why none is available. */
   readonly activate: (
     request: ReviewRuntimeActivationRequest,
-  ) => ReviewRuntimeActivatedPorts | undefined;
+  ) => ReviewRuntimeActivatedPorts | ReviewRuntimeActivationUnavailable;
   readonly verificationRunner: ProductionCodingRuntimeResolverInput["verificationRunner"];
   readonly readWorkspaceHead: (workspaceRoot: string, repositoryRoot: string) => string | undefined;
   readonly resolveManagedModelProfile: (
@@ -273,12 +285,13 @@ function privateSnapshotStore(): {
 }
 
 /**
- * Composes one review instance, or `undefined` when no OpenCode runtime can be activated for it
- * (the review then settles `skipped/model-unavailable` in Issue #4136; nothing is half-composed).
+ * Composes one review instance, or names why none could be composed: no OpenCode runtime can be
+ * activated for it, or no runtime host can be created (the review then settles
+ * `skipped/model-unavailable` in Issue #4136; nothing is half-composed).
  */
 export function composeReviewRuntime(
   input: ReviewRuntimeCompositionInput,
-): ReviewRuntimeComposition | undefined {
+): ReviewRuntimeComposition | ReviewRuntimeComposeRefusal {
   const workspace = createReviewWorkspaceLifecycle();
   const readiness = createOpenCodeGatewayReadinessRegistry("review");
   const evidence = createCodingRuntimeEvidenceAggregator(input.evidenceStore);
@@ -288,7 +301,9 @@ export function composeReviewRuntime(
     resolveWorkspaceRoot: () => workspace.bound()?.worktreeRoot,
     runtimeEvidence: evidence,
   });
-  if (ports === undefined) return undefined;
+  if ("unavailableReason" in ports) {
+    return { startFailure: activationStartFailure(ports.unavailableReason) };
+  }
   const confirmations = reviewStartConfirmations();
   const authority = reviewWorkspaceAuthority(input, workspace);
   const resolver = createProductionCodingRuntimeResolver({
@@ -308,7 +323,7 @@ export function composeReviewRuntime(
         : { ...qualified, openCodeGatewayReadinessRegistry: readiness };
     },
   });
-  if (host === undefined) return undefined;
+  if (host === undefined) return { startFailure: "host-unavailable" };
   return assembleComposition(input, {
     workspace,
     readiness,

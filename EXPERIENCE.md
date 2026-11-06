@@ -85,3 +85,12 @@ Existing linked decisions and executable gates remain the source to check before
 - **Some agent harnesses run sub-agents in an isolated worktree at clean `HEAD`.** If you delegate
   edits, confirm they landed on _this_ working tree and not a throwaway checkout before you report
   the change as made.
+
+## Lessons recorded since the migration
+
+- **Root `package.json` is a SHA-pinned source of the #1300 design-evidence proofs.** Adding an npm
+  script, even an alias for repository tooling, changes its digest and turns the keiko-ui coverage
+  suite red (`globals.css.test.ts`, "pins the complete shared producer, fixture and stylesheet input
+  set"), and the proofs may only be regenerated on the Linux reference environment. Give a lab or
+  tool a `node scripts/...` entry point and register it in `knip.json` instead; the continuity and
+  memory labs run that way. Seen on PR #4230 (2026-11-03).

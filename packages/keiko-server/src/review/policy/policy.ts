@@ -17,6 +17,7 @@ import { correlationIdOrUnknown } from "../../correlation.js";
 import type { UiHandlerDeps } from "../../deps.js";
 import type { ServerLogSink } from "../../observability/index.js";
 import { deriveRepositoryId } from "../../task-workspace/naming.js";
+import { reportReviewFailure } from "../diagnostics.js";
 import type { ReviewRulesSettingsPort } from "../runtime/rulesFile.js";
 import { logReviewModelPolicyRefused, type ReviewModelPolicyRefusalStage } from "./activity-log.js";
 import { reviewGatewayConfig, reviewOperatorConfig } from "./operator.js";
@@ -114,12 +115,20 @@ export function effectiveRulesFilePath(
   return { path: REVIEW_RULES_FILE_DEFAULT_PATH, source: "default" };
 }
 
-/** The stored settings document, or `undefined` when none (or no valid one) is stored. */
+/**
+ * The stored settings document, or `undefined` when none (or no valid one) is stored. An invalid
+ * document is reported under the run's correlation, as the settings routes report it, so a run that
+ * read the preset or default rules path instead of the person's setting is traceable (R4130-023).
+ */
 function storedReviewSettings(
   store: ReviewSettingsStore | undefined,
   repositoryId: string,
+  correlationId: string | undefined,
 ): ReviewSettingsDocument | undefined {
   const stored = store?.read(repositoryId);
+  if (stored?.kind === "invalid") {
+    reportReviewFailure("review.settings.read", correlationId, new TypeError("invalid settings"));
+  }
   return stored?.kind === "stored" ? stored.document : undefined;
 }
 
@@ -129,9 +138,9 @@ export function reviewRulesSettingsPort(
   store: () => ReviewSettingsStore | undefined,
 ): ReviewRulesSettingsPort {
   return {
-    rulesPath: (repositoryRoot): string => {
+    rulesPath: (repositoryRoot, correlationId): string => {
       const repositoryId = deriveRepositoryId(repositoryRoot);
-      const settings = storedReviewSettings(store(), repositoryId);
+      const settings = storedReviewSettings(store(), repositoryId, correlationId);
       return effectiveRulesFilePath(reviewOperatorConfig(deps()), settings, repositoryId).path;
     },
   };

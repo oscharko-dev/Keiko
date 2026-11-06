@@ -23,6 +23,8 @@ export interface TaskActionsInput {
   readonly projectMemoryEnabled: boolean;
   /** The Jira Pod picked in the composer for the next start; absent starts without Jira. */
   readonly jiraPodId?: string | undefined;
+  /** The MCP servers selected in the composer for the next start; absent offers every one. */
+  readonly mcpServers?: readonly string[] | undefined;
   readonly conversationId: string | undefined;
   /**
    * The fork the person asked for (S03): the start begins a new task from it and continues no
@@ -89,6 +91,7 @@ function beginStart(
       issue,
       ...startPromptInputs(inputs),
       ...(input.jiraPodId === undefined ? {} : { jiraPodId: input.jiraPodId }),
+      ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
     });
   });
 }

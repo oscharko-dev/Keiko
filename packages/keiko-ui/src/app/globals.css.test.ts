@@ -756,6 +756,15 @@ describe("Compact model picker", () => {
       "max-width: 34px",
     );
   });
+
+  it("wraps the composer's controls where one row would make them overlap", () => {
+    const narrow = css.slice(css.indexOf("@container (max-width: 400px) {\n  .cmp-bar,"));
+    expect(narrow).toMatch(/^[^}]*\.cmp-bar-compact,\s*\.cmp-bar-model \{\s*flex-wrap: wrap;/u);
+    // The rule must come after the compact bar's own nowrap to win.
+    expect(css.indexOf(".cmp-bar-compact {\n  flex-wrap: nowrap;")).toBeLessThan(
+      css.indexOf("@container (max-width: 400px) {\n  .cmp-bar,"),
+    );
+  });
 });
 
 describe("Prompt Enhancer rendered prompt selection", () => {

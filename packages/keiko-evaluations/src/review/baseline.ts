@@ -4,7 +4,9 @@
 //
 // - thread-change rate: of all threads whose region could be measured, the share whose anchored
 //   region changed later in the same pull request;
-// - acceptance rate: of the decided threads (hits plus false alarms), the share that were hits.
+// - acceptance rate: of the decided threads (hits plus false alarms), the share that were hits;
+// - actionable rate: hits over hits, false alarms and undecided threads, the quantity the offline
+//   gate holds a replayed agent to (owner decision 2026-11-04, R4130-006).
 //
 // Every rate carries its absolute counts and a Wilson interval; a rate over nothing is null.
 
@@ -41,6 +43,8 @@ export interface ReviewProducerBaseline {
   readonly falseAlarms: number;
   readonly undecided: number;
   readonly unmeasured: number;
+  /** Hits over hits, false alarms and undecided threads: the gated quantity (R4130-006). */
+  readonly actionableRate: WilsonInterval;
   readonly acceptanceRate: WilsonInterval;
   readonly refutations: {
     readonly total: number;
@@ -168,6 +172,7 @@ function producerBaseline(
     falseAlarms: tally.falseAlarms,
     undecided: tally.undecided,
     unmeasured: tally.unmeasured,
+    actionableRate: wilsonInterval(tally.hits, tally.hits + tally.falseAlarms + tally.undecided),
     acceptanceRate: wilsonInterval(tally.hits, tally.hits + tally.falseAlarms),
     refutations: {
       total: tally.refuted,
