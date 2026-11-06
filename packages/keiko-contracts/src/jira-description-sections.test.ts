@@ -59,6 +59,23 @@ describe("Data Center description heading serialization", () => {
     expect(getterCalls).toBe(0);
   });
 
+  it.each(["getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor"] as const)(
+    "propagates an unexpected %s trap to the caller without accepting the description",
+    (trap) => {
+      const failure = new Error("Synthetic reflection failure");
+      const hostile = new Proxy(
+        { format: "markdown", text: "## Heading\nBody" },
+        {
+          [trap]: (): never => {
+            throw failure;
+          },
+        },
+      );
+      expect(() => readJiraMarkdownDescription(hostile)).toThrow(failure);
+      expect(() => projectJiraDescriptionInput(hostile)).toThrow(failure);
+    },
+  );
+
   it("writes real wiki headings while retaining every criterion, source and footer byte", () => {
     const source =
       "## Requirement\nExact requirement.\n\n## Acceptance criteria\n* one\n* two\n* three\n* four\n* five\n\n## Source\n[Source|https://source.example.invalid]\n\nKeiko trace: unchanged.";

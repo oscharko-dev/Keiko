@@ -247,14 +247,13 @@ export const JIRA_DESCRIPTION_INPUT_SCHEMA = {
   ],
 } as const;
 
-/** Exact data properties only: a model value never supplies inherited members or accessors. */
+/**
+ * Exact data properties only: a model value never supplies inherited members or accessors.
+ * Unexpected reflection failures propagate to the caller's diagnostic boundary.
+ */
 export function readJiraMarkdownDescription(value: unknown): string | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
-  try {
-    return markdownDescriptionObject(value);
-  } catch {
-    return undefined;
-  }
+  return markdownDescriptionObject(value);
 }
 function markdownDescriptionObject(value: object): string | undefined {
   const prototype: unknown = Object.getPrototypeOf(value);
