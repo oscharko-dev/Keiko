@@ -75,7 +75,10 @@ function integerSetting(name: string, minimum: number, fallback: number): number
   return value;
 }
 
-function settings<T>(options: PropertyOptions<T>): { readonly seed: number; readonly runs: number } {
+function settings<T>(options: PropertyOptions<T>): {
+  readonly seed: number;
+  readonly runs: number;
+} {
   return {
     seed: options.seed ?? integerSetting("KEIKO_PROPERTY_SEED", 0, DEFAULT_PROPERTY_SEED),
     runs: options.runs ?? integerSetting("KEIKO_PROPERTY_RUNS", 1, DEFAULT_PROPERTY_RUNS),

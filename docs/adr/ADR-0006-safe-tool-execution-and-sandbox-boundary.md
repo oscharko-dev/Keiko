@@ -316,8 +316,12 @@ contains no validation logic — because validation belongs to the caller, not t
 **Supported subset.** `parseUnifiedDiff` handles standard unified
 diffs: `--- a/<path>` / `+++ b/<path>` headers, including Git's C-quoted form for a path with special
 characters, `@@ -l,s +l,s @@` hunks, ` `/`+`/`-` body lines,
-file creation (`--- /dev/null`), and deletion (`+++ /dev/null`). This is not git-apply: no rename
-detection, no fuzzy matching, no binary patches. The parser is linear — a single pass over split
+file creation (`--- /dev/null`), and deletion (`+++ /dev/null`). A shape that would silently lose a
+change is refused with `PatchParseError` instead of parsing to a smaller patch: hunks under a
+`--- ` line that has no `+++ ` line, a change line between the `+++ ` header and the file's first
+hunk header, and a hunk header number outside the safe integer range (#4271, found by seeded
+property tests). A lone `--- ` line without hunks and prose after a finished hunk stay ignored.
+This is not git-apply: no rename detection, no fuzzy matching, no binary patches. The parser is linear — a single pass over split
 lines with bounded per-line regexes — so it cannot backtrack catastrophically (CodeQL ReDoS guard).
 
 The pure parser lives in `keiko-contracts/runtime/unified-diff`; the existing tools module re-exports
