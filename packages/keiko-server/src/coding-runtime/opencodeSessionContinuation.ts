@@ -326,12 +326,12 @@ async function arrivedSession(
   const deadline = Date.now() + SESSION_MOVE_ARRIVAL_TIMEOUT_MS;
   for (;;) {
     signal?.throwIfAborted();
-    const located = await locatedSession(client, expectedId, signal);
+    const located = await locatedSession(client, expectedId, signal); // NOSONAR typescript:S9382 -- a readiness poll: each read decides whether another is needed
     if (located.directory === directory) return located.view;
     if (located.directory !== source || Date.now() >= deadline) {
       throw new ContinuationRefused("session-mismatch");
     }
-    await new Promise((resolve) => setTimeout(resolve, SESSION_MOVE_ARRIVAL_POLL_MS));
+    await new Promise((resolve) => setTimeout(resolve, SESSION_MOVE_ARRIVAL_POLL_MS)); // NOSONAR typescript:S9382 -- the poll interval between dependent reads
   }
 }
 

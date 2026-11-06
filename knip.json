@@ -1,13 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignoreDependencies": [
-    "axe-core",
-    "@oscharko-dev/keiko-memory-consolidation",
-    "@oscharko-dev/keiko-quality-intelligence",
-    "@oscharko-dev/keiko-sandbox",
-    "fallow",
-    "ws"
-  ],
+  "ignoreDependencies": ["axe-core", "@oscharko-dev/keiko-memory-consolidation", "fallow", "ws"],
   "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3", "pgrep", "ssh-keygen"],
   "workspaces": {
     ".": {

@@ -1186,9 +1186,11 @@ describe("auditing a database directly", () => {
 // usual owner-only inheritance would satisfy this proof without Keiko doing anything (#4068).
 describe.runIf(WINDOWS_HOST)("retained session privacy on the Windows DACL", () => {
   const BROAD_READERS = ["BU", "WD", "AU"];
+  // The system copy by absolute path, as the production owner resolves it: never one found on PATH.
+  const ICACLS = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe");
 
   function grantInheritedRead(path: string): void {
-    execFileSync("icacls", [path, "/grant", "*S-1-5-32-545:(OI)(CI)(RX)"], { stdio: "ignore" });
+    execFileSync(ICACLS, [path, "/grant", "*S-1-5-32-545:(OI)(CI)(RX)"], { stdio: "ignore" });
   }
 
   function sddl(path: string): string {
