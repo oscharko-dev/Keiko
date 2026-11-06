@@ -101,6 +101,7 @@ const ALLOWED_CHAT_MESSAGES_COLUMNS = new Set([
 
 // V44 retains private per-chat composer text and its CAS revision, without provider metadata.
 const ALLOWED_CHAT_DRAFTS_COLUMNS = new Set(["chat_id", "text", "revision"]);
+const ALLOWED_CODING_WORKBENCH_DRAFTS_COLUMNS = new Set(["window_id", "text", "revision"]);
 
 const ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS = new Set([
   "run_id",
@@ -214,6 +215,7 @@ const EXPECTED_TABLES = new Set([
   "chat_tool_mutations",
   "chat_tool_read_grants",
   "chat_drafts",
+  "coding_workbench_drafts",
   "chat_messages",
   "chats",
   "coding_history_tasks",
@@ -712,6 +714,17 @@ describe("forbidden-fields — private chat drafts (ADR-0013 / ADR-0114)", () =>
     const inspector = openMigratedSchema(join(tmpDir, "chat-draft-inventory.db"));
     try {
       expect(new Set(columnNames(inspector, "chat_drafts"))).toEqual(ALLOWED_CHAT_DRAFTS_COLUMNS);
+    } finally {
+      inspector.close();
+    }
+  });
+
+  it("limits Coding Workbench drafts to reviewed text, window identity, and revision", () => {
+    const inspector = openMigratedSchema(join(tmpDir, "workbench-draft-inventory.db"));
+    try {
+      expect(new Set(columnNames(inspector, "coding_workbench_drafts"))).toEqual(
+        ALLOWED_CODING_WORKBENCH_DRAFTS_COLUMNS,
+      );
     } finally {
       inspector.close();
     }

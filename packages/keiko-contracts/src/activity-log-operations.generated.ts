@@ -2338,6 +2338,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["read", "save"],
       },
+      surface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["chat", "coding-workbench"],
+      },
       phase: {
         type: "string",
         dataClass: "closed-enum",

@@ -137,6 +137,7 @@ import {
   type ChatSessionCatalog,
 } from "../../context/ChatSessionContext";
 import { useGatewayModelCatalogSettled } from "../../hooks/useChatSession";
+import { usePrivateDraft, useChatDraftUnloadGuard } from "../../hooks/useChatDraft";
 import {
   useRepositoryBranchState,
   type RepositoryBranchState,
@@ -908,7 +909,21 @@ function useCheckoutRefresh(
   }, [refreshBranches, refreshWorkspace]);
 }
 
+/**
+ * The composer's task and follow-up text lives in the window's private server draft (#4271), so a
+ * reload while a start is in flight, or before a follow-up is sent, restores what was typed. Without
+ * a window identity (an embedded or test render) it stays local to the component.
+ */
+function useWorkbenchComposerDraft(
+  draftKey: string | undefined,
+): readonly [string, (value: string) => void] {
+  const draft = usePrivateDraft(draftKey, "coding-workbench");
+  useChatDraftUnloadGuard(draft.controller, 0);
+  return [draft.text, draft.setText];
+}
+
 export function CodingWorkbenchWindow({
+  draftKey,
   selectedRoot,
   selectedBranch,
   selectedLocation,
@@ -920,6 +935,8 @@ export function CodingWorkbenchWindow({
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
 }: {
+  /** The Workbench window's own id, which keys its private composer draft. */
+  readonly draftKey?: string | undefined;
   readonly selectedRoot?: string | undefined;
   readonly selectedBranch?: string | undefined;
   readonly selectedLocation?: WorkbenchExecutionLocation | undefined;
@@ -938,7 +955,7 @@ export function CodingWorkbenchWindow({
   const { state: runtimeState, actions } = useCodingWorkbenchRuntime({
     workspace: activeWorkspace,
   });
-  const [taskIntent, setTaskIntent] = useState("");
+  const [taskIntent, setTaskIntent] = useWorkbenchComposerDraft(draftKey);
   const history = useCodingTaskSession({
     snapshot: runtimeState.run.value,
     active: activeRunState(runtimeState.run.value?.state),

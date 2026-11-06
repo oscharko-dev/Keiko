@@ -55,6 +55,7 @@ import {
 } from "./CodingWorkbenchWindow";
 import type { CodingTaskSession } from "./useCodingTaskSession";
 import * as codingHistoryApi from "@/lib/coding-history-api";
+import { readCodingWorkbenchDraft, writeCodingWorkbenchDraft } from "@/lib/chat-draft-api";
 import { restoreConversation } from "./codingWorkbenchRestoredRun";
 import {
   resetClientDiagnosticWriter,
@@ -108,6 +109,12 @@ const chatCatalogMock = vi.hoisted(() => ({
 // PR #3625 review: whether the latest catalog refresh settled, so a test can tell an empty list
 // published mid-refresh from one a successful refresh settled on.
 const catalogRefreshMock = vi.hoisted(() => ({ settled: false }));
+vi.mock("@/lib/chat-draft-api", () => ({
+  readChatDraft: vi.fn(),
+  writeChatDraft: vi.fn(),
+  readCodingWorkbenchDraft: vi.fn(),
+  writeCodingWorkbenchDraft: vi.fn(),
+}));
 vi.mock("../../hooks/useChatSession", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../hooks/useChatSession")>()),
   useGatewayModelCatalogSettled: (): boolean => catalogRefreshMock.settled,
@@ -1330,6 +1337,54 @@ describe("CodingWorkbenchWindow", () => {
     view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
 
     expect(taskInput).toHaveValue("");
+  });
+
+  it("restores the unsent task text after a reload while Start was pending (#4271)", async () => {
+    const user = userEvent.setup();
+    const liveActions = actions();
+    vi.mocked(readCodingWorkbenchDraft).mockReset().mockResolvedValue({ text: "", revision: 0 });
+    vi.mocked(writeCodingWorkbenchDraft)
+      .mockReset()
+      .mockImplementation(async (_id, update) => ({
+        text: update.text,
+        revision: update.expectedRevision + 1,
+      }));
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
+    const first = render(
+      <CodingWorkbenchWindow draftKey="coding-workbench-mabc12" selectedRoot="/repo" />,
+    );
+    await waitFor(() => expect(readCodingWorkbenchDraft).toHaveBeenCalled());
+    await user.type(screen.getByLabelText("Task instructions"), "Investigate the failing test");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        mutation: { status: "pending", kind: "start", requestId: "req-1", error: null },
+      }),
+      actions: liveActions,
+    });
+    first.rerender(
+      <CodingWorkbenchWindow draftKey="coding-workbench-mabc12" selectedRoot="/repo" />,
+    );
+    await waitFor(() =>
+      expect(writeCodingWorkbenchDraft).toHaveBeenLastCalledWith("coding-workbench-mabc12", {
+        text: "Investigate the failing test",
+        expectedRevision: expect.any(Number) as unknown as number,
+      }),
+    );
+
+    // The reload ends the pending start without a run; the page comes back with the saved text.
+    first.unmount();
+    vi.mocked(readCodingWorkbenchDraft).mockResolvedValue({
+      text: "Investigate the failing test",
+      revision: 1,
+    });
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
+    render(<CodingWorkbenchWindow draftKey="coding-workbench-mabc12" selectedRoot="/repo" />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Task instructions")).toHaveValue(
+        "Investigate the failing test",
+      ),
+    );
   });
 
   it("shows one repository and branch control above the composer", () => {

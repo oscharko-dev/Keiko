@@ -99,6 +99,8 @@ counts; it never records source, credentials or parser diagnostics containing so
 Chat draft recovery reuses the private UiStore and authenticated chat-bound revision checks.
 The `chat.draft.operation` Activity Log records lifecycle and status without draft text;
 concurrent stale writes must preserve the local draft and require explicit conflict resolution.
+The Coding Workbench composer reuses the same store and revision checks per Workbench window
+(`surface: "coding-workbench"`); never add a second draft store for another composer.
 
 An unchanged privacy-elided Files connection may reuse its conversation-bound canonical
 acknowledgement only when the persisted fingerprint and visible scope both match. Restore the

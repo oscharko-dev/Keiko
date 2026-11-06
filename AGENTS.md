@@ -1364,7 +1364,8 @@ the removed separators (`segmentSeparatorsRemoved`); any other line break is the
 and stays. Browser clips are normalized in memory to mono PCM16 WAV;
 normalization failures use the existing body-free client diagnostic sink (ADR-0100 D8).
 
-Chat draft persistence uses `chat.draft.operation` for read/save lifecycle and status only.
+Chat draft persistence uses `chat.draft.operation` for read/save lifecycle and status only; the
+Coding Workbench composer reuses that store per Workbench window (`surface: "coding-workbench"`).
 Draft text belongs to the authenticated, chat-bound private UiStore and never enters logs or
 browser persistence; stale revisions fail closed (ADR-0114 D1).
 

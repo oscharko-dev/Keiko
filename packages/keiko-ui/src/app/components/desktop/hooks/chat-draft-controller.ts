@@ -1,3 +1,4 @@
+import type { PrivateDraftSurface } from "@/lib/chat-draft-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { dirty, newEntry, type DraftEntry } from "./chat-draft-state";
 import type { ChatDraftActions } from "./chat-draft-runtime";
@@ -10,6 +11,7 @@ export class ChatDraftController {
   constructor(
     private readonly changed: () => void,
     private readonly replaced: () => void = () => {},
+    private readonly surface: PrivateDraftSurface = "chat",
   ) {}
   entry(chatId: string): DraftEntry {
     let entry = this.entries.get(chatId);
@@ -51,6 +53,7 @@ export class ChatDraftController {
           replaced: this.replaced,
           schedule: (chatId, entry): void => this.schedule(chatId, entry),
           hasUnsaved: (): boolean => this.hasUnsaved(),
+          surface: this.surface,
         }),
     );
     return this.actions;

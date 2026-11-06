@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3df76c104aa04eb05b4f45fba7a7ffac7e7a96b8f58f47257d662f74c8246cfd",
+    "catalogDigest": "027d6de244602f667ef848a01cc6a48d51725bceea391d5389524d6b591a6523",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2436,6 +2436,12 @@
             "required": true,
             "values": ["read", "save"]
           },
+          "surface": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["chat", "coding-workbench"]
+          },
           "phase": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -2455,7 +2461,7 @@
         "proofIds": ["chat.draft.operation.lifecycle"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-draft-log.ts:8",
-        "emitterSites": ["packages/keiko-server/src/chat-draft-log.ts:42"]
+        "emitterSites": ["packages/keiko-server/src/chat-draft-log.ts:52"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33210,7 +33216,7 @@
         "proofIds": ["memory-vault.store.opened.key-source"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-memory-vault/src/vault.ts:123",
-        "emitterSites": ["packages/keiko-memory-vault/src/vault.ts:450"]
+        "emitterSites": ["packages/keiko-memory-vault/src/vault.ts:475"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -40901,8 +40907,8 @@
         "failureClasses": ["ui-store-open"],
         "proofIds": ["store.opened.identity"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store/db.ts:146",
-        "emitterSites": ["packages/keiko-server/src/store/db.ts:1005"]
+        "registrationSite": "packages/keiko-server/src/store/db.ts:151",
+        "emitterSites": ["packages/keiko-server/src/store/db.ts:1013"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -59704,6 +59710,12 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "surface",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 }
               ],
               "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
@@ -112030,14 +112042,14 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4734",
+      "site": "packages/keiko-server/src/deps.ts:4763",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "server.diagnostic.failure",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:1109",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:1110",
       "package": "keiko-server"
     },
     {
@@ -112130,7 +112142,7 @@
     {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:149",
+      "site": "packages/keiko-server/src/store/db.ts:154",
       "package": "keiko-server"
     },
     {
@@ -112196,7 +112208,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3319",
+      "site": "packages/keiko-server/src/deps.ts:3348",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
