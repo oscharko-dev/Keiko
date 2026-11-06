@@ -483,3 +483,43 @@ it does not strip unsupported constraints to make a server connect. Internal clo
 retain their existing contract; `jira.draft` explicitly uses that same standard dialect for its
 two closed input alternatives as specified in ADR-0175 D3. Schema complexity, references and patterns are
 bounded before compilation, with no remote schema fetches or execution of schema-supplied code.
+
+### Call resilience of the shared connection (#4271)
+
+An independent audit of OpenCode coding runs through the shared connection corrected these
+points; they refine D5 and the section above, they do not widen any authority.
+
+- **Effect is a fact of the transport gate.** `ManagedMcpError.effect` is `none` only for a failure
+  that happened before the `tools/call` frame passed the dispatch gate in `ExternalClient`
+  (a stalled or failed declaration check, descriptor drift, an abort, a refused `beforeDispatch`);
+  every other failure is `possible`. The native relay no longer revokes the run for a `none` failure.
+  The durable record becomes `dispatched` at that gate (`ManagedMcpMutationInvocation.dispatch`),
+  not at admission, and a failure before it settles the record `not-dispatched` (`release`). A
+  permit without `dispatch` keeps the old behaviour: its record was already dispatched, so the relay
+  never claims "no effect" for it. The post-send pin (lost response, provider error, malformed
+  result) is unchanged: the run is revoked.
+- **`tools/list_changed` retires, it does not cancel.** The consumer-visible `signal` aborts at once
+  and no further call is dispatched, but a call whose frame already left keeps its transport until it
+  settles (bounded by its own hard cap); the connection then closes and the next consumer reconnects
+  against the new catalog.
+- **Frame cap above result cap.** The stdio frame buffer is 16 MiB and the delivered result bound
+  stays 1 MiB, so a result between the two is refused whole as `result-too-large` (never truncated)
+  and the shared connection survives. A single frame beyond 16 MiB still makes the SDK close the
+  connection; that bound is the transport's, not a result policy.
+- **Catalog narrowing.** A manually discovered server is narrowed to the registry's tools before the
+  64-tool cap applies (up to 512 tools and 4 MiB per listing page are inspected; every tool's schema
+  still passes admission). Descriptions are cut to 2 KiB each and 128 KiB per catalog on code-point
+  boundaries; the listing line carries `omittedToolCount` and `truncatedDescriptionCount`. Automatic
+  discovery keeps the whole catalog and the 64-tool cap.
+- **Closed failure reasons and budgets.** A request deadline is `deadline-exceeded`, a caller abort
+  `aborted`, a lost transport `closed`. A call has its own 30 s idle budget (progress notifications
+  extend it) up to a 300 s hard cap; the declaration check has a separate 15 s deadline and its queue
+  wait ends with the call's abort. A failed connect records `connectCause`
+  (`timeout`, `spawn`, `aborted`, `closed`, `protocol`, `unknown`).
+- **Server composition.** Three consecutive timeouts without a success recycle a connected but hung
+  server. Consecutive failures back off 5 s doubling to 60 s (the first reconnect is immediate); a
+  call during backoff fails at once with the closed `backoff` code, recorded as
+  `coding-runtime.mcp-relay` `reconnect-backoff` / `server-hung-recycled`. A revoked relay binding
+  answers `binding-revoked` with a fixed message when the caller proves the old capability. The
+  shared connection of a bound server is started while the run launches. A harvested OAuth credential
+  never replaces one with a later `expires`.

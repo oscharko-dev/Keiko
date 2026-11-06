@@ -381,6 +381,32 @@ describe("a relayed MCP exchange (#3903 AC3)", () => {
       .toEqual([["cancelled", "GET"]]);
   });
 
+  it("tells a revoked binding from an unknown capability, in words a model can read", async () => {
+    const { url, capability, relay, records } = await relayed();
+    relay.releaseRun(RUN_ID);
+    const revoked = await fetch(url, {
+      method: "POST",
+      headers: { [MCP_RELAY_CAPABILITY_HEADER]: capability },
+      body: INITIALIZE,
+    });
+    expect(revoked.status).toBe(401);
+    const body = (await revoked.json()) as { error: string; message: string };
+    expect(body.error).toBe("binding-revoked");
+    expect(body.message).toContain("Start a new run");
+    // Proof of the old capability is required: anyone else still gets the bare refusal.
+    const stranger = await fetch(url, {
+      method: "POST",
+      headers: { [MCP_RELAY_CAPABILITY_HEADER]: "x".repeat(43) },
+      body: INITIALIZE,
+    });
+    expect(stranger.status).toBe(401);
+    expect(await stranger.text()).toBe("");
+    expect(lines(records).map((line) => [line.outcome, line.reason])).toEqual([
+      ["refused", "binding-revoked"],
+      ["refused", "capability-invalid"],
+    ]);
+  });
+
   it("reaches the server only through Keiko's egress, which refuses a loopback target", async () => {
     const upstream = await startUpstream();
     const send = egressMcpRelayUpstream(() => undefined);

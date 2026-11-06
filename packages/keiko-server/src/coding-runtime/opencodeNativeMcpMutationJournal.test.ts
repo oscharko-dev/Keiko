@@ -85,10 +85,20 @@ function fixture(): Fixture {
   owner.bindTurn("run-one", "msg_user_one", "Create note");
   return { owner, store, reopen };
 }
+// The permit is issued at admission; the durable record becomes dispatched only at the transport
+// gate (`dispatch`), so a failure before the frame leaves the process stays provably effect-free.
 function begin(f: Fixture): NonNullable<ReturnType<NativeMcpMutationJournal["begin"]>> {
   const permit = f.owner.begin({ ...request, beforeEffect: () => true });
   if (permit === undefined) throw new Error("Expected durable dispatch permit");
+  if (permit.dispatch?.() !== true) throw new Error("Expected the dispatch gate to admit");
   return permit;
+}
+function dispatchRefused(
+  owner: NativeMcpMutationJournal,
+  input: Parameters<NativeMcpMutationJournal["begin"]>[0],
+): boolean {
+  const permit = owner.begin(input);
+  return permit === undefined || permit.dispatch?.() !== true;
 }
 
 it("does not confirm success until the committed native producer tool completes", () => {
@@ -114,7 +124,7 @@ it("keeps an unconsumed successful relay response fenced after reopening the own
     kind: "blocked",
     reason: "in-flight",
   });
-  expect(reopened.begin({ ...request, beforeEffect: () => true })).toBeUndefined();
+  expect(dispatchRefused(reopened, { ...request, beforeEffect: () => true })).toBe(true);
 });
 
 it("permits a genuinely new Call ID after confirmation, never a replay of the same call", () => {
@@ -123,7 +133,7 @@ it("permits a genuinely new Call ID after confirmation, never a replay of the sa
   begin(f).acknowledge();
   f.owner.observeCompletion(identity, true);
   expect(f.owner.prepare(request).kind).toBe("replayed");
-  expect(f.owner.begin({ ...request, beforeEffect: () => true })).toBeUndefined();
+  expect(dispatchRefused(f.owner, { ...request, beforeEffect: () => true })).toBe(true);
   expect(f.owner.prepare({ ...request, callId: "call_two" }).kind).toBe("prepared");
   expect(begin(f).invocationId).toBe(nativeMcpInvocationId({ ...request, callId: "call_two" }));
 });
@@ -191,14 +201,14 @@ it("rechecks the exact prepared call's authority before any effect", () => {
   f.owner.prepare(request);
   const admitted: unknown[] = [];
   expect(
-    f.owner.begin({
+    dispatchRefused(f.owner, {
       ...request,
       beforeEffect: (value) => {
         admitted.push(value);
         return false;
       },
     }),
-  ).toBeUndefined();
+  ).toBe(true);
   expect(admitted).toEqual([{ ...identity, mcpActionDigest: request.mcpActionDigest }]);
   expect(f.owner.unsettled(identity.runId)).toBe(false);
 });
@@ -300,6 +310,7 @@ it("keeps distinct inner mutations under one real parent call until its persiste
   expect(f.owner.prepare(secondRequest).kind).toBe("prepared");
   const second = f.owner.begin({ ...secondRequest, beforeEffect: () => true });
   expect(second?.invocationId).not.toBe(first.invocationId);
+  expect(second?.dispatch?.()).toBe(true);
   second?.acknowledge();
   expect(f.owner.prepare({ ...request, callId: "another_model_call" }).kind).toBe("blocked");
   producerCompletion(f, "completed");
@@ -318,15 +329,15 @@ it("retains the first budget admission through a permission replay without chang
     record: { consumer: { mcpActionDigest: first.mcpActionDigest } },
   });
   let observed: unknown;
-  expect(
-    f.owner.begin({
-      ...retry,
-      beforeEffect: (value) => {
-        observed = value;
-        return true;
-      },
-    }),
-  ).toBeDefined();
+  const permit = f.owner.begin({
+    ...retry,
+    beforeEffect: (value) => {
+      observed = value;
+      return true;
+    },
+  });
+  expect(permit).toBeDefined();
+  expect(permit?.dispatch?.()).toBe(true);
   expect(observed).toMatchObject({ ...identity, mcpActionDigest: first.mcpActionDigest });
 });
 
@@ -344,4 +355,36 @@ it("retains legacy receipts without admitting a mutation with missing budget ide
     }),
   ).toBeUndefined();
   expect(readmissions).toBe(0);
+});
+
+it("settles a call that failed before the transport gate as not dispatched, with no effect", () => {
+  const f = fixture();
+  f.owner.prepare(request);
+  const permit = f.owner.begin({ ...request, beforeEffect: () => true });
+  expect(permit?.release).toBeDefined();
+  expect(f.store.chatToolMutations?.find(nativeMcpInvocationId(request))).toMatchObject({
+    phase: "prepared",
+  });
+  permit?.release?.();
+  expect(f.store.chatToolMutations?.find(nativeMcpInvocationId(request))).toMatchObject({
+    phase: "settled",
+    outcome: "not-dispatched",
+  });
+  expect(f.owner.unsettled(identity.runId)).toBe(false);
+  expect(f.owner.prepare({ ...request, callId: "model_retry" }).kind).toBe("prepared");
+});
+
+it("never calls a dispatched record effect-free: release after dispatch stays unconfirmed", () => {
+  const f = fixture();
+  f.owner.prepare(request);
+  const permit = begin(f);
+  permit.release?.();
+  expect(f.store.chatToolMutations?.find(permit.invocationId)).toMatchObject({
+    phase: "settled",
+    outcome: "unknown",
+  });
+  expect(f.owner.prepare({ ...request, callId: "model_retry" })).toMatchObject({
+    kind: "blocked",
+    reason: "unknown-effect",
+  });
 });
