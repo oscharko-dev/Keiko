@@ -824,9 +824,22 @@ with an unavailable projection is omitted through the existing read-failure/unce
 Java parses run in a worker thread with a heap ceiling and a deadline that grows with the text
 (2026-11-06, #4212): the pinned java-parser's ALL(*) prediction grows superlinearly on some invalid
 expressions (400 characters took 21 s, 1,600 exhausted a 4 GB heap) and keeps its DFA caches across
-parses. A missed deadline, an exhausted worker heap or a grammar that fails to load is a depth
-refusal like stack exhaustion; the worker is replaced and only node names, token types, offsets and
-images leave it, never a library diagnostic.
+parses. A missed deadline, an exhausted worker heap or a grammar that fails to load is a budget
+refusal, closed like stack exhaustion; the worker is replaced and only node names, token types,
+offsets and images leave it, never a library diagnostic. The worker keeps the in-process stack size
+(1 MB), so nesting of roughly 150 to 200 levels parses and deeper nesting fails closed as a depth
+refusal; a tree the worker cannot pass back, or this thread cannot read back, is also a depth
+refusal. Every answer carries its request's id: an answer that lost step with its request is never
+used, retires the worker and is not reused for the text, which it says nothing about. The caller's
+wait cannot observe a worker's exit, so a worker that dies mid-parse is retired at its deadline and
+an exit between parses is found before the next one. A worker that cannot start refuses parses for
+a minute before the next start. A refusal on time is reused for the
+same text for five seconds, so two callers of one hostile message wait out one deadline, and the
+text is parsed afresh afterwards. A worker whose heap grew past what it may keep is replaced after
+its answer as routine. `security.java-parser.worker-started`, `security.java-parser.worker-recycled`
+and `security.java-parser.worker-retired` record each start, routine replacement and failure on the
+Activity Log under one correlation per worker lifetime, with the worker's ordinal, parse count, age
+and, for a retirement, a closed reason, never text.
 Completed standalone private-key intervals are opaque whitespace only in the parser input, with
 unchanged UTF-16 offsets and CR/LF delimiters. Unconditional masking consumes their original bytes;
 public code after a closed interval remains readable. Unclosed intervals receive no parser exemption.

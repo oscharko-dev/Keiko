@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7a70019fc657794da3799f82835b01104934c0e8a3009b09d42babed84e9ab8f"
+    "catalogDigest": "c7160801f2c6cd65029ad01e481d65f8862c5ffcbb9d01afbccb29df80fad760"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 642,
-    "proofCount": 664,
-    "resolvedProofCount": 664,
-    "failureClassCount": 390,
+    "operationCount": 645,
+    "proofCount": 667,
+    "resolvedProofCount": 667,
+    "failureClassCount": 391,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -774,6 +774,9 @@
         "portable.windows-authenticode.system-binary-refused",
         "security.fs.atomic-rename-failed",
         "security.fs.atomic-rename-retried",
+        "security.java-parser.worker-recycled",
+        "security.java-parser.worker-retired",
+        "security.java-parser.worker-started",
         "security.keychain.fallback",
         "security.keychain.withheld",
         "security.log.sink-failed",
@@ -1153,6 +1156,7 @@
     "runtime-git-identity": ["editor-delivery.dependency-failure"],
     "runtime-shutdown": ["lifecycle-crash.crash"],
     "security-atomic-publish": ["runtime-packages.dependency-failure"],
+    "security-java-parse-bound": ["runtime-packages.dependency-failure"],
     "security-keychain-access": ["runtime-packages.dependency-failure"],
     "security-vault-delete": ["runtime-packages.dependency-failure"],
     "security-vault-key-resolution": ["runtime-packages.dependency-failure"],
@@ -2842,6 +2846,15 @@
     ],
     "security.fs.atomic-rename-retried.attempts": [
       "packages/keiko-security/src/fs-atomic-rename.test.ts"
+    ],
+    "security.java-parser.worker-recycled.line": [
+      "packages/keiko-security/src/redaction-java.test.ts"
+    ],
+    "security.java-parser.worker-retired.line": [
+      "packages/keiko-security/src/redaction-java.test.ts"
+    ],
+    "security.java-parser.worker-started.line": [
+      "packages/keiko-security/src/redaction-java.test.ts"
     ],
     "security.keychain.fallback.bounded-exit": [
       "packages/keiko-security/src/macos-keychain.test.ts"

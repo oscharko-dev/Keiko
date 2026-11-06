@@ -152,6 +152,8 @@ export {
   nullSecurityLogSink,
   securityErrorKind,
 } from "./log-port.js";
+// The bounded Java parser's worker starts and retirements (#4212); the server installs its sink.
+export { installJavaParserLogSink } from "./redaction-java-parser.js";
 
 // Prompt Enhancer authoritative injection / unsafe-content detector (#1313, ADR-0044 §1/§5).
 export type {

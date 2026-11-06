@@ -9051,6 +9051,40 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "security-java-parse-bound",
+    requiredProductSurfaces: ["keiko-security"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["security.java-parser.worker-started"],
+      end: ["security.java-parser.worker-recycled"],
+      failure: ["security.java-parser.worker-retired"],
+      loss: [],
+    },
+    requiredCausalOperations: [],
+    requiredLossOperations: [],
+    requiredProofOperations: [
+      "security.java-parser.worker-recycled",
+      "security.java-parser.worker-retired",
+      "security.java-parser.worker-started",
+    ],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: [
+      "security.java-parser.worker-recycled",
+      "security.java-parser.worker-started",
+    ],
+    requiredEvidenceClasses: [
+      "closed-enum",
+      "completeness-state",
+      "count",
+      "duration",
+      "loss-state",
+    ],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "security-keychain-access",
     requiredProductSurfaces: ["keiko-security"],
     requiredLifecycleOperations: {
