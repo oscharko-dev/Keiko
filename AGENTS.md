@@ -1439,6 +1439,8 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   harness [`tests/support/property-testing.ts`](tests/support/property-testing.ts) — no
   third-party dependency. It draws inputs from a fixed seed, shrinks a failure and prints
   `KEIKO_PROPERTY_SEED=<n>` to replay it; `KEIKO_PROPERTY_RUNS=<n>` widens a local or nightly run.
+  Both apply to every property in the run, so replay one with `-t "<test name>"`, and derive
+  vacuity floors from the runs actually made (`propertySettings`), never from a fixed count.
   `measureScaling` proves linear time by comparing two input sizes, never one absolute time. Guard
   each property against vacuity (count what it actually reached) and prove it red against the
   defect class it names before relying on it.

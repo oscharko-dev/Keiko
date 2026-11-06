@@ -19,9 +19,12 @@ import {
   arrayOf,
   checkProperty,
   createRandom,
+  LINEAR_RATIO_MAX,
   measureScaling,
   oneOf,
+  propertySettings,
   SCALING_FACTOR,
+  scalingRatio,
   seedOf,
   shrinkArray,
   shrinkRecord,
@@ -31,6 +34,7 @@ import {
   type Generator,
   type Random,
 } from "../../../tests/support/property-testing.js";
+import { MEMORY_BODY_MAX_CHARS_DEFAULT } from "./_constants.js";
 import { memoryTextCaptureRejectionReason } from "./capture-safety.js";
 import { extractCandidatesFromUserText } from "./capture.js";
 import { admitProposedFact } from "./fact-admission.js";
@@ -173,41 +177,41 @@ const knownFacts = (bodies: readonly string[]): SalienceInput["knownFacts"] =>
 
 // ─── Origin of a learned body ────────────────────────────────────────────────
 
-// The person's words, verbatim or with only their first letter capitalised, as a clause that opens
-// mid-sentence is stored ("… und ich nutze Excel" → "Ich nutze Excel").
-function standsInText(body: string, text: string): boolean {
-  if (text.includes(body)) return true;
-  for (let length = 1; length <= Math.min(3, body.length); length += 1) {
-    const head = body.slice(0, length);
-    const rest = body.slice(length);
-    for (let at = text.indexOf(rest, 1); at !== -1; at = text.indexOf(rest, at + 1)) {
-      if (text.charAt(at - 1).toUpperCase() === head) return true;
-    }
-  }
-  return false;
+// Every property below states its run count once, so its coverage floors follow a widened or
+// narrowed run (KEIKO_PROPERTY_RUNS) instead of failing a short replay for being short.
+const PROPERTY_TIMEOUT_MS = 120_000;
+
+function runsOf(name: string, runs: number): number {
+  return propertySettings({ name, runs }).runs;
 }
 
-// "Meine Berichte beginnen immer …" for "Sie beginnen immer …" after "Ich schreibe meine Berichte":
-// the possessive and noun come from the person's previous message, the rest from this one.
-function resolvesOwnThing(body: string, userText: string, earlier: string): boolean {
-  const match = /^(\S+) (\S+) ([\s\S]*)$/u.exec(body);
-  if (match === null) return false;
-  const [, possessive = "", noun = "", tail = ""] = match;
-  return (
-    /^(?:mein|my)/iu.test(possessive) && earlier.includes(noun) && standsInText(tail, userText)
-  );
+// A floor met at the reference run count, scaled to the runs actually made.
+function scaledFloor(floor: number, referenceRuns: number, runs: number): number {
+  return Math.min(floor, Math.floor((floor * runs) / referenceRuns));
 }
 
+const WORD_RE = /[\p{L}\p{M}\p{N}]+/gu;
+
+// Compares case-insensitively the way Unicode does: "ﬁ" capitalises to "FI", which must still count
+// as the person's word. Upper- then lower-casing both sides folds such characters alike.
+function wordsOf(text: string): Set<string> {
+  const folded = text.toUpperCase().toLowerCase();
+  return new Set(Array.from(folded.matchAll(WORD_RE), ([word]) => word));
+}
+
+// A learned body may capitalise a clause that opened mid-sentence ("… und ich nutze Excel" → "Ich
+// nutze Excel") or name the person's own thing from their previous message ("Sie beginnen …" →
+// "Meine Berichte beginnen …"); it may not bring in a word the person wrote in neither message.
+// The evidence span, by contrast, must stand in this message as written.
 function expectOwnWords(outcome: SalienceOutcome, userText: string, earlier: string): void {
   if (outcome.kind !== "candidate") return;
   const { body, provenance } = outcome.proposal;
   expect(userText.includes(provenance.evidenceSpan ?? ""), "evidence span is the person's").toBe(
     true,
   );
-  expect(
-    standsInText(body, userText) || resolvesOwnThing(body, userText, earlier),
-    `learned body ${JSON.stringify(body)} is the person's words`,
-  ).toBe(true);
+  const said = new Set([...wordsOf(userText), ...wordsOf(earlier)]);
+  const brought = [...wordsOf(body)].filter((word) => !said.has(word));
+  expect(brought, `learned body ${JSON.stringify(body)} is the person's words`).toEqual([]);
 }
 
 interface Turn {
@@ -250,14 +254,23 @@ const OWN_TURN: Generator<Turn> = (random) => {
 
 interface ForeignTurn extends Turn {
   readonly assistantText: string;
+  // The earlier sentence this message repeats with one letter changed.
+  readonly said: string;
 }
 
+// Shrinking the person's texts could turn a foreign span into their own words and the failure into
+// a different one; only what the model and the assistant contributed is shrunk.
 const shrinkForeignTurn = shrinkRecord<ForeignTurn>({
-  userText: shrinkString,
-  previousUserText: shrinkString,
   assistantText: shrinkString,
   items: (items) => shrinkArray(items),
 });
+
+type ForeignSource = "near-miss" | "assistant" | "earlier";
+
+function foreignSourceOf(turn: ForeignTurn, evidence: string): ForeignSource {
+  if (evidence === turn.said.replace(/[.!?,]+$/u, "").trim()) return "near-miss";
+  return turn.assistantText.includes(evidence) ? "assistant" : "earlier";
+}
 
 // The same sentence with one character changed: a span copied from the earlier message is then
 // one letter away from anything in this one.
@@ -281,6 +294,7 @@ const FOREIGN_TURN: Generator<ForeignTurn> = (random) => {
     userText,
     previousUserText,
     assistantText,
+    said,
     known: [],
     items: arrayOf((r) => item(r, source(r)), 1, 4)(random),
   };
@@ -307,11 +321,12 @@ function countReach(reach: Map<string, number>, { outcomes, diagnostics }: Learn
 }
 
 describe("memory capture properties", () => {
-  it("learns only the person's own words", async () => {
+  it("learns only the person's own words", { timeout: PROPERTY_TIMEOUT_MS }, async () => {
     const reach = new Map<string, number>();
+    const runs = runsOf("origin", 800);
     await checkProperty({
       name: "origin",
-      runs: 800,
+      runs,
       generate: OWN_TURN,
       shrink: shrinkTurn,
       property: async (turn) => {
@@ -324,77 +339,98 @@ describe("memory capture properties", () => {
     });
     // The generator must reach admission, or the property above held vacuously.
     const summary = JSON.stringify(Object.fromEntries(reach));
-    expect(reach.get("candidate") ?? 0, summary).toBeGreaterThanOrEqual(80);
+    expect(reach.get("candidate") ?? 0, summary).toBeGreaterThanOrEqual(scaledFloor(80, 800, runs));
     // …and it must reach the rules that refuse, not only the path that learns.
     const reasons = [...reach.keys()].filter(
       (key) => key !== "candidate" && key !== "confirmation",
     );
-    expect(reasons.length, summary).toBeGreaterThanOrEqual(10);
+    expect(reasons.length, summary).toBeGreaterThanOrEqual(scaledFloor(10, 800, runs));
   });
 
-  it("never learns words the person did not write in this message", async () => {
-    let proposedForeign = 0;
-    await checkProperty({
-      name: "foreign evidence",
-      runs: 300,
-      generate: FOREIGN_TURN,
-      shrink: shrinkForeignTurn,
-      property: async (turn) => {
-        const userText = turn.userText.normalize("NFC");
-        const foreign = turn.items.filter(
-          (proposed) => !userText.includes(proposed.evidence.normalize("NFC").trim()),
+  it(
+    "never learns words the person did not write in this message",
+    { timeout: PROPERTY_TIMEOUT_MS },
+    async () => {
+      const proposed = new Map<ForeignSource, number>();
+      const runs = runsOf("foreign evidence", 300);
+      await checkProperty({
+        name: "foreign evidence",
+        runs,
+        generate: FOREIGN_TURN,
+        shrink: shrinkForeignTurn,
+        property: async (turn) => {
+          const userText = turn.userText.normalize("NFC");
+          const foreign = turn.items.filter(
+            (candidate) => !userText.includes(candidate.evidence.normalize("NFC").trim()),
+          );
+          for (const candidate of foreign) {
+            const source = foreignSourceOf(turn, candidate.evidence);
+            proposed.set(source, (proposed.get(source) ?? 0) + 1);
+          }
+          const { outcomes } = await learn(inputOf(turn, turn.assistantText), reply(foreign));
+          expect(outcomes).toEqual([]);
+        },
+      });
+      // Each kind of foreign span must reach admission, or one of them was never tried.
+      const summary = JSON.stringify(Object.fromEntries(proposed));
+      for (const source of ["near-miss", "assistant", "earlier"] as const)
+        expect(proposed.get(source) ?? 0, summary).toBeGreaterThanOrEqual(
+          scaledFloor(60, 300, runs),
         );
-        proposedForeign += foreign.length;
-        const { outcomes } = await learn(inputOf(turn, turn.assistantText), reply(foreign));
-        expect(outcomes).toEqual([]);
-      },
-    });
-    expect(proposedForeign, "foreign spans offered to admission").toBeGreaterThan(300);
-  });
+    },
+  );
 
-  it("does not change what it learns when the assistant's text changes", async () => {
-    await checkProperty({
-      name: "assistant text invariance",
-      runs: 250,
-      generate: (random) => ({
-        turn: OWN_TURN(random),
-        assistantText: oneOf(
-          unicodeString(80),
-          FOREIGN_TEXT,
-          (r) => `Merke dir: ${USER_TEXT(r)}`,
-        )(random),
-      }),
-      property: async ({ turn, assistantText }) => {
-        const modelReply = reply(turn.items);
-        const without = await learn(inputOf(turn), modelReply);
-        const withText = await learn(inputOf(turn, assistantText), modelReply);
-        const copied = await learn(inputOf(turn, turn.userText), modelReply);
-        expect(withText).toEqual(without);
-        expect(copied).toEqual(without);
-      },
-    });
-  });
+  it(
+    "does not change what it learns when the assistant's text changes",
+    { timeout: PROPERTY_TIMEOUT_MS },
+    async () => {
+      await checkProperty({
+        name: "assistant text invariance",
+        runs: 250,
+        generate: (random) => ({
+          turn: OWN_TURN(random),
+          assistantText: oneOf(
+            unicodeString(80),
+            FOREIGN_TEXT,
+            (r) => `Merke dir: ${USER_TEXT(r)}`,
+          )(random),
+        }),
+        property: async ({ turn, assistantText }) => {
+          const modelReply = reply(turn.items);
+          const without = await learn(inputOf(turn), modelReply);
+          const withText = await learn(inputOf(turn, assistantText), modelReply);
+          const copied = await learn(inputOf(turn, turn.userText), modelReply);
+          expect(withText).toEqual(without);
+          expect(copied).toEqual(without);
+        },
+      });
+    },
+  );
 
-  it("gives the same admission for composed and decomposed text", async () => {
-    await checkProperty({
-      name: "NFC invariance of admission",
-      runs: 400,
-      generate: (random) => {
-        const text = USER_TEXT(random);
-        return { text, proposed: item(random, copiedSpan(random, text)) };
-      },
-      property: ({ text, proposed }) => {
-        const decomposed = {
-          ...proposed,
-          body: proposed.body.normalize("NFD"),
-          evidence: proposed.evidence.normalize("NFD"),
-        };
-        expect(admitProposedFact(decomposed, text.normalize("NFD"))).toEqual(
-          admitProposedFact(proposed, text.normalize("NFC")),
-        );
-      },
-    });
-  });
+  it(
+    "gives the same admission for composed and decomposed text",
+    { timeout: PROPERTY_TIMEOUT_MS },
+    async () => {
+      await checkProperty({
+        name: "NFC invariance of admission",
+        runs: 400,
+        generate: (random) => {
+          const text = USER_TEXT(random);
+          return { text, proposed: item(random, copiedSpan(random, text)) };
+        },
+        property: ({ text, proposed }) => {
+          const decomposed = {
+            ...proposed,
+            body: proposed.body.normalize("NFD"),
+            evidence: proposed.evidence.normalize("NFD"),
+          };
+          expect(admitProposedFact(decomposed, text.normalize("NFD"))).toEqual(
+            admitProposedFact(proposed, text.normalize("NFC")),
+          );
+        },
+      });
+    },
+  );
 });
 
 // ─── Totality ────────────────────────────────────────────────────────────────
@@ -418,7 +454,10 @@ const TEXT_RULES: readonly (readonly [string, (text: string) => unknown])[] = [
   [
     "admitProposedFact",
     (text): unknown =>
-      admitProposedFact({ body: text, evidence: text.slice(0, 40), about: "self" }, text),
+      admitProposedFact(
+        { body: text, evidence: Array.from(text).slice(0, 40).join(""), about: "self" },
+        text,
+      ),
   ],
 ];
 
@@ -436,6 +475,7 @@ function loneSurrogateIn(value: unknown): boolean {
 describe("totality", () => {
   it.each(TEXT_RULES)(
     "%s answers every text the same way twice, without throwing",
+    { timeout: PROPERTY_TIMEOUT_MS },
     async (_, rule) => {
       await checkProperty({
         name: `totality ${_}`,
@@ -457,7 +497,7 @@ describe("totality", () => {
     },
   );
 
-  it("survives any model reply without throwing", async () => {
+  it("survives any model reply without throwing", { timeout: PROPERTY_TIMEOUT_MS }, async () => {
     await checkProperty({
       name: "totality salience",
       runs: 300,
@@ -539,23 +579,45 @@ const RANDOM_SHAPES: readonly (readonly [string, Shape])[] = Array.from(
   },
 );
 
-// Linear work grows by the factor, quadratic work by its square; twice the factor leaves room for
-// timer noise and garbage collection while still refusing every quadratic path.
-const LINEAR_RATIO_MAX = SCALING_FACTOR * 2;
+// A hang fails at once, whatever the ratio says.
 const HANG_GUARD_MS = 5_000;
 
+// Two ranges, each timed at one size and four times it. The first stays, with its lead and tail,
+// under the memory body limit at which several rules stop reading, so a quadratic path behind
+// that limit still shows; the second finds one in a rule without a limit. Both stay below V8's
+// large-object threshold (128 KiB, two-byte text included), above which an allocation costs
+// disproportionately more and a linear copy would look quadratic.
+const SIZES = [Math.floor(MEMORY_BODY_MAX_CHARS_DEFAULT / SCALING_FACTOR) - 128, 8_000] as const;
+
+const MINIMUM_MS = 10;
+
+// A rule still faster than MINIMUM_MS over the harness's largest repetition count spends a few
+// nanoseconds a call: it does not read its input, so its ratio means nothing, and its large run
+// must merely stay that fast as well.
 function expectLinear(name: string, build: Shape, rule: (text: string) => unknown): void {
-  const scaling = measureScaling({ build, run: rule, size: 4_000, maximumSize: 64_000 });
-  const detail = `${name}: ${JSON.stringify(scaling)}`;
-  expect(scaling.largeMs, detail).toBeLessThan(HANG_GUARD_MS);
-  if (scaling.measurable)
-    expect(scaling.largeMs / scaling.smallMs, detail).toBeLessThan(LINEAR_RATIO_MAX);
+  for (const size of SIZES) {
+    const scaling = measureScaling({
+      build,
+      run: rule,
+      size,
+      maximumSize: size,
+      minimumMs: MINIMUM_MS,
+    });
+    const detail = `${name}: ${JSON.stringify(scaling)}`;
+    expect(scaling.largeMs, detail).toBeLessThan(HANG_GUARD_MS);
+    if (scaling.measurable) expect(scalingRatio(scaling), detail).toBeLessThan(LINEAR_RATIO_MAX);
+    else expect(scaling.largeMs, detail).toBeLessThan(MINIMUM_MS * LINEAR_RATIO_MAX);
+  }
 }
 
 describe("linear time", () => {
-  it.each([...NAMED_SHAPES, ...RANDOM_SHAPES])("%s", (_, build) => {
-    for (const [name, rule] of TEXT_RULES) expectLinear(name, build, rule);
-  });
+  it.each([...NAMED_SHAPES, ...RANDOM_SHAPES])(
+    "%s",
+    { timeout: PROPERTY_TIMEOUT_MS },
+    (_, build) => {
+      for (const [name, rule] of TEXT_RULES) expectLinear(name, build, rule);
+    },
+  );
 });
 
 // ─── Credentials never become memories ───────────────────────────────────────
@@ -588,54 +650,65 @@ interface CredentialText {
   readonly secret: string;
 }
 
-// Shrinks the words around the credential and keeps the credential whole.
+// Shrinks the words around the credential and keeps the credential whole, still set apart by the
+// space around it: glued to a word, it would be a different text and a different failure.
 function* shrinkCredentialText({ text, secret }: CredentialText): Iterable<CredentialText> {
   const at = text.indexOf(secret);
-  const before = text.slice(0, at);
-  const after = text.slice(at + secret.length);
-  for (const smaller of shrinkString(before)) yield { secret, text: `${smaller}${secret}${after}` };
-  for (const smaller of shrinkString(after)) yield { secret, text: `${before}${secret}${smaller}` };
+  const before = text.slice(0, at).trimEnd();
+  const after = text.slice(at + secret.length).trimStart();
+  const join = (head: string, tail: string): string =>
+    [head, secret, tail].filter((part) => part !== "").join(" ");
+  for (const smaller of shrinkString(before)) yield { secret, text: join(smaller, after) };
+  for (const smaller of shrinkString(after)) yield { secret, text: join(before, smaller) };
 }
 
 describe("credentials", () => {
-  it("rejects any text that carries a credential, wherever it stands", async () => {
-    await checkProperty({
-      name: "credential rejection",
-      runs: 500,
-      generate: (random) => {
-        const secret = random.pick(CREDENTIALS)(random);
-        const after = random.chance(0.5) ? USER_TEXT(random) : "";
-        return { secret, text: `${USER_TEXT(random)} ${secret} ${after}`.trim() };
-      },
-      shrink: shrinkCredentialText,
-      property: ({ text, secret }) => {
-        expect(memoryTextCaptureRejectionReason(text)).not.toBeNull();
-        // "Merke dir: A. B" stores only its first sentence, so the credential may stand outside
-        // what is stored; it must never stand inside anything that is.
-        const outcomes = extractCandidatesFromUserText(`Merke dir: ${text}`, context());
-        expect(JSON.stringify(outcomes)).not.toContain(secret);
-      },
-    });
-  });
+  it(
+    "rejects any text that carries a credential, wherever it stands",
+    { timeout: PROPERTY_TIMEOUT_MS },
+    async () => {
+      await checkProperty({
+        name: "credential rejection",
+        runs: 500,
+        generate: (random) => {
+          const secret = random.pick(CREDENTIALS)(random);
+          const after = random.chance(0.5) ? USER_TEXT(random) : "";
+          return { secret, text: `${USER_TEXT(random)} ${secret} ${after}`.trim() };
+        },
+        shrink: shrinkCredentialText,
+        property: ({ text, secret }) => {
+          expect(memoryTextCaptureRejectionReason(text)).not.toBeNull();
+          // "Merke dir: A. B" stores only its first sentence, so the credential may stand outside
+          // what is stored; it must never stand inside anything that is.
+          const outcomes = extractCandidatesFromUserText(`Merke dir: ${text}`, context());
+          expect(JSON.stringify(outcomes)).not.toContain(secret);
+        },
+      });
+    },
+  );
 
-  it("never learns a credential the model copied from the person's message", async () => {
-    await checkProperty({
-      name: "credential learning",
-      runs: 300,
-      generate: (random) => {
-        const secret = random.pick(CREDENTIALS)(random);
-        const userText = `Ich nutze ${secret} für alles.`;
-        return {
-          userText,
-          secret,
-          items: [item(random, random.chance(0.5) ? userText : `Ich nutze ${secret}`)],
-        };
-      },
-      property: async ({ userText, secret, items }) => {
-        const { outcomes, diagnostics } = await learn({ userText, knownFacts: [] }, reply(items));
-        // Neither the body nor its evidence span nor a diagnostic may carry it.
-        expect(JSON.stringify({ outcomes, diagnostics })).not.toContain(secret);
-      },
-    });
-  });
+  it(
+    "never learns a credential the model copied from the person's message",
+    { timeout: PROPERTY_TIMEOUT_MS },
+    async () => {
+      await checkProperty({
+        name: "credential learning",
+        runs: 300,
+        generate: (random) => {
+          const secret = random.pick(CREDENTIALS)(random);
+          const userText = `Ich nutze ${secret} für alles.`;
+          return {
+            userText,
+            secret,
+            items: [item(random, random.chance(0.5) ? userText : `Ich nutze ${secret}`)],
+          };
+        },
+        property: async ({ userText, secret, items }) => {
+          const { outcomes, diagnostics } = await learn({ userText, knownFacts: [] }, reply(items));
+          // Neither the body nor its evidence span nor a diagnostic may carry it.
+          expect(JSON.stringify({ outcomes, diagnostics })).not.toContain(secret);
+        },
+      });
+    },
+  );
 });

@@ -9,6 +9,10 @@
 //   KEIKO_PROPERTY_SEED=<uint32>  replays one base seed (the failure message prints it)
 //   KEIKO_PROPERTY_RUNS=<count>   overrides every property's run count
 //
+// Both apply to every property in the run: replay one failure with vitest's `-t "<test name>"`.
+// A coverage floor a test asserts after its property should follow the runs it actually made,
+// which `propertySettings` answers.
+//
 // Invalid values fail the run instead of falling back, so a typo cannot pass for a deep run.
 
 export interface Random {
@@ -157,8 +161,12 @@ async function shrunk<T>(
 
 function describeValue(value: unknown): string {
   // JSON escapes lone surrogates and control characters, so the counterexample can be pasted back.
-  const text = JSON.stringify(value);
-  return text.length > 2_000 ? `${text.slice(0, 2_000)}… (${String(text.length)} chars)` : text;
+  // It answers undefined, despite its declared type, for undefined, functions and symbols.
+  const json = JSON.stringify(value) as string | undefined;
+  const text = json ?? String(value);
+  if (text.length <= 2_000) return text;
+  // Cut between characters, never inside a surrogate pair the message would then misprint.
+  return `${Array.from(text).slice(0, 2_000).join("")}… (${String(text.length)} chars)`;
 }
 
 function messageOf(error: unknown): string {
@@ -325,7 +333,8 @@ export function shrinkRecord<T extends object>(fields: FieldShrinkers<T>): Shrin
 export interface ScalingOptions {
   readonly build: (size: number) => string;
   readonly run: (input: string) => unknown;
-  // The first size tried; it grows fourfold until the small run takes `minimumMs`.
+  // The first size tried; it grows fourfold until the small run takes `minimumMs`, and once it
+  // reaches `maximumSize` the rule is run several times per timing instead.
   readonly size: number;
   readonly maximumSize: number;
   readonly minimumMs?: number;
@@ -333,43 +342,75 @@ export interface ScalingOptions {
 
 export interface Scaling {
   readonly size: number;
-  // Median milliseconds of three runs at `size` and at four times `size`.
+  // How often the rule ran per timing, the same at both sizes.
+  readonly repetitions: number;
+  // The fastest of three runs at `size` and at four times `size`: noise only ever adds time.
   readonly smallMs: number;
   readonly largeMs: number;
-  // False when even the largest small size ran faster than timer noise allows to compare.
+  // False when even the largest size and repetition count ran faster than timer noise allows to
+  // compare.
   readonly measurable: boolean;
 }
 
 export const SCALING_FACTOR = 4;
+// Linear work grows by the factor and quadratic work by its square; twice the factor leaves room
+// for noise and garbage collection. It does not tell n log n from n, nor a quadratic term whose
+// constant is too small to show at these sizes; the absolute guard callers add covers a hang.
+export const LINEAR_RATIO_MAX = SCALING_FACTOR * 2;
 
-function medianMs(run: () => unknown): number {
-  const times = [0, 1, 2].map(() => {
+// A rule that stops reading at a cap or returns early stays fast at every size; repeating it is
+// what makes its time comparable at all.
+const REPETITIONS_MAX = 1 << 20;
+
+function fastestMs(run: () => unknown): number {
+  let fastest = Number.POSITIVE_INFINITY;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     const started = performance.now();
     run();
-    return performance.now() - started;
-  });
-  return times.sort((a, b) => a - b)[1] ?? 0;
+    fastest = Math.min(fastest, performance.now() - started);
+  }
+  return fastest;
 }
 
-// Builds the input first, so only the rule's own work is timed.
-function timedAt(options: ScalingOptions, size: number): number {
+// Builds the input first and runs it once untimed, so only the rule's own, warmed work is timed.
+function timedAt(options: ScalingOptions, size: number, repetitions: number): number {
   const input = options.build(size);
-  return medianMs(() => options.run(input));
+  options.run(input);
+  return fastestMs(() => {
+    for (let count = 0; count < repetitions; count += 1) options.run(input);
+  });
 }
 
-// Compares running times at two sizes instead of trusting one absolute time: a linear rule grows
-// by the size factor, a quadratic one by its square, whatever the machine's speed or load. A rule
-// too fast to time at the first size is timed again on larger inputs, so a quadratic path cannot
-// pass merely because it is still quick on a small input.
-export function measureScaling(options: ScalingOptions): Scaling {
-  const minimumMs = options.minimumMs ?? 5;
-  options.run(options.build(Math.max(1, Math.floor(options.size / 10))));
+function measureOnce(options: ScalingOptions, minimumMs: number): Scaling {
   let size = options.size;
-  let smallMs = timedAt(options, size);
+  let repetitions = 1;
+  let smallMs = timedAt(options, size, repetitions);
   while (smallMs < minimumMs && size * SCALING_FACTOR <= options.maximumSize) {
     size *= SCALING_FACTOR;
-    smallMs = timedAt(options, size);
+    smallMs = timedAt(options, size, repetitions);
   }
-  const largeMs = timedAt(options, size * SCALING_FACTOR);
-  return { size, smallMs, largeMs, measurable: smallMs >= minimumMs };
+  while (smallMs < minimumMs && repetitions * SCALING_FACTOR <= REPETITIONS_MAX) {
+    repetitions *= SCALING_FACTOR;
+    smallMs = timedAt(options, size, repetitions);
+  }
+  const largeMs = timedAt(options, size * SCALING_FACTOR, repetitions);
+  return { size, repetitions, smallMs, largeMs, measurable: smallMs >= minimumMs };
+}
+
+export function scalingRatio(scaling: Scaling): number {
+  return scaling.largeMs / scaling.smallMs;
+}
+
+// Compares running times at two sizes instead of trusting one absolute time, so the verdict does
+// not depend on the machine's speed. A rule too fast to time at the first size is timed again on
+// larger inputs, so a quadratic path cannot pass merely because it is quick on a small input, and
+// a rule still too fast at the largest size is timed over repeated runs. A
+// ratio over the limit is measured once more, because a stall under load can inflate one run;
+// a quadratic rule exceeds it both times.
+export function measureScaling(options: ScalingOptions): Scaling {
+  const minimumMs = options.minimumMs ?? 10;
+  const first = measureOnce(options, minimumMs);
+  if (!first.measurable || scalingRatio(first) < LINEAR_RATIO_MAX) return first;
+  const second = measureOnce(options, minimumMs);
+  return scalingRatio(second) < scalingRatio(first) ? second : first;
 }

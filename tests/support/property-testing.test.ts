@@ -3,8 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   checkProperty,
   createRandom,
+  LINEAR_RATIO_MAX,
   measureScaling,
-  SCALING_FACTOR,
+  scalingRatio,
   propertySettings,
   seedOf,
   shrinkArray,
@@ -203,13 +204,28 @@ describe("measureScaling", () => {
     const flat = measureScaling({ build, run: linear, size: 1_000, maximumSize: 4_096_000 });
     const steep = measureScaling({ build, run: quadratic, size: 250, maximumSize: 64_000 });
     expect(flat.measurable && steep.measurable, JSON.stringify({ flat, steep })).toBe(true);
-    expect(flat.largeMs / flat.smallMs).toBeLessThan(SCALING_FACTOR * 2);
-    expect(steep.largeMs / steep.smallMs).toBeGreaterThan(SCALING_FACTOR * 2);
+    expect(scalingRatio(flat)).toBeLessThan(LINEAR_RATIO_MAX);
+    expect(scalingRatio(steep)).toBeGreaterThan(LINEAR_RATIO_MAX);
+  });
+
+  it("times a rule that stops at a cap over repeated runs", () => {
+    // Reads at most 64 characters, as a rule behind a length cap does: constant work at every size.
+    const capped = (input: string): number => linear(input.slice(0, 64));
+    const scaling = measureScaling({
+      build: (size) => "x".repeat(size),
+      run: capped,
+      size: 1_000,
+      maximumSize: 16_000,
+    });
+    expect(scaling.measurable, JSON.stringify(scaling)).toBe(true);
+    expect(scaling.repetitions).toBeGreaterThan(1);
+    expect(scalingRatio(scaling)).toBeLessThan(LINEAR_RATIO_MAX);
   });
 
   it("reports a rule too fast to time as not measurable instead of guessing", () => {
     const scaling = measureScaling({ build: () => "", run: () => 0, size: 1, maximumSize: 4 });
     expect(scaling.measurable).toBe(false);
     expect(scaling.size).toBe(4);
+    expect(scaling.repetitions).toBe(1 << 20);
   });
 });
