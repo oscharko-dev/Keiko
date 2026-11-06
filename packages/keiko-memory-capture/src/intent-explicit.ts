@@ -279,17 +279,52 @@ const ENDS_IN_NUMBER_RE = /\p{N}$/u;
 const SINGLE_LETTER_RE = /^\p{L}$/u;
 const SHORT_FORM_PART_CHARS = 2;
 const ABBREVIATIONS = new Set("bzw ca dr etc evtl ggf inkl nr prof sog usw vgl vs zzgl".split(" "));
+// Lower casing never shortens a word, so a longer one is no abbreviation.
+const LONGEST_ABBREVIATION = Math.max(...[...ABBREVIATIONS].map((word) => word.length));
 
 // Only a period can belong to its word. "z. B.", "e.g." and "bzw." are abbreviations, and a number
 // stays with what follows, because "am 3. Mai" reads the same as "Ich bin 42." and cutting a date
 // loses the fact. A longer word with a period inside is a name such as "Node.js".
-function periodBelongsToWord(line: string, index: number): boolean {
-  const word = line.slice(line.lastIndexOf(" ", index - 1) + 1, index);
-  if (ENDS_IN_NUMBER_RE.test(word) || ABBREVIATIONS.has(word.toLowerCase())) return true;
-  const parts = word.split(".");
-  return parts.length > 1
-    ? parts.every((part) => part.length <= SHORT_FORM_PART_CHARS)
-    : SINGLE_LETTER_RE.test(word);
+function periodBelongsToWord(line: string, word: WordBeforePeriod): boolean {
+  const { start, end } = word;
+  // The number test reads only the last character, a surrogate pair included.
+  if (ENDS_IN_NUMBER_RE.test(line.slice(Math.max(start, end - 2), end))) return true;
+  const text = (): string => line.slice(start, end);
+  if (end - start <= LONGEST_ABBREVIATION && ABBREVIATIONS.has(text().toLowerCase())) return true;
+  return word.hasPeriod ? word.longestPart <= SHORT_FORM_PART_CHARS : SINGLE_LETTER_RE.test(text());
+}
+
+// The word before a period: where it starts, whether a period stands inside it, and its longest
+// part between periods. "z.B" has the parts "z" and "B".
+interface WordBeforePeriod {
+  readonly start: number;
+  readonly end: number;
+  readonly hasPeriod: boolean;
+  readonly longestPart: number;
+}
+
+// Reads each word once, however many periods it holds, for periods asked about in order. Reading
+// "x.x.x.…" again from its start at every period is quadratic.
+function wordsBeforePeriods(line: string): (index: number) => WordBeforePeriod {
+  let nextSpace = line.indexOf(" ");
+  let start = 0;
+  let scanned = 0;
+  let partStart = 0;
+  let longest = 0;
+  return (index) => {
+    while (nextSpace !== -1 && nextSpace < index) {
+      start = nextSpace + 1;
+      nextSpace = line.indexOf(" ", start);
+    }
+    if (scanned < start) [scanned, partStart, longest] = [start, start, 0];
+    for (; scanned < index; scanned += 1) {
+      if (line[scanned] !== ".") continue;
+      longest = Math.max(longest, scanned - partStart);
+      partStart = scanned + 1;
+    }
+    const hasPeriod = partStart > start;
+    return { start, end: index, hasPeriod, longestPart: Math.max(longest, index - partStart) };
+  };
 }
 
 function nextSentenceStartsAt(line: string, index: number): boolean {
@@ -299,9 +334,10 @@ function nextSentenceStartsAt(line: string, index: number): boolean {
 }
 
 function firstSentence(line: string): string {
+  const wordBefore = wordsBeforePeriods(line);
   for (const match of line.matchAll(SENTENCE_MARKS_RE)) {
     const end = match.index + match[0].length;
-    const abbreviated = match[0] === "." && periodBelongsToWord(line, match.index);
+    const abbreviated = match[0] === "." && periodBelongsToWord(line, wordBefore(match.index));
     if (!abbreviated && nextSentenceStartsAt(line, end)) return line.slice(0, end);
   }
   return line;

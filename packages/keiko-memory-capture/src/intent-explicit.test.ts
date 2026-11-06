@@ -617,7 +617,25 @@ describe("a forget followed by a long glued run of marks", () => {
   it("stays linear: the words after each comma are read only a short way", () => {
     const text = `Vergiss den Bericht, ${",".repeat(100_000)}`;
     const started = performance.now();
-    explicitStatementKind(text);
+    expect(explicitStatementKind(text)).toBe("forget");
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+
+  it("reads a task verb with marks glued after it up to 64 characters", () => {
+    // "nimm" and 60 commas are 64 characters: still the verb. With 61 the word is read no further.
+    const withMarks = (count: number): string =>
+      `Vergiss den Bericht, nimm${",".repeat(count)} den Entwurf`;
+    expect(explicitStatementKind(withMarks(60))).toBeNull();
+    expect(explicitStatementKind(withMarks(61))).toBe("forget");
+  });
+});
+
+describe("a statement whose word holds many periods", () => {
+  it.each(["x.", "1.", "z.B."])("stays linear on a long glued run of %s", (piece) => {
+    const run = piece.repeat(Math.ceil(100_000 / piece.length));
+    const started = performance.now();
+    expect(explicitStatementKind(`Vergiss den Bericht${run}`)).toBe("forget");
+    expect(explicitStatementKind(`Merke dir, dass ${run}`)).toBe("remember");
     expect(performance.now() - started).toBeLessThan(2000);
   });
 });
