@@ -37,6 +37,11 @@ export const DEFAULT_PROPERTY_SEED = 0x4271;
 export const DEFAULT_PROPERTY_RUNS = 200;
 const MAX_SHRINK_STEPS = 2_000;
 
+/** The code points of `text`, one string each: an alphabet for `SeededRandom.string`. */
+export function characters(text: string): string[] {
+  return Array.from(text);
+}
+
 /** mulberry32: small, fast, full 32-bit period, and identical on every platform. */
 export function seededRandom(seed: number): SeededRandom {
   let state = seed >>> 0;
@@ -89,12 +94,16 @@ function settings<T>(options: PropertyOptions<T>): {
   };
 }
 
-function failure<T>(property: (input: T) => void, input: T): unknown {
+/** The failure of one input, boxed so that even a thrown `undefined` counts as a failure. */
+function failure<T>(
+  property: (input: T) => void,
+  input: T,
+): { readonly error: unknown } | undefined {
   try {
     property(input);
     return undefined;
   } catch (error) {
-    return error ?? new Error("property threw a nullish value");
+    return { error };
   }
 }
 
@@ -109,9 +118,9 @@ export function shrinkFailure<T>(
   for (let step = 0; shrink !== undefined && step < MAX_SHRINK_STEPS; step += 1) {
     let smaller: { input: T; error: unknown } | undefined;
     for (const candidate of shrink(current.input)) {
-      const candidateError = failure(property, candidate);
-      if (candidateError !== undefined) {
-        smaller = { input: candidate, error: candidateError };
+      const candidateFailure = failure(property, candidate);
+      if (candidateFailure !== undefined) {
+        smaller = { input: candidate, error: candidateFailure.error };
         break;
       }
     }
@@ -123,7 +132,9 @@ export function shrinkFailure<T>(
 
 function describeInput(input: unknown): string {
   try {
-    return JSON.stringify(input) ?? String(input);
+    // JSON.stringify answers undefined for undefined and functions, despite its declared type.
+    const text = JSON.stringify(input) as string | undefined;
+    return text ?? String(input);
   } catch {
     return "(input is not serializable)";
   }
@@ -139,9 +150,9 @@ export function checkProperty<T>(
   for (let run = 0; run < runs; run += 1) {
     const caseSeed = runSeed(seed, run);
     const input = generate(seededRandom(caseSeed));
-    const error = failure(property, input);
-    if (error === undefined) continue;
-    const shrunk = shrinkFailure(property, input, error, options.shrink);
+    const observed = failure(property, input);
+    if (observed === undefined) continue;
+    const shrunk = shrinkFailure(property, input, observed.error, options.shrink);
     const reason = shrunk.error instanceof Error ? shrunk.error.message : String(shrunk.error);
     throw new Error(
       `property failed at run ${String(run)} (case seed ${String(caseSeed)}, base seed ` +
@@ -154,7 +165,7 @@ export function checkProperty<T>(
 
 /** Shrink candidates for a string: halves first, then each single character removed. */
 export function* shrinkString(value: string): Generator<string> {
-  const characters = [...value];
+  const characters = Array.from(value);
   if (characters.length === 0) return;
   const half = Math.floor(characters.length / 2);
   if (half > 0) {
@@ -164,6 +175,22 @@ export function* shrinkString(value: string): Generator<string> {
   for (let index = 0; index < characters.length; index += 1) {
     yield [...characters.slice(0, index), ...characters.slice(index + 1)].join("");
   }
+}
+
+/**
+ * Narrows a shrinker to candidates that stay inside the generator's class. A property that holds
+ * only for that class would otherwise "fail" on every smaller candidate outside it, and the report
+ * would end at a misleading input.
+ */
+export function shrinkWithin<T>(
+  shrink: (input: T) => Iterable<T>,
+  keep: (candidate: T) => boolean,
+): (input: T) => Generator<T> {
+  return function* within(input: T): Generator<T> {
+    for (const candidate of shrink(input)) {
+      if (keep(candidate)) yield candidate;
+    }
+  };
 }
 
 /** Shrink candidates for an array: halves first, then each single item removed. */

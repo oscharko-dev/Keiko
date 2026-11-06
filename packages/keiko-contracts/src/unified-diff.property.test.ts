@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  characters,
   checkProperty,
   shrinkString,
   type SeededRandom,
@@ -17,7 +18,7 @@ import { parseUnifiedDiff, PatchParseError, type UnifiedDiffFileSource } from ".
  */
 
 const CONTENT = [
-  ..."ab z09",
+  ...characters("ab z09"),
   "-- ",
   "--- a/x",
   "+++ b/x",
@@ -40,7 +41,7 @@ interface GeneratedFile {
 }
 
 function needsQuoting(path: string): boolean {
-  return [...path].some((character) => {
+  return Array.from(path).some((character) => {
     const code = character.codePointAt(0) ?? 0;
     return code < 0x20 || code > 0x7e || character === '"' || character === "\\";
   });

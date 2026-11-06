@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  characters,
   checkProperty,
   shrinkArray,
   type SeededRandom,
@@ -23,7 +24,7 @@ interface RawCall {
   readonly function: { readonly name: string; readonly arguments: string };
 }
 
-const ID_CHARACTERS = [..."abcXYZ019_.:-"];
+const ID_CHARACTERS = characters("abcXYZ019_.:-");
 
 function rawId(random: SeededRandom, earlier: readonly unknown[]): unknown {
   switch (random.integer(0, 8)) {
@@ -38,9 +39,9 @@ function rawId(random: SeededRandom, earlier: readonly unknown[]): unknown {
     case 4:
       return random.pick([undefined, null, 7, { id: "nested" }, ["a"]]);
     case 5:
-      return `${SYNTHESIZED_TOOL_CALL_ID_PREFIX}${random.string([..."0123456789abcdef"], 12, 12)}-${String(random.integer(0, 4))}`;
+      return `${SYNTHESIZED_TOOL_CALL_ID_PREFIX}${random.string(characters("0123456789abcdef"), 12, 12)}-${String(random.integer(0, 4))}`;
     case 6:
-      return `call_${random.string([..."äé😀/"], 1, 3)}`;
+      return `call_${random.string(characters("äé😀/"), 1, 3)}`;
     default:
       return `call_${random.string(ID_CHARACTERS, 1, 20)}`;
   }
@@ -107,7 +108,7 @@ describe("tool call ids of a provider response", () => {
       (calls) => {
         const normalized = parseNormalizedToolCalls(calls);
         expect(normalized.map((call) => [call.name, call.arguments])).toEqual(
-          calls.map((call) => [call.function.name, JSON.parse(call.function.arguments)]),
+          calls.map((call) => [call.function.name, JSON.parse(call.function.arguments) as unknown]),
         );
         for (const [position, id] of firstSeenUsable(calls)) {
           expect(normalized[position]?.id).toBe(id);

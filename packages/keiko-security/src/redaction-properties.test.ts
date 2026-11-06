@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  characters,
   checkProperty,
   shrinkString,
   type SeededRandom,
@@ -11,9 +12,9 @@ import { redact, REDACTION_PLACEHOLDER } from "./redaction.js";
 // Seeded property tests for the credential floor (`redactContent` under `preserve`) and the strict
 // projection (`redact`). Every secret is synthetic and built from the alphabet its shape admits.
 
-const UPPER = [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"];
-const LOWER = [..."abcdefghijklmnopqrstuvwxyz"];
-const DIGIT = [..."0123456789"];
+const UPPER = characters("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+const LOWER = characters("abcdefghijklmnopqrstuvwxyz");
+const DIGIT = characters("0123456789");
 const ALNUM = [...UPPER, ...LOWER, ...DIGIT];
 const B64URL = [...ALNUM, "-", "_"];
 const UPPER_DIGIT = [...UPPER, ...DIGIT];
@@ -112,24 +113,23 @@ function keyedValue(random: SeededRandom): Secret {
     "DB_PASSWORD",
   ]);
   const value = random.string([...ALNUM, ".", "-", "_"], 6, 32);
-  const form = random.integer(0, 3);
-  const text = [
+  const text = random.pick([
     `${key}=${value}`,
     `${key}: ${value}`,
     `"${key}": "${value}"`,
     `${key} = '${value}'`,
-  ][form] as string;
+  ]);
   return { text, value, strictOnly: true };
 }
 
 const SECRET_MAKERS: readonly ((random: SeededRandom) => Secret)[] = [
-  (r) => token(r, "ghp_", ALNUM, 20, 40),
-  (r) => token(r, r.pick(["gho_", "ghu_", "ghs_", "ghr_"]), ALNUM, 20, 40),
-  (r) => token(r, "AKIA", UPPER_DIGIT, 16, 16),
-  (r) => token(r, "sk-", [...ALNUM, "-", "_"], 16, 48),
-  (r) => token(r, `xox${r.pick([..."baprs"])}-`, [...ALNUM, "-"], 10, 30),
-  (r) => token(r, "AIza", [...ALNUM, "-", "_"], 20, 40),
-  (r) => token(r, `${r.pick(["sk", "rk"])}_${r.pick(["live", "test"])}_`, ALNUM, 16, 32),
+  (r): Secret => token(r, "ghp_", ALNUM, 20, 40),
+  (r): Secret => token(r, r.pick(["gho_", "ghu_", "ghs_", "ghr_"]), ALNUM, 20, 40),
+  (r): Secret => token(r, "AKIA", UPPER_DIGIT, 16, 16),
+  (r): Secret => token(r, "sk-", [...ALNUM, "-", "_"], 16, 48),
+  (r): Secret => token(r, `xox${r.pick(characters("baprs"))}-`, [...ALNUM, "-"], 10, 30),
+  (r): Secret => token(r, "AIza", [...ALNUM, "-", "_"], 20, 40),
+  (r): Secret => token(r, `${r.pick(["sk", "rk"])}_${r.pick(["live", "test"])}_`, ALNUM, 16, 32),
   jwt,
   privateKey,
   urlCredential,
@@ -140,7 +140,7 @@ const SECRET_MAKERS: readonly ((random: SeededRandom) => Secret)[] = [
 
 /** Surrounding text that cannot spell a secret or a credential context by itself. */
 const NEIGHBOURS = [
-  ..."the quick brown fox runs over lazy dogs",
+  ...characters("the quick brown fox runs over lazy dogs"),
   " ",
   " ",
   "\n",
@@ -161,16 +161,16 @@ const NEIGHBOURS = [
 ];
 
 const WRAPPERS: readonly ((text: string) => string)[] = [
-  (t) => t,
-  (t) => `"${t}"`,
-  (t) => `'${t}'`,
-  (t) =>
+  (t): string => t,
+  (t): string => `"${t}"`,
+  (t): string => `'${t}'`,
+  (t): string =>
     `{"value": "${t.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\n", "\\n")}"}`,
-  (t) => `key: ${t}`,
-  (t) => `export TOKEN_VALUE=${t}`,
-  (t) => `curl -H '${t}' https://example.test`,
-  (t) => `- ${t}`,
-  (t) => `<${t}>`,
+  (t): string => `key: ${t}`,
+  (t): string => `export TOKEN_VALUE=${t}`,
+  (t): string => `curl -H '${t}' https://example.test`,
+  (t): string => `- ${t}`,
+  (t): string => `<${t}>`,
 ];
 
 interface Case {
@@ -321,7 +321,7 @@ describe("credential redaction properties (#4271)", () => {
     );
   });
 
-  const HOSTILE = [..."ab c\n\r\t\0\u0001\u007f=:\"'[]{}-_/\\.@"].concat([
+  const HOSTILE = characters("ab c\n\r\t\0\u0001\u007f=:\"'[]{}-_/\\.@").concat([
     "\ud800",
     "\udc00",
     "\ud83d",

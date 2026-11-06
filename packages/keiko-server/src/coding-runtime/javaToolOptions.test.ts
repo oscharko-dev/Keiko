@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  characters,
   checkProperty,
   shrinkString,
   type SeededRandom,
@@ -40,7 +41,7 @@ function hotspotOptions(buffer: string): readonly string[] | "unmatched-quote" {
 }
 
 const HOSTILE = [
-  ..."abc/._-~",
+  ...characters("abc/._-~"),
   " ",
   "\t",
   "\n",

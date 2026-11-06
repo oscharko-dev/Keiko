@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  characters,
   checkProperty,
   shrinkString,
   type SeededRandom,
@@ -23,7 +24,7 @@ import {
  * properties drive it through the sink (`redactLogString`, `redactLogFields`) that persists it.
  */
 
-type Generator = (random: SeededRandom) => string;
+type ValueGenerator = (random: SeededRandom) => string;
 
 const DIGITS = "0123456789".split("");
 const UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
@@ -151,10 +152,10 @@ function email(random: SeededRandom): string {
   return `${random.pick(["", "mailto:"])}${local}@${domain}`;
 }
 
-const CLASSES: readonly (readonly [string, Generator])[] = [
+const CLASSES: readonly (readonly [string, ValueGenerator])[] = [
   [
     "compact or grouped IBAN",
-    (random) => (random.boolean() ? groupedIban(random) : compactIban(random)),
+    (random): string => (random.boolean() ? groupedIban(random) : compactIban(random)),
   ],
   ["lowercase IBAN", lowercaseIban],
   ["international telephone", internationalPhone],
@@ -292,7 +293,8 @@ describe("sink privacy filter properties", () => {
           outer: { [name]: REDACTED_KEY },
         });
       },
-      { runs: 300, shrink: shrinkString },
+      // No shrink: a shorter spelling is no longer a personal field name.
+      { runs: 300 },
     );
   });
 
@@ -306,7 +308,8 @@ describe("sink privacy filter properties", () => {
           });
         }
       },
-      { runs: 300, shrink: shrinkString },
+      // No shrink: a shorter host can be a local binding, which stays readable by design.
+      { runs: 300 },
     );
     // `[::1]` is in the production allow-list but is refused as a structured payload before the
     // value is returned; that is over-redaction, not a leak, so it is not asserted readable.
@@ -384,7 +387,7 @@ describe("sink allowed shapes", () => {
 
 describe("sink totality and determinism", () => {
   const ALPHABET = [
-    ..."aZ09 .-_/\\:@+()[]{}\"'=,;<>#%~!?*\t\n",
+    ...characters("aZ09 .-_/\\:@+()[]{}\"'=,;<>#%~!?*\t\n"),
     "é",
     "日",
     " ",

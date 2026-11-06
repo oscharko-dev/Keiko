@@ -6,6 +6,7 @@ import {
   seededRandom,
   shrinkArray,
   shrinkString,
+  shrinkWithin,
 } from "./seeded-property.js";
 
 afterEach(() => {
@@ -107,5 +108,19 @@ describe("seeded property testing", () => {
     expect([...shrinkString("abcd")].slice(0, 3)).toEqual(["ab", "cd", "bcd"]);
     expect([...shrinkArray([1, 2, 3])]).toEqual([[1], [2, 3], [2, 3], [1, 3], [1, 2]]);
     expect([...shrinkString("")]).toEqual([]);
+  });
+
+  it("keeps a narrowed shrink inside the generator's class", () => {
+    const keepsNul = shrinkWithin(shrinkString, (text) => text.includes("\u0000"));
+    expect([...keepsNul("a\u0000b")]).toEqual(["\u0000b", "\u0000b", "a\u0000"]);
+    expect(() => {
+      checkProperty(
+        () => "abc\u0000def",
+        (text) => {
+          if (text.includes("\u0000")) throw new Error("refused");
+        },
+        { runs: 1, shrink: keepsNul },
+      );
+    }).toThrow(/for input "\\u0000": refused/u);
   });
 });

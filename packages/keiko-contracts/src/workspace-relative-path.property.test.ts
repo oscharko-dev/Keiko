@@ -2,6 +2,7 @@ import { posix, win32 } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  characters,
   checkProperty,
   shrinkString,
   type SeededRandom,
@@ -53,7 +54,7 @@ function candidate(random: SeededRandom): string {
   return random.boolean(0.2) ? `${joined}/` : joined;
 }
 
-function insideUnder(flavor: typeof posix | typeof win32, root: string, path: string): boolean {
+function insideUnder(flavor: typeof posix, root: string, path: string): boolean {
   const rel = flavor.relative(root, flavor.resolve(root, path));
   return rel !== ".." && !rel.startsWith(`..${flavor.sep}`) && !flavor.isAbsolute(rel);
 }
@@ -70,7 +71,7 @@ const PREDICATES: readonly [string, (value: string) => boolean][] = [
   ["isPortableWorkspaceRelativePath", isPortableWorkspaceRelativePath],
   ["isContainedAgentPath", isContainedAgentPath],
   ["isCodeTaskRepoRelativePath", isCodeTaskRepoRelativePath],
-  ["isValidScopePath", (value) => isValidScopePath(value, { mustBeRelative: true })],
+  ["isValidScopePath", (value): boolean => isValidScopePath(value, { mustBeRelative: true })],
 ];
 
 describe("workspace-relative path predicates (#4271)", () => {
@@ -86,7 +87,7 @@ describe("workspace-relative path predicates (#4271)", () => {
 
   it.each(PREDICATES)("%s is deterministic and never throws on arbitrary text", (_name, admit) => {
     checkProperty(
-      (random) => random.string([..."./\\:%~\u0000\uFF0E\u2024 aé\ud83d\ude00"], 0, 40),
+      (random) => random.string(characters("./\\:%~\u0000\uFF0E\u2024 aé\ud83d\ude00"), 0, 40),
       (path) => {
         expect(admit(path)).toBe(admit(path));
       },

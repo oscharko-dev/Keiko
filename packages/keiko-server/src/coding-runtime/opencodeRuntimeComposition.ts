@@ -2244,7 +2244,10 @@ function preparedEnvironment(
   javaProperties: Readonly<Record<string, string>> = {},
 ): Readonly<Record<string, string>> {
   const properties = { "java.io.tmpdir": join(runRoot, "tmp"), ...javaProperties };
-  return { ...profile, JAVA_TOOL_OPTIONS: javaToolOptions(inherited.JAVA_TOOL_OPTIONS, properties) };
+  return {
+    ...profile,
+    JAVA_TOOL_OPTIONS: javaToolOptions(inherited.JAVA_TOOL_OPTIONS, properties),
+  };
 }
 
 /** The prepared launch: the profile's environment plus the run's two capabilities. */

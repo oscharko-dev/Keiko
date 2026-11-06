@@ -6,8 +6,10 @@ import {
   TOOL_STATE_PATH_DENY_PATTERNS,
 } from "@oscharko-dev/keiko-contracts/sensitive-path-patterns";
 import {
+  characters,
   checkProperty,
   shrinkString,
+  shrinkWithin,
   type SeededRandom,
 } from "../../../tests/support/seeded-property.js";
 import { PathEscapeError } from "./errors.js";
@@ -104,13 +106,13 @@ describe("resolveWithinWorkspace properties (#4271)", () => {
       (path) => {
         expect(outcome(path)).toBe("refused");
       },
-      { shrink: shrinkString },
+      { shrink: shrinkWithin(shrinkString, (path) => path.includes("\u0000")) },
     );
   });
 
   it("never throws anything but PathEscapeError on arbitrary text", () => {
     checkProperty(
-      (random) => random.string([..."./\\:%~\u0000\uFF0E\u2024 aé\ud83d\ude00"], 0, 40),
+      (random) => random.string(characters("./\\:%~\u0000\uFF0E\u2024 aé\ud83d\ude00"), 0, 40),
       (path) => {
         outcome(path);
       },
@@ -124,7 +126,9 @@ const DENIED_NAMES = [...CREDENTIAL_PATH_DENY_PATTERNS, ...TOOL_STATE_PATH_DENY_
 );
 
 function randomCase(random: SeededRandom, text: string): string {
-  return [...text].map((c) => (random.boolean() ? c.toUpperCase() : c.toLowerCase())).join("");
+  return Array.from(text)
+    .map((c) => (random.boolean() ? c.toUpperCase() : c.toLowerCase()))
+    .join("");
 }
 
 function deniedSpelling(random: SeededRandom): string {
@@ -167,13 +171,14 @@ describe("isDenied properties (#4271)", () => {
           return;
         expect(isDenied(path)).toBe(true);
       },
-      { shrink: shrinkString },
+      // No shrink: a shorter string no longer spells a denied name, so every candidate would
+      // "fail" and the report would end at a misleading empty path.
     );
   });
 
   it("is deterministic and never throws on arbitrary text", () => {
     checkProperty(
-      (random) => random.string([..."./\\.envEnvssh\u0000 %\uFF0E\u2024aé"], 0, 40),
+      (random) => random.string(characters("./\\.envEnvssh\u0000 %\uFF0E\u2024aé"), 0, 40),
       (path) => {
         expect(isDenied(path)).toBe(isDenied(path));
       },
