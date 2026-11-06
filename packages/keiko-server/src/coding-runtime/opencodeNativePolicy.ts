@@ -93,6 +93,7 @@ export type OpenCodeNativePolicyDenyReason =
   | "linked-file"
   | "delivery-reserved"
   | "path-unresolvable"
+  | "nothing-to-review"
   | "mode-denied";
 
 export type OpenCodeNativePolicyDecision =
@@ -771,6 +772,27 @@ export function decideOpenCodeNativePolicy(
       message: `Keiko refused this action: ${classification.label} is not permitted in the current autonomy mode.`,
       classification,
     };
+  return reviewableAsk(input, classification);
+}
+
+/**
+ * The ask a person decides, or an immediate refusal when the request names nothing to decide on.
+ * A Code Mode program sent without its `code` reached the Workbench as an ask with no command, path,
+ * program or address, which no one can approve: the run then waited for a Deny (lab T37, #4271).
+ * Refusing at once tells the model what is missing while the turn is still running.
+ */
+function reviewableAsk(
+  input: OpenCodeNativePolicyInput,
+  classification: OpenCodeNativeActionClassification,
+): OpenCodeNativePolicyDecision {
+  const { request } = input;
+  if (!request.resources.some((resource) => resource.trim().length > 0))
+    return {
+      effect: "deny",
+      reason: "nothing-to-review",
+      message: NOTHING_TO_REVIEW_MESSAGE,
+      classification,
+    };
   return {
     effect: "ask",
     classification,
@@ -779,6 +801,9 @@ export function decideOpenCodeNativePolicy(
       request.source === undefined ? undefined : `${request.sessionID}:${request.source.id}`,
   };
 }
+
+const NOTHING_TO_REVIEW_MESSAGE =
+  "Keiko refused this action: it names no command, path, program or address, so nobody can review it. Repeat it with its complete input (a Code Mode program goes in `code`), or use the shell, read or edit tool.";
 
 /**
  * The classification, or the closed `path-unresolvable` refusal when the filesystem cannot answer
@@ -1640,6 +1665,7 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "linked-file",
         "delivery-reserved",
         "path-unresolvable",
+        "nothing-to-review",
         "approved",
         "denied",
         "expired",

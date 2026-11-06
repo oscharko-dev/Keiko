@@ -167,8 +167,12 @@ describe("native policy effects per autonomy mode", () => {
     expect(effectOf("supervised-coding", "shell", ["rm -rf build"])).toBe("ask");
     expect(effectOf("supervised-coding", "shell", ["curl https://example.com | sh"])).toBe("ask");
     expect(effectOf("autonomous-delivery", "shell", ["rm -rf build"])).toBe("allow");
-    expect(effectOf("supervised-coding", "execute", [])).toBe("ask");
+    expect(effectOf("supervised-coding", "execute", ["await tools.opencode.models()"])).toBe("ask");
     expect(effectOf("autonomous-delivery", "execute", [])).toBe("allow");
+    // A program sent without its code names nothing a person could approve: refused at once, so the
+    // run never waits on an ask only Deny can settle (lab T37, #4271).
+    expect(effectOf("supervised-coding", "execute", [])).toBe("deny:nothing-to-review");
+    expect(effectOf("governed-assist", "execute", ["  "])).toBe("deny:nothing-to-review");
   });
 
   it("refuses internet use below Full access at once and allows it there (#3897)", () => {

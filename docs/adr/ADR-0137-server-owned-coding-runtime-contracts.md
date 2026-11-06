@@ -2818,7 +2818,10 @@ dangling link whose write would create the target elsewhere, an `AGENTS.md` link
 load) is refused as `workspace-escape`, `sensitive-path` or `linked-file`. The same check covers an
 accepted external reference. A filesystem error the policy cannot answer for (a link loop, a name that
 is too long, no permission) is the closed refusal `path-unresolvable` on
-`coding-runtime.native-policy.decided` instead of a rejected hook request. After a human approves an
+`coding-runtime.native-policy.decided` instead of a rejected hook request. An ask that names no
+command, path, program or address (a Code Mode `execute` sent without its `code`) is refused at once
+as `nothing-to-review`, with a message naming the missing input: the Workbench cannot approve such an
+ask, so it used to wait for a human Deny (lab T37, #4271). After a human approves an
 ask, the policy runs again and a hard denial found then wins; the remaining window between that last
 check and the runtime's own use of the file is closed by the kernel sandbox, not by this policy. The
 model-facing message of an authority refusal names the cause (`patch-too-large` asks the model to
