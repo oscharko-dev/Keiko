@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1dfd2f2cf101eee17fed81a1c0dde456da1551042bf23139fe0008e1f8bd304a"
+    "catalogDigest": "ae23140e8bf0e393aa33871c0f9cbad686c0d7e7018dd91518a404d9bded1a57"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 631,
-    "proofCount": 653,
-    "resolvedProofCount": 653,
-    "failureClassCount": 390,
+    "operationCount": 633,
+    "proofCount": 655,
+    "resolvedProofCount": 655,
+    "failureClassCount": 392,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -559,6 +559,8 @@
         "memory-vault.store.encryption-migrated",
         "memory-vault.store.opened",
         "memory-vault.store.quarantined",
+        "memory-vault.write.capture-failed",
+        "memory-vault.write.rejected",
         "memory.capture.novelty-gate",
         "memory.embedding.invalidated",
         "memory.embedding.invalidation-failed",
@@ -1208,6 +1210,8 @@
       "client-diagnostics.rejection",
       "runtime-packages.rejection"
     ],
+    "memory-write-capture": ["memory-knowledge.dependency-failure"],
+    "memory-write-validation": ["memory-knowledge.rejection"],
     "knowledge-manual-summary-validation": ["memory-knowledge.rejection"],
     "editor-semantic-token-refusal": ["editor-delivery.rejection"],
     "editor-semantic-token-settlement": ["editor-delivery.dependency-failure"]
@@ -2587,6 +2591,13 @@
     ],
     "memory-vault.store.opened.key-source": ["packages/keiko-memory-vault/src/vault.test.ts"],
     "memory-vault.store.quarantined.recovery": ["packages/keiko-memory-vault/src/db.test.ts"],
+    "memory-vault.write.capture-failed.physical-admission": [
+      "packages/keiko-memory-vault/src/vault-log.test.ts"
+    ],
+    "memory-vault.write.rejected.initial-admission": [
+      "packages/keiko-memory-vault/src/vault-log.test.ts",
+      "packages/keiko-memory-vault/src/vault.test.ts"
+    ],
     "memory.audit.state-cache.seeded.count": ["packages/keiko-server/src/deps-activity.test.ts"],
     "memory.capture.novelty-gate.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
     "memory.embedding.invalidated.line": ["packages/keiko-server/src/memory-embedding.test.ts"],

@@ -3743,6 +3743,7 @@ async function attachGroundedMemory(
       ),
       memoryPreparation.context,
       {
+        writeContext: { correlationId: prepared.correlationId },
         retrievalContent: prepared.input.content,
         precomputedMemory: memoryPreparation.result,
       },

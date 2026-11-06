@@ -11,8 +11,8 @@
 //
 // This is defence-in-depth, NOT a substitute for the capture-policy gate in #207. The contract
 // validator runs FIRST (so we never persist a structurally bad record); redaction runs SECOND on
-// the validator-approved record so the only string transformation between contract-valid input
-// and SQL bind is this redact step.
+// the validator-approved record. The physical writer then captures and canonically validates the
+// redacted projection before encryption or SQL binding.
 
 import type {
   MemoryEdge,

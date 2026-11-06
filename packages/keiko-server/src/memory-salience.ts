@@ -427,6 +427,7 @@ async function persistCandidate(
   vault: MemoryVaultStore,
   mode: CodingWorkbenchMode,
   surface: SalienceCaptureSurface,
+  writeContext: MemoryWriteContext,
 ): Promise<PersistedCandidate> {
   if (outcome.kind !== "candidate") {
     return { action: null, disposition: "none" };
@@ -443,7 +444,12 @@ async function persistCandidate(
   const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
     ? promoteEligibleMemoryRecord(record)
     : record;
-  const outcomeOfInsert = await insertSalienceMemoryWithNoveltyGate(deps, vault, candidate);
+  const outcomeOfInsert = await insertSalienceMemoryWithNoveltyGate(
+    deps,
+    vault,
+    candidate,
+    writeContext,
+  );
   if (outcomeOfInsert.kind === "suppressed") {
     // A PARAPHRASE of a fact the human already forgot or rejected. Nothing was stored and nothing
     // was reinforced — this is a refusal, so it is audited and tallied as one, exactly like the
@@ -669,11 +675,19 @@ async function persistSalienceActions(
   outcomes: readonly CaptureOutcome[],
   mode: CodingWorkbenchMode,
   surface: SalienceCaptureSurface,
+  writeContext: MemoryWriteContext,
 ): Promise<SalienceCaptureResult> {
   const actions: ConversationMemoryActionWire[] = [];
   const summary = emptySalienceCaptureSummary();
   for (const outcome of outcomes) {
-    const { action, disposition } = await persistCandidate(deps, outcome, vault, mode, surface);
+    const { action, disposition } = await persistCandidate(
+      deps,
+      outcome,
+      vault,
+      mode,
+      surface,
+      writeContext,
+    );
     if (action !== null) actions.push(action);
     tallyDisposition(summary, disposition);
   }
@@ -735,7 +749,9 @@ async function runSalienceCapture(
     return [];
   }
   const { outcomes } = extraction;
-  const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, mode, surface);
+  const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, mode, surface, {
+    correlationId,
+  });
   if (outcomes.length > 0) logSalienceCaptureSummary(mode, summary, deps, correlationId);
   return actions;
 }
@@ -774,3 +790,5 @@ export async function captureSalientFromTurn(
     return [];
   }
 }
+
+type MemoryWriteContext = Parameters<MemoryVaultStore["insertMemory"]>[1];

@@ -15792,6 +15792,61 @@ const activityLogOperationPart2 = () =>
     {
       contractKind: "activity-log-operation",
       schemaVersion: 1,
+      op: "memory-vault.write.capture-failed",
+      category: "memory",
+      owner: "keiko-memory-vault",
+      emitter: "vault-log.emitMemoryWriteCaptureFailureEvent",
+      fields: {
+        completeness: activityLogCompletenessField(),
+        loss: activityLogLossField(),
+        method: activityLogStringEnumField(true, ["insert", "update", "update-batch", "graph"]),
+        stage: activityLogStringEnumField(true, ["physical-admission"]),
+        reason: activityLogStringEnumField(true, ["capture-unavailable"]),
+        rejectionCount: activityLogCountField(true),
+        admitted: activityLogBooleanField(true),
+        frames: fieldContracts.activityLogBoundedStringArrayField(
+          false,
+          "safe-platform-class",
+          512,
+          8,
+        ),
+        causeChain: fieldContracts.activityLogBoundedStringArrayField(false, "error-kind", 128, 5),
+      },
+      causal: "correlation",
+      lifecycle: "failure",
+      analyzerProjection: "timeline",
+      failureClasses: ["memory-write-capture"],
+      proofIds: ["memory-vault.write.capture-failed.physical-admission"],
+      releaseImpact: "patch",
+      diagnosticWhen: [{ field: "admitted", values: [false] }],
+    },
+    {
+      contractKind: "activity-log-operation",
+      schemaVersion: 1,
+      op: "memory-vault.write.rejected",
+      category: "memory",
+      owner: "keiko-memory-vault",
+      emitter: "vault-log.emitMemoryWriteRejected",
+      fields: {
+        completeness: activityLogCompletenessField(),
+        loss: activityLogLossField(),
+        method: activityLogStringEnumField(true, ["insert", "update", "update-batch", "graph"]),
+        stage: activityLogStringEnumField(true, ["caller-admission", "physical-admission"]),
+        reason: activityLogStringEnumField(true, ["invalid-record", "invalid-edge"]),
+        rejectionCount: activityLogCountField(true),
+        admitted: activityLogBooleanField(true),
+      },
+      causal: "correlation",
+      lifecycle: "failure",
+      analyzerProjection: "timeline",
+      failureClasses: ["memory-write-validation"],
+      proofIds: ["memory-vault.write.rejected.initial-admission"],
+      releaseImpact: "patch",
+      diagnosticWhen: [{ field: "admitted", values: [false] }],
+    },
+    {
+      contractKind: "activity-log-operation",
+      schemaVersion: 1,
       op: "memory.audit.state-cache.seeded",
       category: "memory",
       owner: "keiko-server",
@@ -20407,6 +20462,9 @@ const activityLogOperationPart2 = () =>
       proofIds: ["tool-catalog.bind-ready.emitted-line"],
       releaseImpact: "patch",
     },
+  ] as const;
+const activityLogOperationPart3 = () =>
+  [
     {
       contractKind: "activity-log-operation",
       schemaVersion: 1,
@@ -20494,9 +20552,6 @@ const activityLogOperationPart2 = () =>
       proofIds: ["tool-catalog.completion-discarded.emitted-line"],
       releaseImpact: "patch",
     },
-  ] as const;
-const activityLogOperationPart3 = () =>
-  [
     {
       contractKind: "activity-log-operation",
       schemaVersion: 1,

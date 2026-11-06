@@ -4,6 +4,10 @@
 // manifest.
 
 import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createMemoryVault } from "@oscharko-dev/keiko-memory-vault";
 import {
   createInMemoryEvidenceStore,
   createAuditRedactor,
@@ -946,4 +950,50 @@ describe("createNoopMemoryAuditHandler", () => {
       handler({ kind: "memory:inserted", record: makeRecord({ status: "proposed" }) });
     }).not.toThrow();
   });
+});
+
+it("consumes actual owned vault snapshots without changing audit transitions or the hash chain", () => {
+  const store = createInMemoryEvidenceStore();
+  const handler = createMemoryAuditHandler({
+    evidenceStore: store,
+    redactString: TEST_AUDIT_REDACT,
+    now: () => FIXED_NOW,
+    newEventId: makeIdFactory(),
+  });
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-owned-audit-"));
+  const records: MemoryRecord[] = [];
+  const vault = createMemoryVault({
+    memoryDir: dir,
+    vaultKey: Buffer.alloc(32, 7),
+    redactString: TEST_AUDIT_REDACT,
+    onMemoryEvent: (event) => {
+      if (event.kind === "memory:inserted" || event.kind === "memory:updated") {
+        records.push(event.record);
+        expect(Reflect.set(event.record, "body", "foreign mutation")).toBe(false);
+      }
+      handler(event);
+    },
+  });
+  try {
+    const inserted = vault.insertMemory(makeRecord({ status: "proposed" }));
+    const accepted = vault.updateMemory(
+      inserted.id,
+      { status: "accepted" },
+      inserted.updatedAt + 1,
+    );
+    expect(records).toEqual([inserted, accepted]);
+    expect(records[0]).toBe(inserted);
+    expect(records[1]).toBe(accepted);
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual([
+      "memory:proposed",
+      "memory:accepted",
+    ]);
+    expect(verifyMemoryAuditHashChain(store.get(auditRunIdFor(FIXED_NOW)) ?? "[]")).toEqual({
+      ok: true,
+    });
+    expect(store.get(auditRunIdFor(FIXED_NOW))).not.toContain(inserted.body);
+  } finally {
+    vault.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
