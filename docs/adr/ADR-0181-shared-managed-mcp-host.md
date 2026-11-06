@@ -58,10 +58,12 @@ Internal managed invocation duration follows the validated, captured tool descri
 by `TOOL_CATALOG_LIMITS.maxDurationMs` (the native timer ceiling, 2^31−1 ms). The host clamps
 defensively and passes explicit inactivity and total timeout bounds to the SDK. There is no
 additional fixed 30-second internal host ceiling or implicit SDK-default timeout. The external
-MCP client retains its separate 30-second invocation ceiling, passed through the same bound
-helper to both SDK timeout options. External read descriptors declare 60 seconds, and write
-descriptors add the approval TTL, but the existing external adapter ceiling may end either call
-earlier. Those declarations cannot widen it. Earlier caller cancellation and the enclosing task or authority deadline still end
+MCP client keeps its own adapter bounds: a 30-second inactivity budget that a server's progress
+notification resets, never beyond a 300-second hard cap (see the external client section below).
+External read descriptors declare 60 seconds, and write descriptors add the approval TTL; the
+catalog settlement ends the call at that declared duration, so progress cannot carry a catalog
+call past its descriptor, and the adapter cap is only the outer bound. Neither the declarations
+nor progress can widen the adapter cap. Earlier caller cancellation and the enclosing task or authority deadline still end
 the invocation. Caller arguments and metadata cannot extend these bounds. Semantic Knowledge
 review reuses the gateway's normal buffered model-call bound; it adds no shorter inner
 model deadline. The active model's canonical context profile supplies its output reserve, still
