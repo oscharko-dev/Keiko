@@ -27,6 +27,7 @@ import type {
   SkillDiscoveryResultV1,
   WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { isLegalCodingWorkbenchRuntimeTransition } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
@@ -87,7 +88,15 @@ import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { isIdentityProofFailure } from "../task-workspace/errors.js";
 import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
 import type { CodingRuntimeInboxItems } from "./codingRuntimeInbox.js";
-import type { CodingRuntimeRevertState } from "./codingRuntimeRevert.js";
+import type { CodingRuntimeRevertState, CodingRuntimeTurnOrigin } from "./codingRuntimeRevert.js";
+import {
+  narrowerMode,
+  type ScheduledWakeBlock,
+  type ScheduledWakeHost,
+  type ScheduledWakePlan,
+  type ScheduledWakeRefusal,
+  type ScheduledWakeStart,
+} from "./codingScheduledWakes.js";
 import {
   auxiliaryEventFacts,
   CodingRuntimeOrchestratorState,
@@ -3854,6 +3863,8 @@ export class CodingRuntimeOrchestrator {
    * confirmation (owner review, PR #3452).
    */
   async shutdown(correlationId?: string): Promise<CodingRuntimeOrchestratorResult> {
+    this.shuttingDown = true;
+    this.scheduledWakes?.stop();
     await this.undoWindow.close("shutdown");
     const current = this.current();
     if (current === undefined) {
@@ -3901,6 +3912,99 @@ export class CodingRuntimeOrchestrator {
 
   // The start in the serial lane, if its client can still give it up; see `start`.
   private startAbandoned: AbortSignal | undefined;
+  // Set only while a scheduled wake starts in the serial lane (`startScheduledWake`).
+  private startOrigin: CodingRuntimeTurnOrigin | undefined;
+  private shuttingDown = false;
+  private scheduledWakes: { readonly stop: () => void } | undefined;
+
+  /**
+   * The orchestrator side of scheduled wakes (#4271, ADR-0137 D10): what holds the slot, which
+   * task is live, and the wake start itself. A wake never closes an undo window and never runs
+   * over a run to recover: it waits until the slot is free.
+   */
+  scheduledWakeHost(): ScheduledWakeHost {
+    return {
+      blocked: (): ScheduledWakeBlock | undefined => this.scheduledWakeBlock(),
+      taskAdmitted: (taskId): boolean => this.scheduledTaskAdmitted(taskId),
+      taskOwned: (taskId): boolean => this.deps.history?.previousRunId(taskId) !== undefined,
+      liveTaskId: (): string | undefined => this.liveTaskId(),
+      start: (plan): Promise<ScheduledWakeStart> => this.startScheduledWake(plan),
+      serial: <T>(work: () => T): Promise<T> => this.serialValue(work),
+    };
+  }
+
+  /** The scheduled-wake service stops when the orchestrator shuts down. */
+  attachScheduledWakes(wakes: { readonly stop: () => void }): void {
+    this.scheduledWakes = wakes;
+  }
+
+  private scheduledWakeBlock(): ScheduledWakeBlock | undefined {
+    if (this.shuttingDown) return "shutting-down";
+    if (this.activeRunId !== undefined || this.startup !== undefined) return "run-active";
+    return this.undoWindow.heldRunId() === undefined ? undefined : "undo-window";
+  }
+
+  private scheduledTaskAdmitted(taskId: string): boolean {
+    const active = this.activeWorkspaceOrUndefined();
+    return (
+      active !== undefined &&
+      this.deps.history?.admits(taskId, active) === true &&
+      this.deps.history.previousRunId(taskId) !== undefined
+    );
+  }
+
+  private liveTaskId(): string | undefined {
+    const runId = this.activeRunId ?? this.undoWindow.heldRunId();
+    return runId === undefined ? undefined : this.deps.history?.forRun(runId)?.id;
+  }
+
+  private startScheduledWake(plan: ScheduledWakePlan): Promise<ScheduledWakeStart> {
+    return this.serial(async (): Promise<ScheduledWakeStart> => {
+      if (this.scheduledWakeBlock() !== undefined)
+        return { ok: false, refusal: "active-run-conflict" };
+      const request = this.scheduledWakeRequest(plan);
+      if (request === undefined) return { ok: false, refusal: "invalid-intent" };
+      this.startOrigin = "schedule-wake";
+      try {
+        const result = await this.startFresh(request, undefined, request.requestId);
+        if (result.ok)
+          return {
+            ok: true,
+            runId: result.snapshot.runId ?? "",
+            mode: this.activeEffectiveMode ?? request.requestedMode,
+          };
+        return {
+          ok: false,
+          refusal: scheduledWakeRefusal(result.failureCode),
+          ...(result.runId === undefined ? {} : { runId: result.runId }),
+        };
+      } finally {
+        this.startOrigin = undefined;
+      }
+    });
+  }
+
+  /**
+   * The continuation start of a wake: the task's latest run supplies its mode bound and model, the
+   * schedule's consent bounds the mode further, and the launch clamps it to the deployment ceiling.
+   * It names no Jira Pod, MCP server, reference or command: a wake carries no grant of its own.
+   */
+  private scheduledWakeRequest(
+    plan: ScheduledWakePlan,
+  ): CodingWorkbenchRuntimeStartRequest | undefined {
+    const priorId = this.deps.history?.previousRunId(plan.taskId);
+    const prior = priorId === undefined ? undefined : this.deps.snapshots.get(priorId);
+    const intent = plan.intent.trim().slice(0, CODING_WORKBENCH_TASK_INTENT_MAX_CHARS);
+    if (prior === undefined || priorId === undefined || intent === "") return undefined;
+    const modelId = this.deps.history?.forRun(priorId)?.modelId;
+    return {
+      requestId: `scheduled-wake-${randomUUID()}`,
+      taskIntent: intent,
+      conversationId: plan.taskId,
+      requestedMode: narrowerMode(plan.consentMode, prior.requestedMode),
+      ...(modelId === undefined || modelId === "coding" ? {} : { modelId }),
+    };
+  }
 
   private async startFresh(
     input: unknown,
@@ -4024,7 +4128,10 @@ export class CodingRuntimeOrchestrator {
     runId: string,
   ): boolean {
     try {
-      if (request.fork === undefined) this.deps.history?.begin(request, active, runId);
+      if (request.fork === undefined)
+        this.deps.history?.begin(request, active, runId, {
+          scheduled: this.startOrigin === "schedule-wake",
+        });
       const fork =
         request.fork === undefined
           ? undefined
@@ -4257,7 +4364,8 @@ export class CodingRuntimeOrchestrator {
     if (!isExactRunRevision(runningInternal, runId, running.snapshot.revision)) {
       return this.transitionActive("recovery-required", "recovery-required");
     }
-    const initialContext = await this.initialContextFor(request, active, runId, attachment);
+    const origin = this.startOrigin;
+    const initialContext = await this.initialTurnContext(request, active, runId, attachment);
     if (this.startupInterrupted(signal)) return this.interruptedStartResult(runId);
     const initialTurn = await this.operations.startInitialTurn({
       runId,
@@ -4267,6 +4375,7 @@ export class CodingRuntimeOrchestrator {
       ...(initialContext === undefined ? {} : { initialContext }),
       ...agentField(request.agent),
       ...promptInputFields(request),
+      ...(origin === undefined ? {} : { origin }),
     });
     if (this.startupInterrupted(signal)) return this.interruptedStartResult(runId);
     // Every OTHER guarded mutation (follow-up dispatch, question answer/reject) advances the live
@@ -4305,6 +4414,18 @@ export class CodingRuntimeOrchestrator {
     }
     recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-recovery");
     return this.transitionActive("recovery-required", "recovery-required");
+  }
+
+  // A scheduled wake posts no prompt (the runtime fires the schedule), so it builds no context.
+  private initialTurnContext(
+    request: CodingWorkbenchRuntimeStartRequest,
+    active: ActiveWorkspaceView,
+    runId: string,
+    attachment: CodingRuntimeIssueAttachment | undefined,
+  ): Promise<string | undefined> {
+    return this.startOrigin === "schedule-wake"
+      ? Promise.resolve(undefined)
+      : this.initialContextFor(request, active, runId, attachment);
   }
 
   private async initialContextFor(
@@ -5291,4 +5412,11 @@ function latestSettledRunId(
   snapshots: Pick<CodingRuntimeSnapshotStore, "listAll">,
 ): string | undefined {
   return snapshots.listAll(1).find((row) => row.terminalAt !== undefined)?.runId;
+}
+
+/** A refused wake start's closed cause, as the scheduled-wake line records it. */
+function scheduledWakeRefusal(code: CodingWorkbenchRuntimeFailureCode): ScheduledWakeRefusal {
+  if (code === "active-run-conflict") return "active-run-conflict";
+  if (code === "authority-resolution-failed") return "authority-resolution-failed";
+  return code === "invalid-intent" ? "invalid-intent" : "start-failed";
 }

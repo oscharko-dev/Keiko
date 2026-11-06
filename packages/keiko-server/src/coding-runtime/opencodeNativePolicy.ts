@@ -28,6 +28,8 @@ import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import type { CodingToolNativeCharge } from "./codingToolFacadePorts.js";
 import { OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE } from "./opencodeNativeDeliveryTools.js";
 import {
+  OPENCODE_CODE_MODE_SCHEDULE,
+  OPENCODE_CODE_MODE_SCHEDULE_OPERATIONS,
   OPENCODE_CODE_MODE_SESSION_MOVE,
   OPENCODE_CODE_MODE_WORKTREE_CREATE,
   OPENCODE_NATIVE_POLICY_ACTION,
@@ -112,7 +114,8 @@ type NativeActionLabel =
   | "native-shell"
   | "native-egress"
   | "native-execute"
-  | "native-mcp";
+  | "native-mcp"
+  | "native-schedule";
 
 const SEARCH_ACTIONS = new Set(["glob", "grep"]);
 /** A new managed task workspace's name: the task id the managed owner derives its branch from. */
@@ -160,6 +163,7 @@ const PERMISSION_LOG_VALUES = [
   "doom_loop",
   "opencode_session_move",
   "opencode_worktree_create",
+  "opencode_schedule",
 ] as const;
 type PermissionLogValue = (typeof PERMISSION_LOG_VALUES)[number] | "other";
 // An MCP tool is logged by its class alone: its server and tool names are the operator's words.
@@ -1023,6 +1027,7 @@ function classifyNativeAction(
   if (permission === OPENCODE_CODE_MODE_SESSION_MOVE)
     return classifySessionMove(request, roots.workspaceRoot);
   if (permission === OPENCODE_CODE_MODE_WORKTREE_CREATE) return classifyWorktreeCreate(request);
+  if (permission === OPENCODE_CODE_MODE_SCHEDULE) return classifySchedule(request);
   if (permission === "websearch") return roots.webSearch === true ? EGRESS : WEBSEARCH_UNCONFIGURED;
   if (!KNOWN_ACTIONS.has(permission))
     return {
@@ -1083,6 +1088,33 @@ const NATIVE_WORKTREE: OpenCodeNativeActionClassification = Object.freeze({
   risk: "high",
   label: "native-edit",
 });
+
+/**
+ * A native schedule (#4271): creating, pausing, resuming or deleting a time at which Keiko continues
+ * this task on its own, in the mode the human chose for it. That starts later work nobody watches,
+ * so it is risky contained work: Ask for approval and Supervised workspace ask, Full access allows
+ * (`NATIVE_SCHEDULE`). A schedule gated by an
+ * `if`/`until` check is refused in every mode: a shell check runs with the runtime server's whole
+ * environment outside the shell scrub, and a Code Mode check would boot a runtime for every poll.
+ */
+const SCHEDULE_CONDITION_REFUSED = Object.freeze({
+  reason: "unsupported-action" as const,
+  message:
+    "Keiko refused this schedule: Keiko continues a task at a time, in, every or cron, but not on an if or until check. Schedule it by time instead.",
+});
+
+const SCHEDULE_OPERATIONS: ReadonlySet<string> = new Set(OPENCODE_CODE_MODE_SCHEDULE_OPERATIONS);
+
+function classifySchedule(request: OpenCodeNativePolicyRequest): Classified {
+  const [operation, ...rest] = request.resources;
+  if (operation === undefined || !SCHEDULE_OPERATIONS.has(operation))
+    return {
+      reason: "unsupported-action",
+      message: "Keiko refused this action: it is not a schedule change Keiko knows.",
+    };
+  if (rest.some((resource) => resource.startsWith("condition:"))) return SCHEDULE_CONDITION_REFUSED;
+  return NATIVE_SCHEDULE;
+}
 
 function classifyWorktreeCreate(request: OpenCodeNativePolicyRequest): Classified {
   const [name, ...rest] = request.resources;
@@ -1184,6 +1216,12 @@ const EDIT: OpenCodeNativeActionClassification = Object.freeze({
   scope: "workspace-contained",
   risk: "medium",
   label: "native-edit",
+});
+/** A native schedule change (`classifySchedule`): risky contained work, never routine. */
+const NATIVE_SCHEDULE: OpenCodeNativeActionClassification = Object.freeze({
+  ...EDIT,
+  risk: "high",
+  label: "native-schedule",
 });
 const EGRESS: OpenCodeNativeActionClassification = Object.freeze({
   actionClass: "network-egress",
@@ -1635,6 +1673,7 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "doom_loop",
         "opencode_session_move",
         "opencode_worktree_create",
+        "opencode_schedule",
         "mcp",
         "other",
       ],

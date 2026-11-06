@@ -63,6 +63,7 @@ import {
   type OpenCodeLifecyclePrepareResult,
 } from "./codingRuntimeManager.js";
 import type { CodingRuntimeTurnOrigin } from "./codingRuntimeRevert.js";
+import { holdRunScheduler, startScheduledWakeTurn } from "./opencodeScheduledWakeTurn.js";
 import type { CodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
 import {
   CODING_TOOL_MAX_BODY_BYTES,
@@ -1295,12 +1296,26 @@ function createSubmitTask(
     }
     if (!(await synchronizeTurnBaseline(run))) return false;
     await refreshedInstructions(run, sinks.refreshInstructions);
-    if (!run.runtimeAdapter.armTurn()) return false;
-    // A new turn: what an undo must find unchanged is recorded afresh from here on. Keiko's own
-    // continuation of the human's request keeps that request's images: its undo reaches back to it.
-    if (origin === undefined) beginOpenCodeTurnImages(run);
-    return postTurnPrompt(run, text, initialContext, inputs, sinks, origin);
+    return armAndPostTurn(run, text, initialContext, inputs, sinks, origin);
   };
+}
+
+async function armAndPostTurn(
+  run: ReadyRun,
+  text: string,
+  initialContext: string | undefined,
+  inputs: AdmittedPromptInputs | undefined,
+  sinks: Parameters<typeof postTurnPrompt>[4],
+  origin: CodingRuntimeTurnOrigin | undefined,
+): Promise<boolean> {
+  if (!run.runtimeAdapter.armTurn()) return false;
+  // A scheduled wake posts nothing: the runtime fires the due schedule into the armed turn.
+  if (origin === "schedule-wake")
+    return startScheduledWakeTurn(run, { activityLog: sinks.activityLog }) && run.ready;
+  // A new turn: what an undo must find unchanged is recorded afresh from here on. Keiko's own
+  // continuation of the human's request keeps that request's images: its undo reaches back to it.
+  if (origin === undefined) beginOpenCodeTurnImages(run);
+  return postTurnPrompt(run, text, initialContext, inputs, sinks, origin);
 }
 
 /**
@@ -1372,12 +1387,15 @@ function releaseUnsentTurnInputs(
 // What separates a turn's hidden context from the operator's own text in the sent prompt.
 const PROMPT_CONTEXT_SEPARATOR = "\n\n";
 
+/** A turn Keiko posts a prompt for; a scheduled wake posts none. */
+type PostedTurnOrigin = Exclude<CodingRuntimeTurnOrigin, "schedule-wake">;
+
 /** The sent turn's own id, origin and inputs; a hidden context moves the mentions by its length. */
 function turnPromptInputs(
   id: string,
   inputs: AdmittedPromptInputs | undefined,
   initialContext: string | undefined,
-  origin: CodingRuntimeTurnOrigin | undefined,
+  origin: PostedTurnOrigin | undefined,
 ): OpenCodeV2PromptInputs {
   const offset =
     initialContext === undefined ? 0 : initialContext.length + PROMPT_CONTEXT_SEPARATOR.length;
@@ -1398,7 +1416,7 @@ async function postTurnPrompt(
     readonly activityLog: ServerLogSink | undefined;
     readonly mcpMutations?: NativeMcpMutationJournal | undefined;
   },
-  origin?: CodingRuntimeTurnOrigin,
+  origin?: PostedTurnOrigin,
 ): Promise<boolean> {
   const { diagnostics, activityLog, mcpMutations } = sinks;
   // A turn that is not a command must never take a command's presentation.
@@ -1881,6 +1899,7 @@ function retainOnDispose(
       runRoot: run.runRoot,
       workspaceRoot: run.workspaceRoot,
       sessionId: run.sessionId,
+      mode: run.mode,
     },
     settlement?.terminalStatus,
   );
@@ -3107,6 +3126,20 @@ function recordOpenCodeV2HistoryFailure(
  * replaced by a fresh one inside a database that still holds the other.
  */
 async function bindRunSession(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+  client: OpenCodeV2HttpClient,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  const sessionId = await bindRunSessionOnce(input, run, client, signal);
+  // Before the first turn can create a schedule: the runtime never fires one inside this run unless
+  // it is the wake run that releases the lease (`opencodeScheduleLease.ts`). A hold that cannot be
+  // written fails the readiness.
+  if (sessionId !== "") holdRunScheduler(input.activityLog, run, "hold");
+  return sessionId;
+}
+
+async function bindRunSessionOnce(
   input: OpenCodeRuntimeCompositionInput,
   run: PreparedRun,
   client: OpenCodeV2HttpClient,

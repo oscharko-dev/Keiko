@@ -553,6 +553,41 @@ describe("Code Mode management tools (#3897, #3903 AC4)", () => {
     }
   });
 
+  // #4271: a schedule continues the task later on its own, so it is risky contained work.
+  it("asks before a schedule change below Full access and allows it there", () => {
+    for (const operation of ["create", "pause", "resume", "delete"]) {
+      const resources =
+        operation === "create"
+          ? [operation, 'when:{"type":"in","in":"30m"}']
+          : [operation, "sch_1"];
+      expect(effectOf("governed-assist", "opencode_schedule", resources), operation).toBe("ask");
+      expect(effectOf("supervised-coding", "opencode_schedule", resources), operation).toBe("ask");
+      expect(effectOf("autonomous-delivery", "opencode_schedule", resources), operation).toBe(
+        "allow",
+      );
+      expect(
+        decide("supervised-coding", "opencode_schedule", resources).classification,
+      ).toMatchObject({
+        risk: "high",
+        label: "native-schedule",
+      });
+    }
+  });
+
+  it("refuses a schedule gated by a check, and an unknown schedule operation, in every mode", () => {
+    for (const mode of MODES)
+      for (const resources of [
+        ["create", "condition:if"],
+        ["create", "condition:until"],
+        ["list"],
+        [],
+        ["fire", "sch_1"],
+      ])
+        expect(effectOf(mode, "opencode_schedule", resources), `${mode} ${resources.join()}`).toBe(
+          "deny:unsupported-action",
+        );
+  });
+
   it("refuses a worktree without one plain name", () => {
     for (const mode of MODES)
       for (const resources of [

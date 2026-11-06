@@ -363,6 +363,8 @@ export const APPROVED_EVIDENCE_LITERALS = new Set<string>([
   "native-egress",
   "native-mcp",
   "native-execute",
+  // #4271: a native schedule's create, pause, resume or delete.
+  "native-schedule",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

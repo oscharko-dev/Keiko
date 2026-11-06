@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 389,
-  "completeClassCount": 389,
+  "supportedClassCount": 390,
+  "completeClassCount": 390,
   "completeness": "complete",
   "classes": [
     {
@@ -14511,6 +14511,313 @@
             "causeChain": false
           },
           "proofIds": ["coding-runtime.run.started.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "coding-runtime-scheduled-wake",
+      "requirementContract": "coding-runtime-scheduled-wake",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [
+          "coding-runtime.schedule.control",
+          "coding-runtime.schedule.lease",
+          "coding-runtime.schedule.wake"
+        ],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "coding-runtime.schedule.control",
+          "mode": "correlation"
+        },
+        {
+          "op": "coding-runtime.schedule.lease",
+          "mode": "correlation"
+        },
+        {
+          "op": "coding-runtime.schedule.wake",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": [
+        "coding-runtime.schedule.control",
+        "coding-runtime.schedule.lease",
+        "coding-runtime.schedule.wake"
+      ],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "coding-runtime.schedule.control",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "action",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "initiator",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "scheduleCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "scheduleDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "status",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "taskDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["coding-runtime.schedule.control.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "coding-runtime.schedule.lease",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "action",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "activeScheduleCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "firedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "runId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": true
+            },
+            {
+              "name": "waitMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "duration",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["coding-runtime.schedule.lease.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "coding-runtime.schedule.wake",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "dueLagMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "firedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "missCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "mode",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "refusal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "runId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "scheduleDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "taskDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "wait",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "duration",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["coding-runtime.schedule.wake.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         }

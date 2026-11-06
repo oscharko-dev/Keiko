@@ -303,6 +303,46 @@ describe("generated native policy plugin Code Mode governance (#3897)", () => {
     ]);
   });
 
+  // #4271: the producer's schedule tools assert no permission, so the hook asks for one.
+  it("asks policy for every schedule change and names a check alone", async () => {
+    const harness = await pluginHarness("supervised-coding", { effect: "allow" });
+    await harness.toolBefore({
+      ...nested("schedule_create"),
+      input: { when: { type: "in", in: "30m" }, name: "Build", prompt: "run the build" },
+    });
+    await harness.toolBefore({
+      ...nested("opencode_schedule_create"),
+      input: { when: { type: "in", in: "1m" }, if: { shell: "test -f x" }, prompt: "p" },
+    });
+    await harness.toolBefore({ ...nested("schedule_delete"), input: { id: "sch_1" } });
+    await harness.toolBefore({ ...nested("schedule_list"), input: {} });
+
+    expect(harness.requests).toHaveLength(3);
+    expect(harness.requests[0]).toMatchObject({
+      permission: "opencode_schedule",
+      resources: expect.arrayContaining([
+        "create",
+        'when:{"type":"in","in":"30m"}',
+        "name:Build",
+      ]) as unknown,
+    });
+    expect(harness.requests.slice(1)).toMatchObject([
+      { permission: "opencode_schedule", resources: ["create", "condition:if"] },
+      { permission: "opencode_schedule", resources: ["delete", "sch_1"] },
+    ]);
+  });
+
+  it("blocks a schedule change the policy refuses", async () => {
+    const refused = await pluginHarness("governed-assist", {
+      effect: "deny",
+      message: "no schedule",
+    });
+
+    await expect(
+      refused.toolBefore({ ...nested("schedule_pause"), input: { id: "sch_1" } }),
+    ).rejects.toThrow("no schedule");
+  });
+
   // #3897 review: the producer asserts no permission for a Code Mode program, so without this the
   // mode policy never gated model-authored JavaScript (its `fetch` reaches loopback services) even in
   // Ask for approval. The program is decided like a command, before it starts.

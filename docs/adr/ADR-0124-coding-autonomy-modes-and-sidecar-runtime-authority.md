@@ -118,6 +118,13 @@ run's correlation id; the model is told the workspace is a plain folder and not 
 repository or run Git another way. Containment, deny lists, sensitive-path denials and budgets are
 unchanged, and `worktree_create` answers `unavailable` because there is no branch to cut from.
 
+**Owner amendment, 2026-11-06 (scheduled continuations, #4271):** a schedule a native run's model
+created continues its task at its due time as a scheduled wake run that the server starts (ADR-0137,
+"Scheduled continuations"). Its requested mode is the narrower of the narrowest mode any run that held
+the schedule was in and the requested mode of the task's latest run; the deployment ceiling then
+applies as for every start. A person's acceptance of the task and its mode is therefore the only
+source of a wake's authority, and a wake can never exceed what that person selected.
+
 No caller may widen authority by passing a higher requested mode than the environment allows. Explicit composition options and environment ceilings are intersected: neither can widen or conceal an invalid value in the other. The retained legacy delivery-ceiling option can only narrow this same Coding/connector result (#4083). The
 effective mode, not the requested mode, is the authority-bearing value for validation, runtime
 policy, and evidence.

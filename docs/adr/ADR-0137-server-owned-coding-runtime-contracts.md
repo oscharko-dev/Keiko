@@ -2644,20 +2644,67 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
 - **OpenCode 2.2.5 (2026-11-05, #4271).** Paragraphs above that name an earlier pinned version record
   when they were decided; the real-binary suites re-proved their behaviour on this pin.
   - **New built-in plugins are withheld.** `OPENCODE_WITHHELD_BUILT_IN_PLUGINS` removes the browser,
-    goal, Claude Agent provider, artifact, image generation and schedule plugins through the
-    producer's own `plugins` setting, on both profiles, and the Ollama, LM Studio and vLLM providers, which
-    would ask their default loopback ports every 30 s. Their `experimental` switches stay off, and
+    goal, Claude Agent provider, artifact and image generation plugins through the producer's own
+    `plugins` setting, on both profiles, and the Ollama, LM Studio and vLLM providers, which would
+    ask their default loopback ports every 30 s. The schedule plugin is removed on the direct
+    profile only (see Scheduled continuations below). Their `experimental` switches stay off, and
     `location_idle_timeout` is `false` so an hour of quiet does not unload a directory under a run. A
     filter behind the producer cannot do this: the browser plugin appends an agent rule after Keiko's
     and so keeps a denied native tool advertised. `/goal` starts model turns on its own and stays out
-    until it has its own proof.
+    by owner decision (2026-11-06).
   - **Changed producer contracts.** The producer repairs a model's `bash` call into `shell`, which
     the policy decides as `shell`. A Code Mode `fetch` asserts `webfetch`. `GET /api/agent` waits for
     plugins and answers 503 after five seconds: Keiko reads it again within the existing location
     bound, and `coding-runtime.location.activation-wait` records the outcome and the number of those
     answers, never a name.
   - **Persistence.** The retained-session contract binds this version's schema. `job` and `blob` rows
-    refuse retention as unknown state, and a `schedule` row as pending input.
+    refuse retention as unknown state. A `schedule` row is retained only as described below.
+  - **Scheduled continuations (owner decision 2026-11-06, "Keiko weckt die Aufgabe").** The native
+    profile admits the producer's schedule plugin and `experimental.schedules`; the direct profile
+    keeps both off.
+    - *Creation.* Creating, changing or removing a schedule is the policy action `native-schedule`
+      (risk high): asked in Ask for approval and Supervised workspace, allowed in Full access. A
+      schedule with an `if` or `until` check is refused, because a shell check runs with the runtime
+      server's whole environment outside the shell scrub, and a Code Mode check boots a runtime per
+      poll (both measured on the pinned runtime).
+    - *No fire inside a human's run.* The producer elects one scheduler per database through the
+      `kv` row `schedule:leader` and never takes over a lease of another owner that has not lapsed.
+      Keiko writes an unexpiring lease of its own into every native run's database when the run's
+      session is bound and into every checked-out copy before the runtime opens it, so the runtime
+      never leads in a run a person started. A database whose lease Keiko cannot write fails the
+      run's readiness or falls back to a fresh session. A fork removes its source's schedules.
+    - *Retention.* A retained copy carries only rows of its own session, of a status the producer
+      writes (`active`, `paused`, `done`), without check or check state, with an id of the
+      producer's alphabet, an action of at most 16384 and a name of at most 256 characters, and at
+      most 64 rows; anything else refuses the retain as `schema-unknown` (`schedule-rows`). The
+      lease row is dropped from the copy; every other `kv` row still refuses it. The manifest's
+      `scheduleModes` ledger records, per schedule id, the narrowest mode any run that held it was
+      in: a retain keeps the narrower of the recorded and the settled run's mode, a new id takes the
+      settled run's mode, and an edit through the store never widens it.
+    - *The wake.* While Keiko runs, `CodingScheduledWakes` looks at the retained schedules every 15
+      seconds. A due schedule waits while any run holds the runtime slot (live, held for undo, or to
+      be recovered), while its task's workspace is not the active one or the task is not the
+      operator's, and for at least a minute after the task's previous wake. Otherwise the server
+      starts a scheduled continuation run: the ordinary start of the task's retained session, in the
+      narrower of the schedule's consent and the requested mode of the task's latest run, clamped by
+      the deployment ceiling like every start. This is the one start the server originates; it uses
+      exactly the authority a person already accepted for the task and widens nothing. The wake run
+      posts no prompt: it re-checks the live database for rows Keiko never admits, releases its
+      lease after the turn is armed, and holds it again as soon as a schedule's run count grows, so
+      the runtime fires what was due and nothing after it. A schedule that has not fired within two
+      minutes cancels the turn; the next attempt backs off (one minute, doubling, at most an hour)
+      and three misses in a row pause the schedule.
+    - *The Workbench.* A task's schedules are listed by `GET /api/coding-workbench/runtime/schedules`
+      and paused, resumed or deleted by `POST .../schedules/:scheduleId/:action`, both on the app
+      session; the prompt never leaves the server, and no change is made while the task's run or
+      wake holds its entry. Coding History marks the wake run's message as a scheduled continuation.
+    - *Evidence.* `coding-runtime.schedule.wake`, `coding-runtime.schedule.control` and
+      `coding-runtime.schedule.lease` record closed outcomes, counts, durations and digests of the
+      task and the schedule; never an id, a name, a cadence or a prompt.
+    - *Limits.* Nothing fires while Keiko is not running. A schedule due during a person's run fires
+      after it, as its own wake run. A passed repeating slot fires once, late. A wake carries no Jira
+      Pod or MCP selection of the run that created the schedule, and it keeps the delivery authority
+      of the task it continues.
 
 What this amendment does not change: the three modes and the Authority Envelope (ADR-0124,
 ADR-0129, ADR-0138), the hard denials (ADR-0129 D3), Git delivery as a Keiko product operation

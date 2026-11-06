@@ -1510,6 +1510,26 @@ export type {
   validateCodingWorkbenchRuntimeStatus,
 } from "./coding-workbench-runtime-api.js";
 export type {
+  CODING_WORKBENCH_SCHEDULE_ACTIONS,
+  CODING_WORKBENCH_SCHEDULE_CADENCES,
+  CODING_WORKBENCH_SCHEDULE_STATUSES,
+  CODING_WORKBENCH_SCHEDULE_WAITS,
+  isCodingWorkbenchScheduleAction,
+  isCodingWorkbenchScheduleId,
+  isCodingWorkbenchTaskIdForSchedules,
+  parseCodingWorkbenchScheduleControlRequest,
+} from "./coding-workbench-runtime-schedules.js";
+export type {
+  CodingWorkbenchSchedule,
+  CodingWorkbenchScheduleAction,
+  CodingWorkbenchScheduleCadence,
+  CodingWorkbenchScheduleControlRequest,
+  CodingWorkbenchScheduleControlResponse,
+  CodingWorkbenchSchedulesResponse,
+  CodingWorkbenchScheduleStatus,
+  CodingWorkbenchScheduleWait,
+} from "./coding-workbench-runtime-schedules.js";
+export type {
   CodingWorkbenchRuntimeQuestionAnswerRequest,
   CodingWorkbenchRuntimeQuestion,
   CodingWorkbenchRuntimeQuestionOption,

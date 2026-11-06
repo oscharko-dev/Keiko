@@ -452,6 +452,7 @@ import {
 } from "./coding-runtime/codingRuntimeEvidenceAggregator.js";
 import type { CodingRuntimeEventHub } from "./coding-runtime/codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./coding-runtime/codingRuntimeOrchestrator.js";
+import type { CodingScheduledWakes } from "./coding-runtime/codingScheduledWakes.js";
 import {
   createCodingRuntimeProjectMemoryPort,
   type CodingRuntimeProjectMemoryPort,
@@ -965,6 +966,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly codingRuntimeEvidenceAggregator?: CodingRuntimeEvidenceAggregator | undefined;
   /** Optional singleton lifecycle aggregate; runtime routes fail closed when it is not composed. */
   readonly codingRuntimeOrchestrator?: CodingRuntimeOrchestrator | undefined;
+  /** Scheduled continuations of Coding History tasks (#4271); absent without retained sessions. */
+  readonly codingScheduledWakes?: CodingScheduledWakes | undefined;
   /** Server-owned bounded replay/fan-out source for the runtime SSE route. */
   readonly codingRuntimeEventHub?: CodingRuntimeEventHub | undefined;
   /**
@@ -6137,6 +6140,7 @@ interface CodingRuntimeControlPlaneDeps {
   mintDescriptionAuthority?: UiHandlerDeps["mintDescriptionAuthority"];
   openCodeGatewayReadinessRegistry?: UiHandlerDeps["openCodeGatewayReadinessRegistry"];
   toolFacadeBridge?: UiHandlerDeps["toolFacadeBridge"];
+  codingScheduledWakes?: UiHandlerDeps["codingScheduledWakes"];
 }
 
 // Same-named pass-throughs from `CodingRuntimeControlPlane` onto `CodingRuntimeControlPlaneDeps`:
@@ -6154,6 +6158,7 @@ const CODING_RUNTIME_CONTROL_PLANE_PASSTHROUGH_KEYS = [
   "mintDescriptionAuthority",
   "openCodeGatewayReadinessRegistry",
   "toolFacadeBridge",
+  "codingScheduledWakes",
 ] as const;
 
 type CodingRuntimeControlPlanePassthroughDeps = Pick<

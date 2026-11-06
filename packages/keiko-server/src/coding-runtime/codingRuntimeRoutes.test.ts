@@ -320,6 +320,8 @@ describe("coding runtime routes", () => {
   it("declares the productive singleton lifecycle routes and leaves deprecated authority routes unmounted", () => {
     expect(CODING_RUNTIME_ROUTE_GROUP.map(({ method, pattern }) => `${method} ${pattern}`)).toEqual(
       [
+        "GET /api/coding-workbench/runtime/schedules",
+        "POST /api/coding-workbench/runtime/schedules/:scheduleId/:action",
         "POST /api/coding-workbench/runtime/runs",
         "GET /api/coding-workbench/runtime/readiness",
         "GET /api/coding-workbench/runtime/status",
@@ -2320,6 +2322,12 @@ function spyingRuntime(channel: UiHandlerDeps["codingAppSessionChannel"]): Spyin
       codingRuntimeOrchestrator: orchestrator,
       codingRuntimeEventHub: { subscribe: () => ({ ok: false as const, reason: "unused" }) },
       codingAppSessionChannel: channel,
+      codingScheduledWakes: {
+        control: () => {
+          invoked.push("scheduleControl");
+          return Promise.resolve({ ok: true as const, status: "paused" as const });
+        },
+      },
     } as unknown as UiHandlerDeps,
     get invoked(): readonly string[] {
       return invoked;
@@ -2337,8 +2345,16 @@ async function invokeRoute(
   cookie?: string,
 ): Promise<HandlerOutcome> {
   return Promise.resolve(
-    route.handler(context("{}", { runId: "run-1" }, route.pattern, cookie), deps),
+    route.handler(context(sweepBody(route), SWEEP_PARAMS, route.pattern, cookie), deps),
   );
+}
+
+/** Route parameters every runtime route of the sweep finds: a run, a schedule and its action. */
+const SWEEP_PARAMS = { runId: "run-1", scheduleId: "sch_a", action: "pause" } as const;
+
+/** The smallest valid body: a schedule change names its task, every other mutation sends `{}`. */
+function sweepBody(route: RouteDefinition): string {
+  return route.pattern.includes(":scheduleId") ? '{"taskId":"task-1"}' : "{}";
 }
 
 describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
@@ -2655,5 +2671,194 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
     expect(denied).toMatchObject({ status: 404 });
     expect(spy.invoked).toEqual([]);
     expect(JSON.stringify(denied.body)).not.toContain("xxxx");
+  });
+});
+
+describe("scheduled continuation routes (#4271, ADR-0137 D10)", () => {
+  const listRoute = CODING_RUNTIME_ROUTE_GROUP.find(
+    ({ pattern }) => pattern === "/api/coding-workbench/runtime/schedules",
+  );
+  const controlRoute = CODING_RUNTIME_ROUTE_GROUP.find(({ pattern }) =>
+    pattern.includes(":scheduleId"),
+  );
+  const listed = {
+    id: "sch_a",
+    status: "active" as const,
+    cadence: "every" as const,
+    runCount: 0,
+  };
+
+  function scheduleDeps(
+    cookieChannel: UiHandlerDeps["codingAppSessionChannel"],
+    wakes?: unknown,
+  ): UiHandlerDeps {
+    return {
+      codingAppSessionChannel: cookieChannel,
+      ...(wakes === undefined ? {} : { codingScheduledWakes: wakes }),
+    } as unknown as UiHandlerDeps;
+  }
+
+  async function list(
+    query: string,
+    deps: UiHandlerDeps,
+    cookie?: string,
+  ): Promise<HandlerOutcome> {
+    if (listRoute === undefined) throw new Error("schedule list route is not mounted");
+    return Promise.resolve(
+      listRoute.handler(
+        context("", {}, `/api/coding-workbench/runtime/schedules${query}`, cookie, "corr-sched-1"),
+        deps,
+      ),
+    );
+  }
+
+  async function control(
+    params: Record<string, string>,
+    body: string,
+    deps: UiHandlerDeps,
+    cookie?: string,
+  ): Promise<HandlerOutcome> {
+    if (controlRoute === undefined) throw new Error("schedule control route is not mounted");
+    return Promise.resolve(
+      controlRoute.handler(
+        context(body, params, controlRoute.pattern, cookie, "corr-sched-2"),
+        deps,
+      ),
+    );
+  }
+
+  it("lists a task's schedules for the paired caller and passes its correlation", async () => {
+    const { channel, cookie } = pairedAppSession();
+    const calls: (readonly [string, string])[] = [];
+    const deps = scheduleDeps(channel, {
+      list: (taskId: string, correlationId: string) => {
+        calls.push([taskId, correlationId]);
+        return { ok: true, schedules: [listed] };
+      },
+    });
+
+    await expect(list("?taskId=task-1", deps, cookie)).resolves.toEqual({
+      status: 200,
+      body: { taskId: "task-1", schedules: [listed] },
+    });
+    expect(calls).toEqual([["task-1", "corr-sched-1"]]);
+  });
+
+  it("lists nothing when Keiko composes no scheduled wakes", async () => {
+    const { channel, cookie } = pairedAppSession();
+
+    await expect(list("?taskId=task-1", scheduleDeps(channel), cookie)).resolves.toEqual({
+      status: 200,
+      body: { taskId: "task-1", schedules: [] },
+    });
+  });
+
+  it.each([
+    ["no task", ""],
+    ["an invalid task id", "?taskId=..%2Fescape"],
+    ["an additional parameter", "?taskId=task-1&session=ses_1"],
+  ])("refuses a list request with %s", async (_name, query) => {
+    const { channel, cookie } = pairedAppSession();
+
+    await expect(
+      list(query, scheduleDeps(channel, { list: () => undefined }), cookie),
+    ).resolves.toMatchObject({
+      status: 400,
+    });
+  });
+
+  it("denies a list and a change to a caller without an app session", async () => {
+    const { channel } = pairedAppSession();
+    const invoked: string[] = [];
+    const deps = scheduleDeps(channel, {
+      list: () => invoked.push("list"),
+      control: () => invoked.push("control"),
+    });
+
+    await expect(list("?taskId=task-1", deps)).resolves.toMatchObject({ status: 403 });
+    await expect(
+      control({ scheduleId: "sch_a", action: "pause" }, '{"taskId":"task-1"}', deps),
+    ).resolves.toMatchObject({ status: 403 });
+    expect(invoked).toEqual([]);
+  });
+
+  it.each([
+    ["not-found", 404],
+    ["no-retained-state", 404],
+    ["not-applicable", 409],
+    ["run-active", 409],
+    ["integrity-failed", 409],
+    ["schema-unknown", 409],
+    ["unavailable", 503],
+  ] as const)("answers a %s refusal with %i", async (reason, status) => {
+    const { channel, cookie } = pairedAppSession();
+    const deps = scheduleDeps(channel, {
+      control: () => Promise.resolve({ ok: false, reason }),
+    });
+
+    await expect(
+      control({ scheduleId: "sch_a", action: "resume" }, '{"taskId":"task-1"}', deps, cookie),
+    ).resolves.toMatchObject({
+      status,
+      body: { error: { code: `CODING_SCHEDULE_${reason.replaceAll("-", "_").toUpperCase()}` } },
+    });
+  });
+
+  it("changes a schedule and passes the task, schedule, action and correlation", async () => {
+    const { channel, cookie } = pairedAppSession();
+    const calls: unknown[] = [];
+    const deps = scheduleDeps(channel, {
+      control: (...args: unknown[]) => {
+        calls.push(args);
+        return Promise.resolve({ ok: true, status: "deleted" });
+      },
+    });
+
+    await expect(
+      control({ scheduleId: "sch_a", action: "delete" }, '{"taskId":"task-1"}', deps, cookie),
+    ).resolves.toEqual({ status: 200, body: { status: "deleted" } });
+    expect(calls).toEqual([["task-1", "sch_a", "delete", "corr-sched-2"]]);
+  });
+
+  it.each([
+    ["an unknown action", { scheduleId: "sch_a", action: "fire" }, '{"taskId":"task-1"}', 404],
+    [
+      "an invalid schedule id",
+      { scheduleId: "sch_a-b", action: "pause" },
+      '{"taskId":"task-1"}',
+      404,
+    ],
+    ["a body without a task", { scheduleId: "sch_a", action: "pause" }, "{}", 400],
+    [
+      "a body with another field",
+      { scheduleId: "sch_a", action: "pause" },
+      '{"taskId":"task-1","sessionId":"ses_1"}',
+      400,
+    ],
+  ] as const)("refuses a change with %s", async (_name, params, body, status) => {
+    const { channel, cookie } = pairedAppSession();
+    const invoked: string[] = [];
+    const deps = scheduleDeps(channel, {
+      control: () => {
+        invoked.push("control");
+        return Promise.resolve({ ok: true, status: "paused" });
+      },
+    });
+
+    await expect(control(params, body, deps, cookie)).resolves.toMatchObject({ status });
+    expect(invoked).toEqual([]);
+  });
+
+  it("answers a change without composed scheduled wakes as unavailable", async () => {
+    const { channel, cookie } = pairedAppSession();
+
+    await expect(
+      control(
+        { scheduleId: "sch_a", action: "pause" },
+        '{"taskId":"task-1"}',
+        scheduleDeps(channel),
+        cookie,
+      ),
+    ).resolves.toMatchObject({ status: 503 });
   });
 });

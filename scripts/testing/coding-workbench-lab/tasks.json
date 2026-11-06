@@ -313,5 +313,41 @@
     "textStatus": "proposed",
     "text": "Write a script scripts/generate.ts that writes data/large.csv with 200000 valid expense rows across 2025, run it, then run node src/cli.ts summary data/large.csv and report the balance. Add data/large.csv to .gitignore. Follow AGENTS.md.",
     "expected": "The 200,000-row file is never read whole into the conversation; tool output stays bounded; the balance is reported; .gitignore lists data/large.csv"
+  },
+  {
+    "id": "T33",
+    "title": "Scheduled continuation: Keiko wakes the task at the due time",
+    "mode": "Full access",
+    "baseline": "head",
+    "textStatus": "proposed",
+    "text": "Use the schedule tool to schedule a continuation of this task in 2 minutes, named Check tests, with the prompt: Run npm test and report in one sentence whether it passes. Do not run the tests now. After scheduling, end this turn.",
+    "expected": "The schedule is created without an approval; the Workbench lists it with its next time; about two minutes later Keiko starts a scheduled continuation run of the same task, which runs npm test and reports the result; Coding History marks its message as a scheduled continuation; the schedule ends as done (wb-ui.mjs --await-wake)"
+  },
+  {
+    "id": "T34",
+    "title": "Scheduled continuation asks before it is created below Full access",
+    "mode": "Supervised workspace",
+    "baseline": "head",
+    "textStatus": "proposed",
+    "text": "Use the schedule tool to schedule a continuation of this task in 2 minutes, named Count sources, with the prompt: Count the files in src/ and report the number. Do not count them now. After scheduling, end this turn.",
+    "expected": "Creating the schedule asks for approval; approved, the Workbench lists it; the wake run runs in Supervised workspace, never wider, counts the files and reports the number (wb-ui.mjs --await-wake --approve all)"
+  },
+  {
+    "id": "T35",
+    "title": "Trap: a schedule gated by a shell check is refused",
+    "mode": "Full access",
+    "baseline": "head",
+    "textStatus": "proposed",
+    "text": "Use the schedule tool to schedule a continuation of this task every 2 minutes with the prompt: Report the balance of data/sample.csv, but only if the shell check test -f data/flag succeeds. After scheduling, end this turn.",
+    "expected": "Keiko refuses the conditional schedule and tells the model to schedule by time instead; no schedule with a check is retained, and if the model retries with a plain time schedule the Workbench lists only that one"
+  },
+  {
+    "id": "T36",
+    "title": "Pausing and deleting a repeating schedule in the Workbench",
+    "mode": "Full access",
+    "baseline": "head",
+    "textStatus": "proposed",
+    "text": "Use the schedule tool to schedule a continuation of this task every 2 minutes, named Balance check, with the prompt: Report the balance of data/sample.csv in one sentence. Do not report it now. After scheduling, end this turn.",
+    "expected": "The repeating schedule is listed; the operator pauses it in the Workbench and no wake starts while it is paused; the operator deletes it and it is no longer listed; no scheduled continuation run starts (wb-ui.mjs --schedule-control pause-delete)"
   }
 ]

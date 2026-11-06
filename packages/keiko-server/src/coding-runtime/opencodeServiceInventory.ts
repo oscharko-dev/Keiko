@@ -562,8 +562,8 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten<
       "experimental.usage.limits",
     ],
   ),
-  // #4271: the 2.2.x artifact, schedule and media surfaces stay closed until each has an owner and
-  // a proof; their plugins are withheld (`OPENCODE_WITHHELD_BUILT_IN_PLUGINS`).
+  // #4271: the 2.2.x artifact and media surfaces stay closed until each has an owner and a proof;
+  // their plugins are withheld (`OPENCODE_WITHHELD_BUILT_IN_PLUGINS`).
   refused(
     "experimental-unadmitted",
     4271,
@@ -577,6 +577,15 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten<
       "experimental.artifacts.update",
       "experimental.artifacts.view",
       "experimental.media.get",
+    ],
+  ),
+  // #4271: the model creates a schedule with the native tool; the human lists, pauses, resumes and
+  // deletes a task's schedules in the Workbench, and Keiko wakes the task at the due time.
+  keikoOperation(
+    "Coding Workbench scheduled wakes",
+    "coding-runtime/codingScheduledWakes.ts",
+    ["C09"],
+    [
       "experimental.schedule.create",
       "experimental.schedule.delete",
       "experimental.schedule.get",
@@ -811,14 +820,10 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
   // #4271: stated closed, so a changed producer default cannot open one; the plugins are withheld.
   keikoSet(
     ["C05"],
-    [
-      "experimental.artifacts",
-      "experimental.image_generate",
-      "experimental.media_blob",
-      "experimental.schedules",
-      "plugins",
-    ],
+    ["experimental.artifacts", "experimental.image_generate", "experimental.media_blob", "plugins"],
   ),
+  // #4271: on for the native profile, whose wake run alone releases the scheduler lease.
+  keikoSet(["C09"], ["experimental.schedules"]),
   keikoSet(
     ["C04"],
     [
@@ -1232,8 +1237,10 @@ export const OPENCODE_PLUGIN_DISPOSITIONS = flatten<OpenCodePluginDisposition>([
     "experimental-unadmitted",
     4271,
     ["C05"],
-    ["opencode.tool.artifact", "opencode.tool.image-generate", "opencode.tool.schedule"],
+    ["opencode.tool.artifact", "opencode.tool.image-generate"],
   ),
+  // #4271: native profile only; its create, pause, resume and delete pass `keiko.native-policy`.
+  nativePlugin(["C09"], ["opencode.tool.schedule"]),
   refused("keiko-owns-configuration", 4271, ["S11"], ["opencode.provider.claude-agent"]),
   refused(
     "leaves-machine",

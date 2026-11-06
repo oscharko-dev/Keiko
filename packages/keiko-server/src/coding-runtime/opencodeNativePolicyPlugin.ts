@@ -38,6 +38,32 @@ export const OPENCODE_CODE_MODE_SESSION_MOVE = "opencode_session_move";
 export const OPENCODE_CODE_MODE_WORKTREE_CREATE = "opencode_worktree_create";
 
 /**
+ * The permission the native policy decides for every change of a native schedule (#4271): the
+ * producer's schedule tools assert no permission of their own, so the hook asks for one, with the
+ * operation as the first resource.
+ */
+export const OPENCODE_CODE_MODE_SCHEDULE = "opencode_schedule";
+export const OPENCODE_CODE_MODE_SCHEDULE_OPERATIONS: readonly string[] = Object.freeze([
+  "create",
+  "pause",
+  "resume",
+  "delete",
+]);
+
+/**
+ * The tool names a schedule change arrives under: the Code Mode management name and the bare one,
+ * each mapped to its operation. `schedule_list` only reads and is not governed.
+ */
+export const OPENCODE_SCHEDULE_TOOLS: Readonly<Record<string, string>> = Object.freeze(
+  Object.fromEntries(
+    OPENCODE_CODE_MODE_SCHEDULE_OPERATIONS.flatMap((operation) => [
+      [`opencode_schedule_${operation}`, operation],
+      [`schedule_${operation}`, operation],
+    ]),
+  ),
+);
+
+/**
  * Secrets and Keiko bindings never reach a shell the native agent starts. The server-owned binding
  * carries each relayed MCP server's capability (#3903 AC3), so it stays out of shells too.
  */
@@ -140,6 +166,7 @@ function pluginConstantsSource(): readonly string[] {
 
 function managementSource(): readonly string[] {
   return [
+    ...scheduleSource(),
     "// A session move is reviewed by the directory it names and the session it moves (absent: the",
     "// calling one); a new worktree by the name it is given.",
     "function managementResources(tool, input) {",
@@ -150,6 +177,25 @@ function managementSource(): readonly string[] {
     "function managementTarget(tool, input) {",
     `  if (tool !== ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_MOVE)} || !input || typeof input !== "object") return null;`,
     "  return input.sessionID === undefined ? null : input.sessionID;",
+    "}",
+  ];
+}
+
+function scheduleSource(): readonly string[] {
+  return [
+    `const SCHEDULE_PERMISSION = ${JSON.stringify(OPENCODE_CODE_MODE_SCHEDULE)};`,
+    `const SCHEDULE_TOOLS = ${JSON.stringify(OPENCODE_SCHEDULE_TOOLS)};`,
+    "// A schedule change is reviewed by its operation, then what it would do: a new schedule by its",
+    "// time and the prompt it would send, split like a program; any other change by the schedule id.",
+    "// A schedule gated by an if or until check names the check alone, which the policy refuses.",
+    "function scheduleResources(operation, input) {",
+    '  const value = input && typeof input === "object" ? input : {};',
+    '  if (operation !== "create") return [operation, String(value.id ?? "")];',
+    '  if (value.if !== undefined || value.until !== undefined) return [operation, value.if !== undefined ? "condition:if" : "condition:until"];',
+    '  const timing = ["when:" + JSON.stringify(value.when ?? null)];',
+    '  if (value.ends !== undefined) timing.push("ends:" + JSON.stringify(value.ends));',
+    '  if (typeof value.name === "string") timing.push("name:" + value.name);',
+    '  return [operation, ...timing, ...programResources({ code: typeof value.prompt === "string" ? value.prompt : "" })];',
     "}",
   ];
 }
@@ -218,6 +264,12 @@ function pluginBodySource(): readonly string[] {
     "    // (`execute`) nor for the nested management tools that change state, so the same policy",
     "    // decides them here; a refusal blocks the call with the policy's message.",
     '    await ctx.tool.hook("execute.before", async (event) => {',
+    "      const scheduleOperation = Object.hasOwn(SCHEDULE_TOOLS, event.tool) ? SCHEDULE_TOOLS[event.tool] : undefined;",
+    "      if (scheduleOperation !== undefined) {",
+    '        const decision = await evaluate({ sessionID: event.sessionID, agent: event.agent, action: SCHEDULE_PERMISSION, resources: scheduleResources(scheduleOperation, event.input), targetSessionID: null, effect: "ask", source: { type: "tool", messageID: event.messageID, id: event.id } });',
+    '        if (decision.effect !== "allow") throw new Error(decision.message ?? DENY_MESSAGE);',
+    "        return;",
+    "      }",
     '      if (event.tool !== "execute" && !CODE_MODE_GOVERNED.has(event.tool)) return;',
     '      const resources = event.tool === "execute" ? programResources(event.input) : managementResources(event.tool, event.input);',
     '      const decision = await evaluate({ sessionID: event.sessionID, agent: event.agent, action: event.tool, resources, targetSessionID: managementTarget(event.tool, event.input), effect: "ask", source: { type: "tool", messageID: event.messageID, id: event.id } });',

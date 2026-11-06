@@ -184,8 +184,26 @@ export const OPENCODE_WITHHELD_BUILT_IN_PLUGINS = Object.freeze([
   "opencode.tool.schedule",
 ]);
 
+/**
+ * The built-in plugins only the native profile loads (ADR-0137 D10, #4271): scheduled wakes of a
+ * session. Keiko holds the producer's scheduler lease in every native run and releases it only in
+ * the wake run it starts at a schedule's due time (`opencodeScheduleLease.ts`).
+ */
+export const OPENCODE_NATIVE_ADMITTED_BUILT_IN_PLUGINS = Object.freeze(["opencode.tool.schedule"]);
+
+/** What a native run withholds: every withheld plugin except the ones it admits. */
+export const OPENCODE_NATIVE_WITHHELD_BUILT_IN_PLUGINS = Object.freeze(
+  OPENCODE_WITHHELD_BUILT_IN_PLUGINS.filter(
+    (plugin) => !OPENCODE_NATIVE_ADMITTED_BUILT_IN_PLUGINS.includes(plugin),
+  ),
+);
+
 const OPENCODE_PLUGIN_REMOVALS = Object.freeze(
   OPENCODE_WITHHELD_BUILT_IN_PLUGINS.map((plugin) => `-${plugin}`),
+);
+
+const OPENCODE_NATIVE_PLUGIN_REMOVALS = Object.freeze(
+  OPENCODE_NATIVE_WITHHELD_BUILT_IN_PLUGINS.map((plugin) => `-${plugin}`),
 );
 
 /** Experimental switches stated explicitly, so a changed producer default cannot open one. */
@@ -691,13 +709,14 @@ function createNativeOpenCodeV2Config(
       ? {}
       : { agents: agentModels.agents }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
-    plugins: OPENCODE_PLUGIN_REMOVALS,
+    plugins: OPENCODE_NATIVE_PLUGIN_REMOVALS,
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     // The producer offers its plan tool (`todowrite`) only under this switch; Keiko classifies the
     // update as a read in every mode and projects it as the plan card (parity row T19, owner
     // decision of 2026-10-24).
-    experimental: { ...OPENCODE_CLOSED_EXPERIMENTS, todo: true },
+    // Its schedule tools need their switch; a schedule wakes the session only in Keiko's wake run.
+    experimental: { ...OPENCODE_CLOSED_EXPERIMENTS, todo: true, schedules: true },
     // The operator's admitted MCP servers, and nothing else (#3903, `opencodeNativeMcp.ts`).
     mcp,
     // The operator's accepted external references, as the producer's own local references
