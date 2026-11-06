@@ -35,6 +35,7 @@ import {
 import {
   codingWorkbenchProviderTimeoutMs,
   providerRequestBudgetMs,
+  streamOutputAllowanceMs,
   streamRequestBudgetMs,
 } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import {
@@ -2736,6 +2737,17 @@ describe("coding-sidecar gateway", () => {
         slow.modelId,
       ),
     ).toBe(1_801_000);
+  });
+
+  // A healthy slow stream (8 tok/s, 32k tokens = 68 minutes) was cut at the fixed 30-minute floor
+  // and generated again from scratch. The gateway now sizes a stream's budget from the call's output
+  // allowance, and the route backstop must sit behind that same budget or it would cut the stream.
+  it("keeps the route deadline behind the stream budget a large output allowance earns", () => {
+    const slow = provider({ timeoutMs: 30_000, maxRetries: 0 });
+    const config = { ...configValue(slow, capability()), codingOutageWindowMs: 0 };
+    const withAllowance = codingSidecarGatewayRequestDeadlineMs(config, slow.modelId, 32_768);
+    expect(withAllowance).toBeGreaterThan((32_768 / 8) * 1000);
+    expect(withAllowance).toBe(streamOutputAllowanceMs(32_768) + 1_000);
   });
 
   // #3873 review: the sidecar's calls ride out a gateway outage, and their budgets extend to the

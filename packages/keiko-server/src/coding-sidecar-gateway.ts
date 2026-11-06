@@ -3407,6 +3407,7 @@ function gatewayCancellationCause(
 export function codingSidecarGatewayRequestDeadlineMs(
   config: GatewayConfig,
   modelId: string,
+  maxOutputTokens?: number,
 ): number {
   // The sidecar reaches the gateway both ways — a buffered `chat()` answer or a `chatStream()`
   // read — so its backstop sits behind the longer of the two budgets, each extended by the outage
@@ -3416,6 +3417,7 @@ export function codingSidecarGatewayRequestDeadlineMs(
     modelId,
     ["buffered", "streamed"],
     CODING_TURN_GATEWAY_POLICY.outagePolicy,
+    maxOutputTokens,
   );
 }
 
@@ -3425,6 +3427,7 @@ function gatewayRequestCancellation(
   config: GatewayConfig,
   modelId: string,
   runId: string,
+  maxOutputTokens: number,
 ): GatewayRequestCancellation {
   const client = new AbortController();
   const abortClient = (): void => {
@@ -3432,7 +3435,7 @@ function gatewayRequestCancellation(
   };
   ctx.req.once("aborted", abortClient);
   ctx.res.once("close", abortClient);
-  const deadlineMs = codingSidecarGatewayRequestDeadlineMs(config, modelId);
+  const deadlineMs = codingSidecarGatewayRequestDeadlineMs(config, modelId, maxOutputTokens);
   const deadline = AbortSignal.timeout(deadlineMs);
   const transport = sidecarSseTransport(ctx, deps);
   const runSignal = cancellationRegistry(deps)?.signalFor(runId);
@@ -3527,6 +3530,7 @@ async function executeGatewayChat(
     binding.config,
     delivery.modelAlias,
     runId,
+    delivery.maxOutputTokens,
   );
   try {
     return await dispatchGatewayChat(ctx, deps, binding, parsed, runId, delivery, cancellation);
@@ -5824,7 +5828,11 @@ function executeBudgetedGatewayChat(
         ? undefined
         : resolveToolCatalogHandlerCoverage(deps, authentication.runId, ctx.correlationId),
     offerLifetimeMs: opencodeGatewayOfferLifetimeMs(
-      codingSidecarGatewayRequestDeadlineMs(binding.config, profile.modelAlias),
+      codingSidecarGatewayRequestDeadlineMs(
+        binding.config,
+        profile.modelAlias,
+        profile.maxOutputTokens,
+      ),
     ),
   });
 }

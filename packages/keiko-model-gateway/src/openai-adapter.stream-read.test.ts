@@ -13,7 +13,11 @@ import {
   TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
-import { OpenAiAdapter } from "./openai-adapter.js";
+import {
+  OpenAiAdapter,
+  STREAM_WIRE_BYTES_PER_TOKEN,
+  streamWireByteCap,
+} from "./openai-adapter.js";
 import {
   activityLogErrorKind,
   logModelId,
@@ -637,5 +641,65 @@ describe("OpenAiAdapter.callStream through a LiteLLM proxy", () => {
     );
     await expect(reading).rejects.toMatchObject({ retryable: true, httpStatus: 502 });
     await expect(reading).rejects.toThrow(/mid-stream/u);
+  });
+});
+
+// A long reasoning stream is thousands of one-token deltas, each wrapped in a 250-400 byte chunk
+// envelope: the fixed 10 MB response cap ended it as a final invalid response at about 30k tokens.
+describe("OpenAiAdapter.callStream: wire cap follows the output allowance", () => {
+  const TINY_REASONING = data({
+    id: `chatcmpl-${"a".repeat(120)}`,
+    object: "chat.completion.chunk",
+    created: 1_700_000_000,
+    model: "example-chat-model",
+    system_fingerprint: "b".repeat(100),
+    choices: [{ index: 0, delta: { reasoning_content: "x" } }],
+  });
+  const FRAMES = 45_000;
+
+  function tinyDeltaStream(frames: number): Response {
+    const stream = drivenStream();
+    const batch = TINY_REASONING.repeat(500);
+    for (let sent = 0; sent < frames; sent += 500) stream.push(batch);
+    stream.push(delta("done"));
+    stream.push(finish("stop"));
+    stream.push(DONE);
+    stream.end();
+    return stream.response;
+  }
+
+  it("completes a stream past 10 MB when its allowance covers the tokens", async () => {
+    const response = tinyDeltaStream(FRAMES);
+    expect(TINY_REASONING.length * FRAMES).toBeGreaterThan(10_000_000);
+    const reading = answerOf(
+      adapterWith(() => Promise.resolve(response)).callStream(
+        { ...REQUEST, maxOutputTokens: 65_536 },
+        CONFIG,
+        BOUNDS,
+      ),
+    );
+    await expect(reading).resolves.toMatchObject({ content: "done", finishReason: "stop" });
+  });
+
+  it("still ends a runaway stream beyond its allowance as a size-exceeded invalid response", async () => {
+    const reading = answerOf(
+      adapterWith(() => Promise.resolve(tinyDeltaStream(FRAMES))).callStream(
+        REQUEST,
+        CONFIG,
+        BOUNDS,
+      ),
+    );
+    await expect(reading).rejects.toMatchObject({ retryable: false });
+    await expect(reading).rejects.toThrow(/size-exceeded/u);
+  });
+
+  it.each([
+    [undefined, 10_000_000],
+    [0, 10_000_000],
+    [1_000, 10_000_000],
+    [65_536, 65_536 * STREAM_WIRE_BYTES_PER_TOKEN + 1_048_576],
+    [Number.MAX_SAFE_INTEGER, 536_870_912],
+  ])("derives the cap for %s output tokens", (tokens, cap) => {
+    expect(streamWireByteCap(tokens)).toBe(cap);
   });
 });

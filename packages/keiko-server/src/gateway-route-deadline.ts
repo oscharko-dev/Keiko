@@ -32,9 +32,10 @@ function gatewayCallBudgetMs(
   provider: RouteProviderBudgetPolicy,
   shape: GatewayCallShape,
   outageWindowMs: number,
+  maxOutputTokens: number | undefined,
 ): number {
   return shape === "streamed"
-    ? streamedCallBudgetMs(provider, outageWindowMs)
+    ? streamedCallBudgetMs(provider, outageWindowMs, maxOutputTokens)
     : bufferedCallBudgetMs(provider, outageWindowMs);
 }
 
@@ -46,6 +47,9 @@ export function gatewayRouteDeadlineMs(
   modelId: string,
   shapes: readonly [GatewayCallShape, ...GatewayCallShape[]],
   outagePolicy?: "outage-window",
+  // The output allowance of a streamed call: the gateway grants a live stream the time its
+  // allowance needs at the slowest granted rate, so the backstop must sit behind the same budget.
+  maxOutputTokens?: number,
 ): number {
   const provider = config.providers.find((candidate) => candidate.modelId === modelId);
   const raised =
@@ -56,7 +60,7 @@ export function gatewayRouteDeadlineMs(
   const budget =
     raised === undefined
       ? UNCONFIGURED_MODEL_ROUTE_DEADLINE_MS
-      : Math.max(...shapes.map((shape) => gatewayCallBudgetMs(raised, shape, outageWindowMs)));
+      : Math.max(...shapes.map((shape) => gatewayCallBudgetMs(raised, shape, outageWindowMs, maxOutputTokens)));
   // Armed with AbortSignal.timeout, which fires at once past 2^31 - 1 ms: an absurd budget must not
   // turn the backstop into an immediate abort.
   return Math.min(budget + GATEWAY_ROUTE_DEADLINE_GRACE_MS, MAX_TIMER_DELAY_MS);

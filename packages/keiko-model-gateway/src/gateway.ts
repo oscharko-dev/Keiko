@@ -932,7 +932,11 @@ function streamStartupBudget(
   now: number,
 ): { readonly remainingMs: number; readonly elapsedMs: number } {
   const elapsedMs = now - state.start;
-  const budgetMs = streamedCallBudgetMs(state.route.provider, state.outageWindowMs);
+  const budgetMs = streamedCallBudgetMs(
+    state.route.provider,
+    state.outageWindowMs,
+    state.prepared.maxOutputTokens,
+  );
   return { remainingMs: Math.max(0, budgetMs - elapsedMs), elapsedMs };
 }
 
@@ -1171,8 +1175,14 @@ function effectiveBufferedAttemptMs(provider: ModelProviderConfig): number {
 // Coding-Workbench-raised) `timeoutMs`: the silence bound floored to the silence floor, the budget
 // through `streamRequestBudgetMs` — the one derivation the route deadline behind a streamed call
 // shares (PR #3602 review).
-function chatStreamBounds(provider: ModelProviderConfig): StreamReadBounds {
-  return { silenceMs: effectiveSilenceMs(provider), budgetMs: streamRequestBudgetMs(provider) };
+function chatStreamBounds(
+  provider: ModelProviderConfig,
+  maxOutputTokens?: number,
+): StreamReadBounds {
+  return {
+    silenceMs: effectiveSilenceMs(provider),
+    budgetMs: streamRequestBudgetMs(provider, maxOutputTokens),
+  };
 }
 
 // One attempt's answer: over the provider's stream when the attempt has read bounds, whole
@@ -1773,7 +1783,7 @@ export class Gateway {
     // and the window, not the stream budget, is what bounds that wait (#3873 review).
     const admissionBudgetMs = admissionBudgetFor(
       callRetryConfig(route.provider, outageWindowMs),
-      streamedCallBudgetMs(route.provider, outageWindowMs),
+      streamedCallBudgetMs(route.provider, outageWindowMs, prepared.maxOutputTokens),
       (): number => this.clock.now() - start,
     );
     const { admission } = await this.initialStreamAdmission(
@@ -2161,7 +2171,7 @@ export class Gateway {
     remainingMs: number | undefined,
     admission: CircuitBreakerAdmission,
   ): Promise<{ first: GatewayStreamChunk; iterator: AsyncGenerator<GatewayStreamChunk> }> {
-    const bounds = chatStreamBounds(state.route.provider);
+    const bounds = chatStreamBounds(state.route.provider, request.maxOutputTokens);
     const budgetMs = Math.min(bounds.budgetMs, remainingMs ?? bounds.budgetMs);
     const iterator = this.reservedStreamAttempt(
       state,
