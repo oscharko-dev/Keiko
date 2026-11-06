@@ -17,6 +17,8 @@ function thread(regionChange: Thread["regionChange"], refuted = false): Thread {
     path: "src/a.ts",
     startLine: 1,
     endLine: 2,
+    headStartLine: 1,
+    headEndLine: 2,
     fileLevel: false,
     side: "right",
     reviewedCommit: SHA,
