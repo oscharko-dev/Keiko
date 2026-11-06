@@ -3754,6 +3754,7 @@ function groundedCanonicalMemoryRequest(
     ],
     modelId: prepared.input.modelId,
     memory: prepared.input.memory,
+    ...(prepared.userMessage === undefined ? {} : { sourceMessageId: prepared.userMessage.id }),
     ...(prepared.input.clientTurnId === undefined
       ? {}
       : { clientTurnId: prepared.input.clientTurnId }),

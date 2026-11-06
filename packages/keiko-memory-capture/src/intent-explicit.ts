@@ -168,6 +168,27 @@ export function isMemoryForgetReference(target: string): boolean {
   return FORGET_REFERENCE_WORDS.has(target.trim().toLowerCase());
 }
 
+// "Vergiss den alten API-Pfad, nimm den neuen" asks for work, not to forget a memory: a named thing
+// whose sentence goes on with a verb ("nimm", "use") is an instruction for the task at hand. A list
+// of things ("den Bericht und die Notizen") or a remark about the thing ("…, die ist veraltet")
+// still names what to forget.
+const NAMED_THING_RE =
+  /^(?:den|die|das|der|dem|des|ein\p{L}*|mein\p{L}*|dein\p{L}*|unser\p{L}*|the|a|an|my|your|our)\s/iu;
+const CONTINUATION_RE = /(?:,|\s(?:und|and|dann|then))\s+(\p{L}+)/gu;
+const CONTINUES_A_THING = new Set(
+  (
+    "den die das der dem des ein eine einen einem einer mein meine meinen meinem dein deine " +
+    "unser unsere auch er sie es ihn ihr the a an my your our also it they this that its"
+  ).split(" "),
+);
+
+function asksForTask(target: string): boolean {
+  if (!NAMED_THING_RE.test(target)) return false;
+  return [...target.matchAll(CONTINUATION_RE)].some(([, word = ""]) => {
+    return /^\p{Ll}/u.test(word) && !CONTINUES_A_THING.has(word.toLowerCase());
+  });
+}
+
 function forgetTargetOf(text: string): string | null {
   for (const [pattern, target] of FORGET_REFERENCE_STATEMENTS) {
     if (pattern.test(text)) return target;
@@ -177,7 +198,8 @@ function forgetTargetOf(text: string): string | null {
   const body = bodyAfterPrefix(prefixMatch, text);
   if (body === null || firstSentence(body).endsWith("?")) return null;
   const target = trimForgetTarget(firstSentence(body));
-  return target === "" || NEVER_MIND_TARGETS.has(target.toLowerCase()) ? null : target;
+  if (target === "" || asksForTask(target)) return null;
+  return NEVER_MIND_TARGETS.has(target.toLowerCase()) ? null : target;
 }
 
 // Any of the four ECMAScript line-terminator code points. `.` (used by the single-regex-capture

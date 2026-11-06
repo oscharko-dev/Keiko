@@ -40,6 +40,21 @@ export function memoryTextSecretEgressRejectionReason(
   return classifyDeniedCategory(trimmed, policy.deniedCategoryMatchers ?? []);
 }
 
+// The shared cues name fixed phrases ("ignoriere alle Anweisungen"); a wish stated in a sentence
+// of its own puts the verb elsewhere ("dass du ab jetzt deine Regeln ignorierst"). A sentence that
+// asks to ignore, bypass or override the rules is refused as the same override.
+const RULE_VERB_RE =
+  /(?:^|[^\p{L}])(?:ignorier\p{L}*|missacht\p{L}*|umgeh\p{L}*|umgangen|übergeh\p{L}*|ignore[sd]?|ignoring|disregard\p{L}*|bypass\p{L}*|override[sn]?|overriding)(?!\p{L})/iu;
+const RULE_NOUN_RE =
+  /(?:^|[^\p{L}])(?:regeln?|anweisung(?:en)?|richtlinien?|vorgaben?|beschränkungen?|sicherheitsregeln?|systemprompts?|rules?|instructions?|guidelines?|restrictions?|safeguards?|system\s+prompt)(?!\p{L})/iu;
+const SENTENCE_RE = /[^.!?\n]+/gu;
+
+function asksToOverrideRules(text: string): boolean {
+  return [...text.matchAll(SENTENCE_RE)].some(
+    ([sentence]) => RULE_VERB_RE.test(sentence) && RULE_NOUN_RE.test(sentence),
+  );
+}
+
 // What may become a memory. A person's clear statement is their decision, but it cannot make a
 // memory out of an instruction to drop the assistant's rules. Reading stored text is a different
 // question and stays with the secret check above.
@@ -51,8 +66,8 @@ export function memoryTextCaptureRejectionReason(
   if (secretReason !== null) {
     return secretReason;
   }
-  const overridesRules = detectPromptInjectionSignals(text).some(
-    (signal) => signal.code === "instruction-override",
-  );
+  const overridesRules =
+    asksToOverrideRules(text) ||
+    detectPromptInjectionSignals(text).some((signal) => signal.code === "instruction-override");
   return overridesRules ? "instruction-override" : null;
 }

@@ -281,4 +281,39 @@ describe("post-commit capture-surface attribution", () => {
 
     expect(await surfaceOfSingleCapture(deps)).toBe("voice");
   });
+
+  it("names the committed turn a canonical caller passes as the learned fact's source", async () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    const vault = makeVault(evidenceStore);
+    const deps = depsFor(vault, evidenceStore, modelFact("I ship on Fridays."));
+
+    runPostCommitCanonicalTurnMemorySideEffects(
+      deps,
+      {
+        chatId: "conversation-a",
+        projectPath: "project-a",
+        messages: [
+          { role: "user", content: "I ship on Fridays." },
+          { role: "assistant", content: "Noted." },
+        ],
+        modelId: "gpt-test",
+        memory: { enabled: true, context: { userId: context().userId } },
+        sourceMessageId: "message-current",
+      },
+      context(),
+      "gpt-test",
+      EMPTY_MEMORY_RESULT,
+      "ok",
+      "correlation-canonical-source",
+    );
+
+    await surfaceOfSingleCapture(deps);
+    const learned = vault.listMemoriesByScope(
+      { kind: "user", userId: context().userId },
+      { status: ["accepted", "proposed"] },
+    );
+    expect(learned.map((record) => record.provenance.sourceMessageIds)).toEqual([
+      ["message-current"],
+    ]);
+  });
 });

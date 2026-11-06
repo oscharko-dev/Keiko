@@ -805,6 +805,35 @@ const SELF_SPEECH_BETWEEN = new Set([
   "have",
   "had",
 ]);
+// Material the person passes on is not their own statement: a line quoted with ">" (a reply or a
+// forwarded mail), and everything after a lead-in that names pasted material ("Hier die Mail von
+// Anna:", "Der Text lautet:"), is a mail header ("Fwd:", "Betreff:") or asks for work on a text
+// ("Übersetze:", "Schreibe einen Dialog:"). A lead-in reaches back to the previous sentence end.
+const QUOTED_LINE_RE = /^[ \t]*(?:>|&gt;)/u;
+const LEAD_IN_RE = /[^.!?\n:]{1,80}:/gu;
+const MATERIAL_NOUN_RE = anyWordPattern([
+  "mail",
+  "email",
+  "nachricht",
+  "text",
+  "brief",
+  "zitat",
+  "dialog",
+  "vorlage",
+  "entwurf",
+  "lautet",
+  "message",
+  "letter",
+  "quote",
+  "dialogue",
+  "draft",
+  "template",
+  "transcript",
+]);
+const MAIL_HEADER_RE =
+  /^(?:fwd?|wg|aw|re|von|an|betreff|datum|gesendet|from|to|subject|cc|date|sent)$/iu;
+const TEXT_TASK_RE =
+  /^(?:(?:bitte|please)\s+)?(?:schreib|übersetz|formulier|korrigier|überarbeit|fasse|translate|write|rewrite|correct|proofread|summari[sz]e|paraphrase)\p{L}*(?!\p{L})/iu;
 // How far before a verb its speaker may stand: "Anna also says", "My boss always says".
 const SPEAKER_REACH = 3;
 
@@ -838,6 +867,15 @@ function isInsideQuotes(before: string): boolean {
     else if (QUOTE_TOGGLES.has(char)) open = !open;
   }
   return open;
+}
+
+function isPassedOn(text: string, start: number): boolean {
+  const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+  if (QUOTED_LINE_RE.test(text.slice(lineStart))) return true;
+  return [...text.slice(0, start).matchAll(LEAD_IN_RE)].some((match) => {
+    const lead = match[0].slice(0, -1).trim();
+    return MATERIAL_NOUN_RE.test(lead) || MAIL_HEADER_RE.test(lead) || TEXT_TASK_RE.test(lead);
+  });
 }
 
 function isHypothetical(evidence: string, prefix: string): boolean {
@@ -1197,7 +1235,9 @@ export function admitProposedFact(
   const span = clauseSpan(userText, evidence);
   if (typeof span === "string") return dropped(span);
   const { start, from, words } = span;
-  if (isInsideQuotes(userText.slice(0, start))) return dropped("quoted");
+  if (isInsideQuotes(userText.slice(0, start)) || isPassedOn(userText, start)) {
+    return dropped("quoted");
+  }
   const sentence = userText.slice(from, span.to);
   if (looksLikePersonalIdentifier(words) || looksLikePersonalIdentifier(fact.body)) {
     return dropped("personal-identifier");

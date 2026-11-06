@@ -447,6 +447,10 @@ describe("explicit German forget and remember statements (#4211)", () => {
     "Vergiss du den Bericht?",
     "Lösche die Datei config.yml",
     "Lösche den Cache",
+    "Vergiss den alten API-Pfad, nimm den neuen.",
+    "Vergiss den Bericht, schreib den neuen.",
+    "Forget the old API, use the new one.",
+    "Vergiss die erste Version und nimm die zweite.",
   ])("does not treat %j as a forget", (text) => {
     const { targets, resolver } = captured();
     expect(tryExtractForget(text, ctx(), { resolver })).toBeNull();
@@ -461,6 +465,12 @@ describe("explicit German forget and remember statements (#4211)", () => {
     ["Lösche bitte die Erinnerung an den Bericht", "den Bericht"],
     ["Vergiss, dass ich Tabellen mag. Zeig mir jetzt eine Zahl.", "ich Tabellen mag"],
     ["Vergiss das. Und zeig mir Tabellen", "das"],
+    ["Vergiss den Bericht und die Notizen", "den Bericht und die Notizen"],
+    [
+      "Vergiss meine Vorliebe für Tabellen, die ist veraltet",
+      "meine Vorliebe für Tabellen, die ist veraltet",
+    ],
+    ["Vergiss, dass ich Tabellen mag und gern lese", "ich Tabellen mag und gern lese"],
   ])("takes the fact out of %j", (text, target) => {
     const { targets, resolver } = captured();
     expect(tryExtractForget(text, ctx(), { resolver })?.kind).toBe("forget");

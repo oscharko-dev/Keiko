@@ -38,7 +38,10 @@ import {
   type SalienceDeps,
   type SalienceOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
-import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import {
+  MemoryStoragePreconditionError,
+  type MemoryVaultStore,
+} from "@oscharko-dev/keiko-memory-vault";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
 import { deploymentContentPolicy, strictRedactor } from "./content-redactor.js";
@@ -557,6 +560,32 @@ async function persistCandidate(
   };
 }
 
+// Another turn changed the memory this outcome would replace, so the vault refused the whole
+// replacement. That outcome is reported, refused and audited; the turn's other outcomes still settle.
+async function settleCandidate(
+  deps: UiHandlerDeps,
+  outcome: SalienceOutcome,
+  vault: MemoryVaultStore,
+  trace: LearningTrace,
+): Promise<PersistedCandidate> {
+  try {
+    return await persistCandidate(deps, outcome, vault, trace);
+  } catch (error: unknown) {
+    if (!(error instanceof MemoryStoragePreconditionError) || outcome.kind !== "candidate") {
+      throw error;
+    }
+    emitSalienceFailureDiagnostic(
+      deps,
+      trace.correlationId,
+      "memory.salience.capture",
+      "memory-salience.settleCandidate",
+      error,
+    );
+    recordRelation(outcome, "refused", trace);
+    return rejectedCandidate(deps, trace.mode, trace.surface, outcome, "ambiguous-update");
+  }
+}
+
 interface SalienceTurnRequest {
   readonly content: string;
   // The person's message the turn came from, when the caller has one.
@@ -798,7 +827,7 @@ async function persistSalienceActions(
   const persistFrom = async (index: number): Promise<void> => {
     const outcome = outcomes[index];
     if (outcome === undefined) return;
-    const { action, disposition } = await persistCandidate(deps, outcome, vault, trace);
+    const { action, disposition } = await settleCandidate(deps, outcome, vault, trace);
     if (action !== null) actions.push(action);
     tallyDisposition(summary, disposition);
     await persistFrom(index + 1);

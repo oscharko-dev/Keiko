@@ -814,3 +814,32 @@ describe("people named by their relation to the person", () => {
     expect(reasonOf(text, text.slice(0, -1))).toBeNull();
   });
 });
+
+describe("material the person passes on", () => {
+  it.each([
+    ["Hier die Mail von Anna:\n\nIch arbeite bei Foo.", "Ich arbeite bei Foo"],
+    ["Fwd:\n> Ich bin Vegetarier.", "Ich bin Vegetarier"],
+    ["Fwd:\n&gt; Ich bin Vegetarier.", "Ich bin Vegetarier"],
+    ["> Ich bin Vegetarier.\n\nWas antworte ich?", "Ich bin Vegetarier"],
+    ["Der Text lautet: Ich liebe Katzen. Was meinst du?", "Ich liebe Katzen"],
+    ["Übersetze: I live in Paris.", "I live in Paris"],
+    ["Bitte übersetze ins Englische: Ich wohne in Köln.", "Ich wohne in Köln"],
+    ["Schreibe einen Dialog: Ich bin Arzt und mag Tee.", "Ich bin Arzt und mag Tee"],
+    ["Translate this: I prefer tables.", "I prefer tables"],
+    ["Here is the email from my client:\nI use Vim every day.", "I use Vim every day"],
+    ["Betreff: Ich bin ab Montag im Urlaub.", "Ich bin ab Montag im Urlaub"],
+  ])("keeps pasted, forwarded or task material out: %s", (text, evidence) => {
+    expect(reasonOf(text, evidence)).toBe("quoted");
+  });
+
+  it.each([
+    ["Kurz zu mir: Ich arbeite bei Foo.", "Ich arbeite bei Foo"],
+    ["Zur Info: ich nutze Vim.", "ich nutze Vim"],
+    ["Ich fange um 9:30 an und nutze Vim.", "Ich fange um 9:30 an und nutze Vim"],
+    ["Meine Regel: Ich antworte immer kurz.", "Ich antworte immer kurz"],
+    ["Ich schreibe gerade viel. Ich nutze Vim.", "Ich nutze Vim"],
+    ["Die Mail ist raus. Ich arbeite bei Foo.", "Ich arbeite bei Foo"],
+  ])("keeps the person's own statement after an ordinary lead-in: %s", (text, evidence) => {
+    expect(admit(text, evidence).admitted).toBe(true);
+  });
+});

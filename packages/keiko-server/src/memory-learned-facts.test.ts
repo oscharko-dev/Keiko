@@ -712,6 +712,42 @@ describe("a replacement that cannot complete", () => {
     expect(liveBodies(vault, ctx)).toEqual(["Ich nutze PostgreSQL 14"]);
     expect(failures).toBeGreaterThan(0);
   });
+
+  it("still settles the turn's other facts when one replacement lost its race", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, "Ich nutze PostgreSQL 14", [stated("Ich nutze PostgreSQL 14")]);
+    const stale: MemoryVaultStore = {
+      ...vault,
+      getMemory: (id): MemoryRecord | undefined => {
+        const record = vault.getMemory(id);
+        return record === undefined ? undefined : { ...record, updatedAt: record.updatedAt - 1 };
+      },
+    };
+    let failures = 0;
+    const deps: UiHandlerDeps = {
+      ...makeDeps(stale, [stated("Ich nutze PostgreSQL 16"), stated("Ich trinke gern Tee")]),
+      diagnostics: {
+        record: (diagnostic): void => {
+          if (diagnostic.source === "memory-salience.settleCandidate") failures += 1;
+        },
+      },
+    };
+    await captureSalientFromTurn(
+      deps,
+      { content: "Ich nutze PostgreSQL 16. Ich trinke gern Tee.", memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "ok",
+    );
+
+    expect([...liveBodies(vault, ctx)].sort()).toEqual([
+      "Ich nutze PostgreSQL 14",
+      "Ich trinke gern Tee",
+    ]);
+    expect(recordsWith(vault, ctx, "superseded")).toEqual([]);
+    expect(failures).toBe(1);
+  });
 });
 
 describe("learning leaves body-free evidence", () => {

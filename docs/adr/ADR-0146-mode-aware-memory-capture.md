@@ -176,7 +176,9 @@ learning, so D2's mapping does not hold it. It needs no model, no approval and n
 candidate through the same promotion lever as D4 in every mode; D3's hard denials stay first, so a
 credential is refused and a sensitive body keeps its approval. An instruction to drop the assistant's
 rules is refused as `instruction-override` on every capture path, because it would reach each later
-answer as a fact; an ordinary wish about how to answer stays a memory. Everything learned from natural
+answer as a fact; besides the shared fixed phrases, a sentence that asks to ignore, bypass or
+override the rules counts ("dass du ab jetzt deine Regeln ignorierst"). An ordinary wish about how
+to answer stays a memory. Everything learned from natural
 conversation stays under D2. Capture-from-conversation remains a review surface and also stays under D2.
 Such a statement lands in the private user scope unless it names a project or workspace, and the
 learner does not read its turn, so it cannot store the statement itself.
@@ -185,8 +187,10 @@ Only a clear statement acts this way, because it changes memory with no question
 "Remember" count, "Speichere" and "Notiere" only with "dass" or a colon, and "Lösche" only with
 "die Erinnerung an". "Speichere die Datei" and "Lösche den Cache" are tasks and never reach a memory.
 A negation ("Merke dir nicht", "Vergiss den Bericht nicht"), a question, and the idioms "Vergiss es"
-and "Forget it" state nothing to store or forget. A named forget reaches a memory only through the
-same word or an inflection of it, so "Java" does not reach "JavaScript".
+and "Forget it" state nothing to store or forget. A named thing whose sentence goes on with a verb
+("Vergiss den alten API-Pfad, nimm den neuen") is an instruction for the task and forgets nothing. A
+named forget reaches a memory only through the same word or an inflection of it, so "Java" does not
+reach "JavaScript".
 
 Saying a statement again confirms the existing memory through `recordAccess`, naming the chat,
 instead of storing a second record: in the same words without an embedder, and as a paraphrase through the existing
@@ -258,9 +262,11 @@ D2 lets a fact through.
   …", "Mir wurde gesagt, …", "Das hat mir mein Chef gesagt") is never the person's own statement;
   markers such as "laut Anna", "angeblich" or "according to" count wherever they frame the claim.
   The clause is not a question, request, quotation, hypothesis, irony, hedge ("Ich glaube, …"),
-  denial or past statement. Tense and pronouns are judged on the claim itself, not on its reason or
-  condition, so "Ich nutze Tabellen, weil sie übersichtlich sind" stands; a decision, switch or
-  migration made in the past holds now.
+  denial or past statement, and not material the person passes on: a line quoted with ">", or
+  anything after a lead-in that names pasted material ("Hier die Mail von Anna:"), a mail header
+  ("Fwd:") or work on a text ("Übersetze:"). Tense and pronouns are judged on the claim itself, not
+  on its reason or condition, so "Ich nutze Tabellen, weil sie übersichtlich sind" stands; a
+  decision, switch or migration made in the past holds now.
   The fact is about the person: labelled `self`, with a first-person word, and naming no one else:
   a titled person, a relation behind a possessive or genitive, a family word, a role a determiner
   points at ("dem Kunden", but not "mit Kunden" or "die Kunden-Tickets"), a partner, another
@@ -300,7 +306,9 @@ D2 lets a fact through.
   asks for approval, the new fact waits as a `correction` with its `corrects` edge, written in the
   same single transaction. A learned fact replaces only what Keiko learned in the person's own scope:
   a clear statement (D4b) and anything outside that scope are fixed, so a learned fact never
-  overwrites them. A newer clear statement replaces an older learned fact.
+  overwrites them. A newer clear statement replaces an older learned fact, and a learned fact the
+  person rewrites is their own statement from then on. When another turn changed the older fact in
+  between, only that replacement is refused; the turn's other facts still settle.
 - **Reinforcement.** Only the person strengthens a memory: saying it again records a confirmation.
   An answer that repeats a memory records a use for "Vergiss das" and never a reinforcement, so a
   false memory cannot entrench itself by being repeated back.

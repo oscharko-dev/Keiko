@@ -4076,6 +4076,8 @@ export interface CanonicalTurnMemoryRequest {
   readonly messages: readonly CanonicalTurnMemoryMessage[];
   readonly modelId: string | undefined;
   readonly memory: ParsedConversationMemoryRequest | undefined;
+  // The stored id of the request's one user message, when the caller committed it.
+  readonly sourceMessageId?: string | undefined;
 }
 
 function canonicalTurnCombinedText(messages: readonly CanonicalTurnMemoryMessage[]): string {
@@ -4291,13 +4293,18 @@ function canonicalTurnSaliencePairs(
   return pairs;
 }
 
-// The stored row of the person's turn, so a fact learned from a grounded turn names its source like
-// any other learned fact.
+// The stored row of the person's turn, so a fact learned from a canonical turn names its source like
+// any other learned fact. A committed id the caller passes wins: a repeated sentence has many rows.
 function sourceMessageOf(
   deps: UiHandlerDeps,
+  request: CanonicalTurnMemoryRequest,
   content: string,
   conversationId: string,
 ): { readonly sourceMessageId?: string } {
+  const users = request.messages.filter((message) => message.role === "user");
+  if (request.sourceMessageId !== undefined && users.length === 1) {
+    return { sourceMessageId: request.sourceMessageId };
+  }
   const messages = deps.store.listMessages(conversationId);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const row = messages[index];
@@ -4322,7 +4329,7 @@ function scheduleCanonicalTurnSalienceCapture(
       {
         content: pair.userText,
         memory: request.memory,
-        ...sourceMessageOf(deps, pair.userText, context.conversationId),
+        ...sourceMessageOf(deps, request, pair.userText, context.conversationId),
       },
       context,
       modelId,
