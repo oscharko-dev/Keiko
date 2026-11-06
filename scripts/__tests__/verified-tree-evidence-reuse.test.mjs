@@ -370,7 +370,7 @@ describe("complete Node 26 qualification shards", () => {
   it("retains both mandatory shards, limits and every qualification step", () => {
     const job = jobs["node-26-compatibility"];
     expect(job.strategy).toEqual({ "fail-fast": false, matrix: { shard: [1, 2] } });
-    expect(job["timeout-minutes"]).toBe(45);
+    expect(job["timeout-minutes"]).toBe(60);
     expect(job["continue-on-error"]).toBeUndefined();
     const runs = job.steps.filter((step) => typeof step.run === "string").map((step) => step.run);
     expect(runs).toEqual([

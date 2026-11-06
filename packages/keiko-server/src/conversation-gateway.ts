@@ -32,14 +32,26 @@ export function gatewayMessagesForToolExchange(
     effect: "unknown",
   };
   return [
-    { role: "assistant", content: "", toolCalls: [exchange.call] },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        { id: exchange.call.id, name: exchange.call.name, arguments: exchange.call.arguments },
+      ],
+    },
     {
       role: "tool",
       toolCallId: exchange.call.id,
       content: JSON.stringify(
         exchange.mutationOutcome === undefined
           ? result
-          : { result, mutationOutcome: exchange.mutationOutcome },
+          : {
+              result,
+              mutationOutcome: exchange.mutationOutcome,
+              ...(exchange.draftProgress === undefined
+                ? {}
+                : { draftProgress: exchange.draftProgress }),
+            },
       ),
     },
   ];
@@ -107,7 +119,7 @@ function messageForGateway(message: ChatMessage): GatewayConversationTurn | null
     content:
       verbatim === undefined
         ? content
-        : `${content}\n\n[Untrusted tool observations]\n${JSON.stringify(verbatim.filter((entry) => entry.toolCalls !== undefined || entry.role === "tool"))}`,
+        : `${content}\n\n[Untrusted tool observations]\n${JSON.stringify(message.toolTranscript?.exchanges.flatMap(gatewayMessagesForToolExchange))}`,
     ...(verbatim === undefined ? {} : { verbatim }),
   };
 }

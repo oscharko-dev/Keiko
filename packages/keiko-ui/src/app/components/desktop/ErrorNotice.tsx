@@ -10,6 +10,8 @@ import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { bffCodeErrorKind, bffRequestErrorKind } from "@/lib/http";
 import type { ClientOnlySupportReportInput } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import styles from "./ErrorNotice.module.css";
+import actionStyles from "./SupportReportButton.module.css";
+import { requestModelSettings } from "./widgets/panels/settingsPanelEvents";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CloseIcon = Icons.close;
@@ -133,6 +135,13 @@ function ErrorNotice({
           }}
         />
       </div>
+      {notice.code === "CONVERSATION_MODEL_NOT_READY" ? (
+        <span className={actionStyles.cmpControl}>
+          <button type="button" className={actionStyles.cmpAction} onClick={requestModelSettings}>
+            {t("chat.error.modelNotReady.action")}
+          </button>
+        </span>
+      ) : null}
       <ErrorNoticeReportAction notice={notice} noticeKey={noticeKey} failure={failure} />
     </div>
   );

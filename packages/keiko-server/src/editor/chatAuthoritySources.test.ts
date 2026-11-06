@@ -28,6 +28,27 @@ function sources(): readonly ChatToolAuthorityEnvelope[] {
     },
   ];
 }
+function localAndExternalSources(): readonly [
+  ChatToolAuthorityEnvelope,
+  ChatToolAuthorityEnvelope,
+] {
+  const [jira, mcp] = sources();
+  if (jira === undefined || mcp === undefined) throw new Error("Missing source fixture");
+  return [
+    {
+      ...jira,
+      subject: {
+        kind: "knowledge-pods",
+        actorDigest: jira.subject.actorDigest,
+        chatId: jira.subject.chatId,
+        configurationDigest: "f".repeat(64),
+      },
+      actionClasses: ["connector-access"],
+      connectorScopes: ["knowledge.read"],
+    },
+    mcp,
+  ];
+}
 function register(
   registry: EditorAgentAuthorityRegistry,
   values = sources(),
@@ -138,5 +159,67 @@ describe("one accepted Chat turn with both source authorities", () => {
         reason: "revoked",
       });
     }
+  });
+});
+
+describe("local Knowledge with external MCP source authority", () => {
+  it("retains distinct source capabilities while sharing the accepted turn budget", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const values = localAndExternalSources();
+    const refs = register(registry, values);
+    for (const [index, ref] of refs.entries()) {
+      const value = values[index];
+      if (value === undefined) throw new Error("Missing source fixture");
+      expect(registry.resolveChat(ref, value.subject, "autonomous-delivery", NOW)).toMatchObject({
+        ok: true,
+        envelope: { actionClasses: value.actionClasses, connectorScopes: value.connectorScopes },
+      });
+    }
+    const reserve = (index: 0 | 1, toolCalls: number, promptTokens: number): boolean => {
+      const ref = refs[index];
+      if (ref === undefined) throw new Error("Missing source reference");
+      return registry.reserveForChat(
+        ref,
+        values[index].subject,
+        "autonomous-delivery",
+        { toolCalls, promptTokens, patchBytes: 0 },
+        NOW,
+      ).ok;
+    };
+    expect(reserve(0, 19, 9_999)).toBe(true);
+    expect(reserve(1, 2, 0)).toBe(false);
+    expect(reserve(1, 1, 1)).toBe(true);
+    expect(reserve(0, 1, 0)).toBe(false);
+    expect(reserve(1, 0, 1)).toBe(false);
+  });
+
+  it.each([
+    { actionClasses: ["connector-access", "network-egress"] as const },
+    { connectorScopes: ["mcp.tools"] as const },
+    { requestedMode: "governed-assist", effectiveMode: "governed-assist" },
+    {
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 21, maxPromptTokens: 10_000, maxPatchBytes: 0 },
+    },
+  ])("refuses a widened or mismatched Knowledge source atomically: %j", (patch) => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const [knowledge, mcp] = localAndExternalSources();
+    expect(
+      registry.registerChatSources([{ ...knowledge, ...patch }, mcp], "autonomous-delivery", NOW)
+        .ok,
+    ).toBe(false);
+    expect(registry.registerChat(mcp, "autonomous-delivery", NOW).ok).toBe(true);
+  });
+
+  it("refuses an external source missing network egress authority", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const [knowledge, mcp] = localAndExternalSources();
+    expect(
+      registry.registerChatSources(
+        [knowledge, { ...mcp, actionClasses: ["connector-access"] }],
+        "autonomous-delivery",
+        NOW,
+      ).ok,
+    ).toBe(false);
+    expect(registry.registerChat(knowledge, "autonomous-delivery", NOW).ok).toBe(true);
   });
 });

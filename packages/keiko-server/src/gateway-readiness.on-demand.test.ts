@@ -56,10 +56,17 @@ function holderWith(
 }
 
 describe("ensureOnDemandConversationReadiness guards", () => {
-  // Interactive Chat adds no readiness request for a model it cannot date: the observation here
-  // carries a malformed timestamp. A WELL-FORMED failed observation older than the cooldown earns
-  // one re-probe from the first request that needs the model — pinned, with its bounds, in
-  // gateway-readiness.initialization.test.ts (ADR-0171 D2).
+  it("does not probe a previously failed model when opening or sending a chat", async () => {
+    freezeNow();
+    const { deps, fetchCalls } = probeableDeps(new Date(NOW - 86_400_000).toISOString(), {
+      conversationReady: false,
+    });
+    await awaitInitializedConversationReadiness(deps, "chat-model");
+    await awaitAnyInitializedConversationReadyChatModel(deps, "chat-model");
+    expect(fetchCalls()).toBe(0);
+  });
+
+  // Conversation requests consume observations without probing, including malformed timestamps.
   it("does not start probes from conversation requests with unknown or malformed observations", async () => {
     const { deps, fetchCalls } = probeableDeps("invalid");
     await awaitInitializedConversationReadiness(deps, "chat-model");
@@ -423,10 +430,10 @@ describe("on-demand readiness correlation", () => {
   });
 });
 
-// A model starts with no observation; its one startup check fails, and a later request heals it.
-describe("startup check and request-time recovery", () => {
+// A failed startup result remains cached until explicit verification or connection replacement.
+describe("startup check without request-time recovery", () => {
   it.each([429, 500, 503])(
-    "heals a startup HTTP %i through the conversation guard without per-question probes",
+    "retains a startup HTTP %i result without per-question probes",
     async (status) => {
       vi.useFakeTimers();
       const { deps, readyRecords } = probeableDeps("invalid", {});
@@ -453,8 +460,8 @@ describe("startup check and request-time recovery", () => {
         "chat-model",
         "corr-recovered-question",
       );
-      expect(readyRecords().at(-1)).toBe(true);
-      expect(fetch.mock.calls.length).toBeGreaterThan(initialCalls);
+      expect(readyRecords().at(-1)).toBe(false);
+      expect(fetch).toHaveBeenCalledTimes(initialCalls);
       const recoveredCalls = fetch.mock.calls.length;
       await awaitAnyInitializedConversationReadyChatModel(recovering, "chat-model");
       expect(fetch).toHaveBeenCalledTimes(recoveredCalls);

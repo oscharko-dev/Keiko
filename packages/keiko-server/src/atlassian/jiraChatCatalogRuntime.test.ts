@@ -12,6 +12,7 @@ import {
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import * as managedProvider from "../tool-catalog/managedProviderCatalog.js";
 import { createJiraChatCatalogRuntime, untracedAdvisory } from "./jiraChatCatalogRuntime.js";
+import { KNOWLEDGE_CHAT_TOOLS } from "../requirementsToolName.js";
 
 const cleanups: (() => Promise<void>)[] = [];
 function releaseGate(): { promise: Promise<void>; release: () => void } {
@@ -65,9 +66,9 @@ describe("application-owned Jira catalog initialization", () => {
     await expect(f.runtime.get()).rejects.toMatchObject({ reason: "log-unavailable" });
     const [first, second] = await Promise.all([f.runtime.get(), f.runtime.get()]);
     expect(second).toBe(first);
-    // Every Jira action plus the one knowledge.requirements read (#4179).
+    // Every Jira action plus the shared Knowledge document/requirement/review tools.
     expect(first.catalog.descriptors).toHaveLength(
-      Object.keys(JIRA_MANAGED_ACTION_TYPES).length + 1,
+      Object.keys(JIRA_MANAGED_ACTION_TYPES).length + KNOWLEDGE_CHAT_TOOLS.length,
     );
     expect(f.record).toHaveBeenCalledOnce();
     expect(JSON.stringify(f.record.mock.calls)).not.toContain("synthetic-private-sink-failure");

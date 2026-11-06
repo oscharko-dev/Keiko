@@ -20,6 +20,37 @@ const PARTIAL: JiraMutationAttempt = {
   links: LINKS,
 };
 
+describe("internal description formatting evidence", () => {
+  it.each([true, false])(
+    "keeps bounded counts internally and omits them from the model result (ok=%s)",
+    (ok) => {
+      const attempt: JiraMutationAttempt = ok
+        ? {
+            ok: true,
+            receipt: { issueKey: "SYN-1", issueId: "10001" },
+            descriptionConvertedHeadingCount: 3,
+          }
+        : { ok: false, reason: "not-found", descriptionConvertedHeadingCount: 3 };
+      const valid = validJiraMutationAttempt(attempt, "jira.create");
+      expect(valid.descriptionConvertedHeadingCount).toBe(3);
+      expect(jiraAttemptToolResult(ok ? "succeeded" : "rejected", valid).data).not.toHaveProperty(
+        "descriptionConvertedHeadingCount",
+      );
+    },
+  );
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 32769])(
+    "drops inadmissible count %s",
+    (count) => {
+      const valid = validJiraMutationAttempt(
+        { ok: false, reason: "not-found", descriptionConvertedHeadingCount: count },
+        "jira.create",
+      );
+      expect(valid).not.toHaveProperty("descriptionConvertedHeadingCount");
+    },
+  );
+});
+
 describe("a partial link effect (#4176)", () => {
   it("is kept by validation: the issue that exists and the links that are missing", () => {
     expect(validJiraMutationAttempt(PARTIAL, "jira.create")).toEqual(PARTIAL);

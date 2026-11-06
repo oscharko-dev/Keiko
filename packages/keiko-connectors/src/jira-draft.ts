@@ -5,6 +5,7 @@
 
 import {
   JIRA_FIELD_ID_PATTERN,
+  JIRA_REQUIREMENT_REFERENCE_CHARS_MAX,
   isJiraDraftRef,
   isSafeAtlassianIdentifier,
   type AtlassianConnectorWriteFailureReason,
@@ -170,7 +171,7 @@ function itemFields(
     ? undefined
     : fields;
 }
-const REQUIREMENT_ID_PATTERN = /^[A-Za-z0-9._:/-]{1,80}$/u;
+const REQUIREMENT_ID_PATTERN = /^[A-Za-z0-9._:/-]+$/u;
 /** Up to {@link JIRA_REQUIREMENT_IDS_MAX} plain reference strings; `undefined` when malformed. */
 export function parseRequirementIds(value: unknown): readonly string[] | null | undefined {
   if (value === undefined) return null;
@@ -179,7 +180,12 @@ export function parseRequirementIds(value: unknown): readonly string[] | null | 
     list === undefined ||
     list.length === 0 ||
     list.length > JIRA_REQUIREMENT_IDS_MAX ||
-    !list.every((entry) => typeof entry === "string" && REQUIREMENT_ID_PATTERN.test(entry))
+    !list.every(
+      (entry) =>
+        typeof entry === "string" &&
+        entry.length <= JIRA_REQUIREMENT_REFERENCE_CHARS_MAX &&
+        REQUIREMENT_ID_PATTERN.test(entry),
+    )
   )
     return undefined;
   return list as readonly string[];

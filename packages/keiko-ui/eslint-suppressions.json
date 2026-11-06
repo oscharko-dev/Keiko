@@ -1636,9 +1636,6 @@
     }
   },
   "src/app/local-knowledge/[capsuleId]/capsule-detail-state.ts": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 1
-    },
     "max-lines-per-function": {
       "count": 1
     }
@@ -1708,7 +1705,7 @@
       "count": 2
     },
     "max-lines-per-function": {
-      "count": 9
+      "count": 7
     }
   },
   "src/app/local-knowledge/html-manual-pod-refresh.tsx": {

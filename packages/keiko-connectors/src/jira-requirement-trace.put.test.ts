@@ -95,6 +95,52 @@ function jira(
   };
 }
 
+describe("explicit Markdown description in a traced edit", () => {
+  it("serializes before adding the footer without changing the submitted wrapper", async () => {
+    const stored: Stored = { fields: { summary: "old", labels: [], description: "Old text" } };
+    const remote = jira(stored);
+    const description = Object.freeze({
+      format: "markdown",
+      text: "## Requirement\nExact body\n## Source\n> Exact quote",
+    });
+    const before = JSON.stringify(description);
+    const result = await remote.edit({ fields: { description } }, trace());
+    expect(result).toMatchObject({ ok: true, descriptionConvertedHeadingCount: 2 });
+    expect(remote.puts()).toHaveLength(1);
+    expect(stored.fields.description).toBe(
+      `h2. Requirement\nExact body\nh2. Source\n> Exact quote\n\n${block("NEW")}`,
+    );
+    expect(JSON.stringify(description)).toBe(before);
+  });
+
+  it("preserves native ordered lists without conversion evidence", async () => {
+    const stored: Stored = { fields: { summary: "old", labels: [], description: "Old text" } };
+    const remote = jira(stored);
+    const description = "# criterion one\n# criterion two\n## nested criterion";
+    const result = await remote.edit({ fields: { description } }, trace());
+    expect(result.ok).toBe(true);
+    expect(result).not.toHaveProperty("descriptionConvertedHeadingCount");
+    expect(stored.fields.description).toBe(`${description}\n\n${block("NEW")}`);
+  });
+
+  it.each([
+    { format: "markdown", text: "## Requirement\nBody", extra: true },
+    { format: "markdown", text: "x".repeat(32768) },
+  ])(
+    "refuses an invalid wrapper or a final footer beyond the field bound before PUT",
+    async (description) => {
+      const stored: Stored = { fields: { summary: "old", labels: [], description: "Old text" } };
+      const remote = jira(stored);
+      expect(await remote.edit({ fields: { description } }, trace())).toMatchObject({
+        ok: false,
+        reason: "field-validation",
+      });
+      expect(remote.puts()).toHaveLength(0);
+      expect(stored.fields.description).toBe("Old text");
+    },
+  );
+});
+
 describe("human description text survives a traced edit (#4179 review)", () => {
   it("keeps the paragraphs written before and after the earlier footer on a summary-only edit", async () => {
     const before = "Ziel des Epics.";

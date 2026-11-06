@@ -149,6 +149,22 @@ redeems the attestation. Other tabs in the same browser profile then observe the
 After a server restart the same action reconnects; `dev:start` can also request this handoff from an
 already running server without restarting it or recovering its private secret.
 
+A mutation refused with HTTP 401, or HTTP 403 carrying `DENIED`, `FORBIDDEN` or `UNAUTHORIZED`,
+requests a fresh browser-session inspection through the existing notification port. For a 404,
+`NOT_FOUND` triggers inspection only on the session-concealing skill-library, Chat skill-selection,
+private-draft and run-control routes; per-run Coding runtime mutations use
+`CODING_RUNTIME_RUN_NOT_FOUND`. An ordinary missing Chat or Pod does not invalidate the held session
+inspection. A 404 alone never proves missing session authority or a missing resource.
+
+Requests join one inspection notification in flight and publish at most once every five seconds,
+including its diagnostic. The banner follows a fresh authoritative inventory read. The original
+refusal is preserved and no mutation is replayed. Follow-up GET/HEAD reads never publish another
+notification, so an unpaired skill or draft read cannot cause a refresh loop. The core API transport
+uses this notification for the closed trigger set above, including `403 DENIED`; the shared satellite
+HTTP transport instead keeps `403 DENIED` on its existing bounded session-confirmation and read-only
+repair/replay path. Diagnostic delivery opts out of both mechanisms and counts its own refusals
+without recursively reporting them through the failing transport.
+
 The destination is an exact HTTP loopback origin on the server-owned public UI port; no supplied
 URL, path, executable, principal or additional arguments are admitted. Browser selection uses a
 closed target list and fixed native application identifiers/commands with no shell. Calls are

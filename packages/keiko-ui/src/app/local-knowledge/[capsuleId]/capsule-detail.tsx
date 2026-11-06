@@ -63,7 +63,7 @@ function htmlManualSourceIdOf(
   tags: readonly string[],
   sources: readonly SourceIndexStats[],
 ): string | undefined {
-  const isManual = parseHtmlManualSourceTagMetadata(tags) !== undefined;
+  const isManual = parseHtmlManualSourceTagMetadata(tags).sourceKind !== undefined;
   return isManual ? sources[0]?.sourceId : undefined;
 }
 
@@ -1687,6 +1687,7 @@ export function CapsuleDetail({
           and action buttons no longer compete with the H1 inside the
           .lk-header flex row (uiux-fix F033, C104). */}
       <CapsuleActions
+        key={capsuleId}
         capsuleId={capsuleId}
         capsuleDisplayName={data.capsule.displayName}
         sourceCount={data.sources.length}

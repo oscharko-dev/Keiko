@@ -27,6 +27,7 @@ import { jiraFailureDetailData, jiraMutationToolResult } from "./jiraMutationRes
 import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
 import { draftRefusalData, readableChatDraft } from "./jiraChatDraftArguments.js";
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
+import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import {
   jiraIssueTemplateSource,
   recordJiraFieldRefusal,
@@ -53,6 +54,13 @@ export interface JiraChatTemplatePreflightPorts {
   readonly writeArguments: (action: JiraChatCatalogAction) => CatalogJsonObject | undefined;
   /** The read grant the dry run's GET requests depend on is still current. */
   readonly readAllowed: (action: JiraChatCatalogAction) => boolean;
+  /** Checks immutable source criteria before a human reviews the unchanged draft. */
+  readonly draftRequirements?:
+    | ((
+        draftArguments: CatalogJsonObject,
+        context: JiraChatCatalogContext,
+      ) => { readonly data: CatalogJsonObject; readonly violationCount: number } | undefined)
+    | undefined;
   /** Asks a draft that names no requirement to name them before a human reviews it. */
   readonly untracedAdvice?:
     | ((
@@ -248,6 +256,29 @@ function templateDraftRefusal(
  * be runnable (every relation known, no cycle, within the resource bound), and every item must pass
  * what its creation will check. The refusal is the structured result the model corrects.
  */
+function draftSourceRefusal(
+  ports: JiraChatTemplatePreflightPorts,
+  action: JiraChatCatalogAction,
+  context: JiraChatCatalogContext,
+  draft: ReturnType<typeof readableChatDraft>,
+): ReturnType<NonNullable<JiraChatTemplatePreflightPorts["draftRequirements"]>> {
+  if (!draft.ok || ports.draftRequirements === undefined) return undefined;
+  context.signal.throwIfAborted();
+  requireDispatch(ports.readAllowed(action), "denied", "effect-denied");
+  return ports.draftRequirements(draft.arguments, context);
+}
+
+async function draftValidationRefusal(
+  ports: JiraChatTemplatePreflightPorts,
+  action: JiraChatCatalogAction,
+  context: JiraChatCatalogContext,
+  draft: ReturnType<typeof readableChatDraft>,
+): Promise<DraftItemsRefusal | undefined> {
+  const requirements = draftSourceRefusal(ports, action, context, draft);
+  if (requirements !== undefined) return { reason: "invalid-fields", ...requirements };
+  return draft.ok ? draftItemsRefusal(ports, action, context, draft.arguments) : undefined;
+}
+
 async function draftPreflight(
   ports: JiraChatTemplatePreflightPorts,
   action: JiraChatCatalogAction,
@@ -258,9 +289,7 @@ async function draftPreflight(
   const startedAt = Date.now();
   const { jiraDraftStore } = ports.deps;
   const draft = readableChatDraft(jiraDraftStore, context.chatId, args);
-  const refusal = draft.ok
-    ? await draftItemsRefusal(ports, action, context, draft.arguments)
-    : undefined;
+  const refusal = await draftValidationRefusal(ports, action, context, draft);
   // The advice records its own refusal, so this draft is not also logged as submitted.
   const advice = untracedAdviceOf(ports, draft, refusal !== undefined, context);
   if (advice !== undefined) return advice;

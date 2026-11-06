@@ -257,6 +257,21 @@ async function discardBody(response: Response): Promise<void> {
   }
 }
 
+// Jira can accept an invalid PAT as an anonymous read and return 200 with an empty collection
+// (JRASERVER-78126). These ports always send credentials: anonymous success is an auth refusal.
+// Apply only to reads; never erase the observed outcome of an already dispatched mutation.
+async function authenticatedReadResponse(method: string, response: Response): Promise<Response> {
+  if (
+    method === "GET" &&
+    response.ok &&
+    response.headers.get("x-ausername")?.trim().toLowerCase() === "anonymous"
+  ) {
+    await discardBody(response);
+    return new Response(null, { status: 401 });
+  }
+  return response;
+}
+
 function atlassianPortBaseUrl(baseUrl: string): URL {
   if (!isSafeAtlassianConnectorBaseUrl(baseUrl)) {
     throw new AtlassianCredentialCustodyError("invalid-input", [
@@ -281,7 +296,7 @@ export function createGatewayAtlassianHttpPort(
     try {
       const egress = await connectorEgressConfig(options, base, signal);
       if (egress === undefined) return { kind: "network-error" };
-      const response = await gatewayFetch(target.toString(), {
+      const upstream = await gatewayFetch(target.toString(), {
         method: request.method,
         prepareHeaders: lifecycle.prepareHeaders,
         signal,
@@ -290,6 +305,7 @@ export function createGatewayAtlassianHttpPort(
         logContext: { correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       });
+      const response = await authenticatedReadResponse(request.method, upstream);
       await lifecycle.observe(response);
       await discardBody(response);
       return { kind: "response", status: response.status };
@@ -417,7 +433,7 @@ export function createGatewayAtlassianHttpBodyPort(
     try {
       const egress = await connectorEgressConfig(options, base, signal);
       if (egress === undefined) return { kind: "network-error" };
-      const response = await gatewayFetch(target.toString(), {
+      const upstream = await gatewayFetch(target.toString(), {
         method: request.method,
         prepareHeaders: lifecycle.prepareHeaders,
         singleAttempt: request.method !== "GET",
@@ -428,6 +444,7 @@ export function createGatewayAtlassianHttpBodyPort(
         logContext: { correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       });
+      const response = await authenticatedReadResponse(request.method, upstream);
       await lifecycle.observe(response);
       const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());
       const body = await readBodyBounded(response, request.maxBodyBytes);

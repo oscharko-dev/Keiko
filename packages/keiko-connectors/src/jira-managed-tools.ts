@@ -16,6 +16,7 @@ import {
   isSafeAtlassianIdentifier,
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
+  JIRA_DESCRIPTION_INPUT_SCHEMA,
   type JiraManagedReadToolName,
   type JiraMutationOperation,
   type JiraMutationAttempt,
@@ -47,6 +48,7 @@ import { executeJiraDraftStageTool, type JiraDraftToolDeps } from "./jira-draft-
 import { createJiraReportStore } from "./jira-report-store.js";
 import { executeJiraReportTool, type JiraReportToolDeps } from "./jira-report-tool.js";
 import type { JiraTraceRequest } from "./jira-requirement-trace.js";
+import { withCreateTemplateMetadata } from "./jira-create-template-metadata.js";
 
 const ARRAY_READ_NAMES: ReadonlySet<string> = new Set(["jira.projects", "jira.assignable-users"]);
 const ISSUE_READ_NAMES: ReadonlySet<string> = new Set([
@@ -206,22 +208,47 @@ function metadataPath(
   allowed.add("issueTypeId");
   return `${path}/${args.issueTypeId}`;
 }
-function metadataResult(
+function objectReadResult(
   name: JiraManagedReadToolName,
   body: Record<string, unknown>,
   selected: ReadSelection,
+  baseUrl: string,
 ): ManagedMcpToolResult {
   const { startAt, maxResults } = selected;
+  if (ISSUE_READ_NAMES.has(name))
+    return jiraIssueReadResult(name, baseUrl, body, startAt, maxResults, selected.fields);
   if (name === "jira.transitions") return jiraTransitionsResult(body, startAt, maxResults);
   if (name === "jira.edit-fields") {
     const items = editMetadataItems(body.fields);
     return items === undefined
       ? failure("malformed-payload")
-      : localJiraPage(items, startAt, maxResults);
+      : localJiraPage(descriptionMetadataItems(items), startAt, maxResults);
   }
   if (name === "jira.issue-types")
     return remoteJiraPage(body, issueTypeItems(body.values), startAt, maxResults);
-  return withDraftPointer(remoteJiraPage(body, metadataItems(body.values), startAt, maxResults));
+  return withDraftPointer(
+    remoteJiraPage(body, createMetadataItems(body.values), startAt, maxResults),
+  );
+}
+
+/** Machine-readable provenance for new Markdown; legacy strings remain native wiki verbatim. */
+function createMetadataItems(value: unknown): readonly CatalogJsonObject[] | undefined {
+  const items = metadataItems(value);
+  return items === undefined ? undefined : descriptionMetadataItems(items);
+}
+function descriptionMetadataItems(
+  items: readonly CatalogJsonObject[],
+): readonly CatalogJsonObject[] {
+  return items.map((item) =>
+    item.id === "description"
+      ? {
+          ...item,
+          inputSchema: structuredClone(JIRA_DESCRIPTION_INPUT_SCHEMA),
+          nativeFormat: "jira-wiki",
+          markdownSerialization: "headings-only",
+        }
+      : item,
+  );
 }
 // A model reads create fields right before it creates. Several issues created one by one ask the
 // human once each; one jira.draft asks once (S05 of epic #4173: three epics, three approvals). A
@@ -229,7 +256,7 @@ function metadataResult(
 // added by three edits), and a description written as a JSON object loses its sections (S05, Gemma).
 const DRAFT_POINTER = Object.freeze({
   tool: "jira.draft",
-  use: "Put several new issues in one jira.draft, each with every field it needs, labels included: the human approves it once, while each jira.create or jira.edit asks again. Write a description as text, each section starting h2. Title; never JSON or HTML.",
+  use: "Put several new issues in one jira.draft, each with every field it needs, labels included: the human approves it once, while each jira.create or jira.edit asks again. Use the description field's inputSchema; native text uses h2. Title for section headings.",
 });
 function withDraftPointer(result: ManagedMcpToolResult): ManagedMcpToolResult {
   return result.data.outcome === "succeeded"
@@ -255,7 +282,8 @@ async function read<Context extends ManagedMcpInvocationContext>(
 ): Promise<ManagedMcpToolResult> {
   const selected = selection(name, args);
   if (selected === undefined) return failure("invalid-input");
-  const { deployment, baseUrl, http } = await connection(context);
+  const connected = await connection(context);
+  const { deployment, baseUrl, http } = connected;
   if (deployment !== "data-center") return failure("unsupported-deployment");
   const url = atlassianApiUrl(atlassianApiEndpointsFor(baseUrl, "/rest/api/2/"), selected.path);
   const outcome = await executeAtlassianWriteRequest(
@@ -275,9 +303,11 @@ async function read<Context extends ManagedMcpInvocationContext>(
       withIssueLink(arrayResult(name, outcome.items, startAt, maxResults), baseUrl, args.issueKey),
     );
   if (outcome.body === undefined) return failure("malformed-payload");
-  const result = ISSUE_READ_NAMES.has(name)
-    ? jiraIssueReadResult(name, baseUrl, outcome.body, startAt, maxResults, selected.fields)
-    : metadataResult(name, outcome.body, selected);
+  const projected = objectReadResult(name, outcome.body, selected, baseUrl);
+  const result =
+    name === "jira.create-fields"
+      ? await withCreateTemplateMetadata(projected, args, context, connected)
+      : projected;
   return boundJiraReadResult(
     name === "jira.issue" || name === "jira.search"
       ? result

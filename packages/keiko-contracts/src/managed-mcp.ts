@@ -46,6 +46,14 @@ export interface ManagedMcpToolDeclaration {
   /** Descriptive protocol hint; the server-owned action/authority port remains authoritative. */
   readonly risk: "read" | "write";
   readonly descriptor: ToolDescriptor;
+  /** Human-readable protocol metadata; hints never replace descriptor-owned authority. */
+  readonly title?: string | undefined;
+  readonly annotations?:
+    | {
+        readonly openWorldHint?: boolean | undefined;
+        readonly idempotentHint?: boolean | undefined;
+      }
+    | undefined;
 }
 
 export interface ManagedMcpTool<

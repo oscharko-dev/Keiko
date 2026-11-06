@@ -11,6 +11,7 @@ import {
 import {
   jiraTemplateViolationGuidance,
   type AtlassianHttpBodyPort,
+  type JiraTraceRequest,
 } from "@oscharko-dev/keiko-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
@@ -182,6 +183,7 @@ describe("the model-facing refusal", () => {
 function journalFixture(): {
   journal: ReturnType<typeof createChatToolMutationStore>;
   intent: JiraChatToolMutationIntent;
+  mutationLog: ReturnType<typeof createBufferedServerLogSink>;
 } {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON");
@@ -204,8 +206,10 @@ function journalFixture(): {
   });
   if (turn.kind !== "admitted" || turn.userMessage.canonicalTurnRef === undefined)
     throw new Error("Expected turn");
+  const mutationLog = createBufferedServerLogSink();
   return {
-    journal: createChatToolMutationStore(db, () => 1000, createBufferedServerLogSink()),
+    journal: createChatToolMutationStore(db, () => 1000, mutationLog),
+    mutationLog,
     intent: {
       invocationId: "invocation-one",
       chatId: chat.id,
@@ -294,8 +298,22 @@ describe("the template source", () => {
     };
     upload(TEMPLATE);
     upload("# Ordinary skill\nSay keiko: jira-issue-template in prose.\n");
+    const story = store.markdownSkills.list().find((skill) => skill.name === "Story");
+    if (story === undefined) throw new TypeError("Missing stored template");
+    const templateMatcher: unknown = expect.objectContaining({
+      project: "SYN",
+      issueType: "Story",
+    });
     expect(jiraIssueTemplateSource(store)()).toEqual({
       templates: [expect.objectContaining({ project: "SYN", issueType: "Story" })],
+      references: [
+        expect.objectContaining({
+          template: templateMatcher,
+          id: story.id,
+          revision: story.revision,
+          digest: story.digest,
+        }),
+      ],
       unreadable: 0,
       unreadableNames: [],
     });
@@ -307,6 +325,7 @@ describe("the template source", () => {
     expect(parseJiraIssueTemplate(stale).ok).toBe(false);
     expect(jiraIssueTemplateSource(store)()).toEqual({
       templates: [],
+      references: [],
       unreadable: 1,
       unreadableNames: ["Story"],
     });
@@ -371,6 +390,9 @@ describe("the dry run before approval", () => {
       readonly fields?: readonly unknown[];
       readonly existing?: readonly unknown[];
       readonly metadataFails?: boolean;
+      readonly draftRequirements?: JiraChatTemplatePreflightPorts["draftRequirements"];
+      readonly readAllowed?: boolean;
+      readonly signal?: AbortSignal;
       readonly untracedAdvice?: JiraChatTemplatePreflightPorts["untracedAdvice"];
     } = {},
   ): {
@@ -420,7 +442,8 @@ describe("the dry run before approval", () => {
         atlassianConnectorCredentials: { httpBodyPortFactory: () => http },
       } as never,
       writeArguments: () => args as never,
-      readAllowed: () => true,
+      readAllowed: () => jira.readAllowed ?? true,
+      draftRequirements: jira.draftRequirements,
       untracedAdvice: jira.untracedAdvice,
     });
     return {
@@ -430,7 +453,7 @@ describe("the dry run before approval", () => {
           chatId: "chat",
           correlationId: "preflight-1",
           authorityReference: {},
-          signal: new AbortController().signal,
+          signal: jira.signal ?? new AbortController().signal,
         } as never),
     };
   }
@@ -455,7 +478,7 @@ describe("the dry run before approval", () => {
   it("lets a conforming proposal through to the human's approval", async () => {
     const f = preflight(TEMPLATE, {
       ...CREATE,
-      fields: { summary: "Add login", description: "## Acceptance criteria\n* works" },
+      fields: { summary: "Add login", description: "h2. Acceptance criteria\n* works" },
     });
     expect(await f.run()).toBeUndefined();
   });
@@ -475,7 +498,43 @@ describe("the dry run before approval", () => {
       issueTypeId: "10001",
       fields: { summary: `Item ${ref}`, description },
     });
-    const GOOD = "## Acceptance criteria\n* works";
+    const GOOD = "h2. Acceptance criteria\n* works";
+
+    it("returns source-criterion failure before approval and before Jira metadata reads", async () => {
+      const data = {
+        outcome: "rejected",
+        reason: "field-validation",
+        requirementRefusal: "references",
+      };
+      const draftRequirements = vi.fn(() => ({ data, violationCount: 1 }));
+      const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
+        draftRequirements,
+      });
+      expect(await f.run()).toEqual(data);
+      expect(draftRequirements).toHaveBeenCalledTimes(1);
+      expect(f.http).not.toHaveBeenCalled();
+    });
+
+    it.each(["cancelled", "read-denied"] as const)(
+      "does not read source criteria when %s",
+      async (state) => {
+        const controller = new AbortController();
+        if (state === "cancelled") controller.abort();
+        const draftRequirements = vi.fn();
+        const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
+          draftRequirements,
+          signal: controller.signal,
+          readAllowed: state !== "read-denied",
+        });
+        await expect(f.run()).rejects.toMatchObject(
+          state === "cancelled"
+            ? { name: "AbortError" }
+            : { status: "denied", reason: "effect-denied" },
+        );
+        expect(draftRequirements).not.toHaveBeenCalled();
+        expect(f.http).not.toHaveBeenCalled();
+      },
+    );
 
     it("refuses an invalid item that follows a valid one, before any approval, and never writes", async () => {
       const sink = logs();
@@ -734,14 +793,19 @@ describe("a violating write never reaches Jira under Full access (#4177)", () =>
   const VIOLATING = { projectId: "10000", issueTypeId: "10001", fields: { summary: "Add login" } };
   const CONFORMING = {
     ...VIOLATING,
-    fields: { summary: "Add login", description: "## Acceptance criteria\n* works" },
+    fields: { summary: "Add login", description: "h2. Acceptance criteria\n* works" },
   };
 
-  function fullAccessWrite(args: Record<string, unknown>): {
+  function fullAccessWrite(
+    args: Record<string, unknown>,
+    trace?: JiraTraceRequest,
+  ): {
     run: () => Promise<ManagedMcpToolResult>;
     methods: () => string[];
     journal: ReturnType<typeof journalFixture>["journal"];
     intent: JiraChatToolMutationIntent;
+    writtenDescription: () => unknown;
+    mutationLog: ReturnType<typeof createBufferedServerLogSink>;
   } {
     const db = new DatabaseSync(":memory:");
     db.exec("PRAGMA foreign_keys = ON");
@@ -754,7 +818,7 @@ describe("a violating write never reaches Jira under Full access (#4177)", () =>
       fileName: "template.md",
       contentBase64: Buffer.from(TEMPLATE).toString("base64"),
     });
-    const { journal, intent } = journalFixture();
+    const { journal, intent, mutationLog } = journalFixture();
     const state: SyntheticJira = { fields: {}, comment: "" };
     const requests: string[] = [];
     const http = vi.fn<AtlassianHttpBodyPort>((request) => {
@@ -818,12 +882,14 @@ describe("a violating write never reaches Jira under Full access (#4177)", () =>
             },
           beforeEffect: () => true,
           beforeMutation: () => true,
-          execute: (port) => execute(port, undefined),
+          execute: (port) => execute(port, trace),
         }),
     );
     return {
       journal,
       intent,
+      mutationLog,
+      writtenDescription: () => state.fields.description,
       methods: () => requests,
       run: () =>
         provider.tools()[0]?.execute(args as CatalogJsonObject, {
@@ -856,5 +922,57 @@ describe("a violating write never reaches Jira under Full access (#4177)", () =>
     const result = await f.run();
     expect(f.methods().filter((method) => method === "POST")).toHaveLength(1);
     expect(result.data).toMatchObject({ outcome: "succeeded" });
+    expect(f.writtenDescription()).toBe(CONFORMING.fields.description);
+    expect(
+      f.mutationLog.events.every(
+        (event) => event.extra?.descriptionConvertedHeadingCount === undefined,
+      ),
+    ).toBe(true);
+  });
+
+  it("serializes explicit Markdown before trace and records actual counts once across journal replay", async () => {
+    const footer =
+      "----\nKeiko traceability\nRequirement: REQ-1 · Synthetic\nEnd of Keiko traceability";
+    const trace: JiraTraceRequest = {
+      labels: [],
+      footer,
+      footerStart: "----\nKeiko traceability",
+      footerEnd: "End of Keiko traceability",
+      replaceLabelPrefixes: [],
+    };
+    const wrapped = {
+      ...CONFORMING,
+      requirementIds: ["REQ-1"],
+      fields: {
+        ...CONFORMING.fields,
+        description: { format: "markdown", text: "## Acceptance criteria\n* works" },
+      },
+    };
+    const before = JSON.stringify(wrapped);
+    const f = fullAccessWrite(wrapped, trace);
+    const result = await f.run();
+    expect(result.data).toMatchObject({ outcome: "succeeded" });
+    expect(f.writtenDescription()).toBe(`h2. Acceptance criteria\n* works\n\n${footer}`);
+    expect(JSON.stringify(wrapped)).toBe(before);
+    const serialized = f.mutationLog.events.filter(
+      (event) => event.extra?.descriptionConvertedHeadingCount !== undefined,
+    );
+    expect(serialized).toHaveLength(1);
+    expect(serialized[0]?.extra).toMatchObject({
+      event: "settled",
+      descriptionConvertedHeadingCount: 1,
+    });
+    expectActivityLogProof(
+      "chat.tool-mutation.emitted-line",
+      formatActivityLogProofLine(serialized[0] ?? {}),
+    );
+    expect(JSON.stringify(serialized)).not.toContain("Acceptance criteria");
+    await f.run();
+    expect(f.methods().filter((method) => method === "POST")).toHaveLength(1);
+    expect(
+      f.mutationLog.events.filter(
+        (event) => event.extra?.descriptionConvertedHeadingCount !== undefined,
+      ),
+    ).toHaveLength(1);
   });
 });

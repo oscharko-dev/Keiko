@@ -203,7 +203,7 @@ describe("GET /api/config", () => {
 });
 
 describe("GET /api/models", () => {
-  it("omits expired readiness while a reload returns its local catalog synchronously", () => {
+  it("retains checked readiness while a reload returns its local catalog synchronously", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-08T12:00:00.000Z"));
     try {
@@ -224,7 +224,7 @@ describe("GET /api/models", () => {
         body: { models: [{ id: "example-chat-model" }] },
       });
       const body = result.body as { models: Record<string, unknown>[] };
-      expect(body.models[0]).not.toHaveProperty("conversationReady");
+      expect(body.models[0]).toHaveProperty("conversationReady", true);
       expect(refreshGatewayCatalog).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
@@ -234,7 +234,7 @@ describe("GET /api/models", () => {
   // #3905 AC2: an expired successful observation used to collapse into the same absent
   // `conversationReady` as a model nobody probed. It still projects no readiness (unknown for
   // admission), but the wire now says it was ready once and needs a fresh check.
-  it("projects an expired successful observation as stale, distinct from never probed", () => {
+  it("distinguishes cached success, explicit failure and an unobserved configuration", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-08T12:00:00.000Z"));
     try {
@@ -261,10 +261,10 @@ describe("GET /api/models", () => {
       expect(projected()).toMatchObject({ conversationReady: true });
       expect(projected()).not.toHaveProperty("conversationReadinessStale");
 
-      // The success ages out: still no readiness, now explicitly stale.
+      // Age alone never invalidates the startup result.
       vi.setSystemTime(new Date("2026-10-08T12:05:00.000Z"));
-      expect(projected()).not.toHaveProperty("conversationReady");
-      expect(projected()).toHaveProperty("conversationReadinessStale", true);
+      expect(projected()).toHaveProperty("conversationReady", true);
+      expect(projected()).not.toHaveProperty("conversationReadinessStale");
 
       // An observed failure is a statement, not staleness, however old it is.
       gatewayConfig.recordVerifiedCapability(
@@ -283,7 +283,7 @@ describe("GET /api/models", () => {
         "2026-10-08T11:00:00.000Z",
         gatewayConfig.generation(),
       );
-      expect(projected()).toHaveProperty("conversationReadinessStale", true);
+      expect(projected()).not.toHaveProperty("conversationReadinessStale");
       gatewayConfig.set(SAMPLE_CONFIG, true);
       expect(projected()).not.toHaveProperty("conversationReadinessStale");
     } finally {

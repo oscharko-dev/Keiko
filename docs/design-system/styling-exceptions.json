@@ -125,13 +125,11 @@
       "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/ConnectorPickerWidget.module.css",
       "globalSelectors": [
         ".connector-node",
-        ".connector-node-copy",
         ".connector-node-icon",
         ".connector-node-kicker",
         ".connector-node-manage",
         ".connector-node-manage",
         ".connector-node-manage",
-        ".connector-node-meta",
         ".connector-node-title",
         ".connector-picker",
         ".connector-picker-create-link",

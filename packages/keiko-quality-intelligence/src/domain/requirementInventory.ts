@@ -94,6 +94,20 @@ import {
 export const REQUIREMENT_INVENTORY_ENTRIES_MAX = 500;
 export const REQUIREMENT_DIGEST_SHORT_LENGTH = 12;
 export const REQUIREMENT_DOCUMENT_SCOPE_LENGTH = 8;
+export const REQUIREMENT_DOCUMENT_SCOPE_MAX_LENGTH = 32;
+export const REQUIREMENT_DOCUMENT_SCOPE_PATTERN = "^(?:[0-9a-f]{8}){1,4}$";
+/** Standard JSON Schema uses four safe atomic patterns, never a nested-repetition regex. */
+export const REQUIREMENT_DOCUMENT_SCOPE_SCHEMA = {
+  type: "string",
+  maxLength: REQUIREMENT_DOCUMENT_SCOPE_MAX_LENGTH,
+  anyOf: Array.from(
+    { length: REQUIREMENT_DOCUMENT_SCOPE_MAX_LENGTH / REQUIREMENT_DOCUMENT_SCOPE_LENGTH },
+    (_, index) => ({
+      type: "string",
+      pattern: `^[0-9a-f]{${String((index + 1) * REQUIREMENT_DOCUMENT_SCOPE_LENGTH)}}$`,
+    }),
+  ),
+} as const;
 
 export interface RequirementInventorySection {
   readonly sectionPath: readonly string[];
@@ -106,6 +120,8 @@ export interface RequirementInventoryInput {
   readonly text: string;
   /** Stable identity of the document (not of its version); salts derived identifiers. */
   readonly documentKey: string;
+  /** Validated identity prefix, widened only when the admitted inventory contains a collision. */
+  readonly documentScope?: string;
   /** Section boundaries as the parser recorded them (headings, slides); optional. */
   readonly sections?: readonly RequirementInventorySection[];
   readonly maxEntries?: number;
@@ -156,6 +172,43 @@ export interface RequirementInventory {
 
 export function documentScopeOf(documentKey: string): string {
   return sha256Hex(`keiko-document|${documentKey}`).slice(0, REQUIREMENT_DOCUMENT_SCOPE_LENGTH);
+}
+
+/** Preserve normal references; extend only a colliding identity prefix in this admitted set. */
+export function documentScopesOf(documentKeys: readonly string[]): ReadonlyMap<string, string> {
+  const digests = new Map(documentKeys.map((key) => [key, sha256Hex(`keiko-document|${key}`)]));
+  const scopes = new Map<string, string>();
+  for (
+    let width = REQUIREMENT_DOCUMENT_SCOPE_LENGTH;
+    width <= REQUIREMENT_DOCUMENT_SCOPE_MAX_LENGTH;
+    width += REQUIREMENT_DOCUMENT_SCOPE_LENGTH
+  ) {
+    const counts = new Map<string, number>();
+    for (const digest of digests.values()) {
+      const prefix = digest.slice(0, width);
+      counts.set(prefix, (counts.get(prefix) ?? 0) + 1);
+    }
+    for (const [key, digest] of digests) {
+      const prefix = digest.slice(0, width);
+      if (
+        !scopes.has(key) &&
+        (counts.get(prefix) === 1 || width === REQUIREMENT_DOCUMENT_SCOPE_MAX_LENGTH)
+      )
+        scopes.set(key, prefix);
+    }
+    if (scopes.size === digests.size) break;
+  }
+  return scopes;
+}
+
+function validatedDocumentScope(input: RequirementInventoryInput): string {
+  const scope = input.documentScope ?? documentScopeOf(input.documentKey);
+  if (
+    !new RegExp(REQUIREMENT_DOCUMENT_SCOPE_PATTERN, "u").test(scope) ||
+    !sha256Hex(`keiko-document|${input.documentKey}`).startsWith(scope)
+  )
+    throw new TypeError("Invalid document identity prefix.");
+  return scope;
 }
 
 // ─── Candidates ──────────────────────────────────────────────────────────────
@@ -217,6 +270,7 @@ interface Context {
   readonly starts: readonly number[];
   readonly vocabulary: CompiledVocabulary;
   readonly documentKey: string;
+  readonly documentScope: string;
 }
 
 function sectionStarts(sections: readonly RequirementInventorySection[]): readonly number[] {
@@ -1183,7 +1237,7 @@ function toEntry(context: Context, parts: EntryParts): RequirementInventoryEntry
     idOrigin: parts.idOrigin,
     unitKind: parts.unitKind,
     documentKey: context.documentKey,
-    documentScope: documentScopeOf(context.documentKey),
+    documentScope: context.documentScope,
     title,
     ...(interpreted.priority === undefined ? {} : { priority: interpreted.priority }),
     statement: interpreted.statement,
@@ -1582,6 +1636,7 @@ export function deriveRequirementInventory(input: RequirementInventoryInput): Re
     starts: sectionStarts(sections),
     vocabulary: compileRequirementVocabulary(input.vocabulary),
     documentKey: input.documentKey,
+    documentScope: validatedDocumentScope(input),
   };
   const tables = scanTables(context);
   const blocks = buildBlocks(context, findCandidates(context, tables));

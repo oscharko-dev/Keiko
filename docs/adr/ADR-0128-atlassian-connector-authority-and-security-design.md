@@ -212,6 +212,11 @@ retriable network failures. POST and PUT use the gateway's single-attempt transp
 CA trust from the first attempt. An optional synchronous response observer records the HTTP status
 before body consumption, so truncated or failed body reads cannot erase an observed acknowledgement.
 Observer failures release the unread body, emit a content-free server diagnostic and propagate.
+For authenticated GET requests, a successful response explicitly marked `X-AUSERNAME: anonymous`
+is classified as 401 before observation and body consumption. Jira can otherwise accept an invalid
+PAT anonymously and return an empty collection (JRASERVER-78126). No header value crosses the port.
+Mutation acknowledgements retain their observed status; this read safeguard must never conceal an
+already dispatched remote effect.
 These callbacks do not themselves grant authority: the composing owner must supply the current
 binding, mode, approval, budget and durable mutation checks before exposing a write operation.
 
@@ -462,12 +467,27 @@ caller as reporter when the field is absent although create metadata lists it as
 default (lab S17, #4176). A supplied reporter is validated like any user; every other required
 field still blocks the create, and edit and transition are unaffected. Add/remove is
 limited to labels; replacement and additive changes cannot target the same field in one action.
-Cloud rich text uses the existing ADF composer; Data Center uses plain text, and user references
-respect each deployment's identity scheme. A rich-text value written to Jira without any real line break, with at
+Cloud rich text uses the existing ADF composer. Existing Data Center description strings remain
+byte-for-byte native Jira wiki text: `#` is also a valid wiki list marker, so strings cannot prove
+Markdown provenance. A new Markdown description uses only the strict explicit value
+`{ format: "markdown", text: "..." }`, advertised on the description field's create metadata.
+Only this Data Center description value serializes supported ATX and setext headings as native
+`hN.` wiki headings through the bounded canonical heading reader. It preserves code/fences,
+quoted source, acceptance criteria and source text; other fields and Cloud values keep their
+existing contracts. The same contracts-leaf projection supplies template validation and the human
+approval preview without changing submitted staged values, their digest or journal identity.
+The writer validates the explicit value before adding the existing trace footer, then validates the
+final serialized string against the existing field bounds. An actual mutation attempt carries only
+its positive converted-heading count internally. Chat records it on the existing `chat.tool-mutation`
+settled event, Coding on the existing `coding-runtime.jira-pod` action `serialize-description`;
+neither count claims remote success, and pure preflight or journal replay emits no such metric.
+The count never enters the model result or mutation receipt. User references respect each
+deployment's identity scheme.
+A rich-text value written to Jira without any real line break, with at
 least two escaped ones (the two characters `\n`) that would produce a heading or a list item at the
 start of a line, is refused with one fixed sentence for the model, on both deployments (lab S07,
 #4178): some models escape line breaks twice inside tool arguments, and Jira would store the escapes
-as visible text and collapse the document's sections into one line. Keiko never rewrites the value;
+as visible text and collapse the document's sections into one line. Keiko never decodes those escapes;
 one literal escape, escapes beside real line breaks, and escapes in prose (a description of the
 pattern `/\n\n/`) remain ordinary text and are accepted, and single-line text fields are unaffected.
 The rule judges what is written only: a stored description is projected by a read exactly as stored. Fresh metadata, authority and dispatch remain separate
@@ -769,11 +789,12 @@ changes nothing in Jira, so it needs the Chat's read grant, not a write approval
 appends at most 50 validated items to a server-held draft session — in memory only, bound to the
 Chat that started it, expiring when idle, and bounded per Chat and in total, exactly like a
 `jira.report` session — and returns its `draftId`, the `draftDigest` of the exact item list, the
-item count and the `unresolvedRefs` still to be written. Its item schema only points at
-`jira.draft`'s item form to keep the catalog small, and names `requirementIds` there, because that
-schema is the only place a model learns of the trace argument (lab S14, 2026-11-02: a model staged
-four epics without `requirementIds`, so none traced its requirement and the later change comparison
-found no baseline). Every appended item first passes the
+item count and the `unresolvedRefs` still to be written. Staging and execution publish the same
+shared item schema, including numeric routing IDs, required `fields.summary`, optional relations
+and `requirementIds`. Each tool is self-describing; staging never relies on the model finding the
+item form in another tool's description. Dynamic Jira fields remain inside `fields`, and malformed
+items are rejected by the catalog before handler work. Existing argument-rejection and draft
+activity records retain body-free evidence. Every appended item first passes the
 customer-template dry run of a create (#4177), then Keiko's own validation of the fields its create
 will send (2026-11-03, S05); a violating page is refused whole, naming the violations or the first
 invalid item and its field, and nothing of it is staged. An item's identity needs the whole draft, so
@@ -856,6 +877,17 @@ counts and name only the keys shown. The model-history receipts and the partial 
 turn read each token of the same ranges, so created keys are never lost to compaction. Barriers are unchanged: an `unknown` or
 `succeeded-unconfirmed` record or an in-flight write blocks every further write of the turn, batch
 or not, so an uncertain item still stops the draft (#2953).
+
+An interrupted Jira draft retains already parsed acknowledgement keys separately as bounded
+`draftProgress` on its existing parent Chat exchange. The server-private snapshot reuses the
+existing draft result projection and its counts/ranges, runs through the same credential/content
+floor and admitted result schema, and preserves an acknowledged but unread-back key as uncertain.
+The catalog's timeout/cancellation envelope and null data stay unchanged. Only this invocation's
+captured receipts are displayed in the deadline answer, live continuation, history and compaction;
+no recovery read or repeated write runs after expiry. The mutation journal and Activity Log keep
+no issue keys or provider bodies. This additive transcript field is readable by current readers;
+older builds with exact-key transcript validation cannot read affected rows without an explicit
+compatible migration, so rollback compatibility is not implied.
 
 *Deselection.* The approving human may deselect items; the deselection is bound into the approval
 proof and extends to every item that depends on a deselected one. The stored approval view carries
@@ -1054,10 +1086,16 @@ the approval.
   `parentField` (an instance field) and `parentLink` (a link type), `optionalSections`. The
   level-2 headings of the template body (`## Title`, or a setext title underlined with `---`) are
   the required description sections, each of which must be present and carry content. One reader
-  (`jira-description-sections.ts`) takes headings from the template body and from an issue's
-  description alike: ATX, setext (three or more `=` or `-`) and Jira wiki (`h2.`) headings, none
-  inside fenced code (``` and ~~~ fences, `{code}` and `{noformat}`), none on a line over 512
-  characters, none matched by a backtracking expression. A deeper heading belongs to the enclosing
+  (`jira-description-sections.ts`) uses Markdown mode for template bodies and explicitly tagged
+  Markdown: ATX, setext (three or more `=` or `-`) and Jira wiki (`h2.`) headings. The projected
+  Data Center wire description is judged in native wiki mode: only `hN.` headings count, so a
+  native `#` numbered list or setext-looking text never satisfies a required section. Explicit
+  Markdown is serialized to native headings before this check; native strings remain unchanged.
+  Backtick and tilde fences are Markdown syntax only: native descriptions and the native samples
+  from which a template is proposed recognize matching `{code}` and `{noformat}` blocks instead.
+  Markdown heading discovery ignores backtick/tilde fences and wiki code macros. Native wire
+  validation and native samples ignore matching `{code}` and `{noformat}` blocks only. Neither
+  accepts a heading on a line over 512 characters or through a backtracking expression. A deeper heading belongs to the enclosing
   section, so a section made only of subsections has content; a section ends at the next heading of
   the same or a shallower level. Patterns use a closed regular-expression subset (literals,
   classes, `. ^ $ \b \B`, `\d \w \s` and their negations, escapes, alternation, groups, greedy
@@ -1102,6 +1140,15 @@ the approval.
   draft names up to 25 such items and `omittedRowCount`; an item that already exists is not refused,
   because a run only reconciles it. Only the create fields of each issue type the draft uses are read,
   whatever its size, and items are looked up only once they fail. A failed read decides nothing.
+- **Discovery before drafting.** `jira.create-fields` returns bounded facts for the current
+  library templates that govern CREATE for its canonical project and issue type, using the same
+  credential-bound identity reads and shared matcher as admission. Each complete returned rule set
+  carries its stored skill revision and digest, required fields and description sections, summary,
+  label and parent constraints. Entire remaining templates are omitted at the projection bound with
+  an explicit omitted count and incomplete state; unreadable templates remain unavailable. Field
+  pagination remains authoritative. These are rule facts, not another selected instruction skill;
+  the user's explicitly selected skill remains unchanged. Staging, pre-approval and dispatch still
+  re-read and enforce the current library independently of this advisory discovery result.
 - **Settings surface.** `GET /api/skills/jira-templates` lists templates; `POST
   /api/skills/jira-templates/validate` validates a template against the live instance through a
   Pod the caller owns (unknown project, issue type, field, ambiguous field name, link type or
@@ -1109,7 +1156,9 @@ the approval.
   of an existing project from its create metadata and the description headings most sampled issues
   share. Both read Jira with GET only and never write to Jira or the library; the lead edits and
   saves what is proposed through the skill routes.
-- **Evidence.** `jira.template.admission` (warn, stage `pre-approval` or `dispatch`) records the
+- **Evidence.** `jira.template.metadata` records only matched, returned, omitted and unreadable
+  template counts through the composing owner's existing Activity Log port; no template reference,
+  field name, section title or body enters it. `jira.template.admission` (warn, stage `pre-approval` or `dispatch`) records the
   operation, the violation count and the closed rule ids under the write's correlation id. It
   never records a field name, section title, label or value; `ruleIds` is a closed vocabulary and
   the registration is pinned to the contract's `JIRA_TEMPLATE_RULE_IDS` by a test.
@@ -1204,7 +1253,8 @@ result of a call is `reading` (with `issuesRead`/`issuesTotal` progress and `rep
 called again), `complete`, or `incomplete` with a closed reason (`read-failed`, `scope-changed` —
 the total moved, an issue repeated, or the page that starts at the last issue read did not begin with it (that start proves nothing was inserted or removed before the cursor) —, `memory-budget`, `issue-too-large`,
 `template-unreadable` — the compliance section was not evaluated). Each call
-reads for at most 15 s because the managed host caps a call at 30 s; there is no issue-count limit.
+reads for at most 15 s under its own report-page budget; the internal managed host honors the
+validated tool duration within the native timer ceiling. There is no issue-count limit.
 Hierarchy discovery and the create-metadata rules are fetched before the first page; when either
 cannot be read the next call asks again and a second failure ends the report as `incomplete`
 (`read-failed`), never as a complete one with silently missing rules. A failure carries a closed
@@ -1296,14 +1346,14 @@ paged the tool and listed 41 of 41. `chat.grounded-tool-round.completed` records
 (`requirementUnitCount`, `excerptRequirementCount`). The guidance replaces redundant wording, so the
 mixed Jira/Data overflow pin keeps its budget. An answer built from tool results carries no excerpt
 markers; the optional citation repair runs only while a synthesis attempt slot is free and otherwise
-keeps the completed answer instead of failing the turn. The repair regenerates the whole answer, so
-it replaces a complete first answer only when it finished with the natural `stop` and attaches at
-least one citation; a repair interrupted at its output limit, by a content filter, an error or a
-cancellation, or still uncited, leaves the complete answer standing
-(lab S12, Gemma: a repair with the remaining output grant cut a 41-row coverage matrix at row 28).
-A repair sends the turn's tool results again, so whether it fits is judged by the last measured prompt;
-one the input grant refuses at admission keeps the completed answer too (lab S11, Qwen: a finished
-answer over 200 issues became a 403 because only the repair's bare prompt had been counted).
+keeps the completed answer instead of failing the turn. Citation repair requests bounded marker
+insertions through the same admitted, turn-metered model port; it advertises no tools and never
+re-enters the catalog/binder loop. It preserves the completed answer unless the locally checked
+insertion plan adds supported markers without changing the prose. Unexpected returned tool calls
+are refused with their usage retained. The original input/output, deadline, readiness, current
+authority, physical-attempt and spend grants remain binding; an admission refusal keeps the
+completed answer. Existing answer-details and gateway admission evidence records the disposition
+without answer or tool-result bodies.
 `search.citations.reconciled` records the outcome in `citationRepairDisposition`
 (`rejected-truncated` for every interrupted repair, `rejected-uncited`, `applied`,
 `skipped-budget`, `not-needed`).
@@ -1425,6 +1475,16 @@ answer over 200 issues became a 403 because only the repair's bare prompt had be
   The traced labels and footer are part of the item the customer-template gate (#4177) judges, so a
   template that governs `description` or `labels` sees the final values, not the model's draft; the
   pre-approval dry run of a create or edit judges the values as the model wrote them.
+  A traced draft also preserves the original acceptance criteria before a page is staged, before
+  human approval and again before final execution. Each referenced unit requires all its original
+  criteria; an explicit criterion reference requires that exact criterion. The canonical description
+  projection must contain each criterion as a whole active paragraph or list item, or the complete
+  ordered criterion set as one paragraph. Unicode normalization and whitespace wrapping may differ;
+  prefixes, substrings, headings, quotes and code do not establish preservation. A missing criterion
+  refuses the draft with `acceptance-criteria-missing` before a digest, approval or Jira mutation;
+  no approved description is silently rewritten. This proves content preservation, not semantic
+  implementation or fulfillment of a criterion. The existing source lifecycle and model-use guards,
+  preview digest, template checks, journal and idempotent reconciliation continue to apply.
 - _Change check._ A new document version is compared with the backlog through the labels alone;
   no earlier inventory is kept anywhere, so the baseline is what Jira holds. `change-queries`
   returns, per document, label-only JQL batches under the JQL length bound for items whose revision

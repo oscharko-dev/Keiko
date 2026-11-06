@@ -19,6 +19,7 @@ import {
 import {
   fixtureRead,
   fixtureWrite,
+  field,
   response,
   type SyntheticJira,
 } from "../../../../tests/support/jira-managed-remote.js";
@@ -133,7 +134,13 @@ function templateStore(template: string | undefined): CodingJiraPodDeps["store"]
   return store;
 }
 
-function harness(options: { readonly attach?: boolean; readonly template?: string } = {}): Harness {
+function harness(
+  options: {
+    readonly attach?: boolean;
+    readonly template?: string;
+    readonly failSerializationLog?: boolean;
+  } = {},
+): Harness {
   const pod: PodState = {
     generation: 3,
     revision: 1,
@@ -162,7 +169,13 @@ function harness(options: { readonly attach?: boolean; readonly template?: strin
   });
   const tokenHeaderSeen: string[] = [];
   const records: ServerLogEvent[] = [];
-  const log: ServerLogSink = { write: (event) => void records.push(event) };
+  const log: ServerLogSink = {
+    write: (event) => {
+      records.push(event);
+      if (options.failSerializationLog === true && event.extra?.action === "serialize-description")
+        throw new Error("Synthetic serialization audit failure");
+    },
+  };
   const pods = createCodingJiraPods(log);
   const deps: CodingJiraPodDeps = {
     store: templateStore(options.template),
@@ -536,6 +549,60 @@ describe("serving the bound Pod through the relay", () => {
 describe("the customer's issue templates bind a Coding run's Jira writes (#4177)", () => {
   const writes = (h: Harness): number =>
     h.http.mock.calls.filter(([request]) => request.method !== "GET").length;
+
+  function descriptionTransport(h: Harness, refuseWrite = false): void {
+    const original = h.http.getMockImplementation();
+    if (original === undefined) throw new TypeError("Missing Jira transport");
+    h.http.mockImplementation((request) => {
+      if (request.method === "GET" && request.url.endsWith("/editmeta"))
+        return Promise.resolve(
+          response({ fields: { description: field("description", "string") } }),
+        );
+      if (refuseWrite && request.method === "PUT")
+        return Promise.resolve(
+          response({ errorMessages: ["Synthetic write refusal"], errors: {} }, 403),
+        );
+      return original(request);
+    });
+  }
+
+  it("preserves a confirmed write when its serialization audit sink throws", async () => {
+    const h = harness({ failSerializationLog: true });
+    // Jira includes an unset selected description as null, allowing before/after confirmation.
+    h.state.fields.description = null;
+    descriptionTransport(h);
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const result = await client.call("jira.edit", {
+      issueKey: "SYN-1",
+      fields: { description: { format: "markdown", text: "## Goal\nKept content." } },
+    });
+    expect(result).toMatchObject({
+      structuredContent: { outcome: "succeeded", issueKey: "SYN-1" },
+    });
+    expect(writes(h)).toBe(1);
+    expect(h.state.fields.description).toBe("h2. Goal\nKept content.");
+    expect(h.recover).not.toHaveBeenCalled();
+    expect(
+      h.records.filter((event) => event.extra?.action === "serialize-description"),
+    ).toHaveLength(1);
+  });
+
+  it("does not log a refused formatted write as completed", async () => {
+    const h = harness();
+    descriptionTransport(h, true);
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const result = await client.call("jira.edit", {
+      issueKey: "SYN-1",
+      fields: { description: { format: "markdown", text: "## Goal\nKept content." } },
+    });
+    expect(result.isError).toBe(true);
+    expect(writes(h)).toBe(1);
+    expect(h.state.fields).not.toHaveProperty("description");
+    expect(proofLines(h).find((line) => line.action === "serialize-description")).toMatchObject({
+      outcome: "failed",
+      descriptionConvertedHeadingCount: 1,
+    });
+  });
 
   it("refuses an edit that leaves the issue violating its template, before any PUT", async () => {
     const h = harness({ template: EDIT_TEMPLATE });

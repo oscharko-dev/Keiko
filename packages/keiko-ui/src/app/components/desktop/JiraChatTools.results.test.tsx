@@ -283,3 +283,33 @@ it("shows a recorded pre-dispatch timeout as not sent without remote uncertainty
   expect(screen.queryByText("Jira outcome unknown")).toBeNull();
   expect(screen.queryByText(/may have been applied/)).toBeNull();
 });
+
+it("keeps known unconfirmed draft keys visible beside a timeout with no result data", async () => {
+  const original = exchange(undefined);
+  if (original.result === undefined) throw new TypeError("Missing timeout fixture");
+  const draft: ChatToolExchange = {
+    call: { id: "draft-call", name: "jira_draft", arguments: { draftId: "reviewed-draft" } },
+    mutationOutcome: "succeeded-unconfirmed",
+    result: {
+      ...original.result,
+      status: "timeout",
+      reason: "deadline-exceeded",
+      data: null,
+      page: null,
+    },
+    draftProgress: {
+      items: [
+        { ref: "epic", state: "uncertain", outcome: "succeeded-unconfirmed", issueKey: "LAB-1" },
+      ],
+    },
+  };
+  render(
+    <JiraChatTools transcript={{ schemaVersion: 1, exchanges: [draft] }} turnState="completed" />,
+  );
+  expect(screen.getByText("Jira accepted the change; confirmation incomplete")).toBeVisible();
+  expect(screen.queryByText("Jira change confirmed")).toBeNull();
+  await userEvent.setup().click(screen.getByText("View Jira result"));
+  expect(screen.getByText(/LAB-1/u)).toBeVisible();
+  expect(screen.queryByRole("button", { name: /retry/iu })).toBeNull();
+  expect(draft.result).toMatchObject({ status: "timeout", data: null });
+});

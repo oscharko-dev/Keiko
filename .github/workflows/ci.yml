@@ -1489,7 +1489,7 @@ jobs:
     needs: [change-scope, verified-tree]
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60 # Tests reached 40m; retain time for UI and package smokes.
     strategy:
       fail-fast: false
       matrix:

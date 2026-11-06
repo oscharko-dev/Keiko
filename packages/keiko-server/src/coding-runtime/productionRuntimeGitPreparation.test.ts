@@ -172,6 +172,18 @@ describe("repository identity before runtime confirmation", () => {
     expect(JSON.stringify(events)).not.toContain(root);
   });
 
+  it("keeps a live start cancellation handle out of canonical request material", async () => {
+    const client = new AbortController();
+    const input = { ...request(), abandoned: client.signal };
+    await expect(preparation.prepare(input)).resolves.toBeUndefined();
+    expect(preparation.consume(input).repositoryIdentity?.kind).toBe("local");
+    expect(input.abandoned).toBe(client.signal);
+    expect(input.abandoned.aborted).toBe(false);
+    client.abort();
+    expect(input.abandoned.aborted).toBe(true);
+    expect(() => preparation.consume(input)).toThrow("preparation-unavailable");
+  });
+
   it("binds explicit no-origin identity and rejects an origin added after admission", async () => {
     const input = request();
     await preparation.prepare(input);
@@ -199,7 +211,7 @@ describe("repository identity before runtime confirmation", () => {
   it.each(["expired", "request-drift", "workspace-drift", "head-drift"] as const)(
     "rejects %s before confirmation consume",
     async (failure) => {
-      const input = request();
+      const input = { ...request(), abandoned: new AbortController().signal };
       await preparation.prepare(input);
       if (failure === "expired") now += 5_000;
       if (failure === "request-drift") Object.assign(input, { taskIntent: "different task" });

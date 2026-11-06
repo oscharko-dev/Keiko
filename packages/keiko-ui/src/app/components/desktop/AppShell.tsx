@@ -106,7 +106,10 @@ import { EditorPaletteHostRegistryProvider } from "./EditorPaletteHostRegistryCo
 import { EditorShellActionsProvider } from "./EditorShellActionsContext";
 import { WorkspaceReplaceBufferProvider } from "./WorkspaceReplaceBufferContext";
 import type { EditorPaletteHost } from "./widgets/cards/editorCommands";
-import { OPEN_EDITOR_SETTINGS_EVENT } from "./widgets/panels/settingsPanelEvents";
+import {
+  OPEN_EDITOR_SETTINGS_EVENT,
+  OPEN_MODEL_SETTINGS_EVENT,
+} from "./widgets/panels/settingsPanelEvents";
 import { WINDOW_LAUNCHER_TYPES, COMMAND_TOOL_TYPES, type Command } from "./workspaceCommands";
 import "./widgets";
 import { localizedWindowTitle, WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
@@ -1761,6 +1764,11 @@ export function buildAppShellCommands(
   ];
 }
 
+export function openModelSettingsPanel(api: WorkspaceApi): void {
+  // add is the existing singleton-aware open/focus operation and records window lifecycle evidence.
+  api.add("settings", { initialTab: "models" });
+}
+
 function openEditorSettingsPanel(toggleTool: (type: WindowType) => void): void {
   toggleTool("settings");
   if (typeof window !== "undefined") {
@@ -3092,6 +3100,12 @@ function AppShellInner(): ReactNode {
     },
     [activeWorkspace.activeRoot, repositoryShortcutRoot, searchOwner, undoStack, ws.api, ws.wins],
   );
+
+  useEffect(() => {
+    const openModelSettings = (): void => openModelSettingsPanel(ws.api);
+    window.addEventListener(OPEN_MODEL_SETTINGS_EVENT, openModelSettings);
+    return (): void => window.removeEventListener(OPEN_MODEL_SETTINGS_EVENT, openModelSettings);
+  }, [ws.api]);
 
   const openEditorSettings = useCallback((): void => openEditorSettingsPanel(onTool), [onTool]);
   // Lets the editor's own capturing keydown listener (EditorWidget.tsx) invoke the shell action
