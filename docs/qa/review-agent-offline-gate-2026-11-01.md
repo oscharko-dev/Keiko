@@ -24,7 +24,7 @@ its composition digest (every other package the pipeline runs, and the lockfile)
 each review's settlement, and per-role tokens and durations.
 
 ```bash
-npm run review:quality-gate -- --set development --iteration dev-1 \
+node scripts/testing/review-quality/run.mjs --set development --iteration dev-1 \
   --repository <evaluation clone> --config <gateway config> --state <state dir> --out <evidence dir> \
   --reviewer qwen3.6-35b-a3b-4bit --counter-checker gemma-4-31b-it-4bit
 ```
@@ -205,9 +205,77 @@ The single holdout run started at 17:36 UTC on 2026-11-02 with the product confi
   handling of this PR, plus two removed `export` keywords in `repository.ts` and `server.ts`. None
   of them changes how a review runs or is scored, so the legacy reviews and the resumed reviews ran
   the same review code.
-- No finding, match or rate of the holdout was read before the stops. Only settlement counts and
-  kinds and the Activity Log entries around the first review were read, to find the cause of the
-  17 refusals and to watch progress.
+- The run resumed at 00:55 UTC on 2026-11-05 with the legacy digest above. The first keyed review
+  was #3419, and its stored legacy review settled `abandoned/interrupted`. The owner paused the run
+  twice more, each time right after a review settled, so another session could use the machine:
+  from 17:08 to 17:11 UTC on 2026-11-05, and from 06:08 to 11:03 UTC on 2026-11-06. A review that
+  had only started when a pause stopped it was reviewed again on the next start.
+- The run finished at 12:52 UTC on 2026-11-06. All 229 pull requests were replayed and none was
+  left unprepared. The evidence is `evidence.json` (sha256 `8fbe1afb4509a27ff294601b65cffc41a100a642b530807b1c6b79fe0549c712`).
+- No finding, match or rate of the holdout was read before the run finished. Only settlement counts
+  and kinds and the Activity Log entries around the first review were read, to find the cause of
+  the 17 refusals and to watch progress.
+
+### Holdout result
+
+The run's own report printed `pass`. That verdict comes from the frozen gate code of the holdout
+start, which predates the owner's scoring decisions of 2026-11-04: it left undecided findings out of
+the rate (18 of 19) and did not gate the not-complete share. It is not the gate result.
+
+The gate result is the offline re-score of the stored run. `rescoreReviewReplayRun` scores the
+recorded finding locations again with the epic's scoring (R4130-006, -007, -010, -011, -014) over
+dataset schema 2 (`sha256:376d45f51991cc68ec72c3d9ba40f29e0d93a9debf9cd47653cbb5aff481af8f`), and
+`evaluateReviewPrecisionGate` evaluates the result. No review ran again; settlements, costs and
+finding locations are the stored ones.
+
+| Measure                                                   | Value                                    | Threshold     |
+| --------------------------------------------------------- | ---------------------------------------- | ------------- |
+| Verdict                                                   | fail                                     |               |
+| Reviews that did not settle `complete`                    | 185 of 229 (80.8 %)                      | at most 20 %  |
+| Actionable rate, hits / (hits + false alarms + undecided) | 53.1 % (17 / 32; 95 % CI 36.4 to 69.1 %) | at least 50 % |
+| Acceptance rate, hits / (hits + false alarms)             | 100 % (17 / 17), not gated               |               |
+| Findings per pull request                                 | mean 0.54, max 3                         | at most 3     |
+
+The 124 findings split into 17 hits, no false alarm, 15 undecided, 10 unmeasured, no duplicate and
+82 unmatched to any historical thread. The re-score matches findings against the anchors carried
+to the head commit (R4130-007). Against the frozen report, it changed 23 finding outcomes:
+
+| Frozen outcome | Re-scored outcome | Findings |
+| -------------- | ----------------- | -------- |
+| unmatched      | unmeasured        | 10       |
+| hit            | unmatched         | 6        |
+| unmatched      | hit               | 3        |
+| false alarm    | hit               | 1        |
+| undecided      | hit               | 1        |
+| undecided      | unmatched         | 1        |
+| unmatched      | undecided         | 1        |
+
+The single reason for the failure is coverage.
+
+| Settlement                      | Reviews |
+| ------------------------------- | ------- |
+| `complete`                      | 44      |
+| `incomplete/budget-exhausted`   | 88      |
+| `incomplete/files-unprocessed`  | 50      |
+| `incomplete/deadline-exceeded`  | 28      |
+| `incomplete/model-failed`       | 17      |
+| `skipped/diff-too-large`        | 1       |
+| `skipped/no-reviewable-changes` | 1       |
+
+The Reviewer used a mean of 941,909 prompt tokens and 13,291 completion tokens per review, and the
+counter-checker 31,388 and 5,152. The median wall time per review was 909 s.
+
+### Behaviour changed after the measurement
+
+Under owner decision 3, these review changes landed after the holdout and are not part of what it
+measured:
+
+- R4130-003: the review admits the role-model pair before it makes either model ready. A refused
+  pair now loads no model. Every holdout review ran with an admitted pair, so this changes no
+  measured review.
+- The review service, runtime, worktree and diff fixes of #4250 to #4254 (merged through #4255),
+  including the merge-base diff of R4130-008. The holdout ran the review code recorded in its
+  configuration digest above.
 
 ## Seed gates
 
@@ -215,4 +283,7 @@ Not run yet.
 
 ## Decision
 
-Not recorded yet.
+The offline gate fails on coverage. Children 9 to 12 of epic #4130 stay closed, and the review
+area stays off by default (`KEIKO_REVIEW_ENABLED`). What to change before a new measurement is an
+owner decision. Settlements show budget exhaustion, unprocessed files and deadlines as the main
+causes. A new measurement needs a new holdout, because ADR-0182 D9 runs a holdout once.
