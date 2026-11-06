@@ -287,17 +287,24 @@ and variant as the holdout, and finished at 14:52 UTC. The evidence is `evidence
 The seed gate fails. It needs every required seed found. The run found 10 of 13 required seeds and
 raised one false alarm on a clean control:
 
-| Seed                                              | Role          | Outcome     |
-| ------------------------------------------------- | ------------- | ----------- |
-| synthetic-off-by-one-boundary                     | required      | missed      |
-| synthetic-nullish-dereference-after-optional      | required      | incomplete  |
-| workspace-relative-candidate-resolved-against-cwd | required      | incomplete  |
-| synthetic-clean-named-constants                   | clean control | false alarm |
+| Seed                                              | Role          | Outcome     | Settlement                     |
+| ------------------------------------------------- | ------------- | ----------- | ------------------------------ |
+| synthetic-off-by-one-boundary                     | required      | missed      | `complete`                     |
+| synthetic-nullish-dereference-after-optional      | required      | incomplete  | `incomplete/model-failed`      |
+| workspace-relative-candidate-resolved-against-cwd | required      | incomplete  | `incomplete/model-failed`      |
+| synthetic-clean-named-constants                   | clean control | false alarm | `complete`                     |
+| synthetic-clean-added-test                        | clean control | incomplete  | `incomplete/deadline-exceeded` |
 
-The other 13 cases came out as expected: the other 10 required seeds were found, the advisory seed
-was found, and the other two clean controls stayed clean. Of the 17 reviews, 14 settled
-`complete`, 2 `incomplete/model-failed` and 1 `incomplete/deadline-exceeded`. The median wall time per
-review was 99 s.
+The other 12 cases came out as expected: the other 10 required seeds were found, the advisory seed
+was found, and `synthetic-clean-rename` stayed clean. Of the 17 reviews, 14 settled `complete`, 2
+`incomplete/model-failed` and 1 `incomplete/deadline-exceeded`. The median wall time per review was
+99 s.
+
+The run's own report shows `synthetic-clean-added-test` as `clean`. Its review hit the deadline with
+one candidate the counter-check had not decided, so the control was not measured (R4130-040). The
+seed scoring now reports such a control as `incomplete`. Only two of the three clean controls were
+measured, so the one false alarm is a lower bound. The recall verdict does not depend on clean
+controls and is unchanged.
 
 ## Decision
 

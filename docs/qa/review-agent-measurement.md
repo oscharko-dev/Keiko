@@ -260,4 +260,6 @@ A defect seed is found when a presented finding overlaps its expected range in i
 fails when any required seed is missed, incomplete or stale (seed or run), and reports each seed's
 outcome (`found`, `missed`, `incomplete`, `stale-run`, `stale-seed`, `clean`, `false-alarm`). An
 incomplete run never counts as found. Findings on clean controls are counted as false alarms apart
-from the recall verdict.
+from the recall verdict. A clean control is `clean` only when its run settled `complete`. A control
+whose run did not finish and presented no finding is `incomplete`, because it measured nothing
+(R4130-040).

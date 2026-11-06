@@ -171,6 +171,31 @@ describe("runReviewSeedGate", () => {
     expect(report.cases.find((entry) => entry.id === "defect")?.outcome).toBe("incomplete");
   });
 
+  // R4130-040: a clean control whose run timed out read `clean` although nothing was measured,
+  // so an incomplete control passed as a measured zero false alarms.
+  it("reports a clean control whose run did not settle complete as incomplete", async () => {
+    const report = await runReviewSeedGate(
+      options(findsEverything, { port: scriptedSeedPort({ settlement: "incomplete" }) }),
+    );
+    expect(report.cases.find((entry) => entry.id === "control")).toMatchObject({
+      outcome: "incomplete",
+      falseAlarms: 0,
+    });
+  });
+
+  it("keeps a false alarm that an incomplete clean-control run presented", async () => {
+    const report = await runReviewSeedGate(
+      options(
+        { ...findsEverything, control: [finding({ file: "src/c.ts", startLine: 1, endLine: 1 })] },
+        { port: scriptedSeedPort({ settlement: "incomplete" }) },
+      ),
+    );
+    expect(report.cases.find((entry) => entry.id === "control")).toMatchObject({
+      outcome: "false-alarm",
+      falseAlarms: 1,
+    });
+  });
+
   it("counts false alarms on clean controls separately from the recall verdict", async () => {
     const report = await runReviewSeedGate(
       options({
