@@ -16327,6 +16327,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "windowTruncated",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
             }
           ],
           "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],

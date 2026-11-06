@@ -99,6 +99,9 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
       values: ["tail", "full", "verify", "anchor-lost"],
     },
     readMessageCount: { type: "integer", dataClass: "count", required: false },
+    // #4279: the window held only the newest messages of a session past the read bound, so older
+    // ones were left out of this pass. Present only then.
+    windowTruncated: { type: "boolean", dataClass: "closed-enum", required: false },
     retainedMessageCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
@@ -371,6 +374,8 @@ export interface OpenCodeV2SyncStats {
   readonly readMessageCount: number;
   /** The older messages the call carried over from earlier calls without reading them. */
   readonly retainedMessageCount: number;
+  /** Present when the window was the newest messages of a session past the read bound. */
+  readonly windowTruncated?: true;
 }
 
 /** What the messages of one `project` call are: the whole session, or only its newest window. */
@@ -1555,7 +1560,7 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
         scanned.anchor?.candidateIndex ?? 0,
         base === undefined,
       );
-    const sync = this.settleSync(base, messages.length);
+    const sync = this.settleSync(base, messages.length, window);
     const pending = {
       ...made,
       sync,
@@ -1568,7 +1573,11 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
     return pending;
   }
 
-  private settleSync(base: TailState | undefined, windowLength: number): OpenCodeV2SyncStats {
+  private settleSync(
+    base: TailState | undefined,
+    windowLength: number,
+    window: OpenCodeV2HistoryWindow | undefined,
+  ): OpenCodeV2SyncStats {
     const planned = this.plannedMode;
     this.plannedMode = undefined;
     this.tailPasses = base === undefined ? 0 : this.tailPasses + 1;
@@ -1576,6 +1585,7 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
       readMode: settledReadMode(base, planned),
       readMessageCount: windowLength,
       retainedMessageCount: base?.precedingCount ?? 0,
+      ...(window?.truncated === true ? { windowTruncated: true as const } : {}),
     };
     return this.syncOfLastProject;
   }
