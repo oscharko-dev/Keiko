@@ -324,12 +324,20 @@ class ExternalClient implements ExternalMcpConnection {
   async connect(): Promise<void> {
     this.options.signal.addEventListener("abort", this.#abort, { once: true });
     const signal = AbortSignal.any([this.options.signal, this.#lifetime.signal]);
-    await this.#client.connect(this.#transport, { signal, timeout: CONNECT_TIMEOUT_MS });
-    const listed = await this.#client.listTools(undefined, {
+    // The SDK can miss an abort that lands before its first request is dispatched (it then sends
+    // into a transport that is already closing); the wait itself must still end with the abort.
+    await abortable(
+      this.#client.connect(this.#transport, { signal, timeout: CONNECT_TIMEOUT_MS }),
       signal,
-      timeout: CONNECT_TIMEOUT_MS,
-      maxTotalTimeout: CONNECT_TIMEOUT_MS,
-    });
+    );
+    const listed = await abortable(
+      this.#client.listTools(undefined, {
+        signal,
+        timeout: CONNECT_TIMEOUT_MS,
+        maxTotalTimeout: CONNECT_TIMEOUT_MS,
+      }),
+      signal,
+    );
     if (this.options.signal.aborted || this.#closed) throw new ManagedMcpError("aborted");
     const catalog = admitCatalog(listed.tools, this.#allowed);
     this.#install(catalog, listingFingerprint(listed.tools));

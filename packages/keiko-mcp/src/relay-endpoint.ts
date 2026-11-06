@@ -81,18 +81,28 @@ const FAILURE_TEXT: Readonly<Partial<Record<ManagedMcpFailure, string>>> = {
   "invalid-arguments": "The tool arguments were not valid for this tool.",
 };
 
-function failureResult(
+function failureText(
   reason: ManagedMcpFailure,
   effect: ManagedMcpEffect,
   mutation: boolean,
-): CallToolResult {
+): string {
   const base = FAILURE_TEXT[reason] ?? "The tool call failed.";
-  const outcome = !mutation
-    ? ""
-    : effect === "none"
-      ? " Nothing was changed."
-      : " The change may or may not have been applied; check before repeating it.";
-  return { isError: true, content: [{ type: "text", text: `${base}${outcome}` }] };
+  if (!mutation) return base;
+  return effect === "none"
+    ? `${base} Nothing was changed.`
+    : `${base} The change may or may not have been applied; check before repeating it.`;
+}
+
+/** The only error the relay hands the SDK: fixed words, with the closed facts kept for tests. */
+class RelayToolFailure extends Error {
+  public constructor(
+    message: string,
+    public readonly reason: ManagedMcpFailure,
+    public readonly effect: ManagedMcpEffect,
+  ) {
+    super(message);
+    this.name = "RelayToolFailure";
+  }
 }
 
 function failureOf(error: unknown): { reason: ManagedMcpFailure; effect: ManagedMcpEffect } {
@@ -141,7 +151,8 @@ async function invokeRelayTool(input: RelayCall): Promise<CallToolResult> {
   } catch (error) {
     const { reason, effect } = failureOf(error);
     await settleFailedCall(input, context, permit, effect);
-    return failureResult(reason, effect, input.mutation);
+    // The SDK delivers a thrown error's message to the model as an error result.
+    throw new RelayToolFailure(failureText(reason, effect, input.mutation), reason, effect);
   }
 }
 

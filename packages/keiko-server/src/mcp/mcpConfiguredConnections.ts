@@ -253,12 +253,12 @@ function projectMcpResult(
     throw new ManagedMcpError("protocol-error");
   return safe;
 }
-/** A refusal before the call is effect-free, whether the check says no or cannot be made. */
+/** A refusal before the call, even one raised by the check itself, is effect-free. */
 function admittedBeforeCall(beforeEffect: () => boolean): boolean {
   try {
     return beforeEffect();
-  } catch {
-    return false;
+  } catch (error) {
+    throw error instanceof ManagedMcpError ? noEffectError(error.reason) : error;
   }
 }
 async function callObserved(
