@@ -29,6 +29,11 @@ each version's database schema.
 | `npmLaneRuntimeApprovals.ts`                                      | Part of the bump: the current entry restates the catalog runtime and the previous entry names the published packages, and `npmLaneRuntimeApprovals.test.ts` refuses anything else. The packages themselves, and the root optional dependencies, move only when the owner publishes. Verify the helper digests then. |
 | Performance evidence                                              | The tool-catalog pair is re-measured on the bump commit and the coding-runtime calibration moves with `--recalibrate-runtime` (`docs/qa/perf-evidence.md`). Both need Node 24.18.0 and npm 11.16.0, and a code change afterwards invalidates them, so they run last.                                                |
 
+An upgrade is its own pull request and carries only the rows of this table. Hardening, fixes and
+features found while upgrading are recorded in the upgrade issue and delivered in a separate pull
+request after the upgrade merged (owner decision, 2026-11-06), so the upgrade's own size stays
+reviewable.
+
 ## 2. Commands, in order
 
 Run them in a clean checkout of the branch that carries the bump.
