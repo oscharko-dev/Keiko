@@ -761,10 +761,9 @@ const ATTRIBUTED_RE =
 // "hat Anna gesagt", "Man hat mir gesagt"; "Ehrlich gesagt" names nobody.
 const SPEECH_PARTICIPLES = new Set(["gesagt", "erzählt", "gemeint", "behauptet"]);
 const SPEECH_AUXILIARIES = new Set(["hat", "haben", "hatte", "hatten"]);
-// Told by someone unnamed: "I was told …", "Mir wurde gesagt, …".
+// Told by someone unnamed: "I am told …", "I'm told …", "Mir wurde gesagt, …".
 const PASSIVE_SPEECH_RE =
-  /(?:^|[^\p{L}])(?:i\s+am|is|are|was|were|been|wird|werde|wurde|wurden)\s+(?:\p{L}+\s+)?(?:told|said|gesagt|erzählt)(?!\p{L})/iu;
-// The first words of each later clause, an aside in brackets included.
+  /(?:^|[^\p{L}])(?:i\s+am|i['’]m|is|are|was|were|been|wird|werde|wurde|wurden)\s+(?:\p{L}+\s+)?(?:told|said|gesagt|erzählt)(?!\p{L})/iu;
 // Each later clause up to the next mark, an aside in brackets included.
 const CLAUSE_HEAD_RE = /[,;:–—(-]\s*(\p{L}+)[^,;:–—()]*/gu;
 // A relative clause, reason or condition is no attribution: "…, which says nothing", "…, weil Anna
@@ -775,9 +774,10 @@ const RELATIVE_LEAD_RE =
 // it: "…, das sagt mein Chef", "…, das hat Anna gesagt", "…, that's what my boss says". A relative
 // "das" puts its verb at the end ("ein Tool, das Fehler erklärt") and stays a relative clause.
 const DEMONSTRATIVE_SPEECH_RE =
-  /^[,;:–—(-]\s*(?:(?:das|dies)\s+(?:sagt|sagte|sagen|sagten|meint|meinte|meinten|behauptet|behauptete|hat|haben|hatte|hatten)|(?:that|this)(?:['’]s|\s+is|\s+was)\s+what)(?!\p{L})/iu;
-// Words that may stand between the person's own subject and their speech verb: "I always tell".
-const SELF_SPEECH_ADVERBS = new Set([
+  /^[,;:–—(-]\s*(?:(?:das|dies)\s+(?:sagt|sagte|sagen|sagten|meint|meinte|meinten|behauptet|behauptete|glaubt|glaubte|denkt|dachte|hat|haben|hatte|hatten)|(?:that|this)(?:['’]s|\s+is|\s+was)\s+what)(?!\p{L})/iu;
+// Words that may stand between the person's own subject and their speech verb: an adverb ("I
+// always tell") or a modal or auxiliary ("I must say", "Ich muss sagen", "I have told").
+const SELF_SPEECH_BETWEEN = new Set([
   "immer",
   "oft",
   "auch",
@@ -792,6 +792,16 @@ const SELF_SPEECH_ADVERBS = new Set([
   "really",
   "sometimes",
   "just",
+  "muss",
+  "kann",
+  "möchte",
+  "würde",
+  "will",
+  "must",
+  "can",
+  "would",
+  "have",
+  "had",
 ]);
 // How far before a verb its speaker may stand: "Anna also says", "My boss always says".
 const SPEAKER_REACH = 3;
@@ -990,12 +1000,12 @@ function speaksInOpening(words: readonly string[]): boolean {
   );
 }
 
-// "I tell", "I always tell": the person's own subject stands right before the verb, or one adverb
-// stands between them.
+// "I tell", "I always tell", "I must say": the person's own subject stands right before the verb,
+// or one adverb, modal or auxiliary stands between them.
 function spokenBySelf(words: readonly string[], at: number): boolean {
-  if (SELF_SPEAKERS.has(words[at - 1]?.toLowerCase() ?? "")) return true;
-  const between = words[at - 1]?.toLowerCase() ?? "";
-  return SELF_SPEECH_ADVERBS.has(between) && SELF_SPEAKERS.has(words[at - 2]?.toLowerCase() ?? "");
+  const before = words[at - 1]?.toLowerCase() ?? "";
+  if (SELF_SPEAKERS.has(before)) return true;
+  return SELF_SPEECH_BETWEEN.has(before) && SELF_SPEAKERS.has(words[at - 2]?.toLowerCase() ?? "");
 }
 
 function speaksInClause(clause: string): boolean {
