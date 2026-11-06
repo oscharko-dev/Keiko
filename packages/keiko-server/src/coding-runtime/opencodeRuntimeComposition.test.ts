@@ -703,6 +703,7 @@ type FixtureSafeActivity = NonNullable<
 type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
+  readonly buildSettingsHome?: string;
   readonly ripgrepVerified?: boolean;
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   /** Extra sessions the runtime's session list reports (native child sessions, #3897). */
@@ -1272,6 +1273,14 @@ function fixtureContextGeometry(control: StartBridgeControl | undefined): Fixtur
   };
 }
 
+function buildSettingsHomeOption(control: StartBridgeControl | undefined): {
+  readonly buildSettingsHome?: string;
+} {
+  return control?.buildSettingsHome === undefined
+    ? {}
+    : { buildSettingsHome: control.buildSettingsHome };
+}
+
 async function startBridgeFixture(
   facade: CodingToolFacade,
   toolBridge: { readonly requestDeadlineMs: number; readonly maxInFlight: number } = {
@@ -1520,6 +1529,7 @@ async function startBridgeFixture(
     get toolProfile(): "direct" | "code-mode" | "native" | undefined {
       return control?.readToolProfile?.();
     },
+    ...buildSettingsHomeOption(control),
     // #3897: the host environment is offered to every profile; only the native profile's
     // allowlist copies anything from it, so a mapped launch must still carry no PATH.
     processEnv: { PATH: "/host/toolchain/bin", HOME: "/host/home" },
@@ -4330,6 +4340,66 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       }
     },
   );
+
+  // #4271: a native launch carries the user's mirror and registry as sanitized copies in its private
+  // home, never a credential, and records the admission body-free. The mapped profiles carry none.
+  it("admits sanitized build settings into a native run's private home and not a mapped one", async () => {
+    const realHome = tempDir("keiko-build-settings-home-");
+    mkdirSync(join(realHome, ".m2"), { recursive: true });
+    writeFileSync(
+      join(realHome, ".m2", "settings.xml"),
+      "<settings><servers><server><id>c</id><password>PLANTED-SECRET</password></server></servers>" +
+        "<mirrors><mirror><id>c</id><mirrorOf>*</mirrorOf><url>https://nexus.corp/m</url></mirror></mirrors></settings>",
+    );
+    writeFileSync(
+      join(realHome, ".npmrc"),
+      "registry=https://registry.corp/\n_authToken=PLANTED\n",
+    );
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "supervised-coding",
+      readToolProfile: () => "native",
+      buildSettingsHome: realHome,
+      activityLog,
+    });
+    try {
+      const userConfig = fixture.preparation.env.NPM_CONFIG_USERCONFIG ?? "";
+      expect(readFileSync(userConfig, "utf8")).toBe("registry=https://registry.corp/\n");
+      const settings = readFileSync(
+        join(dirname(dirname(userConfig)), "home", ".m2", "settings.xml"),
+        "utf8",
+      );
+      expect(settings).toContain("https://nexus.corp/m");
+      expect(JSON.stringify([settings, fixture.preparation.env])).not.toContain("PLANTED");
+      const admitted = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.native-build-settings.admitted",
+      );
+      expect(admitted).toHaveLength(1);
+      expect(admitted[0]).toMatchObject({ correlationId: FIXTURE_RUN_ID });
+      expect(admitted[0]?.extra).toMatchObject({
+        launchMode: "supervised-coding",
+        mavenSettings: "sanitized",
+        npmConfig: "sanitized",
+      });
+    } finally {
+      await fixture.stop();
+    }
+    const mapped = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      readToolProfile: () => "direct",
+      buildSettingsHome: realHome,
+      activityLog,
+    });
+    try {
+      expect(mapped.preparation.env).not.toHaveProperty("NPM_CONFIG_USERCONFIG");
+      expect(
+        activityLog.events.filter(
+          (event) => event.op === "coding-runtime.native-build-settings.admitted",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await mapped.stop();
+    }
+  });
 
   // #3903 AC1: the further gateway models and the configured per-agent overrides reach the binding,
   // and one body-free line records their counts.

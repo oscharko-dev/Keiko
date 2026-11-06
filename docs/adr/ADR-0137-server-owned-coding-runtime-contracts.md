@@ -2303,7 +2303,28 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `--openssl-config` with its file inline or as the next option, and the directories they name
   (the configuration file's directory, the include directory, the modules, an
   `--openssl-config=` file's directory) open read-only through `nativeOpenSslReadRoots`, under the
-  toolchain root rule: never the user's home or above it, a system prefix or a credential store. The launch gate that keeps a host secret out of the child compares the
+  toolchain root rule: never the user's home or above it, a system prefix or a credential store.
+  Build tools in a nested monorepo (#4271) follow the same shape. The build names `JAVA_HOME`,
+  `MAVEN_HOME`/`M2_HOME`/`GRADLE_HOME`, `MAVEN_OPTS`, `MAVEN_ARGS`, `GRADLE_OPTS`, the proxy family,
+  `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and `npm_config_registry` are inherited
+  (`nativeBuildInheritedEnvNames`) only when the value carries no credential (URL user-info, or a
+  Maven/Gradle option naming a password or token); the JDK or build tool they name, and the JDK of the
+  first `java` on `PATH`, open read-only through `nativeBuildToolReadRoots` under the toolchain root
+  rule, and only when the directory holds the tool's `bin/` executable. The private `HOME` hides the
+  user's build settings, so Keiko admits them as sanitized copies (`nativeBuildSettings.ts`, one
+  `coding-runtime.native-build-settings.admitted` line per run with closed dispositions and counts
+  only): `~/.m2/settings.xml` keeps `mirrors`, `proxies`, `profiles`, `activeProfiles` and
+  `pluginGroups` without `servers`, any credential-named element or URL user-info; `~/.npmrc` keeps
+  the registry, scoped registries, `strict-ssl`, proxy and fetch settings and none of its `_auth*`,
+  token or `//host/:` keys, written to a user-config file whose name is not `.npmrc` and bound with
+  `NPM_CONFIG_USERCONFIG` (the kernel denies the name `.npmrc` anywhere, so a sanitized `.npmrc` could
+  never be read, and the real file stays denied); `~/.gradle/gradle.properties` keeps proxy and daemon
+  keys only. Below Full access the sanitized Maven settings run `offline` against the user's
+  `~/.m2/repository` opened as one READ-ONLY root (`nativeBuildCacheReadRoots`), so a warm cache builds
+  without a network and a run can never poison the user's cache; at Full access the run resolves into
+  its own writable private cache. An in-repo `.npmrc` stays kernel-denied: no sanitized view is
+  possible without rewriting a workspace read, and registry routing is available through the user
+  config instead. The launch gate that keeps a host secret out of the child compares the
   child env (allowlisted non-secret names plus Keiko's own run projection) against the host values
   whose name says they carry a credential; comparing against every host value refused each
   Full-access run on a host that also exports the deployment ceiling, because the projected mode

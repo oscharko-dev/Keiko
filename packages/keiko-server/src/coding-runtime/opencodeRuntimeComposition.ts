@@ -28,7 +28,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { type IncomingHttpHeaders, type IncomingMessage } from "node:http";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { nativeBuildCacheReadRoots } from "@oscharko-dev/keiko-sandbox";
+import { nativeBuildCacheAdmitted, prepareNativeBuildSettings } from "./nativeBuildSettings.js";
 import { DatabaseSync } from "node:sqlite";
 import type {
   CodingWorkbenchRuntimeEvent,
@@ -502,6 +505,12 @@ export type McpOAuthIssuerPort = (
 
 export interface OpenCodeRuntimeCompositionInput {
   readonly mcpMutations?: NativeMcpMutationJournal | undefined;
+  /**
+   * The user's real home that a native run's sanitized build settings (`~/.m2/settings.xml`,
+   * `~/.npmrc`, `~/.gradle/gradle.properties`) are read from (#4271, `nativeBuildSettings.ts`).
+   * Absent uses the process's home; tests inject a fixture directory.
+   */
+  readonly buildSettingsHome?: string | undefined;
   /** Captured server-only observation profile. Absent retains the direct native history contract. */
   readonly toolProfile?: OpenCodeToolProfile | undefined;
   /**
@@ -2001,7 +2010,7 @@ async function materializePrepare(
   const result = preparedLaunch(
     input,
     bridge,
-    preparedEnvironment(profile.env, request.env, runRoot),
+    preparedRunEnvironment(input, request, profile.env, runRoot),
   );
   persistPreparedRun(runs, request, runRoot, password, configDigest, {
     continuation,
@@ -2017,6 +2026,46 @@ async function materializePrepare(
   recordAgentModelsBound(input.activityLog, request, agentModels);
   recordProviderPolicyBound(input.activityLog, request, profile, input.toolProfile ?? "direct");
   return result;
+}
+
+/** The launch environment: the profile's, the run's sanitized build settings and the inherited names. */
+function preparedRunEnvironment(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  profileEnv: Readonly<Record<string, string>>,
+  runRoot: string,
+): Readonly<Record<string, string>> {
+  return preparedEnvironment(
+    { ...profileEnv, ...admitNativeBuildSettings(input, request, runRoot) },
+    request.env,
+    runRoot,
+  );
+}
+
+/**
+ * The sanitized build settings of a native run (#4271): the environment that binds them, empty for
+ * the mapped profiles. The Maven cache is bound read-only below Full access, matching the kernel
+ * read root the backend opens for it (`nativeBuildCacheReadRoots`).
+ */
+function admitNativeBuildSettings(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+): Readonly<Record<string, string>> {
+  if (input.toolProfile !== "native") return {};
+  const realHome = input.buildSettingsHome ?? homedir();
+  const mode = request.env.KEIKO_CODING_MODE;
+  const repository = nativeBuildCacheAdmitted(mode)
+    ? nativeBuildCacheReadRoots(realHome)[0]
+    : undefined;
+  return prepareNativeBuildSettings({
+    runId: request.runId,
+    mode,
+    realHome,
+    stateRoot: runRoot,
+    readOnlyMavenRepository: repository,
+    activityLog: input.activityLog,
+  }).env;
 }
 
 /** The run's launch profile, with the MCP servers the operator's registry admits for it. */

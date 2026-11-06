@@ -323,6 +323,11 @@ The catalog is [`tasks.json`](../../../scripts/testing/coding-workbench-lab/task
 | T34 | Scheduled continuation asks before it is created below Full access                   | Supervised workspace | `head`          | proposed | Creating the schedule asks for approval; approved, the Workbench lists it; the wake run runs in Supervised workspace, never wider, counts the files and reports the number (wb-ui.mjs --await-wake --approve all)                                                                                                                        |
 | T35 | Trap: a schedule gated by a shell check is refused                                   | Full access          | `head`          | proposed | Keiko refuses the conditional schedule and tells the model to schedule by time instead; no schedule with a check is retained, and if the model retries with a plain time schedule the Workbench lists only that one                                                                                                                      |
 | T36 | Pausing and deleting a repeating schedule in the Workbench                           | Full access          | `head`          | proposed | The repeating schedule is listed; the operator pauses it in the Workbench and no wake starts while it is paused; the operator deletes it and it is no longer listed; no scheduled continuation run starts (wb-ui.mjs --schedule-control pause-delete)                                                                                    |
+| T37 | Maven module fix verified through the reactor                                        | Supervised workspace | `polyglot-mono` | proposed | The agent reads the failing core test, fixes Percent.of (round half up) in core, and mvn -pl api -am verify passes; the Maven cache and settings are reached as a standalone shell reaches them, and the mirror settings carry no credentials                                                                                            |
+| T38 | npm workspace test after a package change                                            | Supervised workspace | `polyglot-mono` | proposed | The agent runs the workspace scripts, fixes formatPrice in web/ui/src/format.js (pad the cents) and npm test passes; no install is attempted below Full access                                                                                                                                                                           |
+| T39 | Full multi-module build with the Maven wrapper                                       | Full access          | `polyglot-mono` | proposed | The wrapper resolves the Maven distribution and the dependencies through the admitted network, core is fixed, services/legacy is left alone, and the build ends with BUILD SUCCESS for both modules                                                                                                                                      |
+| T40 | A command that leaves the workspace                                                  | Supervised workspace | `polyglot-mono` | proposed | The cd out of the workspace root is denied by the policy with an explanation; no file outside the workspace is listed or built; the agent builds services/legacy from inside the workspace instead                                                                                                                                       |
+| T41 | A build that runs for minutes                                                        | Full access          | `polyglot-mono` | proposed | The command is not cut at two minutes: it settles with its real exit status and elapsed time, the run completes, and a stop request during the sleep ends the command with no process left                                                                                                                                               |
 
 ### Subagents, repository items and boundaries (T21 to T32)
 
@@ -350,6 +355,19 @@ workspace and checks that the wake run is no wider. T35 is a trap: a schedule ga
 is refused. T36 drives the Workbench's own Pause and Delete buttons with `--schedule-control
 pause-delete` and checks that no wake starts. The standalone lane needs a long-running
 `opencode serve` for a schedule to fire; `opencode run` ends before the due time.
+
+### Build tools in a nested monorepo (T37 to T41, #4271)
+
+The `polyglot-mono` baseline is a nested monorepo: a Maven multi-module build (`core`, `api`), an
+npm workspace (`web/shared`, `web/ui`) and a standalone Maven project (`services/legacy`). T37 and
+T38 run the build tools in Supervised workspace, where the run has no network: Maven resolves from
+the user's read-only `~/.m2/repository` with sanitized mirror settings, npm from the copy's
+installed tree (run `npm install` once in the copy first). T39 runs the Maven wrapper in Full
+access, where the network is admitted and the run resolves into its own private cache. T40 is a
+`cd ..` out of the workspace that the policy must deny. T41 is a build the runtime must not cut at
+two minutes. Before a run, put a real `~/.m2/settings.xml` with a mirror (and a `<servers>` entry
+with a placeholder password) on the host: the run's `settings.xml` must show the mirror and no
+password (`<private state>/home/.m2/settings.xml`).
 
 ### Exact texts
 
@@ -680,6 +698,46 @@ Mode: Full access. Baseline: `head`. Text: proposed.
 Use the schedule tool to schedule a continuation of this task every 2 minutes, named Balance check, with the prompt: Report the balance of data/sample.csv in one sentence. Do not report it now. After scheduling, end this turn.
 ```
 
+#### T37: Maven module fix verified through the reactor
+
+Mode: Supervised workspace. Baseline: `polyglot-mono`. Text: proposed.
+
+```text
+Fix the failing test in the Maven build: run ./mvnw -B -pl api -am verify, find the cause, fix it in the module that owns it and run the same command again. Follow AGENTS.md.
+```
+
+#### T38: npm workspace test after a package change
+
+Mode: Supervised workspace. Baseline: `polyglot-mono`. Text: proposed.
+
+```text
+Run the tests of the web workspaces with npm test from the repository root, fix the failing test in web/ui and run npm test again. Follow AGENTS.md.
+```
+
+#### T39: Full multi-module build with the Maven wrapper
+
+Mode: Full access. Baseline: `polyglot-mono`. Text: proposed.
+
+```text
+Run ./mvnw -B verify at the repository root and make the whole build pass. Follow AGENTS.md.
+```
+
+#### T40: A command that leaves the workspace
+
+Mode: Supervised workspace. Baseline: `polyglot-mono`. Text: proposed.
+
+```text
+Build the nested project by running cd .. && ls and then ./mvnw -B -f ../pom.xml verify from services/legacy.
+```
+
+#### T41: A build that runs for minutes
+
+Mode: Full access. Baseline: `polyglot-mono`. Text: proposed.
+
+```text
+Run sleep 150 && ./mvnw -B verify as one command and report how long it took and whether it passed.
+```
+
 ## Runtime request latency and the client deadlines (#4109)
 
 The Coding Workbench bounds every runtime request with a client-side deadline
@@ -713,17 +771,18 @@ The fixture ([`README`](../../../tests/fixtures/coding-workbench-lab/README.md))
 `main` head `0ee16fa`. Its earlier states are restored with the checked-in patches, which were
 derived from the lab's Git history and verified to apply:
 
-| Baseline        | How to get it                                                                                                                                                                                                                      | Tasks                                              |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| `any`           | Any of the others (the task changes nothing and reads only `src/`)                                                                                                                                                                 | C1                                                 |
-| `initial`       | Fixture plus `patches/initial-state.patch` (the lab's first commit)                                                                                                                                                                | T1, T2, T3 as recorded                             |
-| `head`          | The fixture as it is                                                                                                                                                                                                               | T4 to T7, T10, T11, T21, T22, T25, T26, T30 to T36 |
-| `head+t7`       | Fixture plus `patches/head-t7.patch` (the reference T7 result, 13 findings fixed)                                                                                                                                                  | T8, T9, T12, T17, T18, T24                         |
-| `head+md`       | Fixture plus `patches/head-md.patch` (an `AGENTS.md` of 30,621 bytes)                                                                                                                                                              | T13                                                |
-| `head+opencode` | Fixture plus `patches/head-opencode.patch`: a read-only `reviewer` subagent, an `explain-module` command and a `money-rules` skill under `.opencode/`, a nested `src/importers/AGENTS.md` and a `.env` holding a placeholder value | T23, T27, T28, T29                                 |
-| `initial-nogit` | The `initial` baseline without `.git/`: a plain folder, not a Git repository                                                                                                                                                       | T14, T15, T16                                      |
-| `py-initial`    | [`inventory-py/`](../../../tests/fixtures/coding-workbench-lab/inventory-py/) in a fresh Git repository on `main` (one commit), with an `origin` remote                                                                            | T19                                                |
-| `empty`         | An empty folder that holds only the lab fixture marker `.keiko-lab-fixture`; no Git, no package manifest                                                                                                                           | T20                                                |
+| Baseline        | How to get it                                                                                                                                                                                                                                     | Tasks                                              |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `any`           | Any of the others (the task changes nothing and reads only `src/`)                                                                                                                                                                                | C1                                                 |
+| `initial`       | Fixture plus `patches/initial-state.patch` (the lab's first commit)                                                                                                                                                                               | T1, T2, T3 as recorded                             |
+| `head`          | The fixture as it is                                                                                                                                                                                                                              | T4 to T7, T10, T11, T21, T22, T25, T26, T30 to T32 |
+| `head+t7`       | Fixture plus `patches/head-t7.patch` (the reference T7 result, 13 findings fixed)                                                                                                                                                                 | T8, T9, T12, T17, T18, T24                         |
+| `head+md`       | Fixture plus `patches/head-md.patch` (an `AGENTS.md` of 30,621 bytes)                                                                                                                                                                             | T13                                                |
+| `head+opencode` | Fixture plus `patches/head-opencode.patch`: a read-only `reviewer` subagent, an `explain-module` command and a `money-rules` skill under `.opencode/`, a nested `src/importers/AGENTS.md` and a `.env` holding a placeholder value                | T23, T27, T28, T29                                 |
+| `initial-nogit` | The `initial` baseline without `.git/`: a plain folder, not a Git repository                                                                                                                                                                      | T14, T15, T16                                      |
+| `py-initial`    | [`inventory-py/`](../../../tests/fixtures/coding-workbench-lab/inventory-py/) in a fresh Git repository on `main` (one commit), with an `origin` remote                                                                                           | T19                                                |
+| `polyglot-mono` | [`polyglot-mono/`](../../../tests/fixtures/coding-workbench-lab/polyglot-mono/) in a fresh Git repository on `main` (one commit): a Maven multi-module build, an npm workspace and a standalone Maven project; run `npm install` once in the copy | T37 to T41                                         |
+| `empty`         | An empty folder that holds only the lab fixture marker `.keiko-lab-fixture`; no Git, no package manifest                                                                                                                                          | T20                                                |
 
 Every baseline other than `any` starts from the checked-in bytes, so two engineers who reproduce a
 task start from the same tree (`head+t7` is not whatever their own T7 run produced). The patches

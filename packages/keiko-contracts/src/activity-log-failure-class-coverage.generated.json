@@ -11528,6 +11528,7 @@
       "lifecycleOperations": {
         "start": [],
         "state": [
+          "coding-runtime.native-build-settings.admitted",
           "coding-runtime.native-external-roots.resolved",
           "coding-runtime.native-formatter.bound",
           "coding-runtime.native-narrowing.refused",
@@ -11540,6 +11541,10 @@
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "coding-runtime.native-build-settings.admitted",
+          "mode": "correlation"
+        },
         {
           "op": "coding-runtime.native-external-roots.resolved",
           "mode": "correlation"
@@ -11567,6 +11572,7 @@
       ],
       "lossSignals": [],
       "resourceSignals": [
+        "coding-runtime.native-build-settings.admitted",
         "coding-runtime.native-external-roots.resolved",
         "coding-runtime.native-formatter.bound",
         "coding-runtime.native-narrowing.refused",
@@ -11576,6 +11582,78 @@
       ],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "coding-runtime.native-build-settings.admitted",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "droppedLineCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "gradleProperties",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "launchMode",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "mavenCache",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "mavenSettings",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "npmConfig",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "runId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": true
+            },
+            {
+              "name": "strippedElementCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-runtime.native-build-settings.admitted.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "coding-runtime.native-external-roots.resolved",
           "owner": "keiko-server",

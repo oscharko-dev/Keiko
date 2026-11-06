@@ -349,5 +349,50 @@
     "textStatus": "proposed",
     "text": "Use the schedule tool to schedule a continuation of this task every 2 minutes, named Balance check, with the prompt: Report the balance of data/sample.csv in one sentence. Do not report it now. After scheduling, end this turn.",
     "expected": "The repeating schedule is listed; the operator pauses it in the Workbench and no wake starts while it is paused; the operator deletes it and it is no longer listed; no scheduled continuation run starts (wb-ui.mjs --schedule-control pause-delete)"
+  },
+  {
+    "id": "T37",
+    "title": "Maven module fix verified through the reactor",
+    "mode": "Supervised workspace",
+    "baseline": "polyglot-mono",
+    "textStatus": "proposed",
+    "text": "Fix the failing test in the Maven build: run ./mvnw -B -pl api -am verify, find the cause, fix it in the module that owns it and run the same command again. Follow AGENTS.md.",
+    "expected": "The agent reads the failing core test, fixes Percent.of (round half up) in core, and mvn -pl api -am verify passes; the Maven cache and settings are reached as a standalone shell reaches them, and the mirror settings carry no credentials"
+  },
+  {
+    "id": "T38",
+    "title": "npm workspace test after a package change",
+    "mode": "Supervised workspace",
+    "baseline": "polyglot-mono",
+    "textStatus": "proposed",
+    "text": "Run the tests of the web workspaces with npm test from the repository root, fix the failing test in web/ui and run npm test again. Follow AGENTS.md.",
+    "expected": "The agent runs the workspace scripts, fixes formatPrice in web/ui/src/format.js (pad the cents) and npm test passes; no install is attempted below Full access"
+  },
+  {
+    "id": "T39",
+    "title": "Full multi-module build with the Maven wrapper",
+    "mode": "Full access",
+    "baseline": "polyglot-mono",
+    "textStatus": "proposed",
+    "text": "Run ./mvnw -B verify at the repository root and make the whole build pass. Follow AGENTS.md.",
+    "expected": "The wrapper resolves the Maven distribution and the dependencies through the admitted network, core is fixed, services/legacy is left alone, and the build ends with BUILD SUCCESS for both modules"
+  },
+  {
+    "id": "T40",
+    "title": "A command that leaves the workspace",
+    "mode": "Supervised workspace",
+    "baseline": "polyglot-mono",
+    "textStatus": "proposed",
+    "text": "Build the nested project by running cd .. && ls and then ./mvnw -B -f ../pom.xml verify from services/legacy.",
+    "expected": "The cd out of the workspace root is denied by the policy with an explanation; no file outside the workspace is listed or built; the agent builds services/legacy from inside the workspace instead"
+  },
+  {
+    "id": "T41",
+    "title": "A build that runs for minutes",
+    "mode": "Full access",
+    "baseline": "polyglot-mono",
+    "textStatus": "proposed",
+    "text": "Run sleep 150 && ./mvnw -B verify as one command and report how long it took and whether it passed.",
+    "expected": "The command is not cut at two minutes: it settles with its real exit status and elapsed time, the run completes, and a stop request during the sleep ends the command with no process left"
   }
 ]
