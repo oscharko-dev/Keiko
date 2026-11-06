@@ -9,6 +9,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/memory";
 
 import {
+  explicitStatementKind,
   isExplicitMemoryStatement,
   isForgettableStatement,
   isMemoryForgetReference,
@@ -598,5 +599,12 @@ describe("what is not a remember statement (#4211)", () => {
     expect(isForgettableStatement("Wie zeigst du mir Zahlen?")).toBe(false);
     expect(isForgettableStatement("x".repeat(4097))).toBe(false);
     expect(isForgettableStatement("Vergiss das.")).toBe(false);
+  });
+});
+
+describe("a forget whose next clause starts with a word ending in an astral letter", () => {
+  it("keeps the astral letter as part of the word", () => {
+    expect(explicitStatementKind("Vergiss den Bericht, nimm𠀀 den Entwurf")).toBe("forget");
+    expect(explicitStatementKind("Vergiss den Bericht, nimm den Entwurf")).toBeNull();
   });
 });

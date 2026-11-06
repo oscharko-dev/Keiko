@@ -2,7 +2,7 @@
 // person's own words only. "Im Zweifel zu wenig": a check that cannot confirm a fact drops it, and
 // the reason stays a closed value.
 
-import { anyWordPattern, factWords, hasWord, isNegated } from "./fact-text.js";
+import { anyWordPattern, factWords, foldWordCase, hasWord, isNegated } from "./fact-text.js";
 import { looksLikePersonalIdentifier } from "./secret-patterns.js";
 
 export const FACT_DROP_REASONS = [
@@ -784,19 +784,35 @@ const PASSIVE_AUXILIARIES = new Set(
   "i'm i’m is are was were be being been wird werde wurde wurden".split(" "),
 );
 const PASSIVE_SPEECH_WORDS = new Set(["told", "said", "gesagt", "erzählt"]);
-const LEADING_NON_LETTERS_RE = /^[^\p{L}]*/u;
 const LEADING_LETTERS_RE = /^\p{L}*/u;
 const ONLY_LETTERS_RE = /^\p{L}+$/u;
+const LETTER_RE = /\p{L}/u;
+// "I'm" ends a word only as a whole: "x-i'm" counts, "him'm" does not.
+const I_AM_END_RE = /(?:^|[^\p{L}])(i['’]m)$/u;
 
+// The letters a word ends with, by code point, so an astral letter stays one letter. A dash or
+// comma glued before them ends the earlier word: "so—wurde" ends in "wurde".
+function lastWord(token: string): string {
+  let start = 0;
+  let end = 0;
+  for (const character of token) {
+    end += character.length;
+    if (!LETTER_RE.test(character)) start = end;
+  }
+  return token.slice(start);
+}
+
+// The auxiliary stands right before the space, any word glued before it ("ok,was told"); a mark
+// after it ("was, told") ends the clause. "am" is the auxiliary only as the word after "I".
 function isPassiveAuxiliary(tokens: readonly string[], at: number): boolean {
-  const word = (tokens[at] ?? "").replace(LEADING_NON_LETTERS_RE, "");
-  if (word === "am") return (tokens[at - 1] ?? "").replace(LEADING_NON_LETTERS_RE, "") === "i";
-  return PASSIVE_AUXILIARIES.has(word);
+  const token = tokens[at] ?? "";
+  if (token === "am") return lastWord(tokens[at - 1] ?? "") === "i";
+  return PASSIVE_AUXILIARIES.has(I_AM_END_RE.exec(token)?.[1] ?? lastWord(token));
 }
 
 // Being told: an auxiliary, at most one word, then "told", "said", "gesagt" or "erzählt".
 function isToldPassively(text: string): boolean {
-  const tokens = text.toLowerCase().split(/\s+/u);
+  const tokens = foldWordCase(text).split(/\s+/u);
   return tokens.some((token, at) => {
     if (!PASSIVE_SPEECH_WORDS.has(LEADING_LETTERS_RE.exec(token)?.[0] ?? "")) return false;
     if (isPassiveAuxiliary(tokens, at - 1)) return true;
@@ -826,7 +842,7 @@ const DEMONSTRATIVE_VERBS = new Set(
 const THAT_IS_RE = /^(?:that|this)['’]s$/u;
 
 function opensDemonstrativeSpeech(head: string): boolean {
-  const words = head.slice(1).trimStart().toLowerCase().split(/\s+/u);
+  const words = foldWordCase(head.slice(1).trimStart()).split(/\s+/u);
   const [first = "", second = "", third = ""] = words;
   const letters = (word: string): string => LEADING_LETTERS_RE.exec(word)?.[0] ?? "";
   if (DEMONSTRATIVES.has(first)) return DEMONSTRATIVE_VERBS.has(letters(second));
@@ -901,7 +917,7 @@ const TEXT_TASK_VERBS = new Set(
 );
 
 function asksForTextWork(lead: string): boolean {
-  const words = lead.toLowerCase().split(/\s+/u);
+  const words = foldWordCase(lead).split(/\s+/u);
   const verb = words[0] === "bitte" || words[0] === "please" ? words[1] : words[0];
   return TEXT_TASK_VERBS.has(LEADING_LETTERS_RE.exec(verb ?? "")?.[0] ?? "");
 }
@@ -1021,18 +1037,28 @@ function finalWord(token: string | undefined): string {
   return FINAL_WORD_RE.exec(token ?? "")?.[1] ?? "";
 }
 
-// The first word at or after `from`, past at most `reach` plain words, that satisfies `ends`.
+// A token at or after `from`, past at most `reach` plain words, that satisfies `holds`. A mark ends
+// the search: "ich höre, auf" is no "höre auf".
+function holdsWithin(
+  tokens: readonly string[],
+  from: number,
+  reach: number,
+  holds: (at: number) => boolean,
+): boolean {
+  for (let at = from; at <= from + reach && at < tokens.length; at += 1) {
+    if (holds(at)) return true;
+    if (!ONLY_LETTERS_RE.test(tokens[at] ?? "")) return false;
+  }
+  return false;
+}
+
 function endsWithin(
   tokens: readonly string[],
   from: number,
   reach: number,
   ends: (word: string) => boolean,
 ): boolean {
-  for (let at = from; at <= from + reach && at < tokens.length; at += 1) {
-    if (ends(finalWord(tokens[at]))) return true;
-    if (!ONLY_LETTERS_RE.test(tokens[at] ?? "")) return false;
-  }
-  return false;
+  return holdsWithin(tokens, from, reach, (at) => ends(finalWord(tokens[at])));
 }
 
 function isTimeAhead(word: string): boolean {
@@ -1058,13 +1084,9 @@ function subjectEnds(tokens: readonly string[]): readonly number[] {
 // habitual "I switch between tabs" changes nothing, so a plain "switch" or "wechsle" needs a time
 // ahead: "aber ich wechsle bald zu Numbers".
 function announcesChange(rest: string): boolean {
-  const tokens = rest.toLowerCase().split(/\s+/u);
+  const tokens = foldWordCase(rest).split(/\s+/u);
   return subjectEnds(tokens).some((from) => {
-    for (let at = from; at <= from + WORDS_BEFORE_CHANGE && at < tokens.length; at += 1) {
-      if (changesAt(tokens, at)) return true;
-      if (!ONLY_LETTERS_RE.test(tokens[at] ?? "")) return false;
-    }
-    return false;
+    return holdsWithin(tokens, from, WORDS_BEFORE_CHANGE, (at) => changesAt(tokens, at));
   });
 }
 
@@ -1274,7 +1296,7 @@ function isReported(opening: string, rest: string): boolean {
   if (namesSource(opening) || speaksInOpening(splitWords(opening))) return true;
   return [...rest.matchAll(CLAUSE_HEAD_RE)].some((head) => {
     const lead = head[1] ?? "";
-    if (RELATIVE_LEADS.has(lead.toLowerCase()) && !opensDemonstrativeSpeech(head[0])) return false;
+    if (RELATIVE_LEADS.has(foldWordCase(lead)) && !opensDemonstrativeSpeech(head[0])) return false;
     return speaksInClause(head[0]);
   });
 }

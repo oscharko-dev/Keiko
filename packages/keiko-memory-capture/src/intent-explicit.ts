@@ -19,6 +19,7 @@ import { buildForget, buildProposal, buildUpdate } from "./_envelopes.js";
 import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
 import { memoryTextCaptureRejectionReason } from "./capture-safety.js";
+import { foldWordCase } from "./fact-text.js";
 import type {
   CaptureContext,
   CaptureMemoryResolver,
@@ -190,8 +191,9 @@ const NAMING_WORDS = new Set([
 const NAMING_STEMS = ["ein", "mein", "dein", "unser"];
 
 function opensWithNamedThing(target: string): boolean {
-  const first = FIRST_WORD_RE.exec(target)?.[1]?.toLowerCase();
-  if (first === undefined) return false;
+  const named = FIRST_WORD_RE.exec(target)?.[1];
+  if (named === undefined) return false;
+  const first = foldWordCase(named);
   return NAMING_WORDS.has(first) || NAMING_STEMS.some((stem) => first.startsWith(stem));
 }
 const CONTINUATION_RE = /,|\s(?:und|and|dann|then)(?!\p{L})/gu;
@@ -218,16 +220,21 @@ function asksForTask(target: string): boolean {
 
 const LETTER_RE = /\p{L}/u;
 
-// Linear on any input: "nimm," and "use." are the verbs.
+// Linear on any input: "nimm," and "use." are the verbs. By code point, so a trailing astral letter
+// ("nimm𠀀") stays part of the word.
 function withoutTrailingNonLetters(word: string): string {
-  let end = word.length;
-  while (end > 0 && !LETTER_RE.test(word.charAt(end - 1))) end -= 1;
-  return word.slice(0, end);
+  let end = 0;
+  let kept = 0;
+  for (const character of word) {
+    end += character.length;
+    if (LETTER_RE.test(character)) kept = end;
+  }
+  return word.slice(0, kept);
 }
 
 // "look" asks for work only as "look at": "look, I moved" corrects the thing to forget.
 function isTaskVerb(word: string, next: string): boolean {
-  const verb = withoutTrailingNonLetters(word.toLowerCase());
+  const verb = withoutTrailingNonLetters(foldWordCase(word));
   return TASK_VERBS.has(verb) || (verb === "look" && next.toLowerCase() === "at");
 }
 

@@ -218,6 +218,16 @@ export function isNegated(text: string): boolean {
   return normalized.split(/[^\p{L}\p{N}-]+/u).some((word) => NEGATION_WORDS.has(trimHyphens(word)));
 }
 
+// Lower case as a case-insensitive pattern compares, so a word set answers what `/iu` answered.
+// `/iu` folds the long s to "s" ("ruleſ" is "rules"), which `toLowerCase` keeps, and keeps the
+// dotted capital I one letter, which `toLowerCase` splits into "i" and a combining dot.
+export function foldWordCase(text: string): string {
+  return text
+    .split("İ")
+    .map((part) => part.toLowerCase().replaceAll("ſ", "s"))
+    .join("İ");
+}
+
 export function hasWord(words: readonly string[], word: string): boolean {
   return words.some((candidate) => sameFactWord(candidate, word));
 }

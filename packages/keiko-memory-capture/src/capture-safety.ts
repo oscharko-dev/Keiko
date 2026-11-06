@@ -2,6 +2,7 @@ import { detectPromptInjectionSignals } from "@oscharko-dev/keiko-security";
 
 import type { RejectionReason } from "./errors.js";
 import { classifyDeniedCategory } from "./classify-denied-category.js";
+import { foldWordCase } from "./fact-text.js";
 import { classifySensitivity } from "./policy.js";
 import { scanForSecrets } from "./secret-patterns.js";
 import type { CapturePolicyOptions } from "./types.js";
@@ -64,12 +65,11 @@ const RULE_NOUNS = new Set(
 );
 const SENTENCE_RE = /[^.!?\n]+/gu;
 const NON_LETTERS_RE = /[^\p{L}]+/u;
+const SYSTEM_PROMPT_RE = /(?:^|[^\p{L}])system\s+prompt(?!\p{L})/iu;
 
 function isRuleVerb(word: string): boolean {
   return RULE_VERBS.has(word) || RULE_VERB_STEMS.some((stem) => word.startsWith(stem));
 }
-
-const SYSTEM_PROMPT_RE = /(?:^|[^\p{L}])system\s+prompt(?!\p{L})/iu;
 
 function namesRules(sentence: string, words: readonly string[]): boolean {
   return words.some((word) => RULE_NOUNS.has(word)) || SYSTEM_PROMPT_RE.test(sentence);
@@ -77,7 +77,7 @@ function namesRules(sentence: string, words: readonly string[]): boolean {
 
 function asksToOverrideRules(text: string): boolean {
   return [...text.matchAll(SENTENCE_RE)].some(([sentence]) => {
-    const words = sentence.toLowerCase().split(NON_LETTERS_RE);
+    const words = foldWordCase(sentence).split(NON_LETTERS_RE);
     return words.some((word) => isRuleVerb(word)) && namesRules(sentence, words);
   });
 }

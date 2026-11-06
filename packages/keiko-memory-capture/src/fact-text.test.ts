@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isNegated } from "./fact-text.js";
+import { foldWordCase, isNegated } from "./fact-text.js";
 
 describe("isNegated", () => {
   it.each(["Nutzt no-code Werkzeuge", "Ist Nicht-Raucher", "Uses no-code tools"])(
@@ -16,4 +16,14 @@ describe("isNegated", () => {
       expect(isNegated(text)).toBe(true);
     },
   );
+});
+
+describe("foldWordCase", () => {
+  it("folds as a case-insensitive pattern compares", () => {
+    expect(foldWordCase("Ignore the RULEſ")).toBe("ignore the rules");
+  });
+
+  it("keeps the dotted capital I one letter", () => {
+    expect(foldWordCase("İst ES so")).toBe("İst es so");
+  });
 });
