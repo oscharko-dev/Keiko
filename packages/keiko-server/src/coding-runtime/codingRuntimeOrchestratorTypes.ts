@@ -46,6 +46,8 @@ export interface CodingRuntimeLaunchResolver {
   ) => Promise<void>;
   /** Resolves server-only launch material; the intent remains transient and must not be persisted. */
   resolve(input: {
+    /** Ends a preparation's wait when the client gave the start up; only `prepare` reads it. */
+    readonly abandoned?: AbortSignal | undefined;
     readonly runId: string;
     readonly requestId: string;
     readonly taskIntent: string;
@@ -181,6 +183,8 @@ export type CodingRuntimeOrchestratorResult =
       readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure;
       // #3603: the closed reason a start refused the chosen model with, for the Workbench's sentence.
       readonly modelRefusalReason?: CodingWorkbenchModelRefusalReason | undefined;
+      // #4271: the start's client hung up before a run existed; the refusal line names it.
+      readonly startAbandoned?: true;
       // The run id a refused start had already minted (issue admission, launch resolution). The
       // route's refusal line carries it, so the request correlation the operator sees as the support
       // id leads to the run-scoped lines that hold the actual cause; without it the two halves of one

@@ -1158,6 +1158,15 @@ describe("native session continuity on the pinned OpenCode runtime", () => {
       await withWorld(async (world) => {
         const { sessionId } = await settledRun(world, ["FIRST-QUESTION"]);
         const source = join(world.fixture.root, "first-run", "state", "opencode.db");
+        if (process.env.KEIKO_WRITE_OPENCODE_PERSISTENCE_FIXTURE === "1") {
+          writeFileSync(
+            new URL(
+              `./opencodePersistenceSchema.opencode-${RUNTIME_VERSION}.fixture.json`,
+              import.meta.url,
+            ),
+            `${JSON.stringify(sortedSchema(persistenceSchema(source)), null, 2)}\n`,
+          );
+        }
         const contract = OPENCODE_PERSISTENCE_SCHEMAS[RUNTIME_VERSION];
         expect(contract).toBeDefined();
         expect(persistenceSchema(source)).toEqual(
@@ -1252,6 +1261,14 @@ describe("native session continuity on the pinned OpenCode runtime", () => {
     240_000,
   );
 });
+
+function sortedSchema(
+  schema: Readonly<Record<string, readonly string[]>>,
+): Record<string, readonly string[]> {
+  return Object.fromEntries(
+    Object.entries(schema).sort(([left], [right]) => left.localeCompare(right)),
+  );
+}
 
 /** Every producer table (SQLite's own excepted) with its sorted column names. */
 function persistenceSchema(path: string): Record<string, readonly string[]> {

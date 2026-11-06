@@ -266,6 +266,46 @@ describe("production coding runtime resolver", () => {
     expect(prepareManagedModel).toHaveBeenCalledOnce();
   });
 
+  // #4271: the model check belongs to the readiness queue and may outlast the start. A start its
+  // client gave up stops waiting for it, so the lane is free for the next start.
+  it.each([
+    ["while the model check runs", false],
+    ["before the model check began", true],
+  ])("stops waiting for the model check when the client leaves %s", async (_, before) => {
+    const fixture = workspaceFixture();
+    let checks = 0;
+    const prepareManagedModel = vi.fn((): Promise<void> => {
+      checks += 1;
+      return new Promise<void>(() => undefined);
+    });
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(
+        fixture,
+        vi.fn((input: ProductionRuntimeBackendInput) => backendRun(input.request.runId)),
+        confirmationFixture().consumer,
+        undefined,
+        { workspaceAuthority: { ...fixture.authority, prepareManagedModel } },
+      ),
+    );
+    if (host?.launchResolver.prepare === undefined) throw new Error("expected start preparation");
+    const client = new AbortController();
+    if (before) client.abort();
+    const prepared = host.launchResolver.prepare({
+      ...launchRequest(fixture.workspace),
+      modelId: "chosen-model",
+      abandoned: client.signal,
+    });
+    if (!before) {
+      await vi.waitFor(() => {
+        expect(checks).toBe(1);
+      });
+      client.abort();
+    }
+    await expect(prepared).resolves.toBeUndefined();
+    // The check itself is shared and keeps running; only this start stopped waiting for it.
+    expect(prepareManagedModel).toHaveBeenCalledOnce();
+  });
+
   it("carries the admitted issue through the production context and start confirmation", () => {
     const fixture = workspaceFixture();
     const confirmations = confirmationFixture();

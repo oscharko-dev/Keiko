@@ -2400,6 +2400,56 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     }
   });
 
+  it("starts without memory when the stored vault does not open with the available key", async () => {
+    const memoryDir = tmp("memory-vault-unreadable-");
+    const keyA = Buffer.alloc(32, 7).toString("base64");
+    const keyB = Buffer.alloc(32, 9).toString("base64");
+    const sealed = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("memory-vault-unreadable-evidence-"),
+      env: { KEIKO_MEMORY_DIR: memoryDir, KEIKO_MEMORY_KEY: keyA },
+      store: createInMemoryUiStore(),
+    });
+    requiredMemoryVault(sealed).insertMemory(memoryAuditFixture());
+    await sealed.dispose?.();
+
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const withheld = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("memory-vault-unreadable-evidence-"),
+      env: { KEIKO_MEMORY_DIR: memoryDir, KEIKO_MEMORY_KEY: keyB },
+      diagnostics: { record: (record) => diagnostics.push(record) },
+      store: createInMemoryUiStore(),
+    });
+    try {
+      expect(withheld.memoryVault).toBeUndefined();
+      expect(withheld.memoryAuthorization).toBeUndefined();
+      expect(diagnostics).toEqual([
+        expect.objectContaining({
+          operation: "server.composition",
+          source: "memory-vault.open",
+          code: "vault-unreadable",
+          errorClass: "MemoryStorageError",
+          message: "The memory vault could not be opened with the available key.",
+        }) as unknown,
+      ]);
+    } finally {
+      await withheld.dispose?.();
+    }
+
+    const reopened = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("memory-vault-unreadable-evidence-"),
+      env: { KEIKO_MEMORY_DIR: memoryDir, KEIKO_MEMORY_KEY: keyA },
+      store: createInMemoryUiStore(),
+    });
+    try {
+      expect(requiredMemoryVault(reopened).getMemory(memoryAuditFixture().id)).toBeDefined();
+    } finally {
+      await reopened.dispose?.();
+    }
+  });
+
   it("seeds memory audit transition state before the first post-restart mutation (#3189)", () => {
     const memoryDir = tmp("memory-audit-restart-");
     const evidenceDir = tmp("memory-audit-restart-evidence-");

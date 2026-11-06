@@ -8,6 +8,7 @@ import type {
   CatalogVersionRef,
   CatalogRuntimeRef,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { OPENCODE_CATALOG_RUNTIME } from "@oscharko-dev/keiko-contracts/runtime/opencode-runtime-pins";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
@@ -69,8 +70,8 @@ function qualifyCodeModeExtensions(
     hasExecute &&
       profile.id === "opencode-code-mode" &&
       profile.version === 1 &&
-      runtime.id === "opencode" &&
-      runtime.version === "2.1.4" &&
+      runtime.id === OPENCODE_CATALOG_RUNTIME.id &&
+      runtime.version === OPENCODE_CATALOG_RUNTIME.version &&
       extensions.some((extension) => extension.alias === "question"),
     "unrepresentable-projection",
   );

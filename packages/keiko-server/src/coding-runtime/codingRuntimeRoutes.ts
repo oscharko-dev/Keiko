@@ -54,13 +54,17 @@ import {
 import { SSE_HEADERS, startSseHeartbeat } from "../sse.js";
 import { writeSseFrame } from "../sse-write.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
-import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
+import type {
+  CodingRuntimeOrchestrator,
+  CodingRuntimeOrchestratorResult,
+} from "./codingRuntimeOrchestrator.js";
 import { openCodeSelectableAgents } from "./opencodeAgents.js";
 import { openCodePromptInputs } from "./opencodePromptInputs.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-type RuntimeMutationRefusalReason = CodingWorkbenchRuntimeFailureCode | "payload-too-large";
+type RuntimeMutationRefusalReason =
+  CodingWorkbenchRuntimeFailureCode | "payload-too-large" | "start-abandoned";
 
 // Every state-changing coding-runtime route the `mutation()` funnel below serves. Named after the
 // route it backs so a log line names exactly which mutation was refused.
@@ -110,6 +114,7 @@ const RUNTIME_REFUSAL_REASONS = [
   "verification-not-evidenced",
   "model-unavailable",
   "workspace-unqualified",
+  "start-abandoned",
   "prompt-allowance-exhausted",
   "envelope-duration-exhausted",
   "output-exhausted-repeated",
@@ -162,6 +167,7 @@ const RUNTIME_REFUSAL_ERROR_KINDS: Partial<
   Readonly<Record<RuntimeMutationRefusalReason, ActivityLogErrorKind>>
 > = {
   "runtime-unavailable": "unavailable",
+  "start-abandoned": "cancelled",
   "issue-context-unavailable": "unavailable",
   "model-unavailable": "unavailable",
   "workspace-unqualified": "conflict",
@@ -283,6 +289,12 @@ function notFound(correlationId?: string): RouteResult {
     status: 404,
     body: errorBody("CODING_RUNTIME_RUN_NOT_FOUND", "Runtime run was not found.", correlationId),
   };
+}
+
+function refusalReason(
+  result: Extract<CodingRuntimeOrchestratorResult, { readonly ok: false }>,
+): RuntimeMutationRefusalReason {
+  return result.startAbandoned === true ? "start-abandoned" : result.failureCode;
 }
 
 // AGENTS.md §8 rule 1 / epic #3384 defect B: a refused runtime operation (a malformed body, a
@@ -491,7 +503,7 @@ async function mutation(
       // result's run id comes first: a refused start or retry minted a NEW run before it was refused,
       // and a retry's URL names only the predecessor -- keyed on that, the refusal and its cause
       // shared no key (review of PR #3452). The URL run is the fallback for a result without one.
-      logMutationRefusal(deps, ctx, operationName, result.runId ?? runId, result.failureCode);
+      logMutationRefusal(deps, ctx, operationName, result.runId ?? runId, refusalReason(result));
       return failureResult(
         result.failureCode,
         ctx.correlationId,
@@ -506,12 +518,23 @@ async function mutation(
   );
 }
 
+// The start route's client hung up (its deadline, Stop or a closed page) before an answer. A body
+// fully read also closes the request side, so only the response's own close says this.
+function clientAbandonSignal(ctx: RouteContext): AbortSignal {
+  const abandoned = new AbortController();
+  ctx.res.once("close", () => {
+    if (!ctx.res.writableFinished) abandoned.abort();
+  });
+  return abandoned.signal;
+}
+
 export function handleCreateCodingRuntimeRun(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
+  const abandoned = clientAbandonSignal(ctx);
   return mutation(ctx, deps, undefined, "start", (runtime, body, correlationId) =>
-    runtime.start(body, correlationId),
+    runtime.start(body, correlationId, abandoned),
   );
 }
 

@@ -685,11 +685,7 @@ describe("production OpenCode backend composition", () => {
           },
         });
         expect(confinement?.filesystem?.deniedReadRoots).toContain(realpathSync(root));
-        expectNativeFilesystemHardening(
-          confinement?.filesystem,
-          root,
-          request.minted.authorityRef.runId,
-        );
+        expectNativeFilesystemHardening(confinement?.filesystem, root, request);
       } finally {
         vi.unstubAllEnvs();
         rmSync(root, { force: true, recursive: true });
@@ -931,13 +927,16 @@ describe("production OpenCode backend composition", () => {
 
 /**
  * #3897 review (P1): the user's other agent state and credential files are denied, and the run's
- * OpenCode configuration directory is protected from writes.
+ * OpenCode configuration directory is protected from writes. #4271: so is the workspace's `.git`,
+ * which a workspace without a repository has none of and the shell may not create, because Keiko's
+ * own Git would read the configuration it holds.
  */
 function expectNativeFilesystemHardening(
   filesystem: RuntimeGatewayFilesystem | undefined,
   root: string,
-  runId: string,
+  request: ProductionRuntimeBackendInput,
 ): void {
+  const runId = request.minted.authorityRef.runId;
   for (const entry of [
     ".ssh",
     ".config/gh",
@@ -949,7 +948,10 @@ function expectNativeFilesystemHardening(
     expect(filesystem?.deniedReadRoots).toContain(join(homedir(), entry));
   const privateStateRoot = join(realpathSync(root), "coding-runtime", "opencode", runId);
   expect(filesystem?.privateStateRoot).toBe(privateStateRoot);
-  expect(filesystem?.protectedWriteRoots).toEqual([join(privateStateRoot, "config", "opencode")]);
+  expect(filesystem?.protectedWriteRoots).toEqual([
+    join(privateStateRoot, "config", "opencode"),
+    join(request.context.workspaceRoot, ".git"),
+  ]);
 }
 
 function releaseQualifiedNativeRuntime(root: string): QualifiedPortableOpenCodeRuntime {
@@ -969,7 +971,7 @@ function releaseQualifiedNativeRuntime(root: string): QualifiedPortableOpenCodeR
         name: "opencode-compatible",
         kind: "coding-runtime",
         upstreamName: "opencode",
-        upstreamVersion: "2.0.10",
+        upstreamVersion: "2.1.4",
         adapterName: "keiko-coding-sidecar",
         adapterVersion: "1",
         protocolVersion: "coding-sidecar-v1",

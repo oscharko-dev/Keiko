@@ -355,6 +355,21 @@ describe("OpenCode V2 compaction has no reported overflow fact", () => {
   });
 });
 
+it("admits a completed compaction's retained-tail fact only as a boolean", () => {
+  const compaction = {
+    event: "completed" as const,
+    compactionIdSha256: "a".repeat(64),
+    retainedTail: true,
+  };
+  const admitted = { ...event("evt_completed", 0), compaction };
+  expect(createOpenCodeReconciler().ingest([admitted])).toMatchObject({ ok: true, applied: 1 });
+  expect(
+    createOpenCodeReconciler().ingest([
+      { ...admitted, compaction: { ...compaction, retainedTail: "PRIVATE_KEPT_MESSAGE_ID" } },
+    ] as unknown as OpenCodeReconciliationEvent[]),
+  ).toEqual({ ok: false, reason: "invalid-event" });
+});
+
 it("admits only the V2 retained-tail fact when its start ID is unavailable", () => {
   const compaction = {
     event: "tail-retained" as const,

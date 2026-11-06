@@ -26,7 +26,6 @@ import {
   plantSymlinkOrSkip,
 } from "../../../../tests/support/symlink-fixture.js";
 import {
-  NPM_LANE_PREVIOUS_RUNTIME_APPROVALS,
   NPM_LANE_RUNTIME_APPROVALS,
   type NpmLaneRuntimeApproval,
 } from "./npmLaneRuntimeApprovals.js";
@@ -64,13 +63,13 @@ const HELPER = "helper-binary";
 function approvalFor(): NpmLaneRuntimeApproval {
   return {
     packageName: PACKAGE_NAME,
-    upstreamVersion: "2.0.10",
+    upstreamVersion: "2.1.4",
     adapterName: "keiko-coding-sidecar",
     adapterVersion: "2",
     executableTreeSha256: sha256(`bin/opencode\0${sha256(EXECUTABLE)}\0`),
     licenseSha256: sha256(LICENSE),
     // The approved version's own producer-derived schema digest (opencodeRuntimeVersions.ts).
-    protocolSchemaSha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
+    protocolSchemaSha256: "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9",
     sbomSha256: sha256(SBOM),
     helperSha256: sha256(HELPER),
     helperSizeBytes: HELPER.length,
@@ -186,8 +185,8 @@ describe("npm-lane OpenCode discovery", () => {
   it("declares the native protocol for a helper of the current approved source and no other", () => {
     const install = globalInstall();
     const currentSource = NPM_LANE_RUNTIME_APPROVALS["macos-arm64"].helperSourceTreeSha256;
-    const previousSource =
-      NPM_LANE_PREVIOUS_RUNTIME_APPROVALS["macos-arm64"].helperSourceTreeSha256;
+    // The helper source of the retired 1.1.3 packages: published bytes that only ever spoke text IO.
+    const previousSource = "97a7a11c6dc2e1512b976c846141e0459d26094097a77b822dc7b895ad3bb4aa";
     for (const [sourceTreeSha256, expected] of [
       [currentSource, "KSR3/KSS3"],
       [previousSource, undefined],

@@ -521,6 +521,25 @@ describe("undo of the newest turn", () => {
     ]);
   });
 
+  // #4271: a server stop that disposes the runtime under an undo is no runtime failure.
+  it("refuses an undo the run's teardown overtook as run-unavailable, without a revert-failed warning", async () => {
+    const { port, log } = subject({ disposedDuringDiff: true });
+
+    await expect(port.revertTurn(RUN_ID, "undo", CORRELATION_ID)).resolves.toEqual({
+      ok: false,
+      reason: "run-unavailable",
+    });
+    expect(log.events).toMatchObject([
+      {
+        op: "coding-runtime.revert.refused",
+        correlationId: CORRELATION_ID,
+        errorKind: "unavailable",
+        extra: { runId: RUN_ID, operation: "undo", reason: "run-unavailable" },
+      },
+    ]);
+    expect(JSON.stringify(log.events)).not.toContain(SECRET);
+  });
+
   it("answers a failing runtime with a refusal that carries frames, never the error text", async () => {
     const { port, run, log } = subject({
       stage: () => Promise.reject(new Error(`stage failed ${SECRET}`)),

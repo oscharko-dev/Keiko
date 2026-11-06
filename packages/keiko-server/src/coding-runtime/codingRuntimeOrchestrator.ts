@@ -2029,6 +2029,14 @@ function runtimeDeliveryErrorFields(error: unknown): RuntimeDeliveryErrorFields 
   };
 }
 
+// #4271: a start its client gave up. No run exists, nobody reads the answer, and nothing stores the
+// code, so the refusal line alone says why (`startAbandoned`).
+const ABANDONED_START = {
+  ok: false,
+  failureCode: "runtime-unavailable",
+  startAbandoned: true,
+} as const;
+
 export class CodingRuntimeOrchestrator {
   private tail: Promise<void> = Promise.resolve();
   private activeRunId: string | undefined;
@@ -2134,15 +2142,25 @@ export class CodingRuntimeOrchestrator {
    * (running, or an unacknowledged recovery) still fails closed as `active-run-conflict` inside
    * `startFresh`.
    */
-  start(input: unknown, correlationId?: string): Promise<CodingRuntimeOrchestratorResult> {
+  start(
+    input: unknown,
+    correlationId?: string,
+    abandoned?: AbortSignal,
+  ): Promise<CodingRuntimeOrchestratorResult> {
     return this.serial(async () => {
+      if (abandoned?.aborted === true) return ABANDONED_START;
       // The next run ends the previous run's undo window: its runtime holds the slot until then.
       await this.closeUndoWindow("next-run");
-      return this.startFreshAgainstPredecessor(
-        input,
-        this.acknowledgedRecoveryPredecessorId(),
-        correlationId,
-      );
+      this.startAbandoned = abandoned;
+      try {
+        return await this.startFreshAgainstPredecessor(
+          input,
+          this.acknowledgedRecoveryPredecessorId(),
+          correlationId,
+        );
+      } finally {
+        this.startAbandoned = undefined;
+      }
     });
   }
 
@@ -3958,6 +3976,9 @@ export class CodingRuntimeOrchestrator {
     return this.deps.history;
   }
 
+  // The start in the serial lane, if its client can still give it up; see `start`.
+  private startAbandoned: AbortSignal | undefined;
+
   private async startFresh(
     input: unknown,
     predecessorRunId?: string,
@@ -4456,29 +4477,22 @@ export class CodingRuntimeOrchestrator {
         readonly ok: false;
         readonly failureCode: CodingWorkbenchRuntimeFailureCode;
         readonly modelRefusalReason?: CodingWorkbenchModelRefusalReason;
+        readonly startAbandoned?: true;
       }
   > {
     try {
-      const input = {
+      const input = this.launchInput(
+        request,
+        active,
+        principal,
         runId,
-        requestId: request.requestId,
-        taskIntent: request.taskIntent,
-        requestedMode: request.requestedMode,
-        ...(request.runtimePreference ? { runtimePreference: request.runtimePreference } : {}),
-        ...(request.modelId ? { modelId: request.modelId } : {}),
-        ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
-        projectMemoryEnabled: request.projectMemory?.enabled ?? true,
-        ...agentField(request.agent),
-        ...promptInputFields(request),
-        ...jiraPodField(request.jiraPodId),
-        ...mcpServersField(request.mcpServers),
-        workspaceId: active.instance.workspaceId,
-        workspaceRoot: active.binding.activeRoot,
-        serverPrincipal: principal,
-        ...(correlationId === undefined ? {} : { correlationId }),
-        ...(issueBinding === undefined ? {} : { issueBinding }),
-      };
+        issueBinding,
+        correlationId,
+      );
       await this.deps.launchResolver.prepare?.(input);
+      // Nothing is minted yet and no snapshot exists: a start the client gave up on ends here. Once
+      // the run exists it stays, because the client can then find it, and a reload must not end it.
+      if (this.startAbandoned?.aborted === true) return ABANDONED_START;
       const launch = this.deps.launchResolver.resolve(input);
       return { ok: true, launch };
     } catch (error) {
@@ -4487,6 +4501,36 @@ export class CodingRuntimeOrchestrator {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, "launch-resolution", error);
       return refusedLaunch(error);
     }
+  }
+
+  private launchInput(
+    request: CodingWorkbenchRuntimeStartRequest,
+    active: ActiveWorkspaceView,
+    principal: string,
+    runId: string,
+    issueBinding?: CodingWorkbenchIssueBinding,
+    correlationId?: string,
+  ): Parameters<CodingRuntimeLaunchResolver["resolve"]>[0] {
+    return {
+      runId,
+      requestId: request.requestId,
+      taskIntent: request.taskIntent,
+      requestedMode: request.requestedMode,
+      ...(request.runtimePreference ? { runtimePreference: request.runtimePreference } : {}),
+      ...(request.modelId ? { modelId: request.modelId } : {}),
+      ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+      projectMemoryEnabled: request.projectMemory?.enabled ?? true,
+      ...agentField(request.agent),
+      ...promptInputFields(request),
+      ...jiraPodField(request.jiraPodId),
+      ...mcpServersField(request.mcpServers),
+      workspaceId: active.instance.workspaceId,
+      workspaceRoot: active.binding.activeRoot,
+      serverPrincipal: principal,
+      ...(correlationId === undefined ? {} : { correlationId }),
+      ...(issueBinding === undefined ? {} : { issueBinding }),
+      ...(this.startAbandoned === undefined ? {} : { abandoned: this.startAbandoned }),
+    };
   }
 
   private buildStartSnapshot(

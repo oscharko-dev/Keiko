@@ -122,7 +122,7 @@ override the pinned helper ceiling.
 On the native profile the same read reaches the model through the producer's own
 instruction plugin instead of the first message (#3900 AC3, 2026-10-25). Keiko writes it, under a
 header that labels it repository-authored and untrusted and grants no authority, to `AGENTS.md` in
-the run's private configuration directory: the pinned 2.1.4 runtime's global instruction file,
+the run's private configuration directory: the pinned runtime's global instruction file,
 which the agent cannot write. The producer watches that one slot from launch (a configured
 `instructions` source is watched only when it exists at launch, so it would miss a file created
 during the run), so Keiko refreshes the copy before the launch and before every turn, through the
@@ -162,7 +162,7 @@ omitted and counted. The context line adds per-kind counts (`globalSourceCount`,
 `ancestorSourceCount`, `configuredSourceCount`, `remoteSourceCount`) and the refused and omitted
 counts; a failed discovery or remote pull is its own `refused` line (`sourceKind`) with frames, and
 the root file's copy is kept. `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` disables every
-source. 2.1.4 reads no `CLAUDE.md`.
+source. The pinned runtime reads no `CLAUDE.md`.
 
 An application upgrade may still resolve the immutable npm runtime 1.1.3. Its previously approved
 helper digests remain admitted with their original 64 KiB wire capability; unknown bytes remain
@@ -1012,7 +1012,7 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   synthetic readiness reply never becomes an uncached historical assistant message.
   The Activity Log records `gateway.reasoning-history` states and byte/message counts only.
   The text beside a tool call remains ordinary assistant content and is preserved (#3907 AC3).
-- **Runtime part types require version qualification.** OpenCode's admitted 2.1.4 source
+- **Runtime part types require version qualification.** OpenCode's admitted source
   [converts failed or interrupted reasoning to ordinary text](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/session/runner/to-llm-message.ts#L155).
   The inspected upstream snapshot
   [drops those reasoning parts instead](https://github.com/anomalyco/opencode/blob/008619ae06cd00dc21f60e4bdb29c04a60b07b6b/packages/core/src/session/runner/to-llm-message.ts#L142).
@@ -1216,7 +1216,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
 - **The runtime keeps its own tools, agents and configuration.** The launch configuration of the
   native profile (`opencodeLaunchProfile.ts`) names no ordinary action: it denies only the
   mode-independent `external_directory` escape (admitting the run's own plan directory), keeps
-  `update` and `share` off (a session is never published, and OpenCode 2.1.4 has no share operation;
+  `update` and `share` off (a session is never published, and OpenCode has no share operation;
   the equivalent is the human's local export and import of a task's Coding History, D4), keeps the single `keiko-runtime` provider behind the Model
   Gateway, and enables native snapshots. The producer appends configured rules after each built-in agent's own
   rules and the last match wins, so any configured rule naming an ordinary action would replace an
@@ -1230,6 +1230,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   (`opencodeNativeProjectBoundary.real.test.ts`) pins it with the production plugin and a facade
   that allows everything: Plan's project write leaves the file unchanged without asking the hook,
   its plan-file write and Build's write go through.
+- **Machine-wide OpenCode configuration stays out (#4271).** OpenCode reads
+  `/Library/Application Support/opencode` and the `ai.opencode.managed` managed preferences and
+  lets them win over the configuration Keiko supplies. The native profile runs on macOS only, and
+  its kernel read boundary admits neither tree, so a value placed there cannot change a run. A
+  backend test pins that boundary. Linux and Windows map to `direct`, whose governed catalog does
+  not take its authority from OpenCode configuration; a future native boundary there must close
+  `/etc/opencode` and the Windows equivalent before it qualifies.
 - **A native run readies only with its governing plugins active.** No configured rule stands in for
   the policy hook, so the fail-closed property lives in readiness: after the protocol digest the
   adapter enters the `policy-plugin` phase, which polls the producer's admitted `GET /api/plugin`
@@ -1263,9 +1270,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   execution, so Ask for approval and Supervised workspace ask before a program starts and a
   refusal blocks it before it runs. The human reviews the program itself: its text, split at line
   breaks into the bounded review resources (64 × 2,048 characters; a longer line is refused as too
-  large to review), is the ask's resource and is never logged. `fetch` is a Code Mode primitive that
-  neither hook sees inside an admitted program: the kernel egress rule governs it (loopback below
-  Full access).
+  large to review), is the ask's resource and is never logged. A `fetch` inside an admitted program
+  asserts the `webfetch` permission since OpenCode 2.2, so the policy decides it like the ordinary
+  tool; the kernel egress rule stays underneath (loopback below Full access).
 - **A Code Mode session move stays inside the task workspace (#3903 AC4).** The policy plugin sends
   `opencode_session_move`'s `directory` and the session it names to the policy. The run's own
   session may move to an existing directory inside the task workspace, named by its absolute,
@@ -1320,7 +1327,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   Linux mount allowlist names no external root yet, so none is admitted there; repository
   references would leave the machine and stay refused.
 - **Web search runs through the search integration the operator admitted (T15, #3903 AC3,
-  PR #4064 review).** The pinned 2.1.4 `websearch` asks the policy for its query and then calls the
+  PR #4064 review).** The pinned `websearch` asks the policy for its query and then calls the
   selected provider of the runtime's websearch service; with no provider selected it waits on the
   user's choice. The generated `keiko.native-delivery` plugin registers Keiko's provider, `keiko`,
   as that service's default (`ctx.websearch`), so the original tool, its permission ask and its
@@ -1453,7 +1460,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   in Ask for approval is allowed without a human and projects as the plan; the control without the
   switch is offered no plan tool and the call is the producer's own error.
 - **Built-in formatters follow the launch mode, and only Full access runs them (#3897, parity row
-  C07).** The pinned 2.1.4 producer runs a built-in formatter (`gofmt`, `rustfmt`, `shfmt`,
+  C07).** The pinned producer runs a built-in formatter (`gofmt`, `rustfmt`, `shfmt`,
   `prettier`, ...) after its own `write` and `edit` as a plain child process of the runtime. No
   permission is evaluated for it, so the policy hook sees the edit and never the formatter, and it
   runs only when the configuration says `formatter: true`; its own default is off. Keiko therefore
@@ -1494,7 +1501,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   configured and refused entry counts).
 - **Repository configuration is data until the operator admits its executable effects (#3903).**
   A first increment loaded the repository's `opencode.json` and `.opencode/` directory like
-  standalone. That is retired. The pinned 2.1.4 producer discovers a project's `opencode.json`,
+  standalone. That is retired. The pinned producer discovers a project's `opencode.json`,
   `.opencode/` agents, commands, skills and `plugins/` modules (and any module an `opencode.json`
   `plugins` entry names) as one layer, imports a plugin module's top-level code and `setup` before
   any permission is evaluated, and merges a project `providers`/`model` entry above the private
@@ -1789,7 +1796,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   refused (`request-conflict`) rather than answered with the receipt of the first, and a receipt
   that names another id is committed as accepted but unreconciled and never retried. A retry that
   arrives after the turn settled is refused with no way to tell whether the first attempt was
-  applied; the log shows its `delivery-unconfirmed` attempt. The pinned 2.1.4 behaviour is proven against the original executable
+  applied; the log shows its `delivery-unconfirmed` attempt. The pinned behaviour is proven against the original executable
   (`opencodeNativePromptInputs.real.test.ts`): `steer` reaches the model with the running turn's
   next step and `queue` after its final answer, both inside one execution, so the one settlement
   Keiko waits for covers them, and a lost acknowledgement followed by a retry of the same request
@@ -1887,7 +1894,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   not fail the stop. The Workbench lists the messages above the composer with Cancel and, for a queued
   one, Send now, and refreshes on the run's revision and on the conversation gaining a message (no
   polling); a failed read is a retryable error, never an empty list.
-- **A turn may run as one of the runtime's slash commands (C02).** The pinned 2.1.4 producer lists its
+- **A turn may run as one of the runtime's slash commands (C02).** The pinned producer lists its
   commands (`GET /api/command`, `command.list`: `init`, guided AGENTS.md setup, and `review`, review
   of the changes, defaulting to the uncommitted ones) and runs one as a turn (`POST
   /api/session/{sessionID}/command`, `session.command`, body `{ name, text, files?, agents?, skills?,
@@ -2432,7 +2439,11 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     the workspace). Run authority and revision checks stay with the callers. The producer's General
     and Explore agents deny `question`, so a child form arises only for an agent whose rules allow
     it; the lane is correct for it either way. Refusing a child's question interrupts the child
-    only, and its parent continues with the failed subagent call. An owned form the lane cannot
+    only, and its parent continues with the failed subagent call. The live signal that prompts
+    the Workbench to read follows the same proof (#4271): a `form.created` frame of the primary
+    signals at once, a frame of another session only once the session tree proves that session an
+    owned child, so a subagent's question appears without waiting for the next unrelated read; an
+    unproven or foreign session signals nothing. An owned form the lane cannot
     show (more than 32 fields or options, a hidden or conditional field, or a field type no answer
     can be given for) is dismissed through the session that asked, as a refusal would be: the
     runtime would otherwise wait for an answer nobody can give, and the validation bound stays.
@@ -2577,12 +2588,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     an unknown schema is refused rather than guessed. Because the whole database crosses this
     boundary, its schema is bound to the producer's persistence contract
     (`opencodePersistenceContract.ts`, #3908 AC4): exactly the tables and columns each admitted
-    runtime's own migrations create for the session's runtime version, derived from genuine 2.1.4
-    and 2.0.10 databases and proven against real settled runs
+    runtime's own migrations create for the session's runtime version, derived from genuine
+    databases of the admitted producers and proven against real settled runs
     (`opencodeNativeSessionResume.real.test.ts`, with `KEIKO_OPENCODE_REAL_VERSION` selecting the
-    admitted producer). The still-published 2.0.10 runtime lacks only the two newer project columns
-    `time_active` and `time_archived`; its own schema is admitted without relaxing any state audit
-    or allowing a different runtime version to resume the session. An
+    admitted producer). The pin, schema and history layouts of 2.0.10 were retired once the 2.1.4
+    runtime packages had replaced its published packages (#4271); a different runtime version
+    still cannot resume a session. An
     added table or column (even an empty one), a view, a trigger, a missing one, or a version with no
     contract is refused as `schema-unknown` with the audit check `schema-drift`, so a producer
     upgrade cannot carry unexamined persisted state forward. A new runtime version needs its own
@@ -2658,8 +2669,72 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   - **Not done.** The mapped (non-native) profile retains nothing; `session.update` (rename) stays
     refused; a fork inside the run the timeline shows is offered only as a whole-task fork.
 
+- **OpenCode 2.2.5 (2026-11-05, #4271).** Paragraphs above that name an earlier pinned version record
+  when they were decided; the real-binary suites re-proved their behaviour on this pin.
+  - **New built-in plugins are withheld.** `OPENCODE_WITHHELD_BUILT_IN_PLUGINS` removes the browser,
+    goal, Claude Agent provider, artifact, image generation and schedule plugins through the
+    producer's own `plugins` setting, on both profiles, and the Ollama, LM Studio and vLLM providers, which
+    would ask their default loopback ports every 30 s. Their `experimental` switches stay off, and
+    `location_idle_timeout` is `false` so an hour of quiet does not unload a directory under a run. A
+    filter behind the producer cannot do this: the browser plugin appends an agent rule after Keiko's
+    and so keeps a denied native tool advertised. `/goal` starts model turns on its own and stays out
+    until it has its own proof.
+  - **Changed producer contracts.** The producer repairs a model's `bash` call into `shell`, which
+    the policy decides as `shell`. A Code Mode `fetch` asserts `webfetch`. `GET /api/agent` waits for
+    plugins and answers 503 after five seconds: Keiko reads it again within the existing location
+    bound, and `coding-runtime.location.activation-wait` records the outcome and the number of those
+    answers, never a name.
+  - **Persistence.** The retained-session contract binds this version's schema. `job` and `blob` rows
+    refuse retention as unknown state, and a `schedule` row as pending input.
+
 What this amendment does not change: the three modes and the Authority Envelope (ADR-0124,
 ADR-0129, ADR-0138), the hard denials (ADR-0129 D3), Git delivery as a Keiko product operation
 with signed commits and bounded refs (ADR-0135, ADR-0087), evidence redaction (D7) and the one
 attested loopback origin for gateway and facade (D4).
 
+**Launch secrets leave the exec environment (#4271).** macOS answers `sysctl(KERN_PROCARGS2)` for
+any process of the same user, reading its argument and environment strings from its stack, and no
+Seatbelt rule gates the call: a default-deny profile, `process-info*` and `sysctl-read` name filters
+were each proved not to stop it on the pinned runtime. The runtime can only receive its API password
+and the server-owned binding through that environment, and the password opens routes of its API that
+`permission.evaluate` never sees. A generated plugin, required for readiness, therefore overwrites
+those values and the run's two capabilities in place before any shell exists, then reads the same
+kernel answer back and fails the run's readiness if one survived. The runtime keeps its own copy, so
+nothing else changes. A port denial was tried first and rejected: Seatbelt resolves a `localhost:*`
+allow against a `*:<port>` denial nondeterministically (about half of the ports, measured over 72
+connections per form), `require-not` does not apply to network filters, and macOS refuses a second
+`sandbox_apply` with another profile. The MCP bindings, which carry relay capabilities, stay out of
+the configuration file the shell can read. This boundary does not extend to other processes of the
+same user: a shell child can read the exec environment of any non-platform process, so an operator
+must not export credentials into the environment that starts Keiko.
+
+The runtime's own children never held these values either: a formatter (the repository's code at
+Full access) or a local MCP server is started by spreading `process.env`, so the same plugin makes
+every shell-denied binding non-enumerable on a plain object that replaces `process.env`. Named reads
+keep working, and a spread omits them; the plugin fails readiness if one survives.
+
+**Host services that answer with the person's data are closed (#4271).** The native profile denies
+the lookup of the clipboard and keychain daemons by name, in every mode, because the daemon reads
+the files the path rules deny and answers a tool its entry trusts. A shell therefore cannot use a
+credential stored in the keychain, and governed delivery runs outside the sandbox with the
+person's own credentials. Other lookups stay open, since toolchains need them (TLS verification goes
+through `trustd`). A toolchain's `var` directory, where its services keep their state, is denied
+too. Full access keeps the internet but not foreign unix sockets: `ssh-agent` would use the keys the
+path rules deny, and a container daemon would start a container mounting anything. The resolver and
+the sockets a run creates in its own roots stay reachable, and loopback TCP is unaffected.
+
+**The run cannot decide what Keiko's own Git executes (#4271).** Keiko runs Git outside the sandbox
+on the run's workspace, so repository configuration a shell child writes would run or read with
+Keiko's authority: filter drivers, `core.worktree`, `commondir`, `gitdir`, alternates. The native
+profile therefore denies writes to that metadata (`opencodeNativeGitMetadata.ts`). Refs, objects, the
+index and hooks stay writable, because Keiko's Git never runs hooks in a run's repository and the
+ordinary `git add` must keep working; Keiko's delivery tools change configuration from outside the
+sandbox. In a folder without a repository the whole `.git` name at the workspace root is denied, so
+a run cannot make its folder a repository: `git init` there exits with an error, and a person can do
+it before the run. A repository in a subfolder stays the run's own. Two read-lane rules cover what a
+person later opens, where the kernel rule does not reach: the local reads override every
+repository-local filter driver with nothing, reading the driver names through the same `-C`, and a
+folder whose configuration names a work tree that does not contain it counts as no repository
+(`keiko-git`). The mutation lane keeps filter drivers because `git-crypt` must run on commit; it
+relies on the kernel rule for the run's repository, and a person who commits in a subfolder
+repository a run created accepts its configuration as they would in a terminal.

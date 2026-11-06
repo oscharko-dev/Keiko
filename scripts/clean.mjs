@@ -6,7 +6,7 @@
 //   - keiko-ui emits tsc output to dist/ and Next.js output to .next/ and out/
 
 import { lstat, realpath, rm } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const ROOT_TARGETS = ["dist", "coverage"];
 const UI_TARGETS = ["dist", ".next", "out"];
@@ -45,7 +45,12 @@ export async function rmIfExistsSafe(rootReal, targetPath) {
   if (!stats) {
     return false;
   }
-  const resolvedTarget = stats.isSymbolicLink() ? await realpath(targetPath) : resolve(targetPath);
+  // A non-link target is judged by its real parent directory, so a root reached through a
+  // symlinked prefix (macOS /var -> /private/var) compares in the same real-path space as
+  // rootReal, while a symlinked parent that escapes the repository is still refused.
+  const resolvedTarget = stats.isSymbolicLink()
+    ? await realpath(targetPath)
+    : join(await realpath(dirname(resolve(targetPath))), basename(targetPath));
   if (!isWithin(rootReal, resolvedTarget)) {
     throw new Error(
       `refusing to delete path outside repository: ${targetPath} -> ${resolvedTarget}`,

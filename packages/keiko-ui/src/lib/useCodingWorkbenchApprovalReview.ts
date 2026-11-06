@@ -10,6 +10,7 @@ import {
 import { getCodingWorkbenchRuntimeApprovalReview } from "./coding-workbench-runtime-api";
 import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
 import { reportClientDiagnostic } from "./client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "./coding-workbench-interaction";
 
 export type CodingWorkbenchApprovalReviewStatus = "idle" | "loading" | "ready" | "unavailable";
 
@@ -140,9 +141,11 @@ function project(
       reportClientDiagnostic("[keiko] verified commit review unavailable: binding-mismatch");
       return UNAVAILABLE;
     }
-    reportClientDiagnostic(
-      `[keiko] verified commit review ready: files ${String(pending.fileCount)} tree ${commit.result.stagedTreeDigest.slice(0, 12)}`,
-    );
+    reportCodingWorkbenchInteraction({
+      interaction: "delivery-step-shown",
+      deliveryStep: "commit-review",
+      deliveryState: "ready",
+    });
   }
   return { status: "ready", review: pending };
 }
@@ -157,9 +160,6 @@ function deliveryRunMatches(
     reportClientDiagnostic("[keiko] draft delivery review unavailable: binding-mismatch");
     return false;
   }
-  reportClientDiagnostic(
-    `[keiko] draft delivery review ready: ${delivery.record.phase} head ${delivery.record.binding.headSha.slice(0, 12)}`,
-  );
   return true;
 }
 

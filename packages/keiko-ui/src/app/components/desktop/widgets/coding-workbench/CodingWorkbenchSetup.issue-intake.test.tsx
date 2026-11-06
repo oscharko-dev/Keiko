@@ -243,6 +243,7 @@ function actions(): CodingWorkbenchRuntimeActions {
     refreshRuntime: vi.fn(() => Promise.resolve()),
     refreshRun: vi.fn(() => Promise.resolve()),
     start: vi.fn(() => Promise.resolve()),
+    cancelStart: vi.fn(),
     decideApproval: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()),
     takeover: vi.fn(() => Promise.resolve()),

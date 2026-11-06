@@ -403,6 +403,31 @@ function resolveBodySuppressionKey(db: DatabaseSync, cipher: MemoryContentCipher
   return key;
 }
 
+function isSecretboxOpenFailure(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as { readonly code?: unknown }).code === "SECRETBOX_OPEN_FAILED"
+  );
+}
+
+// The vault's sealed suppression key is the first value every open decrypts, so a key that does
+// not match the stored vault (a keychain entry that changed or is withheld, a state directory
+// moved to another device) fails here. That is a classified, recoverable state of the stored data,
+// not a defect: the database is closed untouched — never re-keyed, overwritten or quarantined — so
+// the original key opens it again, and the caller can run without memory instead of crashing.
+function openBodySuppressionKey(db: DatabaseSync, cipher: MemoryContentCipher): Buffer {
+  try {
+    return resolveBodySuppressionKey(db, cipher);
+  } catch (error) {
+    if (!isSecretboxOpenFailure(error)) throw error;
+    db.close();
+    throw new MemoryStorageError(
+      "vault-unreadable",
+      "The memory vault cannot be opened with the available key.",
+    );
+  }
+}
+
 interface ResolvedCipherWithSource {
   readonly cipher: MemoryContentCipher;
   // `undefined` for a test-injected cipher/vaultKey, where no key-resolution tier ran at all —
@@ -435,7 +460,7 @@ function resolveCipherWithSource(
   }
   const memoryDir = resolveMemoryDir(opts?.memoryDir, env);
   const resolved = resolveVaultKey(env, memoryDir, () =>
-    keyFromKeychain({ sink: securityLogSink }),
+    keyFromKeychain({ sink: securityLogSink, env }),
   );
   return { cipher: createMemoryContentCipher(resolved.key), keySource: resolved.source };
 }
@@ -1314,13 +1339,13 @@ export function createMemoryVault(options?: CreateMemoryVaultOptions): MemoryVau
   // operation below then threw and the vault never actually became usable.
   let bodySuppressionKey: Buffer;
   try {
-    bodySuppressionKey = resolveBodySuppressionKey(db, cipher);
+    bodySuppressionKey = openBodySuppressionKey(db, cipher);
     hardenVaultSidecars(dbPath);
   } catch (error) {
     // #4068: the failed vault is never returned, so nothing else can close its handle. Left open,
     // the database and its WAL siblings stay locked, which on Windows blocks removing or
-    // quarantining them. The initialization error is rethrown unchanged.
-    db.close();
+    // quarantining them. An unreadable vault is already closed; the error is rethrown unchanged.
+    if (db.isOpen) db.close();
     throw error;
   }
   emitVaultOpened(options?.logSink, keySource, elapsedMs());

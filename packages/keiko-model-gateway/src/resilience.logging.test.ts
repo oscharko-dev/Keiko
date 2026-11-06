@@ -77,7 +77,7 @@ describe("executeWithRetry — activity log", () => {
     expect(scheduled.category).toBe("gateway");
     expect(scheduled.level).toBe("warn");
     expect(scheduled.correlationId).toBe("corr-0001");
-    expect(scheduled.errorKind).toBe("internal");
+    expect(scheduled.errorKind).toBe("unavailable");
     expect(scheduled.extra).toMatchObject({
       modelId: "example-chat-model",
       attempt: 1,

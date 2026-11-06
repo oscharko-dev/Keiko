@@ -110,6 +110,7 @@ export function CodingWorkbenchWindowHost({
   return (
     <ConnectorWindowsProvider value={connectorWindows}>
       <CodingWorkbenchWindow
+        draftKey={context.windowId}
         historySelection={historySelection}
         onHistorySelectionHandled={() => context.updateCfg(handledHistoryPatch(restoringHistory))}
         onOpenHistory={() => context.openWindow("codingHistory")}

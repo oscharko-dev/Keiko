@@ -451,7 +451,7 @@ function admitUniqueActions(server: McpServerDefinition, actions: Set<string>): 
 
 /**
  * The permission action an MCP tool reaches a runtime's policy under: `<server>_<tool>`, with the
- * tool name's characters outside `[A-Za-z0-9_-]` replaced by `_`, as OpenCode 2.1.4 names it.
+ * tool name's characters outside `[A-Za-z0-9_-]` replaced by `_`, as the pinned OpenCode names it.
  */
 export function mcpToolAction(server: string, tool: string): string {
   return `${server}_${tool.replaceAll(/[^A-Za-z0-9_-]/gu, "_")}`;

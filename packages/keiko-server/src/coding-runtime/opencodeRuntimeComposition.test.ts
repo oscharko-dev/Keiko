@@ -165,6 +165,10 @@ import {
 } from "./opencodeRuntimeAdapter.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import {
+  OPENCODE_PINNED_VERSION,
+  OPENCODE_RUNTIME_VERSION_PINS,
+} from "./opencodeRuntimeVersions.js";
+import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   projectOpenCodeV2ProtocolSurface,
 } from "./opencodeProtocolSurface.js";
@@ -226,13 +230,16 @@ const TOOL_CAPABILITY = "t".repeat(43);
 // `toolFacadeUrl` from in production, fixed here since this suite never binds a real BFF port.
 const TOOL_FACADE_ORIGIN = "http://127.0.0.1:4391/api/coding-sidecar/tool";
 const FIXTURE_RUN_ID = "run-2254";
-const OPENCODE_VERSION = "2.1.4";
+const OPENCODE_VERSION = OPENCODE_PINNED_VERSION;
 const FIXED_SESSION_TITLE = "Keiko governed runtime";
-const OPENCODE_SCHEMA_SHA256 = "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9";
-// Captured structural projection from OpenCode 2.1.4's actual OpenAPI document.
+const OPENCODE_SCHEMA_SHA256 = OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "";
+// Captured structural projection from the pinned OpenCode's actual OpenAPI document.
 const OPENAPI: unknown = JSON.parse(
   readFileSync(
-    new URL("./opencodeProtocolSurface.opencode-2.1.4.fixture.json", import.meta.url),
+    new URL(
+      `./opencodeProtocolSurface.opencode-${OPENCODE_PINNED_VERSION}.fixture.json`,
+      import.meta.url,
+    ),
     "utf8",
   ),
 );
@@ -1813,7 +1820,7 @@ describe("unmounted OpenCode runtime composition", () => {
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
     expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
-      "941a87888e62c1b22bc9b4c6a8b7fbc6baacaa1c52dd47aa384248fc4fe8c857",
+      OPENCODE_RUNTIME_VERSION_PINS[0]?.protocolSurfaceSha256,
     );
     const root = tempDir("keiko-opencode-composition-");
     const workspaceRoot = join(root, "workspace");
@@ -2558,6 +2565,47 @@ describe("private OpenCode run control", () => {
       });
       // Foreign-session and session-unbound frames observe nothing; dedupe is the consumer's job.
       expect(questionObservations).toEqual(["evt_q1", "evt_q2"]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // #4271: a subagent's question is the run's too. Its live frame signals the Workbench once the run's
+  // session tree proves the session a child of the run; an unproven or foreign session still signals
+  // nothing (the pin above).
+  it("observes a proven child session's live question frame and no unproven session's", async () => {
+    const questionObservations: string[] = [];
+    const childSessions: Record<string, unknown>[] = [];
+    let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const fixture = await startBridgeFixture(facade, undefined, {
+      childSessions,
+      questionObservations,
+      onSseStart: (controller) => {
+        stream = controller;
+      },
+    });
+    try {
+      const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+      childSessions.push(
+        { id: "ses_child", parentID: "ses_tool", location: { directory: workspaceRoot } },
+        { id: "ses_elsewhere", parentID: "ses_tool", location: { directory: "/elsewhere" } },
+        { id: "ses_foreign", location: { directory: workspaceRoot } },
+      );
+      await vi.waitFor(() => {
+        expect(stream).toBeDefined();
+      });
+      const frame = (id: string, sessionID: string): Uint8Array =>
+        new TextEncoder().encode(
+          `data: {"id":"${id}","type":"form.created","data":{"form":{"id":"frm_${id}","sessionID":"${sessionID}"}}}\n\n`,
+        );
+      stream?.enqueue(frame("evt_elsewhere", "ses_elsewhere"));
+      stream?.enqueue(frame("evt_foreign", "ses_foreign"));
+      stream?.enqueue(frame("evt_unknown", "ses_unknown"));
+      stream?.enqueue(frame("evt_child", "ses_child"));
+      await vi.waitFor(() => {
+        expect(questionObservations).toContain("evt_child");
+      });
+      expect(questionObservations).toEqual(["evt_child"]);
     } finally {
       await fixture.stop();
     }

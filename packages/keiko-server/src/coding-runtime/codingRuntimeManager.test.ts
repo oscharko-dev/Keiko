@@ -67,7 +67,7 @@ import { OPENCODE_GOVERNED_ACTION_PERMISSION } from "./opencodeToolSchemas.js";
 import { projectOpenCodePermissionEvent } from "./opencodeProtocol.js";
 
 const tempDirs: string[] = [];
-const OPENCODE_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
+const OPENCODE_SCHEMA_SHA256 = "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9";
 const TEST_QUALIFICATION: RuntimeQualificationIdentity = {
   platform: "win32",
   arch: "x64",
@@ -730,7 +730,7 @@ function createPortableRuntimeFixture(): {
         name: "opencode-compatible",
         kind: "coding-runtime",
         upstreamName: "opencode",
-        upstreamVersion: "2.0.10",
+        upstreamVersion: "2.1.4",
         adapterName: "keiko-coding-sidecar",
         adapterVersion: "1",
         protocolVersion: "http-sse",

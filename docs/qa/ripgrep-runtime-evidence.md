@@ -46,7 +46,7 @@ carry CRLF text, so each target pins its own license digest.
 | Windows x64    | `ripgrep-15.1.0-x86_64-pc-windows-msvc.zip`       | `124510b94b6baa3380d051fdf4650eaa80a302c876d611e9dba0b2e18d87493a` | `decdd4992f3f1b9a5ef9898f1b40ab16886d579d6516b4efd3d5eaa19364e408` |
 | Windows arm64  | `ripgrep-15.1.0-aarch64-pc-windows-msvc.zip`      | `00d931fb5237c9696ca49308818edb76d8eb6fc132761cb2a1bd616b2df02f8e` | `f7799d737b520e00b10dfa72def23904fe66fb03315636a7b78549845ee9609c` |
 
-The archives are the exact files OpenCode 2.1.4 would download from
+The archives are the exact files the pinned OpenCode would download from
 `https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/`. The Linux x64 build is the
 statically linked musl one; the Linux arm64 build is the upstream glibc one, as OpenCode selects.
 The `LICENSE-MIT` digests are `0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f`

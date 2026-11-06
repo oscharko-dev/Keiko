@@ -1835,6 +1835,65 @@ describe("coding runtime routes", () => {
     });
   });
 
+  // #4271: a client that hung up mid-start gave the start up, and one that got its answer did not.
+  it("tells the orchestrator when the start's client hung up, and not otherwise", async () => {
+    const session = pairedAppSession();
+    const deps = runtime({ codingAppSessionChannel: session.channel });
+    const request = (): RouteContext =>
+      context(
+        '{"requestId":"r","taskIntent":"private","requestedMode":"governed-assist"}',
+        {},
+        "/api/coding-workbench/runtime/runs",
+        session.cookie,
+      );
+    const start = vi.fn((_body: unknown, _correlationId?: string, _abandoned?: AbortSignal) =>
+      Promise.resolve({ ok: true as const, snapshot }),
+    );
+    Object.assign(deps.codingRuntimeOrchestrator as object, { start });
+    const aborted = (): boolean | undefined => start.mock.lastCall?.[2]?.aborted;
+    const hungUp = request();
+    await handleCreateCodingRuntimeRun(hungUp, deps);
+    (hungUp.res as unknown as EventEmitter).emit("close");
+    expect(aborted()).toBe(true);
+    const answered = request();
+    await handleCreateCodingRuntimeRun(answered, deps);
+    Object.assign(answered.res, { writableFinished: true });
+    (answered.res as unknown as EventEmitter).emit("close");
+    expect(aborted()).toBe(false);
+  });
+
+  it("names a start its client gave up on the refusal line, without a stored failure code", async () => {
+    const session = pairedAppSession();
+    const records: unknown[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: session.channel,
+      activityLog: { write: (event: unknown) => void records.push(event) },
+    });
+    Object.assign(deps.codingRuntimeOrchestrator as object, {
+      start: () =>
+        Promise.resolve({
+          ok: false as const,
+          failureCode: "runtime-unavailable" as const,
+          startAbandoned: true as const,
+        }),
+    });
+    await handleCreateCodingRuntimeRun(
+      context(
+        '{"requestId":"r","taskIntent":"private","requestedMode":"governed-assist"}',
+        {},
+        "/api/coding-workbench/runtime/runs",
+        session.cookie,
+      ),
+      deps,
+    );
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      op: "coding-runtime.operation.refused",
+      errorKind: "cancelled",
+      extra: { operation: "start", reason: "start-abandoned" },
+    });
+  });
+
   it("parses a bounded JSON body and passes it only to the orchestrator", async () => {
     const session = pairedAppSession();
     const deps = runtime({ codingAppSessionChannel: session.channel });

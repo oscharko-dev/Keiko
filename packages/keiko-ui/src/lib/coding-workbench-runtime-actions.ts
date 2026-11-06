@@ -4,24 +4,19 @@ import type {
   CodingWorkbenchCodexAuthMethod,
   CodingWorkbenchMode,
   CodingWorkbenchPromptReference,
-  CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimePreference,
-  CodingWorkbenchRuntimeResearchGrant,
   ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchCommandRequest,
   CodingWorkbenchPromptMentions,
   CodingWorkbenchRuntimeForkRequest,
-  CodingWorkbenchRuntimeInboxAction,
-  CodingWorkbenchRuntimeRevertAction,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type {
   CodingWorkbenchRuntimeState,
   CodingWorkbenchRuntimeStateAction,
 } from "./coding-workbench-live-state";
 import type { RuntimeMutationActions, RuntimeResources } from "./coding-workbench-runtime-hooks";
-import type { CodingWorkbenchFollowUpInputs } from "./coding-workbench-runtime-mutations";
 
 export interface CodingWorkbenchIssueStartIntent {
   readonly issueRef: string;
@@ -52,7 +47,8 @@ export interface CodingWorkbenchStartOptions {
   readonly mcpServers?: readonly string[] | undefined;
 }
 
-export interface CodingWorkbenchRuntimeActions {
+/** The public action surface: the run's mutations plus the profile, source and preference controls. */
+export interface CodingWorkbenchRuntimeActions extends RuntimeMutationActions {
   readonly setRequestedMode: (mode: CodingWorkbenchMode) => void;
   readonly setAgent: (agent: CodingWorkbenchAgent) => void;
   readonly setRuntimePreference: (preference: CodingWorkbenchRuntimePreference) => void;
@@ -63,26 +59,6 @@ export interface CodingWorkbenchRuntimeActions {
   readonly refreshSource: () => Promise<void>;
   readonly refreshRuntime: () => Promise<void>;
   readonly refreshRun: () => Promise<void>;
-  readonly start: (taskIntent: string, options: CodingWorkbenchStartOptions) => Promise<void>;
-  readonly decideApproval: (decision: CodingWorkbenchRuntimeApprovalDecision) => Promise<void>;
-  readonly stop: () => Promise<void>;
-  readonly takeover: () => Promise<void>;
-  readonly retry: (taskIntent: string) => Promise<void>;
-  readonly acknowledgeRecovery: () => Promise<void>;
-  readonly pause: () => Promise<void>;
-  readonly resume: (requestedMode: CodingWorkbenchMode) => Promise<void>;
-  readonly submitFollowUp: (
-    taskIntent: string,
-    inputs?: CodingWorkbenchFollowUpInputs,
-  ) => Promise<void>;
-  /** Undo the run's newest turn or restore an undo (B3, S04). */
-  readonly revert: (action: CodingWorkbenchRuntimeRevertAction) => Promise<void>;
-  /** Withdraw a message waiting for the running turn, or change a queued one to Send now (S07). */
-  readonly inboxAction: (
-    action: CodingWorkbenchRuntimeInboxAction,
-    itemId: string,
-  ) => Promise<void>;
-  readonly revokeResearchGrant: (grant: CodingWorkbenchRuntimeResearchGrant) => Promise<void>;
 }
 
 interface RuntimeActionInput {
@@ -109,6 +85,7 @@ function createCodingWorkbenchRuntimeActions({
   } = resources;
   const {
     acknowledgeRecovery,
+    cancelStart,
     decideApproval,
     pause,
     resume,
@@ -138,6 +115,7 @@ function createCodingWorkbenchRuntimeActions({
     refreshRuntime,
     refreshRun,
     start,
+    cancelStart,
     decideApproval,
     stop,
     takeover,
@@ -167,6 +145,7 @@ export function useCodingWorkbenchRuntimeActions(
   } = resources;
   const {
     acknowledgeRecovery,
+    cancelStart,
     decideApproval,
     pause,
     resume,
@@ -195,6 +174,7 @@ export function useCodingWorkbenchRuntimeActions(
         },
         mutations: {
           acknowledgeRecovery,
+          cancelStart,
           decideApproval,
           pause,
           resume,
@@ -210,6 +190,7 @@ export function useCodingWorkbenchRuntimeActions(
       }),
     [
       acknowledgeRecovery,
+      cancelStart,
       decideApproval,
       dispatch,
       inboxAction,

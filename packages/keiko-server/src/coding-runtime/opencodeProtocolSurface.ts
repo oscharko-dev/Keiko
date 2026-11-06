@@ -7,9 +7,8 @@ export const OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256 =
   "e1db492f2ac661f2b44da6ef3d7e58ed34856621a2c58de4610640e1291266f6";
 export const OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM =
   "keiko-opencode-protocol-surface-v2" as const;
-/** The current pin's structural digest; per-version values live in `opencodeRuntimeVersions.ts`. */
-export const OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256 =
-  "941a87888e62c1b22bc9b4c6a8b7fbc6baacaa1c52dd47aa384248fc4fe8c857";
+/** The current pin's structural digest, read from the one pin source. */
+export { OPENCODE_PINNED_PROTOCOL_SURFACE_SHA256 as OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256 } from "@oscharko-dev/keiko-contracts/runtime/opencode-runtime-pins";
 
 /**
  * The admitted operations as `METHOD path`. The complete service inventory

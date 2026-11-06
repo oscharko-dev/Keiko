@@ -12,7 +12,7 @@ import type { McpOAuthIssuerValidation } from "../mcp/mcpOAuthIssuer.js";
 import type { OpenCodeNativeMcpGrants } from "./opencodeNativePolicy.js";
 
 /**
- * The MCP servers a native run admits (#3903, parity row C04), as the pinned 2.1.4 runtime reads
+ * The MCP servers a native run admits (#3903, parity row C04), as the pinned runtime reads
  * them: `mcp.servers.<name>` on the server-owned binding, which no lower configuration layer can
  * add to or replace. Proven against the original executable:
  *

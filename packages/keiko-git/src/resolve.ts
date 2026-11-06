@@ -6,6 +6,7 @@
 // can differ in letter case or Unicode form (NFC vs NFD) while naming the same directory. The
 // containment guard below therefore normalizes before comparing, and is defense-in-depth only.
 
+import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { GIT_BASE_ARGS } from "./runner.js";
 import type { GitProcessResult, GitProcessRunner } from "./types.js";
@@ -26,6 +27,8 @@ export interface GitRepositoryMembership {
 export interface GitMembershipFailure {
   readonly ok: false;
   readonly result: GitProcessResult;
+  /** Git answered for a work tree that does not contain the directory it was asked about. */
+  readonly redirected?: true;
 }
 
 export interface GitMembershipSuccess {
@@ -78,6 +81,9 @@ export async function resolveGitMembership(
   if (toplevel.length === 0) {
     return { ok: false, result };
   }
+  if (await isWorktreeRedirected(directory, resolve(toplevel))) {
+    return { ok: false, result: worktreeRedirectedResult(result), redirected: true };
+  }
   return {
     ok: true,
     membership: {
@@ -93,6 +99,25 @@ export async function resolveGitMembership(
 // recognized" reports. Linux default filesystems are byte-sensitive: NFC and NFD spellings are
 // genuinely different directories there, so normalizing would make this guard more permissive —
 // compare exactly on every other platform.
+// Repository configuration can name a work tree elsewhere (`core.worktree`). Git then answers every
+// read about that other folder, so a folder whose configuration an agent or a download wrote could
+// present foreign files as its own (#4271). A linked worktree, a submodule and a dotfiles checkout
+// all contain the directory they are asked about; only a redirect does not. Such a folder is an
+// ordinary folder to Keiko, which is what `not a git repository` already means to every consumer.
+async function isWorktreeRedirected(directory: string, toplevel: string): Promise<boolean> {
+  // Both sides resolve, because one location has several spellings (`/var` is `/private/var` on
+  // macOS). A directory Git just answered for that can no longer be resolved proves nothing: fail
+  // closed.
+  return await Promise.all([realpath(toplevel), realpath(directory)]).then(
+    ([realToplevel, realDirectory]) => !containsPath(realToplevel, realDirectory),
+    () => true,
+  );
+}
+
+function worktreeRedirectedResult(result: GitProcessResult): GitProcessResult {
+  return { ...result, exitCode: 128, stdout: "", stderr: "not a git repository" };
+}
+
 /**
  * The platform's filesystem identity spelling for a path. Case-insensitive and
  * normalization-insensitive on darwin (APFS) and win32 (NTFS); byte-exact everywhere else.

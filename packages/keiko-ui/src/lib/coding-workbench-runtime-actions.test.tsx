@@ -11,6 +11,7 @@ import type { RuntimeMutationActions, RuntimeResources } from "./coding-workbenc
 function mutations(): RuntimeMutationActions {
   return {
     start: vi.fn(() => Promise.resolve()),
+    cancelStart: vi.fn(),
     decideApproval: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()),
     takeover: vi.fn(() => Promise.resolve()),

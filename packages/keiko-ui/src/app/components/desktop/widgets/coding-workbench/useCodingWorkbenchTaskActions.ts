@@ -133,6 +133,7 @@ export function useTaskComposerActions(input: TaskActionsInput): TaskActions {
     onStart: startTask,
     onPause: () => void actions.pause(),
     onStop: () => void actions.stop(),
+    onCancelStart: actions.cancelStart,
     onResume: () => {
       if (resumeMode !== null) void actions.resume(resumeMode);
     },

@@ -325,6 +325,13 @@ export function gatewayFilesystemSeatbeltRules(
   );
 }
 
+// A toolchain's install prefix also holds the state of the services it runs (a Homebrew Postgres
+// keeps its databases in `var`), which no toolchain reads to build or run (#4271). `/usr/local` is
+// inside the system root, so it is named whether or not PATH does.
+function nativeServiceStateRoots(closed: RuntimeGatewayFilesystem): readonly string[] {
+  return ["/usr/local/var", ...(closed.toolchainReadRoots ?? []).map((root) => `${root}/var`)];
+}
+
 function nativeReadRoots(closed: RuntimeGatewayFilesystem): readonly string[] {
   return [
     ...NATIVE_SYSTEM_READ_ROOTS,
@@ -368,6 +375,7 @@ export function nativeWorkspaceSeatbeltRules(filesystem: RuntimeGatewayFilesyste
     `(allow file-write* ${pathFilters("subpath", own)} ` +
     '(literal "/dev/null") (regex #"^/dev/tty") (literal "/dev/stdout") (literal "/dev/stderr"))' +
     (denied.length === 0 ? "" : `(deny file-read* file-write* ${pathFilters("subpath", denied)})`) +
+    `(deny file-read* file-write* ${pathFilters("subpath", nativeServiceStateRoots(closed))})` +
     // Keiko's managed task workspaces live inside its own state directory, which is a denied
     // root; the workspace is re-allowed after the denial like the private state (#3897 lab:
     // OpenCode 2.0.10 could not even realpath its workspace in the customer shape).

@@ -60,7 +60,7 @@ function fixture(): {
         name: "opencode-compatible",
         kind: "coding-runtime",
         upstreamName: "opencode",
-        upstreamVersion: "2.0.10",
+        upstreamVersion: "2.1.4",
         adapterName: "keiko-coding-sidecar",
         adapterVersion: "2",
         protocolVersion: "http-sse",

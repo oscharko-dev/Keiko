@@ -10,7 +10,7 @@ import {
 
 const ROOT = "/private/var/work/ws_1";
 
-// The pinned 2.1.4 `grep` result and environment block, as observed against the staged executable.
+// The pinned `grep` result and environment block, as observed against the staged executable.
 function searchResult(...hits: readonly string[]): string {
   return [`Found ${String(hits.length)} matches`, ...hits].join("\n");
 }

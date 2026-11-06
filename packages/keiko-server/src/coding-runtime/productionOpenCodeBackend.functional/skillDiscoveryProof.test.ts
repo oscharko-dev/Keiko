@@ -8,7 +8,7 @@ import {
   type SkillDiscoveryConsumptionProof,
 } from "./skillDiscoveryProof.js";
 
-// The pinned 2.1.4 system prompt lists the skills it can load; this is its observed shape.
+// The pinned system prompt lists the skills it can load; this is its observed shape.
 function listing(...skills: readonly (readonly [id: string, name: string])[]): string {
   const entries = skills.map(
     ([id, name]) =>

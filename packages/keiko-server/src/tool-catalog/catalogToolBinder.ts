@@ -531,7 +531,13 @@ function buildCatalogOfferForTool<Consumer extends CatalogConsumer = CodingCatal
     expiresAt: new Date(expiry).toISOString(),
   });
   const identity = lifecycleIdentity<Consumer>(state, context);
-  emitBindingReadiness<Consumer>(state, identity, binding);
+  // The line describes the handler this call selected. The offer's own binding keeps the
+  // catalog-wide readiness, so another unavailable handler cannot turn a ready call into a false
+  // "handler unavailable" line.
+  emitBindingReadiness<Consumer>(state, identity, {
+    ...binding,
+    readiness: ready ? "ready" : "unavailable",
+  });
   emitToolLifecycleEvent(state.input.logPort, {
     ...identity,
     op: "tool-catalog.projection",

@@ -3,7 +3,12 @@ import { readContinuityCheckpoint, writeContinuityCheckpoint } from "./chatConti
 import { createChatToolMutationStore } from "./chatToolMutations.js";
 import { withImmediateTransaction } from "./transaction.js";
 import { replayChatCreationIntent, withChatCreationIntent } from "./chatCreationIntents.js";
-import { readChatDraft, updateChatDraft } from "./chatDrafts.js";
+import {
+  readChatDraft,
+  readCodingWorkbenchDraft,
+  updateChatDraft,
+  updateCodingWorkbenchDraft,
+} from "./chatDrafts.js";
 import { createMarkdownSkillStore } from "./markdownSkills.js";
 import { createBrowserApprovalStore } from "./browserApprovals.js";
 import { bindMarkdownSkillTurn } from "./markdownSkillSelections.js";
@@ -759,6 +764,9 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     },
     readChatDraft: (id) => readChatDraft(db, id),
     updateChatDraft: (id, update) => updateChatDraft(db, id, update),
+    readCodingWorkbenchDraft: (windowId) => readCodingWorkbenchDraft(db, windowId),
+    updateCodingWorkbenchDraft: (windowId, update) =>
+      updateCodingWorkbenchDraft(db, windowId, update),
     createChat: (
       projectPath: string,
       title: string,

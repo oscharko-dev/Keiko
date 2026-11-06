@@ -350,7 +350,7 @@ SDKs and credentials.
 
 OpenCode knows exactly one provider, the gateway-bound `keiko-runtime`, and one model. Which
 upstream serves it (LiteLLM, Azure or a later one) is the gateway's concern and invisible to the
-runtime. Because the pinned 2.1.4 runtime otherwise lists OpenCode's hosted free models and
+runtime. Because the pinned runtime otherwise lists OpenCode's hosted free models and
 discovers local model servers such as Ollama on their default loopback ports, every launch binds
 the producer's own provider policy (`provider.use` denied for `*`, allowed for `keiko-runtime`) on
 the server-owned configuration layer and sets `OPENCODE_DISABLE_FREE_MODELS` and
@@ -640,3 +640,4 @@ done exactly that; an evaluation runtime is not such a fact and stays in the det
 | 1.7     | 2026-10-23 | Shipped the pinned ripgrep 15.1.0 executable and MIT license in every production ZIP (`nativeTools`, `runtime/native/rg`), so the OpenCode search tools never download at run time (#3897). |
 | 1.8     | 2026-10-24 | D6: the runtime knows one provider. Every launch binds the producer's gateway-only provider policy on the server-owned layer and disables OpenCode's hosted free models and the models.dev catalog fetch, after the original 2.1.4 executable was shown to list free models and a local Ollama beside the gateway model (#3905, parity row S11). |
 | 1.9     | 2026-10-29 | D4: recorded that orphaned runtime trees are reaped by the Linux, Windows and macOS supervisors/monitor themselves and deleted the unused server-side native recovery port (#4106). |
+| 1.10    | 2026-11-05 | Pinned OpenCode 2.2.5 (#4271). Every version fact reads from `opencode-runtime-pins.json`. The new built-in plugins are removed at the source, so the shipped payload offers no capability the previous one did not. |
