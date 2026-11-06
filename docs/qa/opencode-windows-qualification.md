@@ -1423,7 +1423,7 @@ Limits:
 
 - **Model.** The model was the one the dev UI was configured with, not an owner-approved model
   (item E of the proposal). Its evidence stays `functional-not-platform-qualified`.
-- **Coverage.** No write task, approval, delivery or other mode was exercised.
+- **Coverage.** Only Ask for approval was exercised. Delivery and the other modes were not.
 - **User checkout.** A run on the user's own checkout (Lokal) gets no workspace grant. It still
   starts and then fails inside the runtime; it should be refused before spawn with a closed reason.
 - **Volumes.** The volume finding comes from one host and one non-system volume. A refusal that names
@@ -1432,6 +1432,20 @@ Limits:
 - **Native tests.** The native readback rules for the inbound permit run in the disposable-runner
   filter suite, now against the production `gateway_inbound.c`. The broker's firewall step has no
   hosted run yet.
+
+Write tasks, same host and setup, Ask for approval mode, new managed worktrees:
+
+- **A file without a BOM (CRLF, as `core.autocrlf` checks it out).** The runtime proposed the edit
+  through Keiko's facade, and the Workbench paused for review. After the human approval the file was
+  written with its CRLF endings kept. The model then asked for a `build` verification. After a
+  second approval it reported `not-run` with `build:script-missing`, because the scratch repository
+  has no build script. That is the expected governed outcome, so the run settled as not verified.
+- **A file with a UTF-8 BOM, which Windows PowerShell 5 writes.** Every edit was refused as
+  `CONTENT_HASH_MISMATCH` on the review path (`coding-runtime.edit.refused`,
+  `executionPath: browser`), after the changeset had been materialized. The model's digest and the
+  materializer's check hash the secure text read, which drops a leading BOM. The patch inspection
+  in `keiko-tools` hashes `readFileSync(…, "utf8")`, which keeps it, and the review admission
+  compares the two. This is a platform-independent defect, tracked separately from this record.
 
 ## Update impact
 
