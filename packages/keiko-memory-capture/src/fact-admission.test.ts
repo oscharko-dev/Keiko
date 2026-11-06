@@ -999,3 +999,9 @@ describe("a change or a no after a short span", () => {
     expect(admit(text, evidence).admitted).toBe(true);
   });
 });
+
+describe("attribution with laut", () => {
+  it("finds the attribution behind a repeated laut", () => {
+    expect(reasonOf("Laut laut Anna nutze ich Excel.", "nutze ich Excel")).toBe("negated-context");
+  });
+});

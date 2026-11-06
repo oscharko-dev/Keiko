@@ -172,8 +172,28 @@ export function isMemoryForgetReference(target: string): boolean {
 // whose sentence goes on with a task verb ("nimm", "use") is an instruction for the task at hand.
 // Any other continuation ("und meine Telefonnummer", ", danke", ", ich bin umgezogen") still names
 // what to forget.
-const NAMED_THING_RE =
-  /^(?:den|die|das|der|dem|des|ein\p{L}*|mein\p{L}*|dein\p{L}*|unser\p{L}*|the|a|an|my|your|our)\s/iu;
+const FIRST_WORD_RE = /^(\p{L}+)\s/u;
+const NAMING_WORDS = new Set([
+  "den",
+  "die",
+  "das",
+  "der",
+  "dem",
+  "des",
+  "the",
+  "a",
+  "an",
+  "my",
+  "your",
+  "our",
+]);
+const NAMING_STEMS = ["ein", "mein", "dein", "unser"];
+
+function opensWithNamedThing(target: string): boolean {
+  const first = FIRST_WORD_RE.exec(target)?.[1]?.toLowerCase();
+  if (first === undefined) return false;
+  return NAMING_WORDS.has(first) || NAMING_STEMS.some((stem) => first.startsWith(stem));
+}
 const CONTINUATION_RE = /,|\s(?:und|and|dann|then)(?!\p{L})/gu;
 const CONJUNCTIONS = new Set(["und", "and", "dann", "then"]);
 const TASK_VERBS = new Set(
@@ -185,7 +205,7 @@ const TASK_VERBS = new Set(
 );
 
 function asksForTask(target: string): boolean {
-  if (!NAMED_THING_RE.test(target)) return false;
+  if (!opensWithNamedThing(target)) return false;
   return [...target.matchAll(CONTINUATION_RE)].some((match) => {
     const words = target
       .slice(match.index + match[0].length)
@@ -196,9 +216,18 @@ function asksForTask(target: string): boolean {
   });
 }
 
+const LETTER_RE = /\p{L}/u;
+
+// Linear on any input: "nimm," and "use." are the verbs.
+function withoutTrailingNonLetters(word: string): string {
+  let end = word.length;
+  while (end > 0 && !LETTER_RE.test(word.charAt(end - 1))) end -= 1;
+  return word.slice(0, end);
+}
+
 // "look" asks for work only as "look at": "look, I moved" corrects the thing to forget.
 function isTaskVerb(word: string, next: string): boolean {
-  const verb = word.toLowerCase().replace(/\P{L}+$/u, "");
+  const verb = withoutTrailingNonLetters(word.toLowerCase());
   return TASK_VERBS.has(verb) || (verb === "look" && next.toLowerCase() === "at");
 }
 

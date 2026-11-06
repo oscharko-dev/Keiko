@@ -757,25 +757,83 @@ const ATTRIBUTION_MARKER_RE = anyWordPattern([
   "apparently",
 ]);
 // "laut" is also "loud"; as attribution it names someone: "Laut Anna", "laut meinem Chef".
-const ATTRIBUTED_RE =
-  /(?:^|[^\p{L}])[Ll]aut\s+(?:\p{Lu}|(?:mein(?:em|er)?|ihr|ihm|ihnen|dem|der|den)(?!\p{L}))/u;
+// The word after "laut" is read ahead, not taken, so "laut laut Anna" still finds "laut Anna".
+const LAUT_RE = /(?:^|[^\p{L}])[Ll]aut(?=\s+(\p{L}+))/gu;
+const LAUT_POINTERS = new Set([
+  "mein",
+  "meinem",
+  "meiner",
+  "ihr",
+  "ihm",
+  "ihnen",
+  "dem",
+  "der",
+  "den",
+]);
+
+function isAttributedByLaut(text: string): boolean {
+  return [...text.matchAll(LAUT_RE)].some(([, word = ""]) => {
+    return CAPITAL_START_RE.test(word) || LAUT_POINTERS.has(word);
+  });
+}
 // "hat Anna gesagt", "Man hat mir gesagt"; "Ehrlich gesagt" names nobody.
 const SPEECH_PARTICIPLES = new Set(["gesagt", "erzählt", "gemeint", "behauptet"]);
 const SPEECH_AUXILIARIES = new Set(["hat", "haben", "hatte", "hatten"]);
 // Told by someone unnamed: "I am told …", "I'm told …", "Mir wurde gesagt, …".
-const PASSIVE_SPEECH_RE =
-  /(?:^|[^\p{L}])(?:i\s+am|i['’]m|is|are|was|were|be|being|been|wird|werde|wurde|wurden)\s+(?:\p{L}+\s+)?(?:told|said|gesagt|erzählt)(?!\p{L})/iu;
+const PASSIVE_AUXILIARIES = new Set(
+  "i'm i’m is are was were be being been wird werde wurde wurden".split(" "),
+);
+const PASSIVE_SPEECH_WORDS = new Set(["told", "said", "gesagt", "erzählt"]);
+const LEADING_NON_LETTERS_RE = /^[^\p{L}]*/u;
+const LEADING_LETTERS_RE = /^\p{L}*/u;
+const ONLY_LETTERS_RE = /^\p{L}+$/u;
+
+function isPassiveAuxiliary(tokens: readonly string[], at: number): boolean {
+  const word = (tokens[at] ?? "").replace(LEADING_NON_LETTERS_RE, "");
+  if (word === "am") return (tokens[at - 1] ?? "").replace(LEADING_NON_LETTERS_RE, "") === "i";
+  return PASSIVE_AUXILIARIES.has(word);
+}
+
+// Being told: an auxiliary, at most one word, then "told", "said", "gesagt" or "erzählt".
+function isToldPassively(text: string): boolean {
+  const tokens = text.toLowerCase().split(/\s+/u);
+  return tokens.some((token, at) => {
+    if (!PASSIVE_SPEECH_WORDS.has(LEADING_LETTERS_RE.exec(token)?.[0] ?? "")) return false;
+    if (isPassiveAuxiliary(tokens, at - 1)) return true;
+    return ONLY_LETTERS_RE.test(tokens[at - 1] ?? "") && isPassiveAuxiliary(tokens, at - 2);
+  });
+}
 // Each later clause up to the next mark, an aside in brackets included.
 const CLAUSE_HEAD_RE = /[,;:–—(-]\s*(\p{L}+)[^,;:–—()]*/gu;
 // A relative clause, reason or condition is no attribution: "…, which says nothing", "…, weil Anna
 // es mir sagte", "…, wenn man sagt, was zu tun ist".
-const RELATIVE_LEAD_RE =
-  /^(?:which|that|who|whom|whose|where|because|since|when|whenever|if|der|die|das|den|dem|welche[rsmn]?|weil|da|wo|denn|obwohl|wenn|falls|sobald)$/iu;
+const RELATIVE_LEADS = new Set(
+  (
+    "which that who whom whose where because since when whenever if der die das den dem welche " +
+    "welcher welches welchem welchen weil da wo denn obwohl wenn falls sobald"
+  ).split(" "),
+);
 // A demonstrative opens an attribution only when it is the subject of a speech verb right after
 // it: "…, das sagt mein Chef", "…, das hat Anna gesagt", "…, that's what my boss says". A relative
 // "das" puts its verb at the end ("ein Tool, das Fehler erklärt") and stays a relative clause.
-const DEMONSTRATIVE_SPEECH_RE =
-  /^[,;:–—(-]\s*(?:(?:das|dies)\s+(?:sagt|sagte|sagen|sagten|meint|meinte|meinten|behauptet|behauptete|glaubt|glaubte|denkt|dachte|hat|haben|hatte|hatten)|(?:that|this)(?:['’]s|\s+is|\s+was)\s+what)(?!\p{L})/iu;
+const DEMONSTRATIVES = new Set(["das", "dies"]);
+const DEMONSTRATIVE_VERBS = new Set(
+  (
+    "sagt sagte sagen sagten meint meinte meinten behauptet behauptete glaubt glaubte denkt " +
+    "dachte hat haben hatte hatten"
+  ).split(" "),
+);
+const THAT_IS_RE = /^(?:that|this)['’]s$/u;
+
+function opensDemonstrativeSpeech(head: string): boolean {
+  const words = head.slice(1).trimStart().toLowerCase().split(/\s+/u);
+  const [first = "", second = "", third = ""] = words;
+  const letters = (word: string): string => LEADING_LETTERS_RE.exec(word)?.[0] ?? "";
+  if (DEMONSTRATIVES.has(first)) return DEMONSTRATIVE_VERBS.has(letters(second));
+  if (THAT_IS_RE.test(first)) return letters(second) === "what";
+  const opensWithThat = first === "that" || first === "this";
+  return opensWithThat && (second === "is" || second === "was") && letters(third) === "what";
+}
 // Words that may stand between the person's own subject and their speech verb: an adverb ("I
 // always tell") or a modal or auxiliary ("I must say", "Ich muss sagen", "I have told"). "Ich
 // würde sagen" and "I would say" are a hedge and stay out.
@@ -835,8 +893,18 @@ const MATERIAL_NOUN_RE = anyWordPattern([
 ]);
 const MAIL_HEADER_RE =
   /^(?:fwd?|wg|aw|re|von|an|betreff|datum|gesendet|from|to|subject|cc|date|sent)$/iu;
-const TEXT_TASK_RE =
-  /^(?:(?:bitte|please)\s+)?(?:schreibe?|übersetze?|formuliere?|korrigiere?|überarbeite?|fasse|translate|write|rewrite|correct|proofread|summari[sz]e|paraphrase)(?!\p{L})/iu;
+const TEXT_TASK_VERBS = new Set(
+  (
+    "schreib schreibe übersetz übersetze formulier formuliere korrigier korrigiere überarbeit " +
+    "überarbeite fasse translate write rewrite correct proofread summarize summarise paraphrase"
+  ).split(" "),
+);
+
+function asksForTextWork(lead: string): boolean {
+  const words = lead.toLowerCase().split(/\s+/u);
+  const verb = words[0] === "bitte" || words[0] === "please" ? words[1] : words[0];
+  return TEXT_TASK_VERBS.has(LEADING_LETTERS_RE.exec(verb ?? "")?.[0] ?? "");
+}
 // How far before a verb its speaker may stand: "Anna also says", "My boss always says".
 const SPEAKER_REACH = 3;
 
@@ -877,7 +945,7 @@ function isPassedOn(text: string, start: number): boolean {
   if (QUOTED_LINE_RE.test(text.slice(lineStart))) return true;
   return [...text.slice(0, start).matchAll(LEAD_IN_RE)].some((match) => {
     const lead = match[0].slice(0, -1).trim();
-    if (MAIL_HEADER_RE.test(lead) || TEXT_TASK_RE.test(lead)) return true;
+    if (MAIL_HEADER_RE.test(lead) || asksForTextWork(lead)) return true;
     return MATERIAL_NOUN_RE.test(lead) && leadInReaches(text, match.index + match[0].length, start);
   });
 }
@@ -900,11 +968,34 @@ const CONTRAST_LEAD_RE =
   /^(?:aber|doch|jedoch|allerdings|but|however|though|although|yet)(?![\p{L}\p{N}])[\s,]*/iu;
 // A bare "nein", "no", "nicht wirklich" or "not really" takes the claim back only on its own: "…, no
 // sugar", "…, nicht mehr als nötig" and "…, not really downtown" qualify it instead.
-const ON_ITS_OWN = String.raw`(?=\s*(?:[,.;:!?…]|$)|\s+(?:actually|really|eigentlich|wirklich|i\s+mean|ich\s+meine)(?![\p{L}\p{N}]))`;
-const RETRACTION_RE = new RegExp(
-  String.raw`^(?:(?:das|es|this|that|it)(?:\s+|(?=['’])))?(?:nicht\s+mehr(?!\s+(?:als|wie|nur)(?![\p{L}\p{N}]))|no\s+longer|not\s+any\s?more|stimmt\s+(?:(?:gar|überhaupt|so)\s+)?nicht|(?:is|['’]s|was)\s+not\s+true|isn['’]t\s+true|(?:just\s+)?(?:kidding|joking)|(?:nur\s+)?(?:ein\s+)?(?:scherz|spaß|spass)|(?:nicht\s+wirklich|not\s+really|nein|nö|nee|no|nope)${ON_ITS_OWN})(?![\p{L}\p{N}])`,
-  "iu",
-);
+const RETRACTION_POINTER_RE = /^(?:das|es|this|that|it)(?:\s+|(?=['’]))/iu;
+const RETRACTION_RES: readonly RegExp[] = [
+  /^nicht\s+mehr(?!\s+(?:als|wie|nur)(?![\p{L}\p{N}]))(?![\p{L}\p{N}])/iu,
+  /^(?:no\s+longer|not\s+any\s?more)(?![\p{L}\p{N}])/iu,
+  /^stimmt\s+(?:(?:gar|überhaupt|so)\s+)?nicht(?![\p{L}\p{N}])/iu,
+  /^(?:(?:is|['’]s|was)\s+not|isn['’]t)\s+true(?![\p{L}\p{N}])/iu,
+  /^(?:just\s+)?(?:kidding|joking)(?![\p{L}\p{N}])/iu,
+  /^(?:nur\s+)?(?:ein\s+)?(?:scherz|spaß|spass)(?![\p{L}\p{N}])/iu,
+];
+const BARE_NO_RE = /^(?:nicht\s+wirklich|not\s+really|nein|nö|nee|no|nope)(?![\p{L}\p{N}])/iu;
+const CLOSES_HERE_RE = /^\s*(?:[,.;:!?…]|$)/u;
+const POINTS_ON_RE =
+  /^\s+(?:actually|really|eigentlich|wirklich|i\s+mean|ich\s+meine)(?![\p{L}\p{N}])/iu;
+
+function opensRetraction(text: string): boolean {
+  if (RETRACTION_RES.some((pattern) => pattern.test(text))) return true;
+  const bare = BARE_NO_RE.exec(text);
+  if (bare === null) return false;
+  const after = text.slice(bare[0].length);
+  return CLOSES_HERE_RE.test(after) || POINTS_ON_RE.test(after);
+}
+
+// "das stimmt nicht", "that's not true" and the bare forms alike.
+function isRetraction(text: string): boolean {
+  if (opensRetraction(text)) return true;
+  const pointer = RETRACTION_POINTER_RE.exec(text);
+  return pointer !== null && opensRetraction(text.slice(pointer[0].length));
+}
 // A restriction the span left out: "…, aber nur wenn mein Chef es verlangt", "…, außer montags".
 const RESTRICTION_RE = /^(?:außer|ausser|except|unless|es\s+sei\s+denn)(?![\p{L}\p{N}])/iu;
 const CONTRAST_RESTRICTION_RE =
@@ -919,7 +1010,7 @@ function tailDropReason(tail: string): FactDropReason | null {
   if (RESTRICTION_RE.test(clause)) return "hypothetical";
   const contrast = CONTRAST_LEAD_RE.exec(clause);
   const rest = contrast === null ? clause : clause.slice(contrast[0].length);
-  if (RETRACTION_RE.test(rest)) return "negated-context";
+  if (isRetraction(rest)) return "negated-context";
   return contrast === null ? null : contrastDropReason(rest);
 }
 
@@ -1116,17 +1207,17 @@ function contextDropReason(
 // sagte, …"); in a later clause another person must stand by the verb.
 function isReported(opening: string, rest: string): boolean {
   // Being told is never the person's own statement, wherever the passive stands: "I am told I …".
-  if (PASSIVE_SPEECH_RE.test(opening) || PASSIVE_SPEECH_RE.test(rest)) return true;
+  if (isToldPassively(opening) || isToldPassively(rest)) return true;
   if (namesSource(opening) || speaksInOpening(splitWords(opening))) return true;
   return [...rest.matchAll(CLAUSE_HEAD_RE)].some((head) => {
     const lead = head[1] ?? "";
-    if (RELATIVE_LEAD_RE.test(lead) && !DEMONSTRATIVE_SPEECH_RE.test(head[0])) return false;
+    if (RELATIVE_LEADS.has(lead.toLowerCase()) && !opensDemonstrativeSpeech(head[0])) return false;
     return speaksInClause(head[0]);
   });
 }
 
 function namesSource(text: string): boolean {
-  return ATTRIBUTION_MARKER_RE.test(text) || ATTRIBUTED_RE.test(text);
+  return ATTRIBUTION_MARKER_RE.test(text) || isAttributedByLaut(text);
 }
 
 function splitWords(text: string): readonly string[] {
