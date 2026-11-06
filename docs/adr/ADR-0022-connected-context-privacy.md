@@ -1556,7 +1556,8 @@ scheme word, a template literal, a call or an interpolation, so preserved source
 Plain text masks a header value as wholly as the floor does, and `Authorization` and
 `Proxy-Authorization` are sensitive structured keys: their value is masked whole, also when it holds
 `$`, `(`, `[`, `{` or a backtick, and only a leading `Bearer`, `Basic` or `Token` scheme word stays
-readable.
+readable, for these keys alone. Like any secret key, such a key masks its whole subtree, so a
+schema's `authorization: { type: string }` is masked too: deliberate strict over-redaction.
 A structured key (JSON, YAML, source property) is sensitive by the same label grammar as flat text:
 a secret label that starts at a word or camelCase boundary and ends the key, so `openai_api_key`,
 `my_password`, `GITHUB_TOKEN` and `sessionToken` count and `max_tokens`, `mypassword` or

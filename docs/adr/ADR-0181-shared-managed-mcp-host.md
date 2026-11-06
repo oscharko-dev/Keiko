@@ -592,7 +592,9 @@ points; they refine D5 and the section above, they do not widen any authority.
   (`ExternalMcpConnection.dispatchGate`, set by `ExternalClient` and forwarded by the configured
   connection wrapper). For any other connection, such as the Coding Jira Pod host connection, the
   relay dispatches the record before the call starts and refuses the call when dispatch is refused,
-  so an effect can never exist without a dispatched record behind it. The post-send pin (lost
+  so an effect can never exist without a dispatched record behind it. The price is precision, not
+  safety: such a connection's later effect-free refusal settles the already dispatched record as
+  unconfirmed, never `not-dispatched`. The post-send pin (lost
   response, provider error, malformed result) is unchanged: the run is revoked.
 - **`tools/list_changed` retires, it does not cancel.** The consumer-visible `signal` aborts at once
   and no further call is dispatched, but a call whose frame already left keeps its transport until it

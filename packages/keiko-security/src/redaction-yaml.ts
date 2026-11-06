@@ -415,13 +415,14 @@ function yamlScalarSpans(
       .map(([node]) => (yamlApi().isScalar(node) ? String(node.value) : "")),
   );
   const keys = yamlKeyNodes(nodes);
+  const headers = authorizationValueNodes(nodes);
   recordPrivateYamlValues(nodes, ports);
   const spans: RedactionSpan[] = [];
   for (const [node, sensitive] of nodes) {
     if (!yamlApi().isScalar(node)) continue;
     const value = String(node.value);
     const safe = sensitive
-      ? sensitivePlaceholder(value)
+      ? sensitivePlaceholder(value, headers.has(node))
       : !keys.has(node) && knownYamlValue(node, values, ports)
         ? REDACTION_PLACEHOLDER
         : ports.redactPlain(value);
@@ -430,9 +431,28 @@ function yamlScalarSpans(
   return spans;
 }
 
-/** A sensitive value is masked whole; only a leading authorization scheme word is public. */
-function sensitivePlaceholder(value: string): string {
-  const scheme = /^(?:Bearer|Basic|Token)[ \t]+(?=\S)/iu.exec(value)?.[0];
+const AUTHORIZATION_KEY = /^(?:proxy-)?authorization$/iu;
+
+/** The values held directly by an `Authorization` or `Proxy-Authorization` key. */
+function authorizationValueNodes(nodes: ReadonlyMap<Node, boolean>): ReadonlySet<Node> {
+  const values = new Set<Node>();
+  for (const node of nodes.keys()) {
+    if (!yamlApi().isMap(node)) continue;
+    for (const pair of node.items) {
+      const key = pair.key;
+      if (yamlApi().isScalar(key) && AUTHORIZATION_KEY.test(String(key.value)))
+        if (yamlApi().isNode(pair.value)) values.add(pair.value);
+    }
+  }
+  return values;
+}
+
+/**
+ * A sensitive value is masked whole. Only an authorization header value keeps its leading scheme
+ * word, which is public; any other secret that starts with such a word loses it too.
+ */
+function sensitivePlaceholder(value: string, header: boolean): string {
+  const scheme = header ? /^(?:Bearer|Basic|Token)[ \t]+(?=\S)/iu.exec(value)?.[0] : undefined;
   return scheme === undefined ? REDACTION_PLACEHOLDER : `${scheme}${REDACTION_PLACEHOLDER}`;
 }
 

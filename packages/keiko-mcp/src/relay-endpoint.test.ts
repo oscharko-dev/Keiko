@@ -27,7 +27,7 @@ interface Fixture {
 function fixture(
   risk: "read" | "write" = "read",
   instructions?: string,
-  dispatchGate: boolean = true,
+  dispatchGate = true,
 ): Fixture {
   let allowed = true;
   const recover = vi.fn(() => {

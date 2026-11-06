@@ -101,6 +101,18 @@ describe("an Authorization value holding a source-structural character (#4271 au
     }
   });
 
+  it("keeps a scheme word only for an authorization key, never for another secret", () => {
+    expect(redact(`y: 1\npassword: Basic ${VALUE}`)).toBe("y: 1\npassword: [REDACTED]");
+    expect(redact(`y: 1\nauthorization: Basic ${VALUE}`)).toBe(
+      "y: 1\nauthorization: Basic [REDACTED]",
+    );
+  });
+
+  it("masks an authorization subtree as it masks any secret key's subtree", () => {
+    // Deliberate over-redaction under the strict projection, as for `token` or `password`.
+    expect(redact(`y: 1\nauthorization:\n  type: ${VALUE}`)).not.toContain(VALUE);
+  });
+
   it.each(STRUCTURED)("keeps valid TypeScript around it: %s", (value) => {
     const output = redact(`const headers = { Authorization: "Bearer ${value}" };\nexport {};`);
     expect(isTypeScriptSource(output)).toBe(true);
