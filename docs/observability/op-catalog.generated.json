@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b97b70009461ff8742a80d0cee4f077dd82ac251cbab05f91f940df8d5dad30b",
+    "catalogDigest": "a13a9155a396851e6d9cef86109565e964523abad67f656a74755267c3934ea7",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -11026,9 +11026,9 @@
         "failureClasses": ["coding-runtime-mcp-credentials"],
         "proofIds": ["coding-runtime.mcp-credentials.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativeMcpCredentials.ts:158",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativeMcpCredentials.ts:162",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeNativeMcpCredentials.ts:213"
+          "packages/keiko-server/src/coding-runtime/opencodeNativeMcpCredentials.ts:217"
         ]
       },
       {
@@ -11079,7 +11079,10 @@
               "relay-unavailable",
               "credential-in-response-header",
               "credential-spelling-unbounded",
-              "mutation-outcome-unknown"
+              "mutation-outcome-unknown",
+              "binding-revoked",
+              "server-hung-recycled",
+              "reconnect-backoff"
             ]
           },
           "method": {
@@ -11123,6 +11126,16 @@
             "dataClass": "count",
             "required": false
           },
+          "failureCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "backoffMs": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "frames": {
             "type": "string-array",
             "dataClass": "opaque-id",
@@ -11150,8 +11163,8 @@
         "failureClasses": ["coding-runtime-mcp-relay"],
         "proofIds": ["coding-runtime.mcp-relay.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:204",
-        "emitterSites": ["packages/keiko-server/src/mcp/mcpCredentialRelay.ts:275"]
+        "registrationSite": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:236",
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpCredentialRelay.ts:312"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33186,7 +33199,9 @@
               "log-unavailable",
               "deadline-exceeded",
               "aborted",
-              "closed"
+              "closed",
+              "result-too-large",
+              "backoff"
             ]
           },
           "registrySha256": {
@@ -33211,6 +33226,60 @@
             "dataClass": "opaque-id",
             "required": false,
             "maxLength": 128
+          },
+          "serverDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "toolDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "durationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "requestBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "resultBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "dispatched": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "effect": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["none", "possible"]
+          },
+          "omittedToolCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "truncatedDescriptionCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "connectCause": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["timeout", "spawn", "aborted", "closed", "protocol", "unknown"]
           }
         },
         "causal": "correlation",
@@ -33220,7 +33289,7 @@
         "proofIds": ["mcp.managed.lifecycle.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-mcp/src/activity.ts:12",
-        "emitterSites": ["packages/keiko-mcp/src/activity.ts:77"]
+        "emitterSites": ["packages/keiko-mcp/src/activity.ts:138"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -45797,6 +45866,7 @@
           "completeness-state",
           "count",
           "digest",
+          "duration",
           "loss-state",
           "opaque-id"
         ],
@@ -68362,6 +68432,12 @@
                   "required": true
                 },
                 {
+                  "name": "backoffMs",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "causeChain",
                   "type": "string-array",
                   "dataClass": "error-kind",
@@ -68369,6 +68445,12 @@
                 },
                 {
                   "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "failureCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": false
@@ -94425,9 +94507,39 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "connectCause",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "dispatched",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "effect",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "invocationId",
                   "type": "string",
                   "dataClass": "opaque-id",
+                  "required": false
+                },
+                {
+                  "name": "omittedToolCount",
+                  "type": "integer",
+                  "dataClass": "count",
                   "required": false
                 },
                 {
@@ -94455,10 +94567,40 @@
                   "required": true
                 },
                 {
+                  "name": "requestBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "resultBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "serverDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
                   "name": "toolCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "toolDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "truncatedDescriptionCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 }
               ],
               "evidenceClasses": [
@@ -94466,6 +94608,7 @@
                 "completeness-state",
                 "count",
                 "digest",
+                "duration",
                 "loss-state",
                 "opaque-id"
               ],
@@ -110519,13 +110662,13 @@
     {
       "op": "coding-runtime.mcp-credentials",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeNativeMcpCredentials.ts:161",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeNativeMcpCredentials.ts:165",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.mcp-relay",
       "category": "security",
-      "site": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:207",
+      "site": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:239",
       "package": "keiko-server"
     },
     {
@@ -113219,7 +113362,7 @@
     {
       "op": "tool-catalog.binding-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/tool-catalog/managedProviderCatalog.ts:239",
+      "site": "packages/keiko-server/src/tool-catalog/managedProviderCatalog.ts:241",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

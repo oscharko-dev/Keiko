@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b97b70009461ff8742a80d0cee4f077dd82ac251cbab05f91f940df8d5dad30b"
+    "catalogDigest": "a13a9155a396851e6d9cef86109565e964523abad67f656a74755267c3934ea7"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2610,6 +2610,7 @@
     ],
     "mcp.authorization.state.line": ["packages/keiko-server/src/mcp/mcpAuthorization.test.ts"],
     "mcp.managed.lifecycle.line": [
+      "packages/keiko-mcp/src/external-client-resilience.test.ts",
       "packages/keiko-mcp/src/external-client.test.ts",
       "packages/keiko-mcp/src/host-protocol.test.ts",
       "packages/keiko-mcp/src/host.test.ts"
