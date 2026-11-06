@@ -19,6 +19,8 @@ CHECKOUT=$(cd "$(dirname "$0")/../../../.." && pwd)
 REVIEWER_PORT=${KEIKO_REVIEW_LAB_REVIEWER_PORT:-8080}
 COUNTER_PORT=${KEIKO_REVIEW_LAB_COUNTER_PORT:-8081}
 GATEWAY_PORT=${KEIKO_REVIEW_LAB_GATEWAY_PORT:-4000}
+# The watchdog of a running `run`; global so that the EXIT trap still sees it.
+WATCHDOG_PID=
 # The versions the 4-bit holdout and seed runs of 2026-11 used.
 MLX_LM_VERSION=0.32.2
 LITELLM_VERSION=1.106.6
@@ -180,10 +182,6 @@ EOF
 listening() { lsof -nP -iTCP:"$1" -sTCP:LISTEN -t >/dev/null 2>&1; }
 
 serve() { # port path pidname log temp top-p top-k chat-template-args cache-bytes
-  if listening "$1"; then
-    echo "lab: port $1 is already in use; stop that server or set KEIKO_REVIEW_LAB_*_PORT" >&2
-    exit 1
-  fi
   # Sampling follows each model card (#4138 dev-2, dev-3): the Reviewer runs Qwen's non-thinking
   # mode. One request at a time, a 512-token prefill step and a byte cap on the prompt cache keep
   # both servers inside the GPU limit (#4138 dev-6); none of them changes what a request generates.
@@ -197,20 +195,31 @@ serve() { # port path pidname log temp top-p top-k chat-template-args cache-byte
 cmd_start() {
   pair "$1"
   [ -f "$LAB/litellm-$QUANT.yaml" ] || { echo "lab: run 'lab.sh setup $QUANT' first" >&2; exit 1; }
+  # R4130-042: every port is checked before any server starts, so a refusal leaves nothing running.
+  local port
+  for port in "$REVIEWER_PORT" "$COUNTER_PORT" "$GATEWAY_PORT"; do
+    if listening "$port"; then
+      echo "lab: port $port is already in use; stop that server or set KEIKO_REVIEW_LAB_*_PORT" >&2
+      exit 1
+    fi
+  done
   export HF_HUB_OFFLINE=1
   local reviewer_path counter_path
   reviewer_path=$(model_path "$REVIEWER_REPO" "$REVIEWER_REVISION")
   counter_path=$(model_path "$COUNTER_REPO" "$COUNTER_REVISION")
   serve "$REVIEWER_PORT" "$reviewer_path" reviewer.pid reviewer.log 0.7 0.8 20 '{"enable_thinking":false}' 4GB
   serve "$COUNTER_PORT" "$counter_path" counter.pid counter.log 1.0 0.95 64 '{}' 6GB
-  if listening "$GATEWAY_PORT"; then
-    echo "lab: port $GATEWAY_PORT is already in use; set KEIKO_REVIEW_LAB_GATEWAY_PORT" >&2
-    exit 1
-  fi
-  # shellcheck source=/dev/null
-  (set -a && . "$LAB/.env" && set +a &&
+  # The key is sourced first and LiteLLM is started on its own line, so `$!` is LiteLLM itself; a
+  # trailing `&` on an `&&` chain would background the whole chain and record a wrapper's pid.
+  (
+    set -a
+    # shellcheck source=/dev/null
+    . "$LAB/.env"
+    set +a
     nohup "$LAB/venv/bin/litellm" --config "$LAB/litellm-$QUANT.yaml" --host 127.0.0.1 \
-      --port "$GATEWAY_PORT" >> "$LAB/logs/litellm.log" 2>&1 & echo $! > "$LAB/logs/litellm.pid")
+      --port "$GATEWAY_PORT" >> "$LAB/logs/litellm.log" 2>&1 &
+    echo $! > "$LAB/logs/litellm.pid"
+  )
   for _ in $(seq 1 300); do
     if curl -s -m 2 -o /dev/null "http://127.0.0.1:$REVIEWER_PORT/v1/models" &&
       curl -s -m 2 -o /dev/null "http://127.0.0.1:$COUNTER_PORT/v1/models" &&
@@ -221,6 +230,7 @@ cmd_start() {
     sleep 2
   done
   echo "lab: the pair did not come up within 10 minutes; see $LAB/logs/" >&2
+  cmd_stop >&2
   exit 1
 }
 
@@ -262,19 +272,23 @@ cmd_run() {
   case "$set" in development | seeds) ;; *) echo "lab: run needs development or seeds" >&2; exit 2 ;; esac
   local stamp
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  # R4130-041, R4130-042: the trap reads a global and is installed before anything starts, so a
+  # finished, failed or interrupted run (INT, TERM and HUP also run the EXIT trap) stops the lab
+  # and keeps the gate's own exit status.
+  trap '[ -n "${WATCHDOG_PID:-}" ] && kill "$WATCHDOG_PID" 2>/dev/null; cmd_stop' EXIT
   until (( $(reclaimable_gb) >= MIN_FREE_GB )); do
     echo "lab: waiting for $MIN_FREE_GB GB reclaimable ($(reclaimable_gb) GB now)"
     sleep 60
   done
+  local f
   for f in reviewer.log counter.log; do
-    [ -f "$LAB/logs/$f" ] && mv "$LAB/logs/$f" "$LAB/logs/$f.prev"
+    if [ -f "$LAB/logs/$f" ]; then mv "$LAB/logs/$f" "$LAB/logs/$f.prev"; fi
   done
   cmd_start "$QUANT"
   watchdog &
-  local watchdog_pid=$!
-  trap 'kill "$watchdog_pid" 2>/dev/null; cmd_stop' EXIT
+  WATCHDOG_PID=$!
   local iteration=()
-  [ "$set" = development ] && iteration=(--iteration "dev-$QUANT-$stamp")
+  if [ "$set" = development ]; then iteration=(--iteration "dev-$QUANT-$stamp"); fi
   (
     cd "$CHECKOUT"
     # shellcheck source=/dev/null
