@@ -51,7 +51,10 @@ import type {
 } from "./connector-graph-types";
 import { useConnectorGraph } from "./connector-graph-state";
 import { PodDragHandle } from "./pod-drag-handle";
-import { beginPodSelectionEvidence } from "./pod-selection-evidence";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { correlationIdOf } from "@/lib/client-error-summary";
 import { CapsuleSetComposeDialog } from "./capsule-set-compose";
 import { AtlassianConnectorsPanel } from "@/app/components/desktop/widgets/connectors/AtlassianConnectorsPanel";
 import podStyles from "@/app/components/desktop/widgets/connectors/connectors.module.css";
@@ -1189,14 +1192,16 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
   const [activeCapsuleId, setActiveCapsuleId] = useState<KnowledgeCapsuleId | null>(null);
   const handleOpenCapsule = useCallback(
     (id: KnowledgeCapsuleId): void => {
-      const settled = beginPodSelectionEvidence();
-      if (externalOpenCapsule !== undefined) {
-        externalOpenCapsule(id);
-        settled("applied");
-        return;
+      try {
+        if (externalOpenCapsule !== undefined) externalOpenCapsule(id);
+        else setActiveCapsuleId(id);
+        // The detail state's admitted fetch owns selection settlement, including failure/staleness.
+      } catch (error) {
+        reportClientDiagnostic("Knowledge Pod opening failed.", {
+          correlationId: correlationIdOf(error) ?? newClientCorrelationId(),
+          errorEvidence: clientErrorEvidence(error),
+        });
       }
-      setActiveCapsuleId(id);
-      settled("applied");
     },
     [externalOpenCapsule],
   );
@@ -1234,13 +1239,19 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
   const [deleteSetTarget, setDeleteSetTarget] = useState<CapsuleSetListEntry | null>(null);
 
   async function submitCreateCapsule(name: string): Promise<void> {
+    let createdId: KnowledgeCapsuleId;
     try {
-      const createdId = await handleCreateCapsule(name);
-      setCreateDialogOpen(false);
-      handleOpenCapsule(createdId);
-    } catch {
-      // The state hook surfaces the error message; keep the dialog open for correction/retry.
+      createdId = await handleCreateCapsule(name);
+    } catch (error) {
+      // The state hook surfaces the create error and keeps the dialog available for correction.
+      reportClientDiagnostic("Knowledge Pod creation failed.", {
+        correlationId: correlationIdOf(error) ?? newClientCorrelationId(),
+        errorEvidence: clientErrorEvidence(error),
+      });
+      return;
     }
+    setCreateDialogOpen(false);
+    handleOpenCapsule(createdId);
   }
 
   function onSetCreated(): void {

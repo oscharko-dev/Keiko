@@ -1054,6 +1054,21 @@ describe("CapsuleActions — full re-embed action", () => {
 // Full rebuild action
 // ---------------------------------------------------------------------------
 
+describe("CapsuleActions — ready Pod reindex access", () => {
+  it("keeps the normal Index now action available in ready Pod details", async () => {
+    const user = userEvent.setup();
+    const startIndexingImpl = vi.fn().mockImplementation(() => okAction(DEFAULT_ID));
+    render(<CapsuleActions {...defaultProps({ lifecycleState: "ready", startIndexingImpl })} />);
+    await user.click(screen.getByRole("button", { name: "Index this Knowledge Pod now" }));
+    await waitFor(() => expect(startIndexingImpl).toHaveBeenCalledExactlyOnceWith(DEFAULT_ID));
+  });
+
+  it("does not offer indexing without an attached source", () => {
+    render(<CapsuleActions {...defaultProps({ lifecycleState: "ready", sourceCount: 0 })} />);
+    expect(screen.queryByRole("button", { name: "Index this Knowledge Pod now" })).toBeNull();
+  });
+});
+
 describe("CapsuleActions — full rebuild action", () => {
   it("calls rebuildCapsuleImpl when confirmed", async () => {
     const user = userEvent.setup();

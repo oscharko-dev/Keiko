@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
 import {
   QualityIntelligenceHandoff,
@@ -16,17 +16,19 @@ import {
 } from "./requirement-inventory.js";
 
 export const KNOWLEDGE_DOCUMENTS_MAX = 10_000;
+export const KNOWLEDGE_SEARCH_DOCUMENT_STRIDE =
+  QualityIntelligenceHandoff.SCOPE_DOCUMENT_CHARS_MAX + 1;
 export type KnowledgeDocument = QualityIntelligenceHandoff.ScopeDocumentInventoryEntry;
 export type ReadKnowledgeDocument = QualityIntelligenceHandoff.ScopeDocument;
 type Scope = QualityIntelligenceHandoff.ScopeDocumentScope;
 
 export function knowledgeDigest(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
+  return sha256Hex(value);
 }
 
 /** New tools bind full digests and up to 10,000 document-sized search offsets. */
 export function decodeKnowledgeCursor(value: string): PageCursor | undefined {
-  return decodeCursor(value, 64, 40_000_010_000);
+  return decodeCursor(value, 64, KNOWLEDGE_DOCUMENTS_MAX * KNOWLEDGE_SEARCH_DOCUMENT_STRIDE);
 }
 
 export function knowledgeDocumentScope(document: Pick<KnowledgeDocument, "documentId">): string {
@@ -37,6 +39,13 @@ export function knowledgeDocumentRevision(document: KnowledgeDocument): string {
   return knowledgeDigest(
     JSON.stringify([document.contentHash, document.mediaType, document.extractionStatus]),
   );
+}
+
+/** Source offsets stay in UTF-16 code units, with no boundary inside a surrogate pair. */
+export function knowledgeWindowEnd(source: string, bound: number): number {
+  const end = Math.min(source.length, bound);
+  const previous = source.codePointAt(end - 1);
+  return previous !== undefined && previous > 0xffff ? end - 1 : end;
 }
 
 /** A fragment must also exist in the complete safe projection: slicing cannot expose a credential

@@ -38,7 +38,6 @@ export const DE_LOCAL_KNOWLEDGE_MESSAGES: LocalKnowledgeMessageCatalog = {
   "localKnowledge.picker.state.indexing": "Wird indexiert…",
   "localKnowledge.picker.state.error": "Fehlgeschlagen",
   "localKnowledge.node.unselected": "Lokales Wissen",
-  "localKnowledge.node.meta": "Lokaler Knowledge Pod",
   "localKnowledge.node.manage": "Verwalten",
   "localKnowledge.state.draft": "Entwurf",
   "localKnowledge.state.indexing": "Wird indexiert",

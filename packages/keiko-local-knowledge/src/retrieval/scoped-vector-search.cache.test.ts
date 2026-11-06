@@ -290,3 +290,50 @@ describe("failed query invalidates its connection proof", () => {
     },
   );
 });
+
+describe("per-Pod identity refusal preserves connection proof", () => {
+  it("refuses stale stored dimensions before querying and keeps a compatible Pod usable", async () => {
+    const opened = openEncryptedStore(freshDbPath());
+    const healthy = await seedCapsuleWithVectors(opened.store, { capsuleId: "cap-proof-healthy" });
+    const capsule = getCapsule(opened.store, healthy.capsuleId);
+    if (capsule === undefined) throw new TypeError("Missing seeded capsule");
+    const identity = capsule.embeddingModelIdentity;
+    const stale = await seedCapsuleWithVectors(opened.store, {
+      capsuleId: "cap-proof-stale",
+      sourceId: "source-proof-stale",
+      documentId: "document-proof-stale",
+      unitId: "unit-proof-stale",
+      identity: { ...identity, vectorDimensions: identity.vectorDimensions + 1 },
+    });
+    const inner = scriptedAdapter({ identity });
+    const request = vi.fn(inner.request);
+    const adapter: OpenAIEmbeddingAdapter = { ...inner, request };
+    const options = {
+      ...identity,
+      expectedDimensions: identity.vectorDimensions,
+      includeSpaceFingerprint: true,
+    };
+    const checked = await verifyEmbeddingCapability(adapter, options, "connection");
+    expect(checked.ok).toBe(true);
+    const probeCalls = request.mock.calls.length;
+    const refused = await searchVectorsForScope(
+      opened.store,
+      adapter,
+      { capsuleIds: [stale.capsuleId] },
+      "stale-pod",
+      { topK: 10 },
+    );
+    expect(refused.references).toHaveLength(0);
+    expect(request).toHaveBeenCalledTimes(probeCalls);
+    expect(await verifyEmbeddingCapability(adapter, options, "connection")).toEqual(checked);
+    const accepted = await searchVectorsForScope(
+      opened.store,
+      adapter,
+      { capsuleIds: [healthy.capsuleId] },
+      "healthy-pod",
+      { topK: 10 },
+    );
+    expect(accepted.references.length).toBeGreaterThan(0);
+    expect(request).toHaveBeenCalledTimes(probeCalls + 1);
+  });
+});

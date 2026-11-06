@@ -126,13 +126,15 @@ export function JiraChatTools({
   turnState,
   chatId,
   showPending = false,
+  waitingForDecision = false,
 }: {
   readonly transcript: ChatToolTranscript | undefined;
   readonly turnState?: ChatTurnState | undefined;
   readonly chatId?: string | undefined;
   readonly showPending?: boolean | undefined;
+  readonly waitingForDecision?: boolean | undefined;
 }): ReactNode {
-  const steps = chatProcessingSteps(transcript, turnState, showPending);
+  const steps = chatProcessingSteps(transcript, turnState, showPending, waitingForDecision);
   if (steps.length === 0) return null;
   return (
     <div className={styles.cmpLayout}>

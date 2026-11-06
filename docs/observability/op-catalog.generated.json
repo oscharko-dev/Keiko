@@ -108922,14 +108922,14 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/knowledge-tool-execution.ts:123",
+      "site": "packages/keiko-server/src/knowledge-tool-execution.ts:139",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/knowledge-tool-execution.ts:129",
+      "site": "packages/keiko-server/src/knowledge-tool-execution.ts:145",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111945,7 +111945,7 @@
     {
       "op": "knowledge.documents",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/knowledge-tool-execution.ts:89",
+      "site": "packages/keiko-server/src/knowledge-tool-execution.ts:105",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111978,7 +111978,7 @@
     {
       "op": "knowledge.requirements-read",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/requirementsTool.ts:596",
+      "site": "packages/keiko-server/src/requirementsTool.ts:646",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

@@ -48,6 +48,7 @@ import {
   documentsFingerprint,
   encodeCursor,
   fitWindow,
+  REQUIREMENT_UNITS_MAX,
   pageLabelOf,
   selectUnits,
   selectionFingerprint,
@@ -104,7 +105,7 @@ const ARGUMENTS = object({
 const UNIT = {
   type: "object",
   required: [],
-  additionalProperties: true,
+  additionalProperties: false,
   properties: {
     reference: text(120),
     id: text(80),
@@ -128,8 +129,54 @@ const UNIT = {
     characterStart: { type: "integer", minimum: 0 },
     characterEnd: { type: "integer", minimum: 0 },
     revisionDigest: text(12),
+    documentDigest: text(12),
+    unitCount: { type: "integer", minimum: 0 },
+    purpose: { type: "string", enum: ["stale", "removed", "traced"] },
+    jql: text(1800),
+    requirementIds: { type: "array", maxItems: REQUIREMENT_UNITS_MAX, items: text(80) },
   },
 } as const satisfies CatalogJsonObject;
+
+const RESULT_COUNT = { type: "integer", minimum: 0 } as const;
+const RESULT_ISSUES = { type: "array", maxItems: 10, items: text(256) } as const;
+const RESULT_REFERENCES = { type: "array", maxItems: 200, items: text(120) } as const;
+const CHANGES_SCHEMA = object({
+  baseline: object({
+    complete: { type: "boolean" },
+    generatedAt: text(64),
+    issuesRead: RESULT_COUNT,
+    issuesTotal: RESULT_COUNT,
+    tracedIssueCount: RESULT_COUNT,
+    unmatchedIssueCount: RESULT_COUNT,
+  }),
+  counts: object({
+    changed: RESULT_COUNT,
+    removed: RESULT_COUNT,
+    untraced: RESULT_COUNT,
+    unchanged: RESULT_COUNT,
+  }),
+  changed: {
+    type: "array",
+    maxItems: 60,
+    items: object({
+      id: text(120),
+      title: text(160),
+      issues: RESULT_ISSUES,
+      issueCount: RESULT_COUNT,
+    }),
+  },
+  removed: {
+    type: "array",
+    maxItems: 60,
+    items: object({ id: text(120), issues: RESULT_ISSUES, issueCount: RESULT_COUNT }),
+  },
+  untraced: RESULT_REFERENCES,
+  unchanged: RESULT_REFERENCES,
+  affectedIssues: { type: "array", maxItems: 120, items: text(256) },
+  unverifiedRemoved: { type: "array", maxItems: 60, items: text(120) },
+  unverifiedRemovedCount: RESULT_COUNT,
+  truncated: { type: "array", maxItems: 7, items: text(32) },
+});
 
 const RESULT = object(
   {
@@ -137,19 +184,22 @@ const RESULT = object(
     reason: text(64),
     nextStep: text(400),
     view: { type: "string", enum: VIEWS },
-    totals: {
-      type: "object",
-      required: [],
-      properties: {},
-      additionalProperties: true,
-    },
+    totals: object({
+      detectedCount: RESULT_COUNT,
+      matchedCount: RESULT_COUNT,
+      documentsScanned: RESULT_COUNT,
+      documentsNotExtracted: RESULT_COUNT,
+      documentsOmitted: RESULT_COUNT,
+      unitsOmitted: RESULT_COUNT,
+      cutReasons: { type: "array", maxItems: 4, items: text(64) },
+      refusals: { type: "array", maxItems: 10_000, items: text(64) },
+      conflictingIds: { type: "array", maxItems: LISTED_IDS_MAX, items: text(120) },
+      ambiguousIds: { type: "array", maxItems: LISTED_IDS_MAX, items: text(120) },
+      referenceOnlyCount: RESULT_COUNT,
+      rejectedCandidateCount: RESULT_COUNT,
+    }),
     items: { type: "array", maxItems: 100, items: UNIT },
-    changes: {
-      type: "object",
-      required: [],
-      properties: {},
-      additionalProperties: true,
-    },
+    changes: CHANGES_SCHEMA,
     nextCursor: text(512),
   },
   ["outcome"],

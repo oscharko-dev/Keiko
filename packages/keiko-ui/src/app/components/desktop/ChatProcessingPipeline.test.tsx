@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event";
 import { render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { describe, expect, it } from "vitest";
@@ -8,7 +9,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import { ChatProcessingPipeline } from "./ChatProcessingPipeline";
-import { chatProcessingSteps } from "./chat-processing-pipeline";
+import { chatProcessingSteps, type ChatProcessingStep } from "./chat-processing-pipeline";
 import { JiraChatTools } from "./JiraChatTools";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
@@ -79,6 +80,17 @@ describe("observed Chat processing steps", () => {
     render(<JiraChatTools transcript={undefined} turnState="pending" showPending />);
     expect(screen.getByRole("region", { name: "Progress" })).toBeVisible();
     expect(screen.getByRole("status")).toHaveTextContent("Current step: Preparing next step");
+  });
+
+  it("does not claim processing is active while the acknowledged turn waits for the human", () => {
+    const steps = chatProcessingSteps(transcript(call()), "pending", false, true);
+    expect(steps.some((step) => step.state === "active")).toBe(false);
+    expect(steps).toContainEqual({
+      id: "decision",
+      label: "chat.processing.approval",
+      state: "approval",
+    });
+    expect(steps[0]).toEqual({ id: "request", label: "chat.processing.request", state: "done" });
   });
 
   it("shows actual tools and preparation between tool calls without predicting Jira creation", () => {
@@ -414,4 +426,57 @@ describe("accessible processing feedback", () => {
       expect(screen.getByRole("list", { name: "" })).toBeVisible();
     },
   );
+});
+
+it("groups consecutive completed calls while retaining the current call separately", () => {
+  const earlier = Array.from({ length: 60 }, (_, index) =>
+    completed(call("knowledge_requirements", `page-${String(index)}`)),
+  );
+  const steps = chatProcessingSteps(
+    transcript(...earlier, call("knowledge_requirements", "current")),
+    "pending",
+    false,
+  );
+  render(<ChatProcessingPipeline steps={steps} />);
+  expect(screen.getAllByRole("listitem")).toHaveLength(4);
+  expect(screen.getByText("2. Read requirements · 60 calls")).toBeVisible();
+  expect(screen.getByRole("listitem", { current: "step" })).toHaveTextContent("Read requirements");
+  expect(screen.getByRole("listitem", { current: "step" })).not.toHaveTextContent("60 calls");
+});
+
+it("keeps a 250-call turn compact and lets the human expand the earlier calls", async () => {
+  const steps: ChatProcessingStep[] = [
+    { id: "request", label: "chat.processing.request", state: "done" },
+    ...Array.from({ length: 250 }, (_, index): ChatProcessingStep => ({
+      id: `tool:${String(index)}`,
+      label: index % 2 === 0 ? "chat.processing.source" : "chat.processing.search",
+      state: index === 249 ? "active" : "done",
+    })),
+    { id: "response", label: "chat.processing.response", state: "upcoming" },
+  ];
+  const user = userEvent.setup();
+  render(<ChatProcessingPipeline steps={steps} />);
+  expect(screen.getAllByRole("listitem").length).toBeLessThanOrEqual(6);
+  expect(screen.getByRole("listitem", { current: "step" })).toHaveTextContent("Search source");
+  const expand = screen.getByRole("button", { name: "Show 247 earlier calls" });
+  expect(expand).toHaveAttribute("aria-expanded", "false");
+  await user.click(expand);
+  expect(screen.getAllByRole("listitem")).toHaveLength(252);
+  const collapse = screen.getByRole("button", { name: "Show fewer steps" });
+  expect(collapse).toHaveAttribute("aria-expanded", "true");
+  await user.click(collapse);
+  expect(screen.getAllByRole("listitem").length).toBeLessThanOrEqual(6);
+  expect(await axe(document.body)).toHaveNoViolations();
+});
+
+it("keeps different tools separate even when they share the same presentation label", () => {
+  const steps: ChatProcessingStep[] = [
+    { id: "request", label: "chat.processing.request", state: "done" },
+    { id: "tool:one", toolName: "mcp_first", label: "chat.mcp.tool", state: "done" },
+    { id: "tool:two", toolName: "mcp_second", label: "chat.mcp.tool", state: "done" },
+    { id: "response", label: "chat.processing.response", state: "done" },
+  ];
+  render(<ChatProcessingPipeline steps={steps} />);
+  expect(screen.getAllByRole("listitem")).toHaveLength(4);
+  expect(screen.queryByText(/2 calls/u)).toBeNull();
 });

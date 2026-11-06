@@ -43,6 +43,14 @@ interface Stream {
   readonly cursor: string | undefined;
   readonly continuous: boolean;
 }
+interface ReviewCoverage {
+  readonly revision: string;
+  readonly textRevision: string;
+  readonly fingerprint: string;
+  readonly documentChars: number;
+  readonly windows: Map<number, number>;
+}
+
 interface Tally {
   observed: boolean;
   documents: number;
@@ -56,10 +64,7 @@ interface Tally {
   readonly unavailableSources: Set<string>;
   readonly read: Set<string>;
   readonly missingCriteria: Set<string>;
-  readonly reviewed: Map<
-    string,
-    { readonly revision: string; readonly textRevision: string; readonly complete: boolean }
-  >;
+  readonly reviewed: Map<string, ReviewCoverage>;
   readonly streams: Map<string, Stream>;
 }
 export interface KnowledgeTurnCoverage {
@@ -109,6 +114,40 @@ function effectiveSelection(
   );
 }
 
+interface ReviewRange {
+  readonly start: number;
+  readonly end: number;
+  readonly documentChars: number;
+}
+
+function reviewRange(coverage: Readonly<Record<string, unknown>>): ReviewRange | undefined {
+  const { characterStart: start, characterEnd: end, documentChars } = coverage;
+  if (typeof start !== "number" || typeof end !== "number" || typeof documentChars !== "number")
+    return undefined;
+  if (
+    ![start, end, documentChars].every(Number.isSafeInteger) ||
+    start < 0 ||
+    end <= start ||
+    end > documentChars
+  )
+    return undefined;
+  return { start, end, documentChars };
+}
+
+function sameReview(
+  previous: ReviewCoverage | undefined,
+  coverage: Readonly<Record<string, unknown>>,
+  documentChars: number,
+): previous is ReviewCoverage {
+  return (
+    previous !== undefined &&
+    previous.fingerprint === coverage.reviewFingerprint &&
+    previous.revision === coverage.revisionDigest &&
+    previous.textRevision === coverage.textRevision &&
+    previous.documentChars === documentChars
+  );
+}
+
 function observeReview(
   tally: Tally,
   coverage: Readonly<Record<string, unknown>> | undefined,
@@ -116,14 +155,35 @@ function observeReview(
   if (
     typeof coverage?.documentScope !== "string" ||
     typeof coverage.revisionDigest !== "string" ||
-    typeof coverage.textRevision !== "string"
+    typeof coverage.textRevision !== "string" ||
+    typeof coverage.reviewFingerprint !== "string"
   )
     return;
+  const range = reviewRange(coverage);
+  if (range === undefined) return;
+  const previous = tally.reviewed.get(coverage.documentScope);
+  const windows = sameReview(previous, coverage, range.documentChars)
+    ? previous.windows
+    : new Map<number, number>();
+  if (coverage.windowReviewComplete === true) windows.set(range.start, range.end);
+  else windows.delete(range.start);
   tally.reviewed.set(coverage.documentScope, {
     revision: coverage.revisionDigest,
     textRevision: coverage.textRevision,
-    complete: coverage.documentReviewComplete === true,
+    fingerprint: coverage.reviewFingerprint,
+    documentChars: range.documentChars,
+    windows,
   });
+}
+
+/** Only settled windows in this turn contribute; the model cost cache supplies no coverage. */
+function reviewComplete(review: ReviewCoverage): boolean {
+  let end = 0;
+  for (const [start, next] of [...review.windows].sort((left, right) => left[0] - right[0])) {
+    if (start > end) return false;
+    end = Math.max(end, next);
+  }
+  return end === review.documentChars;
 }
 
 function changedReviewSource(
@@ -185,7 +245,8 @@ function observe(tally: Tally, exchange: ChatToolExchange): void {
   observeUnavailableSources(tally, data);
   observeCounts(tally, record(data.totals));
   invalidateChangedReviews(tally, data);
-  observeReview(tally, record(data.coverage));
+  if (result.toolRef?.canonicalId === "keiko.knowledge.review")
+    observeReview(tally, record(data.coverage));
   observeItems(tally, data);
   observeStream(tally, exchange, data);
 }
@@ -242,7 +303,7 @@ export function knowledgeTurnCoverage(
     requirementCount: tally.requirements,
     readRequirementCount: tally.read.size,
     sourceCriteriaMissingCount: tally.missingCriteria.size,
-    reviewedDocumentCount: [...tally.reviewed.values()].filter((review) => review.complete).length,
+    reviewedDocumentCount: [...tally.reviewed.values()].filter(reviewComplete).length,
     unavailableDocumentCount: Math.max(tally.unavailable, tally.unavailableSources.size),
     requestedReviewDocumentCount: tally.reviewTargets.size,
     refusedScopeCount: tally.scopeRefusals,

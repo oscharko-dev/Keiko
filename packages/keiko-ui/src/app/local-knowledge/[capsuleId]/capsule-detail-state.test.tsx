@@ -9,6 +9,11 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useCapsuleDetail } from "./capsule-detail-state";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticWriter,
+} from "@/lib/client-diagnostics";
 import type { CapsuleDetail } from "@/lib/local-knowledge-api";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 
@@ -32,6 +37,66 @@ function setHidden(hidden: boolean): void {
   });
   Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
 }
+
+describe("Knowledge Pod selection evidence", () => {
+  afterEach(() => {
+    cleanup();
+    resetClientDiagnosticWriter();
+  });
+
+  it("records a failed detail load without claiming the selection was applied", async () => {
+    const diagnostic = vi.fn<ClientDiagnosticWriter>();
+    setClientDiagnosticWriter(diagnostic);
+    const fetchImpl = vi.fn(() => Promise.reject(new Error("PRIVATE detail unavailable")));
+    const { result } = renderHook(() => useCapsuleDetail(capsuleId(), fetchImpl));
+    await waitFor(() => expect(result.current.loadStatus).toBe("error"));
+    expect(diagnostic).toHaveBeenCalledWith(
+      "Knowledge Pod selection settled.",
+      expect.objectContaining({
+        stageReport: expect.objectContaining({ navigationOutcome: "failed" }),
+      }),
+    );
+    expect(
+      diagnostic.mock.calls.some(([, meta]) => {
+        const stage = meta?.stageReport;
+        return stage?.phase === "settled" && stage.navigationOutcome === "applied";
+      }),
+    ).toBe(false);
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("PRIVATE detail unavailable");
+  });
+
+  it("settles selection only after its actual detail request resolves", async () => {
+    const diagnostic = vi.fn<ClientDiagnosticWriter>();
+    setClientDiagnosticWriter(diagnostic);
+    let finish: ((value: CapsuleDetail) => void) | undefined;
+    const pending = new Promise<CapsuleDetail>((resolve) => {
+      finish = resolve;
+    });
+    const fetchImpl = vi.fn(() => pending);
+    const { result } = renderHook(() => useCapsuleDetail(capsuleId(), fetchImpl));
+    expect(diagnostic).toHaveBeenCalledWith("Knowledge Pod selection started.", expect.any(Object));
+    expect(
+      diagnostic.mock.calls.some(([message]) => message === "Knowledge Pod selection settled."),
+    ).toBe(false);
+    const base = indexingDetail();
+    const detail: CapsuleDetail = {
+      ...base,
+      capsule: { ...base.capsule, id: capsuleId(), lifecycleState: "ready" },
+      indexingJobs: [],
+    };
+    await act(async () => {
+      finish?.(detail);
+      await pending;
+    });
+    expect(result.current.data).toBe(detail);
+    expect(diagnostic).toHaveBeenCalledWith(
+      "Knowledge Pod selection settled.",
+      expect.objectContaining({
+        stageReport: expect.objectContaining({ navigationOutcome: "applied" }),
+      }),
+    );
+  });
+});
 
 describe("useCapsuleDetail scope ownership", () => {
   afterEach(cleanup);

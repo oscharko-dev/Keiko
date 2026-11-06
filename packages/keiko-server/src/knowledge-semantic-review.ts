@@ -12,6 +12,7 @@ import {
 } from "@oscharko-dev/keiko-quality-intelligence";
 import {
   knowledgeDigest,
+  knowledgeWindowEnd,
   knowledgeSourceWindow,
   type ReadKnowledgeDocument,
 } from "./knowledge-document-source.js";
@@ -113,12 +114,12 @@ export function reviewAnchors(
   document: ReadKnowledgeDocument,
   start: number,
   redact: (value: string) => string,
+  projected = redact(document.text),
 ): readonly ReviewAnchor[] {
-  const end = Math.min(document.text.length, start + REVIEW_WINDOW_CHARS);
-  const projected = redact(document.text);
+  const end = knowledgeWindowEnd(document.text, start + REVIEW_WINDOW_CHARS);
   const anchors: ReviewAnchor[] = [];
   for (let position = start; position < end;) {
-    const bound = Math.min(end, position + 750);
+    const bound = knowledgeWindowEnd(document.text, Math.min(end, position + 750));
     const newline = document.text.lastIndexOf("\n", bound - 1);
     const next = newline > position + 150 ? newline + 1 : bound;
     const text = knowledgeSourceWindow(document.text, position, next, redact, projected);
@@ -132,6 +133,15 @@ export function reviewAnchors(
     position = next;
   }
   return anchors;
+}
+
+export function reviewWindowCount(source: string): number {
+  let count = 0;
+  for (let start = 0; start < source.length;) {
+    start = knowledgeWindowEnd(source, start + REVIEW_WINDOW_CHARS);
+    count++;
+  }
+  return count;
 }
 
 export function reviewPrompt(
@@ -223,9 +233,11 @@ function refusal(
     },
   };
 }
-function shapeRecord(value: unknown, keys: string): Record<string, unknown> | undefined {
+function shapeRecord(value: unknown, keys: readonly string[]): Record<string, unknown> | undefined {
   const item = record(value);
-  return item !== undefined && Object.keys(item).sort(compareStrings).join() === keys
+  if (item === undefined) return undefined;
+  const actual = Object.keys(item).sort(compareStrings);
+  return actual.length === keys.length && actual.every((key, index) => key === keys[index])
     ? item
     : undefined;
 }
@@ -267,7 +279,7 @@ function parseFindingText(
   return { ok: true, proposal, question };
 }
 function parseFinding(value: unknown, anchorCount: number): FindingParseResult {
-  const item = shapeRecord(value, "anchors,kind,proposal,question");
+  const item = shapeRecord(value, ["anchors", "kind", "proposal", "question"]);
   if (item === undefined) return refusal("finding-shape", valueFacts(value));
   const kind = KINDS.find((candidate) => candidate === item.kind);
   if (kind === undefined) return refusal("finding-kind", valueFacts(item.kind));
@@ -286,7 +298,7 @@ function parseFinding(value: unknown, anchorCount: number): FindingParseResult {
   };
 }
 function parseReviewPayload(value: unknown, anchorCount: number): SemanticReviewParseResult {
-  const payload = shapeRecord(value, "complete,findings");
+  const payload = shapeRecord(value, ["complete", "findings"]);
   if (payload === undefined) return refusal("review-shape", valueFacts(value));
   if (typeof payload.complete !== "boolean")
     return refusal("complete-type", valueFacts(payload.complete));
@@ -354,6 +366,10 @@ export function parseSemanticReview(
   return undefined;
 }
 
+function reviewText(source: string, maximum: number): string {
+  return source.slice(0, knowledgeWindowEnd(source, maximum));
+}
+
 export function renderSemanticFindings(
   review: SemanticReview,
   anchors: readonly ReviewAnchor[],
@@ -369,8 +385,8 @@ export function renderSemanticFindings(
     origin: "model-proposal",
     status: "proposed",
     kind: finding.kind,
-    proposal: redact(finding.proposal).slice(0, 300),
-    question: redact(finding.question).slice(0, 160),
+    proposal: reviewText(redact(finding.proposal), 300),
+    question: reviewText(redact(finding.question), 160),
     sources: finding.anchors.flatMap((id) => {
       const anchor = anchors[id];
       return anchor === undefined
@@ -380,7 +396,7 @@ export function renderSemanticFindings(
               ...identity,
               characterStart: anchor.characterStart,
               characterEnd: anchor.characterEnd,
-              quote: anchor.text.slice(0, 100),
+              quote: reviewText(anchor.text, 100),
               quoteTruncated: anchor.text.length > 100,
             },
           ];

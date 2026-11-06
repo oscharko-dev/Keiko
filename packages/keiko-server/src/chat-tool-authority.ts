@@ -1,17 +1,22 @@
 import type {
   ChatToolAuthorityEnvelope,
+  CodingWorkbenchMode,
   CodingWorkbenchRuntimeDelegationUsage,
   EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import {
+  CHAT_TOOL_DEFAULT_MODE,
+  resolveEffectiveCodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { AcceptedJiraChatTurn } from "./atlassian/jiraChatAuthority.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatToolAuthorityResolution } from "./editor/agentAuthorityRegistry.js";
 import { chatToolTurnBudget } from "./chat-tool-turn-budget.js";
 
 type AuthorityFailure = Extract<ChatToolAuthorityResolution, { readonly ok: false }>;
-type CurrentChatToolAuthority<Envelope extends ChatToolAuthorityEnvelope> =
-  { readonly ok: true; readonly envelope: Envelope } | AuthorityFailure;
-const INVALID = { ok: false, reason: "invalid" } as const;
+type CurrentChatToolAuthority =
+  { readonly ok: true; readonly envelope: ChatToolAuthorityEnvelope } | AuthorityFailure;
 
 function validChatTurnLifetime(
   deps: Pick<UiHandlerDeps, "chatToolTurnBudget">,
@@ -44,23 +49,69 @@ export function isAcceptedChatToolTurn(
   );
 }
 
+/** Construct only after accepted-turn and source admission; domain adapters own their scope. */
+export function acceptedChatToolAuthorityEnvelope<
+  Subject extends ChatToolAuthorityEnvelope["subject"],
+  const Scopes extends ChatToolAuthorityEnvelope["connectorScopes"],
+>(
+  turn: AcceptedJiraChatTurn,
+  subject: Subject,
+  requestedMode: CodingWorkbenchMode,
+  deploymentCeiling: CodingWorkbenchMode,
+  budget: ChatToolAuthorityEnvelope["budget"],
+  connectorScopes: Scopes,
+): ChatToolAuthorityEnvelope & { readonly subject: Subject; readonly connectorScopes: Scopes } {
+  const runId = `chat-${sha256Hex(canonicalise({ chatId: turn.chatId, userMessageId: turn.userMessageId }))}`;
+  return {
+    schemaVersion: "1",
+    kind: "chat-tool-authority",
+    runId,
+    subject,
+    requestedMode,
+    deploymentCeiling,
+    effectiveMode: resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling),
+    actionClasses: ["connector-access", "network-egress"],
+    connectorScopes,
+    budget,
+    expiresAt: new Date(turn.startedAtMs + budget.maxRuntimeMs).toISOString(),
+    approvalProofDigest: sha256Hex(
+      canonicalise({
+        runId,
+        subject,
+        requestedMode,
+        deploymentCeiling,
+        userMessageId: turn.userMessageId,
+        acceptedAtMs: turn.startedAtMs,
+      }),
+    ),
+  };
+}
+
+export function isRequestedChatToolModeCurrent(
+  envelope: Pick<ChatToolAuthorityEnvelope, "requestedMode">,
+  chat: { readonly toolMode?: CodingWorkbenchMode | undefined } | undefined,
+): boolean {
+  return envelope.requestedMode === (chat?.toolMode ?? CHAT_TOOL_DEFAULT_MODE);
+}
+
 /** Reserve only after the source adapter resolved its current subject, scope, mode and ceiling. */
-export function reserveResolvedChatToolAuthority<Envelope extends ChatToolAuthorityEnvelope>(
+export function reserveResolvedChatToolAuthority<Current extends CurrentChatToolAuthority>(
   deps: Pick<UiHandlerDeps, "agentAuthorityRegistry">,
-  current: CurrentChatToolAuthority<Envelope>,
+  current: Current,
   reference: EditorAgentGovernedAuthorityReference,
   usage: CodingWorkbenchRuntimeDelegationUsage,
   nowIso: string,
   correlationId: string,
-): CurrentChatToolAuthority<Envelope> {
+  deploymentCeiling?: CodingWorkbenchMode,
+): Current | AuthorityFailure | undefined {
   if (!current.ok) return current;
   const reserved = deps.agentAuthorityRegistry?.reserveForChat(
     reference,
     current.envelope.subject,
-    current.envelope.deploymentCeiling,
+    deploymentCeiling ?? current.envelope.deploymentCeiling,
     usage,
     nowIso,
     correlationId,
   );
-  return reserved?.ok === true ? current : (reserved ?? INVALID);
+  return reserved?.ok === true ? current : reserved;
 }

@@ -7150,19 +7150,36 @@ it("discards and aborts a startup settlement superseded by a gateway configurati
   unmount();
 });
 
-it("ends a failed startup observation without retrying it on timers or focus", async () => {
+it("preserves the held usable catalog when the passive startup observation fails", async () => {
   vi.useFakeTimers();
+  const diagnostic = vi.fn();
+  setClientDiagnosticWriter(diagnostic);
   vi.mocked(fetchModels)
     .mockResolvedValueOnce({ models: [model()], startupReadinessPending: true })
-    .mockRejectedValueOnce(new Error("Startup observation unavailable."));
+    .mockRejectedValueOnce(new Error("PRIVATE startup observation unavailable."));
   vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
   const { result, unmount } = renderHook(() => useChatSession({ autoCreate: false }));
-  await act(() => vi.advanceTimersByTimeAsync(1));
-  expect(result.current.error).toBe("Startup observation unavailable.");
-  await act(() => vi.advanceTimersByTimeAsync(600_000));
-  act(() => window.dispatchEvent(new Event("focus")));
-  expect(fetchModels).toHaveBeenCalledTimes(2);
-  unmount();
+  try {
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(result.current.error).toBeUndefined();
+    expect(result.current.modelCatalogStatus).toBe("ready");
+    expect(result.current.models).toEqual([model()]);
+    expect(result.current.selectedModel).toBe(model().id);
+    expect(diagnostic).toHaveBeenCalledWith(
+      "Startup model readiness observation failed.",
+      expect.objectContaining({
+        correlationId: expect.any(String),
+        errorEvidence: expect.any(Object),
+      }),
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("PRIVATE startup observation");
+    await act(() => vi.advanceTimersByTimeAsync(600_000));
+    act(() => window.dispatchEvent(new Event("focus")));
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+  } finally {
+    unmount();
+    resetClientDiagnosticWriter();
+  }
 });
 
 it("aborts the shared startup metadata read when its final chat leaves", async () => {

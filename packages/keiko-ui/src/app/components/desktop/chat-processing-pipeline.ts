@@ -13,6 +13,7 @@ export interface ChatProcessingStep {
   readonly id: string;
   readonly label: WidgetMessageKey;
   readonly state: ChatProcessingState;
+  readonly toolName?: string;
 }
 
 export const CHAT_PROCESSING_STATE_LABELS: Readonly<Record<ChatProcessingState, WidgetMessageKey>> =
@@ -122,22 +123,31 @@ export function chatProcessingSteps(
   transcript: ChatToolTranscript | undefined,
   turnState: ChatTurnState | undefined,
   showPending: boolean,
+  waitingForDecision?: boolean,
 ): readonly ChatProcessingStep[] {
   const exchanges = transcript?.exchanges ?? [];
   if (exchanges.length === 0 && !(showPending && turnState === "pending")) return [];
   const steps: ChatProcessingStep[] = [
     { id: "request", label: "chat.processing.request", state: "done" },
-    ...exchanges.map((exchange): ChatProcessingStep => ({
-      id: `tool:${exchange.call.id}`,
-      label: exchangeLabel(exchange),
-      state: exchangeState(exchange, turnState),
-    })),
+    ...exchanges.map((exchange): ChatProcessingStep => {
+      const state = exchangeState(exchange, turnState);
+      return {
+        id: `tool:${exchange.call.id}`,
+        label: exchangeLabel(exchange),
+        toolName: exchange.call.name,
+        state: waitingForDecision && state === "active" ? "upcoming" : state,
+      };
+    }),
   ];
   if (
     turnState === "pending" &&
     !steps.some((step) => step.state === "active" || step.state === "approval")
   )
-    steps.push({ id: "continuing", label: "chat.processing.continuing", state: "active" });
+    steps.push(
+      waitingForDecision
+        ? { id: "decision", label: "chat.processing.approval", state: "approval" }
+        : { id: "continuing", label: "chat.processing.continuing", state: "active" },
+    );
   if (turnState !== undefined)
     steps.push({
       id: "response",

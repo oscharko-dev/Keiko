@@ -29,6 +29,7 @@ import {
 } from "./knowledge-document-activity.js";
 import {
   knowledgeDigest,
+  knowledgeWindowEnd,
   decodeKnowledgeCursor,
   knowledgeDocumentRevision,
   knowledgeDocumentScope,
@@ -44,11 +45,11 @@ import {
   type KnowledgeToolRead,
 } from "./knowledge-tool-execution.js";
 import {
-  REVIEW_WINDOW_CHARS,
   REVIEW_FINDINGS_MAX,
   semanticReviewFormat,
   semanticReviewInstruction,
   reviewAnchors,
+  reviewWindowCount,
   reviewPrompt,
   parseSemanticReviewDetailed,
   renderSemanticFindings,
@@ -56,38 +57,63 @@ import {
   type ReviewAnchor,
 } from "./knowledge-semantic-review.js";
 
+const REVIEW_COUNT_SCHEMA = { type: "integer", minimum: 0 } as const;
+const REVIEW_FLAG_SCHEMA = { type: "boolean" } as const;
+const REVIEW_SOURCE_SCHEMA = object({
+  documentScope: text(8),
+  revisionDigest: text(64),
+  textRevision: text(64),
+  characterStart: REVIEW_COUNT_SCHEMA,
+  characterEnd: REVIEW_COUNT_SCHEMA,
+  quote: text(100),
+  quoteTruncated: REVIEW_FLAG_SCHEMA,
+});
 const KNOWLEDGE_REVIEW_RESULT_SCHEMA: CatalogJsonObject = {
   ...KNOWLEDGE_RESULT_SCHEMA,
   properties: {
     ...(KNOWLEDGE_RESULT_SCHEMA.properties as CatalogJsonObject),
     failureStage: { type: "string", enum: KNOWLEDGE_REVIEW_FAILURE_STAGES },
     validationReason: { type: "string", enum: KNOWLEDGE_REVIEW_VALIDATION_REASONS },
-    sourceAvailable: { type: "boolean" },
+    sourceAvailable: REVIEW_FLAG_SCHEMA,
+    items: {
+      type: "array",
+      maxItems: REVIEW_FINDINGS_MAX,
+      items: object({
+        proposalId: text(16),
+        origin: { type: "string", enum: ["model-proposal"] },
+        status: { type: "string", enum: ["proposed"] },
+        kind: {
+          type: "string",
+          enum: ["obligation", "acceptance-criterion", "conflict", "omission", "clarification"],
+        },
+        proposal: text(300),
+        question: text(160),
+        sources: { type: "array", maxItems: 2, items: REVIEW_SOURCE_SCHEMA },
+      }),
+    },
+    coverage: object({
+      documentScope: text(8),
+      revisionDigest: text(64),
+      textRevision: text(64),
+      reviewFingerprint: text(64),
+      characterStart: REVIEW_COUNT_SCHEMA,
+      characterEnd: REVIEW_COUNT_SCHEMA,
+      documentChars: REVIEW_COUNT_SCHEMA,
+      reviewedWindows: REVIEW_COUNT_SCHEMA,
+      totalWindows: REVIEW_COUNT_SCHEMA,
+      documentReviewComplete: REVIEW_FLAG_SCHEMA,
+      windowReviewComplete: REVIEW_FLAG_SCHEMA,
+      windowSkipped: REVIEW_FLAG_SCHEMA,
+      failedWindows: REVIEW_COUNT_SCHEMA,
+      semanticExhaustivenessProven: { type: "boolean", enum: [false] },
+      originalModified: { type: "boolean", enum: [false] },
+      cached: REVIEW_FLAG_SCHEMA,
+    }),
   },
 };
 
 const CACHE_WINDOWS_MAX = 128;
 const caches = new WeakMap<UiHandlerDeps, Map<string, SemanticReview>>();
-const coverage = new WeakMap<UiHandlerDeps, Map<string, Set<number>>>();
-function reviewedWindows(deps: UiHandlerDeps, fingerprint: string, start?: number): number {
-  const root = depsRoot(deps);
-  let documents = coverage.get(root);
-  if (documents === undefined) {
-    documents = new Map();
-    coverage.set(root, documents);
-  }
-  const windows = documents.get(fingerprint) ?? new Set<number>();
-  if (start !== undefined) {
-    windows.add(start);
-    documents.set(fingerprint, windows);
-  }
-  while (documents.size > CACHE_WINDOWS_MAX) {
-    const oldest = documents.keys().next().value;
-    if (oldest === undefined) break;
-    documents.delete(oldest);
-  }
-  return windows.size;
-}
 function cacheFor(deps: UiHandlerDeps): Map<string, SemanticReview> {
   const root = depsRoot(deps);
   let cache = caches.get(root);
@@ -117,23 +143,23 @@ interface ReviewInput {
   readonly fingerprint: string;
   readonly start: number;
   readonly anchors: readonly ReviewAnchor[];
-  readonly prompt: string;
 }
 
 function reviewStart(
   args: CatalogJsonObject,
   fingerprint: string,
-  length: number,
+  source: string,
 ): number | undefined {
   const cursor = typeof args.cursor === "string" ? decodeKnowledgeCursor(args.cursor) : undefined;
   if (args.cursor !== undefined && cursor?.fingerprint !== fingerprint) return undefined;
   const start = cursor?.offset ?? 0;
-  return start < length && start % REVIEW_WINDOW_CHARS === 0 ? start : undefined;
+  return start < source.length && knowledgeWindowEnd(source, start) === start ? start : undefined;
 }
 function reviewIdentity(
   environment: KnowledgeToolEnvironment,
   document: ReadKnowledgeDocument,
   modelId: string,
+  projected: string,
 ): Pick<ReviewInput, "generation" | "textRevision" | "fingerprint"> {
   const textRevision = knowledgeDigest(document.text);
   const generation = environment.deps.gatewayConfig?.generation() ?? 0;
@@ -144,7 +170,7 @@ function reviewIdentity(
       textRevision,
       modelId,
       generation,
-      knowledgeDigest(environment.redact(document.text)),
+      knowledgeDigest(projected),
     ]),
   );
   return { textRevision, generation, fingerprint };
@@ -160,10 +186,11 @@ function inputFor(
   const modelId =
     context.knowledgeReviewModelId?.() ?? deps.store.findChatById(context.chatId)?.selectedModel;
   if (document === undefined || modelId === undefined) return undefined;
-  const identity = reviewIdentity(environment, document, modelId);
-  const start = reviewStart(args, identity.fingerprint, document.text.length);
+  const projected = redact(document.text);
+  const identity = reviewIdentity(environment, document, modelId, projected);
+  const start = reviewStart(args, identity.fingerprint, document.text);
   if (start === undefined) return undefined;
-  const anchors = reviewAnchors(document, start, redact);
+  const anchors = reviewAnchors(document, start, redact, projected);
   if (anchors.length === 0) return undefined;
   return {
     document,
@@ -173,7 +200,6 @@ function inputFor(
     ...identity,
     start,
     anchors,
-    prompt: reviewPrompt(document, anchors),
   };
 }
 
@@ -193,7 +219,7 @@ function modelRequest(
     modelId: input.modelId,
     messages: [
       { role: "system", content: semanticReviewInstruction(format) },
-      { role: "user", content: input.prompt },
+      { role: "user", content: reviewPrompt(input.document, input.anchors) },
     ],
     stream: false,
     maxOutputTokens: profile.reservedOutputTokens,
@@ -201,14 +227,12 @@ function modelRequest(
     ...(capability?.supportsResponseFormat === true ? { responseFormat: format } : {}),
     logContext: { correlationId: environment.context.correlationId },
   };
-  return capability?.kind === "chat"
-    ? fitToolRoundOutput(request, profile, [], {
-        maxOutputTokens: capability.maxOutputTokens,
-        reasoningHistoryField: config?.providers.find(
-          (provider) => provider.modelId === input.modelId,
-        )?.reasoningHistoryField,
-      })
-    : request;
+  return fitToolRoundOutput(request, profile, [], {
+    maxOutputTokens:
+      capability?.kind === "chat" ? capability.maxOutputTokens : profile.reservedOutputTokens,
+    reasoningHistoryField: config?.providers.find((provider) => provider.modelId === input.modelId)
+      ?.reasoningHistoryField,
+  });
 }
 
 type GeneratedReview =
@@ -265,20 +289,19 @@ function reviewCoverage(
   input: ReviewInput,
   review: SemanticReview,
   cached: boolean,
-  environment: KnowledgeToolEnvironment,
 ): CatalogJsonObject {
-  const windowCount = reviewedWindows(environment.deps, input.fingerprint);
-  const windows = Math.ceil(input.document.text.length / REVIEW_WINDOW_CHARS);
+  const windows = reviewWindowCount(input.document.text);
   return {
     documentScope: input.documentScope,
     revisionDigest: input.revisionDigest,
     textRevision: input.textRevision,
+    reviewFingerprint: input.fingerprint,
     characterStart: input.start,
     characterEnd: input.anchors.at(-1)?.characterEnd ?? input.start,
     documentChars: input.document.text.length,
-    reviewedWindows: windowCount,
+    reviewedWindows: review.complete ? 1 : 0,
     totalWindows: windows,
-    documentReviewComplete: windowCount === windows,
+    documentReviewComplete: review.complete && input.start === 0 && windows === 1,
     windowReviewComplete: review.complete,
     semanticExhaustivenessProven: false,
     originalModified: false,
@@ -310,7 +333,7 @@ function reviewResult(
         },
         environment.redact,
       ),
-      coverage: reviewCoverage(input, review, cached, environment),
+      coverage: reviewCoverage(input, review, cached),
       nextStep: review.complete
         ? "Keep original requirements and acceptance criteria unchanged. Label model findings as proposals; resolve their specific questions. Review every document window before claiming corpus review coverage."
         : "This window review is incomplete. Read its source and resolve the remaining questions.",
@@ -343,6 +366,24 @@ function admittedReviewResult(
   };
 }
 
+/** Source and authority have already been rechecked; a refused model output is not coverage. */
+function failedWindowContinuation(input: ReviewInput): CatalogJsonObject {
+  const end = input.anchors.at(-1)?.characterEnd ?? input.start;
+  return {
+    view: "review",
+    coverage: {
+      ...reviewCoverage(input, { complete: false, findings: [] }, false),
+      windowSkipped: true,
+      failedWindows: 1,
+    },
+    nextStep:
+      "This source window was not reviewed successfully. Continue nextCursor with the same document selection if present; report this failed window and do not claim complete document review.",
+    ...(end < input.document.text.length
+      ? { nextCursor: encodeCursor({ offset: end, fingerprint: input.fingerprint }) }
+      : {}),
+  };
+}
+
 function failedReview(
   input: ReviewInput,
   generated: Extract<GeneratedReview, { ok: false }>,
@@ -354,6 +395,7 @@ function failedReview(
       reason: failureStage,
       failureStage,
       sourceAvailable: true,
+      ...(failureStage === "model-output-invalid" ? failedWindowContinuation(input) : {}),
       ...(generated.observation.reviewValidationReason === undefined
         ? {}
         : { validationReason: generated.observation.reviewValidationReason }),
@@ -390,6 +432,7 @@ async function review(
   const cache = cacheFor(environment.deps);
   const key = `${input.fingerprint}|${String(input.start)}`;
   const hit = cache.get(key);
+  if (!reviewAuthorityCurrent(environment.context)) return knowledgeToolFailure("denied");
   const generated = hit === undefined ? await generateReview(environment, input) : undefined;
   const continuationFailure = reviewContinuationFailure(environment, args, input);
   if (continuationFailure !== undefined) return continuationFailure;
@@ -397,7 +440,6 @@ async function review(
   const result = hit ?? generated?.review;
   if (result === undefined) return knowledgeToolFailure("model-port-unavailable");
   remember(cache, key, result);
-  if (result.complete) reviewedWindows(environment.deps, input.fingerprint, input.start);
   return admittedReviewResult(environment, input, result, hit !== undefined, generated);
 }
 

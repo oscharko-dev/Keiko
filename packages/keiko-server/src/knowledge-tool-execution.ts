@@ -18,6 +18,7 @@ import {
 import type { RequirementsToolContext } from "./requirementsTool.js";
 
 export const KNOWLEDGE_TOOL_RESULT_BYTES_MAX = 32_000;
+export const KNOWLEDGE_TOOL_PAYLOAD_BYTES_MAX = KNOWLEDGE_TOOL_RESULT_BYTES_MAX - 2048;
 export interface KnowledgeToolEnvironment {
   readonly deps: UiHandlerDeps;
   readonly store: KnowledgeStore;
@@ -36,8 +37,23 @@ export interface KnowledgeToolRead {
   readonly confirmModelOperation?: () => void;
 }
 
+const STALE_SOURCE_REASONS = new Set([
+  "cursor-stale",
+  "document-or-cursor-stale",
+  "document-stale-or-out-of-scope",
+  "source-changed",
+]);
+const STALE_SOURCE_NEXT_STEP =
+  "Restart knowledge.documents inventory in this Chat's current selected Pods. Use its current documentScope and revisionDigest, then read or review from the first window without the refused cursor. Follow only newly returned nextCursor values and state any remaining coverage limits.";
+
 export function knowledgeToolFailure(reason: string): KnowledgeToolRead {
-  return { data: { outcome: "failed", reason } };
+  return {
+    data: {
+      outcome: "failed",
+      reason,
+      ...(STALE_SOURCE_REASONS.has(reason) ? { nextStep: STALE_SOURCE_NEXT_STEP } : {}),
+    },
+  };
 }
 
 function readDisposition(read: KnowledgeToolRead): KnowledgeDocumentActivity["disposition"] {
@@ -74,7 +90,7 @@ async function admittedRead(
   if (context.signal.aborted || !context.beforeEffect()) return knowledgeToolFailure("denied");
   if (knowledgeDocumentSnapshot(deps, store, context.chatId).fingerprint !== snapshot.fingerprint)
     return knowledgeToolFailure("source-changed");
-  if (Buffer.byteLength(JSON.stringify(result.data)) > KNOWLEDGE_TOOL_RESULT_BYTES_MAX - 2048)
+  if (Buffer.byteLength(JSON.stringify(result.data)) > KNOWLEDGE_TOOL_PAYLOAD_BYTES_MAX)
     return knowledgeToolFailure("result-bound");
   result.confirmModelOperation?.();
   return result;

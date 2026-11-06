@@ -14,7 +14,7 @@ import {
 import { readMarkdownSkill } from "@/lib/markdown-skills-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
-import { correlationIdOf } from "@/lib/client-error-summary";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { bffRequestErrorKind } from "@/lib/http";
 import { usePodChoices } from "../useJiraPodChoices";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
@@ -104,7 +104,7 @@ interface RequestState {
 }
 type Run = (
   kind: Work,
-  operation: (isCurrent: () => boolean) => Promise<void>,
+  operation: (isCurrent: () => boolean, correlationId: string) => Promise<void>,
   validatingId?: string,
 ) => Promise<void>;
 
@@ -122,15 +122,16 @@ function useTemplateRequest(
     };
   }, [scope]);
   const run: Run = async (kind, operation, validatingId) => {
+    const correlationId = newClientCorrelationId();
     const request = ++sequence.current;
     const isCurrent = (): boolean => currentScope.current === scope && sequence.current === request;
     setState({ scope, work: kind, failed: false, validatingId });
     try {
-      await operation(isCurrent);
+      await operation(isCurrent, correlationId);
     } catch (error) {
       if (isCurrent()) setState({ scope, work: "idle", failed: true });
       reportClientDiagnostic("Jira template request failed.", {
-        correlationId: correlationIdOf(error),
+        correlationId,
         errorKind: bffRequestErrorKind(error),
         errorEvidence: clientErrorEvidence(error),
       });
@@ -152,21 +153,25 @@ async function validateStoredTemplate(
   scope: RequestScope,
   isCurrent: () => boolean,
   publish: (validation: Validation) => void,
+  correlationId: string,
 ): Promise<void> {
   if (scope.podId === undefined) return;
-  reportClientDiagnostic("Jira template validation started.");
-  const skill = await readMarkdownSkill({ id: entry.id, revision: entry.revision, digest: "" });
+  reportClientDiagnostic("Jira template validation started.", { correlationId });
+  const skill = await readMarkdownSkill(
+    { id: entry.id, revision: entry.revision, digest: "" },
+    correlationId,
+  );
   if (!isCurrent()) {
-    reportClientDiagnostic("Jira template validation superseded.");
+    reportClientDiagnostic("Jira template validation superseded.", { correlationId });
     return;
   }
-  const result = await validateJiraTemplate(scope.podId, skill.body);
+  const result = await validateJiraTemplate(scope.podId, skill.body, correlationId);
   if (!isCurrent()) {
-    reportClientDiagnostic("Jira template validation superseded.");
+    reportClientDiagnostic("Jira template validation superseded.", { correlationId });
     return;
   }
   publish({ scope, id: entry.id, revision: entry.revision, name: entry.name, result });
-  reportClientDiagnostic("Jira template validation completed.");
+  reportClientDiagnostic("Jira template validation completed.", { correlationId });
 }
 
 /** Validation and proposal need a Pod; each result is recorded against what it was made from. */
@@ -183,14 +188,15 @@ function useTemplateActions(
       setValidation(undefined);
       return run(
         "validating",
-        (isCurrent) => validateStoredTemplate(entry, scope, isCurrent, setValidation),
+        (isCurrent, correlationId) =>
+          validateStoredTemplate(entry, scope, isCurrent, setValidation, correlationId),
         entry.id,
       );
     },
     propose: (projectKey) =>
-      run("proposing", async (isCurrent) => {
+      run("proposing", async (isCurrent, correlationId) => {
         if (scope.podId === undefined) return;
-        const items = await proposeJiraTemplates(scope.podId, projectKey);
+        const items = await proposeJiraTemplates(scope.podId, projectKey, correlationId);
         if (!isCurrent()) return;
         setProposals((current) => ({ generation: (current?.generation ?? 0) + 1, items }));
       }),
@@ -206,11 +212,11 @@ function useJiraTemplateTools(podId: string | undefined, version: string): Tools
   const currentVersion = useRef(version);
   currentVersion.current = version;
   const reload = (): Promise<void> =>
-    run("loading", async () => {
+    run("loading", async (_isCurrent, correlationId) => {
       const load = ++latestLoad.current;
       const readFor = currentVersion.current;
       try {
-        const next = await fetchJiraTemplates();
+        const next = await fetchJiraTemplates(correlationId);
         // List reads depend on the library, so resolving the default Pod cannot retire them.
         if (load === latestLoad.current)
           setLoaded({ version: readFor, entries: next, failed: false });

@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import type { ChatProcessingStep, ChatProcessingState } from "./chat-processing-pipeline";
 import { CHAT_PROCESSING_STATE_LABELS } from "./chat-processing-pipeline";
 import {
@@ -30,7 +30,12 @@ function StepIcon({ state }: { readonly state: ChatProcessingState }): ReactNode
 function pipelineSummary(steps: readonly ChatProcessingStep[], t: OptionalWidgetTranslate): string {
   const current = steps.filter((step) => step.state === "active" || step.state === "approval");
   if (current.length > 0)
-    return t("chat.processing.current", { steps: current.map((step) => t(step.label)).join(", ") });
+    return t("chat.processing.current", {
+      steps: current
+        .slice(-3)
+        .map((step) => t(step.label))
+        .join(", "),
+    });
   if (steps.some((step) => step.state === "attention")) return t("chat.processing.checkOutcome");
   const terminal = ["failed", "blocked", "cancelled"] as const;
   const issueState = terminal.find((candidate) => steps.some((step) => step.state === candidate));
@@ -41,16 +46,45 @@ function pipelineSummary(steps: readonly ChatProcessingStep[], t: OptionalWidget
   return t("chat.processing.summary", { state: t(CHAT_PROCESSING_STATE_LABELS[state]) });
 }
 
-function ProcessingStep({
-  step,
-  index,
-}: {
+interface PresentedStep {
   readonly step: ChatProcessingStep;
   readonly index: number;
-}): ReactNode {
+  readonly count: number;
+}
+
+function groupCompletedSteps(steps: readonly ChatProcessingStep[]): readonly PresentedStep[] {
+  const groups: PresentedStep[] = [];
+  for (const [index, step] of steps.entries()) {
+    const previous = groups.at(-1);
+    if (
+      previous !== undefined &&
+      step.toolName !== undefined &&
+      step.toolName === previous.step.toolName &&
+      step.state === "done" &&
+      previous.step.state === "done" &&
+      previous.step.label === step.label
+    )
+      groups[groups.length - 1] = { ...previous, count: previous.count + 1 };
+    else groups.push({ step, index, count: 1 });
+  }
+  return groups;
+}
+
+function compactStepIndices(groups: readonly PresentedStep[]): ReadonlySet<number> {
+  const current = groups.findLastIndex(
+    ({ step }) => step.state === "active" || step.state === "approval",
+  );
+  const visible = new Set([0, groups.length - 1, current]);
+  for (let index = Math.max(0, groups.length - 4); index < groups.length; index += 1)
+    visible.add(index);
+  return visible;
+}
+
+function ProcessingStep({ step, index, count }: PresentedStep): ReactNode {
   const t = useTranslate();
   const current = step.state === "active" || step.state === "approval";
-  const label = t(step.label);
+  const label =
+    count === 1 ? t(step.label) : t("chat.processing.repeated", { label: t(step.label), count });
   const state = t(CHAT_PROCESSING_STATE_LABELS[step.state]);
   return (
     <li
@@ -70,6 +104,34 @@ function ProcessingStep({
   );
 }
 
+function EarlierStepsToggle({
+  hiddenCount,
+  expanded,
+  listId,
+  onToggle,
+}: {
+  readonly hiddenCount: number;
+  readonly expanded: boolean;
+  readonly listId: string;
+  readonly onToggle: () => void;
+}): ReactNode {
+  const t = useTranslate();
+  if (hiddenCount === 0) return null;
+  return (
+    <button
+      type="button"
+      className={`lk-btn lk-btn-ghost ${styles.cmpMore}`}
+      aria-controls={listId}
+      aria-expanded={expanded}
+      onClick={onToggle}
+    >
+      {expanded
+        ? t("chat.processing.hideEarlier")
+        : t("chat.processing.showEarlier", { count: hiddenCount })}
+    </button>
+  );
+}
+
 /** A transcript projection, not an execution plan or a second progress producer. */
 export function ChatProcessingPipeline({
   steps,
@@ -77,15 +139,30 @@ export function ChatProcessingPipeline({
   readonly steps: readonly ChatProcessingStep[];
 }): ReactNode {
   const t = useTranslate();
+  const [expanded, setExpanded] = useState(false);
+  const listId = useId();
+  const groups = groupCompletedSteps(steps);
+  const compact = compactStepIndices(groups);
+  const hiddenCount = groups.reduce(
+    (count, group, index) => (compact.has(index) ? count : count + group.count),
+    0,
+  );
+  const visible = expanded ? groups : groups.filter((_, index) => compact.has(index));
   if (steps.length === 0) return null;
   return (
     <section className={styles.cmpPipeline} aria-label={t("chat.processing.title")}>
       <strong className={styles.cmpTitle}>{t("chat.processing.title")}</strong>
-      <ol className={styles.cmpSteps}>
-        {steps.map((step, index) => (
-          <ProcessingStep key={step.id} step={step} index={index} />
+      <ol className={styles.cmpSteps} id={listId}>
+        {visible.map((group) => (
+          <ProcessingStep key={group.step.id} {...group} />
         ))}
       </ol>
+      <EarlierStepsToggle
+        hiddenCount={hiddenCount}
+        expanded={expanded}
+        listId={listId}
+        onToggle={() => setExpanded(!expanded)}
+      />
       <output className={styles.cmpAnnouncement} aria-live="polite" aria-atomic="true">
         {pipelineSummary(steps, t)}
       </output>

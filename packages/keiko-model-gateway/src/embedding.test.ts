@@ -1368,6 +1368,136 @@ describe("connection-owned embedding capability proof", () => {
     expect(seen).toHaveLength(9);
   });
 
+  it("keeps the creating caller's cancellation local while another caller joins its physical probe", async () => {
+    let release: ((outcome: OpenAIEmbeddingOutcome) => void) | undefined;
+    const request = vi.fn(
+      (input: OpenAIEmbeddingRequest) =>
+        new Promise<OpenAIEmbeddingOutcome>((resolve) => {
+          release = resolve;
+          input.signal?.addEventListener(
+            "abort",
+            () => {
+              resolve({ ok: false, kind: "cancelled" });
+            },
+            { once: true },
+          );
+        }),
+    );
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: PROVIDER_ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      request,
+    };
+    const human = new AbortController();
+    const creator = verifyEmbeddingCapability(
+      adapter,
+      { ...PROBE, signal: human.signal },
+      "connection",
+    );
+    await Promise.resolve();
+    const joined = verifyEmbeddingCapability(adapter, PROBE, "connection");
+    human.abort();
+    expect(await creator).toMatchObject({ ok: false, reason: "cancelled" });
+    release?.(successOutcome(2));
+    expect((await joined).ok).toBe(true);
+    expect((await verifyEmbeddingCapability(adapter, PROBE, "connection")).ok).toBe(true);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("evicts settled profiles without dropping a pending proof or an unrelated recent proof", async () => {
+    let release: ((outcome: OpenAIEmbeddingOutcome) => void) | undefined;
+    const request = vi.fn((input: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+      if (input.dimensions === 1)
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      return Promise.resolve(successOutcome(2));
+    });
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: PROVIDER_ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      request,
+    };
+    const pending = verifyEmbeddingCapability(
+      adapter,
+      { ...PROBE, dimensionsParam: 1 },
+      "connection",
+    );
+    for (let dimensionsParam = 2; dimensionsParam <= 65; dimensionsParam += 1)
+      await verifyEmbeddingCapability(adapter, { ...PROBE, dimensionsParam }, "connection"); // NOSONAR typescript:S9382 -- Each settled profile determines the next admission and eviction.
+    const count = request.mock.calls.length;
+    expect(
+      (await verifyEmbeddingCapability(adapter, { ...PROBE, dimensionsParam: 65 }, "connection"))
+        .ok,
+    ).toBe(true);
+    expect(request).toHaveBeenCalledTimes(count);
+    release?.(successOutcome(2));
+    expect((await pending).ok).toBe(true);
+    expect(
+      (await verifyEmbeddingCapability(adapter, { ...PROBE, dimensionsParam: 1 }, "connection")).ok,
+    ).toBe(true);
+    expect(request).toHaveBeenCalledTimes(count);
+  });
+
+  it("refuses a new profile while all bounded cache slots still own pending work", async () => {
+    const releases: ((outcome: OpenAIEmbeddingOutcome) => void)[] = [];
+    const request = vi.fn(
+      () =>
+        new Promise<OpenAIEmbeddingOutcome>((resolve) => {
+          releases.push(resolve);
+        }),
+    );
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: PROVIDER_ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      request,
+    };
+    const pending = Array.from({ length: 64 }, (_, index) =>
+      verifyEmbeddingCapability(adapter, { ...PROBE, dimensionsParam: index + 1 }, "connection"),
+    );
+    await Promise.resolve();
+    const overflow = verifyEmbeddingCapability(
+      adapter,
+      { ...PROBE, dimensionsParam: 65 },
+      "connection",
+    );
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(64);
+    expect(await overflow).toMatchObject({ ok: false, reason: "unavailable" });
+    releases.forEach((release) => {
+      release(successOutcome(2));
+    });
+    expect((await Promise.all(pending)).every((checked) => checked.ok)).toBe(true);
+    expect(
+      (await verifyEmbeddingCapability(adapter, { ...PROBE, dimensionsParam: 1 }, "connection")).ok,
+    ).toBe(true);
+    expect(request).toHaveBeenCalledTimes(64);
+  });
+
+  it("keeps the initial transient reason until explicit verification recovers it", async () => {
+    let ready = false;
+    const request = vi.fn((): Promise<OpenAIEmbeddingOutcome> =>
+      Promise.resolve(ready ? successOutcome(2) : { ok: false, kind: "rate-limited", status: 429 }),
+    );
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: PROVIDER_ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      request,
+    };
+    const first = await verifyEmbeddingCapability(adapter, PROBE, "connection");
+    expect(first).toMatchObject({
+      ok: false,
+      reason: "rate-limited",
+    });
+    expect(first).toHaveProperty("safeMessage", expect.stringContaining("429"));
+    ready = true;
+    expect(await verifyEmbeddingCapability(adapter, PROBE, "connection")).toEqual(first);
+    expect(request).toHaveBeenCalledOnce();
+    expect((await verifyEmbeddingCapability(adapter, PROBE, "refresh")).ok).toBe(true);
+    expect((await verifyEmbeddingCapability(adapter, PROBE, "connection")).ok).toBe(true);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("lets a joining human cancel without aborting the shared startup proof", async () => {
     let release: ((value: OpenAIEmbeddingOutcome) => void) | undefined;
     const request = vi.fn(

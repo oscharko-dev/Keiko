@@ -158,6 +158,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Requirements without detected acceptance criteria in the source: {count}.",
   "chat.knowledgeCoverage.requestedReviews":
     "Documents fully reviewed: {completed} of {requested} requested.",
+  "chat.processing.repeated": "{label} · {count} calls",
+  "chat.processing.showEarlier": "Show {count} earlier calls",
+  "chat.processing.hideEarlier": "Show fewer steps",
   "chat.processing.title": "Progress",
   "chat.processing.request": "Request received",
   "chat.processing.continuing": "Preparing next step",
@@ -202,7 +205,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.addToWorkspace": "Add to workspace",
   "chat.jira.workspaceHint":
     "Drag this Jira Pod onto the workspace, or add it with this button. Connect its port to a Chat.",
-  "chat.jira.liveTools": "Live Jira tools",
   "chat.jira.liveReady": "Verified Jira Pod",
   "chat.jira.liveUnavailable": "Jira Pod unavailable; open Knowledge Pods to verify or reconnect.",
   "chat.connectors.title": "Connectors",

@@ -399,6 +399,12 @@
   min-width: 0;
 }
 
+.cmpPodEmbeddedIdentity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .cmpPodChip {
   white-space: nowrap;
 }

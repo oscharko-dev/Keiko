@@ -1057,6 +1057,7 @@ function ChatBubbleImpl({
   previewWindows,
   windowId,
   streaming = false,
+  waitingForDecision = false,
   layout = "stack",
 }: {
   readonly message: ChatMessage;
@@ -1072,6 +1073,7 @@ function ChatBubbleImpl({
   // Issue #1296 — true only for the live assistant turn while tokens are arriving,
   // so the DS 0.4.0 streaming caret blinks at the growing edge of the text.
   readonly streaming?: boolean;
+  readonly waitingForDecision?: boolean;
   readonly layout?: "stack" | "turn";
 }): ReactNode {
   const t = useTranslate();
@@ -1164,6 +1166,7 @@ function ChatBubbleImpl({
           turnState={message.turnState}
           chatId={message.chatId}
           showPending={isUser && message.turnState === "pending"}
+          waitingForDecision={waitingForDecision}
         />
         <ResponseVersionSelector
           message={message}
@@ -1238,15 +1241,12 @@ function KeikoMessageMark({ pulsing = false }: { readonly pulsing?: boolean }): 
   );
 }
 
-function TypingBubble({ showProgress }: { readonly showProgress: boolean }): ReactNode {
+function TypingBubble(): ReactNode {
   const t = useTranslate();
   return (
     <article className="chat-msg" data-role="assistant">
       <div className="chat-msg-bubble">
         <KeikoMessageMark pulsing />
-        {showProgress ? (
-          <JiraChatTools transcript={undefined} turnState="pending" showPending />
-        ) : null}
         {/* uiux-fix F042 (C319) — aria-label is prohibited on a generic span and
             ignored by AT; role="img" makes the label exposed. The lifecycle
             announcement itself comes from SendLifecycleStatus. */}
@@ -1358,6 +1358,7 @@ function ConversationThreadImpl({
               {userMessage !== null ? (
                 <ChatBubble
                   message={userMessage}
+                  waitingForDecision={isLastTurn && sendStatus === "awaiting-decision"}
                   onOpenRunResult={onOpenRunResult}
                   repositoryRoots={repositoryRoots}
                   openRepositoryReference={openRepositoryReference}
@@ -1439,14 +1440,7 @@ function ConversationThreadImpl({
           <div className="chat-turn-cell chat-turn-prompt" />
           <div className="chat-turn-cell chat-turn-answer">
             <div className="chatw-typing-row">
-              <TypingBubble
-                showProgress={
-                  (sendStatus === "contacting" || sendStatus === "awaiting-decision") &&
-                  !messages.some(
-                    (message) => message.role === "user" && message.turnState === "pending",
-                  )
-                }
-              />
+              {sendStatus === "awaiting-decision" ? null : <TypingBubble />}
               {hasGroundingScope(activeChat) ? (
                 <button
                   type="button"

@@ -389,7 +389,7 @@ export async function bffFetchJson<T>(
     return await performBffFetch(path, init, opts);
   } catch (error) {
     if (error instanceof ApiError && opts?.repairSession !== false && !isDeniedError(error))
-      await reinspectSessionAfterMutationRefusal(error, init?.method);
+      await reinspectSessionAfterMutationRefusal(error, init?.method, path);
     if (!isDeniedError(error) || opts?.repairSession === false) throw error;
     return repairAndReplay(error, path, init, opts);
   }

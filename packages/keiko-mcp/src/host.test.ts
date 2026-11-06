@@ -668,40 +668,43 @@ it("executes an external open schema with a local reference and optional union w
 });
 
 describe("managed MCP invocation durations", () => {
-  it("completes through the actual SDK beyond both former host and SDK defaults", async () => {
-    const entered = deferred();
-    const release = deferred();
-    let allowed = false;
-    let settled = false;
-    const { host } = fixture(
-      async (args, ctx) => {
-        entered.resolve();
-        await release.promise;
-        allowed = ctx.beforeEffect();
-        return { data: { text: args.text ?? "", binding: ctx.binding } };
-      },
-      undefined,
-      { durationMs: 90_000 },
-    );
-    await host.admit("admission-fixture");
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const outcome = host.call("fixture.echo", { text: "one" }, context("first"));
-    void outcome.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    await entered.promise;
-    await vi.advanceTimersByTimeAsync(75_000);
-    expect(settled).toBe(false);
-    release.resolve();
-    await expect(outcome).resolves.toEqual({ text: "one", binding: "first" });
-    expect(allowed).toBe(true);
-    expect(exchanges.filter(({ method }) => method === "tools/call")).toHaveLength(1);
-  });
+  it.each([90_000, Number.MAX_SAFE_INTEGER])(
+    "completes through the actual SDK beyond former defaults at declared duration %s",
+    async (durationMs) => {
+      const entered = deferred();
+      const release = deferred();
+      let allowed = false;
+      let settled = false;
+      const { host } = fixture(
+        async (args, ctx) => {
+          entered.resolve();
+          await release.promise;
+          allowed = ctx.beforeEffect();
+          return { data: { text: args.text ?? "", binding: ctx.binding } };
+        },
+        undefined,
+        { durationMs },
+      );
+      await host.admit("admission-fixture");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const outcome = host.call("fixture.echo", { text: "one" }, context("first"));
+      void outcome.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(75_000);
+      expect(settled).toBe(false);
+      release.resolve();
+      await expect(outcome).resolves.toEqual({ text: "one", binding: "first" });
+      expect(allowed).toBe(true);
+      expect(exchanges.filter(({ method }) => method === "tools/call")).toHaveLength(1);
+    },
+  );
 
   it.each([
     { label: "declared tool duration", durationMs: 90_000, abortAtMs: undefined },

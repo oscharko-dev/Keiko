@@ -637,7 +637,7 @@ describe("ChatWindow cancel button", () => {
     expect(messageForSelectedResponseVersion(message, 2).groundedAnswer).toBe(currentGrounding);
   });
 
-  it("shows one progress pipeline across optimistic and canonical send states", async () => {
+  it("starts the progress pipeline only after the server acknowledges the human turn", async () => {
     const optimistic = makeMessage({
       id: "local-voice-submitted",
       content: "Read the selected Pod",
@@ -661,11 +661,17 @@ describe("ChatWindow cancel button", () => {
         <ChatWindow />
       </ChatSessionProvider>,
     );
-    expect(screen.getAllByRole("region", { name: "Progress" })).toHaveLength(1);
-    expect(screen.getByRole("listitem", { current: "step" })).toHaveTextContent(
-      "Preparing next step",
-    );
+    expect(screen.queryByRole("region", { name: "Progress" })).toBeNull();
+    expect(screen.getByLabelText("Keiko is responding")).toBeInTheDocument();
     expect(screen.queryByText("Read requirements")).toBeNull();
+
+    rerender(
+      <ChatSessionProvider value={{ ...session, sendStatus: "awaiting-decision" }}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(screen.queryByRole("region", { name: "Progress" })).toBeNull();
+    expect(screen.queryByLabelText("Keiko is responding")).toBeNull();
 
     const canonical = { ...optimistic, id: "canonical-submitted", turnState: "pending" as const };
     rerender(
@@ -677,6 +683,19 @@ describe("ChatWindow cancel button", () => {
     const userBubble = screen.getByText(optimistic.content).closest("article");
     expect(userBubble).not.toBeNull();
     expect(screen.getByRole("region", { name: "Progress" }).closest("article")).toBe(userBubble);
+
+    rerender(
+      <ChatSessionProvider
+        value={{ ...session, sendStatus: "awaiting-decision", messages: [canonical] }}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(screen.getByRole("region", { name: "Progress" })).toHaveTextContent(
+      "Waiting for approval",
+    );
+    expect(document.querySelector('[data-state="active"]')).toBeNull();
+    expect(screen.queryByLabelText("Keiko is responding")).toBeNull();
 
     rerender(
       <ChatSessionProvider

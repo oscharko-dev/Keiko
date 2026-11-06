@@ -86,6 +86,16 @@ describe("private skill client boundary", () => {
     });
   });
 
+  it("carries the logical validation correlation id through the immutable skill read", async () => {
+    vi.mocked(bffFetchJson).mockResolvedValue({ skill: reference });
+    expect(await skills.readMarkdownSkill(reference, "template-validation-run")).toEqual(reference);
+    expect(bffFetchJson).toHaveBeenLastCalledWith(
+      "/api/skills/local%2Fid?revision=3",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      { correlationId: "template-validation-run" },
+    );
+  });
+
   it("transports exact UTF-8 bytes without trimming or normalizing the local document", async () => {
     const body = "\uFEFF# Review\r\nGrüße 😀\r\n";
     const file = new File([body], "review.md");

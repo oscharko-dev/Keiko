@@ -17,6 +17,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { recordManagedMcp } from "./activity.js";
+import { mcpRequestTimeouts } from "./request-timeouts.js";
 import { ManagedMcpError, definitionIdentity, toolDefinition, toolsOf } from "./definitions.js";
 
 import { deepFreeze, isDeepFrozen } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
@@ -360,10 +361,10 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
     if (tool === undefined) throw new ManagedMcpError("invalid-arguments");
     const invocation = new AbortController();
     const bound = withSignal(context, this.#lifetime.signal, invocation.signal);
-    const timeout = tool.descriptor.bounds.maxDurationMs;
+    const timeouts = mcpRequestTimeouts(tool.descriptor.bounds.maxDurationMs);
     const timer = setTimeout(() => {
       invocation.abort();
-    }, timeout);
+    }, timeouts.maxTotalTimeout);
     timer.unref();
     try {
       const result = await this.#contexts.run(bound, async () => {
@@ -372,7 +373,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
         return this.#client.callTool(
           { name, arguments: argumentsValue },
           // Pin the admitted definition so SDK HEADER_MISMATCH recovery cannot replay effects.
-          { toolDefinition: deepFreeze(toolDefinition(tool)), signal: bound.signal, timeout },
+          { toolDefinition: deepFreeze(toolDefinition(tool)), signal: bound.signal, ...timeouts },
         );
       });
       if (result.isError)

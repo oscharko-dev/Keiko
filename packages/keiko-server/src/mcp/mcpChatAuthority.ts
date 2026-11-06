@@ -1,15 +1,13 @@
 import {
+  acceptedChatToolAuthorityEnvelope,
   isAcceptedChatToolTurn,
+  isRequestedChatToolModeCurrent,
   reserveResolvedChatToolAuthority,
 } from "../chat-tool-authority.js";
 import { mcpChatConfigurationDigest, selectedMcpServers } from "./mcpChatSelection.js";
 import { randomUUID } from "node:crypto";
-import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { chatToolTurnBudget } from "../chat-tool-turn-budget.js";
-import {
-  CHAT_TOOL_DEFAULT_MODE,
-  resolveEffectiveCodingWorkbenchMode,
-} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { CHAT_TOOL_DEFAULT_MODE } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { MCP_CHAT_READ_DISCLOSURE_VERSION } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import type {
   ChatToolAuthorityEnvelope,
@@ -79,39 +77,6 @@ function currentSubject(
   };
 }
 
-function envelopeFor(
-  deps: McpChatAuthorityDeps,
-  turn: AcceptedJiraChatTurn,
-  subject: McpChatToolAuthoritySubject,
-): McpChatAuthorityEnvelope {
-  const requestedMode = deps.store.findChatById(turn.chatId)?.toolMode ?? CHAT_TOOL_DEFAULT_MODE;
-  const deploymentCeiling = deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist";
-  const runId = `chat-${sha256Hex(canonicalise({ chatId: turn.chatId, userMessageId: turn.userMessageId }))}`;
-  return {
-    schemaVersion: "1",
-    kind: "chat-tool-authority",
-    runId,
-    subject,
-    requestedMode,
-    deploymentCeiling,
-    effectiveMode: resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling),
-    actionClasses: ["connector-access", "network-egress"],
-    connectorScopes: ["mcp.tools"],
-    budget: chatToolTurnBudget(deps),
-    expiresAt: new Date(turn.startedAtMs + chatToolTurnBudget(deps).maxRuntimeMs).toISOString(),
-    approvalProofDigest: sha256Hex(
-      canonicalise({
-        runId,
-        subject,
-        requestedMode,
-        deploymentCeiling,
-        userMessageId: turn.userMessageId,
-        acceptedAtMs: turn.startedAtMs,
-      }),
-    ),
-  };
-}
-
 /** Validate without registration so all source authorities can share one atomic admission. */
 export function prepareAcceptedMcpChatAuthority(
   deps: McpChatAuthorityDeps,
@@ -129,7 +94,17 @@ export function prepareAcceptedMcpChatAuthority(
       { chatId: turn.chatId },
       turn.correlationId,
     );
-  return { ok: true, envelope: envelopeFor(deps, turn, subject) };
+  return {
+    ok: true,
+    envelope: acceptedChatToolAuthorityEnvelope(
+      turn,
+      subject,
+      deps.store.findChatById(turn.chatId)?.toolMode ?? CHAT_TOOL_DEFAULT_MODE,
+      deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist",
+      chatToolTurnBudget(deps),
+      ["mcp.tools"],
+    ),
+  };
 }
 
 /** Same accepted-message registry and cumulative budget as Jira; no fabricated Pod or Coding session. */
@@ -186,10 +161,7 @@ export function resolveCurrentMcpChatAuthority(
       { chatId, authorityDigest: reference.envelopeDigest },
       correlationId,
     );
-  if (
-    current.envelope.requestedMode !==
-    (deps.store.findChatById(chatId)?.toolMode ?? CHAT_TOOL_DEFAULT_MODE)
-  )
+  if (!isRequestedChatToolModeCurrent(current.envelope, deps.store.findChatById(chatId)))
     return recordChatAuthorityResult(
       "current-state",
       INVALID,
@@ -213,7 +185,10 @@ export function reserveCurrentMcpChatAuthority(
   correlationId: string,
 ): CurrentMcpChatAuthority {
   const current = resolveCurrentMcpChatAuthority(deps, chatId, reference, nowIso, correlationId);
-  return reserveResolvedChatToolAuthority(deps, current, reference, usage, nowIso, correlationId);
+  return (
+    reserveResolvedChatToolAuthority(deps, current, reference, usage, nowIso, correlationId) ??
+    INVALID
+  );
 }
 
 /** A granted disclosure can outlive its originating turn, but never its actor/configuration or TTL. */

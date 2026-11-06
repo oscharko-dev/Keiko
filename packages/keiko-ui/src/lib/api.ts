@@ -334,7 +334,7 @@ async function fetchJson<T>(
     headers: fetchJsonHeaders(init, isStateChanging, correlationId),
   });
 
-  if (!res.ok) throw await bffFailure(res, method);
+  if (!res.ok) throw await bffFailure(res, method, path);
 
   if (res.status === 204) {
     return undefined as T;
@@ -353,7 +353,7 @@ async function fetchJson<T>(
 // transport's own record of the id; the envelope carries the same id when a route writes it into
 // the body. Either ties this failure to one redacted server diagnostic (#3385 — a refused issue
 // preview names its correlation id in the UI state).
-async function bffFailure(res: Response, method = "GET"): Promise<ApiError> {
+async function bffFailure(res: Response, method = "GET", path?: string): Promise<ApiError> {
   let code = "INTERNAL";
   let message = `HTTP ${res.status.toString()}`;
   let envelopeCorrelationId: string | undefined;
@@ -371,7 +371,7 @@ async function bffFailure(res: Response, method = "GET"): Promise<ApiError> {
   const error = new ApiError(code, message, res.status);
   const correlationId = res.headers.get(CORRELATION_HEADER) ?? envelopeCorrelationId;
   if (correlationId !== undefined) error.correlationId = correlationId;
-  await reinspectSessionAfterMutationRefusal(error, method);
+  await reinspectSessionAfterMutationRefusal(error, method, path);
   return error;
 }
 
@@ -770,7 +770,7 @@ export async function streamAssistantSpeech(
     throw failure;
   });
   if (!res.ok) {
-    const error = await bffFailure(res, "POST");
+    const error = await bffFailure(res, "POST", "/api/voice/speak/stream");
     error.correlationId ??= correlationId;
     throw error;
   }
@@ -1806,7 +1806,7 @@ export async function sendDesktopChatStream(
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("text/event-stream")) {
-    const failure = await bffFailure(res, "POST");
+    const failure = await bffFailure(res, "POST", "/api/desktop/chat/stream");
     failure.correlationId ??= responseCorrelationId;
     if (failure.code !== "STREAMING_UNSUPPORTED") throw failure;
     const unavailable = new StreamingUnavailableError(failure.code, failure.message);

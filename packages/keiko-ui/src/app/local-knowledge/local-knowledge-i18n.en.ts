@@ -36,7 +36,6 @@ export const EN_LOCAL_KNOWLEDGE_MESSAGES = {
   "localKnowledge.picker.state.indexing": "Indexing…",
   "localKnowledge.picker.state.error": "Failed",
   "localKnowledge.node.unselected": "Local Knowledge",
-  "localKnowledge.node.meta": "Local Knowledge Pod",
   "localKnowledge.node.manage": "Manage",
   "localKnowledge.state.draft": "Draft",
   "localKnowledge.state.indexing": "Indexing",

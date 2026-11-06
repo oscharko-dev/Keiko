@@ -79,6 +79,10 @@
   font-size: inherit;
 }
 
+.cmpMore {
+  margin-block-start: var(--space-4);
+}
+
 .cmpAnnouncement {
   position: absolute;
   width: 1px;

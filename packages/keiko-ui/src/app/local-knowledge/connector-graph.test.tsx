@@ -31,6 +31,11 @@ import type {
   CapsuleLifecycleState,
 } from "@oscharko-dev/keiko-contracts";
 import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticWriter,
+} from "@/lib/client-diagnostics";
 
 const pushMock = vi.fn();
 
@@ -65,6 +70,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetClientDiagnosticWriter();
   window.localStorage.removeItem(I18N_STORAGE_KEY);
   stubPlatform(originalPlatform);
 });
@@ -950,6 +956,65 @@ describe("ConnectorGraph — LK-02 keyboard add-to-workspace", () => {
 });
 
 describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
+  it("does not certify a selection before an external detail view actually opens", async () => {
+    const diagnostic = vi.fn<ClientDiagnosticWriter>();
+    setClientDiagnosticWriter(diagnostic);
+    const onOpenCapsule = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([makeCapsule({ displayName: "Selection" })])}
+        onOpenCapsule={onOpenCapsule}
+      />,
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Actions for Knowledge Pod Selection" }),
+    );
+    await user.click(
+      screen.getByRole("menuitem", { name: "Open details for Knowledge Pod Selection" }),
+    );
+    expect(onOpenCapsule).toHaveBeenCalledOnce();
+    expect(
+      diagnostic.mock.calls.some(([message]) => message === "Knowledge Pod selection settled."),
+    ).toBe(false);
+  });
+
+  it("records a failed open after successful creation without misclassifying it as a create failure", async () => {
+    const diagnostic = vi.fn<ClientDiagnosticWriter>();
+    setClientDiagnosticWriter(diagnostic);
+    const createdId = makeCapsuleId("open-failure");
+    const createCapsuleImpl = vi.fn().mockResolvedValue(createdPod(createdId, "Created Pod"));
+    const onOpenCapsule = vi.fn(() => {
+      throw new Error("PRIVATE opening failure");
+    });
+    const user = userEvent.setup();
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={emptyFetch}
+        createCapsuleImpl={createCapsuleImpl}
+        onOpenCapsule={onOpenCapsule}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: "Create Knowledge Pod" }));
+    const dialog = screen.getByRole("dialog", { name: "Create Knowledge Pod" });
+    await user.type(within(dialog).getByLabelText("Knowledge Pod display name"), "Created Pod");
+    await user.click(within(dialog).getByRole("button", { name: "Create Knowledge Pod" }));
+    await waitFor(() =>
+      expect(diagnostic).toHaveBeenCalledWith(
+        "Knowledge Pod opening failed.",
+        expect.objectContaining({
+          correlationId: expect.any(String),
+          errorEvidence: expect.any(Object),
+        }),
+      ),
+    );
+    expect(
+      diagnostic.mock.calls.some(([message]) => message === "Knowledge Pod creation failed."),
+    ).toBe(false);
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("PRIVATE opening failure");
+    expect(screen.queryByRole("dialog", { name: "Create Knowledge Pod" })).toBeNull();
+  });
+
   it("setup regression: opens the newly created pod instead of leaving setup on an existing pod", async () => {
     const createdId = makeCapsuleId("new-migration");
     const onOpenCapsule = vi.fn();

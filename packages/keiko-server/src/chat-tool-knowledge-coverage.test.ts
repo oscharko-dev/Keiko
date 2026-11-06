@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { knowledgeTurnCoverage as sharedKnowledgeTurnCoverage } from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  CatalogJsonObject,
+  CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   knowledgeTurnCoverage,
   knowledgeCoverageCorrection,
   knowledgeCoverageIssues,
   knowledgeCoverageReceipt,
 } from "./chat-tool-knowledge-coverage.js";
+
+function isResultDataObject(value: CatalogJsonValue): value is CatalogJsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function exchange(
   data: object,
@@ -87,6 +95,11 @@ describe("Knowledge completion uses observed page chains", () => {
           documentScope: "doc-a",
           revisionDigest: "revision-a",
           textRevision: "text-a",
+          reviewFingerprint: "review-a",
+          characterStart: 0,
+          characterEnd: 10,
+          documentChars: 10,
+          windowReviewComplete: true,
           documentReviewComplete: true,
         },
         items: [],
@@ -151,6 +164,11 @@ it("keeps complete metadata inventories and complete targeted reviews free of ir
         documentScope: "doc-a",
         revisionDigest: "revision-a",
         textRevision: "text-a",
+        reviewFingerprint: "review-a",
+        characterStart: 0,
+        characterEnd: 10,
+        documentChars: 10,
+        windowReviewComplete: true,
         documentReviewComplete: true,
       },
     },
@@ -173,6 +191,11 @@ it("keeps complete metadata inventories and complete targeted reviews free of ir
         documentScope: "doc-a",
         revisionDigest: "revision-a",
         textRevision: "text-a",
+        reviewFingerprint: "review-a",
+        characterStart: 0,
+        characterEnd: 10,
+        documentChars: 10,
+        windowReviewComplete: false,
         documentReviewComplete: false,
       },
     },
@@ -227,4 +250,62 @@ it.each([
   expect(
     knowledgeCoverageIssues(coverage).some((entry) => entry.kind === "requested-reviews"),
   ).toBe(false);
+});
+
+function reviewWindow(
+  start: number,
+  end: number,
+  fingerprint = "current-review",
+  complete = true,
+): ChatToolExchange {
+  return exchange(
+    {
+      outcome: "succeeded",
+      view: "review",
+      coverage: {
+        documentScope: "doc-current",
+        revisionDigest: "revision-current",
+        textRevision: "text-current",
+        reviewFingerprint: fingerprint,
+        characterStart: start,
+        characterEnd: end,
+        documentChars: 12000,
+        windowReviewComplete: complete,
+        // A stale/global claim never substitutes for this turn's settled windows.
+        documentReviewComplete: true,
+      },
+      items: [],
+      ...(end < 12000 ? { nextCursor: "current-next" } : {}),
+    },
+    { documentScope: "doc-current", ...(start === 0 ? {} : { cursor: "current-next" }) },
+    "keiko.knowledge.review",
+  );
+}
+
+it("derives review completion only from current-turn settled windows and their identity", () => {
+  const first = reviewWindow(0, 6000);
+  const last = reviewWindow(6000, 12000);
+  expect(requiredCoverage([last]).reviewedDocumentCount).toBe(0);
+  expect(requiredCoverage([first, last]).reviewedDocumentCount).toBe(1);
+  expect(requiredCoverage([first, reviewWindow(7000, 12000)]).reviewedDocumentCount).toBe(0);
+  expect(
+    requiredCoverage([first, reviewWindow(6000, 12000, "new-generation")]).reviewedDocumentCount,
+  ).toBe(0);
+  expect(
+    requiredCoverage([first, reviewWindow(6000, 12000, "current-review", false)])
+      .reviewedDocumentCount,
+  ).toBe(0);
+  const completed = last.result;
+  if (completed?.status !== "completed") throw new Error("Expected a completed review result.");
+  const data = completed.data;
+  if (!isResultDataObject(data)) throw new Error("Expected structured review data.");
+  const failed: ChatToolExchange = {
+    ...last,
+    result: { ...completed, status: "failed", reason: "provider-reported-error", page: null, data },
+  };
+  expect(requiredCoverage([first, failed]).reviewedDocumentCount).toBe(0);
+  expect(
+    requiredCoverage([first, last, reviewWindow(0, 6000, "current-review", false)])
+      .reviewedDocumentCount,
+  ).toBe(0);
 });

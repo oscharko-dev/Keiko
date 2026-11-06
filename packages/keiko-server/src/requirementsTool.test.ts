@@ -12,6 +12,7 @@ import {
   requirementLabel,
 } from "@oscharko-dev/keiko-quality-intelligence";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
@@ -32,7 +33,12 @@ import {
 } from "./_requirementSupport.js";
 import { estimateGatewayMessageTokens, fitToolContinuation } from "./chat-tool-continuation-fit.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
-import { resetRequirementTurnCache } from "./requirement-inventory.js";
+import { resetRequirementTurnCache, decodeCursor, encodeCursor } from "./requirement-inventory.js";
+import {
+  decodeKnowledgeCursor,
+  KNOWLEDGE_DOCUMENTS_MAX,
+  KNOWLEDGE_SEARCH_DOCUMENT_STRIDE,
+} from "./knowledge-document-source.js";
 import { openTraceSession } from "./requirement-trace.js";
 import {
   REQUIREMENTS_CURSOR_STALE_NEXT_STEP,
@@ -92,6 +98,7 @@ async function call(f: PodFixture, args: CatalogJsonObject, turn = "turn-1"): Pr
     userMessageId: turn,
   };
   const result = await tool.execute(args, context);
+  expect(describeCatalogSchemaMismatch(tool.descriptor.resultSchema, result.data)).toBeUndefined();
   return result.data as unknown as Page;
 }
 
@@ -1035,4 +1042,55 @@ describe("the change view fits its descriptor bound (#4179 review)", () => {
     expect(page.changes?.truncated).toEqual(expect.arrayContaining(["affectedIssues", "issues"]));
     expect(page.changes).toMatchObject({ counts: { changed: 1 } });
   });
+});
+
+it("rejects undeclared requirement item, total and nested change fields", async () => {
+  const f = await fixture([{ capsuleId: "closed-result", text: specification(2).text }]);
+  const tool = createKnowledgeRequirementsProvider(f.deps, reports).tools()[0];
+  if (tool === undefined) throw new Error("Expected the requirements tool.");
+  const schema = tool.descriptor.resultSchema;
+  const invalidResults: readonly CatalogJsonObject[] = [
+    { outcome: "succeeded", items: [{ reference: "doc:REQ-1", rawPath: "unexpected" }] },
+    { outcome: "succeeded", totals: { detectedCount: 1, rawText: "unexpected" } },
+    { outcome: "succeeded", changes: { baseline: { complete: true, rawPath: "unexpected" } } },
+    {
+      outcome: "succeeded",
+      changes: { changed: [{ id: "REQ-1", issues: [], rawText: "unexpected" }] },
+    },
+  ];
+  for (const data of invalidResults) {
+    expect(describeCatalogSchemaMismatch(schema, data)).toBeDefined();
+  }
+});
+
+it("checks cursor width, canonical offsets and both reader limits", () => {
+  const fingerprint = "a".repeat(16);
+  const knowledgeFingerprint = "b".repeat(64);
+  const maxKnowledgeOffset = KNOWLEDGE_DOCUMENTS_MAX * KNOWLEDGE_SEARCH_DOCUMENT_STRIDE;
+  const requirement = encodeCursor({ offset: 7, fingerprint });
+  const knowledge = encodeCursor({ offset: maxKnowledgeOffset, fingerprint: knowledgeFingerprint });
+  expect(decodeCursor(requirement)).toEqual({ offset: 7, fingerprint });
+  expect(decodeKnowledgeCursor(knowledge)).toEqual({
+    offset: maxKnowledgeOffset,
+    fingerprint: knowledgeFingerprint,
+  });
+  expect(decodeCursor(encodeCursor({ offset: 999_999_999, fingerprint }))).toEqual({
+    offset: 999_999_999,
+    fingerprint,
+  });
+  for (const value of [
+    `5.${fingerprint}`,
+    requirement.replace(/^7/u, "007"),
+    encodeCursor({ offset: 1_000_000_000, fingerprint }),
+    knowledge,
+    "1".repeat(513),
+  ])
+    expect(decodeCursor(value)).toBeUndefined();
+  for (const value of [
+    requirement,
+    encodeCursor({ offset: maxKnowledgeOffset + 1, fingerprint: knowledgeFingerprint }),
+    encodeCursor({ offset: 100_000_000_000, fingerprint: knowledgeFingerprint }),
+    "1".repeat(513),
+  ])
+    expect(decodeKnowledgeCursor(value)).toBeUndefined();
 });

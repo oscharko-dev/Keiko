@@ -162,8 +162,23 @@ describe("Jira issue template tools", () => {
     const [validate] = screen.getAllByRole("button", { name: "Validate against Jira" });
     await waitFor(() => expect(validate).toBeEnabled());
     if (validate) await user.click(validate);
-    expect(templates.validateJiraTemplate).toHaveBeenCalledWith("pod-1", "BODY");
+    expect(templates.validateJiraTemplate).toHaveBeenCalledWith(
+      "pod-1",
+      "BODY",
+      expect.any(String),
+    );
+    const correlationId = vi.mocked(templates.validateJiraTemplate).mock.calls[0]?.[2];
+    expect(skills.readMarkdownSkill).toHaveBeenCalledWith(
+      { id: ENTRY.id, revision: ENTRY.revision, digest: "" },
+      correlationId,
+    );
+    expect(reportClientDiagnostic).toHaveBeenCalledWith("Jira template validation started.", {
+      correlationId,
+    });
     expect(await screen.findByText(/Field Story Points does not exist/u)).toBeInTheDocument();
+    expect(reportClientDiagnostic).toHaveBeenCalledWith("Jira template validation completed.", {
+      correlationId,
+    });
   });
 
   it("says which instance checks could not run instead of reporting a full match", async () => {
@@ -230,7 +245,11 @@ describe("Jira issue template tools", () => {
     await waitFor(() => expect(first).toBeEnabled());
     if (first) await user.click(first);
     await screen.findByText(/Field Story Points does not exist/u);
-    expect(templates.validateJiraTemplate).toHaveBeenLastCalledWith("pod-1", "BODY-2");
+    expect(templates.validateJiraTemplate).toHaveBeenLastCalledWith(
+      "pod-1",
+      "BODY-2",
+      expect.any(String),
+    );
     vi.mocked(templates.fetchJiraTemplates).mockResolvedValue([{ ...ENTRY, revision: 3 }]);
     view.rerender(<JiraTemplateTools library={libraryOf(stored(3))} />);
     await waitFor(() => expect(templates.fetchJiraTemplates).toHaveBeenCalledTimes(2));
@@ -243,9 +262,14 @@ describe("Jira issue template tools", () => {
     await waitFor(() =>
       expect(skills.readMarkdownSkill).toHaveBeenLastCalledWith(
         expect.objectContaining({ id: "skill-1", revision: 3 }),
+        expect.any(String),
       ),
     );
-    expect(templates.validateJiraTemplate).toHaveBeenLastCalledWith("pod-1", "BODY-3");
+    expect(templates.validateJiraTemplate).toHaveBeenLastCalledWith(
+      "pod-1",
+      "BODY-3",
+      expect.any(String),
+    );
   });
 
   it("withdraws the old template and its validation when the refresh after a replacement fails", async () => {
@@ -309,7 +333,9 @@ describe("Jira issue template tools", () => {
     expect(
       within(rowFor(TASK.name)).getByText("The template matches the Jira instance."),
     ).toBeInTheDocument();
-    expect(reportClientDiagnostic).toHaveBeenCalledWith("Jira template validation completed.");
+    expect(reportClientDiagnostic).toHaveBeenCalledWith("Jira template validation completed.", {
+      correlationId: vi.mocked(templates.validateJiraTemplate).mock.calls[1]?.[2],
+    });
   });
 
   it("keeps the verified row result when an independent skill preview changes", async () => {
@@ -366,7 +392,14 @@ describe("Jira issue template tools", () => {
     });
     expect(screen.queryByText("The template matches the Jira instance.")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Validating…" })).toBeDisabled();
-    expect(reportClientDiagnostic).toHaveBeenCalledWith("Jira template validation superseded.");
+    const earlierCorrelationId = vi.mocked(templates.validateJiraTemplate).mock.calls[0]?.[2];
+    const laterCorrelationId = vi.mocked(templates.validateJiraTemplate).mock.calls[1]?.[2];
+    expect(earlierCorrelationId).toEqual(expect.any(String));
+    expect(laterCorrelationId).toEqual(expect.any(String));
+    expect(earlierCorrelationId).not.toBe(laterCorrelationId);
+    expect(reportClientDiagnostic).toHaveBeenCalledWith("Jira template validation superseded.", {
+      correlationId: earlierCorrelationId,
+    });
     await act(async () => {
       current.resolve(MATCH);
     });
@@ -456,7 +489,7 @@ describe("Jira issue template tools", () => {
     await user.type(screen.getByLabelText("Project key"), "SYN");
     await waitFor(() => expect(propose).toBeEnabled());
     await user.click(propose);
-    expect(templates.proposeJiraTemplates).toHaveBeenCalledWith("pod-1", "SYN");
+    expect(templates.proposeJiraTemplates).toHaveBeenCalledWith("pod-1", "SYN", expect.any(String));
     await screen.findByText("Proposed for Story (3 issues sampled)");
     await user.click(screen.getByRole("button", { name: "Save as skill" }));
     expect(upload).toHaveBeenCalledOnce();

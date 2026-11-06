@@ -522,13 +522,19 @@ function rememberCapabilityFailure(
   });
 }
 
-function clearCancelledCapabilityProof(
+/** Retain pending work; capacity may evict only the oldest settled observation. */
+function reserveCapabilityCacheSlot(
   cache: Map<string, EmbeddingCapabilityEntry>,
   key: string,
-  entry: EmbeddingCapabilityEntry,
-  checked: EmbeddingCapabilityCheck,
-): void {
-  if (!checked.ok && checked.reason === "cancelled" && cache.get(key) === entry) cache.delete(key);
+): boolean {
+  if (cache.has(key) || cache.size < EMBEDDING_CAPABILITY_CACHE_MAX) return true;
+  for (const [candidate, entry] of cache) {
+    if (entry.state !== "pending") {
+      cache.delete(candidate);
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Explicit verification renews a settled proof; concurrent startup/read requests join one probe. */
@@ -549,8 +555,9 @@ export async function verifyEmbeddingCapability(
       options.expectedDimensions,
     );
   // Every pod checks its stored dimension locally against the shared actual observation.
-  const { expectedDimensions, ...probeOptions } = options;
-  if (cache.size >= EMBEDDING_CAPABILITY_CACHE_MAX && !cache.has(key)) cache.clear();
+  const { expectedDimensions, signal, ...probeOptions } = options;
+  // A human owns only their wait; the shared physical probe retains its adapter timeout.
+  if (!reserveCapabilityCacheSlot(cache, key)) return fail("unavailable");
   let startRefused = false;
   const start =
     onProbeStart === undefined
@@ -578,8 +585,7 @@ export async function verifyEmbeddingCapability(
       }),
   };
   cache.set(key, entry);
-  const checked = await awaitCapabilityProof(entry.promise, options.signal);
-  clearCancelledCapabilityProof(cache, key, entry, checked);
+  const checked = await awaitCapabilityProof(entry.promise, signal);
   return dimensionChecked(checked, expectedDimensions);
 }
 

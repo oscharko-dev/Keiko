@@ -156,7 +156,15 @@ normalization, dimension and model validation. A hard credential, model, respons
 retires the positive proof without scheduling passive retries. A transient query transport failure,
 timeout, rate limit or HTTP 5xx still refuses that query but retains the already verified identity;
 the next actual query may dispatch normally without another capability or fingerprint probe.
-An unsuccessful initial capability check remains unavailable until explicit recovery. A caller's cancellation never records provider failure and
+A same-alias provider swap with unchanged dimensions and no changed response model or revision
+cannot be detected from ordinary query vectors: the measured space fingerprint remains the
+connection's observation until explicit Settings verification or connection replacement. This is
+the deliberate limit of startup-only verification; no elapsed-time or passive probe is scheduled.
+Changed response dimensions, model/revision and invalid vectors still encounter the actual-query
+identity/response guards. A stale Pod identity alone refuses that Pod and does not retire another
+Pod's otherwise valid connection proof.
+An unsuccessful initial capability check retains its original closed failure reason and remains
+unavailable until explicit recovery. A caller's cancellation never records provider failure and
 cancels only that caller's wait on shared startup work. Explicit Settings model verification (whose
 standard probes include the selected retrieval embedding connection) renews its default proof and,
 after success, permits failed custom profiles to verify once on their next active use. Connection

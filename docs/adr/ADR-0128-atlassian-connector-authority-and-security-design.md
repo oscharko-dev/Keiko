@@ -1239,7 +1239,8 @@ result of a call is `reading` (with `issuesRead`/`issuesTotal` progress and `rep
 called again), `complete`, or `incomplete` with a closed reason (`read-failed`, `scope-changed` —
 the total moved, an issue repeated, or the page that starts at the last issue read did not begin with it (that start proves nothing was inserted or removed before the cursor) —, `memory-budget`, `issue-too-large`,
 `template-unreadable` — the compliance section was not evaluated). Each call
-reads for at most 15 s because the managed host caps a call at 30 s; there is no issue-count limit.
+reads for at most 15 s under its own report-page budget; the internal managed host honors the
+validated tool duration within the native timer ceiling. There is no issue-count limit.
 Hierarchy discovery and the create-metadata rules are fetched before the first page; when either
 cannot be read the next call asks again and a second failure ends the report as `incomplete`
 (`read-failed`), never as a complete one with silently missing rules. A failure carries a closed

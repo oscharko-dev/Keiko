@@ -164,6 +164,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Anforderungen ohne erkannte Akzeptanzkriterien in der Quelle: {count}.",
   "chat.knowledgeCoverage.requestedReviews":
     "Vollständig geprüfte Dokumente: {completed} von {requested} angefragten.",
+  "chat.processing.repeated": "{label} · {count} Aufrufe",
+  "chat.processing.showEarlier": "{count} frühere Aufrufe anzeigen",
+  "chat.processing.hideEarlier": "Weniger Schritte anzeigen",
   "chat.processing.title": "Fortschritt",
   "chat.processing.request": "Anfrage empfangen",
   "chat.processing.continuing": "Nächsten Schritt vorbereiten",
@@ -208,7 +211,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.addToWorkspace": "Zum Arbeitsbereich hinzufügen",
   "chat.jira.workspaceHint":
     "Ziehe diesen Jira-Pod auf den Workspace oder füge ihn mit dieser Schaltfläche hinzu. Verbinde seinen Port mit einem Chat.",
-  "chat.jira.liveTools": "Live-Jira-Werkzeuge",
   "chat.jira.liveReady": "Verifizierter Jira-Pod",
   "chat.jira.liveUnavailable":
     "Jira-Pod nicht verfügbar; öffne Knowledge Pods, um ihn zu prüfen oder neu zu verbinden.",

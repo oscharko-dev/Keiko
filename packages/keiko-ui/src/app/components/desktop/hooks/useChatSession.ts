@@ -1846,7 +1846,8 @@ type GatewayModelRefreshResult =
       readonly correlationId: string;
       readonly startupReadinessPending?: boolean;
     }
-  | { readonly kind: "failure"; readonly message: string };
+  | { readonly kind: "failure"; readonly message: string }
+  | { readonly kind: "startup-observation-unavailable" };
 const gatewayModelRefreshSubscribers = new Set<(result: GatewayModelRefreshResult) => void>();
 let gatewayModelRefreshGeneration = 0;
 let gatewayModelSnapshot: string | undefined;
@@ -1913,7 +1914,12 @@ function joinStartupModelSettlement(): () => void {
             !current.controller.signal.aborted &&
             current.generation === gatewayModelRefreshGeneration
           ) {
-            publishGatewayModelRefresh({ kind: "failure", message: errorMessage(error_) });
+            reportClientDiagnostic("Startup model readiness observation failed.", {
+              correlationId,
+              errorKind: bffRequestErrorKind(error_),
+              errorEvidence: clientErrorEvidence(error_),
+            });
+            publishGatewayModelRefresh({ kind: "startup-observation-unavailable" });
           }
         },
       )
@@ -2034,6 +2040,7 @@ export function useGatewayModelCatalogSettled(): boolean {
   useEffect(
     () =>
       subscribeGatewayModelRefresh((result): void => {
+        if (result.kind === "startup-observation-unavailable") return;
         setSettled(result.kind === "success");
       }),
     [],
@@ -3797,6 +3804,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       if (result.kind === "pending") {
         setError(undefined);
         setState((previous) => clearSessionModelsForPendingRefresh(previous));
+        return;
+      }
+      if (result.kind === "startup-observation-unavailable") {
+        setState((previous) => ({ ...previous, startupReadinessPending: false }));
         return;
       }
       if (result.kind === "failure") {

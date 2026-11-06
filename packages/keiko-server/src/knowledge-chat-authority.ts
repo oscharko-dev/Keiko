@@ -1,9 +1,11 @@
-import { isAcceptedChatToolTurn, reserveResolvedChatToolAuthority } from "./chat-tool-authority.js";
-import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
-  CHAT_TOOL_DEFAULT_MODE,
-  resolveEffectiveCodingWorkbenchMode,
-} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+  acceptedChatToolAuthorityEnvelope,
+  isAcceptedChatToolTurn,
+  isRequestedChatToolModeCurrent,
+  reserveResolvedChatToolAuthority,
+} from "./chat-tool-authority.js";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import { CHAT_TOOL_DEFAULT_MODE } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type {
   ChatToolAuthorityEnvelope,
   KnowledgeChatToolAuthoritySubject,
@@ -87,34 +89,19 @@ export function prepareAcceptedKnowledgeChatAuthority(
     );
   const requestedMode = deps.store.findChatById(turn.chatId)?.toolMode ?? CHAT_TOOL_DEFAULT_MODE;
   const deploymentCeiling = deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist";
-  const runId = `chat-${sha256Hex(canonicalise({ chatId: turn.chatId, userMessageId: turn.userMessageId }))}`;
   return {
     ok: true,
-    envelope: {
-      schemaVersion: "1",
-      kind: "chat-tool-authority",
-      runId,
+    envelope: acceptedChatToolAuthorityEnvelope(
+      turn,
       subject,
       requestedMode,
       deploymentCeiling,
-      effectiveMode: resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling),
-      actionClasses: ["connector-access", "network-egress"],
-      connectorScopes: ["knowledge.read"],
-      budget: chatToolTurnBudget(deps),
-      expiresAt: new Date(turn.startedAtMs + chatToolTurnBudget(deps).maxRuntimeMs).toISOString(),
-      approvalProofDigest: sha256Hex(
-        canonicalise({
-          runId,
-          subject,
-          requestedMode,
-          deploymentCeiling,
-          userMessageId: turn.userMessageId,
-          acceptedAtMs: turn.startedAtMs,
-        }),
-      ),
-    },
+      chatToolTurnBudget(deps),
+      ["knowledge.read"],
+    ),
   };
 }
+
 export function mintAcceptedKnowledgeChatAuthority(
   deps: KnowledgeChatAuthorityDeps,
   turn: AcceptedJiraChatTurn,
@@ -162,8 +149,7 @@ export function resolveCurrentKnowledgeChatAuthority(
   if (!current.ok) return current;
   if (
     !isKnowledgeChatAuthorityEnvelope(current.envelope) ||
-    current.envelope.requestedMode !==
-      (deps.store.findChatById(chatId)?.toolMode ?? CHAT_TOOL_DEFAULT_MODE)
+    !isRequestedChatToolModeCurrent(current.envelope, deps.store.findChatById(chatId))
   )
     return recordChatAuthorityResult(
       "current-state",
@@ -200,5 +186,8 @@ export function reserveCurrentKnowledgeChatAuthority(
     nowIso,
     correlationId,
   );
-  return reserveResolvedChatToolAuthority(deps, current, reference, usage, nowIso, correlationId);
+  return (
+    reserveResolvedChatToolAuthority(deps, current, reference, usage, nowIso, correlationId) ??
+    INVALID
+  );
 }

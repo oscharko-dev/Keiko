@@ -54,14 +54,19 @@ Caller cancellation, host shutdown, request cancellation and the SDK handler sig
 are combined in the provider context and its final before-effect guard; settlement
 revokes that guard. A timed-out caller cannot leave a delayed provider authorized.
 
-Invocation duration follows the validated, captured tool descriptor and is passed explicitly
-to the SDK. There is no additional fixed 30-second host ceiling or implicit SDK-default
-timeout. Earlier caller cancellation and the enclosing task or authority deadline still end
+Internal managed invocation duration follows the validated, captured tool descriptor, bounded
+by `TOOL_CATALOG_LIMITS.maxDurationMs` (the native timer ceiling, 2^31−1 ms). The host clamps
+defensively and passes explicit inactivity and total timeout bounds to the SDK. There is no
+additional fixed 30-second internal host ceiling or implicit SDK-default timeout. The external
+MCP client retains its separate 30-second invocation ceiling, passed through the same bound
+helper to both SDK timeout options. External read descriptors declare 60 seconds, and write
+descriptors add the approval TTL, but the existing external adapter ceiling may end either call
+earlier. Those declarations cannot widen it. Earlier caller cancellation and the enclosing task or authority deadline still end
 the invocation. Caller arguments and metadata cannot extend these bounds. Semantic Knowledge
 review reuses the gateway's normal buffered model-call bound; it adds no shorter inner
 model deadline. The active model's canonical context profile supplies its output reserve, still
 bounded by provider capacity, context fit and the enclosing caller and turn grants. Ordinary
-tools retain their own declared durations.
+internal tools retain their own declared durations.
 
 Provider handler references are captured with the initial metadata and served from
 immutable host-owned bindings. A provider must return stable functions across
@@ -107,6 +112,16 @@ existing budgets, executes, settles once and records the lifecycle. Redemption r
 all boundaries immediately before the effect. No synthetic Coding workspace is created
 for Chat. This wiring remains an explicit acceptance requirement beyond the protocol
 package itself.
+
+Knowledge document and requirement `nextCursor` values locate source pages; they are
+not invocation grants. They reuse the existing requirement-inventory cursor codec.
+Following one starts a new admitted catalog invocation, with current source selection,
+authority, cancellation and fresh budget checks. Re-reading a page consumes another
+invocation; the cursor checksum grants no permission. `CatalogContinuation` instead
+resumes one captured catalog request and binds its exact request digest, reservation,
+single-use state and short expiry. Using that reservation cursor as a document position
+would conflate two different lifecycles. Source-position cursors therefore remain data,
+while the existing catalog continuation and authority boundaries remain unchanged.
 
 ### D5 — Effect uncertainty and evidence
 
