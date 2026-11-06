@@ -101,7 +101,33 @@ function parseToolCall(raw: unknown): NormalizedToolCall {
 
 /** Reused by the streaming adapter to assemble tool calls from accumulated SSE deltas. */
 export function parseNormalizedToolCalls(raw: unknown): readonly NormalizedToolCall[] {
-  return Array.isArray(raw) ? raw.map(parseToolCall) : [];
+  return Array.isArray(raw) ? normalizeToolCallIds(raw.map(parseToolCall)) : [];
+}
+
+/** Prefix of an id Keiko minted for a call whose provider id it could not use. */
+export const SYNTHESIZED_TOOL_CALL_ID_PREFIX = "keiko-call-";
+const USABLE_TOOL_CALL_ID = /^[A-Za-z0-9_.:-]{1,128}$/u;
+
+// A provider may omit a call id, send one the catalog bridge cannot carry (empty, over 128 characters,
+// other characters) or repeat one across parallel calls. None of that is the model's fault, and the
+// bridge refuses such a batch whole, which used to end the turn. The first layer that sees the ids
+// replaces each unusable or repeated id with a stable `keiko-call-<position>` that no sibling holds,
+// so every valid call of the batch still runs. A usable, first-seen id is never touched.
+function normalizeToolCallIds(calls: readonly NormalizedToolCall[]): readonly NormalizedToolCall[] {
+  const held = new Set<string>();
+  const kept = new Set(calls.map((call) => call.id).filter((id) => USABLE_TOOL_CALL_ID.test(id)));
+  return calls.map((call, position) => {
+    if (USABLE_TOOL_CALL_ID.test(call.id) && !held.has(call.id)) {
+      held.add(call.id);
+      return call;
+    }
+    let id = `${SYNTHESIZED_TOOL_CALL_ID_PREFIX}${String(position)}`;
+    for (let attempt = 1; kept.has(id) || held.has(id); attempt += 1) {
+      id = `${SYNTHESIZED_TOOL_CALL_ID_PREFIX}${String(position)}-${String(attempt)}`;
+    }
+    held.add(id);
+    return { ...call, id };
+  });
 }
 
 function parseToolCalls(message: Record<string, unknown>): readonly NormalizedToolCall[] {

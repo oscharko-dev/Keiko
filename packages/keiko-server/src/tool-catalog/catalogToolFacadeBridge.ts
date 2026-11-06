@@ -6,6 +6,7 @@ import {
 } from "./catalogToolBinder.js";
 import { codingCatalogConsumer } from "./catalogCodingConsumer.js";
 import { randomUUID } from "node:crypto";
+import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   CHANGESET_EDIT_ARGUMENT_LIMITS,
   GOVERNED_CHANGESET_EDIT_TOOL_ID,
@@ -284,6 +285,18 @@ export function openCodeCatalogSettlementBudgetMs(
   return toolId === undefined
     ? undefined
     : OPENCODE_DESCRIPTOR_BY_ID.get(toolId)?.bounds.maxDurationMs;
+}
+
+/**
+ * Whether the tool a request dispatches to may park on a human decision: exactly the tools whose
+ * settlement budget exceeds the sandbox default (verification at its derived budget and the
+ * proposal tools, which add the operator's approval wait). Those calls hold their admission slot
+ * for minutes, so the facade and the tool bridge count them in a lane of their own and a read or
+ * search is never refused `busy` because eight approvals are pending (audit 2026-11-06, finding 9).
+ */
+export function openCodeToolMayAwaitOperator(request: CodingToolActionRequest): boolean {
+  const budgetMs = openCodeCatalogSettlementBudgetMs(request);
+  return budgetMs !== undefined && budgetMs > DEFAULT_SANDBOX_POLICY.defaultTimeoutMs;
 }
 
 function gitCatalogAction(

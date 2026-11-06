@@ -33,7 +33,7 @@ import {
 import type { GatewayOutputRepairOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { GatewayPromptAdmission, ProviderPromptCounter } from "./gateway-prompt-admission.js";
 import { findConfiguredCapability } from "./model-selection.js";
-import { carriedReasoning } from "./normalize.js";
+import { carriedReasoning, SYNTHESIZED_TOOL_CALL_ID_PREFIX } from "./normalize.js";
 import { GatewayReasoningHistory } from "./reasoning-history.js";
 import {
   activityLogErrorKind,
@@ -473,6 +473,8 @@ const REASONING_COMPLETION_FIELDS = {
     required: false,
     values: ["none", "forwarded", "discarded"],
   },
+  // Calls whose provider id was missing, unusable or repeated and which got a minted id instead.
+  toolCallIdsNormalized: { type: "integer", dataClass: "count", required: false },
 } as const;
 
 const GATEWAY_CHAT_STARTED_OPERATION = defineActivityLogOperation({
@@ -1320,6 +1322,7 @@ function streamUsageIfSupplied(usage: UsageMetadata | undefined): StreamTerminal
 type ReasoningDisposition = "none" | "forwarded" | "discarded";
 
 interface ReasoningCompletion {
+  readonly toolCallIdsNormalized?: number;
   readonly reasoningBytes: number;
   readonly reasoningTokens?: number;
   readonly reasoningDisposition: ReasoningDisposition;
@@ -1336,7 +1339,11 @@ function reasoningDisposition(
 // The body-free reasoning share a completion line records (#3878).
 function reasoningCompletion(response: NormalizedResponse, forwards: boolean): ReasoningCompletion {
   const { reasoningBytes, reasoningTokens } = response.usage;
+  const normalized = response.toolCalls.filter((call) =>
+    call.id.startsWith(SYNTHESIZED_TOOL_CALL_ID_PREFIX),
+  ).length;
   return {
+    ...(normalized === 0 ? {} : { toolCallIdsNormalized: normalized }),
     reasoningBytes: reasoningBytes ?? 0,
     ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
     reasoningDisposition: reasoningDisposition(response, forwards),

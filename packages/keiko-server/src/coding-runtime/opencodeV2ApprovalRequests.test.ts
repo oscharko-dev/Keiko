@@ -17,13 +17,16 @@ const SESSION_ID = "ses_approval";
 const ANY_REQUEST_ID = expect.any(String) as unknown as string;
 
 // The ask exactly as the generated V2 plugin sends it for one keiko_verification call.
-function verificationAsk(callId = "call_1"): Promise<Record<string, unknown>> {
+function verificationAsk(
+  callId = "call_1",
+  options: { readonly runId?: string; readonly targetPath?: string } = {},
+): Promise<Record<string, unknown>> {
   return capturedGeneratedV2Ask({
-    runId: RUN_ID,
+    runId: options.runId ?? RUN_ID,
     sessionId: SESSION_ID,
     callId,
     tool: "keiko_verification",
-    args: { verifierId: "test", targetPath: "" },
+    args: { verifierId: "test", targetPath: options.targetPath ?? "" },
   });
 }
 
@@ -167,17 +170,85 @@ describe("OpenCode V2 approval requests", () => {
   });
 
   // #3611 review: at most 64 asks wait at once. The 65th is refused as unavailable, and settling one
-  // frees its slot again.
+  // frees its slot again. One run keeps at most 16 prompts open, so the ceiling is reached with
+  // four runs; each ask asks for something different, because equal asks share one prompt.
   it("refuses an ask beyond the 64 pending ones and admits one again after a settlement", async () => {
     const approvals = createOpenCodeV2ApprovalRequests();
     const signal = new AbortController().signal;
     const ask = asked();
+    const runOf = (index: number): string => `run-capacity-${String(Math.floor(index / 16))}`;
     const values = await Promise.all(
       Array.from({ length: 66 }, (_unused, index) =>
-        verificationAsk(`call_capacity_${String(index)}`),
+        verificationAsk(`call_capacity_${String(index)}`, {
+          runId: runOf(index),
+          targetPath: `pkg/${String(index)}`,
+        }),
       ),
     );
-    const pending = values.slice(0, 64).map((value) =>
+    const request = (index: number): ReturnType<typeof approvals.request> =>
+      approvals.request({
+        value: values[index],
+        runId: runOf(index),
+        sessionId: SESSION_ID,
+        onPermission: ask.onPermission,
+        signal,
+      });
+    const pending = Array.from({ length: 64 }, (_unused, index) => request(index));
+    await expect(request(64)).resolves.toMatchObject({ outcome: "unavailable" });
+
+    expect(approvals.resolve(runOf(0), requestIdOf(ask), false)).toBe(true);
+    await expect(pending[0]).resolves.toMatchObject({ outcome: "denied" });
+    const admitted = request(65);
+    expect(ask.events).toHaveLength(65);
+    approvals.close();
+    await expect(admitted).resolves.toMatchObject({ outcome: "cancelled" });
+  });
+
+  // Audit 2026-11-06 finding 10: the cap was global and every ask was its own prompt, so one run
+  // asking in a loop could use the whole registry up for the others.
+  it("keeps one run to 16 open prompts so another run is still admitted", async () => {
+    const approvals = createOpenCodeV2ApprovalRequests();
+    const signal = new AbortController().signal;
+    const ask = asked();
+    const values = await Promise.all(
+      Array.from({ length: 17 }, (_unused, index) =>
+        verificationAsk(`call_run_${String(index)}`, { targetPath: `pkg/${String(index)}` }),
+      ),
+    );
+    const request = (value: Record<string, unknown>): ReturnType<typeof approvals.request> =>
+      approvals.request({
+        value,
+        runId: RUN_ID,
+        sessionId: SESSION_ID,
+        onPermission: ask.onPermission,
+        signal,
+      });
+    const pending = values.slice(0, 16).map(request);
+    await expect(request(values[16] ?? {})).resolves.toMatchObject({ outcome: "unavailable" });
+    expect(ask.events).toHaveLength(16);
+
+    const other = approvals.request({
+      value: await verificationAsk("call_other", { runId: "run-other", targetPath: "pkg/other" }),
+      runId: "run-other",
+      sessionId: SESSION_ID,
+      onPermission: ask.onPermission,
+      signal,
+    });
+    expect(ask.events).toHaveLength(17);
+    approvals.close();
+    await expect(other).resolves.toMatchObject({ outcome: "cancelled" });
+    for (const decision of pending)
+      await expect(decision).resolves.toMatchObject({ outcome: "cancelled" });
+  });
+
+  it("never merges asks that an approval digest binds to their own call", async () => {
+    const approvals = createOpenCodeV2ApprovalRequests();
+    const ask = asked();
+    const signal = new AbortController().signal;
+    const values = await Promise.all(
+      ["call_bound_1", "call_bound_2"].map((callId) => verificationAsk(callId)),
+    );
+    const decisions = values.map((value) =>
       approvals.request({
         value,
         runId: RUN_ID,
@@ -186,28 +257,9 @@ describe("OpenCode V2 approval requests", () => {
         signal,
       }),
     );
-    await expect(
-      approvals.request({
-        value: values[64],
-        runId: RUN_ID,
-        sessionId: SESSION_ID,
-        onPermission: ask.onPermission,
-        signal,
-      }),
-    ).resolves.toMatchObject({ outcome: "unavailable" });
-
-    expect(approvals.resolve(RUN_ID, requestIdOf(ask), false)).toBe(true);
-    await expect(pending[0]).resolves.toMatchObject({ outcome: "denied" });
-    const admitted = approvals.request({
-      value: values[65],
-      runId: RUN_ID,
-      sessionId: SESSION_ID,
-      onPermission: ask.onPermission,
-      signal,
-    });
-    expect(ask.events).toHaveLength(65);
+    expect(ask.events).toHaveLength(2);
     approvals.close();
-    await expect(admitted).resolves.toMatchObject({ outcome: "cancelled" });
+    await Promise.all(decisions);
   });
 
   it("answers an ask whose delivery to the human failed as unavailable", async () => {
@@ -292,7 +344,7 @@ describe("OpenCode V2 approval requests", () => {
 describe("OpenCode V2 approval requests for native asks (#3897)", () => {
   const NATIVE_ACTION_ID = `${SESSION_ID}:call_native`;
 
-  function nativeEvent(requestId: string): SidecarPermissionEvent {
+  function nativeEvent(requestId: string, resource = "npm test"): SidecarPermissionEvent {
     return {
       type: "permission-request",
       requestId,
@@ -301,7 +353,7 @@ describe("OpenCode V2 approval requests for native asks (#3897)", () => {
       reasonCode: "approval-required",
       expiresAt: "2026-10-23T12:00:00.000Z",
       scopeLabel: "workspace-scope",
-      nativeAction: { permission: "shell", resources: ["npm test"] },
+      nativeAction: { permission: "shell", resources: [resource] },
     };
   }
 
@@ -313,11 +365,12 @@ describe("OpenCode V2 approval requests for native asks (#3897)", () => {
       readonly actionId?: string | undefined;
       readonly signal?: AbortSignal;
       readonly runId?: string;
+      readonly resource?: string;
     } = {},
   ): ReturnType<ReturnType<typeof createOpenCodeV2ApprovalRequests>["requestNative"]> {
     return approvals.requestNative({
       runId: options.runId ?? RUN_ID,
-      event: nativeEvent(requestId),
+      event: nativeEvent(requestId, options.resource),
       ...(options.actionId === undefined ? {} : { actionId: options.actionId }),
       onPermission: ask.onPermission,
       signal: options.signal ?? new AbortController().signal,
@@ -457,21 +510,92 @@ describe("OpenCode V2 approval requests for native asks (#3897)", () => {
   it("refuses an ask beyond the 64 pending ones as unavailable and admits one after a settlement", async () => {
     const approvals = createOpenCodeV2ApprovalRequests();
     const ask = asked();
-    const pending = Array.from({ length: 64 }, (_unused, index) =>
-      nativeRequest(approvals, ask, `per_native_capacity_${String(index)}`),
-    );
-    await expect(nativeRequest(approvals, ask, "per_native_capacity_64")).resolves.toStrictEqual({
+    // Distinct things in four runs: a run keeps 16 prompts open and equal asks share one prompt.
+    const runOf = (index: number): string => `${RUN_ID}-${String(Math.floor(index / 16))}`;
+    const native = (index: number): ReturnType<typeof nativeRequest> =>
+      nativeRequest(approvals, ask, `per_native_capacity_${String(index)}`, {
+        runId: runOf(index),
+        resource: `npm run job-${String(index)}`,
+      });
+    const pending = Array.from({ length: 64 }, (_unused, index) => native(index));
+    await expect(native(64)).resolves.toStrictEqual({
       outcome: "unavailable",
       requestId: "per_native_capacity_64",
     });
     expect(ask.events).toHaveLength(64);
 
-    expect(approvals.resolve(RUN_ID, "per_native_capacity_0", false)).toBe(true);
+    expect(approvals.resolve(runOf(0), "per_native_capacity_0", false)).toBe(true);
     await expect(pending[0]).resolves.toMatchObject({ outcome: "denied" });
-    const admitted = nativeRequest(approvals, ask, "per_native_capacity_65");
+    const admitted = native(65);
     expect(ask.events).toHaveLength(65);
     approvals.close();
     await expect(admitted).resolves.toMatchObject({ outcome: "cancelled" });
+  });
+
+  // Audit 2026-11-06 finding 10: equal asks of one run (same permission and resources) were each put
+  // to the human, so a model repeating a command flooded the approval lane.
+  it("shows one prompt for equal asks of a run and gives every waiter the same decision", async () => {
+    const approvals = createOpenCodeV2ApprovalRequests();
+    const ask = asked();
+    const first = nativeRequest(approvals, ask, "per_native_same_1", {
+      actionId: NATIVE_ACTION_ID,
+    });
+    const second = nativeRequest(approvals, ask, "per_native_same_2", {
+      actionId: `${SESSION_ID}:call_second`,
+    });
+    expect(ask.events).toHaveLength(1);
+    expect(approvals.resolve(RUN_ID, "per_native_same_1", true)).toBe(true);
+    await expect(first).resolves.toStrictEqual({
+      outcome: "approved",
+      actionId: NATIVE_ACTION_ID,
+      requestId: "per_native_same_1",
+    });
+    await expect(second).resolves.toStrictEqual({
+      outcome: "approved",
+      actionId: `${SESSION_ID}:call_second`,
+      requestId: "per_native_same_2",
+    });
+    // A settled prompt is gone: the next equal ask is put to the human again.
+    const third = nativeRequest(approvals, ask, "per_native_same_3");
+    expect(ask.events).toHaveLength(2);
+    approvals.close();
+    await expect(third).resolves.toMatchObject({ outcome: "cancelled" });
+  });
+
+  it("denies every waiter of a shared prompt together, and an expiry settles them all", async () => {
+    vi.useFakeTimers();
+    const approvals = createOpenCodeV2ApprovalRequests();
+    const ask = asked();
+    const first = nativeRequest(approvals, ask, "per_native_exp_1");
+    const second = nativeRequest(approvals, ask, "per_native_exp_2");
+    await vi.advanceTimersByTimeAsync(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS);
+    await expect(first).resolves.toMatchObject({ outcome: "expired" });
+    await expect(second).resolves.toMatchObject({ outcome: "expired" });
+  });
+
+  it("does not merge asks that differ in what they ask for or in their run", async () => {
+    const approvals = createOpenCodeV2ApprovalRequests();
+    const ask = asked();
+    const pending = [
+      nativeRequest(approvals, ask, "per_native_diff_1"),
+      nativeRequest(approvals, ask, "per_native_diff_2", { resource: "npm run build" }),
+      nativeRequest(approvals, ask, "per_native_diff_3", { runId: "run-other" }),
+    ];
+    expect(ask.events).toHaveLength(3);
+    approvals.close();
+    await Promise.all(pending);
+  });
+
+  it("lets a joined waiter leave without cancelling the prompt for the others", async () => {
+    const approvals = createOpenCodeV2ApprovalRequests();
+    const ask = asked();
+    const leaver = new AbortController();
+    const stay = nativeRequest(approvals, ask, "per_native_stay");
+    const gone = nativeRequest(approvals, ask, "per_native_gone_join", { signal: leaver.signal });
+    leaver.abort();
+    await expect(gone).resolves.toMatchObject({ outcome: "cancelled" });
+    expect(approvals.resolve(RUN_ID, "per_native_stay", false)).toBe(true);
+    await expect(stay).resolves.toMatchObject({ outcome: "denied" });
   });
 
   it("refuses a second ask under a request id that is still pending, leaving the first intact", async () => {
@@ -505,12 +629,13 @@ describe("OpenCode V2 approval requests for native asks (#3897)", () => {
       outcome: "unavailable",
     });
 
-    const natives = Array.from({ length: 63 }, (_unused, index) =>
-      nativeRequest(approvals, ask, `per_native_shared_${String(index)}`),
-    );
-    await expect(nativeRequest(approvals, ask, "per_native_shared_over")).resolves.toMatchObject({
-      outcome: "unavailable",
-    });
+    const native = (index: number): ReturnType<typeof nativeRequest> =>
+      nativeRequest(approvals, ask, `per_native_shared_${String(index)}`, {
+        runId: `${RUN_ID}-shared-${String(Math.floor(index / 16))}`,
+        resource: `npm run shared-${String(index)}`,
+      });
+    const natives = Array.from({ length: 63 }, (_unused, index) => native(index));
+    await expect(native(63)).resolves.toMatchObject({ outcome: "unavailable" });
     expect(approvals.resolve(RUN_ID, pluginRequestId, true)).toBe(true);
     await expect(plugin).resolves.toMatchObject({ outcome: "approved" });
     approvals.close();

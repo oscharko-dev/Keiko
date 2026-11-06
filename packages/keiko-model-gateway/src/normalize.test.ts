@@ -4,7 +4,7 @@ import {
   ModelRefusalError,
   ProviderOutputExhaustedError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
-import { normalizeChatResponse } from "./normalize.js";
+import { normalizeChatResponse, parseNormalizedToolCalls } from "./normalize.js";
 
 const BASE_USAGE = { requestId: "req-1", latencyMs: 12, costClass: "medium" } as const;
 
@@ -297,5 +297,57 @@ describe("normalizeChatResponse", () => {
     const result = normalizeChatResponse({ usage: {} }, "m", BASE_USAGE);
     expect(result.content).toBe("");
     expect(result.finishReason).toBe("stop");
+  });
+});
+
+// Audit 2026-11-06 finding 8: a missing, unusable or repeated provider call id used to be refused by
+// the catalog bridge as a whole batch, ending the turn for every valid sibling.
+describe("parseNormalizedToolCalls call ids", () => {
+  const call = (id: unknown, name = "read"): unknown => ({
+    id,
+    type: "function",
+    function: { name, arguments: "{}" },
+  });
+
+  it("keeps every usable, first-seen id exactly as the provider sent it", () => {
+    const calls = parseNormalizedToolCalls([call("call_1"), call("fc-2.x:3")]);
+    expect(calls.map((entry) => entry.id)).toEqual(["call_1", "fc-2.x:3"]);
+  });
+
+  it("mints a stable id for a missing, empty, over-long or unusable one", () => {
+    const calls = parseNormalizedToolCalls([
+      call(undefined),
+      call(""),
+      call("x".repeat(129)),
+      call("has space"),
+      call("good"),
+    ]);
+    expect(calls.map((entry) => entry.id)).toEqual([
+      "keiko-call-0",
+      "keiko-call-1",
+      "keiko-call-2",
+      "keiko-call-3",
+      "good",
+    ]);
+  });
+
+  it("renames only the repeat of a duplicate and never collides with a sibling's own id", () => {
+    const calls = parseNormalizedToolCalls([
+      call("same"),
+      call("same"),
+      call("keiko-call-2"),
+      call(""),
+    ]);
+    const ids = calls.map((entry) => entry.id);
+    expect(ids[0]).toBe("same");
+    expect(ids[2]).toBe("keiko-call-2");
+    expect(ids[1]).toBe("keiko-call-1");
+    expect(ids[3]).toBe("keiko-call-3");
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("resolves a collision between a minted id and a later provider id", () => {
+    const ids = parseNormalizedToolCalls([call(""), call("keiko-call-0")]).map((entry) => entry.id);
+    expect(ids).toEqual(["keiko-call-0-1", "keiko-call-0"]);
   });
 });

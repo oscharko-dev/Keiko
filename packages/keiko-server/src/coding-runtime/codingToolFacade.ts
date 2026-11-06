@@ -171,7 +171,10 @@ import type {
   CodingToolInvocationRegistry,
   CodingToolInvocationTakeResult,
 } from "./codingToolInvocationRegistry.js";
-import type { CanonicalCatalogFacadeBridge } from "../tool-catalog/catalogToolFacadeBridge.js";
+import {
+  openCodeToolMayAwaitOperator,
+  type CanonicalCatalogFacadeBridge,
+} from "../tool-catalog/catalogToolFacadeBridge.js";
 
 // F8 (#3413): an optional, additive extension of CodingToolFacadeOptions. `codingToolFacadePorts.ts`
 // stays the single owner of the base shape; this widens only the LOCAL parameter type accepted by
@@ -198,6 +201,7 @@ export function createCodingToolFacade(
     onToolSettled: options.onToolSettled,
     observeEditOutcome: options.observeEditOutcome,
     inFlight: { count: 0 },
+    operatorLane: { count: 0 },
   };
   return {
     execute: async (input) => execute(context, input),
@@ -214,6 +218,7 @@ interface ExecutionContext {
   readonly onToolSettled: CodingToolFacadeOptions["onToolSettled"];
   readonly observeEditOutcome: ((outcome: CodingToolEditOutcome) => void) | undefined;
   readonly inFlight: { count: number };
+  readonly operatorLane: { count: number };
 }
 
 async function executeCatalogRequest(
@@ -276,14 +281,17 @@ async function executeParsed(
   request: CodingToolActionRequest,
 ): Promise<CodingToolResult> {
   if (input.signal?.aborted === true) return empty("cancelled");
-  if (context.inFlight.count >= context.maxInFlight) return empty("busy");
-  context.inFlight.count += 1;
+  // A call that may park on a human decision counts in its own lane (same bound), so pending
+  // approvals never starve a read or a search of its slot.
+  const lane = openCodeToolMayAwaitOperator(request) ? context.operatorLane : context.inFlight;
+  if (lane.count >= context.maxInFlight) return empty("busy");
+  lane.count += 1;
   try {
     const result = await routeParsed(context, input, request);
     if (request.action === "edit") observeEditResult(context.observeEditOutcome, result);
     return result;
   } finally {
-    context.inFlight.count -= 1;
+    lane.count -= 1;
   }
 }
 

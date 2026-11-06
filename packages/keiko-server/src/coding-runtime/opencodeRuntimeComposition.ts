@@ -4916,32 +4916,40 @@ function toolBridgeDrainWait(signal: AbortSignal, clear: () => void): ToolBridge
 function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmissionGate {
   let pendingDrain: ToolBridgeDrainWait | undefined;
   const requests = new Set<AdmittedToolRequest>();
+  // Requests admitted under a deadline past the default may park on a human decision (verification
+  // and the proposal tools); they hold a lane of their own with the same bound.
+  const operatorRequests = new Set<AdmittedToolRequest>();
   const release = (controller: AbortController): void => {
+    for (const request of operatorRequests) {
+      if (request.controller === controller) operatorRequests.delete(request);
+    }
     for (const request of requests) {
       if (request.controller === controller) requests.delete(request);
     }
-    if (requests.size === 0) pendingDrain?.finish(true);
+    if (requests.size === 0 && operatorRequests.size === 0) pendingDrain?.finish(true);
   };
   return {
     limits,
     admit: (requestDeadlineMs): AdmittedToolRequest | undefined => {
-      if (requests.size >= limits.maxInFlight) return undefined;
+      const lane = requestDeadlineMs > limits.requestDeadlineMs ? operatorRequests : requests;
+      if (lane.size >= limits.maxInFlight) return undefined;
       const request = admittedToolRequest(new AbortController(), requestDeadlineMs, release);
-      requests.add(request);
+      lane.add(request);
       return request;
     },
     abortNativeRead: (identity): void => {
-      for (const request of requests) {
+      for (const request of [...requests, ...operatorRequests]) {
         if (sameNativeReadIdentity(request.nativeReadIdentity, identity))
           request.controller.abort(new Error(DISCONNECT_ABORT));
       }
     },
     abortAll: (): void => {
-      for (const request of requests) request.controller.abort(new Error(CLOSE_ABORT));
+      for (const request of [...requests, ...operatorRequests])
+        request.controller.abort(new Error(CLOSE_ABORT));
     },
-    drained: (): boolean => requests.size === 0,
+    drained: (): boolean => requests.size === 0 && operatorRequests.size === 0,
     drain: (signal): Promise<boolean> => {
-      if (requests.size === 0) return Promise.resolve(true);
+      if (requests.size === 0 && operatorRequests.size === 0) return Promise.resolve(true);
       if (signal.aborted) return Promise.resolve(false);
       pendingDrain ??= toolBridgeDrainWait(signal, (): void => {
         pendingDrain = undefined;

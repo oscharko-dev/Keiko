@@ -6184,6 +6184,53 @@ describe("private OpenCode tool bridge", () => {
     }
   });
 
+  // Audit 2026-11-06 finding 9: a request that may park on an operator decision is admitted in a lane
+  // of its own, so pending approvals never turn a read away.
+  it("admits a read while the lane of operator-awaiting requests is full", async () => {
+    const releases: (() => void)[] = [];
+    const facade: CodingToolFacade = {
+      execute: vi.fn(
+        () =>
+          new Promise<typeof completed>((resolve) => {
+            releases.push((): void => {
+              resolve(completed);
+            });
+          }),
+      ),
+    };
+    const fixture = await startBridgeFixture(facade, { requestDeadlineMs: 1_000, maxInFlight: 1 });
+    const handle = (body: string): Promise<{ readonly status: number }> =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body,
+      });
+    const verification = JSON.stringify({
+      action: "verification",
+      verifierId: "test",
+      targetPath: "",
+      actionId: "tool:call_verify",
+      idempotencyKey: "idempotency-verify",
+    });
+    try {
+      const parked = handle(verification);
+      await vi.waitFor(() => {
+        expect(facade.execute).toHaveBeenCalledOnce();
+      });
+      await expect(handle(verification)).resolves.toMatchObject({ status: 429 });
+      const read = handle('{"action":"read"}');
+      await vi.waitFor(() => {
+        expect(facade.execute).toHaveBeenCalledTimes(2);
+      });
+      for (const release of releases) release();
+      await expect(read).resolves.toMatchObject({ status: 200 });
+      await expect(parked).resolves.toMatchObject({ status: 200 });
+    } finally {
+      for (const release of releases) release();
+      await fixture.stop();
+    }
+  });
+
   it("settles facade busy and rejected calls as failed", async () => {
     const activity = activityRecorder();
     const facade: CodingToolFacade = {

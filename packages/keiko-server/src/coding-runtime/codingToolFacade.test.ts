@@ -551,6 +551,42 @@ describe("CodingToolFacade", () => {
     await expect(first).resolves.toMatchObject({ status: "completed" });
   });
 
+  // Audit 2026-11-06 finding 9: calls that park on an operator decision held the shared slots for the
+  // whole wait, so a handful of pending approvals refused every read and search as busy.
+  it("keeps calls that may await the operator in their own in-flight lane", async () => {
+    const ports = facade();
+    const releases: (() => void)[] = [];
+    ports.delegate.execute = vi.fn(
+      (request: { readonly action: string }) =>
+        new Promise((resolve) => {
+          if (request.action === "verification") {
+            releases.push(() => {
+              resolve({ outcome: "completed" });
+            });
+          } else resolve({ outcome: "completed" });
+        }),
+    );
+    const subject = createCodingToolFacade(ports, { maxInFlight: 1 });
+    const verify = requestBody({ action: "verification", verifierId: "test" });
+    const parked = subject.execute({ body: verify, capability });
+    await vi.waitFor(() => {
+      expect(releases).toHaveLength(1);
+    });
+    // The lane of the parked verification is full: a second one is busy, as before.
+    await expect(subject.execute({ body: verify, capability })).resolves.toMatchObject({
+      status: "busy",
+    });
+    // A read is not held up by it.
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "read", relativePath: "src/example.ts" }),
+        capability,
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    releases[0]?.();
+    await expect(parked).resolves.toMatchObject({ status: "completed" });
+  });
+
   it("does not delegate denied or cancelled actions", async () => {
     const ports = facade();
     const controller = new AbortController();
