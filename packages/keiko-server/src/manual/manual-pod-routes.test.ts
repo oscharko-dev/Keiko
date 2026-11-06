@@ -163,3 +163,73 @@ describe("manual-pod route success + service-error mapping (injected service)", 
     expect(bad.status).toBe(400);
   });
 });
+
+// SOURCE-ONLY prospective proof; no crawl/sink guarantee is inferred from this injected service.
+describe("manual responsibility checked route flow", () => {
+  it("does not invoke either service on malformed create input", async () => {
+    const service: ManualPodRouteService = { startRefresh: vi.fn(), startCreate: vi.fn() };
+    const result = await handleCreateHtmlManualPod(
+      ctxFor({}, { displayName: "Ops", origin: "ftp://invalid" }),
+      FAKE_DEPS,
+      service,
+    );
+    expect(result.status).toBe(400);
+    expect(service.startCreate).not.toHaveBeenCalled();
+    expect(service.startRefresh).not.toHaveBeenCalled();
+    expect(JSON.stringify(result.body)).toContain("corr-xyz");
+  });
+
+  it("does not invoke either service on malformed refresh input", async () => {
+    const service: ManualPodRouteService = { startRefresh: vi.fn(), startCreate: vi.fn() };
+    const result = await handleRefreshHtmlManualPod(
+      ctxFor({}, { capsuleId: "../escape", sourceId: "src" }),
+      FAKE_DEPS,
+      service,
+    );
+    expect(result.status).toBe(400);
+    expect(service.startRefresh).not.toHaveBeenCalled();
+    expect(service.startCreate).not.toHaveBeenCalled();
+    expect(JSON.stringify(result.body)).toContain("corr-xyz");
+  });
+
+  it("forwards normalized checked create fields and the exact service job", async () => {
+    const job = initialJob("checked-create", "create", "cap", "src");
+    const service: ManualPodRouteService = {
+      startRefresh: vi.fn(),
+      startCreate: vi.fn().mockResolvedValue({ ok: true, job }),
+    };
+    const result = await handleCreateHtmlManualPod(
+      ctxFor({}, { displayName: "  Ops  ", origin: "https://manual.example.com" }),
+      FAKE_DEPS,
+      service,
+    );
+    expect(service.startCreate).toHaveBeenCalledExactlyOnceWith(FAKE_DEPS, {
+      displayName: "Ops",
+      origin: "https://manual.example.com",
+      pathPrefix: null,
+    });
+    expect(service.startRefresh).not.toHaveBeenCalled();
+    expect(result).toStrictEqual({ status: 202, body: job });
+    expect(result.body).toBe(job);
+  });
+
+  it("forwards checked refresh fields and the exact service job", async () => {
+    const job = initialJob("checked-refresh", "refresh", "cap", "src");
+    const service: ManualPodRouteService = {
+      startRefresh: vi.fn().mockReturnValue({ ok: true, job }),
+      startCreate: vi.fn(),
+    };
+    const result = await handleRefreshHtmlManualPod(
+      ctxFor({}, { capsuleId: "cap", sourceId: "src" }),
+      FAKE_DEPS,
+      service,
+    );
+    expect(service.startRefresh).toHaveBeenCalledExactlyOnceWith(FAKE_DEPS, {
+      capsuleId: "cap",
+      sourceId: "src",
+    });
+    expect(service.startCreate).not.toHaveBeenCalled();
+    expect(result).toStrictEqual({ status: 202, body: job });
+    expect(result.body).toBe(job);
+  });
+});

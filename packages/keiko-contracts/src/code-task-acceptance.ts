@@ -19,6 +19,7 @@ import {
   type CodingWorkbenchValidationResult,
 } from "./coding-workbench.js";
 import { isGitCiReadinessEvidenceRef } from "./git-ci-readiness.js";
+import { ownField } from "./contract-validation-primitives.js";
 
 export const CODE_TASK_ACCEPTANCE_SCHEMA_VERSION = 1;
 
@@ -304,9 +305,11 @@ export function hasInheritedEnumerableProperty(record: Record<string, unknown>):
 // there is no descriptor shape left to exploit. Returns unknown, matching how a fresh property read
 // off Record<string, unknown> already behaved before this change -- callers narrow it exactly as
 // they narrowed `value.someField` before.
-export function ownField(record: Record<string, unknown>, key: string): unknown {
-  return Object.hasOwn(record, key) ? record[key] : undefined;
-}
+// The single implementation lives in contract-validation-primitives.ts, so small consumers such as
+// jira-tool-execution.ts can read own fields without importing this module. The re-export names
+// its source module so the emitted declaration keeps the producer resolvable for the
+// raw-own-property-reader responsibility record.
+export { ownField } from "./contract-validation-primitives.js";
 
 function knownFactFieldsAreValid(
   errors: string[],

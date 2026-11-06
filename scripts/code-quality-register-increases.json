@@ -10,6 +10,38 @@
       "issue": 3918
     },
     {
+      "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+      "rule": "anti-slop/no-reflect-apply",
+      "from": 0,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-activity-log/src/server-logger.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-connectors/src/atlassian-write-http.ts",
       "rule": "anti-slop/no-conditional-empty-object-spread",
       "from": 2,
@@ -2787,9 +2819,25 @@
     },
     {
       "path": "packages/keiko-contracts/src/contract-validation-primitives.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 1,
+      "reason": "qualified-boundary",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/contract-validation-primitives.ts",
       "rule": "anti-slop/no-unsafe-dictionary-type",
       "from": 2,
       "to": 4,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/contract-validation-primitives.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 4,
+      "to": 5,
       "reason": "pending-boundary-migration",
       "issue": 3918
     },

@@ -135,8 +135,12 @@ function record(value: unknown): Json | undefined {
   return isRecord(value) ? value : undefined;
 }
 
+function boundedLength(value: string): boolean {
+  return value.length > 0 && value.length <= MCP_TEXT_MAX;
+}
+
 function boundedText(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= MCP_TEXT_MAX;
+  return typeof value === "string" && boundedLength(value);
 }
 
 function hasOnlyKeys(value: Json, keys: readonly string[]): boolean {
@@ -335,7 +339,7 @@ function optionalMatch(value: unknown, grammar: RegExp): value is string | undef
 
 // RFC 8414 §2: an https URL with no query and no fragment, kept exactly as written.
 function issuerIdentifier(value: string): boolean {
-  if (!boundedText(value) || !literal(value) || /[?#\s]/u.test(value) || !URL.canParse(value))
+  if (!boundedLength(value) || !literal(value) || /[?#\s]/u.test(value) || !URL.canParse(value))
     return false;
   const url = new URL(value);
   return url.protocol === "https:" && url.username === "" && url.password === "";
