@@ -55,11 +55,14 @@ import { CodingRuntimeLaunchRejectedError } from "../../coding-runtime/launchFai
 import { resolveProductionRuntimeContext } from "../../coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import type { ServerDiagnosticSink } from "../../diagnostics-log.js";
 import type { ServerLogSink } from "../../observability/index.js";
-import { activationStartFailure, type ReviewRuntimeStartFailure } from "./activity-log.js";
+import {
+  activationStartFailure,
+  type ReviewAuthorityRefusal,
+  type ReviewRuntimeStartFailure,
+} from "./activity-log.js";
 import { runMigrations } from "../../store/schema.js";
 import type { WorkspaceRootAccess } from "../../task-workspace/workspace-root-access.js";
 import type { UiHandlerDeps } from "../../deps.js";
-import type { ReviewAuthorityRefusal } from "./activity-log.js";
 import {
   createReviewWorkspaceLifecycle,
   type ReviewWorkspaceLifecycle,
