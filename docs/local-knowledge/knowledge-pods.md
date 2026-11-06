@@ -32,13 +32,18 @@ The first release does not add a second app area or a second registry.
   Sets instead of low-level capsule terminology. Each pod row emphasizes its name and
   workspace action; details and disconnect use the existing pod actions menu. Indexing
   actions appear once a source is attached, and cancellation remains available while indexing.
-  Lifecycle badges and embedding guidance belong in the existing detail view rather than
-  the ordinary pod list (owner decision, 2026-11-04; `design-system/components.html`).
+  The next required action remains visible: an empty pod offers **Add documents**, an
+  unindexed source offers **Index**, and a ready pod offers its workspace action without an
+  initial-indexing button. Detailed lifecycle badges and embedding guidance remain in the
+  detail view (`design-system/components.html`).
   Embedded Jira Live Pods use the same compact list treatment; connection metadata remains
   in connector settings, while actionable connection problems keep their repair controls.
 - **Create** — the ordinary Create Knowledge Pod dialog asks only for a name. It creates
   an existing Local Knowledge capsule under the hood, using the server's existing `standard`
-  model-use policy default. Connecting a source and indexing remain separate actions.
+  model-use policy default. Successful creation opens that exact pod's source setup;
+  connecting a source and indexing remain separate actions. Switching pods clears the source
+  form's old selection, and late detail reads from a previous pod cannot replace the active
+  pod's view.
   Creating a pod set still creates a capsule set over existing pod ids. The separate **Add HTML
   manual** creation feature is retired; HTML files remain supported through ordinary file/folder
   sources, and existing indexed manual pods retain their refresh and citation paths.
@@ -47,6 +52,11 @@ The first release does not add a second app area or a second registry.
 - **Attach** — Conversation Center, the existing source picker, Quality Intelligence, and voice
   grounding surfaces refer to selected local knowledge as Knowledge Pods while keeping
   existing `capsule` and `capsule-set` wire discriminants.
+  Attached scopes also expose document inventory, scoped search, source reading and semantic
+  review through the existing managed MCP host. Local Knowledge tools do not require a Jira
+  connection. Their read authority is bound to the current actor, Chat and selected scopes;
+  changing the selection invalidates that authority. Document inventory and paged source reads
+  cover the supported file and folder sources, independently of retrieval's ranked answer window.
 - **Remove** — deleting a pod deletes the local pod index only; source files on disk
   are not deleted. Removing a pod from a set preserves the underlying pod.
 
@@ -216,6 +226,47 @@ anyway is dropped. Any other value fails the configuration load. The Activity Lo
 (sizes only, never the text).
 
 ## Project document formats
+
+Chat can inspect an attached Pod through the existing managed MCP catalog. `knowledge.documents`
+pages a document inventory, literal searches and source reads across the formats below; inventory
+also names files whose extraction failed. It does not substitute a ranked excerpt set for the
+document inventory. Overlapping Pod and Pod Set connections enumerate each document once. Every
+read rechecks the attached scope, lifecycle and model-use policy, and revision-bound cursors refuse
+changed sources. The inventory is bounded to 10,000 document descriptors and the existing complete
+text reader to 4,000,000 characters per document; exclusions remain explicit.
+
+Before synthesis, each accepted Chat tool turn with selected Pods records one metadata inventory
+page through that same managed tool, authority and cancellation path. The first model request
+receives up to 20 document descriptors, the total count and any next cursor; the visible transcript
+marks the call as runtime initiated. The inventory consumes the normal tool budget. If it exhausts
+that budget, the turn returns a partial result without a model call. Larger inventories retain their
+pagination and incomplete-coverage facts. This step reads no source text, runs no semantic review
+and supplies no evidence for claims about document contents; further reads and reviews use explicit
+tool calls.
+
+`knowledge.requirements` retains the deterministic requirement and source acceptance-criterion
+inventory. `knowledge.review` is a separate, explicit model call over one 6,000-character source
+window, using the active Chat model and its existing turn budget and cancellation. Its output
+reserve follows the model's canonical context profile, provider capacity and context fit; its
+managed invocation uses the gateway's normal buffered bound without a second, shorter deadline.
+A complete outer JSON code fence is normalized before strict schema and anchor validation;
+partial responses, surrounding prose and multiple blocks remain invalid. It returns
+source-anchored **proposals** for missed obligations, acceptance criteria, conflicts, omissions and
+targeted questions. It never changes the source or silently turns a proposed criterion into an
+original requirement. Successful reviews are cached by document text revision, model configuration
+and content projection; no review runs during Pod connection or ordinary requirement paging.
+Finding bodies have a bounded cache; separate bounded window coverage retains the fact that a
+review completed after its cached body is evicted. The model's review is not proof of semantic
+exhaustiveness, and an invalid, unavailable, truncated or unanchored review does not count as a
+completed window. Body-free Activity Log evidence records each inventory, search, read and review.
+
+Chat displays observed read gaps and incomplete requested reviews as a separate, localized result
+notice. Server and browser use the same pure projection of the existing durable tool receipts;
+streaming, cancellation, failed turns and reload retain those receipts. A complete document
+inventory does not request a semantic review, and the review denominator includes only documents
+explicitly requested for review. The application does not append an English coverage footer to the
+model's answer. As with existing grounded-answer notices, copying the answer copies its text;
+the result notice remains a separate part of the turn.
 
 A pod indexes the text of Word (`.docx`), Excel (`.xlsx`), CSV, PowerPoint (`.pptx`) and PDF
 files, with the source location a citation points at: the paragraph or sheet row, the slide

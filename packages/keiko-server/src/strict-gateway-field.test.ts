@@ -369,6 +369,15 @@ function fieldTmpDir(): string {
   return tmp;
 }
 
+function expectVerifiedFieldToolModel(deps: UiHandlerDeps): void {
+  expect(
+    deps.gatewayConfig?.current()?.capabilities?.find((model) => model.id === "qwen-chat"),
+  ).toMatchObject({
+    toolCalling: true,
+    toolCallingVerification: { status: "verified" },
+  });
+}
+
 function probesSince(log: FakeGatewayLog, mark: number, modelId: string): number {
   return log.chatModels.slice(mark).filter((entry) => entry === modelId).length;
 }
@@ -662,9 +671,9 @@ describe("strict LiteLLM field twin", () => {
   // Customer report on 1.1.0: URL and key were all the customer entered. The gateway declares no
   // token limits, so every chat model kept the 4,096 setup placeholder and the Coding Workbench
   // answered "context window too small (minimum 32,000)" for models that accept far more. What
-  // Keiko can determine itself it must determine itself: opening the Workbench proves the window
+  // Keiko can determine itself it must determine itself: an explicit Workbench check proves the window
   // and stores it, with no readiness click and no value copied by hand.
-  it("proves and stores the context window itself when the Workbench profile is read", async () => {
+  it("proves and stores the context window on an explicit Workbench profile check", async () => {
     resetCodingWorkbenchContextWindowProbesForTests();
     const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const gateway = startStrictLiteLlm(
@@ -710,7 +719,10 @@ describe("strict LiteLLM field twin", () => {
       expect(log.chatModels).toHaveLength(chatCallsBeforeSubscriptionRead);
       expect(storedWindow()).toBe(4_096);
 
-      const profile = await handleCodingSidecarGatewayProfile(ctx("GET", {}), observed);
+      const profile = await handleCodingSidecarGatewayProfile(
+        ctx("GET", {}, {}, "/api?check=1"),
+        observed,
+      );
 
       expect(profile.body).toMatchObject({ status: "available", modelAlias: "qwen-chat" });
       expect(storedWindow()).toBe(32_000);
@@ -737,7 +749,7 @@ describe("strict LiteLLM field twin", () => {
   // configuration generation, and a run that started under the previous generation has its
   // conclusion discarded: probing them all at once stored the first and silently dropped the rest,
   // leaving every other model in the picker at 4,096 for the whole cooldown.
-  it("proves the context window of every tool-capable model, not only the elected one", async () => {
+  it("retains startup context verification for every tool-capable model after an explicit profile check", async () => {
     resetCodingWorkbenchContextWindowProbesForTests();
     const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const gateway = startStrictLiteLlm(
@@ -771,7 +783,10 @@ describe("strict LiteLLM field twin", () => {
         ["gemma-chat", 4_096],
       ]);
 
-      const profile = await handleCodingSidecarGatewayProfile(ctx("GET", {}), deps);
+      const profile = await handleCodingSidecarGatewayProfile(
+        ctx("GET", {}, {}, "/api?check=1"),
+        deps,
+      );
       expect(profile.body).toMatchObject({ status: "available" });
       await codingWorkbenchProbesSettledForTests();
 
@@ -786,9 +801,9 @@ describe("strict LiteLLM field twin", () => {
   });
 
   // The forced tool-call proof expires after 24 h. A customer who connects the gateway today and
-  // opens the Workbench tomorrow must not be sent to Settings to click a check: Keiko renews the
-  // proof itself.
-  it("renews an expired tool-calling proof itself when the Workbench profile is read", async () => {
+  // explicitly checks the selected Workbench model tomorrow may renew the proof without
+  // changing provider settings. Passive profile reads never initiate that verification.
+  it("renews an expired tool-calling proof on an explicit Workbench profile check", async () => {
     resetCodingWorkbenchContextWindowProbesForTests();
     const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const gateway = startStrictLiteLlm(
@@ -835,7 +850,10 @@ describe("strict LiteLLM field twin", () => {
         true,
       );
 
-      const profile = await handleCodingSidecarGatewayProfile(ctx("GET", {}), deps);
+      const profile = await handleCodingSidecarGatewayProfile(
+        ctx("GET", {}, {}, "/api?check=1"),
+        deps,
+      );
 
       expect(profile.body).toMatchObject({ status: "available", modelAlias: "qwen-chat" });
     } finally {
@@ -848,7 +866,7 @@ describe("strict LiteLLM field twin", () => {
   // `toolCalling: false`, and the renewal above keyed on that flag, so after every restart the
   // Workbench read "no tool calling", probed nothing and stayed blocked until a manual check. Here
   // the day passes on disk and the process restarts, so the production loader builds the config.
-  it("renews an expired tool-calling proof after a restart the day after setup", async () => {
+  it("renews an expired tool-calling proof through an explicit profile check after restart", async () => {
     resetCodingWorkbenchContextWindowProbesForTests();
     const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const gateway = startStrictLiteLlm(
@@ -893,7 +911,10 @@ describe("strict LiteLLM field twin", () => {
         activityLog: { write: (event): void => void events.push(event) },
       };
 
-      const profile = await handleCodingSidecarGatewayProfile(ctx("GET", {}), observed);
+      const profile = await handleCodingSidecarGatewayProfile(
+        ctx("GET", {}, {}, "/api?check=1"),
+        observed,
+      );
 
       expect(profile.body).toMatchObject({ status: "available", modelAlias: "qwen-chat" });
       expect(probesSince(log, mark, "qwen-chat")).toBeGreaterThan(0);
@@ -996,7 +1017,13 @@ describe("strict LiteLLM field twin", () => {
     // observation, and the models wire told the UI that no model was usable at all. This twin
     // restarts the server half-way: same stored config, same UI DB, fresh process state.
     const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
-    const gateway = startStrictLiteLlm(log);
+    // The installed Knowledge MCP catalog requires an actually verified tool-capable model.
+    // This HTTP twin answers the real forced-call proof; no capability flag is injected.
+    const gateway = startStrictLiteLlm(
+      log,
+      {},
+      { emptyChatModels: new Set(), answersToolCalls: true },
+    );
     const port = await listen(gateway);
     const tmp = fieldTmpDir();
     const docsDir = join(tmp, "handbuch");
@@ -1016,6 +1043,7 @@ describe("strict LiteLLM field twin", () => {
       );
       expect(chat.status).toBe(201);
       const chatId = (chat.body as { chat: { id: string } }).chat.id;
+      expectVerifiedFieldToolModel(deps);
       const created = await handleCreateLocalKnowledgeCapsule(
         ctx("POST", { displayName: "Handbuch" }),
         deps,
@@ -1059,6 +1087,7 @@ describe("strict LiteLLM field twin", () => {
         env: { ...VAULT_ENV, KEIKO_ALLOW_PRIVATE_EGRESS: "true" },
       });
       expect(deps.gatewayConfig?.present()).toBe(true);
+      expectVerifiedFieldToolModel(deps);
 
       // Tri-state models wire: never-probed is UNKNOWN (field absent), not `false` — a hard
       // false emptied the UI's model picker after every restart until a manual probe + reload.
@@ -1075,7 +1104,7 @@ describe("strict LiteLLM field twin", () => {
         ctx("POST", { chatId, content: "Was steht im Handbuch zu KFZ?" }),
         deps,
       );
-      expect(asked.status).toBe(200);
+      expect(asked.status, JSON.stringify(asked.body)).toBe(200);
     } finally {
       await deps?.dispose?.();
       await closeServer(gateway);

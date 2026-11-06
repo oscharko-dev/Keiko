@@ -5565,3 +5565,21 @@ it("delivers a running tool call before terminal completion", async () => {
   expect(handlers.onToolExchange).toHaveBeenCalledExactlyOnceWith(payload);
   expect(handlers.onDone).toHaveBeenCalledOnce();
 });
+
+it("joins only startup observations on the explicit passive metadata read", async () => {
+  const fetchMock = vi.fn(() =>
+    Promise.resolve(jsonResponse({ models: [], startupReadinessPending: true })),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  const controller = new AbortController();
+  await fetchModels("corr-startup-observation", false, {
+    waitForStartup: true,
+    signal: controller.signal,
+  });
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/models?settleStartup=1",
+    expect.objectContaining({ cache: "no-store", signal: expect.any(AbortSignal) }),
+  );
+  resetModelRequestCache();
+});

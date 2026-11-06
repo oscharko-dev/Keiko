@@ -227,7 +227,6 @@ import {
   withConversationReadinessAdmission,
   type ConversationReadinessAdmission,
 } from "./conversation-readiness-admission.js";
-import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 
 // ─── Canonical connector reader ───────────────────────────────────────────────
 
@@ -1249,6 +1248,7 @@ async function hybridGatewayRepair(
     return uninvokedCitationRepair(original);
   ensureNotCancelled(signal);
   const response = await callPluralGroundedSynthesis({
+    purpose: "citation-repair",
     deps: ctx.deps,
     evidenceCount: ctx.sourceEvidenceCount,
     model: ctx.model,
@@ -2335,7 +2335,6 @@ function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | Ro
     ctx.modelId,
     readinessAdmission,
     ctx.deps,
-    (id, correlationId) => awaitInitializedConversationReadiness(ctx.deps, id, correlationId),
   );
   return {
     answer: createHybridAnswerer(
@@ -2450,7 +2449,7 @@ function withHybridAnswerDuration(
 ): HybridGroundedAnswer {
   const elapsedMs = Math.max(0, Date.now() - (ctx.startedAtMs ?? Date.now()));
   return {
-    ...withToolResultsAsSource(answer, ctx.deps.store),
+    ...withToolResultsAsSource(answer, ctx.deps.chatToolTurn),
     elapsedMs,
     contextPack: {
       ...answer.contextPack,

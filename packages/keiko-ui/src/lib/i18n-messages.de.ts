@@ -517,11 +517,17 @@ export const DE_MESSAGES = {
   // ist kein defektes Gateway, und keiner der Texte macht die Größe der Anfrage verantwortlich.
   "chat.modelSelectionUnavailable":
     "Das ausgewählte Modell ist vorübergehend nicht verfügbar. Wähle ein anderes verfügbares Modell oder warte auf seine Wiederherstellung.",
+  "chat.error.modelNotReady.title": "Modellprüfung erforderlich",
+  "chat.error.modelNotReady.message":
+    "Das ausgewählte Modell hat die Bereitschaftsprüfung noch nicht bestanden.",
+  "chat.error.modelNotReady.remediation":
+    "Öffne die Modelleinstellungen, starte die Bereitschaftsprüfung und sende deine Nachricht danach erneut.",
+  "chat.error.modelNotReady.action": "Modellprüfung öffnen",
   "chat.error.capabilityUnavailable.title": "Modellfunktion nicht verfügbar",
   "chat.error.capabilityUnavailable.message":
     "Das ausgewählte Modell kann die benötigten Chat-Funktionen derzeit nicht ausführen.",
   "chat.error.capabilityUnavailable.remediation":
-    "Wähle ein einsatzbereites Chat-Modell. Prüfe für den Jira-Zugriff Tool-Calling unter Einstellungen > Modelle oder trenne den Jira-Pod.",
+    "Wähle ein verfügbares Chat-Modell, das die benötigten Funktionen unterstützt.",
   "chat.error.scopeChanged.title": "Verbundene Quellen wurden geändert",
   "chat.error.scopeChanged.message":
     "Die verbundenen Quellen haben sich zwischenzeitlich geändert. Die Anfrage wurde nicht mit einer veralteten Quellenliste ausgeführt.",
@@ -587,7 +593,7 @@ export const DE_MESSAGES = {
   "chat.model.title": "Modell",
 
   "chat.model.noneConfiguredTitle":
-    "Kein dialogfähiges Modell ist konfiguriert - verbinde ein Gateway in den Einstellungen",
+    "Derzeit ist kein dialogfähiges Modell verfügbar - prüfe den Gateway- und Modellstatus in den Einstellungen",
 
   "chat.voice": "Spracheingabe",
   "chat.voice.interrupt": "Assistenz unterbrechen",

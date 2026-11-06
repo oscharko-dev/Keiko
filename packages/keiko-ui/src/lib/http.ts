@@ -40,6 +40,7 @@
 
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { ApiError } from "./api";
+import { reinspectSessionAfterMutationRefusal } from "./bff-session-reinspection";
 import {
   buildBffHeaders,
   CORRELATION_HEADER,
@@ -411,6 +412,8 @@ export async function bffFetchJson<T>(
   try {
     return await performBffFetch(path, init, opts);
   } catch (error) {
+    if (error instanceof ApiError && opts?.repairSession !== false && !isDeniedError(error))
+      await reinspectSessionAfterMutationRefusal(error, init?.method, path);
     if (!isDeniedError(error) || opts?.repairSession === false) throw error;
     return repairAndReplay(error, path, init, opts);
   }

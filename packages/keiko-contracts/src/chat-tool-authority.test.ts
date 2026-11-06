@@ -8,9 +8,12 @@ import {
   CHAT_TOOL_READ_GRANT_STATES,
   type ChatToolReadGrant,
   type ChatToolAuthorityEnvelope,
+  type JiraChatToolAuthoritySubject,
 } from "./chat-tool-authority.js";
 
-function envelope(): ChatToolAuthorityEnvelope {
+function envelope(): ChatToolAuthorityEnvelope & {
+  readonly subject: JiraChatToolAuthoritySubject;
+} {
   return {
     schemaVersion: "1",
     kind: "chat-tool-authority",
@@ -263,5 +266,66 @@ describe("configured MCP Chat authority", () => {
       false,
     );
     expect(validateChatToolReadGrant({ ...value, kind: "jira-chat-read-grant" }).ok).toBe(false);
+  });
+});
+
+describe("Knowledge-only Chat authority subject", () => {
+  function knowledgeEnvelope(): ChatToolAuthorityEnvelope {
+    return {
+      ...envelope(),
+      subject: {
+        kind: "knowledge-pods",
+        actorDigest: "a".repeat(64),
+        chatId: "knowledge-chat",
+        configurationDigest: "c".repeat(64),
+      },
+      actionClasses: ["connector-access"],
+      connectorScopes: ["knowledge.read"],
+    };
+  }
+  it("accepts exactly the selection digest and read-only scope", () => {
+    const value = knowledgeEnvelope();
+    expect(validateChatToolAuthorityEnvelope(value)).toEqual({ ok: true, value });
+  });
+  it.each([
+    [],
+    ["network-egress"],
+    ["connector-access", "network-egress"],
+    ["connector-access", "file-edit"],
+    ["connector-access", "connector-access"],
+  ])("refuses widened or missing action classes %j", (...actionClasses) => {
+    expect(validateChatToolAuthorityEnvelope({ ...knowledgeEnvelope(), actionClasses }).ok).toBe(
+      false,
+    );
+  });
+  it.each(["mcp.tools", "issue-tracker.read", "issue-tracker.write", "knowledge.write"])(
+    "refuses widened %s scope",
+    (scope) => {
+      expect(
+        validateChatToolAuthorityEnvelope({ ...knowledgeEnvelope(), connectorScopes: [scope] }).ok,
+      ).toBe(false);
+    },
+  );
+  it("refuses credential facts, unknown subject kinds and fabricated grants", () => {
+    const value = knowledgeEnvelope();
+    expect(
+      validateChatToolAuthoritySubject({ ...value.subject, authenticationGeneration: 1 }).ok,
+    ).toBe(false);
+    expect(validateChatToolAuthoritySubject({ ...value.subject, kind: "knowledge" }).ok).toBe(
+      false,
+    );
+    expect(
+      validateChatToolReadGrant({
+        schemaVersion: "1",
+        kind: "jira-chat-read-grant",
+        grantId: "fabricated",
+        subject: value.subject,
+        disclosureVersion: "jira-chat-read-v1",
+        state: "pending",
+        consentProofDigest: null,
+        requestedAt: 1,
+        expiresAt: 2,
+      }).ok,
+    ).toBe(false);
   });
 });

@@ -1,5 +1,11 @@
+import { REQUIREMENT_DOCUMENT_SCOPE_PATTERN } from "@oscharko-dev/keiko-quality-intelligence";
 import {
   JIRA_DRAFT_ITEM_STATES,
+  JIRA_DRAFT_ID_PATTERN,
+  JIRA_DRAFT_DIGEST_PATTERN,
+  JIRA_DRAFT_STAGE_BYTES_MAX,
+  JIRA_DRAFT_PAGE_ITEMS_MAX,
+  isJiraDraftRef,
   type JiraDraftItemState,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -68,7 +74,7 @@ export function chatToolDraftReceipts(
   // Read defensively: a transcript stored by an older build is data, not a validated envelope.
   const result = record(exchange.result);
   if (record(result?.toolRef)?.canonicalId !== DRAFT_TOOL_ID) return undefined;
-  const receipts = draftRowReceipts(record(result?.data));
+  const receipts = draftRowReceipts(record(result?.data ?? exchange.draftProgress));
   return receipts.length === 0 ? undefined : receipts;
 }
 /** The receipts of a result's key ranges and of its rows; none for a result without rows. */
@@ -86,7 +92,100 @@ function draftRowReceipts(
   ];
 }
 
-const REQUIREMENT_REFERENCE = /^[0-9a-f]{8}:[A-Za-z0-9._-]{1,80}$/u;
+const STAGED_DRAFT_ID = new RegExp(JIRA_DRAFT_ID_PATTERN, "u");
+const STAGED_DRAFT_DIGEST = new RegExp(JIRA_DRAFT_DIGEST_PATTERN, "u");
+interface StagedDraftCounts {
+  readonly itemCount: number;
+  readonly pageCount: number;
+  readonly unresolvedRefCount: number;
+}
+interface ChatToolStagedDraftReceipt extends StagedDraftCounts {
+  readonly draftId: string;
+  readonly draftDigest: string;
+  readonly unresolvedRefs: readonly string[];
+}
+function stageCount(value: unknown): value is number {
+  // Every counted item, page or unresolved reference consumes at least one retained byte.
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= JIRA_DRAFT_STAGE_BYTES_MAX
+  );
+}
+function stagedDraftCounts(data: Readonly<Record<string, unknown>>): StagedDraftCounts | undefined {
+  const { itemCount, pageCount, unresolvedRefCount } = data;
+  if (!stageCount(itemCount) || !stageCount(pageCount) || !stageCount(unresolvedRefCount))
+    return undefined;
+  if (
+    itemCount === 0 ||
+    pageCount === 0 ||
+    pageCount > itemCount ||
+    itemCount > pageCount * JIRA_DRAFT_PAGE_ITEMS_MAX
+  )
+    return undefined;
+  return { itemCount, pageCount, unresolvedRefCount };
+}
+function stagedDraftReference(
+  data: Readonly<Record<string, unknown>>,
+): { readonly draftId: string; readonly draftDigest: string } | undefined {
+  const { draftId, draftDigest } = data;
+  return typeof draftId === "string" &&
+    draftId.length === 36 &&
+    STAGED_DRAFT_ID.test(draftId) &&
+    typeof draftDigest === "string" &&
+    draftDigest.length === 64 &&
+    STAGED_DRAFT_DIGEST.test(draftDigest)
+    ? { draftId, draftDigest }
+    : undefined;
+}
+function stagedDraftRefs(value: unknown, count: number): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length === Math.min(count, 32) &&
+    value.every((ref: unknown) => isJiraDraftRef(ref) && ref.length <= 32 && ref.trim() === ref) &&
+    new Set(value).size === value.length
+  );
+}
+function stagedDraftData(
+  exchange: ChatToolExchange,
+): Readonly<Record<string, unknown>> | undefined {
+  const result = exchange.result;
+  const data = record(result?.data);
+  if (
+    result?.toolRef?.canonicalId !== "keiko.jira.draft.stage" ||
+    result.toolRef.contractVersion !== 1 ||
+    result.status !== "completed" ||
+    data?.outcome !== "succeeded" ||
+    exchange.mutationOutcome !== undefined
+  )
+    return undefined;
+  return data;
+}
+/** A successful stage names stored content, never a remote mutation or a created issue. */
+export function chatToolStagedDraftReceipt(
+  exchange: ChatToolExchange,
+): ChatToolStagedDraftReceipt | undefined {
+  const data = stagedDraftData(exchange);
+  if (data === undefined) return undefined;
+  const reference = stagedDraftReference(data);
+  const counts = stagedDraftCounts(data);
+  if (reference === undefined || counts === undefined) return undefined;
+  if (!stagedDraftRefs(data.unresolvedRefs, counts.unresolvedRefCount)) return undefined;
+  return { ...reference, ...counts, unresolvedRefs: data.unresolvedRefs };
+}
+
+const REQUIREMENT_SCOPE = new RegExp(REQUIREMENT_DOCUMENT_SCOPE_PATTERN, "u");
+const REQUIREMENT_ID = /^[A-Za-z0-9._-]{1,80}$/u;
+function isRequirementReference(value: string): boolean {
+  const separator = value.indexOf(":");
+  return (
+    separator >= 0 &&
+    value === value.trim() &&
+    REQUIREMENT_SCOPE.test(value.slice(0, separator)) &&
+    REQUIREMENT_ID.test(value.slice(separator + 1))
+  );
+}
 const REQUIREMENT_RECEIPTS_MAX = 50;
 const RECEIPT_TEXT_CHARS = 60;
 
@@ -99,7 +198,7 @@ export interface ChatToolRequirementReceipt {
 function requirementReceipt(value: unknown): ChatToolRequirementReceipt | undefined {
   const item = record(value);
   const reference = item?.reference;
-  if (item === undefined || typeof reference !== "string" || !REQUIREMENT_REFERENCE.test(reference))
+  if (item === undefined || typeof reference !== "string" || !isRequirementReference(reference))
     return undefined;
   const title = typeof item.title === "string" ? item.title.slice(0, RECEIPT_TEXT_CHARS) : "";
   const priority =

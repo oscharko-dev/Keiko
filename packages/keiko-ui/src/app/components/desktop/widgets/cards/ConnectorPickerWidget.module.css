@@ -169,78 +169,69 @@
   outline-offset: 2px;
 }
 
-.lazyWidgetScope :global(.connector-node) {
+.lazyWidgetScope:global(.connector-node) {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
   height: 100%;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 10px;
-  padding: 16px;
+  padding: var(--space-6);
   color: var(--text-primary);
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--accent) 10%, transparent), transparent 42%),
-    var(--background-secondary);
-}
-
-.lazyWidgetScope :global(.connector-node-icon) {
-  width: 64px;
-  height: 64px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--accent-line);
-  border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--accent) 14%, var(--surface-primary));
-  color: var(--accent);
-  box-shadow: var(--shadow-card);
-}
-
-.lazyWidgetScope :global(.connector-node-copy) {
-  min-width: 0;
-  align-self: center;
-}
-
-.lazyWidgetScope :global(.connector-node-kicker) {
-  margin: 0 0 5px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-accent);
-}
-
-.lazyWidgetScope :global(.connector-node-title) {
-  margin: 0;
-  font-size: 18px;
-  line-height: 1.2;
-  font-weight: 700;
-  color: var(--text-primary);
-  overflow-wrap: anywhere;
-}
-
-.lazyWidgetScope :global(.connector-node-meta) {
-  margin: 8px 0 0;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.35;
+  background: var(--surface-primary);
 }
 
 .lazyWidgetScope :global(.connector-node-manage) {
-  justify-self: start;
-  min-height: 28px;
-  padding: 4px 10px;
-  border: 1px solid var(--border-strong);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-5);
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: var(--space-4);
+  border: 0;
   border-radius: var(--radius-sm);
-  background: var(--surface-primary);
-  color: var(--text-primary);
-  font-size: 12px;
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-ui);
   cursor: pointer;
 }
 
 .lazyWidgetScope :global(.connector-node-manage):hover {
-  border-color: var(--accent-line);
+  background: var(--surface-inset);
 }
 
 .lazyWidgetScope :global(.connector-node-manage):focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+.lazyWidgetScope :global(.connector-node-icon) {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+  color: var(--accent);
+}
+
+.lazyWidgetScope :global(.connector-node-title) {
+  max-width: 100%;
+  font-size: 16px;
+  line-height: 1.4;
+  font-weight: 650;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.lazyWidgetScope :global(.connector-node-kicker) {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
 }

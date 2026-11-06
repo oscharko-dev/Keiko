@@ -367,7 +367,7 @@ const ACTIVITY_LOG_ERROR_KIND_RULES: readonly Readonly<{
   { pattern: /timeout|^etimedout$/u, result: "timeout" },
   { pattern: /cancel|abort/u, result: "cancelled" },
   { pattern: /rate|^429$/u, result: "rate-limited" },
-  { pattern: /valid|schema/u, result: "validation-failed" },
+  { pattern: /^gateway_malformed_tool_call$|valid|schema/u, result: "validation-failed" },
   { pattern: /model[_-]?refusal|content[_-]?filter/u, result: "permission-denied" },
   {
     pattern: /(?:^|[._-])auth(?:entication)?(?:[._-]|$)|permission|forbidden|blocked/u,

@@ -12,6 +12,9 @@ import {
   requirementLabel,
 } from "@oscharko-dev/keiko-quality-intelligence";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
+
+import { buildRedactor } from "./deps.js";
 
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
@@ -32,7 +35,12 @@ import {
 } from "./_requirementSupport.js";
 import { estimateGatewayMessageTokens, fitToolContinuation } from "./chat-tool-continuation-fit.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
-import { resetRequirementTurnCache } from "./requirement-inventory.js";
+import { resetRequirementTurnCache, decodeCursor, encodeCursor } from "./requirement-inventory.js";
+import {
+  decodeKnowledgeCursor,
+  KNOWLEDGE_DOCUMENTS_MAX,
+  KNOWLEDGE_SEARCH_DOCUMENT_STRIDE,
+} from "./knowledge-document-source.js";
 import { openTraceSession } from "./requirement-trace.js";
 import {
   REQUIREMENTS_CURSOR_STALE_NEXT_STEP,
@@ -92,6 +100,7 @@ async function call(f: PodFixture, args: CatalogJsonObject, turn = "turn-1"): Pr
     userMessageId: turn,
   };
   const result = await tool.execute(args, context);
+  expect(describeCatalogSchemaMismatch(tool.descriptor.resultSchema, result.data)).toBeUndefined();
   return result.data as unknown as Page;
 }
 
@@ -204,6 +213,59 @@ describe("paging (#4179 review, defect 2)", () => {
     expect(forged.nextStep).toBe(REQUIREMENTS_CURSOR_STALE_NEXT_STEP);
     expect(REQUIREMENTS_CURSOR_STALE_NEXT_STEP.length).toBeLessThanOrEqual(400);
   });
+
+  it("refuses a fabricated offset while retaining the returned cursor fingerprint", async () => {
+    const f = await fixture([{ capsuleId: "cap-offset", text: specification(131).text }]);
+    const first = await call(f, { limit: 1 });
+    const cursor = first.nextCursor ?? "";
+    const fabricated = cursor.replace(/^\d+/u, "45");
+
+    const skipped = await call(f, { cursor: fabricated, limit: 50 });
+
+    expect(skipped).toMatchObject({
+      outcome: "failed",
+      reason: "cursor-stale",
+      nextStep: REQUIREMENTS_CURSOR_STALE_NEXT_STEP,
+    });
+    expect(skipped.items).toBeUndefined();
+    expect(sink.events.at(-1)?.extra).toMatchObject({ disposition: "cursor-stale" });
+  });
+
+  it("resumes every issued cursor with changing limits and reads all 131 units once", async () => {
+    const spec = specification(130);
+    const f = await fixture([
+      {
+        capsuleId: "cap-resume",
+        text: spec.text.replace(
+          "Schadenmeldungen werden heute telefonisch erfasst.",
+          "Das System muss alle Eingaben protokollieren.",
+        ),
+      },
+    ]);
+    const pages: Page[] = [];
+    let cursor: string | undefined;
+    do {
+      resetRequirementTurnCache();
+      const page = await call(
+        f,
+        { limit: pages.length % 2 === 0 ? 1 : 50, ...(cursor === undefined ? {} : { cursor }) },
+        `resume-${String(pages.length)}`,
+      );
+      expect(page.outcome).toBe("succeeded");
+      pages.push(page);
+      cursor = page.nextCursor;
+    } while (cursor !== undefined && pages.length < 131);
+
+    const units = pages.flatMap((page) => page.items ?? []);
+    expect(cursor).toBeUndefined();
+    expect(units).toHaveLength(131);
+    expect(new Set(units.map((unit) => unit.reference)).size).toBe(131);
+    expect(units.filter((unit) => unit.idOrigin === "explicit").map((unit) => unit.id)).toEqual(
+      spec.ids,
+    );
+    expect(units.filter((unit) => unit.idOrigin === "derived")).toHaveLength(1);
+    expect(pages[0]?.totals).toMatchObject({ detectedCount: 131, matchedCount: 131 });
+  });
 });
 
 describe("filters and views", () => {
@@ -287,6 +349,26 @@ describe("filters and views", () => {
     expect(stale.every((row) => String(row.jql).length <= 1800)).toBe(true);
     expect(stale.flatMap((row) => row.requirementIds as string[])).toHaveLength(120);
     expect(rows.some((row) => row.purpose === "traced")).toBe(true);
+  });
+
+  it("matches requirement queries only against the credential-safe projection", async () => {
+    const secret = "fixture-credential-8a30762e";
+    const text = specification(1).text.replace("Thema 1;", `Thema 1 mit ${secret};`);
+    const f = await fixture([{ capsuleId: "cap-safe-query", text }], {
+      redactor: buildRedactor({ FIGMA_ACCESS_TOKEN: secret }),
+    });
+
+    for (const query of [secret, secret.slice(0, 18), secret.slice(-12)]) {
+      const page = await call(f, { query });
+      expect(page.outcome).toBe("succeeded");
+      expect(page.items).toEqual([]);
+      expect(page.totals?.matchedCount).toBe(0);
+      expect(JSON.stringify(page)).not.toContain(secret);
+    }
+    const visible = await call(f, { query: "unterstützt" });
+    expect(visible.items).toHaveLength(1);
+    expect(visible.totals?.matchedCount).toBe(1);
+    expect(JSON.stringify(visible)).not.toContain(secret);
   });
 
   it("redacts document text with the Chat content policy before it reaches the model", async () => {
@@ -982,4 +1064,86 @@ describe("the change view fits its descriptor bound (#4179 review)", () => {
     expect(page.changes?.truncated).toEqual(expect.arrayContaining(["affectedIssues", "issues"]));
     expect(page.changes).toMatchObject({ counts: { changed: 1 } });
   });
+});
+
+it("rejects undeclared requirement item, total and nested change fields", async () => {
+  const f = await fixture([{ capsuleId: "closed-result", text: specification(2).text }]);
+  const tool = createKnowledgeRequirementsProvider(f.deps, reports).tools()[0];
+  if (tool === undefined) throw new Error("Expected the requirements tool.");
+  const schema = tool.descriptor.resultSchema;
+  const invalidResults: readonly CatalogJsonObject[] = [
+    { outcome: "succeeded", items: [{ reference: "doc:REQ-1", rawPath: "unexpected" }] },
+    { outcome: "succeeded", totals: { detectedCount: 1, rawText: "unexpected" } },
+    { outcome: "succeeded", changes: { baseline: { complete: true, rawPath: "unexpected" } } },
+    {
+      outcome: "succeeded",
+      changes: { changed: [{ id: "REQ-1", issues: [], rawText: "unexpected" }] },
+    },
+  ];
+  for (const data of invalidResults) {
+    expect(describeCatalogSchemaMismatch(schema, data)).toBeDefined();
+  }
+});
+
+it("checks cursor width, canonical offsets and both reader limits", () => {
+  const fingerprint = "a".repeat(16);
+  const knowledgeFingerprint = "b".repeat(64);
+  const maxKnowledgeOffset = KNOWLEDGE_DOCUMENTS_MAX * KNOWLEDGE_SEARCH_DOCUMENT_STRIDE;
+  const requirement = encodeCursor({ offset: 7, fingerprint });
+  const knowledge = encodeCursor({ offset: maxKnowledgeOffset, fingerprint: knowledgeFingerprint });
+  expect(decodeCursor(requirement)).toEqual({ offset: 7, fingerprint });
+  expect(decodeKnowledgeCursor(knowledge)).toEqual({
+    offset: maxKnowledgeOffset,
+    fingerprint: knowledgeFingerprint,
+  });
+  expect(decodeCursor(encodeCursor({ offset: 999_999_999, fingerprint }))).toEqual({
+    offset: 999_999_999,
+    fingerprint,
+  });
+  for (const value of [
+    `5.${fingerprint}`,
+    requirement.replace(/^7/u, "007"),
+    encodeCursor({ offset: 1_000_000_000, fingerprint }),
+    knowledge,
+    "1".repeat(513),
+  ])
+    expect(decodeCursor(value)).toBeUndefined();
+  for (const value of [
+    requirement,
+    encodeCursor({ offset: maxKnowledgeOffset + 1, fingerprint: knowledgeFingerprint }),
+    encodeCursor({ offset: 100_000_000_000, fingerprint: knowledgeFingerprint }),
+    "1".repeat(513),
+  ])
+    expect(decodeKnowledgeCursor(value)).toBeUndefined();
+});
+
+it("declares local knowledge tools as closed-world with a non-idempotent semantic review", async () => {
+  const f = await fixture([{ capsuleId: "metadata-pod", text: specification(1).text }]);
+  const tools = createKnowledgeRequirementsProvider<RequirementsToolContext>(
+    f.deps,
+    reports,
+  ).tools();
+  expect(
+    tools.map(({ descriptor, title, annotations }) => ({
+      id: descriptor.toolRef.canonicalId,
+      title,
+      annotations,
+    })),
+  ).toEqual([
+    {
+      id: "keiko.knowledge.requirements",
+      title: "Knowledge requirements",
+      annotations: { openWorldHint: false, idempotentHint: true },
+    },
+    {
+      id: "keiko.knowledge.documents",
+      title: "Knowledge documents",
+      annotations: { openWorldHint: false, idempotentHint: true },
+    },
+    {
+      id: "keiko.knowledge.review",
+      title: "Review knowledge",
+      annotations: { openWorldHint: false, idempotentHint: false },
+    },
+  ]);
 });

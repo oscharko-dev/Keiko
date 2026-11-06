@@ -216,6 +216,30 @@ describe("CapsuleDetail — overview section", () => {
     });
   });
 
+  it("does not offer manual refresh for an ordinary indexed folder", async () => {
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+
+    await screen.findByRole("heading", { level: 1, name: "My Test Capsule" });
+
+    expect(screen.queryByRole("button", { name: "Refresh manual" })).not.toBeInTheDocument();
+  });
+
+  it.each(["html-manual-http", "html-manual-local"])(
+    "offers manual refresh for a tagged %s source",
+    async (sourceKind) => {
+      const detail = {
+        ...FULL_DETAIL,
+        capsule: {
+          ...BASE_CAPSULE,
+          tags: [`keiko-html-manual-source-kind:${sourceKind}`],
+        },
+      };
+      render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+
+      expect(await screen.findByRole("button", { name: "Refresh manual" })).toBeInTheDocument();
+    },
+  );
+
   it("renders a stable back path when the selected capsule was deleted", async () => {
     const fetchDetailImpl = vi
       .fn()

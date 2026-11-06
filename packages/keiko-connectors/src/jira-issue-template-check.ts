@@ -4,6 +4,7 @@ import {
   jiraIssueTemplateLabel,
   normalizeJiraSectionHeading,
   readJiraDescriptionSections,
+  projectJiraDescriptionInput,
   type JiraIssueTemplate,
   type JiraTemplateActivation,
   type JiraTemplateViolation,
@@ -152,10 +153,13 @@ export function resolveJiraTemplateFieldIds(
   return catalog.filter((entry) => same(entry.name, reference)).map((entry) => entry.id);
 }
 
-/** Section name to whether it has content; a repeated heading merges into one section. */
+/**
+ * Section content of the projected Jira wire text. A native numbered list is not a heading;
+ * explicitly tagged Markdown has already been serialized to native wiki headings.
+ */
 function sectionContent(description: string): ReadonlyMap<string, boolean> {
   const sections = new Map<string, boolean>();
-  for (const section of readJiraDescriptionSections(description)) {
+  for (const section of readJiraDescriptionSections(description, "jira-wiki")) {
     const key = normalizeJiraSectionHeading(section.title);
     sections.set(key, (sections.get(key) ?? false) || section.hasContent);
   }
@@ -178,7 +182,11 @@ function raise(context: Context, ruleId: JiraTemplateViolation["ruleId"], subjec
 }
 
 function textOf(context: Context, id: string): string {
-  return jiraTemplateValueText(context.subject.fields[id]);
+  return jiraTemplateValueText(fieldValue(context, id));
+}
+function fieldValue(context: Context, id: string): unknown {
+  const value = context.subject.fields[id];
+  return id === "description" ? (projectJiraDescriptionInput(value)?.text ?? value) : value;
 }
 
 function matchesPattern(pattern: string, value: string): boolean {
@@ -211,7 +219,7 @@ function checkSections(context: Context): void {
 function fieldPresent(context: Context, reference: string): boolean | undefined {
   const ids = resolveJiraTemplateFieldIds(reference, context.catalog);
   if (ids.length === 0) return undefined;
-  return ids.some((id) => jiraTemplateValuePresent(context.subject.fields[id]));
+  return ids.some((id) => jiraTemplateValuePresent(fieldValue(context, id)));
 }
 
 function checkFields(context: Context): void {

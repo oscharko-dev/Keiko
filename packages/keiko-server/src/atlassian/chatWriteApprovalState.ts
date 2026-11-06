@@ -67,6 +67,10 @@ function matchesApprovalSubject(entry: ChatWriteApprovalEntry): boolean {
       approval.chatId === subject.chatId &&
       approval.configurationDigest === subject.configurationDigest
     );
+  return subject.kind === undefined && matchesJiraApprovalSubject(entry);
+}
+function matchesJiraApprovalSubject(entry: ChatWriteApprovalEntry): boolean {
+  const { approval, subject } = entry;
   return (
     approval.kind === "jira-chat-write" &&
     sameReadGrantSubject(entry, subject) &&

@@ -6,6 +6,8 @@ import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-
 import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
 import type { updateChatConnectedScopes } from "@/lib/api";
 import { ConnectedScopePill } from "../ConnectedScopePill";
+import { ChatWindow } from "../ChatWindow";
+import { ChatSessionProvider } from "../context/ChatSessionContext";
 import { toUserErrorNotice } from "../format-error";
 import type {
   Chat,
@@ -89,6 +91,7 @@ beforeAll(async () => {
 vi.mock("@/lib/api", async (original) => {
   const api = await original<typeof import("@/lib/api")>();
   return {
+    ...api,
     ApiError: api.ApiError,
     StreamingUnavailableError: api.StreamingUnavailableError,
     askGrounded: vi.fn(),
@@ -311,6 +314,38 @@ function ImmediateChatBindingHarness({ target }: { readonly target: Chat }): Rea
 }
 
 describe("useChatSession bootstrap", () => {
+  it("shares event-driven model reads and stays quiet across time, focus and visibility", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "startup-model" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+    const { result, unmount } = renderHook(() => ({
+      first: useChatSession({ autoCreate: false }),
+      second: useChatSession({ autoCreate: false }),
+      settled: useGatewayModelCatalogSettled(),
+    }));
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(300_000));
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await act(() => vi.advanceTimersByTimeAsync(300_000));
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "changed-model" })] });
+    act(() => notifyGatewayConfigUpdated());
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+    expect(result.current.first.models.map((entry) => entry.id)).toEqual(["changed-model"]);
+    expect(result.current.second.models.map((entry) => entry.id)).toEqual(["changed-model"]);
+    expect(result.current.settled).toBe(true);
+    act(() => notifyGatewayModelReadinessUpdated());
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetchModels).toHaveBeenCalledTimes(3);
+    unmount();
+    vi.useRealTimers();
+  });
+
   it("reloads a bootstrap snapshot invalidated by an acknowledged scope mutation", async () => {
     const initial = chat({ id: "chat-scope-bootstrap", updatedAt: 1 });
     const changed = chat({
@@ -361,7 +396,7 @@ describe("useChatSession bootstrap", () => {
     expect(fetchModels).toHaveBeenCalledWith(expect.any(String), true);
   });
 
-  it("continues quick projection reads during reload discovery even for already-ready models", async () => {
+  it("does not reread ready models as time advances", async () => {
     vi.useFakeTimers();
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "chat-live", conversationReady: true, toolCalling: true })],
@@ -372,7 +407,7 @@ describe("useChatSession bootstrap", () => {
       await act(() => vi.advanceTimersByTimeAsync(10_001));
       const calls = vi.mocked(fetchModels).mock.calls.length;
       await act(() => vi.advanceTimersByTimeAsync(5_000));
-      expect(fetchModels).toHaveBeenCalledTimes(calls + 1);
+      expect(fetchModels).toHaveBeenCalledTimes(calls);
     } finally {
       unmount();
       vi.useRealTimers();
@@ -606,7 +641,7 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.selectedModel).toBe("chat-alt");
   });
 
-  it("adopts startup readiness in the background without Settings or losing selection", async () => {
+  it("adopts announced startup readiness without Settings or losing selection", async () => {
     vi.useFakeTimers();
     const catalogUpdated = vi.fn();
     window.addEventListener("keiko:gateway-model-catalog-updated", catalogUpdated);
@@ -629,9 +664,8 @@ describe("useChatSession bootstrap", () => {
         model({ id: "chat-waking", conversationReady: true }),
       ],
     });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_000);
-    });
+    act(() => notifyGatewayModelReadinessUpdated());
+    await act(() => vi.advanceTimersByTimeAsync(1));
     expect(result.current.models).toHaveLength(2);
     expect(result.current.selectedModel).toBe("chat-live");
     expect(catalogUpdated).toHaveBeenCalledOnce();
@@ -647,7 +681,7 @@ describe("useChatSession bootstrap", () => {
     vi.useRealTimers();
   });
 
-  it("keeps a deliberate choice through a background readiness outage and restores it", async () => {
+  it("keeps a deliberate choice through announced readiness changes and restores it", async () => {
     vi.useFakeTimers();
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "chat-live" }), model({ id: "chat-alt" })],
@@ -660,20 +694,21 @@ describe("useChatSession bootstrap", () => {
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "chat-live" }), model({ id: "chat-alt", conversationReady: false })],
     });
-    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    act(() => notifyGatewayModelReadinessUpdated());
+    await act(() => vi.advanceTimersByTimeAsync(1));
     expect(result.current.selectedModel).toBeUndefined();
     expect(result.current.noEligibleModels).toBe(false);
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "chat-live" }), model({ id: "chat-alt" })],
     });
-    act(() => window.dispatchEvent(new Event("focus")));
+    act(() => notifyGatewayModelReadinessUpdated());
     await act(() => vi.advanceTimersByTimeAsync(1));
     expect(result.current.selectedModel).toBe("chat-alt");
     unmount();
     vi.useRealTimers();
   });
 
-  it("clears only the recovered catalog error after a background read succeeds", async () => {
+  it("clears the recovered catalog error after an explicit retry succeeds", async () => {
     vi.useFakeTimers();
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
@@ -684,14 +719,15 @@ describe("useChatSession bootstrap", () => {
     act(() => requestGatewayModelCatalogRefresh());
     await act(() => vi.advanceTimersByTimeAsync(1));
     expect(result.current.error).toContain("Synthetic catalog failure.");
-    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    act(() => requestGatewayModelCatalogRefresh());
+    await act(() => vi.advanceTimersByTimeAsync(1));
     expect(result.current.error).toBeUndefined();
     expect(result.current.selectedModel).toBe("chat-live");
     unmount();
     vi.useRealTimers();
   });
 
-  it("pauses background model reads while hidden and catches up when visible", async () => {
+  it("does not reread models on visibility changes", async () => {
     vi.useFakeTimers();
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
@@ -705,41 +741,35 @@ describe("useChatSession bootstrap", () => {
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     act(() => document.dispatchEvent(new Event("visibilitychange")));
     await act(() => vi.advanceTimersByTimeAsync(1));
-    expect(fetchModels).toHaveBeenCalledTimes(calls + 1);
+    expect(fetchModels).toHaveBeenCalledTimes(calls);
     unmount();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
-  it("backs off failed background reads and reports one correlated failure per streak", async () => {
+  it("keeps a failed model catalog quiet until an explicit retry", async () => {
     vi.useFakeTimers();
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
-    const diagnostic = vi.fn();
-    setClientDiagnosticWriter(diagnostic);
-    const { unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+    const { result, unmount } = renderHook(() => useChatSession({ autoCreate: false }));
     await act(() => vi.advanceTimersByTimeAsync(1));
-    const calls = vi.mocked(fetchModels).mock.calls.length;
-    vi.mocked(fetchModels).mockRejectedValue(new TypeError("Synthetic transport outage."));
-    await act(() => vi.advanceTimersByTimeAsync(30_000));
-    expect(fetchModels).toHaveBeenCalledTimes(calls + 3);
-    expect(diagnostic.mock.calls.filter(([, meta]) => meta?.kind === "other")).toHaveLength(1);
-    expect(diagnostic).toHaveBeenCalledWith(
-      expect.stringContaining("Background model catalog refresh failed (TypeError)"),
-      expect.objectContaining({ kind: "other", correlationId: expect.any(String) }),
-    );
-    expect(
-      diagnostic.mock.calls.find(([, meta]) => meta?.kind === "other")?.[1].correlationId,
-    ).toBe(vi.mocked(fetchModels).mock.calls[calls]?.[0]);
+    const initialCalls = vi.mocked(fetchModels).mock.calls.length;
+    vi.mocked(fetchModels).mockRejectedValue(new TypeError("Synthetic catalog outage."));
+    act(() => requestGatewayModelCatalogRefresh());
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(result.current.modelCatalogStatus).toBe("failed");
+    expect(result.current.selectedModel).toBeUndefined();
+    await act(() => vi.advanceTimersByTimeAsync(300_000));
+    act(() => window.dispatchEvent(new Event("focus")));
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetchModels).toHaveBeenCalledTimes(initialCalls + 1);
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
-    act(() => window.dispatchEvent(new Event("focus")));
+    act(() => requestGatewayModelCatalogRefresh());
     await act(() => vi.advanceTimersByTimeAsync(1));
-    vi.mocked(fetchModels).mockRejectedValue(new TypeError("Synthetic second outage."));
-    act(() => window.dispatchEvent(new Event("focus")));
-    await act(() => vi.advanceTimersByTimeAsync(1));
-    expect(diagnostic.mock.calls.filter(([, meta]) => meta?.kind === "other")).toHaveLength(2);
+    expect(fetchModels).toHaveBeenCalledTimes(initialCalls + 2);
+    expect(result.current.modelCatalogStatus).toBe("ready");
+    expect(result.current.selectedModel).toBe("chat-live");
     unmount();
-    resetClientDiagnosticWriter();
     vi.useRealTimers();
   });
 
@@ -6718,7 +6748,7 @@ async function mountSelectionReview(
 
 async function adoptReviewCatalog(models: readonly ModelCapability[]): Promise<void> {
   vi.mocked(fetchModels).mockResolvedValue({ models: [...models] });
-  act(() => window.dispatchEvent(new Event("focus")));
+  act(() => notifyGatewayModelReadinessUpdated());
   await act(() => vi.advanceTimersByTimeAsync(1));
 }
 
@@ -6878,7 +6908,7 @@ describe("actual model selection lifecycle evidence", () => {
         durationMs: 0,
         modelCatalog: {
           surface: "chat",
-          source: "background",
+          source: "foreground",
           configuredModelCount: 2,
           usableModelCount: 1,
           selectionProvenance: "human",
@@ -6902,7 +6932,7 @@ describe("actual model selection lifecycle evidence", () => {
           setTimeout(() => resolve({ models: [model(), model({ id: "chat-b" })] }), 250);
         }),
     );
-    act(() => window.dispatchEvent(new Event("focus")));
+    act(() => notifyGatewayModelReadinessUpdated());
     await act(() => vi.advanceTimersByTimeAsync(250));
     const adoptions = diagnostic.mock.calls
       .map(([, meta]) => meta)
@@ -6946,7 +6976,7 @@ describe("actual model selection lifecycle evidence", () => {
     act(() => requestGatewayModelCatalogRefresh());
     await act(() => vi.advanceTimersByTimeAsync(1));
     await act(() => vi.advanceTimersByTimeAsync(5_000));
-    expect(updated).not.toHaveBeenCalled();
+    expect(updated).toHaveBeenCalledOnce();
     unmount();
     window.removeEventListener("keiko:gateway-model-catalog-updated", updated);
   });
@@ -6959,3 +6989,285 @@ vi.mock("@/lib/markdown-skills-api", () => ({
     .mockResolvedValue({ availability: "none", selection: { revision: 0, skill: null } }),
   changeMarkdownSkillSelection: vi.fn(),
 }));
+
+function BufferedCancelWindow({
+  capture,
+}: {
+  readonly capture: (session: ChatSessionApi) => void;
+}): ReactNode {
+  const session = useChatSession({ autoCreate: false });
+  capture(session);
+  return (
+    <ChatSessionProvider value={session}>
+      <ChatWindow />
+    </ChatSessionProvider>
+  );
+}
+
+it.each(["terminal", "read-failure"] as const)(
+  "reconciles cancellation after an observed tool transcript: %s",
+  async (settlement) => {
+    const diagnostics = vi.fn();
+    setClientDiagnosticWriter(diagnostics);
+    try {
+      const selectedChat = chat({
+        connectedScopes: [
+          {
+            kind: "workspace-root",
+            root: "/repo",
+            relativePaths: [],
+            connectedAtMs: 1,
+          },
+        ],
+      });
+      vi.mocked(fetchModels).mockResolvedValue({
+        models: [model({ streaming: false })],
+      });
+      vi.mocked(fetchProjects).mockResolvedValue({ projects: [project()] });
+      vi.mocked(fetchChats).mockResolvedValue({ chats: [selectedChat] });
+      let pending: ChatMessage | undefined;
+      let aborted = false;
+      let reconciliationReads = 0;
+      const terminal = deferred<Awaited<ReturnType<typeof fetchChatMessages>>>();
+      vi.mocked(fetchChatMessages).mockImplementation(() => {
+        if (pending === undefined) return Promise.resolve({ messages: [] });
+        if (!aborted) return Promise.resolve({ messages: [pending] });
+        reconciliationReads++;
+        return reconciliationReads === 1
+          ? Promise.resolve({ messages: [pending] })
+          : terminal.promise;
+      });
+      vi.mocked(askGrounded).mockImplementation(
+        (request, signal) =>
+          new Promise((_resolve, reject) => {
+            void canonicalTurnReferenceForClient(selectedChat.id, request.clientTurnId ?? "").then(
+              (canonicalTurnRef) => {
+                pending = message({
+                  id: "canonical-cancelled-user",
+                  canonicalTurnRef,
+                  turnState: "pending",
+                  toolTranscript: {
+                    schemaVersion: 1,
+                    exchanges: [
+                      {
+                        call: {
+                          id: "runtime-inventory",
+                          name: "knowledge_documents",
+                          arguments: { view: "inventory" },
+                          origin: "runtime",
+                        },
+                        result: {
+                          schemaVersion: 1,
+                          invocationId: "inventory",
+                          toolRef: null,
+                          projectionDigest: null,
+                          effectStarted: true,
+                          metrics: {
+                            inputBytes: 20,
+                            outputBytes: 100,
+                            resultCount: 9,
+                            durationMs: 20,
+                          },
+                          status: "completed",
+                          reason: "none",
+                          page: {
+                            truncated: false,
+                            reason: "none",
+                            cursor: null,
+                          },
+                          data: {},
+                        },
+                      },
+                    ],
+                  },
+                });
+              },
+            );
+            signal?.addEventListener(
+              "abort",
+              () => {
+                aborted = true;
+                reject(new DOMException("cancelled", "AbortError"));
+              },
+              { once: true },
+            );
+          }),
+      );
+      let current: ChatSessionApi | undefined;
+      render(
+        <BufferedCancelWindow
+          capture={(session) => {
+            current = session;
+          }}
+        />,
+      );
+      await waitFor(() => expect(current?.loading).toBe(false));
+      await waitFor(() => expect(current?.activeChat?.id).toBe(selectedChat.id));
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        delivery = current?.sendMessage({
+          text: "Review this source",
+          reportOutcome: true,
+        });
+      });
+      await waitFor(() => expect(askGrounded).toHaveBeenCalledTimes(1));
+      await waitFor(
+        () =>
+          expect(current?.messages.some((entry) => entry.toolTranscript !== undefined)).toBe(true),
+        { timeout: 4000 },
+      );
+      expect(screen.getAllByRole("region", { name: "Progress" })).toHaveLength(1);
+      fireEvent.click(screen.getByRole("button", { name: "Cancel response" }));
+      await waitFor(() => expect(reconciliationReads).toBe(1));
+      expect(current?.sendStatus).toBe("cancelled");
+      expect(current?.messages.find((entry) => entry.id === pending?.id)?.turnState).toBe(
+        "pending",
+      );
+      expect(screen.getByRole("listitem", { current: "step" })).toBeInTheDocument();
+      await waitFor(() => expect(reconciliationReads).toBe(2), {
+        timeout: 4000,
+      });
+      await act(async () => {
+        if (settlement === "terminal")
+          terminal.resolve({
+            messages: [{ ...pending!, turnState: "cancelled" }],
+          });
+        else {
+          const failure = new ApiError("UNAVAILABLE", "Private reconciliation canary", 503);
+          failure.correlationId = "canonical-retry-correlation";
+          terminal.reject(failure);
+        }
+        await delivery;
+      });
+      expect(current?.messages.find((entry) => entry.id === pending?.id)?.turnState).toBe(
+        settlement === "terminal" ? "cancelled" : "pending",
+      );
+      if (settlement === "terminal") {
+        expect(screen.queryByRole("listitem", { current: "step" })).toBeNull();
+        expect(screen.queryByText("Preparing next step")).toBeNull();
+        expect(
+          diagnostics.mock.calls.some(([text]) => text === "Canonical chat reconciliation failed."),
+        ).toBe(false);
+      } else {
+        expect(diagnostics).toHaveBeenCalledWith(
+          "Canonical chat reconciliation failed.",
+          expect.objectContaining({
+            correlationId: "canonical-retry-correlation",
+            kind: "other",
+            errorKind: "unavailable",
+            errorEvidence: expect.objectContaining({ errorClass: "ApiError" }),
+          }),
+        );
+        expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("Private");
+      }
+      expect(screen.getByRole("button", { name: "Send message" })).toBeInTheDocument();
+      expect(askGrounded).toHaveBeenCalledTimes(1);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  },
+);
+
+it("adopts the startup verdict once across mounted chats without later polling", async () => {
+  vi.useFakeTimers();
+  let resolve: ((value: Awaited<ReturnType<typeof fetchModels>>) => void) | undefined;
+  const pending = new Promise<Awaited<ReturnType<typeof fetchModels>>>((finish) => {
+    resolve = finish;
+  });
+  vi.mocked(fetchModels)
+    .mockResolvedValueOnce({ models: [model({ id: "startup-a" })], startupReadinessPending: true })
+    .mockReturnValueOnce(pending);
+  vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+  const { result, unmount } = renderHook(() => ({
+    first: useChatSession({ autoCreate: false }),
+    second: useChatSession({ autoCreate: false }),
+  }));
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  expect(result.current.first.loading).toBe(false);
+  expect(result.current.first.selectedModel).toBe("startup-a");
+  expect(fetchModels).toHaveBeenCalledTimes(2);
+  expect(fetchModels).toHaveBeenLastCalledWith(expect.any(String), false, {
+    waitForStartup: true,
+    signal: expect.any(AbortSignal),
+  });
+  await act(async () => {
+    resolve?.({ models: [model({ id: "startup-a", conversationReady: false })] });
+  });
+  expect(result.current.first.models).toEqual([]);
+  expect(result.current.second.models).toEqual([]);
+  expect(result.current.first.selectedModel).toBeUndefined();
+  await act(() => vi.advanceTimersByTimeAsync(600_000));
+  act(() => {
+    window.dispatchEvent(new Event("focus"));
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  expect(fetchModels).toHaveBeenCalledTimes(2);
+  unmount();
+});
+
+it("discards and aborts a startup settlement superseded by a gateway configuration refresh", async () => {
+  let resolve: ((value: Awaited<ReturnType<typeof fetchModels>>) => void) | undefined;
+  const pending = new Promise<Awaited<ReturnType<typeof fetchModels>>>((finish) => {
+    resolve = finish;
+  });
+  vi.mocked(fetchModels)
+    .mockResolvedValueOnce({ models: [model({ id: "startup-a" })], startupReadinessPending: true })
+    .mockReturnValueOnce(pending)
+    .mockResolvedValue({ models: [model({ id: "replacement-b" })] });
+  vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+  const { result, unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+  await waitFor(() => expect(fetchModels).toHaveBeenCalledTimes(2));
+  const signal = vi.mocked(fetchModels).mock.calls[1]?.[2]?.signal;
+  act(() => notifyGatewayConfigUpdated());
+  await waitFor(() => expect(result.current.selectedModel).toBe("replacement-b"));
+  expect(signal?.aborted).toBe(true);
+  await act(async () => {
+    resolve?.({ models: [model({ id: "startup-a", conversationReady: false })] });
+  });
+  expect(result.current.selectedModel).toBe("replacement-b");
+  unmount();
+});
+
+it("preserves the held usable catalog when the passive startup observation fails", async () => {
+  vi.useFakeTimers();
+  const diagnostic = vi.fn();
+  setClientDiagnosticWriter(diagnostic);
+  vi.mocked(fetchModels)
+    .mockResolvedValueOnce({ models: [model()], startupReadinessPending: true })
+    .mockRejectedValueOnce(new Error("PRIVATE startup observation unavailable."));
+  vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+  const { result, unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+  try {
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(result.current.error).toBeUndefined();
+    expect(result.current.modelCatalogStatus).toBe("ready");
+    expect(result.current.models).toEqual([model()]);
+    expect(result.current.selectedModel).toBe(model().id);
+    expect(diagnostic).toHaveBeenCalledWith(
+      "Startup model readiness observation failed.",
+      expect.objectContaining({
+        correlationId: expect.any(String),
+        errorEvidence: expect.any(Object),
+      }),
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("PRIVATE startup observation");
+    await act(() => vi.advanceTimersByTimeAsync(600_000));
+    act(() => window.dispatchEvent(new Event("focus")));
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+  } finally {
+    unmount();
+    resetClientDiagnosticWriter();
+  }
+});
+
+it("aborts the shared startup metadata read when its final chat leaves", async () => {
+  vi.mocked(fetchModels)
+    .mockResolvedValueOnce({ models: [model()], startupReadinessPending: true })
+    .mockReturnValueOnce(new Promise(() => undefined));
+  vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+  const { unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+  await waitFor(() => expect(fetchModels).toHaveBeenCalledTimes(2));
+  const signal = vi.mocked(fetchModels).mock.calls[1]?.[2]?.signal;
+  unmount();
+  expect(signal?.aborted).toBe(true);
+});

@@ -875,8 +875,9 @@ const CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION = defineActivityLogOperation({
       values: ["client-disconnect", "route-deadline", "backpressure-killed", "run-stopped"],
     },
     ...OUTPUT_REPAIR_FIELDS,
-    // #3907 AC3: on an accepted answer, whether it renewed the model's same-generation chat
-    // readiness; `not-renewable` when there was no success to renew or the configuration changed.
+    // Legacy field name (#3907 AC3): an accepted answer updates same-generation serving evidence
+    // while preserving the readiness check timestamp. It extends no TTL and starts no probe;
+    // `not-renewable` means no eligible positive observation or a replaced configuration.
     readinessRenewal: {
       type: "string",
       dataClass: "closed-enum",
@@ -3861,7 +3862,7 @@ type RecordBufferedOutcome = (
 // The outcome line of a buffered turn: the answer's counts, the reasoning it carried to the
 // runtime (#3878) or withheld, and — from the settled answer — the gateway's steered repair (#3873).
 // The finish reasons that prove the model served the turn (ADR-0171): an error, a cancellation or a
-// content filter never renews readiness, even when its answer reached the runtime.
+// content filter never updates the serving observation, even when its answer reached the runtime.
 const SERVING_FINISH_REASONS: ReadonlySet<NormalizedResponse["finishReason"]> = new Set<
   NormalizedResponse["finishReason"]
 >(["stop", "tool_calls", "length"]);
@@ -4774,7 +4775,7 @@ function configuredConversationSubset(
   };
 }
 
-/** A new run is admitted only on fresh serving evidence; its start checked the model just before. */
+/** A new run needs a positive current-generation serving observation; its age never starts a probe. */
 function resolveFreshCodingProfile(
   config: GatewayConfig | undefined,
   holder: RuntimeGatewayConfig | undefined,
@@ -4802,8 +4803,8 @@ function resolveFreshCodingProfile(
 
 /**
  * What the Workbench may claim before a run, judged as Chat judges its picker: an observed failure
- * is not ready, and a model whose answer expired or that nobody checked yet is usable, because the
- * start of its run checks it first (`awaitCodingRunModelReadiness`). A fresh-only projection turned
+ * is not ready. An unknown choice remains selectable, but run minting requires its positive startup
+ * or explicit Settings observation; neither picker reads nor run starts initiate a probe. An age-only projection turned
  * every expired answer into "Keiko is still checking the model source" with no check running
  * (customer, 1.3.4).
  */
@@ -5148,7 +5149,7 @@ export async function handleCodingSidecarGatewayProfile(
   // missing configuration must never cause a paid provider probe (ADR-0124 D5). A probe can cure a
   // lapsed proof and a model nobody proved yet (#3578); the targets decide whether any model needs
   // one, and a refuted or non-chat model never does.
-  if (elected.status === "available" || probeCuresShortfall(elected.reason)) {
+  if (checkRequested && (elected.status === "available" || probeCuresShortfall(elected.reason))) {
     // #3591 (1.1.7): the browser reads this profile with a 15 s deadline while a probe against a
     // slow gateway may take minutes. Wait a bounded moment for the elected model's proof; past it,
     // answer with the projection (`model-verification-pending` while the probe runs) and let
@@ -5171,10 +5172,8 @@ export async function handleCodingSidecarGatewayProfile(
   return { status: 200, body: gatewayReadinessProjection(ctx, deps, modelId) };
 }
 
-// Choosing a model in the picker checks it (`check=1`), when it holds no fresh answer, exactly as a
-// Chat request would. Every other read only describes what is known: a re-read after a catalog
-// update, a configuration change or a running check never starts one, so an open Workbench probes
-// nothing in the background (customer 1.3.4).
+// A picker selection (`check=1`) may join configuration-owned startup verification. Every other
+// read describes cached readiness immediately; neither path starts a basic-chat health check.
 function electedConversationReadiness(
   ctx: RouteContext,
   deps: UiHandlerDeps,

@@ -1787,7 +1787,7 @@ describe("handleGroundedAsk", () => {
     },
   );
 
-  it("requires live skill authority before grounded turn persistence regardless of client preconditions", async () => {
+  it("refuses missing skill authority before model readiness regardless of client preconditions", async () => {
     const { chatId, projectPath } = await setupChatWithScope();
     seedScopedRepo(projectPath);
     const skill = store.markdownSkills.import({
@@ -1803,6 +1803,9 @@ describe("handleGroundedAsk", () => {
     if (!pair.paired) throw new Error("Expected pairing");
     channel.signOut(pair.cookieToken);
     const seen: GatewayRequest[] = [];
+    const config = customModelConfig();
+    const holder = unreadyRuntimeGatewayConfig(config);
+    const probe = vi.spyOn(readiness, "awaitInitializedConversationReadiness");
     for (const revision of [undefined, 1, null]) {
       for (const cookie of [undefined, `${APP_SESSION_COOKIE_NAME}=${pair.cookieToken}`]) {
         const result = await handleGroundedAsk(
@@ -1815,14 +1818,70 @@ describe("handleGroundedAsk", () => {
             fakeRes(),
             cookie,
           ),
-          deps(fakeModel("Must not dispatch", seen), {}, { codingAppSessionChannel: channel }),
+          deps(
+            fakeModel("Must not dispatch", seen),
+            {},
+            { config, gatewayConfig: holder, codingAppSessionChannel: channel },
+          ),
         );
         expect(result).toMatchObject({ status: 404 });
         expect(store.listMessages(chatId)).toHaveLength(0);
       }
     }
+    expect(probe).not.toHaveBeenCalled();
+    probe.mockRestore();
     expect(seen).toHaveLength(0);
   });
+
+  it.each(["authority", "selection"] as const)(
+    "rechecks skill %s after asynchronous model readiness before persisting the turn",
+    async (change) => {
+      const { chatId, projectPath } = await setupChatWithScope();
+      seedScopedRepo(projectPath);
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from("# Private method\nCheck boundaries.").toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      const seen: GatewayRequest[] = [];
+      const config = customModelConfig();
+      const paired = pairedReportOwner(tmp);
+      const probe = vi
+        .spyOn(readiness, "awaitInitializedConversationReadiness")
+        .mockImplementationOnce(async (): Promise<void> => {
+          await Promise.resolve();
+          if (change === "authority")
+            paired.owner.codingAppSessionChannel?.signOut(
+              decodeURIComponent(paired.cookie.slice(paired.cookie.indexOf("=") + 1)),
+            );
+          else store.markdownSkills.delete(skill.id, skill.revision);
+        });
+      try {
+        const result = await handleGroundedAsk(
+          ctx(
+            JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION }),
+            fakeRes(),
+            paired.cookie,
+          ),
+          deps(
+            fakeModel("Must not dispatch", seen),
+            {},
+            {
+              config,
+              gatewayConfig: runtimeGatewayConfig(config, true),
+              codingAppSessionChannel: paired.owner.codingAppSessionChannel,
+            },
+          ),
+        );
+        expect(probe).toHaveBeenCalledOnce();
+        expect(result).toMatchObject({ status: change === "authority" ? 404 : 409 });
+        expect(store.listMessages(chatId)).toHaveLength(0);
+        expect(seen).toHaveLength(0);
+      } finally {
+        probe.mockRestore();
+      }
+    },
+  );
 
   it.each(["single", "multiple"] as const)(
     "applies the pinned skill once at the actual %s-folder synthesis boundary",
@@ -2428,7 +2487,7 @@ describe("handleGroundedAsk", () => {
         status: 400,
         body: {
           error: {
-            code: "BAD_REQUEST",
+            code: "CONVERSATION_MODEL_NOT_READY",
             message:
               "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
           },
@@ -2504,7 +2563,7 @@ describe("handleGroundedAsk", () => {
         status: 400,
         body: {
           error: {
-            code: "BAD_REQUEST",
+            code: "CONVERSATION_MODEL_NOT_READY",
             message:
               "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
           },

@@ -19,6 +19,7 @@ import {
   deepLinkToolFor,
   headerStatus,
   normalizeEditorWindowCfg,
+  openModelSettingsPanel,
   opensDirectlyFromPalette,
 } from "./AppShell";
 import type { AppWindow, Connection } from "./windows/types";
@@ -737,4 +738,11 @@ describe("deepLinkToolFor (S3358)", () => {
   it("returns null for any other path", () => {
     expect(deepLinkToolFor("/settings")).toBeNull();
   });
+});
+
+it("opens or focuses the existing model settings singleton without toggling it closed", () => {
+  const api = fakeApi();
+  openModelSettingsPanel(api);
+  expect(api.add).toHaveBeenCalledWith("settings", { initialTab: "models" });
+  expect(api.toggleTool).not.toHaveBeenCalled();
 });

@@ -5,7 +5,12 @@
 // is flattened into dotted-path rows by the renderer, so no leaf goes unseen. The server verifies
 // the action digest, not this model.
 import type { OptionalWidgetTranslate, WidgetMessageKey } from "@/lib/optional-widget-i18n";
-import { jiraDraftValueOf, type JiraDraftField, type JiraDraftValue } from "./jiraDraftTree";
+import {
+  jiraDraftValueOf,
+  jiraDraftFieldValueOf,
+  type JiraDraftField,
+  type JiraDraftValue,
+} from "./jiraDraftTree";
 import { jiraNamed, jiraNameOf, NO_JIRA_NAMES, restatesTarget, type JiraNames } from "./jiraNames";
 
 type Raw = Readonly<Record<string, unknown>>;
@@ -92,7 +97,10 @@ function jiraFacts(key: string, value: unknown, t: OptionalWidgetTranslate): rea
     case "fields":
       return fieldMap === undefined
         ? [{ id: key, value: jiraDraftValueOf(value) }]
-        : Object.entries(fieldMap).map(([id, field]) => ({ id, value: jiraDraftValueOf(field) }));
+        : Object.entries(fieldMap).map(([id, field]) => ({
+            id,
+            value: jiraDraftFieldValueOf(id, field),
+          }));
     case "links":
       return [listFact("chat.jira.fact.links", value, (entry) => linkValue(entry, t), t)];
     case "updates":

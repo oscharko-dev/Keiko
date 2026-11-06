@@ -2507,15 +2507,19 @@ export class Gateway {
     request: GatewayCallRequest,
     capability: ModelCapability,
     correctsUnusableAttempt = false,
+    transportPromptTokens?: number,
   ): ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>> {
     const admit = request.attemptAdmission;
     if (admit === undefined) return undefined;
     const profile = deriveContextProfileFromCapability(capability);
     const reservation = admit({
-      promptTokens: countGatewayPromptTokens(request, profile.tokenAccounting, {
-        contextWindow: profile.maxInputTokens,
-        reasoningHistoryField: this.providers.get(request.modelId)?.reasoningHistoryField,
-      }),
+      promptTokens: Math.max(
+        countGatewayPromptTokens(request, profile.tokenAccounting, {
+          contextWindow: profile.maxInputTokens,
+          reasoningHistoryField: this.providers.get(request.modelId)?.reasoningHistoryField,
+        }),
+        transportPromptTokens ?? 0,
+      ),
       maxOutputTokens: request.maxOutputTokens ?? profile.reservedOutputTokens,
       ...(correctsUnusableAttempt ? { correctsUnusableAttempt: true as const } : {}),
     });
@@ -2593,6 +2597,7 @@ export class Gateway {
               dispatched ||= observed;
             },
             announced,
+            input.promptTokens,
           );
         },
       },
@@ -2608,8 +2613,16 @@ export class Gateway {
     correlationId: string,
     observeDispatch: (dispatched: boolean) => void,
     correctsUnusableAttempt: boolean,
+    promptTokens: number,
   ): NonNullable<ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>> {
-    const caller = this.callerAttemptReservation(request, capability, correctsUnusableAttempt);
+    if (!Number.isSafeInteger(promptTokens) || promptTokens < 0)
+      throw new CallerAttemptAdmissionError("Invalid transport prompt token count before dispatch");
+    const caller = this.callerAttemptReservation(
+      request,
+      capability,
+      correctsUnusableAttempt,
+      promptTokens,
+    );
     let spend: GatewaySpendReservation | undefined;
     try {
       request = callerAdmittedRequest(request, caller);

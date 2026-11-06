@@ -144,4 +144,34 @@ describe("quiet private draft persistence", () => {
     expect(screen.getByRole("alert")).toBe(alert);
     expect(screen.getByRole("button", { name: "Retry draft save" })).toBeVisible();
   });
+  it.each([401, 403, 404])(
+    "does not report an empty admitted composer as an unsaved draft after an unavailable first read (%s)",
+    async (status) => {
+      vi.mocked(readChatDraft).mockRejectedValue(new ApiError("NOT_FOUND", "Unavailable", status));
+      const user = userEvent.setup();
+      render(<DraftHarness />);
+      await waitFor(() => expect(readChatDraft).toHaveBeenCalledOnce());
+      const textbox = screen.getByRole("textbox");
+      await user.type(textbox, "Prompt before send admission");
+      expect(screen.getByRole("alert")).toHaveTextContent("has not been saved");
+      await user.clear(textbox);
+      expect(textbox).toHaveValue("");
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(writeChatDraft).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains the initial read failure after an unsaved local draft is cleared", async () => {
+    vi.mocked(readChatDraft).mockRejectedValue(new TypeError("offline"));
+    const user = userEvent.setup();
+    render(<DraftHarness />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("saved draft could not be loaded");
+    const textbox = screen.getByRole("textbox");
+    await user.type(textbox, "Local prompt");
+    expect(screen.getByRole("alert")).toHaveTextContent("changes have not been saved");
+    await user.clear(textbox);
+    expect(screen.getByRole("alert")).toHaveTextContent("saved draft could not be loaded");
+    expect(screen.getByRole("button", { name: "Retry loading draft" })).toBeVisible();
+    expect(writeChatDraft).not.toHaveBeenCalled();
+  });
 });

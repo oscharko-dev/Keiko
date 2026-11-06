@@ -1,11 +1,12 @@
 // Issue #198 — state management hook for the capsule detail view.
 // Split from capsule-detail.tsx to keep both files under the 400-LOC budget.
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { fetchCapsuleDetail } from "@/lib/local-knowledge-api";
 import type { CapsuleDetail } from "@/lib/local-knowledge-api";
 import { formatError } from "../format-error";
+import { beginPodSelectionEvidence } from "../pod-selection-evidence";
 
 type DetailLoadStatus = "loading" | "ready" | "error";
 
@@ -24,13 +25,20 @@ export function useCapsuleDetail(
   const [data, setData] = useState<CapsuleDetail | null>(null);
   const [loadStatus, setLoadStatus] = useState<DetailLoadStatus>("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
+  const activeScope = useRef<{
+    readonly capsuleId: KnowledgeCapsuleId;
+    readonly settled: ReturnType<typeof beginPodSelectionEvidence>;
+  } | null>(null);
 
   const load = useCallback(
     async (opts: { readonly quiet?: boolean } = {}): Promise<void> => {
+      const scope = activeScope.current;
+      if (scope?.capsuleId !== capsuleId) return;
       if (capsuleId === "") {
         setData(null);
         setLoadError("No Knowledge Pod selected.");
         setLoadStatus("error");
+        scope.settled("unavailable");
         return;
       }
       if (opts.quiet !== true) {
@@ -39,20 +47,36 @@ export function useCapsuleDetail(
       }
       try {
         const result = await fetchImpl(capsuleId);
+        if (activeScope.current !== scope) {
+          scope.settled("stale");
+          return;
+        }
         setData(result);
         setLoadStatus("ready");
+        scope.settled("applied");
       } catch (error) {
+        if (activeScope.current !== scope) {
+          scope.settled("stale");
+          return;
+        }
         if (opts.quiet === true) return;
         setLoadError(formatError(error));
         setLoadStatus("error");
+        scope.settled("failed");
       }
     },
     [capsuleId, fetchImpl],
   );
 
   useEffect(() => {
+    const scope = { capsuleId, settled: beginPodSelectionEvidence() };
+    activeScope.current = scope;
     void load();
-  }, [load]);
+    return (): void => {
+      if (activeScope.current === scope) activeScope.current = null;
+      scope.settled("cancelled");
+    };
+  }, [capsuleId, load]);
 
   useEffect(() => {
     const latestJob = data?.indexingJobs[0];
@@ -89,7 +113,7 @@ export function useCapsuleDetail(
     };
     if (!isHidden()) startPolling();
     document.addEventListener("visibilitychange", sync);
-    return () => {
+    return (): void => {
       stopPolling();
       document.removeEventListener("visibilitychange", sync);
     };
@@ -99,10 +123,22 @@ export function useCapsuleDetail(
     void load();
   }
 
+  const replacementScope = activeScope.current;
   function replaceData(nextData: CapsuleDetail): void {
+    const settled = beginPodSelectionEvidence();
+    if (
+      replacementScope === null ||
+      activeScope.current !== replacementScope ||
+      replacementScope.capsuleId !== capsuleId ||
+      nextData.capsule.id !== capsuleId
+    ) {
+      settled("stale");
+      return;
+    }
     setData(nextData);
     setLoadError(null);
     setLoadStatus("ready");
+    settled("applied");
   }
 
   return { data, loadStatus, loadError, reload, replaceData };

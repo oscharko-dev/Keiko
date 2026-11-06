@@ -201,17 +201,18 @@ function useCapsuleCreate(
   creating: boolean;
   createError: string | null;
   clearCreateError: () => void;
-  handleCreateCapsule: (name: string) => Promise<void>;
+  handleCreateCapsule: (name: string) => Promise<KnowledgeCapsuleId>;
 } {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  async function doCreate(name: string): Promise<void> {
+  async function doCreate(name: string): Promise<KnowledgeCapsuleId> {
     setCreating(true);
     setCreateError(null);
     try {
-      await createCapsuleImpl({ displayName: name });
+      const created = await createCapsuleImpl({ displayName: name });
       reload();
+      return created.capsule.id;
     } catch (error) {
       setCreateError(formatError(error));
       throw error;

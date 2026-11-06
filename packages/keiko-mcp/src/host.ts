@@ -17,6 +17,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { recordManagedMcp } from "./activity.js";
+import { mcpRequestTimeouts } from "./request-timeouts.js";
 import { ManagedMcpError, definitionIdentity, toolDefinition, toolsOf } from "./definitions.js";
 
 import { deepFreeze, isDeepFrozen } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
@@ -68,6 +69,18 @@ async function capturedResult<Context extends ManagedMcpInvocationContext>(
   return validated.value;
 }
 
+function sameProtocolMetadata(
+  left: ManagedMcpToolDeclaration,
+  right: ManagedMcpToolDeclaration,
+): boolean {
+  return (
+    left.title === right.title &&
+    left.annotations?.openWorldHint === right.annotations?.openWorldHint &&
+    left.annotations?.idempotentHint === right.annotations?.idempotentHint &&
+    Object.keys(left.annotations ?? {}).length === Object.keys(right.annotations ?? {}).length
+  );
+}
+
 class ManagedHost<Context extends ManagedMcpInvocationContext> implements ManagedMcpHost<Context> {
   readonly #contexts = new AsyncLocalStorage<Context>();
   readonly #requests = new WeakMap<Request, Context>();
@@ -95,15 +108,17 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
   ) {
     const tools = toolsOf(providers);
     this.#tools = deepFreeze(
-      tools.map(({ name, risk, descriptor, execute }) => ({
+      tools.map(({ name, risk, descriptor, execute, title, annotations }) => ({
         name,
         risk,
         descriptor: structuredClone(descriptor),
         execute,
+        ...(title === undefined ? {} : { title }),
+        ...(annotations === undefined ? {} : { annotations: structuredClone(annotations) }),
       })),
     );
     this.#catalog = deepFreeze(
-      this.#tools.map(({ name, risk, descriptor }) => ({ name, risk, descriptor })),
+      this.#tools.map(({ execute: _execute, ...declaration }) => declaration),
     );
     this.#expected = definitionIdentity(tools.map(toolDefinition));
     this.#declarations = this.declarationIdentity(tools);
@@ -127,7 +142,13 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
 
   private declarationIdentity(tools: readonly ManagedMcpTool<Context>[]): string {
     return canonicalise(
-      tools.map((tool) => ({ name: tool.name, risk: tool.risk, descriptor: tool.descriptor })),
+      tools.map((tool) => ({
+        name: tool.name,
+        risk: tool.risk,
+        descriptor: tool.descriptor,
+        title: tool.title,
+        annotations: tool.annotations,
+      })),
     );
   }
 
@@ -141,6 +162,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
           tool.descriptor === frozen[index] &&
           tool.name === admitted?.name &&
           tool.risk === admitted.risk &&
+          sameProtocolMetadata(tool, admitted) &&
           tool.execute === admitted.execute
         );
       })
@@ -182,6 +204,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
       server.registerTool(
         tool.name,
         {
+          ...(definition.title === undefined ? {} : { title: definition.title }),
           description: tool.descriptor.description,
           inputSchema: fromJsonSchema<CatalogJsonObject>(tool.descriptor.inputSchema),
           outputSchema: fromJsonSchema<CatalogJsonObject>(tool.descriptor.resultSchema),
@@ -360,10 +383,10 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
     if (tool === undefined) throw new ManagedMcpError("invalid-arguments");
     const invocation = new AbortController();
     const bound = withSignal(context, this.#lifetime.signal, invocation.signal);
-    const timeout = Math.min(30_000, tool.descriptor.bounds.maxDurationMs);
+    const timeouts = mcpRequestTimeouts(tool.descriptor.bounds.maxDurationMs);
     const timer = setTimeout(() => {
       invocation.abort();
-    }, timeout);
+    }, timeouts.maxTotalTimeout);
     timer.unref();
     try {
       const result = await this.#contexts.run(bound, async () => {
@@ -372,7 +395,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
         return this.#client.callTool(
           { name, arguments: argumentsValue },
           // Pin the admitted definition so SDK HEADER_MISMATCH recovery cannot replay effects.
-          { toolDefinition: deepFreeze(toolDefinition(tool)), signal: bound.signal, timeout },
+          { toolDefinition: deepFreeze(toolDefinition(tool)), signal: bound.signal, ...timeouts },
         );
       });
       if (result.isError)

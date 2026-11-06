@@ -26,6 +26,13 @@ import { readJiraMutationIssue } from "./jira-mutation-confirmation.js";
  */
 export interface JiraIssueTemplateSet {
   readonly templates: readonly JiraIssueTemplate[];
+  /** Current private-library provenance bound to each exact parsed template, never its body. */
+  readonly references?: readonly {
+    readonly template: JiraIssueTemplate;
+    readonly id: string;
+    readonly revision: number;
+    readonly digest: string;
+  }[];
   /** Template documents in the library that no longer parse. They fail closed. */
   readonly unreadable: number;
   /** Display names of those documents, so the refusal tells the lead which skill to repair. */
@@ -140,11 +147,20 @@ async function createIdentity(
 ): Promise<Identity | Extract<JiraTemplateGateResult, { ok: false }>> {
   const { projectId, issueTypeId } = target;
   if (!numericId(projectId) || !numericId(issueTypeId)) return MALFORMED;
-  const project = await request(`project/${projectId}`);
-  if (!project.ok) return project;
+  return readJiraCreateTemplateIdentity(request, projectId, issueTypeId);
+}
+
+/** The gate and create metadata resolve names through the same credential-bound reader. */
+export async function readJiraCreateTemplateIdentity(
+  request: JiraMutationRequest,
+  project: string,
+  issueTypeId: string,
+): Promise<Identity | Extract<JiraTemplateGateResult, { ok: false }>> {
+  const projectRead = await request(`project/${encodeURIComponent(project)}`);
+  if (!projectRead.ok) return projectRead;
   const type = await request(`issuetype/${issueTypeId}`);
   if (!type.ok) return type;
-  const key = project.body?.key;
+  const key = projectRead.body?.key;
   const name = type.body?.name;
   if (typeof key !== "string" || typeof name !== "string" || key.length === 0) return MALFORMED;
   return { projectKey: key, issueType: { id: issueTypeId, name }, prior: {} };

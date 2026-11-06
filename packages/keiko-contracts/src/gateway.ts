@@ -185,14 +185,6 @@ export interface ModelCapability {
    */
   readonly conversationReady?: boolean | undefined;
   /**
-   * Transient server observation, never persisted: the current configuration generation holds a
-   * SUCCESSFUL basic-chat observation of this model that is older than the readiness freshness
-   * bound, so `conversationReady` is absent. It tells "was ready, needs a fresh check" apart from
-   * "never probed in this process"; both are unknown for admission, and an observed `false` is never
-   * stale. Absent in every other state (#3905).
-   */
-  readonly conversationReadinessStale?: true | undefined;
-  /**
    * Transient server observation, never persisted: this chat model's forced tool-call proof lapsed
    * or was withdrawn (for example because the gateway re-pointed the alias) and the server's own
    * automatic verification of it is still open: queued, running, or retrying after an inconclusive

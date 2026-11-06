@@ -4,7 +4,7 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { bindChatToolCatalog, ChatToolTurn, chatModelSupportsTools } from "../chat-tool-turn.js";
+import { bindChatToolCatalog, ChatToolTurn, mintAndBoundChatTurn } from "../chat-tool-turn.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ChatMessage } from "../store/index.js";
 import {
@@ -12,8 +12,6 @@ import {
   sameMutationIdentity,
 } from "../store/chatToolMutationState.js";
 import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
-import { ConversationModelNotReadyError } from "../conversation-readiness-admission.js";
-import { logConversationAdmission } from "../conversation-readiness-log.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { createMcpChatCatalogAdmission } from "./mcpChatCatalogAdmission.js";
 import {
@@ -136,31 +134,24 @@ export async function createMcpChatToolTurn(
     deps.store.findChatById(message.chatId)?.mcpServers,
   );
   if (managed === undefined) return undefined;
-  if (!chatModelSupportsTools(deps, modelId)) {
-    const generation = deps.gatewayConfig?.generation();
-    logConversationAdmission("observation-unavailable", correlation, generation, generation);
-    throw new ConversationModelNotReadyError("tool-calling");
-  }
-  const authority = mintAcceptedMcpChatAuthority(deps, {
-    chatId: message.chatId,
-    userMessageId: message.id,
-    startedAtMs: message.timestamp,
-    nowMs: Date.now(),
-    correlationId: correlation,
-  });
+  const bound = mintAndBoundChatTurn<Accepted>(
+    deps,
+    modelId,
+    message,
+    correlation,
+    (turn) => mintAcceptedMcpChatAuthority(deps, turn),
+    [signal, managed.signal],
+  );
   requireDispatch(
-    authority.ok && authority.envelope.subject.configurationDigest === managed.configurationDigest,
+    bound.authority.envelope.subject.configurationDigest === managed.configurationDigest,
     "denied",
     "authority-invalid",
   );
-  const remaining = Date.parse(authority.envelope.expiresAt) - Date.now();
-  requireDispatch(remaining > 0, "denied", "authority-expired");
   return new McpChatToolTurn({
     deps,
     message,
-    authority,
+    ...bound,
     managed,
-    signal: AbortSignal.any([signal, managed.signal, AbortSignal.timeout(remaining)]),
     correlationId: correlation,
   });
 }

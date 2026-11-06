@@ -1,3 +1,5 @@
+import { chatKnowledgeScopes } from "./requirement-inventory.js";
+import { createKnowledgeChatToolTurn } from "./knowledge-chat-turn.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/index.js";
 import type { ChatToolTurnPort } from "./chat-tool-turn.js";
@@ -19,7 +21,7 @@ export async function createChatToolTurn(
 ): Promise<ChatToolTurnPort | undefined> {
   const chat = deps.store.findChatById(message.chatId);
   if (chat?.jiraPodBinding === undefined)
-    return createMcpChatToolTurn(deps, modelId, message, signal, correlationId);
+    return createUnboundChatToolTurn(deps, modelId, message, signal, correlationId);
   const mcp = await deps.mcpChatCatalog?.get(
     correlationIdOrUnknown(correlationId),
     chat.mcpServers,
@@ -33,6 +35,24 @@ export async function createChatToolTurn(
         }),
       )
     : createChatSourcesToolTurn(deps, modelId, message, signal, correlationId, mcp);
+}
+async function createUnboundChatToolTurn(
+  deps: UiHandlerDeps,
+  modelId: string,
+  message: ChatMessage,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+): Promise<ChatToolTurnPort | undefined> {
+  const chat = deps.store.findChatById(message.chatId);
+  if (chatKnowledgeScopes(chat).length === 0)
+    return createMcpChatToolTurn(deps, modelId, message, signal, correlationId);
+  const mcp = await deps.mcpChatCatalog?.get(
+    correlationIdOrUnknown(correlationId),
+    chat?.mcpServers,
+  );
+  return mcp === undefined
+    ? createKnowledgeChatToolTurn(deps, modelId, message, signal, correlationId)
+    : createChatSourcesToolTurn(deps, modelId, message, signal, correlationId, mcp, "knowledge");
 }
 export function scopeChatToolTurn(
   deps: UiHandlerDeps,

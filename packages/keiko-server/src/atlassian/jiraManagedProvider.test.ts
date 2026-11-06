@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { JIRA_MUTATION_OPERATIONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 import type {
   JiraManagedConnection,
@@ -83,4 +84,59 @@ it("steers a model that is asked about many issues to jira.report, whose input n
   expect(report?.descriptor.description).toContain("requirementsFromPods");
   expect(report?.descriptor.description).toContain("report.figures");
   expect(JSON.stringify(report?.descriptor.inputSchema)).toContain("requirementsFromPods");
+});
+
+it("builds canonical field metadata descriptors that admit the advertised input schema as data", () => {
+  const connection = vi.fn();
+  const provider = createJiraProviderForCatalog(connection, ["jira.create-fields"]);
+  const descriptor = provider.tools()[0]?.descriptor;
+  if (descriptor === undefined) throw new TypeError("Expected canonical create-fields descriptor");
+  expect(descriptor.resultSchema).toMatchObject({
+    properties: {
+      items: {
+        items: {
+          properties: {
+            inputSchema: {
+              type: "object",
+              properties: {},
+              required: [],
+              additionalProperties: true,
+            },
+          },
+        },
+      },
+    },
+  });
+  const data = {
+    outcome: "succeeded",
+    items: [
+      {
+        id: "description",
+        name: "Description",
+        required: false,
+        hasDefaultValue: false,
+        kind: "text",
+        richText: true,
+        operations: ["set"],
+        inputSchema: {
+          oneOf: [
+            { type: "string", maxLength: 32768 },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["format", "text"],
+              properties: {
+                format: { type: "string", enum: ["markdown"] },
+                text: { type: "string", maxLength: 32768 },
+              },
+            },
+          ],
+        },
+        nativeFormat: "jira-wiki",
+        markdownSerialization: "headings-only",
+      },
+    ],
+  };
+  expect(describeCatalogSchemaMismatch(descriptor.resultSchema, data)).toBeUndefined();
+  expect(connection).not.toHaveBeenCalled();
 });

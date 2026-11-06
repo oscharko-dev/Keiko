@@ -18,15 +18,24 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { type KnowledgeStore } from "@oscharko-dev/keiko-local-knowledge";
 import {
+  REQUIREMENT_DOCUMENT_SCOPE_SCHEMA,
   requirementChangeQueries,
   requirementReference,
   shortRequirementDigest,
 } from "@oscharko-dev/keiko-quality-intelligence";
-import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  compileExternalCatalogSchema,
+  createToolDescriptor,
+  createToolRef,
+} from "@oscharko-dev/keiko-tool-catalog";
 
 import { object, text } from "./atlassian/jiraManagedSchemas.js";
 import { KNOWLEDGE_REQUIREMENTS_TOOL } from "./requirementsToolName.js";
 import type { UiHandlerDeps } from "./deps.js";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import { createKnowledgeDocumentsTool } from "./knowledgeDocumentsTool.js";
+import { createKnowledgeReviewTool } from "./knowledgeReviewTool.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
@@ -44,6 +53,7 @@ import {
   documentsFingerprint,
   encodeCursor,
   fitWindow,
+  REQUIREMENT_UNITS_MAX,
   pageLabelOf,
   selectUnits,
   selectionFingerprint,
@@ -85,7 +95,11 @@ const ARGUMENTS = object({
   },
   reportId: text(64),
   projectKey: text(64),
-  documents: { type: "array", maxItems: 20, items: { type: "string", pattern: "^[0-9a-f]{8}$" } },
+  documents: {
+    type: "array",
+    maxItems: 20,
+    items: REQUIREMENT_DOCUMENT_SCOPE_SCHEMA,
+  },
   query: text(200),
   ids: { type: "array", maxItems: LISTED_IDS_MAX, items: text(80) },
   priorities: { type: "array", maxItems: 10, items: text(64) },
@@ -96,7 +110,7 @@ const ARGUMENTS = object({
 const UNIT = {
   type: "object",
   required: [],
-  additionalProperties: true,
+  additionalProperties: false,
   properties: {
     reference: text(120),
     id: text(80),
@@ -113,15 +127,61 @@ const UNIT = {
     },
     criteriaTruncated: { type: "boolean" },
     findings: { type: "array", maxItems: 16, items: text(64) },
-    documentScope: text(8),
+    documentScope: REQUIREMENT_DOCUMENT_SCOPE_SCHEMA,
     documentName: text(300),
     sectionPath: { type: "array", maxItems: 12, items: text(300) },
     pageLabel: text(64),
     characterStart: { type: "integer", minimum: 0 },
     characterEnd: { type: "integer", minimum: 0 },
     revisionDigest: text(12),
+    documentDigest: text(12),
+    unitCount: { type: "integer", minimum: 0 },
+    purpose: { type: "string", enum: ["stale", "removed", "traced"] },
+    jql: text(1800),
+    requirementIds: { type: "array", maxItems: REQUIREMENT_UNITS_MAX, items: text(80) },
   },
 } as const satisfies CatalogJsonObject;
+
+const RESULT_COUNT = { type: "integer", minimum: 0 } as const;
+const RESULT_ISSUES = { type: "array", maxItems: 10, items: text(256) } as const;
+const RESULT_REFERENCES = { type: "array", maxItems: 200, items: text(120) } as const;
+const CHANGES_SCHEMA = object({
+  baseline: object({
+    complete: { type: "boolean" },
+    generatedAt: text(64),
+    issuesRead: RESULT_COUNT,
+    issuesTotal: RESULT_COUNT,
+    tracedIssueCount: RESULT_COUNT,
+    unmatchedIssueCount: RESULT_COUNT,
+  }),
+  counts: object({
+    changed: RESULT_COUNT,
+    removed: RESULT_COUNT,
+    untraced: RESULT_COUNT,
+    unchanged: RESULT_COUNT,
+  }),
+  changed: {
+    type: "array",
+    maxItems: 60,
+    items: object({
+      id: text(120),
+      title: text(160),
+      issues: RESULT_ISSUES,
+      issueCount: RESULT_COUNT,
+    }),
+  },
+  removed: {
+    type: "array",
+    maxItems: 60,
+    items: object({ id: text(120), issues: RESULT_ISSUES, issueCount: RESULT_COUNT }),
+  },
+  untraced: RESULT_REFERENCES,
+  unchanged: RESULT_REFERENCES,
+  affectedIssues: { type: "array", maxItems: 120, items: text(256) },
+  unverifiedRemoved: { type: "array", maxItems: 60, items: text(120) },
+  unverifiedRemovedCount: RESULT_COUNT,
+  truncated: { type: "array", maxItems: 7, items: text(32) },
+});
 
 const RESULT = object(
   {
@@ -129,9 +189,22 @@ const RESULT = object(
     reason: text(64),
     nextStep: text(400),
     view: { type: "string", enum: VIEWS },
-    totals: { type: "object", required: [], properties: {}, additionalProperties: true },
+    totals: object({
+      detectedCount: RESULT_COUNT,
+      matchedCount: RESULT_COUNT,
+      documentsScanned: RESULT_COUNT,
+      documentsNotExtracted: RESULT_COUNT,
+      documentsOmitted: RESULT_COUNT,
+      unitsOmitted: RESULT_COUNT,
+      cutReasons: { type: "array", maxItems: 4, items: text(64) },
+      refusals: { type: "array", maxItems: 10_000, items: text(64) },
+      conflictingIds: { type: "array", maxItems: LISTED_IDS_MAX, items: text(120) },
+      ambiguousIds: { type: "array", maxItems: LISTED_IDS_MAX, items: text(120) },
+      referenceOnlyCount: RESULT_COUNT,
+      rejectedCandidateCount: RESULT_COUNT,
+    }),
     items: { type: "array", maxItems: 100, items: UNIT },
-    changes: { type: "object", required: [], properties: {}, additionalProperties: true },
+    changes: CHANGES_SCHEMA,
     nextCursor: text(512),
   },
   ["outcome"],
@@ -148,8 +221,8 @@ function declaration(): ManagedMcpToolDeclaration {
   const descriptor = createToolDescriptor({
     toolRef: createToolRef("keiko.knowledge.requirements", 1),
     description: DESCRIPTION,
-    inputSchema: ARGUMENTS,
-    resultSchema: RESULT,
+    inputSchema: compileExternalCatalogSchema(ARGUMENTS),
+    resultSchema: compileExternalCatalogSchema(RESULT),
     effects: ["connector-access"],
     actionMapping: [{ action: KNOWLEDGE_REQUIREMENTS_TOOL, effects: ["connector-access"] }],
     policyReferences: ["adr-0128.d4"],
@@ -163,7 +236,13 @@ function declaration(): ManagedMcpToolDeclaration {
     idempotency: "server-key-required",
     cancellation: "before-effect",
   });
-  return Object.freeze({ name: KNOWLEDGE_REQUIREMENTS_TOOL, risk: "read", descriptor });
+  return Object.freeze({
+    name: KNOWLEDGE_REQUIREMENTS_TOOL,
+    risk: "read",
+    title: "Knowledge requirements",
+    annotations: { openWorldHint: false, idempotentHint: true },
+    descriptor,
+  });
 }
 
 interface ParsedArguments {
@@ -316,7 +395,7 @@ function buildView(
   parsed: ParsedArguments,
   redact: (value: string) => string,
 ): ViewItems {
-  const selected = selectUnits(collection.units, parsed.filter);
+  const selected = selectUnits(collection.units, parsed.filter, redact);
   if (parsed.view === "documents")
     return {
       items: collection.documents.map((document): CatalogJsonObject => ({
@@ -332,7 +411,10 @@ function buildView(
   if (parsed.view === "change-queries")
     return {
       items: requirementChangeQueries(selected.map((unit) => unit.entry)).map(
-        (query): CatalogJsonObject => ({ ...query, requirementIds: [...query.requirementIds] }),
+        (query): CatalogJsonObject => ({
+          ...query,
+          requirementIds: [...query.requirementIds],
+        }),
       ),
       fingerprint,
       units: [],
@@ -413,7 +495,11 @@ export const REQUIREMENTS_CURSOR_STALE_NEXT_STEP =
 function failure(reason: string, collection?: RequirementCollection, nextStep?: string): Served {
   const disposition = reason === "cursor-stale" ? "cursor-stale" : "refused";
   return {
-    data: { outcome: "failed", reason, ...(nextStep === undefined ? {} : { nextStep }) },
+    data: {
+      outcome: "failed",
+      reason,
+      ...(nextStep === undefined ? {} : { nextStep }),
+    },
     activity: activityOf(collection, disposition, {
       matched: 0,
       returned: 0,
@@ -436,7 +522,10 @@ function serveChanges(
   });
   if (!baseline.ok) {
     const served = failure(baseline.reason, collection, baseline.nextStep);
-    return { ...served, activity: { ...served.activity, changes: { refusal: baseline.reason } } };
+    return {
+      ...served,
+      activity: { ...served.activity, changes: { refusal: baseline.reason } },
+    };
   }
   const shell: CatalogJsonObject = {
     outcome: "succeeded",
@@ -463,7 +552,10 @@ function serveChanges(
   });
   return {
     data,
-    activity: { ...activity, changes: changesActivity(view.counts, baseline.source) },
+    activity: {
+      ...activity,
+      changes: changesActivity(view.counts, baseline.source),
+    },
   };
 }
 
@@ -512,7 +604,12 @@ function serve(
     totals: totalsOf(collection, view.items.length),
     items: page,
     ...(next
-      ? { nextCursor: encodeCursor({ offset: window.to, fingerprint: view.fingerprint }) }
+      ? {
+          nextCursor: encodeCursor({
+            offset: window.to,
+            fingerprint: view.fingerprint,
+          }),
+        }
       : {}),
   };
   return {
@@ -529,6 +626,11 @@ function serve(
 export interface RequirementsToolContext extends ManagedMcpInvocationContext {
   readonly chatId: string;
   readonly userMessageId?: string | undefined;
+  /** Server-private turn meter; semantic review cannot make an unbudgeted model call. */
+  readonly meterModel?: (model: ModelPort) => ModelPort;
+  readonly knowledgeReviewModelId?: () => string | undefined;
+  /** Confirms only the exact fully observed, parsed result produced by this turn's model. */
+  readonly confirmModelOperation?: (response: NormalizedResponse) => void;
 }
 
 function log(context: RequirementsToolContext, parsed: ParsedArguments, served: Served): void {
@@ -609,7 +711,10 @@ function execute(
           : deps.store.findMessageById(context.userMessageId)?.timestamp,
     });
     log(context, parsed, served);
-    return { data: served.data, ...(served.data.outcome === "failed" ? { isError: true } : {}) };
+    return {
+      data: served.data,
+      ...(served.data.outcome === "failed" ? { isError: true } : {}),
+    };
   } catch (error) {
     logRequirementRead(context.correlationId, {
       view: parsed.view,
@@ -678,8 +783,13 @@ export function createKnowledgeRequirementsProvider<Context extends Requirements
     execute: (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> =>
       Promise.resolve(execute(deps, args, context, reports ?? deps.jiraReportStore)),
   });
+  const tools: readonly ManagedMcpTool<Context>[] = [
+    tool,
+    createKnowledgeDocumentsTool(deps),
+    createKnowledgeReviewTool(deps),
+  ];
   return Object.freeze({
     id: "knowledge",
-    tools: (): readonly ManagedMcpTool<Context>[] => [tool],
+    tools: (): readonly ManagedMcpTool<Context>[] => tools,
   });
 }

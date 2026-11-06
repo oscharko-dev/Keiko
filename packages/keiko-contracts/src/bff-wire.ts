@@ -525,8 +525,13 @@ export interface ChatAssistantResponseVersion {
 
 /** A call/result pair stays attached to its canonical human turn during history selection. */
 export interface ChatToolExchange {
-  readonly call: Pick<NormalizedToolCall, "id" | "name" | "arguments">;
+  readonly call: Pick<NormalizedToolCall, "id" | "name" | "arguments"> & {
+    /** Legacy transcript metadata may be read; current writers and public projections omit it. */
+    readonly origin?: "runtime" | undefined;
+  };
   readonly result?: ToolResultEnvelope | undefined;
+  /** Bound server-owned draft receipts retained beside a cancelled result, never inside it. */
+  readonly draftProgress?: Readonly<Record<string, unknown>> | undefined;
   readonly approval?: ChatToolWriteApprovalView | undefined;
   /** Durable remote-effect knowledge is independent from transport cancellation or denial. */
   readonly mutationOutcome?: JiraMutationOutcome | undefined;
@@ -739,7 +744,7 @@ export interface ChatContextSegmentWire {
  * server can resolve it.
  */
 export interface ChatContextConnectorWire {
-  readonly kind: "mcp" | "jira";
+  readonly kind: "mcp" | "jira" | "knowledge";
   readonly name?: string | undefined;
   readonly toolCount?: number | undefined;
   readonly tokens?: number | undefined;
@@ -1201,11 +1206,16 @@ export function isChatToolWriteApprovalView(value: unknown): value is ChatToolWr
   return validateChatToolWriteApprovalView(value).ok;
 }
 
+function isRuntimeToolOrigin(value: unknown): boolean {
+  return value === undefined || value === "runtime";
+}
+
 function isChatToolCallView(value: unknown): value is ChatToolExchange["call"] {
   const parsed = parseSafely(() => {
     if (
       !isWireRecord(value) ||
-      exactKeys(value, ["id", "name", "arguments"], "call").length > 0 ||
+      exactKeys(value, ["id", "name", "arguments", "origin"], "call").length > 0 ||
+      !isRuntimeToolOrigin(value.origin) ||
       typeof value.id !== "string" ||
       !/^[\w-]{1,128}$/u.test(value.id) ||
       typeof value.name !== "string" ||
@@ -1235,12 +1245,25 @@ function isDesktopChatWriteApprovalData(data: unknown): boolean {
   );
 }
 
+function isDesktopChatDraftProgress(name: unknown, progress: unknown): boolean {
+  if (progress === undefined) return true;
+  const parsed = parseSafely(() => ({
+    ok: true,
+    value:
+      name === "jira_draft" &&
+      isWireRecord(progress) &&
+      new TextEncoder().encode(JSON.stringify(progress)).length <= 262144,
+  }));
+  return parsed.ok && parsed.value;
+}
 function isDesktopChatStreamedExchange(exchange: unknown): boolean {
   return (
     isWireRecord(exchange) &&
-    exactKeys(exchange, ["call", "result", "mutationOutcome"], "exchange").length === 0 &&
+    exactKeys(exchange, ["call", "result", "mutationOutcome", "draftProgress"], "exchange")
+      .length === 0 &&
     isChatToolCallView(exchange.call) &&
     (exchange.result === undefined || isWireRecord(exchange.result)) &&
+    isDesktopChatDraftProgress(exchange.call.name, exchange.draftProgress) &&
     (exchange.mutationOutcome === undefined || typeof exchange.mutationOutcome === "string")
   );
 }
@@ -1589,6 +1612,12 @@ export interface SafeRerankerConfig {
   readonly modelId: string;
   readonly credentialHeaderName: string;
   readonly timeoutMs: number;
+}
+
+/** Credential-free model metadata and the startup observation already in progress. */
+export interface GatewayModelsResponseWire {
+  readonly models: ModelCapability[];
+  readonly startupReadinessPending?: true;
 }
 
 export interface SafeGatewayConfig {
@@ -2248,6 +2277,7 @@ export type BffErrorCode =
   // English strings (no echoing of model ids, file names, or byte counts) so they pass
   // through the BFF redactor without leaking any caller-supplied value.
   | "CONVERSATION_UNAVAILABLE_MODEL"
+  | "CONVERSATION_MODEL_NOT_READY"
   | "CONVERSATION_UNSUPPORTED_MODALITY"
   | "CONVERSATION_UNSUPPORTED_FILE_TYPE"
   | "CONVERSATION_OVERSIZED_CONTEXT"

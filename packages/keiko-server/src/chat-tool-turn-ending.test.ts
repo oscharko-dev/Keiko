@@ -12,6 +12,7 @@ import { ProviderOutputExhaustedError } from "@oscharko-dev/keiko-security";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
 import {
+  withToolResultsAsSource,
   chatToolTurnEndReason,
   chatToolTurnPartialAnswer,
   recordChatToolTurnContextFitted,
@@ -344,5 +345,26 @@ describe("recordChatToolTurnCorrected", () => {
     const line = formatActivityLogProofLine(event ?? {});
     expectActivityLogProof("chat.tool-turn.corrected.line", line);
     expect(line).not.toMatch(/message-private-id|REQ-|SYN-/u);
+  });
+});
+
+// Persisted transcript rows intentionally omit dispatch origin (old-reader compatibility).
+// Only the live turn's private custody can decide whether a model result supports this answer.
+describe("withToolResultsAsSource", () => {
+  const answer = {
+    userMessageId: "source-marker-proof",
+    uncertainty: [
+      { kind: "uncited-answer", claim: "synthetic missing citation" },
+      { kind: "unsupported-citation", claim: "synthetic unsupported citation" },
+    ],
+  };
+  it("retains source warnings without a usable model observation", () => {
+    expect(withToolResultsAsSource(answer, { hasUsableObservation: () => false })).toBe(answer);
+  });
+  it("removes only the untraceable note after a privately settled usable result", () => {
+    expect(
+      withToolResultsAsSource(answer, { hasUsableObservation: () => true }).uncertainty,
+    ).toEqual([answer.uncertainty[1]]);
+    expect(answer.uncertainty).toHaveLength(2);
   });
 });

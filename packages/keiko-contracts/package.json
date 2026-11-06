@@ -211,6 +211,14 @@
       "types": "./dist/command-runner.d.ts",
       "import": "./dist/command-runner.js"
     },
+    "./runtime/canonical-json": {
+      "types": "./dist/canonical-json.d.ts",
+      "import": "./dist/canonical-json.js"
+    },
+    "./runtime/knowledge-turn-coverage": {
+      "types": "./dist/knowledge-turn-coverage.d.ts",
+      "import": "./dist/knowledge-turn-coverage.js"
+    },
     "./runtime/comparators": {
       "types": "./dist/comparators.d.ts",
       "import": "./dist/comparators.js"

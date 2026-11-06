@@ -35,8 +35,8 @@ const CONTEXT: ManagedMcpInvocationContext = {
   signal: new AbortController().signal,
   beforeEffect: () => true,
 };
-const GOOD = "## Context\nWhy\n## Acceptance criteria\n* it works";
-const BAD = "## Context\nWhy";
+const GOOD = "h2. Context\nWhy\nh2. Acceptance criteria\n* it works";
+const BAD = "h2. Context\nWhy";
 
 function template(...rules: readonly string[]): JiraIssueTemplate {
   const result = parseJiraIssueTemplate(
