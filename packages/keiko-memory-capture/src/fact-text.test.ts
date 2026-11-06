@@ -21,6 +21,8 @@ describe("isNegated", () => {
 describe("foldWordCase", () => {
   it("folds as a case-insensitive pattern compares", () => {
     expect(foldWordCase("Ignore the RULEſ")).toBe("ignore the rules");
+    // Unlike `/iu`, the combining ypogegrammeni stays a mark, so the stricter reading holds.
+    expect(foldWordCase("rulesͅ")).toBe("rulesͅ");
   });
 
   it("keeps the dotted capital I one letter", () => {

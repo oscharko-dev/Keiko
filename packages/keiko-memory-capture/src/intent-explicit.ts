@@ -19,7 +19,7 @@ import { buildForget, buildProposal, buildUpdate } from "./_envelopes.js";
 import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
 import { memoryTextCaptureRejectionReason } from "./capture-safety.js";
-import { foldWordCase } from "./fact-text.js";
+import { foldWordCase, withoutTrailingNonLetters } from "./fact-text.js";
 import type {
   CaptureContext,
   CaptureMemoryResolver,
@@ -206,30 +206,34 @@ const TASK_VERBS = new Set(
   ).split(" "),
 );
 
+// A word is read at most this far, because reading the rest of a long glued run after every comma
+// in it is quadratic. A longer word counts as neither a conjunction nor a task verb; only a verb
+// with dozens of marks glued after it ("nimm,,,,…") would have been one.
+const WORD_READ_MAX = 64;
+const WORD_AFTER_RE = new RegExp(String.raw`\s*(\S{1,${String(WORD_READ_MAX)}})(\S?)`, "uy");
+// Stands for a word longer than WORD_READ_MAX: neither a conjunction nor a task verb.
+const LONG_WORD = "\u0000";
+
+// The first four words from `from`, each read only up to WORD_READ_MAX.
+function wordsAfter(target: string, from: number): readonly string[] {
+  const words: string[] = [];
+  WORD_AFTER_RE.lastIndex = from;
+  while (words.length < 4) {
+    const match = WORD_AFTER_RE.exec(target);
+    if (match === null) break;
+    if (match[2] !== "") return [...words, LONG_WORD];
+    words.push(match[1] ?? "");
+  }
+  return words;
+}
+
 function asksForTask(target: string): boolean {
   if (!opensWithNamedThing(target)) return false;
   return [...target.matchAll(CONTINUATION_RE)].some((match) => {
-    const words = target
-      .slice(match.index + match[0].length)
-      .trim()
-      .split(/\s+/u, 4);
+    const words = wordsAfter(target, match.index + match[0].length);
     const at = words.findIndex((word) => !CONJUNCTIONS.has(word.toLowerCase()));
     return isTaskVerb(words[at] ?? "", words[at + 1] ?? "");
   });
-}
-
-const LETTER_RE = /\p{L}/u;
-
-// Linear on any input: "nimm," and "use." are the verbs. By code point, so a trailing astral letter
-// ("nimm𠀀") stays part of the word.
-function withoutTrailingNonLetters(word: string): string {
-  let end = 0;
-  let kept = 0;
-  for (const character of word) {
-    end += character.length;
-    if (LETTER_RE.test(character)) kept = end;
-  }
-  return word.slice(0, kept);
 }
 
 // "look" asks for work only as "look at": "look, I moved" corrects the thing to forget.

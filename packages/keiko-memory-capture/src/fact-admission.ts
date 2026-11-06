@@ -2,7 +2,14 @@
 // person's own words only. "Im Zweifel zu wenig": a check that cannot confirm a fact drops it, and
 // the reason stays a closed value.
 
-import { anyWordPattern, factWords, foldWordCase, hasWord, isNegated } from "./fact-text.js";
+import {
+  anyWordPattern,
+  factWords,
+  foldWordCase,
+  hasWord,
+  isNegated,
+  lastWord,
+} from "./fact-text.js";
 import { looksLikePersonalIdentifier } from "./secret-patterns.js";
 
 export const FACT_DROP_REASONS = [
@@ -786,21 +793,8 @@ const PASSIVE_AUXILIARIES = new Set(
 const PASSIVE_SPEECH_WORDS = new Set(["told", "said", "gesagt", "erzählt"]);
 const LEADING_LETTERS_RE = /^\p{L}*/u;
 const ONLY_LETTERS_RE = /^\p{L}+$/u;
-const LETTER_RE = /\p{L}/u;
 // "I'm" ends a word only as a whole: "x-i'm" counts, "him'm" does not.
 const I_AM_END_RE = /(?:^|[^\p{L}])(i['’]m)$/u;
-
-// The letters a word ends with, by code point, so an astral letter stays one letter. A dash or
-// comma glued before them ends the earlier word: "so—wurde" ends in "wurde".
-function lastWord(token: string): string {
-  let start = 0;
-  let end = 0;
-  for (const character of token) {
-    end += character.length;
-    if (!LETTER_RE.test(character)) start = end;
-  }
-  return token.slice(start);
-}
 
 // The auxiliary stands right before the space, any word glued before it ("ok,was told"); a mark
 // after it ("was, told") ends the clause. "am" is the auxiliary only as the word after "I".

@@ -220,12 +220,40 @@ export function isNegated(text: string): boolean {
 
 // Lower case as a case-insensitive pattern compares, so a word set answers what `/iu` answered.
 // `/iu` folds the long s to "s" ("ruleſ" is "rules"), which `toLowerCase` keeps, and keeps the
-// dotted capital I one letter, which `toLowerCase` splits into "i" and a combining dot.
+// dotted capital I one letter, which `toLowerCase` splits into "i" and a combining dot. The one
+// deliberate difference: `/iu` reads the combining ypogegrammeni (U+0345) as the letter iota, here
+// it stays a mark, so "rulesͅ" still names rules and "toldͅ" still reports being told.
 export function foldWordCase(text: string): string {
   return text
     .split("İ")
     .map((part) => part.toLowerCase().replaceAll("ſ", "s"))
     .join("İ");
+}
+
+const LETTER_RE = /\p{L}/u;
+
+// The letters a word ends with, by code point, so an astral letter stays one letter. A dash or
+// comma glued before them ends the earlier word: "so—wurde" ends in "wurde".
+export function lastWord(token: string): string {
+  let start = 0;
+  let end = 0;
+  for (const character of token) {
+    end += character.length;
+    if (!LETTER_RE.test(character)) start = end;
+  }
+  return token.slice(start);
+}
+
+// A word without the marks after its last letter, by code point: "nimm," is "nimm", and a
+// trailing astral letter ("nimm𠀀") stays part of the word.
+export function withoutTrailingNonLetters(word: string): string {
+  let end = 0;
+  let kept = 0;
+  for (const character of word) {
+    end += character.length;
+    if (LETTER_RE.test(character)) kept = end;
+  }
+  return word.slice(0, kept);
 }
 
 export function hasWord(words: readonly string[], word: string): boolean {

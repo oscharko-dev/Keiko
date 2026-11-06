@@ -605,6 +605,19 @@ describe("what is not a remember statement (#4211)", () => {
 describe("a forget whose next clause starts with a word ending in an astral letter", () => {
   it("keeps the astral letter as part of the word", () => {
     expect(explicitStatementKind("Vergiss den Bericht, nimm𠀀 den Entwurf")).toBe("forget");
+  });
+
+  it("still reads, as a control, a task after the named thing", () => {
     expect(explicitStatementKind("Vergiss den Bericht, nimm den Entwurf")).toBeNull();
+    expect(explicitStatementKind("Vergiss den Bericht, und dann nimm den Entwurf")).toBeNull();
+  });
+});
+
+describe("a forget followed by a long glued run of marks", () => {
+  it("stays linear: the words after each comma are read only a short way", () => {
+    const text = `Vergiss den Bericht, ${",".repeat(100_000)}`;
+    const started = performance.now();
+    explicitStatementKind(text);
+    expect(performance.now() - started).toBeLessThan(2000);
   });
 });

@@ -1009,12 +1009,15 @@ describe("attribution with laut", () => {
 describe("being told with a word glued before the auxiliary", () => {
   it.each([
     ["So—wurde mir gesagt—nutze ich Excel.", "nutze ich Excel"],
-    ["Ok,was told I use Excel.", "I use Excel"],
+    ["Ok,I'm told I use Excel.", "I use Excel"],
+    ["I use Excel, ok,i'm told.", "I use Excel"],
+    // The dotted capital I stays one letter, so "İch" is the one word between auxiliary and verb.
+    ["Mir wurde İch gesagt, nutze ich Excel.", "nutze ich Excel"],
   ])("drops %s as told by someone", (text, evidence) => {
     expect(reasonOf(text, evidence)).toBe("negated-context");
   });
 
-  it("keeps a statement whose auxiliary is followed by a mark", () => {
+  it("keeps, as a control, a statement whose auxiliary is followed by a mark", () => {
     expect(reasonOf("I use Excel, it is, said plainly, my tool.", "I use Excel")).toBeNull();
   });
 });
