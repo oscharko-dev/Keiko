@@ -81,3 +81,47 @@ describe("private chat drafts", () => {
     );
   });
 });
+
+describe("private Coding Workbench drafts", () => {
+  it("restores a window's draft after reopening the store and isolates windows", () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-workbench-draft-"));
+    directories.push(directory);
+    const path = join(directory, "ui.sqlite");
+    const initial = createNodeUiStore(path);
+    initial.updateCodingWorkbenchDraft("coding-workbench-mabc12", {
+      text: "Synthetic task intent",
+      expectedRevision: 0,
+    });
+    initial.close();
+    const reopened = createNodeUiStore(path);
+    stores.push(reopened);
+    expect(reopened.readCodingWorkbenchDraft("coding-workbench-mabc12")).toEqual({
+      text: "Synthetic task intent",
+      revision: 1,
+    });
+    expect(reopened.readCodingWorkbenchDraft("coding-workbench-mabc12-1")).toEqual({
+      text: "",
+      revision: 0,
+    });
+  });
+
+  it("rejects stale writes, keeps a clear tombstone and refuses foreign keys", () => {
+    const store = createInMemoryUiStore();
+    stores.push(store);
+    const windowId = "coding-workbench-mabc12";
+    store.updateCodingWorkbenchDraft(windowId, { text: "First", expectedRevision: 0 });
+    expect(() =>
+      store.updateCodingWorkbenchDraft(windowId, { text: "Stale", expectedRevision: 0 }),
+    ).toThrow(/stale/u);
+    expect(store.updateCodingWorkbenchDraft(windowId, { text: "", expectedRevision: 1 })).toEqual({
+      text: "",
+      revision: 2,
+    });
+    for (const foreign of ["chat-mabc12", "coding-workbench-", "../coding-workbench-a", ""]) {
+      expect(() => store.readCodingWorkbenchDraft(foreign)).toThrow(/not found/iu);
+      expect(() =>
+        store.updateCodingWorkbenchDraft(foreign, { text: "x", expectedRevision: 0 }),
+      ).toThrow(/not found/iu);
+    }
+  });
+});

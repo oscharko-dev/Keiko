@@ -164,6 +164,7 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 30_000,
       env: {
+        KEIKO_OS_KEYCHAIN: "off",
         KEIKO_E2E_MODEL_PORT: String(modelPort),
       },
     },
@@ -176,6 +177,7 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 120_000,
       env: {
+        KEIKO_OS_KEYCHAIN: "off",
         NODE_ENV: "test",
         KEIKO_DEV_UI_PORT: String(publicPort),
         KEIKO_DEV_BFF_PORT: String(bffPort),

@@ -141,6 +141,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "document",
   "download",
   "draft",
+  "drafts",
   "dryrun-figma",
   "dryrun-jira",
   "edit",

@@ -592,18 +592,10 @@ function redactProseAllowedValue(value: string): string {
 // This does not admit arbitrary browser prose or broaden any other field's redaction.
 const BODY_FREE_CLIENT_NOTE_PATTERNS: readonly RegExp[] = [
   /^\[keiko\] shared diff viewport focused$/u,
-  /^\[keiko\] draft delivery review ready: (?:push-proposed|pr-proposed) head [a-f0-9]{12}$/u,
   /^\[keiko\] draft delivery review unavailable: binding-mismatch$/u,
-  /^\[keiko\] draft delivery review displayed: (?:idle|loading|ready|unavailable)$/u,
-  /^\[keiko\] journey displayed: (?:awaiting-ready-approval|keiko-technical-ready|ready-for-human-review|awaiting-human-requirements|merged-awaiting-issue-closure|completed|blocked|cancelled|recovery-required|stale) head [a-f0-9]{12}$/u,
   /^\[keiko\] journey action: (?:refresh|propose-ready) (?:started|completed|failed)$/u,
   /^\[keiko\] journey unavailable: binding-mismatch$/u,
-  /^\[keiko\] CI readiness displayed: (?:technical-ready|pending|failed|blocked|unknown|stale|unobserved) head [a-f0-9]{12}$/u,
-  /^\[keiko\] draft delivery displayed: (?:push-proposed|pushing|pushed|pr-proposed|creating-pr|draft-created|recovery-required) reason (?:approval-required|in-flight|completed|authority-denied|remote-drift|issue-drift|provider-failed|ambiguous-remote|approval-invalid|payload-changed|restart-reconciliation|preflight-failed) head [a-f0-9]{12}$/u,
-  /^\[keiko\] git stage review (?:idle|loading|ready|unavailable): files (?:0|[1-9]\d{0,5}|1000000)$/u,
-  /^\[keiko\] verified commit result displayed: (?:succeeded|blocked|failed|recovery-required|verification-failed|drift) tree [0-9a-f]{12}$/u,
   /^\[keiko\] verified commit review unavailable: binding-mismatch$/u,
-  /^\[keiko\] verified commit review ready: files (?:0|[1-9]\d{0,5}|1000000) tree [0-9a-f]{12}$/u,
   /^\[keiko\] coding workbench issue (?:preview (?:requested|cancelled)|removed before start)$/u,
   /^\[keiko\] coding workbench issue preview ready: issue [1-9]\d{0,9}$/u,
   /^\[keiko\] coding workbench issue accepted: issue [1-9]\d{0,9} binding [0-9a-f]{12}$/u,

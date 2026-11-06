@@ -294,9 +294,9 @@ function sidecarRuntime(target: UpdatePortableTarget): Record<string, unknown> {
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: "2.0.10",
-      tag: "v2.0.10",
-      commit: "b8cedc1a7a5e2916bbb65dc1d4b620729c261638",
+      version: "2.1.4",
+      tag: "v2.1.4",
+      commit: "68bc26b7da1990ce10ffecfbc1e09eb13aa5d824",
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
@@ -305,7 +305,7 @@ function sidecarRuntime(target: UpdatePortableTarget): Record<string, unknown> {
     },
     protocolSchema: {
       path: "packages/protocol/openapi.json",
-      sha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
+      sha256: "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9",
       hashAlgorithm: "sha256",
       hashEncoding: "lowercase-hex",
       digestInput: "upstream-raw-bytes",
@@ -1103,7 +1103,7 @@ describe("update preflight service", () => {
     expect(report.oneClickEligible).toBe(true);
     expect(report.portableAsset?.asset?.sidecarRuntimes?.[0]).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: "2.0.10",
+      upstreamVersion: "2.1.4",
       platformTarget: target,
       payloadSha256: "f".repeat(64),
       payloadSha256Prefix: "f".repeat(12),

@@ -34,6 +34,8 @@ export type OpenCodeCompactionActivity =
   | {
       readonly event: "completed";
       readonly compactionIdSha256: string;
+      /** Whether the summary kept messages verbatim; absent where the producer does not say. */
+      readonly retainedTail?: boolean;
     }
   | {
       readonly event: "failed";
@@ -426,7 +428,9 @@ const COMPACTION_ACTIVITY_VALIDATORS: Readonly<
     optionalCompactionBoolean(value, "overflow") &&
     value.retainedTail === true,
   completed: (value) =>
-    exactActivity(value, ["event", "compactionIdSha256"]) && validCompactionId(value),
+    exactActivity(value, ["event", "compactionIdSha256"], ["retainedTail"]) &&
+    validCompactionId(value) &&
+    optionalCompactionBoolean(value, "retainedTail"),
   failed: (value) =>
     exactActivity(value, ["event", "compactionIdSha256", "errorKind", "finishReason"]) &&
     validCompactionId(value) &&

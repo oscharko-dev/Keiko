@@ -280,7 +280,7 @@ describe("OpenCode V2 native tool history", () => {
     },
   );
 
-  // A runtime whose history grows by suffix between pulls. The pinned 2.0.10 persists a streamed part
+  // A runtime whose history grows by suffix between pulls. OpenCode 2.0.10 persists a streamed part
   // only empty and then complete, so this is the contract for a history that does grow, not what that
   // runtime produces: what it streams in between is pinned under "OpenCode V2 live streamed text".
   it("emits only new characters from a text part whose history grows by suffix", () => {
@@ -412,7 +412,7 @@ describe("OpenCode V2 native tool history", () => {
 
 // #3878: OpenCode records the model's reasoning (`reasoning_content`) as a `reasoning` content
 // part. It reaches the live timeline as its own growing signal and never Coding History. The pulls
-// below model a history that grows by suffix; the pinned 2.0.10 persists the part empty and then
+// below model a history that grows by suffix; OpenCode 2.0.10 persists the part empty and then
 // complete, and its stream in between is pinned under "OpenCode V2 live streamed text".
 describe("OpenCode V2 native reasoning history", () => {
   function reasoningHistory(
@@ -1078,7 +1078,11 @@ describe("OpenCode V2 live streamed text", () => {
 });
 
 // OpenCode 2.0.10 session-message.ts CompactionRunning/Completed/Failed; no V1 overflow field.
-function nativeCompaction(status: string, recent = "", reason = "auto"): Record<string, unknown> {
+function nativeCompaction(
+  status: string,
+  metadata?: Readonly<Record<string, unknown>>,
+  reason = "auto",
+): Record<string, unknown> {
   const base = {
     id: "msg_PRIVATE_COMPACTION_ID",
     type: "compaction",
@@ -1088,7 +1092,11 @@ function nativeCompaction(status: string, recent = "", reason = "auto"): Record<
   };
   return status === "failed"
     ? { ...base, error: { type: "PRIVATE_ERROR_TYPE", message: "PRIVATE_ERROR_BODY", status: 503 } }
-    : { ...base, summary: "PRIVATE_COMPACTION_SUMMARY", recent };
+    : {
+        ...base,
+        summary: "PRIVATE_COMPACTION_SUMMARY",
+        ...(metadata === undefined ? {} : { metadata }),
+      };
 }
 
 describe("OpenCode V2 actual compaction history", () => {
@@ -1099,8 +1107,7 @@ describe("OpenCode V2 actual compaction history", () => {
     let checkpoint: number | undefined;
     for (const message of [
       nativeCompaction("running"),
-      nativeCompaction("running", "[User]: PRIVATE_RECENT_BODY /private/raw-path"),
-      nativeCompaction("completed", "[User]: PRIVATE_RECENT_BODY /private/raw-path"),
+      nativeCompaction("completed", { keepID: "PRIVATE_KEPT_MESSAGE_ID" }),
     ]) {
       const events = projection.project("ses_compaction", [message], checkpoint);
       for (let replay = 0; replay < 2; replay += 1) {
@@ -1121,11 +1128,8 @@ describe("OpenCode V2 actual compaction history", () => {
       ).toEqual([]);
     }
     const lines = sink.events.filter((line) => line.op === "coding-runtime.compaction");
-    expect(lines.map((line) => line.extra?.event)).toEqual([
-      "started",
-      "tail-retained",
-      "completed",
-    ]);
+    expect(lines.map((line) => line.extra?.event)).toEqual(["started", "completed"]);
+    expect(lines.map((line) => line.extra?.retainedTail)).toEqual([false, true]);
     expect(new Set(lines.map((line) => line.extra?.compactionIdSha256)).size).toBe(1);
     for (const line of lines) {
       expectActivityLogProof(
@@ -1136,6 +1140,23 @@ describe("OpenCode V2 actual compaction history", () => {
       expect(line.extra).not.toHaveProperty("tailStartIdSha256");
     }
     expect(JSON.stringify(lines)).not.toMatch(/PRIVATE_|summary|recentID/);
+  });
+
+  it.each([
+    ["names the messages it kept", { keepID: "PRIVATE_KEPT_MESSAGE_ID" }, true],
+    ["stored the text it kept", { recent: "PRIVATE_RECENT_BODY" }, true],
+    ["kept nothing", { recent: "" }, false],
+    ["carries other metadata", { other: "PRIVATE_OTHER" }, false],
+    ["carries no metadata", undefined, false],
+  ])("says whether a completed compaction kept a tail when it %s", (_name, metadata, retained) => {
+    const events = createOpenCodeV2HistoryProjection().project(
+      "ses_compaction",
+      [nativeCompaction("completed", metadata)],
+      undefined,
+    );
+    const activity = events.flatMap((event) => event.compaction ?? []);
+    expect(activity).toEqual([expect.objectContaining({ retainedTail: retained })]);
+    expect(JSON.stringify(activity)).not.toMatch(/PRIVATE_/u);
   });
 
   it("records failed compaction without exposing error text or turning it into task settlement", () => {
@@ -1173,6 +1194,7 @@ describe("OpenCode V2 actual compaction history", () => {
     { status: "unknown" },
     { reason: "unknown" },
     { summary: undefined },
+    { recent: "the retired runtime's tail" },
     { recent: undefined },
     { recent: 42 },
     { status: "failed", error: undefined },
@@ -1381,7 +1403,7 @@ it("preserves only the original native execute parent in the captured inactive p
 // opencodeRuntimeVersions.ts), carrying no customer content. 2.1.4 renamed the provider replay
 // state of an assistant message and of a compaction to `native`, dropped the compaction tail
 // (`recent`, `providerContext`), and widened `Session.StructuredError` with `response` and
-// `retryAfterMs`. The 2.0.10 npm runtime stays admitted, so both layouts are accepted, each strictly.
+// `retryAfterMs`. The retired 2.0.10 layouts are refused, each strictly.
 function historySafeCode(run: () => unknown): string | undefined {
   try {
     run();
@@ -1551,18 +1573,6 @@ describe("OpenCode 2.1.4 compaction history (#3897)", () => {
       compaction214("completed", { summary: undefined }),
     ],
     ["a completed compaction with a non-text summary", compaction214("completed", { summary: 42 })],
-    [
-      "a completed 2.1.4 compaction that also carries the 2.0.10 tail",
-      compaction214("completed", { recent: "x" }),
-    ],
-    [
-      "a completed 2.1.4 compaction that also carries provider state",
-      compaction214("completed", { providerState: {} }),
-    ],
-    [
-      "a completed 2.1.4 compaction that also carries provider context",
-      compaction214("completed", { providerContext: {} }),
-    ],
     ["a failed compaction carrying a summary", compaction214("failed", { summary: "x" })],
     ["a failed compaction without its error", compaction214("failed", { error: undefined })],
     ["a failed compaction with a bare error", compaction214("failed", { error: "PRIVATE" })],
@@ -1594,6 +1604,21 @@ describe("OpenCode 2.1.4 compaction history (#3897)", () => {
     const projection = createOpenCodeV2HistoryProjection();
     expect(historySafeCode(() => projection.project("ses_compaction", [message], undefined))).toBe(
       "reason=compaction-shape-invalid",
+    );
+  });
+
+  // The retired 2.0.10 layout is no admitted field set any more, so it stops at the unknown-field gate.
+  it.each([
+    ["its tail", { recent: "x" }],
+    ["its provider state", { providerState: {} }],
+    ["its provider context", { providerContext: {} }],
+  ])("refuses a compaction carrying the retired layout's %s", (_name, fields) => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const code = historySafeCode(() =>
+      projection.project("ses_compaction", [compaction214("completed", fields)], undefined),
+    );
+    expect(code).toMatch(
+      /^reason=event-unknown:eventSha256=[0-9a-f]{16}:role=compaction:extraCount=1:extraKeySha256=[0-9a-f]{16}$/u,
     );
   });
 
@@ -1638,18 +1663,22 @@ function assistant214(fields: Readonly<Record<string, unknown>> = {}): Record<st
 describe("OpenCode 2.1.4 assistant message history (#3897)", () => {
   const user = { id: "msg_user", type: "user", time: { created: 1 }, text: "Task" };
 
-  it("accepts the 2.1.4 provider replay state `native` and the 2.0.10 `providerState`, each on its own", () => {
-    for (const state of [{ native: { opaque: true } }, { providerState: { opaque: true } }]) {
-      const { native: _native, ...withoutState } = assistant214();
-      const projection = createOpenCodeV2HistoryProjection();
-      const events = projection.project(
+  it("accepts the provider replay state `native` and refuses the retired `providerState`", () => {
+    const { native: _native, ...withoutState } = assistant214();
+    const events = createOpenCodeV2HistoryProjection().project(
+      "ses_state",
+      [user, { ...withoutState, native: { opaque: true } }],
+      undefined,
+    );
+    expect(events.length).toBeGreaterThan(0);
+    expect(JSON.stringify(events)).not.toContain("opaque");
+    expect(() =>
+      createOpenCodeV2HistoryProjection().project(
         "ses_state",
-        [user, { ...withoutState, ...state }],
+        [user, { ...withoutState, providerState: { opaque: true } }],
         undefined,
-      );
-      expect(events.length).toBeGreaterThan(0);
-      expect(JSON.stringify(events)).not.toContain("opaque");
-    }
+      ),
+    ).toThrow("opencode-v2-history-invalid");
   });
 
   it("refuses a message that mixes the two layouts and an unknown field, by count and key digest only", () => {
@@ -2573,6 +2602,19 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
     expect(toolSignals(shellHistory(completed(3)))).toEqual([
       expect.objectContaining({ kind: "tool", callId: "call_shell", state: "failed", exitCode: 3 }),
     ]);
+  });
+
+  // #4271: a command the runtime killed reports no exit status at all, only how it ended.
+  it.each([
+    ["ran out of its timeout", { status: "completed", truncated: false, timeout: true }],
+    ["was killed by a signal", { status: "completed", truncated: false, signal: "SIGKILL" }],
+  ])("projects a command that %s as a failed call without an exit status", (_name, metadata) => {
+    const [signal] = toolSignals(
+      shellHistory({ status: "completed", input: { command: "npm test" }, metadata }),
+    );
+    expect(signal).toEqual(expect.objectContaining({ callId: "call_shell", state: "failed" }));
+    expect(signal).not.toHaveProperty("exitCode");
+    expect(signal).not.toHaveProperty("exitStatusCheck");
   });
 
   it("projects a command that exited zero as succeeded with its exit status", () => {

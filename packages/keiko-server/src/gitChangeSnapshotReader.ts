@@ -179,7 +179,8 @@ export function snapshotDiffArgs(
     "--find-copies-harder",
     "-l2000",
     "--submodule=short",
-    "--ignore-submodules=none",
+    // Both revisions are commits, so no nested work tree is consulted; `dirty` says so to the runner.
+    "--ignore-submodules=dirty",
     `-O${process.platform === "win32" ? "NUL" : "/dev/null"}`,
     ...lane,
     revisions.mergeBaseSha,

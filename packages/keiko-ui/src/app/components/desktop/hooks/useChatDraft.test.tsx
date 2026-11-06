@@ -2,12 +2,22 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatDraft, ChatDraftUpdate } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError } from "@/lib/api";
-import { readChatDraft, writeChatDraft } from "@/lib/chat-draft-api";
+import {
+  readChatDraft,
+  readCodingWorkbenchDraft,
+  writeChatDraft,
+  writeCodingWorkbenchDraft,
+} from "@/lib/chat-draft-api";
 import { notifyCodingAppSessionChanged } from "@/lib/coding-app-session-client";
 import { ChatDraftController } from "./chat-draft-controller";
-import { useChatDraft, useChatDraftUnloadGuard } from "./useChatDraft";
+import { useChatDraft, useChatDraftUnloadGuard, usePrivateDraft } from "./useChatDraft";
 
-vi.mock("@/lib/chat-draft-api", () => ({ readChatDraft: vi.fn(), writeChatDraft: vi.fn() }));
+vi.mock("@/lib/chat-draft-api", () => ({
+  readChatDraft: vi.fn(),
+  writeChatDraft: vi.fn(),
+  readCodingWorkbenchDraft: vi.fn(),
+  writeCodingWorkbenchDraft: vi.fn(),
+}));
 vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
 
 function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
@@ -371,4 +381,43 @@ describe("private chat drafts", () => {
       });
     },
   );
+});
+
+describe("private Coding Workbench drafts", () => {
+  it("restores the window's unsent text after a reload and saves edits to that window", async () => {
+    vi.mocked(readCodingWorkbenchDraft)
+      .mockReset()
+      .mockResolvedValue({ text: "Synthetic task intent", revision: 3 });
+    vi.mocked(writeCodingWorkbenchDraft)
+      .mockReset()
+      .mockImplementation(async (_id: string, update: ChatDraftUpdate): Promise<ChatDraft> => ({
+        text: update.text,
+        revision: update.expectedRevision + 1,
+      }));
+    const { result } = renderHook(() =>
+      usePrivateDraft("coding-workbench-mabc12", "coding-workbench"),
+    );
+    await waitFor(() => expect(result.current.text).toBe("Synthetic task intent"));
+    expect(readCodingWorkbenchDraft).toHaveBeenCalledWith("coding-workbench-mabc12");
+    act(() => result.current.setText("Edited intent"));
+    await waitFor(() =>
+      expect(writeCodingWorkbenchDraft).toHaveBeenCalledWith("coding-workbench-mabc12", {
+        text: "Edited intent",
+        expectedRevision: 3,
+      }),
+    );
+    expect(readChatDraft).not.toHaveBeenCalled();
+    expect(writeChatDraft).not.toHaveBeenCalled();
+  });
+
+  it("stays local without a window identity", async () => {
+    vi.mocked(readCodingWorkbenchDraft).mockReset();
+    vi.mocked(writeCodingWorkbenchDraft).mockReset();
+    const { result } = renderHook(() => usePrivateDraft(undefined, "coding-workbench"));
+    act(() => result.current.setText("Local only"));
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(result.current.text).toBe("Local only");
+    expect(readCodingWorkbenchDraft).not.toHaveBeenCalled();
+    expect(writeCodingWorkbenchDraft).not.toHaveBeenCalled();
+  });
 });

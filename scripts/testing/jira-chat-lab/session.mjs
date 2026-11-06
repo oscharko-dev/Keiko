@@ -61,6 +61,7 @@ if (action === "init") {
     {
       env: {
         ...process.env,
+        KEIKO_OS_KEYCHAIN: "off",
         KEIKO_JIRA_LAB_STATE_DIR: directory,
         KEIKO_JIRA_LAB_HTTP_PORT: String(session.httpPort),
       },

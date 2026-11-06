@@ -1030,6 +1030,62 @@ describe("CodingRuntimeOrchestrator", () => {
     );
     expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_ACCEPTED_TASK_CANARY");
   });
+  // #4271: the client's start deadline ended its wait, and the run still started where nobody saw it.
+  describe("a start its client gave up", () => {
+    const abandonedDuringPrepare = (f: ReturnType<typeof fixture>): AbortController => {
+      const client = new AbortController();
+      Object.assign(f.launchResolver, {
+        prepare: (): Promise<void> => {
+          client.abort();
+          return Promise.resolve();
+        },
+      });
+      return client;
+    };
+
+    it("creates no run when the client left while it was being prepared", async () => {
+      const f = fixture();
+      const client = abandonedDuringPrepare(f);
+      const result = await f.orchestrator.start(start, undefined, client.signal);
+      expect(result).toMatchObject({ ok: false, startAbandoned: true });
+      expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+      expect(f.manager.start).not.toHaveBeenCalled();
+      expect(f.orchestrator.status().state).toBe("idle");
+    });
+
+    it("creates no run when the client left before the start reached the lane", async () => {
+      const f = fixture();
+      const result = await f.orchestrator.start(start, undefined, AbortSignal.abort());
+      expect(result).toMatchObject({ ok: false, startAbandoned: true });
+      expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+    });
+
+    it("leaves the next start free", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start, undefined, abandonedDuringPrepare(f).signal);
+      Object.assign(f.launchResolver, { prepare: undefined });
+      expect((await f.orchestrator.start(start)).ok).toBe(true);
+    });
+
+    // The client leaves while the start is still in progress, once the run is being minted: the run
+    // stays, because the client can then find it and a reload must not end it.
+    it("keeps a run that exists when the client leaves afterwards", async () => {
+      const f = fixture();
+      const client = new AbortController();
+      const resolve = f.launchResolver.resolve.getMockImplementation();
+      if (resolve === undefined) throw new Error("expected a launch resolver");
+      f.launchResolver.resolve.mockImplementation((input) => {
+        client.abort();
+        return resolve(input);
+      });
+      const result = await f.orchestrator.start(start, undefined, client.signal);
+      expect(client.signal.aborted).toBe(true);
+      expect(result.ok).toBe(true);
+      expect(f.manager.start).toHaveBeenCalledOnce();
+      expect(f.orchestrator.status().state).not.toBe("idle");
+    });
+  });
+
   it("records body-free activity log lines for run start and settlement", async () => {
     const captured = captureActivityLog();
     const f = fixture(undefined, undefined, [], undefined, captured.activityLog);

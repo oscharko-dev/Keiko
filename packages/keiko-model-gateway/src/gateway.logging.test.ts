@@ -404,7 +404,7 @@ describe("Gateway.chat — activity log", () => {
     await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(TransportError);
     const failed = eventFor(log.events, "gateway.chat.failed");
     expect(failed.level).toBe("warn");
-    expect(failed.errorKind).toBe("internal");
+    expect(failed.errorKind).toBe("unavailable");
     expect(JSON.stringify(failed)).not.toContain("sk-leak-me");
     expect(ops(log.events)).not.toContain("gateway.chat.completed");
     const persisted = expectActivityLogProof(
@@ -515,7 +515,7 @@ describe("Gateway.chatStream — activity log", () => {
       TransportError,
     );
     const failed = eventFor(log.events, "gateway.stream.failed");
-    expect(failed.errorKind).toBe("internal");
+    expect(failed.errorKind).toBe("unavailable");
     expect(failed.extra).toMatchObject({ chunkCount: 1, afterFirstChunk: true, streaming: true });
     expect(ops(log.events)).not.toContain("gateway.stream.completed");
     const persisted = expectActivityLogProof(

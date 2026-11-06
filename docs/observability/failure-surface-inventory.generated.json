@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "eda5588922658f48ff9a1c97fa0cf9a60bdf508ed029877d4a6633decb7205ba"
+    "catalogDigest": "027d6de244602f667ef848a01cc6a48d51725bceea391d5389524d6b591a6523"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 636,
-    "proofCount": 658,
-    "resolvedProofCount": 658,
+    "operationCount": 639,
+    "proofCount": 661,
+    "resolvedProofCount": 661,
     "failureClassCount": 389,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -267,6 +267,7 @@
         "gateway.readiness.automatic.completed",
         "gateway.readiness.automatic.joined",
         "gateway.readiness.automatic.started",
+        "gateway.readiness.automatic.withheld",
         "gateway.readiness.busy-retained",
         "gateway.readiness.compatibility-retry",
         "gateway.readiness.compatibility-retry.failed",
@@ -381,6 +382,7 @@
         "coding-runtime.initial-turn.stop-failed",
         "coding-runtime.jira-pod",
         "coding-runtime.linked-files.resolved",
+        "coding-runtime.location.activation-wait",
         "coding-runtime.mcp-authorization",
         "coding-runtime.mcp-credentials",
         "coding-runtime.mcp-relay",
@@ -770,6 +772,7 @@
         "security.fs.atomic-rename-failed",
         "security.fs.atomic-rename-retried",
         "security.keychain.fallback",
+        "security.keychain.withheld",
         "security.log.sink-failed",
         "security.portable-tree-attestation.failed",
         "security.vault.entries-delete-failed",
@@ -1691,6 +1694,9 @@
     "coding-runtime.linked-files.resolved.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeNativeLinkedFiles.test.ts"
     ],
+    "coding-runtime.location.activation-wait.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeCommands.test.ts"
+    ],
     "coding-runtime.mcp-authorization.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeNativeMcpAuthorization.test.ts"
     ],
@@ -2177,6 +2183,9 @@
     "gateway.readiness.automatic.started.line": [
       "packages/keiko-server/src/gateway-readiness.test.ts",
       "packages/keiko-server/src/gateway-readiness.workbench-never-proven.test.ts"
+    ],
+    "gateway.readiness.automatic.withheld.line": [
+      "packages/keiko-server/src/gateway-readiness.workbench-probe-policy.test.ts"
     ],
     "gateway.readiness.busy-retained.line": [
       "packages/keiko-server/src/gateway-readiness.busy.test.ts"
@@ -2830,6 +2839,9 @@
     "security.keychain.fallback.bounded-exit": [
       "packages/keiko-security/src/macos-keychain.test.ts"
     ],
+    "security.keychain.withheld.line": [
+      "packages/keiko-security/src/macos-keychain-withheld.test.ts"
+    ],
     "security.log.sink-failed.body-free": ["packages/keiko-security/src/log-port.test.ts"],
     "security.portable-tree-attestation.failed.driver": [
       "packages/keiko-security/src/portable-tree-attestation.test.ts"
@@ -2901,6 +2913,7 @@
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
       "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts",
       "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
+      "packages/keiko-server/src/gateway-readiness.cancellation.test.ts",
       "packages/keiko-server/src/grounded-qa-multi-source.test.ts"
     ],
     "server.diagnostic.observation.activity-log-line": [
@@ -3054,6 +3067,7 @@
     ],
     "tool-catalog.invocation-settled.emitted-line": [
       "packages/keiko-server/src/tool-catalog/catalogNonCodingConsumer.test.ts",
+      "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.test.ts",
       "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.test.ts"
     ],
     "tool-catalog.invocation-started.emitted-line": [

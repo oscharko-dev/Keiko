@@ -29,6 +29,7 @@ import {
   OPENCODE_PINNED_VERSION,
   projectedGatewaySchema,
 } from "../opencodeToolSchemas.js";
+import { openCodeRuntimeVersionPin } from "../opencodeRuntimeVersions.js";
 import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   projectOpenCodeV2ProtocolSurface,
@@ -45,24 +46,20 @@ import {
 const BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
 const RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
 const RECEIPT = `sha256:${"0".repeat(64)}`;
-const PROTOCOL_SCHEMA_SHA256 = "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9";
+const PROTOCOL_SCHEMA_SHA256 =
+  openCodeRuntimeVersionPin(OPENCODE_PINNED_VERSION)?.rawSchemaSha256 ?? "";
 const MAX_FAKE_BODY_BYTES = 1024 * 1024;
 const MAX_FAKE_AGENT_STEPS = 12;
 const FAKE_SESSION_ID = "ses_functional0000000001";
 
-/** Captured OpenCode 2.1.4 protocol projection served by the scripted V2 child. */
-const protocolFixtureUrl = new URL(
-  "../opencodeProtocolSurface.opencode-2.1.4.fixture.json",
-  import.meta.url,
-);
+/** Captured pinned OpenCode protocol projection served by the scripted V2 child. */
+const protocolFixtureName = `opencodeProtocolSurface.opencode-${OPENCODE_PINNED_VERSION}.fixture.json`;
+const protocolFixtureUrl = new URL(`../${protocolFixtureName}`, import.meta.url);
 // The e2e server compiles this harness under tests/e2e/servers/dist without copying JSON assets.
 // Its workspace root remains the repo root, where the checked-in fixture is authoritative.
 const protocolFixturePath = existsSync(protocolFixtureUrl)
   ? protocolFixtureUrl
-  : resolve(
-      process.cwd(),
-      "packages/keiko-server/src/coding-runtime/opencodeProtocolSurface.opencode-2.1.4.fixture.json",
-    );
+  : resolve(process.cwd(), `packages/keiko-server/src/coding-runtime/${protocolFixtureName}`);
 const FUNCTIONAL_OPENCODE_OPENAPI: unknown = JSON.parse(readFileSync(protocolFixturePath, "utf8"));
 const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeV2ProtocolSurface(
   FUNCTIONAL_OPENCODE_OPENAPI,

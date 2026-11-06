@@ -356,3 +356,39 @@ describe("diagnostic records on the activity log", () => {
     }
   });
 });
+
+describe("coding sidecar stream failure summaries on the activity log (#4271 L2.5)", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-diagnostics-stream-summary-"));
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    closeFileServerLogSinks();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it.each([
+    "The coding sidecar gateway stream failed before the first response chunk.",
+    "The coding sidecar gateway stream failed mid-response.",
+  ] as const)("persists the closed summary %j unchanged", (message) => {
+    defaultServerDiagnosticSink.record({
+      correlationId: "req-stream-summary",
+      timestamp: "2026-11-05T00:00:00.000Z",
+      operation: "coding-sidecar.gateway",
+      source: "coding-sidecar-gateway.stream",
+      errorClass: "TransportError",
+      message,
+    });
+
+    expect(readActivityLine(stateDir)).toMatchObject({
+      correlationId: "req-stream-summary",
+      diagnosticSummary: message,
+    });
+  });
+});

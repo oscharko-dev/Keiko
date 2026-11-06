@@ -288,7 +288,10 @@ describe("OpenCode launch profile", () => {
         "share",
         "update",
       ]);
-      for (const key of Object.keys(content)) expect(content[key]).toEqual(file[key]);
+      // The MCP bindings carry relay capabilities and stay off the disk a shell child can read.
+      for (const key of Object.keys(content).filter((name) => name !== "mcp"))
+        expect(content[key]).toEqual(file[key]);
+      expect(file.mcp).toBeUndefined();
       // #3900 AC5: no layer can name a reference; without an accepted root there is none.
       expect(content.references).toEqual({});
       const provider = record(record(content.providers)["keiko-runtime"]);

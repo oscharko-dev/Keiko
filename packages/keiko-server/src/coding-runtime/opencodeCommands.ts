@@ -28,11 +28,12 @@ import {
   type PromptInputsAdmission,
   type PromptInputsRefusal,
 } from "./opencodePromptInputs.js";
-import type {
-  OpenCodeV2Agent,
-  OpenCodeV2Command,
-  OpenCodeV2HttpClient,
-  OpenCodeV2Skill,
+import {
+  OpenCodeV2HttpStatusError,
+  type OpenCodeV2Agent,
+  type OpenCodeV2Command,
+  type OpenCodeV2HttpClient,
+  type OpenCodeV2Skill,
 } from "./opencodeV2HttpClient.js";
 
 /**
@@ -91,41 +92,142 @@ export interface OpenCodeCommandsRunPort {
   ) => Promise<PromptInputsAdmission>;
 }
 
-export interface OpenCodeCommandsRunPortDeps {
-  readonly readyRun: (runId: string) => CommandsRun | undefined;
-  readonly capabilities: CodingWorkbenchRuntimePromptInputs;
+export interface LocationActivationWaitDeps {
   readonly activityLog: ServerLogSink | undefined;
   /** Waits between the reads of a location that is still loading; injectable for tests. */
   readonly pause?: ((ms: number) => Promise<void>) | undefined;
 }
 
+export interface OpenCodeCommandsRunPortDeps extends LocationActivationWaitDeps {
+  readonly readyRun: (runId: string) => CommandsRun | undefined;
+  readonly capabilities: CodingWorkbenchRuntimePromptInputs;
+}
+
 /**
- * The pinned 2.1.4 loads a location's agents and skills on its first touch, and answers that first
- * read with an empty listing (proven on the original executable). Its built-in subagents are always
- * listed once it has loaded, so an empty agent listing means "not loaded yet": it is read again, a
- * bounded number of times, before anything is decided from it.
+ * A runtime loads a location's agents and skills on its first touch. One that does not wait for that
+ * load answers the first read with an empty listing; one that does answers 503 when its plugins did
+ * not activate in time. Built-in subagents are always listed once it has loaded, so both mean "not
+ * loaded yet": the listing is read again, a bounded number of times, before anything is decided.
  */
 const LOCATION_LOAD_READS = 6;
 const LOCATION_LOAD_PAUSE_MS = 250;
+const LOCATION_ACTIVATING_STATUS = 503;
 
 const realPause = (ms: number): Promise<void> =>
   new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
 
+const LOCATION_ACTIVATION_WAIT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.location.activation-wait",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeCommands.recordLocationActivationWait",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["exhausted", "failed", "recovered"],
+    },
+    // How many times the runtime answered that the location's plugins were still activating.
+    activatingAnswerCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-prompt-inputs"],
+  proofIds: ["coding-runtime.location.activation-wait.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function recordLocationActivationWait(
+  activityLog: ServerLogSink | undefined,
+  runId: string,
+  outcome: "exhausted" | "failed" | "recovered",
+  activatingAnswerCount: number,
+): void {
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      LOCATION_ACTIVATION_WAIT_OPERATION,
+      {
+        level: outcome === "recovered" ? "info" : "warn",
+        correlationId: correlationIdOrUnknown(runId),
+      },
+      { runId, outcome, activatingAnswerCount },
+    ),
+  );
+}
+
+function isLocationActivatingAnswer(error: unknown): boolean {
+  return error instanceof OpenCodeV2HttpStatusError && error.status === LOCATION_ACTIVATING_STATUS;
+}
+
+/**
+ * Reads a listing that waits for the location's plugins. Their late activation is a state of the
+ * location, not a failed listing, so only that answer is read again; every other failure and the
+ * last activating answer reach the caller, which refuses as it does for any listing it cannot read.
+ * A wait that began always leaves its line, so a different failure after it stays reconstructable.
+ */
+export function readOnceLocationActivated<T>(
+  deps: LocationActivationWaitDeps,
+  runId: string,
+  read: () => Promise<T>,
+  // Reads a caller already spent on this location; the bound holds across them (#4271).
+  readsSpent = 0,
+): Promise<T> {
+  const pause = deps.pause ?? realPause;
+  // Each read depends on the previous one's answer, so the reads run one after another.
+  const attempt = async (activatingAnswers: number): Promise<T> => {
+    try {
+      const value = await read();
+      if (activatingAnswers > 0) {
+        recordLocationActivationWait(deps.activityLog, runId, "recovered", activatingAnswers);
+      }
+      return value;
+    } catch (error) {
+      if (!isLocationActivatingAnswer(error)) {
+        if (activatingAnswers > 0) {
+          recordLocationActivationWait(deps.activityLog, runId, "failed", activatingAnswers);
+        }
+        throw error;
+      }
+      const answers = activatingAnswers + 1;
+      if (readsSpent + answers >= LOCATION_LOAD_READS) {
+        recordLocationActivationWait(deps.activityLog, runId, "exhausted", answers);
+        throw error;
+      }
+      await pause(LOCATION_LOAD_PAUSE_MS);
+      return attempt(answers);
+    }
+  };
+  return attempt(0);
+}
+
 async function loadedAgents(
   deps: OpenCodeCommandsRunPortDeps,
   run: CommandsRun,
 ): Promise<readonly OpenCodeV2Agent[]> {
   const pause = deps.pause ?? realPause;
-  // Each read depends on the previous one's answer, so the reads run one after another.
-  const read = async (remaining: number): Promise<readonly OpenCodeV2Agent[]> => {
-    const agents = await run.client.agents(run.workspaceRoot);
-    if (agents.length > 0 || remaining <= 1) return agents;
-    await pause(LOCATION_LOAD_PAUSE_MS);
-    return read(remaining - 1);
+  // An empty listing and a late activation mean the same "not loaded yet", so they share one bound:
+  // each late answer takes the runtime five seconds, and multiplied bounds would hold a start for
+  // three minutes.
+  let reads = 0;
+  const readAgents = (): Promise<readonly OpenCodeV2Agent[]> => {
+    reads += 1;
+    return run.client.agents(run.workspaceRoot);
   };
-  return read(LOCATION_LOAD_READS);
+  // Each read depends on the previous one's answer, so the reads run one after another.
+  const read = async (): Promise<readonly OpenCodeV2Agent[]> => {
+    const agents = await readOnceLocationActivated(deps, run.runId, readAgents, reads);
+    if (agents.length > 0 || reads >= LOCATION_LOAD_READS) return agents;
+    await pause(LOCATION_LOAD_PAUSE_MS);
+    return read();
+  };
+  return read();
 }
 
 const COMMANDS_LISTED_OPERATION = defineActivityLogOperation({

@@ -54,7 +54,11 @@ import { chmodIfPresent, ensureDirHardened, FILE_MODE } from "./fs-hardening.js"
 import {
   emitKeychainFallback,
   KEYCHAIN_SPAWN_TIMEOUT_MS,
+  emitKeychainWithheld,
   keychainItemNotFound,
+  keychainWithheldReason,
+  MACOS_SECURITY_EXECUTABLE,
+  realKeychainWithheld,
 } from "./macos-keychain.js";
 // Independent activity-log seam (ADR-0019, w4a-security-log-port).
 import {
@@ -66,7 +70,6 @@ import {
 
 const KEY_BYTES = 32;
 const STORE_VERSION = 1;
-const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
 const MAX_VAULT_STACK_CHARS = 16 * 1024;
 const MAX_VAULT_STACK_LINES = 64;
 const MAX_VAULT_FRAMES = 8;
@@ -443,13 +446,17 @@ export function createKeychainCommandRunner(
   executable = MACOS_SECURITY_EXECUTABLE,
   timeoutMs = KEYCHAIN_SPAWN_TIMEOUT_MS,
 ): KeychainCommandRunner {
-  return (args: readonly string[]): string =>
-    execFileSync(executable, args, {
+  return (args: readonly string[]): string => {
+    if (executable === MACOS_SECURITY_EXECUTABLE && realKeychainWithheld()) {
+      throw new Error("The real keychain is withheld from this process.");
+    }
+    return execFileSync(executable, args, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: timeoutMs,
       killSignal: "SIGKILL",
     });
+  };
 }
 
 const defaultKeychainCommandRunner = createKeychainCommandRunner();
@@ -460,9 +467,16 @@ export function createKeychainVaultKeyAccess(
   keychainService: string,
   runCommand: KeychainCommandRunner = defaultKeychainCommandRunner,
   sink?: SecurityLogSink,
+  env?: Readonly<Record<string, string | undefined>>,
 ): LocalVaultKeychainAccess {
   return (): Buffer | undefined => {
     if (process.platform !== "darwin") return undefined;
+    const withheld =
+      runCommand === defaultKeychainCommandRunner ? keychainWithheldReason(env) : undefined;
+    if (withheld !== undefined) {
+      emitKeychainWithheld(sink, withheld);
+      return undefined;
+    }
     const account = userInfo().username;
     const elapsedMs = startSecurityLogTimer();
     let found: string;
@@ -570,7 +584,7 @@ function computeLocalVaultKey(options: ResolveLocalVaultKeyOptions): ResolvedLoc
   if (fromEnv !== undefined) return { key: fromEnv, source: "env" };
   const keychainAccess =
     options.keychainAccess ??
-    createKeychainVaultKeyAccess(options.keychainService, undefined, options.sink);
+    createKeychainVaultKeyAccess(options.keychainService, undefined, options.sink, options.env);
   const fromKeychain = keychainAccess();
   if (fromKeychain !== undefined) return { key: fromKeychain, source: "keychain" };
   return { key: keyFromKeyfile(options.vaultDir, options.keyfileName), source: "keyfile" };

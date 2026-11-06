@@ -32,6 +32,7 @@ import {
   type CodingWorkbenchRuntimeState,
 } from "./coding-workbench-live-state";
 import {
+  CANCELLED_START_REREAD_DELAYS_MS,
   useCodingWorkbenchRuntimeMutations,
   useCodingWorkbenchRuntimeResources,
   CODING_WORKBENCH_VERIFYING_REFRESH_MS,
@@ -610,6 +611,8 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     readonly mutations: ReturnType<typeof useCodingWorkbenchRuntimeMutations>;
     readonly dispatch: ReturnType<typeof vi.fn>;
     readonly refreshRun: ReturnType<typeof vi.fn>;
+    readonly stateRef: { current: CodingWorkbenchRuntimeState };
+    readonly unmount: () => void;
   } {
     const dispatch = vi.fn();
     const refreshRun = vi.fn(() => Promise.resolve());
@@ -617,7 +620,13 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     const view = renderHook(() =>
       useCodingWorkbenchRuntimeMutations({ stateRef, refreshRun, dispatch }),
     );
-    return { mutations: view.result.current, dispatch, refreshRun };
+    return {
+      mutations: view.result.current,
+      dispatch,
+      refreshRun,
+      stateRef,
+      unmount: view.unmount,
+    };
   }
 
   function readyRunState(
@@ -626,6 +635,16 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
   ): CodingWorkbenchRuntimeState {
     return runtimeState({ run: { status: "ready", value: run, error: null }, ...overrides });
   }
+
+  // #4271: the server may have created the run while the client's wait ran out.
+  it("re-reads the run when a start hit its deadline, so a run that exists appears", async () => {
+    vi.mocked(startCodingWorkbenchRuntime).mockRejectedValueOnce(
+      new DOMException("The operation timed out.", "TimeoutError"),
+    );
+    const { mutations, refreshRun } = renderMutations(readyRunState(null, { canStart: true }));
+    await act(() => mutations.start("task", { projectMemoryEnabled: true }));
+    expect(refreshRun).toHaveBeenCalledOnce();
+  });
 
   it("starts a run and installs the server truth", async () => {
     vi.mocked(startCodingWorkbenchRuntime).mockResolvedValue(snapshot({ state: "starting" }));
@@ -950,6 +969,106 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       expect(dispatch).not.toHaveBeenCalledWith(
         expect.objectContaining({ kind: "mutation-failed" }),
       );
+    });
+
+    // #4271: only ending the request tells the server to create no run, and it may have lost that
+    // race, so the window reads the run instead of assuming there is none.
+    it("ends a cancelled start's request without a failure and re-reads the run", async () => {
+      const held = holdCalls();
+      const { mutations, dispatch, refreshRun } = renderMutations(
+        readyRunState(null, { canStart: true }),
+      );
+
+      await act(async () => {
+        const start = mutations.start("write the failing test first", {
+          projectMemoryEnabled: true,
+        });
+        await vi.waitFor(() => {
+          expect(held).toHaveLength(1);
+        });
+        mutations.cancelStart();
+        await start;
+      });
+
+      expect(held[0]?.signal?.aborted).toBe(true);
+      expect(refreshRun).toHaveBeenCalledOnce();
+      expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
+      expect(dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "mutation-failed" }),
+      );
+      expect(reportClientDiagnostic).not.toHaveBeenCalledWith(
+        expect.objectContaining({ stage: "mutation" }),
+      );
+    });
+
+    // #4271 audit: the immediate read can reach the server before the start's ended request does,
+    // while the server is about to create the run. Later reads are bounded and end once a run shows.
+    describe("the reads after a cancelled start", () => {
+      async function cancelHeldStart(rendered: ReturnType<typeof renderMutations>): Promise<void> {
+        const held = holdCalls();
+        // Only the timers the cancellation schedules are faked; the start's own wait stays real.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        await act(async () => {
+          const start = rendered.mutations.start("write the failing test first", {
+            projectMemoryEnabled: true,
+          });
+          await vi.waitFor(() => {
+            expect(held).toHaveLength(1);
+          });
+          rendered.mutations.cancelStart();
+          await start;
+        });
+      }
+
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it("reads the run again a bounded number of times", async () => {
+        const rendered = renderMutations(readyRunState(null, { canStart: true }));
+        await cancelHeldStart(rendered);
+        expect(rendered.refreshRun).toHaveBeenCalledOnce();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1_000);
+        });
+        expect(rendered.refreshRun).toHaveBeenCalledTimes(2);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(60_000);
+        });
+        expect(rendered.refreshRun).toHaveBeenCalledTimes(
+          1 + CANCELLED_START_REREAD_DELAYS_MS.length,
+        );
+      });
+
+      it("stops once the run it was looking for is shown", async () => {
+        const rendered = renderMutations(readyRunState(null, { canStart: true }));
+        await cancelHeldStart(rendered);
+        rendered.stateRef.current = readyRunState(snapshot({ state: "starting" }));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(60_000);
+        });
+        expect(rendered.refreshRun).toHaveBeenCalledOnce();
+      });
+
+      it("reads nothing more once the Workbench is closed", async () => {
+        const rendered = renderMutations(readyRunState(null, { canStart: true }));
+        await cancelHeldStart(rendered);
+        rendered.unmount();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(60_000);
+        });
+        expect(rendered.refreshRun).toHaveBeenCalledOnce();
+      });
+    });
+
+    it("cancels nothing when no start is pending", async () => {
+      const { mutations, dispatch, refreshRun } = renderMutations(awaitingApprovalState());
+      await act(async () => {
+        mutations.cancelStart();
+        await Promise.resolve();
+      });
+      expect(refreshRun).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
     });
 
     it("leaves a pending mutation alone when Stop has no run to stop", async () => {

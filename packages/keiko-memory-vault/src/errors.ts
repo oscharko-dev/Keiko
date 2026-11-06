@@ -16,6 +16,7 @@ export type MemoryStorageErrorCode =
   | "precondition-failed"
   | "constraint-violation"
   | "schema-mismatch"
+  | "vault-unreadable"
   | "internal";
 
 export class MemoryStorageError extends RedactingError {

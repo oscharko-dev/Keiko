@@ -170,6 +170,8 @@ export interface UiStore {
   readonly replayChatCreation: (intent: ChatCreationIntent) => Chat | undefined;
   readonly readChatDraft: (id: string) => ChatDraft;
   readonly updateChatDraft: (id: string, update: ChatDraftUpdate) => ChatDraft;
+  readonly readCodingWorkbenchDraft: (windowId: string) => ChatDraft;
+  readonly updateCodingWorkbenchDraft: (windowId: string, update: ChatDraftUpdate) => ChatDraft;
   readonly createChat: (
     projectPath: string,
     title: string,

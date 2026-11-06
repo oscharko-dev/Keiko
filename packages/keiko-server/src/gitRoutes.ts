@@ -343,6 +343,14 @@ async function lacksManagedRootReadAuthority(
   );
 }
 
+function repositoryRootOutsideRoot(root: string): ReturnType<typeof genericUnavailable> {
+  return genericUnavailable(
+    root,
+    "repository-root-outside-root",
+    "Git status is unavailable because the repository root is outside the selected folder.",
+  );
+}
+
 export async function resolveRepository(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -379,6 +387,7 @@ export async function resolveRepository(
     ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
   });
   if (!membership.ok) {
+    if (membership.redirected === true) return repositoryRootOutsideRoot(selectedRoot.root);
     const reason = classifyFailure(membership.result);
     return genericUnavailable(
       selectedRoot.root,
@@ -395,11 +404,7 @@ export async function resolveRepository(
   // on-disk path can no longer misclassify a valid subfolder. The containment check stays as
   // defense-in-depth only, with platform filesystem identity rules (see keiko-git containsPath).
   if (!containsPath(repositoryRoot, selectedRoot.realRoot)) {
-    return genericUnavailable(
-      selectedRoot.root,
-      "repository-root-outside-root",
-      "Git status is unavailable because the repository root is outside the selected folder.",
-    );
+    return repositoryRootOutsideRoot(selectedRoot.root);
   }
   return {
     root: selectedRoot.root,
