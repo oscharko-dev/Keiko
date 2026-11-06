@@ -763,7 +763,7 @@ const SPEECH_PARTICIPLES = new Set(["gesagt", "erzählt", "gemeint", "behauptet"
 const SPEECH_AUXILIARIES = new Set(["hat", "haben", "hatte", "hatten"]);
 // Told by someone unnamed: "I am told …", "I'm told …", "Mir wurde gesagt, …".
 const PASSIVE_SPEECH_RE =
-  /(?:^|[^\p{L}])(?:i\s+am|i['’]m|is|are|was|were|been|wird|werde|wurde|wurden)\s+(?:\p{L}+\s+)?(?:told|said|gesagt|erzählt)(?!\p{L})/iu;
+  /(?:^|[^\p{L}])(?:i\s+am|i['’]m|is|are|was|were|be|being|been|wird|werde|wurde|wurden)\s+(?:\p{L}+\s+)?(?:told|said|gesagt|erzählt)(?!\p{L})/iu;
 // Each later clause up to the next mark, an aside in brackets included.
 const CLAUSE_HEAD_RE = /[,;:–—(-]\s*(\p{L}+)[^,;:–—()]*/gu;
 // A relative clause, reason or condition is no attribution: "…, which says nothing", "…, weil Anna
@@ -776,7 +776,8 @@ const RELATIVE_LEAD_RE =
 const DEMONSTRATIVE_SPEECH_RE =
   /^[,;:–—(-]\s*(?:(?:das|dies)\s+(?:sagt|sagte|sagen|sagten|meint|meinte|meinten|behauptet|behauptete|glaubt|glaubte|denkt|dachte|hat|haben|hatte|hatten)|(?:that|this)(?:['’]s|\s+is|\s+was)\s+what)(?!\p{L})/iu;
 // Words that may stand between the person's own subject and their speech verb: an adverb ("I
-// always tell") or a modal or auxiliary ("I must say", "Ich muss sagen", "I have told").
+// always tell") or a modal or auxiliary ("I must say", "Ich muss sagen", "I have told"). "Ich
+// würde sagen" and "I would say" are a hedge and stay out.
 const SELF_SPEECH_BETWEEN = new Set([
   "immer",
   "oft",
@@ -795,11 +796,12 @@ const SELF_SPEECH_BETWEEN = new Set([
   "muss",
   "kann",
   "möchte",
-  "würde",
+  "werde",
   "will",
   "must",
   "can",
-  "would",
+  "do",
+  "did",
   "have",
   "had",
 ]);
