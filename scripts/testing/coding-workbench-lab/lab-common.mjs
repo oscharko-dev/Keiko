@@ -482,13 +482,30 @@ export function exitCodeForState(state) {
  * holding the dev server's checkout, so the next task would be refused with LOCK_CONTENTION.
  * `post(path, body)` resolves to `{ status }`. Returns the stop's status, or null for an ended run.
  */
-export async function stopUnfinishedRun(post, runId, snapshot) {
+export async function stopUnfinishedRun(post, runId, snapshot, why = "deadline passed") {
   if (TERMINAL_STATES.includes(snapshot?.state)) return null;
   const { status } = await post(`/api/coding-workbench/runtime/runs/${runId}/stop`, {
     requestId: runId,
   });
-  log(`deadline passed while ${String(snapshot?.state)}; stopped the run (${String(status)})`);
+  log(`${why} while ${String(snapshot?.state)}; stopped the run (${String(status)})`);
   return status;
+}
+
+/**
+ * Follows a started run; when the driver itself fails on the way (a control it cannot click, a
+ * closed page), it stops the run and names it before rethrowing. A live run left behind holds the
+ * workspace lock, so every later task of a campaign would be refused with LOCK_CONTENTION.
+ */
+export async function watchOrStop(watch, post, runId) {
+  try {
+    return await watch();
+  } catch (error) {
+    await stopUnfinishedRun(post, runId, { state: "running" }, "driver failed").catch((stopError) =>
+      log(`stopping the run failed: ${errorMessage(stopError).slice(0, 200)}`),
+    );
+    console.log(`----- run ${runId} -----`);
+    throw error;
+  }
 }
 
 export function loadTasks() {

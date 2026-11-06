@@ -33,6 +33,7 @@ import {
   runMain,
   selectLabCheckout,
   stopUnfinishedRun,
+  watchOrStop,
   UsageError,
 } from "./lab-common.mjs";
 
@@ -364,18 +365,15 @@ export async function operateRun(page, options) {
   await selectCheckout(page, repo, branch);
   const workbench = await reopenWorkbench(page);
   const runId = await startRun(page, workbench, task);
-  const snapshot = await watchRun(page, runId, {
-    approve,
-    deadline: Date.now() + timeoutMs,
-    shots,
+  const post = async (path, data) => ({
+    status: (await page.request.post(path, { headers: CSRF_HEADERS, data })).status(),
   });
-  await stopUnfinishedRun(
-    async (path, data) => ({
-      status: (await page.request.post(path, { headers: CSRF_HEADERS, data })).status(),
-    }),
+  const snapshot = await watchOrStop(
+    () => watchRun(page, runId, { approve, deadline: Date.now() + timeoutMs, shots }),
+    post,
     runId,
-    snapshot,
   );
+  await stopUnfinishedRun(post, runId, snapshot);
   await reportRun(page, workbench, runId, snapshot, { shots, textOut, approve });
   const code = exitCodeForState(snapshot.state);
   if (code !== 0 || schedules === undefined) return code;

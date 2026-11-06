@@ -42,6 +42,7 @@ import {
   resolveMode,
   resolveTaskInput,
   stopUnfinishedRun,
+  watchOrStop,
 } from "../testing/coding-workbench-lab/lab-common.mjs";
 
 const TEMP_DIRECTORIES = [];
@@ -425,6 +426,25 @@ describe("numbers, modes and run ids", () => {
     for (const state of TERMINAL_STATES) {
       await expect(stopUnfinishedRun(post, "run-9", { state })).resolves.toBeNull();
     }
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  // #4271 lab: a disabled Approve button failed the UI driver mid-run; the run stayed active and
+  // every later task of the campaign was refused with LOCK_CONTENTION.
+  it("stops and names a run when the driver fails while following it", async () => {
+    const lines = [];
+    vi.spyOn(console, "log").mockImplementation((line) => void lines.push(String(line)));
+    const post = vi.fn(async () => ({ status: 200 }));
+    const failing = () => Promise.reject(new Error("locator.click: Timeout"));
+    await expect(watchOrStop(failing, post, "run-11")).rejects.toThrow(/Timeout/u);
+    expect(post).toHaveBeenCalledExactlyOnceWith("/api/coding-workbench/runtime/runs/run-11/stop", {
+      requestId: "run-11",
+    });
+    expect(lines.at(-1)).toBe("----- run run-11 -----");
+    post.mockClear();
+    await expect(
+      watchOrStop(async () => ({ state: "completed" }), post, "run-12"),
+    ).resolves.toEqual({ state: "completed" });
     expect(post).not.toHaveBeenCalled();
   });
 
