@@ -11,9 +11,10 @@
 // without one by raising a dialog on the person's desktop. `KEIKO_STATE_DIR` stays unset too, because
 // setting it selects the production Activity Log writer (see `activity-log-test-writer.ts`).
 //
-// The private home lives in `~/.keiko-test-homes`, not in the temporary directory: a home is where
-// the portable install suites place their managed roots, and the product refuses a managed install
-// root inside a temporary directory or a repository (`portable-root-policy.ts`, #4271).
+// The private home lives in `~/.cache/keiko-test-homes`, not in the temporary directory: a home is
+// where the portable install suites place their managed roots, and the product refuses a managed
+// install root inside a temporary directory or a repository (`portable-root-policy.ts`, #4271). Its
+// path shares no prefix with the real `~/.keiko`, which the isolation pins compare against.
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -29,7 +30,7 @@ const realHomedir = os.homedir.bind(os);
 let privateHome: string | undefined;
 
 function createPrivateHome(): string {
-  const homes = join(realHomedir(), ".keiko-test-homes");
+  const homes = join(realHomedir(), ".cache", "keiko-test-homes");
   mkdirSync(homes, { recursive: true, mode: 0o700 });
   return mkdtempSync(join(homes, "home-"));
 }
