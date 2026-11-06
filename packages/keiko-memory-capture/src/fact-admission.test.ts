@@ -193,8 +193,12 @@ describe("admitProposedFact", () => {
     ["a word the person did not use", "Bevorzugt Kaffee"],
     ["only framing", "Bevorzugt"],
     ["a translation", "Prefers spreadsheets"],
-  ])("does not admit a body with %s", (_case, body) => {
-    expect(reasonOf("Ich mag Tabellen.", "Ich mag Tabellen", body)).toBe("not-entailed");
+    ["a paraphrase about the user", "Der Benutzer mag Tabellen"],
+  ])("admits the person's words whatever the model's statement has: %s", (_case, body) => {
+    expect(admit("Ich mag Tabellen.", "Ich mag Tabellen", body)).toMatchObject({
+      admitted: true,
+      claim: "Ich mag Tabellen",
+    });
   });
 
   it("does not admit a body that drops or adds a negation", () => {
@@ -475,6 +479,37 @@ describe("a pronoun for the person's own thing", () => {
     expect(
       admitProposedFact({ body, evidence, about: "self" }, text, { previousUserText }).admitted,
     ).toBe(false);
+  });
+
+  it.each([
+    ["names the thing without the possessive", "Berichte beginnen immer mit einer Zusammenfassung"],
+    ["keeps the pronoun", "Sie beginnen immer mit einer Zusammenfassung in drei Saetzen"],
+  ])("resolves it when the model's statement %s", (_, proposed) => {
+    const admission = admitProposedFact({ body: proposed, evidence, about: "self" }, text, {
+      previousUserText: "Ich habe eine neue Regel fuer meine Berichte.",
+    });
+    expect(admission).toMatchObject({
+      admitted: true,
+      claim: `Meine Berichte ${evidence.slice(4)}`,
+    });
+  });
+
+  it.each([
+    [
+      "names another thing",
+      "Notizen beginnen immer mit einer Zusammenfassung",
+      "fuer meine Berichte",
+    ],
+    [
+      "keeps the pronoun while the person named two things",
+      "Sie beginnen immer mit einer Zusammenfassung",
+      "fuer meine Berichte und meine Notizen",
+    ],
+  ])("drops it when the model's statement %s", (_, proposed, named) => {
+    const admission = admitProposedFact({ body: proposed, evidence, about: "self" }, text, {
+      previousUserText: `Ich habe eine neue Regel ${named}.`,
+    });
+    expect(admission.admitted).toBe(false);
   });
 
   it.each([

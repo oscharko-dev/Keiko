@@ -2,7 +2,7 @@
 // person's own words only. "Im Zweifel zu wenig": a check that cannot confirm a fact drops it, and
 // the reason stays a closed value.
 
-import { anyWordPattern, factWords, hasWord, isNegated, isPredicateWord } from "./fact-text.js";
+import { anyWordPattern, factWords, hasWord, isNegated } from "./fact-text.js";
 import { looksLikePersonalIdentifier } from "./secret-patterns.js";
 
 export const FACT_DROP_REASONS = [
@@ -49,6 +49,9 @@ export type FactAdmission =
   | {
       readonly admitted: true;
       readonly sentence: string;
+      // The person's own words for the fact, a leading pronoun replaced by what it stood for in
+      // the previous message: what is stored, so no paraphrase replaces what they said.
+      readonly claim: string;
       // "team" is the person's team or project as a whole; its fact belongs to the project.
       readonly subject: "self" | "team";
       // No first-person word: "Ab jetzt lieber Listen". Such a fact only stands as a change of a
@@ -799,15 +802,11 @@ function subjectDropReason(about: string, evidence: string): FactDropReason | nu
   return namesOtherPerson(evidence) || claimNamesOtherPronoun(evidence) ? "third-party" : null;
 }
 
-function entailmentDropReason(body: string, evidence: string): FactDropReason | null {
-  const evidenceWords = factWords(evidence);
-  const bodyWords = factWords(body);
-  const carried = bodyWords.filter((word) => hasWord(evidenceWords, word));
-  const invented = bodyWords.filter((word) => !hasWord(evidenceWords, word));
-  if (carried.length === 0 || invented.some((word) => !isPredicateWord(word))) {
-    return "not-entailed";
-  }
-  return isNegated(body) === isNegated(evidence) ? null : "polarity-changed";
+// The person's words are what is stored, so the model's statement may paraphrase or translate them.
+// It may not invert them: a statement that drops or adds a negation shows the model misread the
+// fact, and its label for how the fact relates to a stored one cannot be trusted either.
+function polarityDropReason(body: string, claim: string): FactDropReason | null {
+  return isNegated(body) === isNegated(claim) ? null : "polarity-changed";
 }
 
 // Derived from what the checks saw, never taken from the model, so results stay comparable across
@@ -831,21 +830,57 @@ function spanDropReason(evidence: string, text: string): FactDropReason | null {
 }
 
 // "Sie beginnen immer mit einer Zusammenfassung" after "… meine Berichte": the claim's subject is the
-// person's own thing only when the body names it and the person named it just before as theirs.
+// person's own thing only when the person named exactly that thing as theirs just before. The
+// model's statement may name which of their things the pronoun stands for; it is not required to.
 const LEADING_THING_PRONOUN_RE = /^(?:Sie|Es|Diese|They|It|These)\s+/u;
-const OWN_THING_RE = /^(?:mein(?:e|em|en|er|es)?|my)\s+(\p{L}+)/iu;
+const OWN_THING_GLOBAL_RE = /(?:^|[^\p{L}])(mein(?:e|em|en|er|es)?|my)\s+(\p{L}+)/giu;
+const LEADING_WORDS_RE = /^(?:(?:mein(?:e|em|en|er|es)?|my|die|der|das|the)\s+)?(\p{L}+)/iu;
+// The subject form of the possessive the person used: "für meine Berichte" → "Meine Berichte".
+const SUBJECT_POSSESSIVE: Readonly<Record<string, string>> = {
+  my: "My",
+  mein: "Mein",
+  meine: "Meine",
+  meiner: "Meine",
+  meinen: "Meine",
+  meinem: "Mein",
+  meines: "Mein",
+};
+
+interface OwnThing {
+  readonly possessive: string;
+  readonly noun: string;
+}
+
+function ownThings(earlier: string): ReadonlyMap<string, OwnThing> {
+  const things = new Map<string, OwnThing>();
+  for (const match of earlier.matchAll(OWN_THING_GLOBAL_RE)) {
+    const possessive = SUBJECT_POSSESSIVE[(match[1] ?? "").toLowerCase()] ?? "";
+    const noun = match[2] ?? "";
+    things.set(noun.toLowerCase(), { possessive, noun });
+  }
+  return things;
+}
+
+function referent(body: string, earlier: string): string | null {
+  const things = ownThings(earlier);
+  const named = LEADING_WORDS_RE.exec(body.normalize("NFC").trim())?.[1];
+  if (named === undefined) return null;
+  const thing = things.get(named.toLowerCase());
+  if (thing !== undefined) return `${thing.possessive} ${named}`;
+  // A statement that kept the pronoun names no thing; one the person called theirs is what it means.
+  const [only] = things.values();
+  const keptPronoun = LEADING_THING_PRONOUN_RE.test(`${named} `);
+  return keptPronoun && things.size === 1 && only !== undefined
+    ? `${only.possessive} ${only.noun}`
+    : null;
+}
 
 function resolvedClaim(body: string, evidence: string, context: AdmissionContext): string {
   const pronoun = LEADING_THING_PRONOUN_RE.exec(evidence);
-  const own = OWN_THING_RE.exec(body.normalize("NFC").trim());
   const earlier = context.previousUserText?.normalize("NFC");
-  if (pronoun === null || own === null || earlier === undefined) return evidence;
-  const noun = own[1] ?? "";
-  const named = new RegExp(
-    String.raw`(?:^|[^\p{L}])(?:mein(?:e|em|en|er|es)?|my)\s+${noun}(?!\p{L})`,
-    "iu",
-  );
-  return named.test(earlier) ? `${own[0]} ${evidence.slice(pronoun[0].length)}` : evidence;
+  if (pronoun === null || earlier === undefined) return evidence;
+  const thing = referent(body, earlier);
+  return thing === null ? evidence : `${thing} ${evidence.slice(pronoun[0].length)}`;
 }
 
 function dropped(reason: FactDropReason): FactAdmission {
@@ -874,20 +909,39 @@ export function admitProposedFact(
     return dropped("personal-identifier");
   }
   const reason = contextDropReason(evidence, sentence, userText.slice(from, start));
-  return reason === null
-    ? admittedClaim(fact, resolvedClaim(fact.body, evidence, context), sentence)
-    : dropped(reason);
+  if (reason !== null) return dropped(reason);
+  const claim = resolvedClaim(fact.body, evidence, context);
+  return admittedClaim(fact, { claim, opensSentence: start === from }, sentence);
 }
 
-function admittedClaim(fact: ProposedFact, claim: string, sentence: string): FactAdmission {
+// A clause taken from inside a sentence opens the stored fact: "…, ich bin Oliver" → "Ich bin Oliver".
+function sentenceCase(claim: string): string {
+  const first = claim.charAt(0);
+  return first === first.toLocaleLowerCase() && first !== first.toLocaleUpperCase()
+    ? first.toLocaleUpperCase() + claim.slice(1)
+    : claim;
+}
+
+interface ClaimWords {
+  readonly claim: string;
+  // The clause opens its sentence; one from inside it is stored with a capital first letter.
+  readonly opensSentence: boolean;
+}
+
+function admittedClaim(
+  fact: ProposedFact,
+  { claim, opensSentence }: ClaimWords,
+  sentence: string,
+): FactAdmission {
   const reason =
-    subjectDropReason(fact.about, claim) ?? entailmentDropReason(fact.body.trim(), claim);
+    subjectDropReason(fact.about, claim) ?? polarityDropReason(fact.body.trim(), claim);
   if (reason !== null) return dropped(reason);
   const subject = fact.about.trim().toLowerCase() === "team" ? "team" : "self";
   const subjectless = subject === "self" && !FIRST_PERSON_RE.test(claim);
   return {
     admitted: true,
     sentence,
+    claim: opensSentence ? claim : sentenceCase(claim),
     subject,
     subjectless,
     confidence: derivedConfidence(fact.body, claim, subjectless),

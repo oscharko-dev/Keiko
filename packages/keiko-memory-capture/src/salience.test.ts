@@ -111,7 +111,7 @@ describe("SALIENCE_SYSTEM_PROMPT", () => {
 });
 
 describe("extractSalientMemories", () => {
-  it("captures a fact inside a longer sentence as a normalized body with its verbatim evidence", async () => {
+  it("stores a fact inside a longer sentence in the person's own words, never the model's paraphrase", async () => {
     const text =
       "Hallo Keiko, ich bevorzuge Tabellen für Zahlen. Kannst du mir das Quartal zeigen?";
     const outcomes = await extractSalientMemories(
@@ -120,7 +120,7 @@ describe("extractSalientMemories", () => {
         .deps,
     );
     const [learned] = candidates(outcomes);
-    expect(learned?.proposal.body).toBe("Bevorzugt Tabellen für Zahlen");
+    expect(learned?.proposal.body).toBe("Ich bevorzuge Tabellen für Zahlen");
     expect(learned?.proposal.provenance.evidenceSpan).toBe("ich bevorzuge Tabellen für Zahlen");
     expect(learned?.proposal.provenance.sourceMessageIds).toEqual(["message-1"]);
     expect(learned?.proposal.body).not.toContain("Quartal");
@@ -179,7 +179,7 @@ describe("extractSalientMemories", () => {
           fact("Mag keine Tabellen", "Ich mag keine Tabellen"),
         ]),
       ),
-    ).toEqual(["Mag keine Tabellen"]);
+    ).toEqual(["Ich mag keine Tabellen"]);
   });
 
   it("takes confidence from the checks, not from the model", async () => {
@@ -219,7 +219,7 @@ describe("extractSalientMemories", () => {
     expect(learned?.proposal.payload).toEqual({
       kind: "key-value",
       entries: [
-        { key: "decision", value: "Entscheidung: lokale Warteschlange" },
+        { key: "decision", value: "Ich habe mich für eine lokale Warteschlange entschieden" },
         { key: "reason", value: "sie offline läuft" },
       ],
     });
@@ -246,7 +246,7 @@ describe("extractSalientMemories", () => {
     expect(decision?.proposal.payload).toEqual({
       kind: "key-value",
       entries: [
-        { key: "decision", value: "Decided on a local queue" },
+        { key: "decision", value: "I decided on a local queue" },
         { key: "reason", value: "it works offline" },
       ],
     });
@@ -356,7 +356,7 @@ describe("extractSalientMemories", () => {
       input("Ich bevorzuge Tabellen."),
       harness(fenced).deps,
     );
-    expect(bodies(outcomes)).toEqual(["Bevorzugt Tabellen"]);
+    expect(bodies(outcomes)).toEqual(["Ich bevorzuge Tabellen"]);
   });
 
   it("returns [] for empty text without calling the model", async () => {
@@ -370,7 +370,7 @@ describe("extractSalientMemories", () => {
       fact("Bevorzugt Tabellen", "Ich bevorzuge Tabellen"),
       fact("Bevorzugt Tabellen.", "Ich bevorzuge Tabellen"),
     ]);
-    expect(bodies(outcomes)).toEqual(["Bevorzugt Tabellen"]);
+    expect(bodies(outcomes)).toEqual(["Ich bevorzuge Tabellen"]);
   });
 
   it("keeps to few facts per turn", async () => {

@@ -222,7 +222,11 @@ The model proposes and deterministic checks decide, on the person's own words on
 doubt Keiko learns too little rather than too much, because nobody approves what it learns once
 D2 lets a fact through.
 
-- **Form.** A learned memory is one normalized statement about the person. Provenance keeps the exact
+- **Form.** A learned memory is the person's own words for one fact: the admitted span, never the
+  model's statement, which only shows which fact the span carries. A paraphrase loses the words a
+  later question uses, and a measured lab run fell below the answer-accuracy baseline when Keiko
+  stored it. A span from inside a sentence starts with a capital letter, and a resolved leading
+  pronoun is replaced by what it stood for. Provenance keeps the exact
   span of the person's message it rests on (`evidenceSpan`, sealed at rest like the body) and the
   person's turns it came from (`sourceMessageIds`). A decision keeps its reason in the key-value
   payload, and a stated end in the future closes validity; both are parsed from the words, never
@@ -243,16 +247,17 @@ D2 lets a fact through.
   scope, never outside a project, and compared only with that scope's facts, so it never confirms or
   replaces a private one; "X und ich" and "Wir und X" name a person and are dropped. A person named
   by their relation (Vermieterin, landlord, Eltern, Oma, "meine Leute") is a third party. A leading pronoun ("Sie beginnen immer mit einer Zusammenfassung") counts as the person's
-  own thing only when the body names it with a first-person possessive and the person's previous
-  message in the same chat named it so ("meine Berichte"); that message reaches the learner as
+  own thing only when the person's previous message in the same chat named it as theirs ("meine
+  Berichte") and the model's statement names that thing or keeps the pronoun while the previous
+  message named exactly one; a statement naming another thing is dropped; that message reaches the learner as
   context, never as a source, and a person's pronoun stays a third party. Two limits are
   accepted: a bare first name outside these forms cannot be told from a German noun, and an English
   role behind a determiner ("the customer database") is treated as a person, because privacy
-  outranks recall. Credentials, IBANs, phone numbers and customer identifiers are refused. Every body word comes from the span
-  except a short predicate vocabulary, with the same polarity, where a verb that rejects its object
-  ("hasse", "avoid") and "ohne" count as negation. Each drop is one closed reason.
+  outranks recall. Credentials, IBANs, phone numbers and customer identifiers are refused. The model's statement may paraphrase or translate the span, because the span is what is stored, but it
+  keeps the span's polarity, where a verb that rejects its object ("hasse", "avoid") and "ohne"
+  count as negation; an inverted statement shows the model misread the fact. Each drop is one closed reason.
 - **Confidence** is derived from what the checks saw, never from the model:
-  0.4, plus 0.3 for a first-person subject, plus 0.15 when the body covers at least half of the
+  0.4, plus 0.3 for a first-person subject, plus 0.15 when the model's statement covers at least half of the
   span. A thin fact without a subject stays below the D4 promotion gate.
 - **Relation.** The model labels `new`, `same`, `update` or `contradiction`; checks confirm it. A
   reversal, a changed number or a changed polarity replaces the older fact on its own. A new value

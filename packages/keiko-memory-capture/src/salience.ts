@@ -370,9 +370,9 @@ function admitItem(
     turn.drop("unknown-type");
     return null;
   }
-  const body = item.body.trim();
+  const proposed = item.body.trim();
   const max = turn.policy.maxBodyChars ?? MEMORY_BODY_MAX_CHARS_DEFAULT;
-  if (body.length === 0 || body.length > max) {
+  if (proposed.length === 0 || proposed.length > max) {
     turn.drop("not-entailed");
     return null;
   }
@@ -385,6 +385,12 @@ function admitItem(
   }
   if (statedEndPassed(admission.sentence, turn.context.nowMs)) {
     turn.drop("past-statement");
+    return null;
+  }
+  // The model's statement only proves the fact; the person's own words are what is learned.
+  const body = admission.claim.trim();
+  if (body.length > max) {
+    turn.drop("not-entailed");
     return null;
   }
   if (isDeniedContent(item, turn.policy)) {
@@ -494,7 +500,7 @@ function bodyOf(outcome: SalienceOutcome): string | null {
 function isRepeatInTurn(item: RawSalienceItem, accepted: readonly SalienceOutcome[]): boolean {
   return accepted.some((outcome) => {
     const body = bodyOf(outcome);
-    return body !== null && statesSameFact(body, item.body);
+    return body !== null && statesSameFact(body, item.evidence);
   });
 }
 

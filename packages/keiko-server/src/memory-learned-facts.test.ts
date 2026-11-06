@@ -226,15 +226,18 @@ describe("a changed fact replaces the older one", () => {
     ["German", "Ich bevorzuge Tabellen", "Ab jetzt lieber Listen", "Lieber Listen"],
     ["German, normalized", "Ich bevorzuge Tabellen", "Ab jetzt lieber Listen", "Bevorzugt Listen"],
     ["English", "I prefer tables", "From now on I prefer lists", "I prefer lists"],
-  ])("replaces on a stated change in %s", async (_language, older, said, body) => {
-    const vault = makeVault();
-    const ctx = context();
-    await say(vault, ctx, older, [stated(older)]);
-    await say(vault, ctx, said, [{ body, evidence: said, relation: "update", related: 1 }]);
+  ])(
+    "replaces on a stated change in %s with the person's words",
+    async (_language, older, said, body) => {
+      const vault = makeVault();
+      const ctx = context();
+      await say(vault, ctx, older, [stated(older)]);
+      await say(vault, ctx, said, [{ body, evidence: said, relation: "update", related: 1 }]);
 
-    expect(liveBodies(vault, ctx)).toEqual([body]);
-    expect(recordsWith(vault, ctx, "superseded").map((record) => record.body)).toEqual([older]);
-  });
+      expect(liveBodies(vault, ctx)).toEqual([said]);
+      expect(recordsWith(vault, ctx, "superseded").map((record) => record.body)).toEqual([older]);
+    },
+  );
 
   it("leaves two alike statements about different things standing, whatever the model says", async () => {
     const vault = makeVault();
@@ -378,10 +381,6 @@ describe("nothing the person did not write is stored", () => {
       { body: "Ich arbeite gerne morgens", evidence: "Ich arbeite am liebsten früh" },
     ],
     ["returns evidence not in the text", { body: "Ich mag Tee", evidence: "Ich mag Tee" }],
-    [
-      "adds words to the body",
-      { body: "Ich arbeite gerne morgens in Berlin", evidence: "Ich arbeite gerne morgens" },
-    ],
     ["attributes it to someone else", { body: "Ich arbeite gerne morgens", about: "other" }],
   ])("stores nothing when the model %s", async (_name, item) => {
     const vault = makeVault();
@@ -389,6 +388,17 @@ describe("nothing the person did not write is stored", () => {
     await say(vault, ctx, SAID, [item]);
     expect(recordsWith(vault, ctx, "accepted")).toEqual([]);
     expect(recordsWith(vault, ctx, "proposed")).toEqual([]);
+  });
+
+  it("stores only the person's words when the model adds words to its statement", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, SAID, [
+      { body: "Ich arbeite gerne morgens in Berlin", evidence: "Ich arbeite gerne morgens" },
+    ]);
+
+    expect(liveBodies(vault, ctx)).toEqual(["Ich arbeite gerne morgens"]);
+    expect(JSON.stringify(recordsWith(vault, ctx, "accepted"))).not.toContain("Berlin");
   });
 
   it("keeps a genuine fact inside a longer sentence as one body with its exact words", async () => {
@@ -399,7 +409,7 @@ describe("nothing the person did not write is stored", () => {
     ]);
 
     const [record] = recordsWith(vault, ctx, "accepted");
-    expect(record?.body).toBe("Ich arbeite gerne morgens");
+    expect(record?.body).toBe("Ich arbeite gerne morgens.");
     expect(record?.provenance.evidenceSpan).toBe("Ich arbeite gerne morgens.");
     expect(record?.body).not.toContain("Heute");
   });
@@ -424,6 +434,38 @@ describe("nothing the person did not write is stored", () => {
 });
 
 describe("what a fact keeps from the person's words", () => {
+  // Lab regression (#4212): storing the model's paraphrase lost the words a later question uses,
+  // so the answer received no memory and answer accuracy fell below the baseline.
+  it.each([
+    [
+      "If I preferred tables, I would have told you. I actually like plain text.",
+      "Prefers plain text.",
+      "I actually like plain text",
+      "How do I like my answers formatted?",
+    ],
+    [
+      "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "Bevorzugt Tabellen bei Zahlen",
+      "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst",
+      "Wie sollst du mir Zahlen zeigen?",
+    ],
+  ])(
+    "stores the person's words, never the model's paraphrase: %s",
+    async (said, body, evidence, question) => {
+      const vault = makeVault();
+      const ctx = context();
+      await say(vault, ctx, said, [{ body, evidence, type: "preference" }]);
+
+      expect(liveBodies(vault, ctx)).toEqual([evidence]);
+      const request = {
+        content: question,
+        memory: { enabled: true, budgetTokens: 900, context: {} },
+      } as unknown as SendDesktopChatRequest;
+      const retrieved = await buildMemoryResult(request, makeDeps(vault, []), ctx);
+      expect(retrieved.context.text).toContain(evidence);
+    },
+  );
+
   it("carries a decision's reason in the payload", async () => {
     const vault = makeVault();
     const ctx = context();
@@ -466,7 +508,7 @@ describe("what stays out of the way of a learned fact", () => {
     const clause = "ich führe meine Zahlen immer im Wiki";
     await say(vault, ctx, `Frau Ostrander rechnet alles in Excel, ${clause}.`, [stated(clause)]);
 
-    expect(liveBodies(vault, ctx)).toEqual([clause]);
+    expect(liveBodies(vault, ctx)).toEqual(["Ich führe meine Zahlen immer im Wiki"]);
   });
 
   it("keeps a fact in the person's own scope, whatever scope the model names", async () => {
@@ -495,7 +537,7 @@ describe("what stays out of the way of a learned fact", () => {
     );
 
     const [waiting] = recordsWith(vault, ctx, "proposed");
-    expect(waiting?.body).toBe("Bevorzugt Listen");
+    expect(waiting?.body).toBe(change);
     expect(waiting?.provenance.confidence).toBe(0.4);
     expect(liveBodies(vault, ctx)).toContain("Ich bevorzuge Tabellen");
   });

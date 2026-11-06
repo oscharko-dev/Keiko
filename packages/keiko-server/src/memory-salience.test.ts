@@ -529,7 +529,7 @@ describe("captureSalientFromTurn", () => {
     );
     expect(actions).toHaveLength(1);
     const records = readMemories(vault, ctx);
-    expect(records[0]?.body).toBe("Ich bin Oliver.");
+    expect(records[0]?.body).toBe("Ich bin Oliver");
   });
 
   it("uses json_schema responseFormat only when the configured model supports it", async () => {
