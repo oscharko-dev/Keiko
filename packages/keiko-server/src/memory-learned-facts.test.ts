@@ -665,12 +665,12 @@ describe("what a pronoun and a team's decision become", () => {
 function changingDuringCall(model: ModelPort, change: () => void): ModelPort {
   let changed = false;
   return {
-    call(request): Promise<NormalizedResponse> {
+    call(request, signal): Promise<NormalizedResponse> {
       if (!changed) {
         changed = true;
         change();
       }
-      return model.call(request);
+      return model.call(request, signal);
     },
   };
 }
