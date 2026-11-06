@@ -10637,6 +10637,9 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "credential-in-response-header",
           "credential-spelling-unbounded",
           "mutation-outcome-unknown",
+          "binding-revoked",
+          "server-hung-recycled",
+          "reconnect-backoff",
         ],
       },
       method: {
@@ -10676,6 +10679,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       durationMs: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      failureCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      backoffMs: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -31819,6 +31832,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "deadline-exceeded",
           "aborted",
           "closed",
+          "result-too-large",
+          "backoff",
         ],
       },
       registrySha256: {
@@ -31843,6 +31858,60 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "opaque-id",
         required: false,
         maxLength: 128,
+      },
+      serverDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      toolDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      durationMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      requestBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      resultBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      dispatched: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      effect: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["none", "possible"],
+      },
+      omittedToolCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      truncatedDescriptionCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      connectCause: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["timeout", "spawn", "aborted", "closed", "protocol", "unknown"],
       },
     },
     causal: "correlation",

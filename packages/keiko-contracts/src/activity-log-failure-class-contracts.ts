@@ -204,6 +204,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "completeness-state",
       "count",
       "digest",
+      "duration",
       "loss-state",
       "opaque-id",
     ],

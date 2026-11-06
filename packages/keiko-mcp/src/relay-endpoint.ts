@@ -9,11 +9,13 @@ import {
 import {
   MANAGED_MCP_PROTOCOL_VERSION,
   type ExternalMcpConnection,
+  type ManagedMcpEffect,
+  type ManagedMcpFailure,
   type ManagedMcpInvocationContext,
   type ManagedMcpMutationInvocation,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { ManagedMcpError } from "./definitions.js";
+import { boundedDescription, ManagedMcpError } from "./definitions.js";
 
 interface RelayEndpoint {
   readonly fetch: (request: Request, context: ManagedMcpInvocationContext) => Promise<Response>;
@@ -67,6 +69,56 @@ function beginMutation(
   if (permit === undefined) throw new ManagedMcpError("not-admitted");
   return permit;
 }
+/** Fixed, model-readable words per closed reason; no server text, name or path. */
+const FAILURE_TEXT: Readonly<Partial<Record<ManagedMcpFailure, string>>> = {
+  "result-too-large":
+    "The tool result exceeded the size limit and was not delivered. Ask for less data: narrow the query, use filters or pagination.",
+  "deadline-exceeded": "The tool did not answer in time.",
+  aborted: "The tool call was cancelled before it finished.",
+  closed: "The connection to the tool server closed before the call finished.",
+  "descriptor-drift": "The tool server changed its tool list. Try the call again.",
+  backoff: "The tool server is restarting after a failure. Try again shortly.",
+  "invalid-arguments": "The tool arguments were not valid for this tool.",
+};
+
+function failureResult(
+  reason: ManagedMcpFailure,
+  effect: ManagedMcpEffect,
+  mutation: boolean,
+): CallToolResult {
+  const base = FAILURE_TEXT[reason] ?? "The tool call failed.";
+  const outcome = !mutation
+    ? ""
+    : effect === "none"
+      ? " Nothing was changed."
+      : " The change may or may not have been applied; check before repeating it.";
+  return { isError: true, content: [{ type: "text", text: `${base}${outcome}` }] };
+}
+
+function failureOf(error: unknown): { reason: ManagedMcpFailure; effect: ManagedMcpEffect } {
+  if (error instanceof ManagedMcpError) return { reason: error.reason, effect: error.effect };
+  return { reason: "tool-error", effect: "possible" };
+}
+
+async function settleFailedCall(
+  input: RelayCall,
+  context: ManagedMcpInvocationContext,
+  permit: ManagedMcpMutationInvocation | undefined,
+  effect: ManagedMcpEffect,
+): Promise<void> {
+  // "none" is trusted only when the durable record is still undispatched (the gate owns dispatch).
+  const undispatched = effect === "none" && permit?.dispatch !== undefined;
+  if (undispatched || (effect === "none" && permit === undefined)) {
+    permit?.release?.();
+    return;
+  }
+  try {
+    permit?.fail();
+  } finally {
+    if (input.mutation) await uncertainMutation(context);
+  }
+}
+
 async function invokeRelayTool(input: RelayCall): Promise<CallToolResult> {
   const { context } = input;
   assertCurrent(context, input.active, input.signal);
@@ -77,19 +129,19 @@ async function invokeRelayTool(input: RelayCall): Promise<CallToolResult> {
       ...context,
       signal,
       invocationId: permit?.invocationId ?? context.invocationId,
+      ...(permit?.dispatch === undefined
+        ? {}
+        : { beforeDispatch: (): boolean => permit.dispatch?.() === true }),
     });
     if (!isCallToolResult(result) || (input.mutation && result.isError === true))
       throw new ManagedMcpError("protocol-error");
     permit?.acknowledge();
     assertCurrent(context, input.active, signal);
     return result;
-  } catch {
-    try {
-      permit?.fail();
-    } finally {
-      if (input.mutation) await uncertainMutation(context);
-    }
-    throw new ManagedMcpError("tool-error");
+  } catch (error) {
+    const { reason, effect } = failureOf(error);
+    await settleFailedCall(input, context, permit, effect);
+    return failureResult(reason, effect, input.mutation);
   }
 }
 
@@ -115,7 +167,9 @@ function relayServer(
     server.registerTool(
       tool.name,
       {
-        ...(tool.description === undefined ? {} : { description: tool.description }),
+        ...(tool.description === undefined
+          ? {}
+          : { description: boundedDescription(tool.description) }),
         inputSchema: fromJsonSchema<CatalogJsonObject>(tool.inputSchema),
       },
       (args, sdkContext) =>

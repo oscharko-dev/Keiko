@@ -22,6 +22,11 @@ export interface ManagedMcpInvocationContext {
     | undefined;
   /** Server-private recovery fence; never supplied by model tool arguments. */
   readonly onUncertainMutation?: (() => void | Promise<void>) | undefined;
+  /**
+   * Runs exactly once per call at the gate that releases the `tools/call` frame to the transport,
+   * after every pre-send check passed. `false` refuses the frame; nothing has left the process.
+   */
+  readonly beforeDispatch?: (() => boolean) | undefined;
   readonly invocationId: string;
   readonly correlationId: string;
   readonly signal: AbortSignal;
@@ -30,6 +35,14 @@ export interface ManagedMcpInvocationContext {
 
 export interface ManagedMcpMutationInvocation {
   readonly invocationId: string;
+  /**
+   * Marks the durable record dispatched. Called at the transport gate, not at admission, so a
+   * failure before the frame left the process stays provably effect-free. Absent: the record was
+   * already dispatched when the permit was issued.
+   */
+  readonly dispatch?: (() => boolean) | undefined;
+  /** The call failed before `dispatch`: settle the record as not dispatched. */
+  readonly release?: (() => void) | undefined;
   /** The upstream replied successfully; the consumer has not acknowledged receipt yet. */
   readonly acknowledge: () => void;
   /** Conservatively retain the observed outcome if delivery cannot be confirmed. */
@@ -76,7 +89,15 @@ export type ManagedMcpFailure =
   | "log-unavailable"
   | "deadline-exceeded"
   | "aborted"
-  | "closed";
+  | "closed"
+  | "result-too-large"
+  | "backoff";
+
+/**
+ * Whether a failed call may have changed the remote system. `none` is only claimed when the
+ * `tools/call` frame never passed the dispatch gate; everything else is `possible`.
+ */
+export type ManagedMcpEffect = "none" | "possible";
 
 export interface ManagedMcpHost<Context extends ManagedMcpInvocationContext> {
   readonly admit: (correlationId: string) => Promise<void>;
