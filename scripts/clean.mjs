@@ -3,13 +3,14 @@
 //
 // Per-package emit conventions:
 //   - keiko-* tsc packages emit to dist/
-//   - keiko-ui (Next.js) emits to .next/ and out/
+//   - keiko-ui (Next.js) emits to .next/ and out/, and its product-token compiler writes
+//     dist/styles/product-tokens.css
 
 import { lstat, realpath, rm } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const ROOT_TARGETS = ["dist", "coverage"];
-const UI_TARGETS = [".next", "out"];
+const UI_TARGETS = [".next", "out", "dist"];
 
 import { collectWorkspacePackages } from "./workspace-graph.mjs";
 

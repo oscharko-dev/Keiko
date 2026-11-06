@@ -15,6 +15,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { adoptReportedContextWindow } from "./gateway-context-window.js";
+import { createMemoryVault } from "@oscharko-dev/keiko-memory-vault";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   acceptedGitChangeChatMode,
@@ -2197,4 +2198,58 @@ describe("window adoption during prompt preparation", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+it("carries a legacy buffered request id into the actual captured memory write", async () => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "keiko-buffered-memory-context-"));
+  const store = createInMemoryUiStore();
+  const modelId = "turn-shape-chat";
+  const vault = createMemoryVault({
+    memoryDir: join(root, "vault"),
+    vaultKey: Buffer.alloc(32, 7),
+    redactString: (value) => value,
+  });
+  const insertion = vi.spyOn(vault, "insertMemory");
+  try {
+    store.createProject(root, "Memory context");
+    const chat = store.createChat(root, "Memory context", modelId);
+    const deps: UiHandlerDeps = {
+      config: turnShapeGatewayConfig(modelId),
+      configPresent: true,
+      store,
+      memoryVault: vault,
+      env: { KEIKO_MEMORY_AUTO_MAINTAIN: "0" },
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      redactor: buildRedactor({}),
+      registry: createRunRegistry(),
+      modelPortFactory: () => turnShapeModel(),
+    };
+    const result = await handleSendDesktopChat(
+      requestContext(
+        {
+          chatId: chat.id,
+          projectPath: root,
+          modelId,
+          content: "remember that I prefer dark mode",
+          memory: { enabled: true, budgetTokens: 900, context: {} },
+        },
+        "legacy-buffered-memory-request",
+      ),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(insertion.mock.calls.length).toBeGreaterThan(0);
+    expect(insertion.mock.calls[0]?.[1]).toEqual({
+      correlationId: "legacy-buffered-memory-request",
+    });
+  } finally {
+    vault.close();
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });

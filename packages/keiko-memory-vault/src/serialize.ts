@@ -32,9 +32,20 @@ import type {
   WorkflowRunId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
+import { validateMemoryRecord } from "@oscharko-dev/keiko-contracts/runtime/memory";
+import {
+  MEMORY_TAGS_MAX_COUNT,
+  MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES,
+} from "@oscharko-dev/keiko-contracts/memory";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
-import { MemoryStorageError } from "./errors.js";
+import { MemoryStorageValidationError, MemoryStorageError } from "./errors.js";
 import type { MemoryContentCipher } from "./cipher.js";
+import { redactMemoryRecord } from "./redact-record.js";
+import {
+  emitMemoryWriteCaptureFailed,
+  emitMemoryWriteRejected,
+  type MemoryPhysicalWriteAdmission,
+} from "./vault-log.js";
 
 // Content-vs-metadata split (ADR-0035): only the columns that carry remembered TEXT are sealed —
 // body, payload_json, tags_json, capture_rationale, stale_reason. Every other column (ids, scope,
@@ -336,11 +347,268 @@ function retentionFieldsToRow(hint: MemoryRecord["retentionHint"]): RetentionRow
   };
 }
 
+// Only locally constructed fixed-schema containers enter this helper. It never walks input.
+function ownMemoryFields(fields: Record<string, unknown>): Readonly<Record<string, unknown>> {
+  Object.setPrototypeOf(fields, null);
+  for (const key of Object.keys(fields)) {
+    if (fields[key] === undefined) Reflect.deleteProperty(fields, key);
+  }
+  return Object.freeze(fields);
+}
+
+function isMemoryFieldGroup(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** One own-field snapshot of a group; the record validator decides whether it is valid. */
+type CapturedMemoryGroup = Readonly<Record<string, unknown>>;
+
+function captureMemoryScope(
+  value: MemoryRecord["scope"],
+): MemoryRecord["scope"] | CapturedMemoryGroup {
+  if (!isMemoryFieldGroup(value)) return value;
+  const kind = value.kind;
+  switch (kind) {
+    case "user":
+      return ownMemoryFields({ kind, userId: value.userId });
+    case "workspace":
+      return ownMemoryFields({ kind, workspaceId: value.workspaceId });
+    case "project":
+      return ownMemoryFields({ kind, projectId: value.projectId });
+    case "workflow":
+      return ownMemoryFields({ kind, workflowDefinitionId: value.workflowDefinitionId });
+    default:
+      return ownMemoryFields({ kind });
+  }
+}
+
+function captureMemoryModelIdentity(
+  value: MemoryRecord["provenance"]["modelIdentity"],
+): MemoryRecord["provenance"]["modelIdentity"] | CapturedMemoryGroup {
+  if (!isMemoryFieldGroup(value)) return value;
+  return ownMemoryFields({
+    provider: value.provider,
+    modelId: value.modelId,
+    modelRevision: value.modelRevision,
+  });
+}
+
+function captureMemoryProvenance(
+  value: MemoryRecord["provenance"],
+): MemoryRecord["provenance"] | CapturedMemoryGroup {
+  if (!isMemoryFieldGroup(value)) return value;
+  return ownMemoryFields({
+    sourceKind: value.sourceKind,
+    sourceConversationId: value.sourceConversationId,
+    sourceWorkflowRunId: value.sourceWorkflowRunId,
+    sourceEvidenceManifestId: value.sourceEvidenceManifestId,
+    capturedAt: value.capturedAt,
+    captureRationale: value.captureRationale,
+    modelIdentity: captureMemoryModelIdentity(value.modelIdentity),
+    confidence: value.confidence,
+    sensitivity: value.sensitivity,
+  });
+}
+
+function captureMemoryValidity(
+  value: MemoryRecord["validity"],
+): MemoryRecord["validity"] | CapturedMemoryGroup {
+  if (!isMemoryFieldGroup(value)) return value;
+  return ownMemoryFields({ validFrom: value.validFrom, validUntil: value.validUntil });
+}
+
+function captureMemoryRetention(
+  value: MemoryRecord["retentionHint"],
+): MemoryRecord["retentionHint"] | CapturedMemoryGroup {
+  if (!isMemoryFieldGroup(value)) return value;
+  return ownMemoryFields({
+    policyKey: value.policyKey,
+    retainUntil: value.retainUntil,
+    notes: value.notes,
+  });
+}
+
+function freezeMemoryArray(values: unknown[]): readonly unknown[] {
+  // JSON checks toJSON through the prototype chain, even on arrays. Shadow it on our array.
+  Object.defineProperty(values, "toJSON", { value: undefined });
+  return Object.freeze(values);
+}
+
+function memoryArrayCaptureLength(values: readonly unknown[], maximum: number): number {
+  const length: unknown = values.length;
+  if (
+    typeof length !== "number" ||
+    !Number.isSafeInteger(length) ||
+    length < 0 ||
+    length > maximum
+  ) {
+    throw new MemoryStorageValidationError("Invalid memory record.", [
+      { path: [], message: "Memory array extent is outside its canonical bound." },
+    ]);
+  }
+  return length;
+}
+
+function captureMemoryStrings(value: readonly unknown[], maximum: number): readonly unknown[] {
+  const length = memoryArrayCaptureLength(value, maximum);
+  const captured: unknown[] = [];
+  for (let index = 0; index < length; index += 1) captured.push(value[index]);
+  return freezeMemoryArray(captured);
+}
+
+function captureMemoryEntries(value: readonly unknown[]): readonly unknown[] {
+  const length = memoryArrayCaptureLength(value, MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES);
+  const captured: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const entry: unknown = value[index];
+    captured.push(
+      isMemoryFieldGroup(entry) ? ownMemoryFields({ key: entry.key, value: entry.value }) : entry,
+    );
+  }
+  return freezeMemoryArray(captured);
+}
+
+function captureMemoryPayload(
+  value: MemoryRecord["payload"],
+): MemoryRecord["payload"] | CapturedMemoryGroup {
+  if (!isMemoryFieldGroup(value)) return value;
+  const group: Readonly<Record<string, unknown>> = value;
+  const kind = group.kind;
+  if (kind === "string-list") {
+    const items = group.items;
+    return ownMemoryFields({
+      kind,
+      items: Array.isArray(items)
+        ? captureMemoryStrings(items, MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES)
+        : items,
+    });
+  }
+  if (kind === "key-value") {
+    const entries = group.entries;
+    return ownMemoryFields({
+      kind,
+      entries: Array.isArray(entries) ? captureMemoryEntries(entries) : entries,
+    });
+  }
+  return ownMemoryFields({ kind });
+}
+
+function captureMemoryTags(tags: MemoryRecord["tags"]): MemoryRecord["tags"] | readonly unknown[] {
+  return Array.isArray(tags) ? captureMemoryStrings(tags, MEMORY_TAGS_MAX_COUNT) : tags;
+}
+
+function captureMemoryRecord(record: MemoryRecord): MemoryRecord {
+  const captured = ownMemoryFields({
+    id: record.id,
+    schemaVersion: record.schemaVersion,
+    scope: captureMemoryScope(record.scope),
+    type: record.type,
+    body: record.body,
+    provenance: captureMemoryProvenance(record.provenance),
+    validity: captureMemoryValidity(record.validity),
+    status: record.status,
+    pinned: record.pinned,
+    tags: captureMemoryTags(record.tags),
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    payload: captureMemoryPayload(record.payload),
+    staleReason: record.staleReason,
+    retentionHint: captureMemoryRetention(record.retentionHint),
+  });
+  const result = validateMemoryRecord(captured);
+  if (!result.ok) {
+    throw new MemoryStorageValidationError(
+      "Invalid memory record.",
+      result.errors.map((message) => ({ path: [], message })),
+    );
+  }
+  return result.value;
+}
+
+function admittedMemorySnapshot(
+  record: MemoryRecord,
+  admission: MemoryPhysicalWriteAdmission | undefined,
+): MemoryRecord {
+  try {
+    return captureMemoryRecord(record);
+  } catch (error) {
+    if (admission !== undefined) {
+      if (error instanceof MemoryStorageValidationError) {
+        emitMemoryWriteRejected(
+          admission.sink,
+          admission.method,
+          admission.context,
+          "physical-admission",
+        );
+      } else {
+        emitMemoryWriteCaptureFailed(admission.sink, admission.method, admission.context, error);
+      }
+    }
+    throw error;
+  }
+}
+
+// Redaction builds fresh containers around the owned snapshot. Each one gets the captured
+// groups' null-prototype, frozen form, so serialization and the returned record see owned data.
+function ownedRedactedGroup<T extends object>(group: T): Readonly<T> {
+  Object.setPrototypeOf(group, null);
+  return Object.freeze(group);
+}
+
+function ownedRedactedArray<T>(values: readonly T[]): readonly T[] {
+  Object.defineProperty(values, "toJSON", { value: undefined });
+  return Object.freeze(values);
+}
+
+function ownRedactedPayload(payload: MemoryStructuredPayload): void {
+  if (payload.kind === "string-list") {
+    ownedRedactedArray(payload.items);
+  } else {
+    for (const entry of payload.entries) ownedRedactedGroup(entry);
+    ownedRedactedArray(payload.entries);
+  }
+  ownedRedactedGroup(payload);
+}
+
+function redactedMemorySnapshot(
+  captured: MemoryRecord,
+  redactString: (input: string) => string,
+): MemoryRecord {
+  const redacted = redactMemoryRecord(captured, redactString);
+  ownedRedactedGroup(redacted.provenance);
+  ownedRedactedArray(redacted.tags);
+  if (redacted.payload !== undefined) ownRedactedPayload(redacted.payload);
+  if (redacted.retentionHint !== undefined) ownedRedactedGroup(redacted.retentionHint);
+  return ownedRedactedGroup(redacted);
+}
+
+export interface PreparedMemoryRow {
+  readonly record: MemoryRecord;
+  readonly row: MemoryRowWrite;
+}
+
+// Capture, then validate, then redact. No foreign container is reread after capture. A vault
+// write redacts the admitted snapshot, and that redacted form supplies the SQL row, the vault's
+// returned record and its events. Redaction runs after validation because it may lengthen a
+// field ("[REDACTED]" replaces a shorter literal), and the stored form was never held to the
+// caller's bounds (REVIEW-3918-057). A direct row write without an admission is not redacted.
+export function prepareMemoryRow(
+  record: MemoryRecord,
+  cipher: MemoryContentCipher,
+  admission?: MemoryPhysicalWriteAdmission,
+): PreparedMemoryRow {
+  const captured = admittedMemorySnapshot(record, admission);
+  const stored =
+    admission === undefined ? captured : redactedMemorySnapshot(captured, admission.redactString);
+  const row = encryptContentColumns(plainRecordToRow(stored), cipher);
+  return Object.freeze({ record: stored, row: Object.freeze(row) });
+}
+
 export function memoryRecordToRow(
   record: MemoryRecord,
   cipher: MemoryContentCipher,
 ): MemoryRowWrite {
-  return encryptContentColumns(plainRecordToRow(record), cipher);
+  return prepareMemoryRow(record, cipher).row;
 }
 
 function plainRecordToRow(record: MemoryRecord): MemoryRowWrite {
