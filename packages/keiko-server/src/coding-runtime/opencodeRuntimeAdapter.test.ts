@@ -1640,8 +1640,16 @@ describe("OpenCode runtime adapter readiness", () => {
     });
 
     const reconnects = records.filter((record) => record.source === "opencode.monitor.reconnect");
-    // The additive `cause` token is asserted separately; every pinned field stays byte-identical.
-    expect(reconnects.map((record) => record.code?.replace(/:cause=[a-z-]+$/u, ""))).toEqual([
+    // Each code is the pinned text plus one closed `cause` token, and nothing else: a cause outside
+    // the closed vocabulary leaves its suffix in place and fails the comparison below.
+    expect(
+      reconnects.map((record) =>
+        record.code?.replace(
+          /:cause=(?:events-ended|events-invalid|history-incomplete|stream-error)$/u,
+          "",
+        ),
+      ),
+    ).toEqual([
       "stage=monitor:reason=backoff:attempt=1:delayMs=250:failingForMs=0",
       "stage=monitor:reason=backoff:attempt=2:delayMs=500:failingForMs=250",
       "stage=monitor:reason=backoff:attempt=3:delayMs=1000:failingForMs=750",
