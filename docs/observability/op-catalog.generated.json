@@ -108814,7 +108814,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-salience.ts:312",
+      "site": "packages/keiko-server/src/memory-salience.ts:323",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -112089,7 +112089,7 @@
     {
       "op": "memory.salience",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-salience.ts:251",
+      "site": "packages/keiko-server/src/memory-salience.ts:262",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
