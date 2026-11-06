@@ -87,6 +87,9 @@ describe("hermetic fixture repositories (REVIEW-3918-044)", () => {
 });
 
 describe("actual tracked/build/workspace inventory (#3915)", () => {
+  // The real-repository inventory dominates this test. Hosted runs measured on 2026-11-06
+  // (REVIEW-3918-063), 24 coverage-shard runs: median 52.1 s, p95 58.6 s, max 60.5 s; 20 Node 26
+  // runs without coverage: max 25.8 s. The timeout is three times the slowest hosted run.
   it("reconciles the actual built workspace public surface with its full source inventory", async () => {
     const root = fileURLToPath(new URL("../../", import.meta.url));
     const inventory = await collectPolicyInventory(root);
@@ -123,7 +126,7 @@ describe("actual tracked/build/workspace inventory (#3915)", () => {
     }
     expect(inventory.rootBuild.sources.length).toBeGreaterThan(0);
     expect(inventory.packages.every((owner) => owner.build.sources.length > 0)).toBe(true);
-  }, 60_000);
+  }, 180_000);
 
   it("selects real inventoried scopes and rejects empty or partial CI qualification", async () => {
     const { files } = await collectPolicyInventory(trackedRepository());
