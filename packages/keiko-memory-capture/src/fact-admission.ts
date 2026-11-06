@@ -808,7 +808,8 @@ const SELF_SPEECH_BETWEEN = new Set([
 // Material the person passes on is not their own statement: a line quoted with ">" (a reply or a
 // forwarded mail), and everything after a lead-in that names pasted material ("Hier die Mail von
 // Anna:", "Der Text lautet:"), is a mail header ("Fwd:", "Betreff:") or asks for work on a text
-// ("Übersetze:", "Schreibe einen Dialog:"). A lead-in reaches back to the previous sentence end.
+// ("Übersetze:", "Schreibe einen Dialog:"). A lead-in reaches back to the previous sentence end;
+// one that ends its line introduces the rest of the message, one followed by text only that line.
 const QUOTED_LINE_RE = /^[ \t]*(?:>|&gt;)/u;
 const LEAD_IN_RE = /[^.!?\n:]{1,80}:/gu;
 const MATERIAL_NOUN_RE = anyWordPattern([
@@ -833,7 +834,7 @@ const MATERIAL_NOUN_RE = anyWordPattern([
 const MAIL_HEADER_RE =
   /^(?:fwd?|wg|aw|re|von|an|betreff|datum|gesendet|from|to|subject|cc|date|sent)$/iu;
 const TEXT_TASK_RE =
-  /^(?:(?:bitte|please)\s+)?(?:schreib|übersetz|formulier|korrigier|überarbeit|fasse|translate|write|rewrite|correct|proofread|summari[sz]e|paraphrase)\p{L}*(?!\p{L})/iu;
+  /^(?:(?:bitte|please)\s+)?(?:schreibe?|übersetze?|formuliere?|korrigiere?|überarbeite?|fasse|translate|write|rewrite|correct|proofread|summari[sz]e|paraphrase)(?!\p{L})/iu;
 // How far before a verb its speaker may stand: "Anna also says", "My boss always says".
 const SPEAKER_REACH = 3;
 
@@ -872,10 +873,20 @@ function isInsideQuotes(before: string): boolean {
 function isPassedOn(text: string, start: number): boolean {
   const lineStart = text.lastIndexOf("\n", start - 1) + 1;
   if (QUOTED_LINE_RE.test(text.slice(lineStart))) return true;
-  return [...text.slice(0, start).matchAll(LEAD_IN_RE)].some((match) => {
-    const lead = match[0].slice(0, -1).trim();
-    return MATERIAL_NOUN_RE.test(lead) || MAIL_HEADER_RE.test(lead) || TEXT_TASK_RE.test(lead);
-  });
+  return [...text.slice(0, start).matchAll(LEAD_IN_RE)].some(
+    (match) => namesMaterial(match[0]) && leadInReaches(text, match.index + match[0].length, start),
+  );
+}
+
+function namesMaterial(leadIn: string): boolean {
+  const lead = leadIn.slice(0, -1).trim();
+  return MATERIAL_NOUN_RE.test(lead) || MAIL_HEADER_RE.test(lead) || TEXT_TASK_RE.test(lead);
+}
+
+function leadInReaches(text: string, colonEnd: number, start: number): boolean {
+  const newline = text.indexOf("\n", colonEnd);
+  const lineEnd = newline === -1 ? text.length : newline;
+  return text.slice(colonEnd, lineEnd).trim() === "" || start < lineEnd;
 }
 
 function isHypothetical(evidence: string, prefix: string): boolean {

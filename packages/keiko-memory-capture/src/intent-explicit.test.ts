@@ -471,6 +471,11 @@ describe("explicit German forget and remember statements (#4211)", () => {
       "meine Vorliebe für Tabellen, die ist veraltet",
     ],
     ["Vergiss, dass ich Tabellen mag und gern lese", "ich Tabellen mag und gern lese"],
+    ["Forget my address and phone", "my address and phone"],
+    ["Forget my address, phone and email", "my address, phone and email"],
+    ["Vergiss meine Adresse und alles andere", "meine Adresse und alles andere"],
+    ["Vergiss meine Adresse, ich bin umgezogen", "meine Adresse, ich bin umgezogen"],
+    ["Vergiss meine Adresse, danke dir", "meine Adresse, danke dir"],
   ])("takes the fact out of %j", (text, target) => {
     const { targets, resolver } = captured();
     expect(tryExtractForget(text, ctx(), { resolver })?.kind).toBe("forget");

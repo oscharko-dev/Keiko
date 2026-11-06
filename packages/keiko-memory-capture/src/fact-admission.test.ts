@@ -828,6 +828,8 @@ describe("material the person passes on", () => {
     ["Translate this: I prefer tables.", "I prefer tables"],
     ["Here is the email from my client:\nI use Vim every day.", "I use Vim every day"],
     ["Betreff: Ich bin ab Montag im Urlaub.", "Ich bin ab Montag im Urlaub"],
+    ["Hier der Entwurf:\n- Punkt 1\nIch nutze Vim.", "Ich nutze Vim"],
+    ["Übersetze: Ich wohne in Köln. Ich arbeite bei Foo.", "Ich arbeite bei Foo"],
   ])("keeps pasted, forwarded or task material out: %s", (text, evidence) => {
     expect(reasonOf(text, evidence)).toBe("quoted");
   });
@@ -839,6 +841,8 @@ describe("material the person passes on", () => {
     ["Meine Regel: Ich antworte immer kurz.", "Ich antworte immer kurz"],
     ["Ich schreibe gerade viel. Ich nutze Vim.", "Ich nutze Vim"],
     ["Die Mail ist raus. Ich arbeite bei Foo.", "Ich arbeite bei Foo"],
+    ["Meine Mail: a@b.de\nIch nutze Vim.", "Ich nutze Vim"],
+    ["Correction: I use Vim now.", "I use Vim now"],
   ])("keeps the person's own statement after an ordinary lead-in: %s", (text, evidence) => {
     expect(admit(text, evidence).admitted).toBe(true);
   });

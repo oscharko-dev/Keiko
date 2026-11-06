@@ -187,8 +187,9 @@ Only a clear statement acts this way, because it changes memory with no question
 "Remember" count, "Speichere" and "Notiere" only with "dass" or a colon, and "Lösche" only with
 "die Erinnerung an". "Speichere die Datei" and "Lösche den Cache" are tasks and never reach a memory.
 A negation ("Merke dir nicht", "Vergiss den Bericht nicht"), a question, and the idioms "Vergiss es"
-and "Forget it" state nothing to store or forget. A named thing whose sentence goes on with a verb
-("Vergiss den alten API-Pfad, nimm den neuen") is an instruction for the task and forgets nothing. A
+and "Forget it" state nothing to store or forget. A named thing whose sentence goes on with a task verb
+("Vergiss den alten API-Pfad, nimm den neuen") is an instruction for the task and forgets nothing;
+any other continuation ("und meine Telefonnummer", ", danke") still names what to forget. A
 named forget reaches a memory only through the same word or an inflection of it, so "Java" does not
 reach "JavaScript".
 
@@ -264,9 +265,10 @@ D2 lets a fact through.
   The clause is not a question, request, quotation, hypothesis, irony, hedge ("Ich glaube, …"),
   denial or past statement, and not material the person passes on: a line quoted with ">", or
   anything after a lead-in that names pasted material ("Hier die Mail von Anna:"), a mail header
-  ("Fwd:") or work on a text ("Übersetze:"). Tense and pronouns are judged on the claim itself, not
-  on its reason or condition, so "Ich nutze Tabellen, weil sie übersichtlich sind" stands; a
-  decision, switch or migration made in the past holds now.
+  ("Fwd:") or work on a text ("Übersetze:"), to the end of its line, or through the rest of the
+  message when the lead-in ends its line. Tense and pronouns are judged on the claim itself, not on
+  its reason or condition, so "Ich nutze Tabellen, weil sie übersichtlich sind" stands; a decision,
+  switch or migration made in the past holds now.
   The fact is about the person: labelled `self`, with a first-person word, and naming no one else:
   a titled person, a relation behind a possessive or genitive, a family word, a role a determiner
   points at ("dem Kunden", but not "mit Kunden" or "die Kunden-Tickets"), a partner, another

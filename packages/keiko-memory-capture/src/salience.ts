@@ -310,8 +310,6 @@ function effectiveContext(input: SalienceInput, deps: SalienceDeps): CaptureCont
   };
 }
 
-// The model's statement, the person's words it rests on and the stored body are each checked: the
-// body can carry words from the person's clause or previous message that neither of the others has.
 // The store refuses a record with a control character other than tab and line breaks.
 function hasControlCharacter(text: string): boolean {
   for (const char of text) {
@@ -323,6 +321,8 @@ function hasControlCharacter(text: string): boolean {
   return false;
 }
 
+// The model's statement, the person's words it rests on and the stored body are each checked: the
+// body can carry words from the person's clause or previous message that neither of the others has.
 function isDeniedContent(texts: readonly string[], policy: CapturePolicyOptions): boolean {
   return texts.some(
     (text) => hasControlCharacter(text) || memoryTextCaptureRejectionReason(text, policy) !== null,

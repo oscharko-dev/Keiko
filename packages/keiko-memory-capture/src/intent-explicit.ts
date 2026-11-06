@@ -169,24 +169,25 @@ export function isMemoryForgetReference(target: string): boolean {
 }
 
 // "Vergiss den alten API-Pfad, nimm den neuen" asks for work, not to forget a memory: a named thing
-// whose sentence goes on with a verb ("nimm", "use") is an instruction for the task at hand. A list
-// of things ("den Bericht und die Notizen") or a remark about the thing ("…, die ist veraltet")
-// still names what to forget.
+// whose sentence goes on with a task verb ("nimm", "use") is an instruction for the task at hand.
+// Any other continuation ("und meine Telefonnummer", ", danke", ", ich bin umgezogen") still names
+// what to forget.
 const NAMED_THING_RE =
   /^(?:den|die|das|der|dem|des|ein\p{L}*|mein\p{L}*|dein\p{L}*|unser\p{L}*|the|a|an|my|your|our)\s/iu;
 const CONTINUATION_RE = /(?:,|\s(?:und|and|dann|then))\s+(\p{L}+)/gu;
-const CONTINUES_A_THING = new Set(
+const TASK_VERBS = new Set(
   (
-    "den die das der dem des ein eine einen einem einer mein meine meinen meinem dein deine " +
-    "unser unsere auch er sie es ihn ihr the a an my your our also it they this that its"
+    "nimm nehmt nutze nutz benutze benutz verwende verwend schreib schreibe mach mache ersetze " +
+    "ersetz ändere änder probier probiere wechsle wechsel use take write make replace change try " +
+    "switch pick"
   ).split(" "),
 );
 
 function asksForTask(target: string): boolean {
   if (!NAMED_THING_RE.test(target)) return false;
-  return [...target.matchAll(CONTINUATION_RE)].some(([, word = ""]) => {
-    return /^\p{Ll}/u.test(word) && !CONTINUES_A_THING.has(word.toLowerCase());
-  });
+  return [...target.matchAll(CONTINUATION_RE)].some(([, word = ""]) =>
+    TASK_VERBS.has(word.toLowerCase()),
+  );
 }
 
 function forgetTargetOf(text: string): string | null {
