@@ -10840,7 +10840,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["read-only", "private", "none"],
+        values: ["read-only", "private", "none", "refused"],
       },
       mavenWrapper: {
         type: "string",

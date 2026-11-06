@@ -446,7 +446,7 @@ async function executePlainAction(
     const outcome = await runDelegate();
     return project(request, outcome);
   } catch (error) {
-    return handlerThrew(input.signal, request.actionId, error, diagnostics);
+    return recordHandlerThrow(input.signal, request.actionId, error, diagnostics);
   }
 }
 
@@ -515,14 +515,14 @@ async function executeClaimedEdit(
     const result = await runDelegate();
     return isAborted(signal) ? empty("cancelled") : project(request, result);
   } catch (error) {
-    return handlerThrew(signal, request.actionId, error, diagnostics);
+    return recordHandlerThrow(signal, request.actionId, error, diagnostics);
   }
 }
 
 // A handler that threw its own abort because its caller went away was cancelled and records no
 // failure. Any other throw is recorded, also when an abort raced it, so the defect stays visible;
 // a caller that left is still answered cancelled.
-function handlerThrew(
+function recordHandlerThrow(
   signal: AbortSignal | undefined,
   actionId: string,
   error: unknown,

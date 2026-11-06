@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { seededRandom } from "../../../../tests/support/seeded-property.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -22,17 +23,6 @@ import {
 const SESSION = "ses_incremental";
 
 type Message = Record<string, unknown>;
-
-/** A seeded generator: the property cases never read the wall clock or Math.random. */
-function mulberry32(seed: number): () => number {
-  let state = seed >>> 0;
-  return (): number => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let mixed = Math.imul(state ^ (state >>> 15), state | 1);
-    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
-    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4_294_967_296;
-  };
-}
 
 /**
  * The runtime's message API for one session: newest first (`order=desc`), `limit` honored, an
@@ -677,7 +667,7 @@ describe("OpenCode V2 incremental history equals a full projection (#4104)", () 
       private readonly config: Config,
       private readonly modes: ModeCounts,
     ) {
-      this.rng = mulberry32(seed);
+      this.rng = seededRandom(seed).next;
       this.incremental = new IncrementalReader(this.session, {
         tailMargin: config.margin,
         verifyEvery: config.verifyEvery,

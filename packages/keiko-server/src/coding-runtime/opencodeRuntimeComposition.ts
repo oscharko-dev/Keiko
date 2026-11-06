@@ -296,6 +296,7 @@ import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
 import { type OpenCodeToolProfile, openCodeVisibleToolNames } from "./opencodeToolSchemas.js";
 import { recordGovernedToolModelContent } from "./governedToolModelContent.js";
+import { javaToolOptions } from "./javaToolOptions.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   openCodeCatalogAliasFor,
@@ -2243,18 +2244,7 @@ function preparedEnvironment(
   javaProperties: Readonly<Record<string, string>> = {},
 ): Readonly<Record<string, string>> {
   const properties = { "java.io.tmpdir": join(runRoot, "tmp"), ...javaProperties };
-  const options = Object.entries(properties).map(([name, value]) =>
-    javaSystemProperty(name, value),
-  );
-  return {
-    ...profile,
-    JAVA_TOOL_OPTIONS: [inherited.JAVA_TOOL_OPTIONS, ...options].filter(Boolean).join(" "),
-  };
-}
-
-/** One JVM `-D` option; these are JVM environment-option quotes, not a shell command. */
-function javaSystemProperty(name: string, value: string): string {
-  return "'-D" + name + "=" + value.replaceAll("'", "'\"'\"'") + "'";
+  return { ...profile, JAVA_TOOL_OPTIONS: javaToolOptions(inherited.JAVA_TOOL_OPTIONS, properties) };
 }
 
 /** The prepared launch: the profile's environment plus the run's two capabilities. */

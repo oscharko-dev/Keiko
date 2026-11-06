@@ -230,7 +230,7 @@ describe("prepareNativeBuildSettings (#4271)", () => {
     expect(log.events[0]?.extra).toMatchObject({ mavenCache: "read-only" });
   });
 
-  it("chains no cache whose path Maven would split at a comma, and records none", () => {
+  it("chains no cache whose path Maven would split at a comma, and records the refusal", () => {
     const { realHome, stateRoot } = fixture();
     const log = sink();
     const result = prepareNativeBuildSettings({
@@ -242,7 +242,24 @@ describe("prepareNativeBuildSettings (#4271)", () => {
       activityLog: log.sink,
     });
     expect(result.javaProperties).toEqual({ "user.home": join(stateRoot, "home") });
-    expect(log.events[0]?.extra).toMatchObject({ mavenCache: "none" });
+    expect(log.events[0]?.extra).toMatchObject({ mavenCache: "refused" });
+  });
+
+  it("leaves Maven's own default repository when the run home spells an interpolation", () => {
+    const { realHome, stateRoot } = fixture();
+    // Maven would interpolate `${user.home}` inside the element; its default names the same path.
+    const interpolated = join(stateRoot, "${user.home}");
+    const result = prepareNativeBuildSettings({
+      runId: "run-0009",
+      mode: "supervised-coding",
+      realHome,
+      stateRoot: interpolated,
+      activityLog: sink().sink,
+    });
+    const settings = readFileSync(join(interpolated, "home", ".m2", "settings.xml"), "utf8");
+    expect(settings).not.toContain("<localRepository>");
+    expect(settings).toContain("<offline>true</offline>");
+    expect(result.javaProperties).toMatchObject({ "user.home": join(interpolated, "home") });
   });
 
   it("replaces its own wrapper link when the same run root is prepared again", () => {

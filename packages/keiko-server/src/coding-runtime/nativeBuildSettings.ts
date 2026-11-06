@@ -256,6 +256,9 @@ export function sanitizeGradleProperties(text: string): KeyValueSanitized {
 type FileDisposition = "sanitized" | "absent" | "refused";
 const CACHE_DISPOSITIONS = ["read-only", "private", "none"] as const;
 type CacheDisposition = (typeof CACHE_DISPOSITIONS)[number];
+/** The Maven cache can also be refused: a path Maven would split at its commas is not chained. */
+const MAVEN_CACHE_DISPOSITIONS = [...CACHE_DISPOSITIONS, "refused"] as const;
+type MavenCacheDisposition = (typeof MAVEN_CACHE_DISPOSITIONS)[number];
 
 const NATIVE_BUILD_SETTINGS_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -294,7 +297,7 @@ const NATIVE_BUILD_SETTINGS_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: [...CACHE_DISPOSITIONS],
+      values: [...MAVEN_CACHE_DISPOSITIONS],
     },
     mavenWrapper: {
       type: "string",
@@ -444,11 +447,16 @@ export function prepareNativeBuildSettings(
   return result;
 }
 
-/** Maven writes into its local repository even offline: the run's own, never the user's cache. */
+/**
+ * Maven writes into its local repository even offline: the run's own, never the user's cache.
+ * Maven interpolates `${...}` in settings, so a run home spelling one omits the element; Maven's
+ * default, `${user.home}/.m2/repository`, then names the same private repository.
+ */
 function mavenRunBinding(input: NativeBuildSettingsInput, home: string): MavenRunBinding {
+  const localRepository = join(home, ".m2", "repository");
   return {
     offline: nativeBuildCacheAdmitted(input.mode),
-    localRepository: join(home, ".m2", "repository"),
+    ...(localRepository.includes("${") ? {} : { localRepository }),
   };
 }
 
@@ -472,6 +480,13 @@ function chainedMavenCache(input: NativeBuildSettingsInput): string | undefined 
   const cache = input.readOnlyMavenRepository;
   if (!nativeBuildCacheAdmitted(input.mode) || cache === undefined) return undefined;
   return cache.includes(",") ? undefined : cache;
+}
+
+function mavenCacheDisposition(input: NativeBuildSettingsInput): MavenCacheDisposition {
+  const disposition = readOnlyDisposition(input.mode, input.readOnlyMavenRepository);
+  return disposition === "read-only" && chainedMavenCache(input) === undefined
+    ? "refused"
+    : disposition;
 }
 
 /**
@@ -520,7 +535,7 @@ function recordNativeBuildSettingsAdmitted(
         mavenSettings: result.mavenSettings,
         npmConfig: result.npmConfig,
         gradleProperties: result.gradleProperties,
-        mavenCache: readOnlyDisposition(input.mode, chainedMavenCache(input)),
+        mavenCache: mavenCacheDisposition(input),
         mavenWrapper: readOnlyDisposition(input.mode, input.readOnlyMavenWrapperDists),
         strippedElementCount: result.strippedElementCount,
         droppedLineCount: result.droppedLineCount,
