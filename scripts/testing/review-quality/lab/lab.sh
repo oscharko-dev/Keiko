@@ -19,8 +19,12 @@ CHECKOUT=$(cd "$(dirname "$0")/../../../.." && pwd)
 REVIEWER_PORT=${KEIKO_REVIEW_LAB_REVIEWER_PORT:-8080}
 COUNTER_PORT=${KEIKO_REVIEW_LAB_COUNTER_PORT:-8081}
 GATEWAY_PORT=${KEIKO_REVIEW_LAB_GATEWAY_PORT:-4000}
-# The watchdog of a running `run`; global so that the EXIT trap still sees it.
+# What a running `run` started. These are global so that its EXIT trap still sees them, and the
+# trap stops only what this invocation started (R4130-041 to R4130-044).
 WATCHDOG_PID=
+GATE_PID=
+STARTED=
+OWNS_LOCK=
 # The versions the 4-bit holdout and seed runs of 2026-11 used.
 MLX_LM_VERSION=0.32.2
 LITELLM_VERSION=1.106.6
@@ -207,6 +211,7 @@ cmd_start() {
   local reviewer_path counter_path
   reviewer_path=$(model_path "$REVIEWER_REPO" "$REVIEWER_REVISION")
   counter_path=$(model_path "$COUNTER_REPO" "$COUNTER_REVISION")
+  STARTED=1
   serve "$REVIEWER_PORT" "$reviewer_path" reviewer.pid reviewer.log 0.7 0.8 20 '{"enable_thinking":false}' 4GB
   serve "$COUNTER_PORT" "$counter_path" counter.pid counter.log 1.0 0.95 64 '{}' 6GB
   # The key is sourced first and LiteLLM is started on its own line, so `$!` is LiteLLM itself; a
@@ -266,16 +271,56 @@ watchdog() {
   done
 }
 
+kill_tree() { # signal pid: signals the pid's descendants first, then the pid
+  local child
+  for child in $(pgrep -P "$2" 2>/dev/null || true); do
+    kill_tree "$1" "$child"
+  done
+  kill "-$1" "$2" 2>/dev/null || true
+}
+
+# The EXIT trap of `run`. Bash also runs it on INT, TERM and HUP. It ends the gate's whole process
+# tree, which a TERM to this script alone would not reach (R4130-043), then the watchdog. It stops
+# the servers only if this run started them (R4130-044), and keeps the gate's exit status.
+run_cleanup() {
+  if [ -n "$GATE_PID" ]; then kill_tree TERM "$GATE_PID"; fi
+  if [ -n "$WATCHDOG_PID" ]; then kill_tree TERM "$WATCHDOG_PID"; fi
+  if [ -n "$STARTED" ]; then cmd_stop; fi
+  if [ -n "$OWNS_LOCK" ]; then
+    rm -f "$LAB/run.lock/pid"
+    rmdir "$LAB/run.lock" 2>/dev/null || true
+  fi
+}
+
+# One run per lab directory: a second run is refused before it waits for memory or touches the
+# first run's servers. A lock whose owner is gone, for example after a power loss, is taken over.
+take_run_lock() {
+  local holder
+  until mkdir "$LAB/run.lock" 2>/dev/null; do
+    holder=$(cat "$LAB/run.lock/pid" 2>/dev/null || true)
+    if [ -z "$holder" ]; then
+      sleep 1
+      holder=$(cat "$LAB/run.lock/pid" 2>/dev/null || true)
+    fi
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+      echo "lab: another run (pid $holder) is using $LAB; wait for it to finish or stop it" >&2
+      exit 1
+    fi
+    rm -f "$LAB/run.lock/pid"
+    rmdir "$LAB/run.lock" 2>/dev/null || true
+  done
+  echo $$ > "$LAB/run.lock/pid"
+  OWNS_LOCK=1
+}
+
 cmd_run() {
   pair "$1"
   local set=${2:-}
   case "$set" in development | seeds) ;; *) echo "lab: run needs development or seeds" >&2; exit 2 ;; esac
   local stamp
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
-  # R4130-041, R4130-042: the trap reads a global and is installed before anything starts, so a
-  # finished, failed or interrupted run (INT, TERM and HUP also run the EXIT trap) stops the lab
-  # and keeps the gate's own exit status.
-  trap '[ -n "${WATCHDOG_PID:-}" ] && kill "$WATCHDOG_PID" 2>/dev/null; cmd_stop' EXIT
+  trap run_cleanup EXIT
+  take_run_lock
   until (( $(reclaimable_gb) >= MIN_FREE_GB )); do
     echo "lab: waiting for $MIN_FREE_GB GB reclaimable ($(reclaimable_gb) GB now)"
     sleep 60
@@ -289,17 +334,21 @@ cmd_run() {
   WATCHDOG_PID=$!
   local iteration=()
   if [ "$set" = development ]; then iteration=(--iteration "dev-$QUANT-$stamp"); fi
+  # The gate runs as a tracked background job, so a signal reaches the trap during `wait` and the
+  # trap can end the gate's tree. Under `set -e`, a failed `wait` exits with the gate's status.
   (
     cd "$CHECKOUT"
     # shellcheck source=/dev/null
     set -a && . "$LAB/.env" && set +a
     export KEIKO_DEFAULT_API_KEY="$LITELLM_MASTER_KEY"
     unset LITELLM_MASTER_KEY
-    node scripts/testing/review-quality/run.mjs --set "$set" ${iteration[@]+"${iteration[@]}"} \
+    exec node scripts/testing/review-quality/run.mjs --set "$set" ${iteration[@]+"${iteration[@]}"} \
       --repository "$LAB/keiko" --config "$LAB/gateway-$QUANT.json" \
       --state "$LAB/state/$QUANT-$set-$stamp" --out "$LAB/evidence/$QUANT-$stamp" \
       --reviewer "$REVIEWER_ID" --counter-checker "$COUNTER_ID"
-  )
+  ) &
+  GATE_PID=$!
+  wait "$GATE_PID"
 }
 
 case "${1:-}" in

@@ -83,9 +83,13 @@ Run everything from the checkout root.
 
 To stop a lab that is still up, for example after a crash, run `lab.sh stop`.
 
+Only one `run` at a time can use a lab directory. A second one is refused before it waits for
+memory, and it leaves the first run's servers alone.
+
 `cleanup-proof.sh` checks the cleanup without models or network. It runs `lab.sh run` against stub
-servers on ports 18080, 18081 and 14000 and checks that a failing gate, Ctrl-C, SIGTERM and a taken
-port each keep the right exit status and leave no server running.
+servers on ports 18080, 18081 and 14000. It checks that a failing gate, Ctrl-C, SIGTERM and a taken
+port each keep the right exit status and leave no server or gate process running, and that a
+second run is refused without touching the first.
 
 ## Model builds
 

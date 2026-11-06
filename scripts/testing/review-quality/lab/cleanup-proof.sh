@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Cleanup proof for lab.sh (R4130-041, R4130-042), without models or network:
+# Cleanup proof for lab.sh (R4130-041 to R4130-044), without models or network:
 #
 #   scripts/testing/review-quality/lab/cleanup-proof.sh [path/to/lab.sh]
 #
 # It copies lab.sh into a scratch checkout whose gate entry is a stub, and serves the "models" and
 # the gateway with python3's http.server on spare loopback ports. Each case checks that `lab.sh run`
-# keeps the gate's exit status and that no server it started is still listening afterwards.
+# keeps the gate's exit status, that no server is still listening and that no process of the run,
+# the gate included, is left. A second run must leave the first run's servers alone.
 # Prints one line per case and exits 1 if any case fails.
 set -u
 
@@ -72,14 +73,18 @@ start_run() { # in the background, in its own process group; sets RUN_PID
   sleep 2
 }
 
-expect() { # case expected-status actual-status
+leftover_count() { pgrep -f "$WORK" 2>/dev/null | wc -l | tr -d ' '; }
+
+expect() { # case expected-status actual-status [expected-listening]
   sleep 1
-  local left
+  local left procs want=${4:-0}
   left=$(listening_count)
-  if [ "$3" = "$2" ] && [ "$left" = 0 ]; then
-    echo "PASS $1: status $3, no server left"
+  procs=$(leftover_count)
+  if [ "$want" != 0 ]; then procs=0; fi
+  if [ "$3" = "$2" ] && [ "$left" = "$want" ] && [ "$procs" = 0 ]; then
+    echo "PASS $1: status $3, $left server(s) listening, no process left"
   else
-    echo "FAIL $1: status $3 (expected $2), $left server(s) still listening"
+    echo "FAIL $1: status $3 (expected $2), $left server(s) listening (expected $want), $procs process(es) left"
     FAILED=1
   fi
 }
@@ -114,6 +119,15 @@ status=$?
 kill "$blocker" 2>/dev/null
 wait "$blocker" 2>/dev/null
 expect "the gateway port is taken" 1 "$status"
+
+prepare hang
+start_run
+first=$RUN_PID
+python3 -c "$WRAP" "$TREE/scripts/testing/review-quality/lab/lab.sh" run 4bit seeds >> "$WORK/run.log" 2>&1
+expect "a second run is refused" 1 "$?" 3
+kill -TERM "$first"
+wait "$first"
+expect "the first run then ends" 143 "$?"
 
 rm -rf "$WORK"
 exit "$FAILED"
