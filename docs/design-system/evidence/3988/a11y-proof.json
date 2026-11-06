@@ -4,11 +4,11 @@
   "verdict": "PASS",
   "harness": "tests/e2e/window-chunk-stall.smoke.spec.ts",
   "browser": "chromium",
-  "node": "v24.18.0",
+  "node": "v24.21.0",
   "sources": {
     "fallback": "da9a005857dc6de09ec52a495c6e3b146296aca39c67d683c776d99a8a56240a",
-    "harness": "54ac5a9bf899c13467158124ffe60c62c127b76e631b90c831aa791390e6701f",
-    "globalsCss": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871"
+    "harness": "ef27c9074f6d3c491aab46df7babe1919c74d089509b080136270e8cde3a10b9",
+    "globalsCss": "299b807fe42bc6069a49ac28c4a5195c016739335b5c375be5c73f216ca9471c"
   },
   "captures": [
     {
