@@ -22,12 +22,7 @@ type OpenCodePersistenceSchema = Readonly<Record<string, readonly string[]>>;
  * version classifies every table it creates, so an upgrade cannot add one nobody looked at.
  */
 export type OpenCodePersistenceTableClass =
-  | "grant"
-  | "credential"
-  | "pending-input"
-  | "unknown-state"
-  | "schedule-state"
-  | "session-state";
+  "grant" | "credential" | "pending-input" | "unknown-state" | "schedule-state" | "session-state";
 
 type OpenCodePersistenceTableClasses = Readonly<Record<string, OpenCodePersistenceTableClass>>;
 

@@ -113,22 +113,18 @@ function insertSchedule(database: DatabaseSync, row: ScheduleRow, index: number)
     )
     .run(
       row.id,
-      row.session_id ?? null,
-      row.status ?? null,
-      row.name ?? null,
-      row.when ?? null,
-      row.action ?? null,
-      row.next_due_at ?? null,
-      row.retry_at ?? null,
+      ...[row.session_id, row.status, row.name, row.when, row.action].map(orNull),
+      ...[row.next_due_at, row.retry_at].map(orNull),
       row.run_count ?? 0,
       row.failures ?? 0,
-      row.ends_at ?? null,
-      row.remaining_runs ?? null,
-      row.check ?? null,
-      row.state ?? null,
+      ...[row.ends_at, row.remaining_runs, row.check, row.state].map(orNull),
       index,
       index,
     );
+}
+
+function orNull(value: string | number | null | undefined): string | number | null {
+  return value ?? null;
 }
 
 interface Fixture {
@@ -147,8 +143,11 @@ function fixture(): Fixture {
   return {
     root,
     clock,
-    store: createRetainedSessionStore({ root: join(root, "retained"), now: () => clock.value }),
-    source(rows, kv = []) {
+    store: createRetainedSessionStore({
+      root: join(root, "retained"),
+      now: (): number => clock.value,
+    }),
+    source(rows, kv = []): string {
       sources += 1;
       const path = join(root, "run", `opencode-${String(sources)}.db`);
       writeDatabase(path, rows, kv);
@@ -190,7 +189,7 @@ function retainedRows(f: Fixture, sql: string): readonly Record<string, unknown>
     },
   );
   try {
-    return database.prepare(sql).all() as readonly Record<string, unknown>[];
+    return database.prepare(sql).all();
   } finally {
     database.close();
   }

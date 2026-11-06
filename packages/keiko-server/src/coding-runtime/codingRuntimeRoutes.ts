@@ -1200,7 +1200,11 @@ export function openCodingRuntimeSse(
   req.once("aborted", close);
 }
 
-function scheduleError(status: number, code: string, correlationId: string | undefined): RouteResult {
+function scheduleError(
+  status: number,
+  code: string,
+  correlationId: string | undefined,
+): RouteResult {
   return { status, body: errorBody(code, "Schedule request was rejected.", correlationId) };
 }
 
@@ -1257,7 +1261,8 @@ export function handleCodingRuntimeScheduleControl(
   const wakes = deps.codingScheduledWakes;
   if (!isCodingWorkbenchScheduleId(scheduleId) || !isCodingWorkbenchScheduleAction(action))
     return Promise.resolve(scheduleError(404, "CODING_SCHEDULE_NOT_FOUND", ctx.correlationId));
-  if (wakes === undefined) return Promise.resolve(scheduleRefusal("unavailable", ctx.correlationId));
+  if (wakes === undefined)
+    return Promise.resolve(scheduleRefusal("unavailable", ctx.correlationId));
   return withBody(async () => {
     const request = parseCodingWorkbenchScheduleControlRequest(await readBody(ctx.req));
     if (request === undefined)

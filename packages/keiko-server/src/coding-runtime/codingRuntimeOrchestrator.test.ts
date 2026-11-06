@@ -1030,6 +1030,59 @@ describe("CodingRuntimeOrchestrator", () => {
     );
     expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_ACCEPTED_TASK_CANARY");
   });
+  // #4279 (lifecycle audit): a start that shutdown overtook would launch a runtime nobody stops.
+  describe("a start that shutdown overtook", () => {
+    it("launches nothing when it reaches the lane after shutdown began", async () => {
+      const f = fixture();
+      await f.orchestrator.shutdown();
+
+      const result = await f.orchestrator.start(start);
+
+      expect(result).toEqual({ ok: false, failureCode: "runtime-unavailable" });
+      expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+      expect(f.manager.start).not.toHaveBeenCalled();
+    });
+
+    it("mints nothing when shutdown began while it was prepared", async () => {
+      const f = fixture();
+      let shutdown: Promise<unknown> | undefined;
+      Object.assign(f.launchResolver, {
+        prepare: (): Promise<void> => {
+          shutdown = f.orchestrator.shutdown();
+          return Promise.resolve();
+        },
+      });
+
+      const result = await f.orchestrator.start(start);
+      await shutdown;
+
+      expect(result).toMatchObject({ ok: false, failureCode: "runtime-unavailable" });
+      expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+      expect(f.manager.start).not.toHaveBeenCalled();
+      expect(f.orchestrator.status().state).toBe("idle");
+    });
+
+    it("releases what its launch minted when shutdown began while it resolved", async () => {
+      const f = fixture();
+      let shutdown: Promise<unknown> | undefined;
+      const resolve = f.launchResolver.resolve.getMockImplementation();
+      if (resolve === undefined) throw new Error("expected a launch resolver");
+      f.launchResolver.resolve.mockImplementation((input) => {
+        shutdown = f.orchestrator.shutdown();
+        return resolve(input);
+      });
+
+      const result = await f.orchestrator.start(start);
+      await shutdown;
+
+      expect(result.ok).toBe(true);
+      expect(successfulSnapshot(result).state).toBe("failed");
+      expect(f.manager.start).not.toHaveBeenCalled();
+      expect(f.manager.stop).toHaveBeenCalled();
+      expect(f.orchestrator.hasLiveRun()).toBe(false);
+    });
+  });
+
   // #4271: the client's start deadline ended its wait, and the run still started where nobody saw it.
   describe("a start its client gave up", () => {
     const abandonedDuringPrepare = (f: ReturnType<typeof fixture>): AbortController => {

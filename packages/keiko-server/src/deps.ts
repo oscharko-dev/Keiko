@@ -6011,7 +6011,41 @@ async function thenSealActivityLog(
   }
 }
 
-type RuntimeShutdownOutcome = "not-applicable" | "ended" | "refused" | "faulted";
+export type RuntimeShutdownOutcome = "not-applicable" | "ended" | "refused" | "faulted";
+
+/**
+ * The live run stops first, while the MCP connections it may still call are open. Closing them is
+ * attempted whatever the run's stop did, so a failed close never leaves a runtime running and a
+ * failed stop never leaves connections open. The caller rethrows the first failure after both ran;
+ * the outcome names the runtime's own result, never the connections'.
+ */
+export async function stopRuntimeThenMcp(
+  stopRuntime: () => Promise<RuntimeShutdownOutcome>,
+  closeMcp: () => Promise<void>,
+): Promise<{ readonly outcome: RuntimeShutdownOutcome; readonly failure?: Error }> {
+  const [runtime] = await Promise.allSettled([stopRuntime()]);
+  const [mcp] = await Promise.allSettled([closeMcp()]);
+  if (runtime.status === "rejected")
+    return { outcome: "faulted", failure: asTeardownError(runtime.reason) };
+  if (mcp.status === "rejected")
+    return { outcome: runtime.value, failure: asTeardownError(mcp.reason) };
+  return { outcome: runtime.value };
+}
+
+function stopForDispose(
+  services: UiHandlerRuntimeServices,
+  mcpConnections: ConfiguredMcpConnections,
+  correlationId: string,
+): ReturnType<typeof stopRuntimeThenMcp> {
+  return stopRuntimeThenMcp(
+    () => shutdownCodingRuntime(services, correlationId),
+    () => mcpConnections.close(),
+  );
+}
+
+function asTeardownError(reason: unknown): Error {
+  return reason instanceof Error ? reason : new Error("Teardown failed.", { cause: reason });
+}
 
 async function shutdownCodingRuntime(
   services: UiHandlerRuntimeServices,
@@ -6062,11 +6096,9 @@ async function disposeUiHandler(
   // there was nothing to stop, which is not the same as stopping cleanly.
   let runtimeShutdown: RuntimeShutdownOutcome = "not-applicable";
   try {
-    await mcpConnections.close();
-    runtimeShutdown = await shutdownCodingRuntime(services, correlationId);
-  } catch (error) {
-    runtimeShutdown = "faulted";
-    throw error;
+    const stopped = await stopForDispose(services, mcpConnections, correlationId);
+    runtimeShutdown = stopped.outcome;
+    if (stopped.failure !== undefined) throw stopped.failure;
   } finally {
     await thenSealActivityLog(args.options, () =>
       disposeRuntimeServicesRecorded(

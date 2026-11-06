@@ -21,6 +21,7 @@ import {
   listRetainedSchedules,
   type RetainedSchedule,
   type RetainedScheduleControlResult,
+  type RetainedTaskSchedules,
 } from "./opencodeRetainedSchedules.js";
 import { errorFields } from "./opencodeScheduledWakeTurn.js";
 import { retainedSessionKey, type RetainedSessionStore } from "./opencodeSessionRetention.js";
@@ -130,7 +131,7 @@ const SCHEDULE_WAKE_OPERATION = defineActivityLogOperation({
         "failed",
       ],
     },
-    taskDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    taskDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     scheduleDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     mode: {
@@ -268,7 +269,8 @@ export function scheduleCorrelationId(scheduleId: string): string {
 export interface ScheduleWakeRecord {
   readonly correlationId: string;
   readonly outcome: WakeOutcome;
-  readonly taskId: string;
+  /** Absent only for a look that failed outside any task. */
+  readonly taskId?: string | undefined;
   readonly scheduleId?: string | undefined;
   readonly runId?: string | undefined;
   readonly mode?: CodingWorkbenchMode | undefined;
@@ -282,24 +284,28 @@ export interface ScheduleWakeRecord {
 
 const WARNED_WAKES = new Set<WakeOutcome>(["missed", "auto-paused", "retain-lost", "failed"]);
 
+function wakeLevelFields(
+  outcome: WakeOutcome,
+): { readonly level: "warn"; readonly errorKind: "internal" | "validation-failed" } | object {
+  if (!WARNED_WAKES.has(outcome)) return {};
+  return { level: "warn", errorKind: outcome === "failed" ? "internal" : "validation-failed" };
+}
+
 export function recordScheduleWake(
   activityLog: ServerLogSink | undefined,
   record: ScheduleWakeRecord,
 ): void {
   const { outcome } = record;
-  const warned = WARNED_WAKES.has(outcome);
   (activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       SCHEDULE_WAKE_OPERATION,
       {
         correlationId: correlationIdOrUnknown(record.correlationId),
-        ...(warned
-          ? { level: "warn", errorKind: outcome === "failed" ? "internal" : "validation-failed" }
-          : {}),
+        ...wakeLevelFields(outcome),
       } as const,
       {
         outcome,
-        taskDigest: retainedSessionKey(record.taskId),
+        ...(record.taskId === undefined ? {} : { taskDigest: retainedSessionKey(record.taskId) }),
         ...wakeIdentityFields(record),
         ...wakeCountFields(record),
         ...errorFields(record.error),
@@ -390,8 +396,16 @@ interface PendingWake {
   readonly taskId: string;
   readonly scheduleId: string;
   readonly runId: string;
-  readonly runCountBefore: number;
+  /** Every schedule of the task's session, by id: the wake run can fire any active one. */
+  readonly runCountsBefore: ReadonlyMap<string, number>;
   readonly startedAtMs: number;
+}
+
+/** A schedule that reached three misses while its task's run held the entry: paused once it can. */
+interface DeferredPause {
+  readonly taskId: string;
+  readonly correlationId: string;
+  readonly misses: number;
 }
 
 interface MissState {
@@ -402,6 +416,51 @@ interface MissState {
 interface DueSchedule {
   readonly taskId: string;
   readonly schedule: RetainedSchedule & { readonly dueAtMs: number };
+  /**
+   * The narrowest consent among the session's active schedules. Once the wake run hands the lease
+   * over, the runtime fires every schedule of the session that is due, so the run may never be
+   * wider than any one of them consented to.
+   */
+  readonly consentMode: CodingWorkbenchMode;
+  readonly runCounts: ReadonlyMap<string, number>;
+}
+
+/** The due schedules of one task, each carrying the session's narrowest active consent. */
+function dueOfTask(
+  taskId: string,
+  schedules: readonly RetainedSchedule[],
+  nowMs: number,
+): readonly DueSchedule[] {
+  const active = schedules.filter((schedule) => schedule.status === "active");
+  const [first, ...rest] = active;
+  if (first === undefined) return [];
+  const consentMode = rest.reduce(
+    (narrowest, schedule) => narrowerMode(narrowest, schedule.consentMode),
+    first.consentMode,
+  );
+  const runCounts = new Map(schedules.map((schedule) => [schedule.id, schedule.runCount]));
+  return active.flatMap((schedule) => {
+    const { dueAtMs } = schedule;
+    return dueAtMs !== undefined && dueAtMs <= nowMs
+      ? [{ taskId, schedule: { ...schedule, dueAtMs }, consentMode, runCounts }]
+      : [];
+  });
+}
+
+/** Which schedules ran since the wake started, and how many runs they made between them. */
+function firedSince(
+  before: ReadonlyMap<string, number>,
+  schedules: readonly RetainedSchedule[],
+): { readonly ids: ReadonlySet<string>; readonly count: number } {
+  const ids = new Set<string>();
+  let count = 0;
+  for (const schedule of schedules) {
+    const grown = schedule.runCount - (before.get(schedule.id) ?? 0);
+    if (grown <= 0) continue;
+    ids.add(schedule.id);
+    count += grown;
+  }
+  return { ids, count };
 }
 
 export type ScheduleListResult =
@@ -431,6 +490,9 @@ export class CodingScheduledWakes {
   private readonly lastWakeAt = new Map<string, number>();
   /** The wait last recorded per schedule, so a wait is one line, not one per look. */
   private readonly waits = new Map<string, CodingWorkbenchScheduleWait>();
+  /** Tasks whose entry could not be read at the last look: one failure line each, not one a look. */
+  private readonly unreadable = new Set<string>();
+  private readonly deferredPauses = new Map<string, DeferredPause>();
 
   public constructor(private readonly options: CodingScheduledWakesOptions) {
     this.now = options.now ?? Date.now;
@@ -462,7 +524,7 @@ export class CodingScheduledWakes {
       recordScheduleWake(this.options.activityLog, {
         correlationId: this.pending?.runId ?? "",
         outcome: "failed",
-        taskId: this.pending?.taskId ?? "",
+        taskId: this.pending?.taskId,
         error,
       });
     } finally {
@@ -478,26 +540,41 @@ export class CodingScheduledWakes {
       if (block !== "shutting-down") this.noteWaits(store, "run-active");
       return;
     }
-    if (this.pending !== undefined && !this.settlePending(store, this.pending)) return;
+    await this.applyDeferredPauses();
+    if (this.pending !== undefined && !(await this.settlePending(store, this.pending))) return;
     const due = this.earliestDue(store);
     if (due !== undefined) await this.wake(due);
   }
 
   private dueSchedules(store: RetainedSessionStore): readonly DueSchedule[] {
     const nowMs = this.now();
-    const due: DueSchedule[] = [];
-    for (const taskId of store.listTaskIds()) {
+    const due = store
+      .listTaskIds()
+      .flatMap((taskId) => dueOfTask(taskId, this.readTask(store, taskId)?.schedules ?? [], nowMs));
+    return [...due].sort((left, right) => left.schedule.dueAtMs - right.schedule.dueAtMs);
+  }
+
+  /**
+   * One task's schedules. An entry that cannot be read (a hostile or damaged row, a store fault) is
+   * skipped, so it never stops the wakes of every other task, and recorded once until it reads again.
+   */
+  private readTask(store: RetainedSessionStore, taskId: string): RetainedTaskSchedules | undefined {
+    try {
       const listed = listRetainedSchedules(store, taskId);
-      for (const schedule of listed?.schedules ?? []) {
-        if (
-          schedule.status === "active" &&
-          schedule.dueAtMs !== undefined &&
-          schedule.dueAtMs <= nowMs
-        )
-          due.push({ taskId, schedule: { ...schedule, dueAtMs: schedule.dueAtMs } });
+      this.unreadable.delete(taskId);
+      return listed;
+    } catch (error) {
+      if (!this.unreadable.has(taskId)) {
+        this.unreadable.add(taskId);
+        recordScheduleWake(this.options.activityLog, {
+          correlationId: "",
+          outcome: "failed",
+          taskId,
+          error,
+        });
       }
+      return undefined;
     }
-    return due.sort((left, right) => left.schedule.dueAtMs - right.schedule.dueAtMs);
   }
 
   private earliestDue(store: RetainedSessionStore): DueSchedule | undefined {
@@ -509,7 +586,9 @@ export class CodingScheduledWakes {
     return undefined;
   }
 
-  private waitOf(candidate: DueSchedule): CodingWorkbenchScheduleWait | undefined {
+  private waitOf(
+    candidate: Pick<DueSchedule, "taskId" | "schedule">,
+  ): CodingWorkbenchScheduleWait | undefined {
     const nowMs = this.now();
     const miss = this.misses.get(candidate.schedule.id);
     if (miss !== undefined && miss.retryAtMs > nowMs) return "retrying";
@@ -544,7 +623,7 @@ export class CodingScheduledWakes {
       taskId,
       scheduleId: schedule.id,
       intent: schedule.prompt ?? schedule.name ?? "Scheduled continuation",
-      consentMode: schedule.consentMode,
+      consentMode: due.consentMode,
     });
     if (!started.ok) {
       recordScheduleWake(this.options.activityLog, {
@@ -557,14 +636,14 @@ export class CodingScheduledWakes {
       });
       // A run that took the slot first is no miss: the wake waits for it. Any other refusal is.
       if (started.refusal !== "active-run-conflict")
-        this.recordMiss(taskId, schedule.id, started.runId);
+        await this.recordMiss(taskId, schedule.id, started.runId);
       return;
     }
     this.pending = {
       taskId,
       scheduleId: schedule.id,
       runId: started.runId,
-      runCountBefore: schedule.runCount,
+      runCountsBefore: due.runCounts,
       startedAtMs,
     };
     recordScheduleWake(this.options.activityLog, {
@@ -579,7 +658,7 @@ export class CodingScheduledWakes {
   }
 
   /** `true` once the previous wake is settled; `false` while its run has not left its entry yet. */
-  private settlePending(store: RetainedSessionStore, pending: PendingWake): boolean {
+  private async settlePending(store: RetainedSessionStore, pending: PendingWake): Promise<boolean> {
     const listed = listRetainedSchedules(store, pending.taskId);
     const elapsed = this.now() - pending.startedAtMs;
     // An entry retained no later than the wake started is the one the wake run checked out.
@@ -587,22 +666,24 @@ export class CodingScheduledWakes {
       if (listed !== undefined && elapsed < RETAIN_WAIT_MS) return false;
       this.pending = undefined;
       this.recordSettled(pending, "retain-lost");
+      // Counted as a miss: a schedule whose wake never comes back would otherwise stay due and
+      // start a wake every interval, without the pause that three misses bring.
+      await this.recordMiss(pending.taskId, pending.scheduleId, pending.runId);
       return true;
     }
     this.pending = undefined;
-    const schedule = listed.schedules.find((candidate) => candidate.id === pending.scheduleId);
-    if (schedule === undefined) {
+    const fired = firedSince(pending.runCountsBefore, listed.schedules);
+    for (const id of fired.ids) this.misses.delete(id);
+    if (!listed.schedules.some((candidate) => candidate.id === pending.scheduleId)) {
       this.misses.delete(pending.scheduleId);
       this.recordSettled(pending, "removed");
       return true;
     }
-    const fired = schedule.runCount - pending.runCountBefore;
-    if (fired > 0) {
-      this.misses.delete(pending.scheduleId);
-      this.recordSettled(pending, "fired", { firedCount: fired });
+    if (fired.ids.has(pending.scheduleId)) {
+      this.recordSettled(pending, "fired", { firedCount: fired.count });
       return true;
     }
-    this.recordMiss(pending.taskId, pending.scheduleId, pending.runId);
+    await this.recordMiss(pending.taskId, pending.scheduleId, pending.runId);
     return true;
   }
 
@@ -621,12 +702,17 @@ export class CodingScheduledWakes {
     });
   }
 
-  private recordMiss(taskId: string, scheduleId: string, runId: string | undefined): void {
+  private async recordMiss(
+    taskId: string,
+    scheduleId: string,
+    runId: string | undefined,
+  ): Promise<void> {
     const misses = (this.misses.get(scheduleId)?.misses ?? 0) + 1;
     const correlationId = runId ?? scheduleCorrelationId(scheduleId);
     if (misses >= MAX_MISSES) {
-      this.misses.delete(scheduleId);
-      this.autoPause(taskId, scheduleId, correlationId, misses);
+      // No further wake until the pause is written, or a human resumes or deletes the schedule.
+      this.misses.set(scheduleId, { misses, retryAtMs: Number.POSITIVE_INFINITY });
+      await this.autoPause(scheduleId, { taskId, correlationId, misses });
       return;
     }
     const backoff = Math.min(MISS_BACKOFF_MS * 2 ** (misses - 1), MISS_BACKOFF_MAX_MS);
@@ -641,17 +727,36 @@ export class CodingScheduledWakes {
     });
   }
 
-  private autoPause(
-    taskId: string,
-    scheduleId: string,
-    correlationId: string,
-    misses: number,
-  ): void {
-    const store = this.options.store();
-    const result: RetainedScheduleControlResult =
-      store === undefined
-        ? { ok: false, reason: "no-retained-state" }
-        : controlRetainedSchedule(store, taskId, scheduleId, "pause", this.now());
+  /**
+   * Pauses a schedule after three misses, in the orchestrator's serial lane and never while its
+   * task's run holds the entry: a retain would otherwise overwrite the pause with the run's copy. A
+   * pause that cannot be written now is retried at each look until it can.
+   */
+  private async autoPause(scheduleId: string, deferred: DeferredPause): Promise<void> {
+    const { taskId, correlationId, misses } = deferred;
+    let result: ScheduleControlOutcome;
+    try {
+      result = await this.options.host.serial(() => this.pauseNow(taskId, scheduleId));
+    } catch (error) {
+      this.deferredPauses.set(scheduleId, deferred);
+      recordScheduleControl(this.options.activityLog, {
+        correlationId,
+        action: "pause",
+        outcome: "failed",
+        initiator: "missed-wakes",
+        taskId,
+        scheduleId,
+        reason: "unavailable",
+        error,
+      });
+      return;
+    }
+    const retry = !result.ok && result.reason === "run-active";
+    const alreadyDeferred = this.deferredPauses.has(scheduleId);
+    if (retry) this.deferredPauses.set(scheduleId, deferred);
+    else this.deferredPauses.delete(scheduleId);
+    // A pause still waiting for the task's run is recorded once, not at every look.
+    if (retry && alreadyDeferred) return;
     recordScheduleControl(this.options.activityLog, {
       correlationId,
       action: "pause",
@@ -661,6 +766,8 @@ export class CodingScheduledWakes {
       scheduleId,
       ...(result.ok ? { status: result.status } : { reason: result.reason }),
     });
+    if (!result.ok) return;
+    this.misses.delete(scheduleId);
     recordScheduleWake(this.options.activityLog, {
       correlationId,
       outcome: "auto-paused",
@@ -668,6 +775,22 @@ export class CodingScheduledWakes {
       scheduleId,
       missCount: misses,
     });
+  }
+
+  private pauseNow(taskId: string, scheduleId: string): ScheduleControlOutcome {
+    const store = this.options.store();
+    if (store === undefined) return { ok: false, reason: "unavailable" };
+    if (this.options.host.liveTaskId() === taskId) return { ok: false, reason: "run-active" };
+    return controlRetainedSchedule(store, taskId, scheduleId, "pause", this.now());
+  }
+
+  private async applyDeferredPauses(): Promise<void> {
+    const deferred = [...this.deferredPauses];
+    // One at a time through the serial lane: each pause rewrites one task's retained entry.
+    await deferred.reduce<Promise<void>>(
+      (previous, [scheduleId, pause]) => previous.then(() => this.autoPause(scheduleId, pause)),
+      Promise.resolve(),
+    );
   }
 
   /** The task's schedules as the Workbench shows them; the prompt never leaves the server. */
@@ -754,6 +877,7 @@ export class CodingScheduledWakes {
     if (outcome.ok) {
       this.misses.delete(scheduleId);
       this.waits.delete(scheduleId);
+      this.deferredPauses.delete(scheduleId);
     }
     return outcome;
   }

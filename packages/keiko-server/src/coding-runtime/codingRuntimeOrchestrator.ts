@@ -2134,6 +2134,8 @@ export class CodingRuntimeOrchestrator {
     predecessorRunId: string | undefined,
     correlationId?: string,
   ): Promise<CodingRuntimeOrchestratorResult> {
+    // A start still queued in the serial lane when the server began shutting down launches nothing.
+    if (this.shutdownBegan()) return this.fail("runtime-unavailable");
     if (predecessorRunId === undefined) return this.startFresh(input, undefined, correlationId);
     this.activeRunId = undefined;
     this.activeEffectiveMode = undefined;
@@ -3938,6 +3940,11 @@ export class CodingRuntimeOrchestrator {
     this.scheduledWakes = wakes;
   }
 
+  /** Read through a call: `shutdown` sets the flag while a start awaits, so it is never narrowed. */
+  private shutdownBegan(): boolean {
+    return this.shuttingDown;
+  }
+
   private scheduledWakeBlock(): ScheduledWakeBlock | undefined {
     if (this.shuttingDown) return "shutting-down";
     if (this.activeRunId !== undefined || this.startup !== undefined) return "run-active";
@@ -4073,6 +4080,9 @@ export class CodingRuntimeOrchestrator {
     launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]>,
     attachment: CodingRuntimeIssueAttachment | undefined,
   ): Promise<CodingRuntimeOrchestratorResult> {
+    // Shutdown began while the launch resolved: `shutdown` saw no run then, so this one releases
+    // what its launch minted instead of starting a runtime nobody would stop.
+    if (this.shutdownBegan()) return this.failMintedStart(runId);
     const startup = { runId, controller: new AbortController() };
     this.startup = startup;
     try {
@@ -4535,6 +4545,8 @@ export class CodingRuntimeOrchestrator {
       // Nothing is minted yet and no snapshot exists: a start the client gave up on ends here. Once
       // the run exists it stays, because the client can then find it, and a reload must not end it.
       if (this.startAbandoned?.aborted === true) return ABANDONED_START;
+      // Shutdown began while the start was prepared: nothing is minted yet, so nothing starts.
+      if (this.shutdownBegan()) return { ok: false, failureCode: "runtime-unavailable" };
       const launch = this.deps.launchResolver.resolve(input);
       return { ok: true, launch };
     } catch (error) {

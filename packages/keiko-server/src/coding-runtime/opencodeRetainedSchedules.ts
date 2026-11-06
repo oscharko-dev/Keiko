@@ -80,8 +80,17 @@ function hasScheduleTable(database: DatabaseSync): boolean {
 }
 
 function integer(value: unknown): number | undefined {
-  if (typeof value === "bigint") return Number(value);
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
+  const number = typeof value === "bigint" ? Number(value) : value;
+  return typeof number === "number" && Number.isSafeInteger(number) ? number : undefined;
+}
+
+/** The largest distance from the epoch a JavaScript date can hold, in milliseconds. */
+const MAX_DATE_MS = 8_640_000_000_000_000;
+
+/** A time column as a date can hold it; any other value is no time at all, never a throw. */
+function timeOf(value: unknown): number | undefined {
+  const time = integer(value);
+  return time !== undefined && Math.abs(time) <= MAX_DATE_MS ? time : undefined;
 }
 
 function parsedObject(value: unknown): Record<string, unknown> | undefined {
@@ -107,17 +116,23 @@ function cadenceOf(when: Record<string, unknown> | undefined): {
   if (typeof type !== "string" || !CADENCES.has(type as RetainedScheduleCadence)) {
     return { cadence: "other" };
   }
-  const value = when?.[type];
-  const text =
-    typeof value === "string"
-      ? value
-      : typeof value === "number" && Number.isFinite(value)
-        ? new Date(value).toISOString()
-        : undefined;
+  const text = cadenceTextOf(when?.[type]);
   return {
     cadence: type as RetainedScheduleCadence,
     ...(text === undefined ? {} : { cadenceText: text.slice(0, CADENCE_MAX_CHARS) }),
   };
+}
+
+/**
+ * The cadence as the runtime stored it. A number is a time; one outside the range a date can hold
+ * (the column is model and runtime data) has no text rather than throwing `RangeError`, which would
+ * otherwise stop every listing and every wake (#4271 audit).
+ */
+function cadenceTextOf(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 function statusOf(value: unknown): RetainedScheduleStatus | undefined {
@@ -125,9 +140,10 @@ function statusOf(value: unknown): RetainedScheduleStatus | undefined {
 }
 
 function dueAt(row: ScheduleRow): number | undefined {
-  const due = integer(row.next_due_at);
+  // A due time a date cannot hold never wakes the task: it fails closed instead of throwing.
+  const due = timeOf(row.next_due_at);
   if (due === undefined) return undefined;
-  const retry = integer(row.retry_at);
+  const retry = timeOf(row.retry_at);
   return retry !== undefined && retry > due ? retry : due;
 }
 

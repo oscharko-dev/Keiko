@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -61,7 +61,7 @@ function harness(options: { readonly scheduler?: boolean } = {}): Harness {
     sessionId: SESSION,
     ready: true,
     runtimeAdapter: {
-      cancelTurn: () => {
+      cancelTurn: (): void => {
         cancelled.count += 1;
       },
     },
@@ -113,12 +113,12 @@ function drivenSleep(): {
   const waiting: (() => void)[] = [];
   let arrived: (() => void) | undefined;
   return {
-    sleep: () =>
+    sleep: (): Promise<void> =>
       new Promise<void>((resolve) => {
         waiting.push(resolve);
         arrived?.();
       }),
-    next: async () => {
+    next: async (): Promise<void> => {
       if (waiting.length === 0) {
         await new Promise<void>((resolve) => {
           arrived = resolve;
@@ -153,6 +153,27 @@ describe("holding a run's scheduler", () => {
 
   it("records a runtime without a scheduler as absent", () => {
     const h = harness({ scheduler: false });
+
+    holdRunScheduler(h.sink, h.run, "hold");
+
+    expect(lines(h)).toEqual([{ runId: "run-wake-1", action: "hold", outcome: "absent" }]);
+  });
+
+  it("fails a native run's readiness when the database to hold is missing", () => {
+    const h = harness();
+    rmSync(h.database, { force: true });
+
+    expect(() => {
+      holdRunScheduler(h.sink, h.run, "hold", { required: true });
+    }).toThrow();
+    expect(lines(h)).toEqual([expect.objectContaining({ action: "hold", outcome: "failed" })]);
+    // Nothing is created in its place: the runtime would find an empty scheduler table.
+    expect(existsSync(h.database)).toBe(false);
+  });
+
+  it("records a missing database as absent where no hold is required", () => {
+    const h = harness();
+    rmSync(h.database, { force: true });
 
     holdRunScheduler(h.sink, h.run, "hold");
 

@@ -14699,7 +14699,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       taskDigest: {
         type: "string",
         dataClass: "digest",
-        required: true,
+        required: false,
         maxLength: 64,
       },
       scheduleDigest: {

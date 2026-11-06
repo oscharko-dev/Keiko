@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+
 import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   activityLogEvent,
@@ -159,9 +161,16 @@ export function holdRunScheduler(
   activityLog: ServerLogSink | undefined,
   run: Pick<ScheduledWakeRun, "runId" | "runRoot">,
   action: "hold" | "rehold",
+  options: { readonly required?: boolean } = {},
 ): void {
   try {
-    const held = holdSchedulerLease(runtimeDatabasePath(run.runRoot));
+    const database = runtimeDatabasePath(run.runRoot);
+    // A runtime that loads the schedule plugin has created its database by the time a session is
+    // bound. Without one there is nothing to hold now, and the runtime could create it later and
+    // lead its scheduler unheld: that run fails its readiness rather than run unguarded.
+    if (options.required === true && !existsSync(database))
+      throw new Error("The runtime database holding the scheduler is missing.");
+    const held = holdSchedulerLease(database);
     recordScheduleLease(activityLog, {
       runId: run.runId,
       action,
@@ -247,18 +256,39 @@ async function watchScheduledFire(
   options: ScheduledWakeTurnOptions,
 ): Promise<void> {
   const now = options.now ?? Date.now;
-  const sleep = options.sleep ?? defaultSleep;
   const started = now();
-  const deadline = started + (options.fireWaitMs ?? SCHEDULED_WAKE_FIRE_WAIT_MS);
-  const pollMs = options.pollMs ?? FIRE_POLL_MS;
-  for (;;) {
-    const verdict = fireVerdict(run, database, runCountBefore, deadline, now);
-    if (verdict !== undefined) {
-      settleWatch(run, options.activityLog, verdict, now() - started);
-      return;
-    }
-    await sleep(pollMs);
+  const watch: FireWatch = {
+    run,
+    database,
+    runCountBefore,
+    options,
+    now,
+    started,
+    deadline: started + (options.fireWaitMs ?? SCHEDULED_WAKE_FIRE_WAIT_MS),
+  };
+  await pollScheduledFire(watch);
+}
+
+interface FireWatch {
+  readonly run: ScheduledWakeRun;
+  readonly database: string;
+  readonly runCountBefore: number;
+  readonly options: ScheduledWakeTurnOptions;
+  readonly now: () => number;
+  readonly started: number;
+  readonly deadline: number;
+}
+
+/** One look at the session's schedules, then the next one after a pause until a verdict. */
+async function pollScheduledFire(watch: FireWatch): Promise<void> {
+  const { run, database, runCountBefore, options, now } = watch;
+  const verdict = fireVerdict(run, database, runCountBefore, watch.deadline, now);
+  if (verdict !== undefined) {
+    settleWatch(run, options.activityLog, verdict, now() - watch.started);
+    return;
   }
+  await (options.sleep ?? defaultSleep)(options.pollMs ?? FIRE_POLL_MS);
+  await pollScheduledFire(watch);
 }
 
 type FireVerdict =

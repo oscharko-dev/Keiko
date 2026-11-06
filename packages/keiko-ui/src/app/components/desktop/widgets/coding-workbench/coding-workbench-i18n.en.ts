@@ -13,7 +13,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.schedules.paused": "{label} · paused",
   "codingWorkbench.schedules.done": "{label} · done",
   "codingWorkbench.schedules.wait.run-active": "{label} · due, waits for the current run",
-  "codingWorkbench.schedules.wait.workspace-inactive": "{label} · due, waits for this task's workspace",
+  "codingWorkbench.schedules.wait.workspace-inactive":
+    "{label} · due, waits for this task's workspace",
   "codingWorkbench.schedules.wait.retrying": "{label} · due, tries again shortly",
   "codingWorkbench.schedules.pause": "Pause",
   "codingWorkbench.schedules.resume": "Resume",

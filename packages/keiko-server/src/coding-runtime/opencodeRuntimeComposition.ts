@@ -3134,8 +3134,10 @@ async function bindRunSession(
   const sessionId = await bindRunSessionOnce(input, run, client, signal);
   // Before the first turn can create a schedule: the runtime never fires one inside this run unless
   // it is the wake run that releases the lease (`opencodeScheduleLease.ts`). A hold that cannot be
-  // written fails the readiness.
-  if (sessionId !== "") holdRunScheduler(input.activityLog, run, "hold");
+  // written fails the readiness, and so does a native run whose database is missing: its runtime
+  // loads the schedule tool, so an unheld database would let it fire schedules unguarded.
+  if (sessionId !== "")
+    holdRunScheduler(input.activityLog, run, "hold", { required: input.toolProfile === "native" });
   return sessionId;
 }
 

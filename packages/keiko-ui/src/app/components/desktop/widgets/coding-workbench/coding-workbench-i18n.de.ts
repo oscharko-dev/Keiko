@@ -15,12 +15,14 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.schedules.paused": "{label} · pausiert",
   "codingWorkbench.schedules.done": "{label} · erledigt",
   "codingWorkbench.schedules.wait.run-active": "{label} · fällig, wartet auf den laufenden Lauf",
-  "codingWorkbench.schedules.wait.workspace-inactive": "{label} · fällig, wartet auf den Workspace dieser Aufgabe",
+  "codingWorkbench.schedules.wait.workspace-inactive":
+    "{label} · fällig, wartet auf den Workspace dieser Aufgabe",
   "codingWorkbench.schedules.wait.retrying": "{label} · fällig, versucht es gleich erneut",
   "codingWorkbench.schedules.pause": "Pausieren",
   "codingWorkbench.schedules.resume": "Fortsetzen",
   "codingWorkbench.schedules.delete": "Löschen",
-  "codingWorkbench.schedules.error": "Die Zeitpläne konnten nicht gelesen oder geändert werden. Bitte erneut versuchen.",
+  "codingWorkbench.schedules.error":
+    "Die Zeitpläne konnten nicht gelesen oder geändert werden. Bitte erneut versuchen.",
   "codingWorkbench.history.scheduled": "Geplante Fortsetzung",
   "codingWorkbench.history.title": "Coding History",
   "codingWorkbench.history.new": "Neue Aufgabe",

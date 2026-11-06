@@ -21,6 +21,7 @@ import {
   narrowerMode,
   scheduleDigest,
   type ScheduledWakeBlock,
+  type ScheduledWakeHost,
   type ScheduledWakePlan,
   type ScheduledWakeStart,
 } from "./codingScheduledWakes.js";
@@ -107,6 +108,26 @@ interface Harness {
   retain(rows: readonly Row[], mode?: CodingWorkbenchMode): void;
 }
 
+/** The orchestrator side of the service, scripted by the harness state. */
+function scriptedHost(
+  state: Harness["state"],
+  starts: ScheduledWakePlan[],
+  overrides: Partial<ScheduledWakeHost> = {},
+): ScheduledWakeHost {
+  return {
+    blocked: (): ScheduledWakeBlock | undefined => state.block,
+    taskAdmitted: (): boolean => state.admitted,
+    taskOwned: (): boolean => state.owned,
+    liveTaskId: (): string | undefined => state.live,
+    start: (plan: ScheduledWakePlan): Promise<ScheduledWakeStart> => {
+      starts.push(plan);
+      return Promise.resolve(state.next);
+    },
+    serial: <T>(work: () => T): Promise<T> => Promise.resolve(work()),
+    ...overrides,
+  };
+}
+
 function harness(): Harness {
   const root = mkdtempSync(join(tmpdir(), "keiko-scheduled-wakes-"));
   roots.push(root);
@@ -127,20 +148,10 @@ function harness(): Harness {
   };
   let sources = 0;
   const wakes = new CodingScheduledWakes({
-    store: () => store,
+    store: (): RetainedSessionStore => store,
     activityLog: sink,
-    now: () => clock.value,
-    host: {
-      blocked: () => state.block,
-      taskAdmitted: () => state.admitted,
-      taskOwned: () => state.owned,
-      liveTaskId: () => state.live,
-      start: (plan) => {
-        starts.push(plan);
-        return Promise.resolve(state.next);
-      },
-      serial: (work) => Promise.resolve(work()),
-    },
+    now: (): number => clock.value,
+    host: scriptedHost(state, starts),
   });
   return {
     store,
@@ -149,7 +160,7 @@ function harness(): Harness {
     starts,
     state,
     wakes,
-    retain(rows, mode = "supervised-coding") {
+    retain(rows, mode = "supervised-coding"): void {
       sources += 1;
       const path = join(root, "run", `opencode-${String(sources)}.db`);
       sourceDatabase(path, rows);
@@ -370,7 +381,8 @@ describe("waking a task when its schedule is due", () => {
     h.clock.value += 600_001;
     await h.wakes.tick();
 
-    expect(wakeOutcomes(h).slice(0, 2)).toEqual(["started", "retain-lost"]);
+    // Counted as a miss: otherwise the schedule stays due and wakes every interval, never paused.
+    expect(wakeOutcomes(h).slice(0, 3)).toEqual(["started", "retain-lost", "missed"]);
   });
 
   it("records a removed schedule when the wake run deleted it", async () => {
@@ -393,19 +405,14 @@ describe("waking a task when its schedule is due", () => {
     h.retain([{ id: "sch_a", dueAt: NOW - 1 }]);
     h.state.next = { ok: true, runId: "run-wake-3", mode: "governed-assist" };
     const failing = new CodingScheduledWakes({
-      store: () => h.store,
+      store: (): RetainedSessionStore => h.store,
       activityLog: h.sink,
-      now: () => h.clock.value,
-      host: {
-        blocked: () => undefined,
-        taskAdmitted: () => {
+      now: (): number => h.clock.value,
+      host: scriptedHost(h.state, [], {
+        taskAdmitted: (): never => {
           throw new Error("store fault");
         },
-        taskOwned: () => true,
-        liveTaskId: () => undefined,
-        start: () => Promise.resolve(h.state.next),
-        serial: (work) => Promise.resolve(work()),
-      },
+      }),
     });
 
     await failing.tick();
@@ -414,6 +421,113 @@ describe("waking a task when its schedule is due", () => {
       expect.objectContaining({ outcome: "failed", causeChain: expect.any(Array) as unknown }),
     ]);
     expect(h.sink.events[0]).toMatchObject({ level: "warn", errorKind: "internal" });
+  });
+
+  it("runs a wake in the narrowest consent of the session's active schedules", async () => {
+    const h = harness();
+    // sch_a was consented under Ask for approval; sch_b, added later, under Full access. Once the
+    // wake run hands the lease over, the runtime fires every due schedule of the session.
+    h.retain([{ id: "sch_a", dueAt: NOW + 3_600_000 }], "governed-assist");
+    h.retain(
+      [
+        { id: "sch_a", dueAt: NOW + 3_600_000 },
+        { id: "sch_b", dueAt: NOW - 1 },
+      ],
+      "autonomous-delivery",
+    );
+
+    await h.wakes.tick();
+
+    expect(h.starts).toEqual([expect.objectContaining({ scheduleId: "sch_b" })]);
+    expect(h.starts[0]?.consentMode).toBe("governed-assist");
+  });
+
+  it("counts the wake as missed when only another schedule of the session fired", async () => {
+    const h = harness();
+    h.retain([
+      { id: "sch_a", dueAt: NOW - 1 },
+      { id: "sch_b", dueAt: NOW + 3_600_000 },
+    ]);
+    await h.wakes.tick();
+
+    h.clock.value += 1_000;
+    h.retain([
+      { id: "sch_a", dueAt: NOW - 1 },
+      { id: "sch_b", dueAt: NOW + 3_600_000, runCount: 1 },
+    ]);
+    await h.wakes.tick();
+
+    expect(wakeOutcomes(h).slice(0, 2)).toEqual(["started", "missed"]);
+  });
+
+  it("lists and looks past a due time the clock cannot show", async () => {
+    const h = harness();
+    h.retain([{ id: "sch_a", dueAt: 9e15 }]);
+
+    await h.wakes.tick();
+
+    expect(h.starts).toEqual([]);
+    expect(lines(h, "coding-runtime.schedule.wake")).toEqual([]);
+    const listed = h.wakes.list(TASK, "corr-list-range");
+    expect(listed).toMatchObject({ ok: true, schedules: [{ id: "sch_a" }] });
+    expect(listed.ok && listed.schedules[0]).not.toHaveProperty("dueAt");
+  });
+
+  it("skips a task whose entry cannot be read, and records it once", async () => {
+    const h = harness();
+    h.retain([{ id: "sch_a", dueAt: NOW - 1 }]);
+    const damaged = Object.assign(Object.create(h.store) as RetainedSessionStore, {
+      readEntry: (): never => {
+        throw new Error("damaged entry");
+      },
+    });
+    const wakes = new CodingScheduledWakes({
+      store: (): RetainedSessionStore => damaged,
+      activityLog: h.sink,
+      now: (): number => h.clock.value,
+      host: scriptedHost(h.state, []),
+    });
+
+    await wakes.tick();
+    await wakes.tick();
+
+    expect(lines(h, "coding-runtime.schedule.wake")).toEqual([
+      expect.objectContaining({ outcome: "failed", taskDigest: retainedSessionKey(TASK) }),
+    ]);
+  });
+
+  it("waits with the automatic pause until the task's run no longer holds its entry", async () => {
+    const h = harness();
+    h.retain([{ id: "sch_a", dueAt: NOW - 1 }]);
+    for (let attempt = 1; attempt <= MAX_MISSES; attempt += 1) {
+      await h.wakes.tick();
+      h.clock.value += 1_000;
+      h.retain([{ id: "sch_a", dueAt: NOW - 1 }]);
+      // The last wake run keeps its runtime for undo: the task is still live when it settles.
+      if (attempt === MAX_MISSES) h.state.live = TASK;
+      await h.wakes.tick();
+      h.clock.value += 4 * 3_600_000;
+    }
+    await h.wakes.tick();
+
+    expect(lines(h, "coding-runtime.schedule.control")).toEqual([
+      expect.objectContaining({ action: "pause", outcome: "refused", reason: "run-active" }),
+    ]);
+    expect(h.starts).toHaveLength(MAX_MISSES);
+
+    h.state.live = undefined;
+    await h.wakes.tick();
+
+    expect(lines(h, "coding-runtime.schedule.control").map((line) => line.outcome)).toEqual([
+      "refused",
+      "changed",
+    ]);
+    expect(wakeOutcomes(h).at(-1)).toBe("auto-paused");
+    expect(h.wakes.list(TASK, "corr-list-deferred")).toMatchObject({
+      ok: true,
+      schedules: [{ id: "sch_a", status: "paused" }],
+    });
+    expect(h.starts).toHaveLength(MAX_MISSES);
   });
 
   it("stops looking once stopped", async () => {
@@ -532,16 +646,11 @@ describe("listing and controlling a task's schedules", () => {
     const h = harness();
     h.retain([{ id: "sch_a" }]);
     const failing = new CodingScheduledWakes({
-      store: () => h.store,
+      store: (): RetainedSessionStore => h.store,
       activityLog: h.sink,
-      host: {
-        blocked: () => undefined,
-        taskAdmitted: () => true,
-        taskOwned: () => true,
-        liveTaskId: () => undefined,
-        start: () => Promise.resolve(h.state.next),
-        serial: () => Promise.reject(new Error("lane fault")),
-      },
+      host: scriptedHost(h.state, [], {
+        serial: (): Promise<never> => Promise.reject(new Error("lane fault")),
+      }),
     });
 
     await expect(failing.control(TASK, "sch_a", "pause", "corr-c-7")).resolves.toEqual({

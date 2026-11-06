@@ -261,7 +261,7 @@ const SCHEDULED_SOURCE_ID = "scheduled-intent";
 
 function markScheduledIntent(db: DatabaseSync, runId: string): void {
   db.prepare(
-    `INSERT OR IGNORE INTO coding_history_message_bindings
+    `INSERT OR IGNORE INTO coding_history_message_bindings (run_id, source_id, message_id)
        SELECT run_id, ?, message_id FROM coding_history_message_bindings WHERE run_id = ? AND source_id = ?`,
   ).run(SCHEDULED_SOURCE_ID, runId, INTENT_SOURCE_ID);
 }
