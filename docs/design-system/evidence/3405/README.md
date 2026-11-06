@@ -282,3 +282,12 @@ The approval card's link label (PR #4182) changed the optional catalogs again, s
 producer ran on 2026-11-02 with Node 24.18.0. All nine cases passed, and the three records rebind
 every declared digest. The evidence freshness gate passed. No updater behavior, baseline or
 numerical ceiling changed.
+
+The update notice action buttons gained a forced-colors rule that keeps their native `ButtonText`
+color (#3918, the port of source fix `8d0931a3c`), which changed `UpdateWindow.module.css`,
+`UpdateStartupNotice.tsx` and `UpdateStartupNoticeContent.tsx`. The original producer ran again on
+2026-11-06 with Node 24.21.0. All nine cases passed, including the real-BFF outage journey.
+`10-responsive-manual-path.png` and `11-progress-state.png` changed bytes (PNG encoding and the
+progress bar's captured position) and were inspected. Neither shows a visible change. The three
+records rebind every declared digest. The evidence freshness gate passed, and both contrast-mode
+cases of `a11y.smoke.spec.ts` passed. No updater behavior, baseline or numerical ceiling changed.
