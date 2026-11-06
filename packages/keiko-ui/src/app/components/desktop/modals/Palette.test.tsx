@@ -309,6 +309,8 @@ describe("Palette stage evidence", () => {
       ["window palette", "started"],
       ["window palette", "settled"],
     ]);
+    expect(stages[0]?.correlationId).toEqual(expect.any(String));
+    expect(stages[0]?.correlationId).not.toBe("");
     expect(stages[1]?.correlationId).toBe(stages[0]?.correlationId);
     expect(reports.every((meta) => meta?.stageReport !== undefined)).toBe(true);
   });
