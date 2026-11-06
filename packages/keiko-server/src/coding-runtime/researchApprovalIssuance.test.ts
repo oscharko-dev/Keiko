@@ -295,6 +295,19 @@ describe("registerApprovedResearchGrant", () => {
     });
   });
 
+  it("refuses a malformed governed projection without undoing the registered grant", () => {
+    const f = issuanceFixture("https://docs.example.org/");
+    registerApprovedResearchGrant(
+      f.deps,
+      { runId: RUN, requestId: f.requestId, boundRevision: -1 },
+      APPROVAL_DIGEST,
+      NOW_MS + 300_000,
+    );
+    expect(f.governed).toEqual([]);
+    // The optional projection sink does not own grant registration or research authority.
+    expect(f.registry.activeGrants(RUN, NOW_MS + 2_000)).toHaveLength(1);
+  });
+
   it("mints nothing when no ask is pending, when it expired, or when the request id mismatches", () => {
     const f = issuanceFixture("https://docs.example.org/");
 

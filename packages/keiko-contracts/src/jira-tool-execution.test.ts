@@ -81,3 +81,39 @@ describe("sanitizeJiraMutationLinkAccount (#4176)", () => {
     expect(sanitizeJiraMutationLinkAccount(value)).toBeUndefined();
   });
 });
+
+describe("Jira mutation projections read own fields only (#3918)", () => {
+  const detail = {
+    fieldId: "summary",
+    validation: "required-field",
+    messages: ["Summary is required"],
+  };
+  const account = { requested: 1, created: 1, missing: [], unconfirmed: false };
+
+  it("keeps a well-formed detail and account with own fields", () => {
+    expect(sanitizeJiraMutationFailureDetail(detail)).toEqual(detail);
+    expect(sanitizeJiraMutationLinkAccount(account)).toEqual(account);
+  });
+
+  it("refuses a detail whose fields are inherited", () => {
+    const inherited: unknown = Object.create(detail);
+    expect(sanitizeJiraMutationFailureDetail(inherited)).toBeUndefined();
+  });
+
+  it("drops a field error whose fields are inherited", () => {
+    const entry: unknown = Object.create({ fieldId: "summary", message: "Summary is required" });
+    expect(sanitizeJiraMutationFailureDetail({ fieldErrors: [entry] })).toBeUndefined();
+  });
+
+  it("refuses a link account whose fields are inherited", () => {
+    const inherited: unknown = Object.create(account);
+    expect(sanitizeJiraMutationLinkAccount(inherited)).toBeUndefined();
+  });
+
+  it("drops a validation reason outside the closed vocabulary", () => {
+    expect(sanitizeJiraMutationFailureDetail({ ...detail, validation: "other" })).toEqual({
+      fieldId: "summary",
+      messages: ["Summary is required"],
+    });
+  });
+});

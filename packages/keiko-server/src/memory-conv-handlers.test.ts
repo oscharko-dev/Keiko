@@ -8,7 +8,7 @@
 // These tests intentionally do NOT spin up the HTTP server — the dispatch layer is shared
 // with the MemoriaViva routes (#211) and is already covered by routes.test.ts.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -541,11 +541,15 @@ describe("handleMemoryCaptureFromConversation", () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
     const chat = registerChat(deps, "capture-remember");
+    const insertion = vi.spyOn(vault, "insertMemory");
     const result = await handleMemoryCaptureFromConversation(
-      makeCtx({
-        text: "remember that we use pnpm not npm for installs",
-        context: { projectPath: chat.projectPath, chatId: chat.chatId },
-      }),
+      {
+        ...makeCtx({
+          text: "remember that we use pnpm not npm for installs",
+          context: { projectPath: chat.projectPath, chatId: chat.chatId },
+        }),
+        correlationId: "conversation-write-request",
+      },
       deps,
     );
     expect(result.status).toBe(200);
@@ -558,6 +562,7 @@ describe("handleMemoryCaptureFromConversation", () => {
     expect(outcomes[0]?.kind).toBe("candidate");
     expect(typeof outcomes[0]?.proposal?.proposalId).toBe("string");
     expect((outcomes[0]?.proposal?.body ?? "").length).toBeGreaterThan(0);
+    expect(insertion.mock.calls[0]?.[1]).toEqual({ correlationId: "conversation-write-request" });
   });
 
   it("returns the accepted status that supervised capture persisted", async () => {

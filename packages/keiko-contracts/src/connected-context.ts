@@ -657,10 +657,7 @@ export function isValidScopePath(path: unknown, options: IsValidScopePathOptions
 }
 
 function isValidWorkspaceRootPath(path: string): boolean {
-  if (typeof path !== "string") {
-    return false;
-  }
-  if (!isNonEmptyTrimmed(path)) {
+  if (typeof path !== "string" || path.trim().length === 0) {
     return false;
   }
   if (path.includes("\0")) {

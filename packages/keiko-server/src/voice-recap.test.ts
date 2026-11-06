@@ -4,7 +4,7 @@
 // candidates as `proposed`, rejects secrets, is dormant on empty input, and returns content-free
 // counts + proposal ids (never transcript text).
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
@@ -235,13 +235,17 @@ describe("handleBuildVoiceRecap", () => {
 
   it("proposes governed candidates from committed spoken spans and reviews them via the queue", async () => {
     const chat = createChat();
+    const insertion = vi.spyOn(vault, "insertMemory");
     const result = await handleBuildVoiceRecap(
-      ctx(
-        recapBody(chat, [
-          "remember that I prefer dark mode",
-          "remember that the deploy target is staging first",
-        ]),
-      ),
+      {
+        ...ctx(
+          recapBody(chat, [
+            "remember that I prefer dark mode",
+            "remember that the deploy target is staging first",
+          ]),
+        ),
+        correlationId: "recap-write-request",
+      },
       deps(),
     );
     expect(result.status).toBe(200);
@@ -279,6 +283,10 @@ describe("handleBuildVoiceRecap", () => {
       })
       .filter((event) => event.kind === "memory:proposed");
     expect(proposedEvents).toHaveLength(2);
+    expect(insertion.mock.calls.map((call) => call[1]?.correlationId)).toEqual([
+      "recap-write-request",
+      "recap-write-request",
+    ]);
   });
 
   it("keeps unattested recap memories review-gated even in an auto-accept posture", async () => {

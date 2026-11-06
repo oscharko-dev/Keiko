@@ -37,9 +37,16 @@ import { securityErrorKind, writeActivityLogPortEvent } from "@oscharko-dev/keik
 
 import {
   activityLogEvent,
+  activityLogEventWillBeRejected,
+  normalizeKeikoFrame,
   defineActivityLogOperation,
   type RejectedActivityLogEvent,
+  type ActivityLogEventEnvelope,
+  type ActivityLogCompletenessState,
+  type ActivityLogLossState,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+
+import type { MemoryWriteContext } from "./types.js";
 
 export type MemoryVaultLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -52,7 +59,9 @@ export type MemoryVaultLogOp =
   | "memory-vault.store.quarantined"
   | "memory-vault.store.encryption-migrated"
   | "memory-vault.store.encryption-checkpoint-degraded"
-  | "memory-vault.log.sink-failed";
+  | "memory-vault.log.sink-failed"
+  | "memory-vault.write.rejected"
+  | "memory-vault.write.capture-failed";
 
 // A closed mirror of cipher.ts's `VaultKeySource` ("env" | "keychain" | "keyfile"), duplicated
 // rather than imported: cipher.ts imports from db.ts (for keyfile hardening) and db.ts imports
@@ -67,7 +76,18 @@ export type MemoryVaultLogKeySource = "env" | "keychain" | "keyfile";
 // attempts + busy signal from a post-migration WAL checkpoint that could not fully truncate
 // (#2906 KEIKO-0713 / KEIKO-0877). Never a memory body, a tag, a scope coordinate, a vault
 // key, or a filesystem path.
+export type MemoryWriteMethod = "insert" | "update" | "update-batch" | "graph";
+
 export interface MemoryVaultLogExtra {
+  readonly method?: MemoryWriteMethod | undefined;
+  readonly stage?: "caller-admission" | "physical-admission" | undefined;
+  readonly reason?: "invalid-record" | "invalid-edge" | "capture-unavailable" | undefined;
+  readonly completeness?: ActivityLogCompletenessState | undefined;
+  readonly loss?: ActivityLogLossState | undefined;
+  readonly frames?: readonly string[] | undefined;
+  readonly causeChain?: readonly string[] | undefined;
+  readonly rejectionCount?: number | undefined;
+  readonly admitted?: boolean | undefined;
   readonly store?: "ui" | "memory-vault" | "local-knowledge" | undefined;
   readonly keySource?: MemoryVaultLogKeySource | undefined;
   readonly reopened?: boolean | undefined;
@@ -86,6 +106,7 @@ export interface MemoryVaultLogEvent {
   readonly category: MemoryVaultLogCategory;
   readonly op: MemoryVaultLogOp;
   readonly correlationId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   readonly durationMs?: number | undefined;
   readonly status?: number | undefined;
   readonly errorKind?: string | undefined;
@@ -95,8 +116,23 @@ export interface MemoryVaultLogEvent {
 // A registered emission may also be the body-free rejection of an event that failed its contract.
 export type MemoryVaultLogTransport = MemoryVaultLogEvent | RejectedActivityLogEvent;
 
+export interface MemoryVaultErrorEvidence {
+  readonly frames: readonly string[];
+  readonly causeChain: readonly string[];
+}
+
 export interface MemoryVaultLogSink {
   readonly write: (event: MemoryVaultLogTransport) => void;
+  readonly errorEvidence?: ((error: unknown) => MemoryVaultErrorEvidence) | undefined;
+}
+
+export interface MemoryPhysicalWriteAdmission {
+  readonly sink: MemoryVaultLogSink | undefined;
+  readonly method: MemoryWriteMethod;
+  readonly context: MemoryWriteContext | undefined;
+  // Applied to the admitted snapshot after validation, so a redaction that lengthens a field
+  // cannot refuse a record whose admitted form met every bound (REVIEW-3918-057).
+  readonly redactString: (input: string) => string;
 }
 
 const NULL_SINK: MemoryVaultLogSink = {
@@ -220,4 +256,221 @@ function warnFailedMemoryVaultLogSink(droppedOpDigest: string, errorKind: string
   } catch {
     // The process warning channel is the last one there is; a report beyond it does not exist.
   }
+}
+
+const MEMORY_WRITE_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "memory-vault.write.rejected",
+  category: "memory",
+  owner: "keiko-memory-vault",
+  emitter: "vault-log.emitMemoryWriteRejected",
+  fields: {
+    method: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["insert", "update", "update-batch", "graph"],
+    },
+    stage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["caller-admission", "physical-admission"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["invalid-record", "invalid-edge"],
+    },
+    rejectionCount: { type: "integer", dataClass: "count", required: true },
+    admitted: { type: "boolean", dataClass: "closed-enum", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "timeline",
+  diagnosticWhen: [{ field: "admitted", values: [false] }],
+  failureClasses: ["memory-write-validation"],
+  proofIds: ["memory-vault.write.rejected.initial-admission"],
+  releaseImpact: "patch",
+});
+
+function writeRefusalEnvelope(context: MemoryWriteContext | undefined): ActivityLogEventEnvelope {
+  return {
+    level: "warn",
+    errorKind: "validation-failed",
+    get correlationId(): string | undefined {
+      return context?.correlationId;
+    },
+    get parentCorrelationId(): string | undefined {
+      return context?.parentCorrelationId;
+    },
+  };
+}
+
+export function emitMemoryWriteRejected(
+  sink: MemoryVaultLogSink | undefined,
+  method: MemoryWriteMethod,
+  context: MemoryWriteContext | undefined,
+  stage: "caller-admission" | "physical-admission" = "caller-admission",
+  reason: "invalid-record" | "invalid-edge" = "invalid-record",
+): void {
+  emitMemoryVaultLogEvent(
+    sink,
+    activityLogEvent(MEMORY_WRITE_REJECTED_OPERATION, writeRefusalEnvelope(context), {
+      method,
+      stage,
+      reason,
+      rejectionCount: 1,
+      admitted: false,
+    }),
+  );
+}
+
+const MEMORY_WRITE_CAPTURE_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "memory-vault.write.capture-failed",
+  category: "memory",
+  owner: "keiko-memory-vault",
+  emitter: "vault-log.emitMemoryWriteCaptureFailureEvent",
+  fields: {
+    method: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["insert", "update", "update-batch", "graph"],
+    },
+    stage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["physical-admission"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["capture-unavailable"],
+    },
+    rejectionCount: { type: "integer", dataClass: "count", required: true },
+    admitted: { type: "boolean", dataClass: "closed-enum", required: true },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "timeline",
+  diagnosticWhen: [{ field: "admitted", values: [false] }],
+  failureClasses: ["memory-write-capture"],
+  proofIds: ["memory-vault.write.capture-failed.physical-admission"],
+  releaseImpact: "patch",
+});
+
+function capturedEvidenceArray(
+  values: readonly string[],
+  maximum: number,
+): readonly string[] | undefined {
+  if (!Array.isArray(values)) return undefined;
+  const length: unknown = values.length;
+  if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0 || length > maximum)
+    return undefined;
+  const captured: string[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const value: unknown = values[index];
+    if (typeof value !== "string") return undefined;
+    captured.push(value);
+  }
+  return Object.freeze(captured);
+}
+
+function memoryCaptureEvidence(
+  sink: MemoryVaultLogSink | undefined,
+  error: unknown,
+): MemoryVaultErrorEvidence | undefined {
+  const provider = sink?.errorEvidence;
+  if (provider === undefined) return undefined;
+  const evidence = provider.call(sink, error);
+  const fields = MEMORY_WRITE_CAPTURE_FAILED_OPERATION.fields;
+  const frames = capturedEvidenceArray(evidence.frames, fields.frames.maxItems);
+  const causes = capturedEvidenceArray(evidence.causeChain, fields.causeChain.maxItems);
+  if (frames === undefined || causes === undefined || frames.length === 0) return undefined;
+  if (frames.some((frame) => normalizeKeikoFrame(frame) === undefined)) return undefined;
+  return { frames, causeChain: causes };
+}
+
+export function emitMemoryWriteCaptureFailed(
+  sink: MemoryVaultLogSink | undefined,
+  method: MemoryWriteMethod,
+  context: MemoryWriteContext | undefined,
+  error: unknown,
+): void {
+  let evidence: MemoryVaultErrorEvidence | undefined;
+  try {
+    evidence = memoryCaptureEvidence(sink, error);
+  } catch {
+    emitMemoryWriteCaptureFailureEvent(sink, method, context, undefined);
+    return;
+  }
+  emitMemoryWriteCaptureFailureEvent(sink, method, context, evidence);
+}
+
+function emitMemoryWriteCaptureFailureEvent(
+  sink: MemoryVaultLogSink | undefined,
+  method: MemoryWriteMethod,
+  context: MemoryWriteContext | undefined,
+  evidence: MemoryVaultErrorEvidence | undefined,
+): void {
+  const envelope: ActivityLogEventEnvelope = {
+    level: "error",
+    errorKind: "internal",
+    get correlationId(): string | undefined {
+      return context?.correlationId;
+    },
+    get parentCorrelationId(): string | undefined {
+      return context?.parentCorrelationId;
+    },
+  };
+  const fields = {
+    method,
+    stage: "physical-admission",
+    reason: "capture-unavailable",
+    rejectionCount: 1,
+    admitted: false,
+    loss: "none",
+  } as const;
+  const event = activityLogEvent(
+    MEMORY_WRITE_CAPTURE_FAILED_OPERATION,
+    envelope,
+    evidence === undefined
+      ? { ...fields, completeness: "partial" }
+      : {
+          ...fields,
+          completeness: "complete",
+          frames: evidence.frames,
+          causeChain: evidence.causeChain,
+        },
+  );
+  emitMemoryVaultLogEvent(
+    sink,
+    activityLogEventWillBeRejected(event)
+      ? activityLogEvent(MEMORY_WRITE_CAPTURE_FAILED_OPERATION, envelope, {
+          ...fields,
+          completeness: "partial",
+        })
+      : event,
+  );
 }

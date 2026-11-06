@@ -658,8 +658,7 @@ export function hasDisallowedEvidenceContent(value: string): boolean {
   );
 }
 
-export function isCodingWorkbenchEvidenceSafeText(value: unknown): value is string {
-  if (typeof value !== "string") return false;
+function isSafeEvidenceString(value: string): boolean {
   const stripped = stripUnsafeFormatChars(value);
   if (stripped !== value || stripped.trim() !== value) return false;
   return (
@@ -670,10 +669,14 @@ export function isCodingWorkbenchEvidenceSafeText(value: unknown): value is stri
   );
 }
 
+export function isCodingWorkbenchEvidenceSafeText(value: unknown): value is string {
+  return typeof value === "string" && isSafeEvidenceString(value);
+}
+
 export function redactCodingWorkbenchEvidenceText(value: string): string {
   if (isCodingWorkbenchEvidenceSafeText(value)) return value;
   const redacted = buildRedactionSummary(value);
-  return isCodingWorkbenchEvidenceSafeText(redacted) ? redacted : REDACTED_CONTENT_TOKEN;
+  return isSafeEvidenceString(redacted) ? redacted : REDACTED_CONTENT_TOKEN;
 }
 
 function admitCodingWorkbenchEvidenceRecord(

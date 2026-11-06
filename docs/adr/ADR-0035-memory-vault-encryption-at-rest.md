@@ -30,11 +30,58 @@ A new leaf primitive provides AES-256-GCM authenticated encryption with two enve
 
 Only the columns that carry remembered TEXT/vector content are sealed. Index, query, and UI-display columns stay cleartext so SQL indexes and scope rendering work without a key.
 
-| Sealed (content)                                                                                              | Cleartext (index / metadata)                                                                                                                       |
-| ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sealed (content)                                                                                                                                                                    | Cleartext (index / metadata)                                                                                                                                                                                     |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `memories.body`, `payload_json`, `tags_json`, `capture_rationale`, `stale_reason`; `memory_edges.provenance_summary`; `memory_tombstones.reason`; `memory_embeddings.vector` (BLOB) | all ids, `schema_version`, `type`, `scope_kind`, `scope_coordinate`, `status`, `sensitivity`, `pinned`, `confidence`, all timestamps, `source_*`, `model_*`, `retention_*`, `vector_dimensions`, `vector_metric` |
 
 Crypto is confined to two wrapper functions in `serialize.ts` (and the per-table seal/open in `edges.ts`, `embeddings.ts`, `tombstones.ts`); the pure row↔record builders operate on plaintext exactly as before. The cipher is threaded as an explicit parameter through the row layer (keeping those modules pure and unit-testable) and resolved once, internally, in `createMemoryVault`.
+
+### Initial record admission evidence
+
+The four record mutation methods accept an optional invocation context carrying the existing
+operation correlation and, when known, its parent. Each call keeps that context locally; the
+long-lived vault never stores a mutable current request id. Request capture, streamed and grounded
+capture, maintenance passes, salience turns and workflow candidates forward their actual owning
+ids. Missing or malformed identities use the canonical Activity Log unknown classification.
+
+A canonical `MemoryStorageValidationError` from the initial caller-record gate emits
+`memory-vault.write.rejected` through the existing vault log port before the identical error is
+rethrown. A graph mutation's invalid edge emits the same event with the `invalid-edge` reason.
+The registered event contains only the closed method, `caller-admission` stage, the closed
+`invalid-record` or `invalid-edge` reason, one rejection and `admitted: false`. It does not contain a validation
+message, field path, record id or content, and does not claim that an outer transaction has already
+settled. Foreign observational errors retain their original classification. The existing port's
+loss ledger and sink-failure fallback remain authoritative when evidence cannot be delivered.
+
+### Physical record admission
+
+The serializer captures the fixed-schema write fields into owned, plain frozen containers and
+admits that projection through the canonical Memory record validator. Redaction then runs on the
+admitted snapshot, and its fresh containers take the same owned, frozen form. Validation precedes
+redaction because a redaction may lengthen a field: the `[REDACTED]` marker replaces a shorter
+configured literal, so a field the caller kept within its bound can exceed it once redacted. The
+stored form has never been held to the caller's bounds, and a write the caller's record admits is
+not refused for it. Only the redacted snapshot supplies encryption and SQL bindings. Foreign `toJSON`
+hooks and retained input references cannot supply later write values, and a redaction callback
+cannot alter the admitted snapshot it redacts. The row writer returns that redacted snapshot; vault return
+values and postcommit success events consume it, including batch and graph updates. Existing
+transaction, pre-image and throwing postcommit-hook semantics remain in force.
+
+Canonical invalidity at this boundary emits `memory-vault.write.rejected` with
+`stage: physical-admission`; initial caller admission keeps its existing stage. A technical inability
+to capture emits the separate same-port `memory-vault.write.capture-failed`, with the invocation id,
+closed method/stage/reason and no content or foreign error message. The optional process sink
+`errorEvidence` capability supplies the existing bounded Keiko frames/causes. Usable admitted frames
+permit complete evidence; absent, unreadable or failed capability produces partial evidence with
+loss none when retained. An empty cause chain is legitimate. Unknown correlation stays degraded in
+support analysis. Actual transport loss follows the existing ledger/fallback once.
+
+The capture catch ends before encoding, cipher and SQL, so those technical failures retain their
+original errors and classification. Read-decoder legacy normalization, immutable update identity,
+encryption tiers and the encrypted content/cleartext metadata split remain unchanged. Whole proofs
+select the actual physical row, preserve rollback/no-success/reopen pins, and reconstruct the
+registered refusal/capture outcomes through the real writer and support analyzer with zero optional
+context.
 
 ### Key resolution tiers (`keiko-memory-vault/cipher.ts`)
 
