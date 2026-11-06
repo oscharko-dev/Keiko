@@ -4,6 +4,12 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// Reads a contract field only when the record owns it, so an inherited or polluted prototype
+// property never answers (Codex P1 3789773829; code-task-acceptance.ts keeps the full rationale).
+export function ownField(record: Record<string, unknown>, key: string): unknown {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
 export function exactKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],

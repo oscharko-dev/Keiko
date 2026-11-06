@@ -1,8 +1,7 @@
 import type { AtlassianConnectorWriteFailureReason } from "./atlassian-connectors.js";
 import type { JiraTemplateViolation } from "./jira-issue-template.js";
-import { ownField } from "./code-task-acceptance.js";
 import { compareStrings } from "./comparators.js";
-import { isOneOf, isRecord } from "./contract-validation-primitives.js";
+import { isOneOf, isRecord, ownField } from "./contract-validation-primitives.js";
 
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
