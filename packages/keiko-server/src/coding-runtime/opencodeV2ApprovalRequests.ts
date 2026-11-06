@@ -169,13 +169,20 @@ function dispatchPermission(
   }
 }
 
+// Code-unit order, as `Array#sort` without a comparator: the canonical form must not depend on a
+// locale, which `localeCompare` would bring in.
+function compareCodeUnits(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
 function canonicalValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalValue);
   const entries = record(value);
   if (entries === undefined) return value;
   return Object.fromEntries(
     Object.keys(entries)
-      .sort()
+      .sort(compareCodeUnits)
       .map((key) => [key, canonicalValue(entries[key])]),
   );
 }

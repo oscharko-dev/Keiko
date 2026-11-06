@@ -132,14 +132,21 @@ function normalizeToolCallIds(calls: readonly NormalizedToolCall[]): readonly No
       return call;
     }
     response ??= randomBytes(6).toString("hex");
-    const minted = `${SYNTHESIZED_TOOL_CALL_ID_PREFIX}${response}-${String(position)}`;
-    let id = minted;
-    for (let attempt = 1; kept.has(id) || held.has(id); attempt += 1) {
-      id = `${minted}-${String(attempt)}`;
-    }
+    const id = freeToolCallId(
+      `${SYNTHESIZED_TOOL_CALL_ID_PREFIX}${response}-${String(position)}`,
+      (candidate) => kept.has(candidate) || held.has(candidate),
+    );
     held.add(id);
     return { ...call, id };
   });
+}
+
+/** The minted id itself, or the first `-<n>` suffix of it that no call of the turn already uses. */
+function freeToolCallId(minted: string, taken: (candidate: string) => boolean): string {
+  if (!taken(minted)) return minted;
+  let attempt = 1;
+  while (taken(`${minted}-${String(attempt)}`)) attempt += 1;
+  return `${minted}-${String(attempt)}`;
 }
 
 function parseToolCalls(message: Record<string, unknown>): readonly NormalizedToolCall[] {

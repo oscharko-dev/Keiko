@@ -228,7 +228,7 @@ class ExternalClient implements ExternalMcpConnection {
   #closed = false;
   #drifted = false;
   #inflight = 0;
-  #drainWaiters: (() => void)[] = [];
+  readonly #drainWaiters: (() => void)[] = [];
   #closing: Promise<void> | undefined;
   #metadataTail: Promise<void> = Promise.resolve();
   readonly #abort = (): void => {

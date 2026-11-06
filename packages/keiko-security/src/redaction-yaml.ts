@@ -423,12 +423,26 @@ function yamlScalarSpans(
     const value = String(node.value);
     const safe = sensitive
       ? sensitivePlaceholder(value, headers.has(node))
-      : !keys.has(node) && knownYamlValue(node, values, ports)
-        ? REDACTION_PLACEHOLDER
-        : ports.redactPlain(value);
+      : ordinaryScalarProjection(node, value, { keys, values, ports });
     if (safe !== value) spans.push(scalarSpan(text, node, safe, plain));
   }
   return spans;
+}
+
+/** A scalar no sensitive key holds: a known private value is masked whole, anything else as text. */
+function ordinaryScalarProjection(
+  node: Scalar,
+  value: string,
+  scope: {
+    readonly keys: ReadonlySet<Node>;
+    readonly values: ReadonlySet<string>;
+    readonly ports: ProjectionPorts;
+  },
+): string {
+  if (!scope.keys.has(node) && knownYamlValue(node, scope.values, scope.ports)) {
+    return REDACTION_PLACEHOLDER;
+  }
+  return scope.ports.redactPlain(value);
 }
 
 const AUTHORIZATION_KEY = /^(?:proxy-)?authorization$/iu;

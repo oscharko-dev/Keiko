@@ -2726,9 +2726,12 @@ function withholdForLiveRun(
 // Its conclusion is discarded (the run is the reason, not the gateway), the entry is dropped so the
 // next read proves the model again, and the same closed withheld line records why.
 export function withholdRunningWorkbenchProbesForLiveRun(deps: UiHandlerDeps): number {
+  // A snapshot, taken before any abort: an abort runs its listeners at once, and a listener that
+  // settles a probe or starts another one changes the map that is being walked.
+  const held = [...workbenchProbes.values()].filter((entry) => entry.holder === deps.gatewayConfig);
   let aborted = 0;
-  for (const entry of [...workbenchProbes.values()]) {
-    if (entry.holder === deps.gatewayConfig && entry.abortForLiveRun()) aborted += 1;
+  for (const entry of held) {
+    if (entry.abortForLiveRun()) aborted += 1;
   }
   return aborted;
 }

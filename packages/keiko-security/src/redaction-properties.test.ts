@@ -239,7 +239,7 @@ describe("credential redaction properties (#4271)", () => {
         // Only a secret that still stands in the input can be asked to disappear (a later
         // wrapper may cut an earlier secret's text apart).
         const present = secrets.filter((secret) => text.includes(secret.text));
-        expect(survivors(output, present, policy).length).toBe(0);
+        expect(survivors(output, present, policy)).toHaveLength(0);
       },
       { runs: 400, shrink: shrinkCase },
     );

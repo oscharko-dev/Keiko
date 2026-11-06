@@ -114,7 +114,7 @@ describe("resolveWithinWorkspace properties (#4271)", () => {
     checkProperty(
       (random) => random.string(characters("./\\:%~\u0000\uFF0E\u2024 aé\ud83d\ude00"), 0, 40),
       (path) => {
-        outcome(path);
+        expect(() => outcome(path)).not.toThrow();
       },
       { shrink: shrinkString },
     );

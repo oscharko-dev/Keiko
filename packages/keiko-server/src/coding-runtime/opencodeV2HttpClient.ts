@@ -1279,16 +1279,29 @@ async function pagedMessages(
         rows.concat(batch),
         batch.length < pageSize ? undefined : { request, base, response, cursors, signal },
       );
-    const anchorAt = anchorId === undefined ? -1 : batch.findIndex((row) => row.id === anchorId);
-    rows.push(...batch);
-    if (anchorAt >= 0) return anchoredWindow(rows, rows.length - batch.length + anchorAt);
-    if (batch.length < pageSize) {
-      rows.reverse();
-      return { messages: rows, truncated: false };
-    }
+    const settled = settledPage(rows, batch, pageSize, anchorId);
+    if (settled !== undefined) return settled;
     cursor = nextMessagesCursor(response, cursors);
   }
   return overBound(mode, rows);
+}
+
+// Adds one page (newest first) to `rows`. The read ends at the page that holds the anchor, or at a
+// short page, the oldest; `undefined` means the next page is needed.
+function settledPage(
+  rows: Readonly<Record<string, unknown>>[],
+  batch: readonly Readonly<Record<string, unknown>>[],
+  pageSize: number,
+  anchorId: string | undefined,
+): OpenCodeV2MessageWindow | undefined {
+  const anchorAt = anchorId === undefined ? -1 : batch.findIndex((row) => row.id === anchorId);
+  rows.push(...batch);
+  if (anchorAt >= 0) return anchoredWindow(rows, rows.length - batch.length + anchorAt);
+  if (batch.length < pageSize) {
+    rows.reverse();
+    return { messages: rows, truncated: false };
+  }
+  return undefined;
 }
 
 // The messages from the anchor to the newest, oldest first. `rows` run newest first.

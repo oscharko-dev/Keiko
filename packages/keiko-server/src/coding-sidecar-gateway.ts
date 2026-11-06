@@ -1833,16 +1833,30 @@ function resolveToolCatalogHandlerCoverage(
   return coverage;
 }
 
+/** What one gateway call of a sidecar turn is bound to, beside the parsed request itself. */
+interface ChatRequestBinding {
+  readonly modelAlias: string;
+  readonly cancellationSignal: AbortSignal;
+  readonly maxOutputTokens: number;
+  readonly correlationId: string | undefined;
+  readonly parentCorrelationId: string;
+  readonly reasoningEffort: ModelReasoningEffort | undefined;
+  readonly toolCatalogOffer: GatewayToolCatalogOffer;
+}
+
 function buildChatRequest(
   parsed: CodingSidecarGatewayChatCompletionRequest,
-  modelAlias: string,
-  cancellationSignal: AbortSignal,
-  maxOutputTokens: number,
-  correlationId: string | undefined,
-  parentCorrelationId: string,
-  reasoningEffort: ModelReasoningEffort | undefined,
-  toolCatalogOffer: GatewayToolCatalogOffer,
+  binding: ChatRequestBinding,
 ): GatewayCallRequest {
+  const {
+    modelAlias,
+    cancellationSignal,
+    maxOutputTokens,
+    correlationId,
+    parentCorrelationId,
+    reasoningEffort,
+    toolCatalogOffer,
+  } = binding;
   return {
     modelId: modelAlias,
     messages: parsed.messages,
@@ -3573,20 +3587,19 @@ function requestForGatewayDelivery(
   runId: string,
 ): GatewayCallRequest {
   const request: GatewayCallRequest = {
-    ...buildChatRequest(
-      parsed,
-      delivery.modelAlias,
-      signal,
-      delivery.maxOutputTokens,
-      ctx.correlationId,
-      runId,
-      delivery.reasoningEffort,
-      {
+    ...buildChatRequest(parsed, {
+      modelAlias: delivery.modelAlias,
+      cancellationSignal: signal,
+      maxOutputTokens: delivery.maxOutputTokens,
+      correlationId: ctx.correlationId,
+      parentCorrelationId: runId,
+      reasoningEffort: delivery.reasoningEffort,
+      toolCatalogOffer: {
         coverage: delivery.toolCatalogCoverage,
         offerLifetimeMs: delivery.offerLifetimeMs,
         toolProfile: delivery.toolProfile,
       },
-    ),
+    }),
     retryObserver,
     reasoningScope: `coding:${runId}`,
   };

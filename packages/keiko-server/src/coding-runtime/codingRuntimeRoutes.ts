@@ -16,8 +16,6 @@ import type {
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
-} from "@oscharko-dev/keiko-contracts";
-import type {
   CodingWorkbenchScheduleControlResponse,
   CodingWorkbenchSchedulesResponse,
 } from "@oscharko-dev/keiko-contracts";

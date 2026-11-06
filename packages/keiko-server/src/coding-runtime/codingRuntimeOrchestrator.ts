@@ -27,10 +27,12 @@ import type {
   SkillDiscoveryResultV1,
   WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
-import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import {
+  CODING_WORKBENCH_TASK_INTENT_MAX_CHARS,
+  isLegalCodingWorkbenchRuntimeTransition,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
-import { isLegalCodingWorkbenchRuntimeTransition } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   isDeliveredDraftDeliveryPhase,
