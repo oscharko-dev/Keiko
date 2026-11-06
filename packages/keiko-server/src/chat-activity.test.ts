@@ -89,13 +89,14 @@ describe("chat-activity.ts Activity Log proofs (#3532)", () => {
       redactionSecrets: [],
     });
     if (assembly === undefined) throw new Error("Missing fixture assembly");
-    logChatContextSelection(undefined, assembly, 0);
+    logChatContextSelection(undefined, assembly, 0, 2);
     const line = formatActivityLogProofLine(sink.events[0] ?? {});
     const persisted = expectActivityLogProof("chat.context.selected.budget", line);
     expect(persisted).toMatchObject({
       state: "verbatim",
       compactedHistoryMessages: 0,
       retainedHistoryMessages: 0,
+      historyDocumentCandidates: 2,
       tokensBefore: 0,
       tokensAfter: 0,
       tokensSaved: 0,

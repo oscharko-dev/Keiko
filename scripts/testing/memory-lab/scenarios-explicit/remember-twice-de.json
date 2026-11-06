@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "remember-twice-de",
+  "language": "de",
+  "class": "preference",
+  "difficulty": "plain",
+  "description": "The same statement said twice yields one memory.",
+  "truth": [
+    {
+      "key": "format-preference",
+      "seed": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "must": true,
+      "private": true,
+      "terms": [["Tabelle*"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Merke dir: Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "learner": []
+    },
+    {
+      "user": "Merke dir: Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Wie sollst du mir Zahlen zeigen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Tabelle*"]]
+      }
+    }
+  ]
+}

@@ -101,7 +101,8 @@ export type RetentionRefusal =
   | "expired"
   | "version-changed"
   | "workspace-changed"
-  | "window-shrunk";
+  | "window-shrunk"
+  | "model-route-changed";
 
 /**
  * Which audit check refused a copy as `schema-unknown`, so a refusal names the table or read that
@@ -125,6 +126,7 @@ export interface RetainedSessionSource {
 
 /** What a retained entry is valid for. A resume must present the same task, workspace and version. */
 export interface RetainedSessionBinding {
+  readonly continuationRouteDigest?: string | undefined;
   readonly taskId: string;
   /** A digest of the workspace identity (id and canonical root); never the root itself. */
   readonly workspaceKey: string;
@@ -450,10 +452,12 @@ class Store {
   }
 
   // A refusal that cannot become valid removes the entry; one that depends on the asking run only
-  // (a smaller window) leaves it for a run that can take it.
+  // (a smaller window, another model route) leaves it for a run that can take it.
   private refuse(taskId: string, reason: RetentionRefusal): CheckoutResult {
     const removed =
-      reason !== "window-shrunk" && removeUnlessHeld(join(this.root, retainedSessionKey(taskId)));
+      reason !== "window-shrunk" &&
+      reason !== "model-route-changed" &&
+      removeUnlessHeld(join(this.root, retainedSessionKey(taskId)));
     return { ok: false, reason, removed };
   }
 
@@ -470,6 +474,8 @@ class Store {
       manifest.workspaceKey !== source?.workspaceKey
     )
       return "workspace-changed";
+    if (binding.continuationRouteDigest !== manifest.continuationRouteDigest)
+      return "model-route-changed";
     if (binding.maxInputTokens < manifest.maxInputTokens) return "window-shrunk";
     return undefined;
   }
@@ -608,6 +614,9 @@ function copyVerdict(
 
 function validBinding(binding: RetainedSessionBinding): boolean {
   return (
+    (binding.continuationRouteDigest === undefined ||
+      (typeof binding.continuationRouteDigest === "string" &&
+        SHA256.test(binding.continuationRouteDigest))) &&
     TASK_ID.test(binding.taskId) &&
     SHA256.test(binding.workspaceKey) &&
     RUNTIME_VERSION.test(binding.runtimeVersion) &&
@@ -636,7 +645,9 @@ function compareKeys(a: string, b: string): number {
 
 function parseManifest(value: unknown): RetainedSessionManifest | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const keys = Object.keys(value).sort(compareKeys);
+  const keys = Object.keys(value)
+    .filter((key) => key !== "continuationRouteDigest")
+    .sort(compareKeys);
   if (keys.length !== MANIFEST_KEYS.length || keys.some((key, i) => key !== MANIFEST_KEYS[i])) {
     return undefined;
   }

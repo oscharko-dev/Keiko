@@ -708,6 +708,12 @@ including completeness and loss fields, remains within the existing 48-field lim
 the underlying recognized cause of `WorkspaceNotFoundError`, with error kind, frames and cause
 chain when available. It no longer substitutes a constant root-not-found label for every cause.
 
+Expected Memory capability states and salience extraction/capture summaries use the registered
+`server.diagnostic.observation` timeline at info, without an error kind or automatic failure incident
+(#4247). Producers explicitly declare `diagnosticOutcome: "routine"`; unclassified diagnostics and
+real model, vault or vector-index failures retain the failure channel. Shutdown start is info even
+with work in flight; faulted cleanup retains its warning and failure evidence.
+
 ### D7 — Process lifecycle events give the log a subject
 
 Before this contract, the log recorded what happened but never which process, running which
@@ -1685,8 +1691,12 @@ exhausted turn is reconstructable from `chat.response.streamed outputExhausted=t
 `gateway.retry.scheduled reason=output-exhausted-repair`, the second read and these two lines alone,
 and a turn that ended empty after reasoning from `gateway.retry.scheduled reason=empty-answer-repair`
 (the closed `reason` of that line is `retryable-error`, `output-exhausted-repair` or
-`empty-answer-repair`), the second read and the same two lines. Prior reasoning is never resent
-upstream (#3873, F23): `coding-sidecar.gateway.request-validated` records
+`empty-answer-repair`), the second read and the same two lines. Default provider policy strips prior
+reasoning (#3873, F23). Explicit `reasoningContinuation: "required-with-tools"` transports only
+admissible, complete native continuation state under the route and budget rules in ADR-0003/0137
+(#4059), independently of UI display. `coding-sidecar.gateway.request-validated` records only
+`reasoningContinuationMessages` and `reasoningContinuationBytes`; invalid required state is refused
+with closed `reasoning-continuation-invalid`. The same operation records
 `droppedReasoningMessageCount`, the number of prior assistant messages that carried nothing but
 reasoning and were dropped before the gateway request was built (the line's prompt estimate and
 `inputMessageCount` describe what is sent), a count and never the reasoning. The same line's

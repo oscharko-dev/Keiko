@@ -988,3 +988,8 @@ workspace cannot retarget a newly selected directory while its manifest fetch is
 watch subscriptions reconcile unattended changes after resuming under fresh subscriber authority.
 Editor watch notices use the selected locale; local-history detail and correlation references remain
 available in a collapsed Details disclosure.
+
+Routine Memory observations (#4247) use `server.diagnostic.observation` at info; no embedding
+configuration, policy blocks and salience summaries do not mean an internal failure. Actual model,
+vault and vector-index failures remain on `server.diagnostic.failure`. A normal shutdown starts at
+info; faulted cleanup still emits a warning with failure evidence.

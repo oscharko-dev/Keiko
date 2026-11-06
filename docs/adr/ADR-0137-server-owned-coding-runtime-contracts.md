@@ -985,7 +985,7 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   the gateway still parses reasoning and suppresses its display. Other surfaces do not receive it,
   also one that borrows the `coding-workbench` latency profile for its timeout floors (ADR-0003,
   #3873 F23).
-- **Qualified protocol continuation, independent of display.** The sidecar still discards
+- **Qualified protocol continuation, independent of display.** For default and shared-history profiles, the sidecar discards
   runtime-echoed reasoning fields and reasoning-only assistant messages rather than forwarding those
   fields directly (#3873 F23). Providers omit prior reasoning by default. An explicit
   `providers[].reasoningHistory: "required-with-tools"` requires all historical assistant reasoning
@@ -1022,6 +1022,19 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   validate reasoning history. Therefore this contract does not promise removal of failed reasoning
   that a runtime has relabelled as text. A runtime upgrade or repair needs its own failed-turn replay
   qualification; readable-text heuristics must not erase legitimate assistant content.
+- **Native session-owned protocol continuation.** The mutually exclusive provider contract
+  `reasoningContinuation: "required-with-tools"` uses the authenticated native session rather than
+  the shared transient history cache (#4059); `reasoningHistory` and `reasoningHistoryField` cannot
+  be combined with it. The qualified field is `reasoning_content`. Its context hook reads canonical
+  `session.context` and removes excluded rounds from the lowered context before provider serialization:
+  aborted, unfinished and foreign-model rounds with orphan results, and retains valid completed
+  length continuations and compaction checkpoints. The run registry and retained manifest bind
+  primary and required model routes; changed or unproven routes start fresh. This path preserves
+  existing native resume/fork, independently of display, while exact state must pass the current
+  credential floor and byte/context/spend admission. Missing, conflicting, secret-bearing or oversized
+  state fails closed. Evidence carries only registered counts and closed outcomes. The transient
+  history continuity limit and part-type qualification above apply to the shared policy; they do not
+  replace this native context qualification.
 - **Shown as what it is.** The sidecar hands reasoning to the managed runtime as
   `reasoning_content`; the runtime records it as a reasoning part, and the live safe-activity
   projection carries it beside its assistant message, never inside the answer. The timeline shows

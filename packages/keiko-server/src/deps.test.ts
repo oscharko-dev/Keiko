@@ -746,7 +746,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const shutdown = records.filter((event) => event.op === "server.runtime.shutdown");
     expect(shutdown).toHaveLength(2);
     expect(shutdown[0]).toMatchObject({
-      level: "warn",
+      level: "info",
       category: "process",
       extra: {
         state: "started",

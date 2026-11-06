@@ -41,7 +41,7 @@ function reusableScopedMemory(
     );
 }
 
-function reuseCapturedMemory(
+export function reuseCapturedMemory(
   vault: MemoryVaultStore,
   existing: MemoryRecord,
   record: MemoryRecord,
@@ -71,6 +71,28 @@ function insertOrReuseCanonicalMemory(
   return existing === undefined
     ? { memory: vault.insertMemory(record), inserted: true, promoted: false }
     : reuseCapturedMemory(vault, existing, record);
+}
+
+// The same statement said again, in the same words: it confirms what is there. Rejected and forgotten
+// bodies are not here; they stay with the suppression checks.
+export function confirmRestatedMemory(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+): PersistedCapturedMemory | undefined {
+  const bodyHash = memoryBodySuppressionHash(record.body);
+  const existing = vault
+    .listMemoriesByScope(record.scope, { status: ["proposed", "accepted"], includeExpired: true })
+    .find((memory) => memoryBodySuppressionHash(memory.body) === bodyHash);
+  return existing === undefined ? undefined : confirmExistingMemory(vault, existing, record);
+}
+
+function confirmExistingMemory(
+  vault: MemoryVaultStore,
+  existing: MemoryRecord,
+  record: MemoryRecord,
+): PersistedCapturedMemory {
+  vault.recordAccess([existing.id], record.updatedAt);
+  return reuseCapturedMemory(vault, existing, record);
 }
 
 export function persistCapturedMemory(

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6bef5aa3898ba467fa28ed7089f9ada1061dc68f17f894349653c189bf4b5715"
+    "catalogDigest": "088c843a34d350023e664681a53ada742d0b71d87f79b815545fe90e2694ec14"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 638,
-    "proofCount": 660,
-    "resolvedProofCount": 660,
-    "failureClassCount": 391,
+    "operationCount": 642,
+    "proofCount": 664,
+    "resolvedProofCount": 664,
+    "failureClassCount": 392,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -121,6 +121,7 @@
         "chat.creation.rejected",
         "chat.draft.operation",
         "chat.grounded-tool-round.completed",
+        "chat.messages.projected",
         "chat.regeneration.rejected",
         "chat.response.message",
         "chat.scope.update",
@@ -150,6 +151,7 @@
         "runs.apply.settled",
         "runs.patch.refused",
         "server.diagnostic.failure",
+        "server.diagnostic.observation",
         "skills.library.operation",
         "skills.workflow.attached",
         "sse.run-events.resume",
@@ -568,6 +570,8 @@
         "memory.embedding.invalidated",
         "memory.embedding.invalidation-failed",
         "memory.embedding.store-rejected",
+        "memory.explicit.forget",
+        "memory.explicit.remember",
         "repository.fingerprint-diff.completed",
         "search.answer.assessed",
         "search.citations.reconciled",
@@ -1106,6 +1110,7 @@
     "chat-content-policy": ["lifecycle-crash.dependency-failure"],
     "memory-audit-state-cache": ["lifecycle-crash.dependency-failure"],
     "memory-capture-novelty": ["memory-knowledge.dependency-failure"],
+    "memory-explicit-statement": ["memory-knowledge.dependency-failure"],
     "memory-embedding-invalidation": ["memory-knowledge.dependency-failure"],
     "memory-embedding-request": ["memory-knowledge.dependency-failure"],
     "memory-embedding-storage": ["memory-knowledge.rejection"],
@@ -1328,6 +1333,9 @@
     "chat.draft.operation.lifecycle": ["packages/keiko-server/src/chat-draft-routes.test.ts"],
     "chat.grounded-tool-round.completed.schedule": [
       "packages/keiko-server/src/chat-activity.test.ts"
+    ],
+    "chat.messages.projected.document-context": [
+      "packages/keiko-server/src/chat-message-projection.test.ts"
     ],
     "chat.regeneration.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.request.compatibility-retry.emitted-line": [
@@ -2619,6 +2627,8 @@
       "packages/keiko-server/src/memory-embedding.test.ts"
     ],
     "memory.embedding.store-rejected.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
+    "memory.explicit.forget.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
+    "memory.explicit.remember.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
     "native-file-dialog.selection.projected.counts": [
       "packages/keiko-server/src/native-file-dialog/route.test.ts"
     ],
@@ -2918,6 +2928,9 @@
       "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts",
       "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
       "packages/keiko-server/src/grounded-qa-multi-source.test.ts"
+    ],
+    "server.diagnostic.observation.activity-log-line": [
+      "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts"
     ],
     "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],
     "skills.library.operation.lifecycle": [

@@ -1,4 +1,4 @@
-import { conversationSystemPrompt } from "./conversation-prompt.js";
+import { chatMessagePromptContent, conversationSystemPrompt } from "./conversation-prompt.js";
 import { isLegacyEmptyAssistantPlaceholder } from "./assistant-response.js";
 import type { ChatMessage } from "./store/index.js";
 import type { ChatMessageContentPart, ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
@@ -45,10 +45,13 @@ export function gatewayMessagesForToolExchange(
   ];
 }
 
-function transcriptMessages(message: ChatMessage): GatewayConversationMessage[] | undefined {
+function transcriptMessages(
+  message: ChatMessage,
+  content: string,
+): GatewayConversationMessage[] | undefined {
   const exchanges = message.toolTranscript?.exchanges;
   if (exchanges === undefined || exchanges.length === 0) return undefined;
-  const turn: GatewayConversationMessage = { role: message.role, content: message.content };
+  const turn: GatewayConversationMessage = { role: message.role, content };
   const tools = exchanges.flatMap(gatewayMessagesForToolExchange);
   return message.role === "assistant" ? [...tools, turn] : [turn, ...tools];
 }
@@ -96,14 +99,15 @@ function messageForGateway(message: ChatMessage): GatewayConversationTurn | null
   if (message.role !== "user" && message.role !== "assistant") {
     return null;
   }
-  const verbatim = transcriptMessages(message);
+  const content = chatMessagePromptContent(message);
+  const verbatim = transcriptMessages(message, content);
   return {
     role: message.role,
     stableId: message.id,
     content:
       verbatim === undefined
-        ? message.content
-        : `${message.content}\n\n[Untrusted tool observations]\n${JSON.stringify(verbatim.filter((entry) => entry.toolCalls !== undefined || entry.role === "tool"))}`,
+        ? content
+        : `${content}\n\n[Untrusted tool observations]\n${JSON.stringify(verbatim.filter((entry) => entry.toolCalls !== undefined || entry.role === "tool"))}`,
     ...(verbatim === undefined ? {} : { verbatim }),
   };
 }

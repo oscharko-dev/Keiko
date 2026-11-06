@@ -458,14 +458,19 @@ async function main() {
       ui.baseUrl,
       projectA,
       rememberChatId,
-      "remember that project alpha uses pnpm for installs",
+      // Names the project, so the isolation check below still proves project scope: a clear
+      // statement stays private otherwise, and takes effect without a review (ADR-0146 D4b).
+      "remember about this project: project alpha uses pnpm for installs",
     );
     const proposalId = remember.memory?.actions?.[0]?.proposalId;
     assert(
       typeof proposalId === "string" && proposalId.length > 0,
-      "remember flow did not create a proposal",
+      "remember flow did not store a memory",
     );
-    await acceptProposal(ui.baseUrl, proposalId);
+    assert(
+      remember.memory?.actions?.[0]?.status === "accepted",
+      "a clear remember statement did not take effect at once",
+    );
 
     const retrievalChatId = await createChat(ui.baseUrl, projectA);
     const retrieval = await sendChat(
@@ -585,14 +590,13 @@ async function main() {
       ui.baseUrl,
       projectA,
       forgetChatId,
-      "remember that project alpha deploys happen on Tuesdays",
+      "remember about this project: project alpha deploys happen on Tuesdays",
     );
     const forgetId = forgetSeed.memory?.actions?.[0]?.proposalId;
     assert(
       typeof forgetId === "string" && forgetId.length > 0,
-      "forget flow did not create a proposal",
+      "forget flow did not store a memory",
     );
-    await acceptProposal(ui.baseUrl, forgetId);
     await forgetMemory(ui.baseUrl, forgetId);
     const afterForgetChatId = await createChat(ui.baseUrl, projectA);
     const afterForget = await memoryContext(
@@ -612,14 +616,13 @@ async function main() {
       ui.baseUrl,
       projectA,
       deleteChatId,
-      "remember that project alpha delete-me flag is disabled",
+      "remember about this project: project alpha delete-me flag is disabled",
     );
     const deleteId = deleteSeed.memory?.actions?.[0]?.proposalId;
     assert(
       typeof deleteId === "string" && deleteId.length > 0,
-      "delete flow did not create a proposal",
+      "delete flow did not store a memory",
     );
-    await acceptProposal(ui.baseUrl, deleteId);
     await deleteMemory(ui.baseUrl, deleteId);
     const deleted = await fetchMemory(ui.baseUrl, deleteId);
     assert(

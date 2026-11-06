@@ -427,6 +427,7 @@ describe("captureSalientFromTurn", () => {
     expect(diagnostics.record).toHaveBeenCalledWith(
       expect.objectContaining({
         errorClass: "SalienceCaptureSummary",
+        diagnosticOutcome: "routine",
         correlationId: "assistant-summary-turn",
       }),
     );
@@ -895,6 +896,7 @@ describe("captureSalientFromTurn", () => {
     expect(diagnosticCall).toBeDefined();
     const entry = diagnosticCall?.[0];
     expect(entry?.code).toBe("responseFormat=false:kind=parse-or-empty-output:rawItemCount=0");
+    expect(entry?.diagnosticOutcome).toBe("routine");
     expect(JSON.stringify(entry)).not.toContain("gpt-4o");
     expect(entry?.code).not.toMatch(/ /);
   });

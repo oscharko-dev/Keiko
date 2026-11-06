@@ -47,6 +47,7 @@ export type {
   MemoryGraphPrecondition,
   MemoryGraphMutationResult,
   MemoryMetadata,
+  MemoryForgottenStatement,
   MemoryTombstone,
   MemoryTombstoneCursor,
   MemoryTombstoneLedgerCursor,

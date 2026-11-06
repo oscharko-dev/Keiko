@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 391,
-  "completeClassCount": 391,
+  "supportedClassCount": 392,
+  "completeClassCount": 392,
   "completeness": "complete",
   "classes": [
     {
@@ -3938,6 +3938,7 @@
         "state": [
           "chat.context.selected",
           "chat.grounded-tool-round.completed",
+          "chat.messages.projected",
           "chat.response.message"
         ],
         "end": [],
@@ -3954,6 +3955,10 @@
           "mode": "correlation"
         },
         {
+          "op": "chat.messages.projected",
+          "mode": "none"
+        },
+        {
           "op": "chat.response.message",
           "mode": "correlation"
         },
@@ -3966,6 +3971,7 @@
       "resourceSignals": [
         "chat.context.selected",
         "chat.grounded-tool-round.completed",
+        "chat.messages.projected",
         "chat.response.message",
         "chat.turn.started"
       ],
@@ -3984,6 +3990,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "historyDocumentCandidates",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "imageCount",
@@ -4137,6 +4149,36 @@
             "causeChain": false
           },
           "proofIds": ["chat.grounded-tool-round.completed.schedule"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "chat.messages.projected",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "messageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "omittedDocumentCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.messages.projected.document-context"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -16672,6 +16714,18 @@
             },
             {
               "name": "offeredToolCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "reasoningContinuationBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "reasoningContinuationMessages",
               "type": "integer",
               "dataClass": "count",
               "required": false
@@ -37645,6 +37699,84 @@
       "completeness": "complete"
     },
     {
+      "failureClass": "memory-explicit-statement",
+      "requirementContract": "memory-explicit-statement",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["memory.explicit.forget", "memory.explicit.remember"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "memory.explicit.forget",
+          "mode": "none"
+        },
+        {
+          "op": "memory.explicit.remember",
+          "mode": "none"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["memory.explicit.forget", "memory.explicit.remember"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "memory.explicit.forget",
+          "owner": "keiko-server",
+          "category": "memory",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory.explicit.forget.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "memory.explicit.remember",
+          "owner": "keiko-server",
+          "category": "memory",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory.explicit.remember.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
       "failureClass": "memory-pressure",
       "requirementContract": "memory-pressure",
       "productSurfaces": ["keiko-cli"],
@@ -41860,10 +41992,10 @@
       "failureClass": "server-diagnostic",
       "requirementContract": "server-diagnostic",
       "productSurfaces": ["keiko-server"],
-      "lifecycleTransitions": ["failure"],
+      "lifecycleTransitions": ["failure", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": [],
+        "state": ["server.diagnostic.observation"],
         "end": [],
         "failure": ["server.diagnostic.failure"],
         "loss": []
@@ -41872,10 +42004,14 @@
         {
           "op": "server.diagnostic.failure",
           "mode": "correlation"
+        },
+        {
+          "op": "server.diagnostic.observation",
+          "mode": "correlation"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": [],
+      "resourceSignals": ["server.diagnostic.observation"],
       "replayReferences": [],
       "operations": [
         {
@@ -42124,6 +42260,66 @@
             "causeChain": true
           },
           "proofIds": ["server.diagnostic.failure.activity-log-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "server.diagnostic.observation",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "code",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "diagnosticErrorClass",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": true
+            },
+            {
+              "name": "diagnosticOperation",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": true
+            },
+            {
+              "name": "parentCorrelationId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "semanticCandidateCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "source",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["server.diagnostic.observation.activity-log-line"],
           "replayReferences": [],
           "missingObligations": []
         }

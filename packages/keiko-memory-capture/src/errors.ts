@@ -22,10 +22,15 @@ export type RejectionReason =
   | "raw-log-content"
   | "customer-identifier"
   | "denied-category"
+  // A memory that tells the assistant to drop its rules would reach every later answer as a fact.
+  | "instruction-override"
   | "empty-content"
   | "exceeds-length-limit"
   | "ambiguous-forget"
   | "ambiguous-update"
+  // A bare "Vergiss das" with no memory it could mean. The caller owns the conversation and decides
+  // whether the statement before it is what the person means.
+  | "forget-reference-unresolved"
   // The restricted sensitivity class is rejected by default at this layer. A future per-policy
   // option could lift this; for #207 the contract is "restricted is unrepresentable from text".
   | "restricted-sensitivity"

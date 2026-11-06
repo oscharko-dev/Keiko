@@ -59,6 +59,7 @@ export type ContinuityReason =
   | "version-changed"
   | "workspace-changed"
   | "window-shrunk"
+  | "model-route-changed"
   | "schema-unknown"
   | "grant-present"
   | "credential-present"
@@ -253,6 +254,7 @@ const SESSION_CONTINUITY_OPERATION = defineActivityLogOperation({
         "version-changed",
         "workspace-changed",
         "window-shrunk",
+        "model-route-changed",
         "schema-unknown",
         "grant-present",
         "credential-present",

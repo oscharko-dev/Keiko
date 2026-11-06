@@ -107,6 +107,7 @@ import type {
   MemoryEmbeddingInput,
   MemoryEmbeddingRow,
   MemoryEvent,
+  MemoryForgottenStatement,
   MemoryUpdatePreImage,
   MemoryGraphMutation,
   MemoryGraphPrecondition,
@@ -525,6 +526,62 @@ function buildTombstone(
     ...(options.reviewerId === undefined ? {} : { reviewerId: options.reviewerId }),
     ...(reason === undefined ? {} : { reason }),
   };
+}
+
+function buildStatementTombstone(
+  statement: MemoryForgottenStatement,
+  memoryId: MemoryId,
+  opts: ResolvedOptions,
+): MemoryTombstone {
+  gateMemoryScope(statement.scope);
+  const reason = sanitizeMemoryTombstoneReason(statement.reason);
+  return redactTombstone(
+    {
+      id: opts.newTombstoneId(),
+      memoryId,
+      scopeKind: scopeKindOf(statement.scope),
+      scopeCoordinate: scopeCoordinateOf(statement.scope),
+      type: "semantic-fact",
+      forgottenAt: statement.nowMs,
+      forgetterSurface: statement.forgetterSurface,
+      bodyHash: opts.bodySuppressionHash(statement.body),
+      ...(statement.reviewerId === undefined ? {} : { reviewerId: statement.reviewerId }),
+      ...(reason === undefined ? {} : { reason }),
+    },
+    opts.redactString,
+  );
+}
+
+// All or nothing, through the same commit hook as a deletion, so a tombstone the audit ledger cannot
+// record is not written.
+function recordForgottenStatementRows(
+  db: DatabaseSync,
+  statements: readonly MemoryForgottenStatement[],
+  opts: ResolvedOptions,
+): readonly MemoryTombstone[] {
+  const memoryId = opts.newTombstoneId() as MemoryId;
+  const prepared = statements.map((statement) => ({
+    statement,
+    tombstone: buildStatementTombstone(statement, memoryId, opts),
+  }));
+  const tombstones = prepared.map((entry) => entry.tombstone);
+  const events = tombstones.map((tombstone): MemoryEvent => ({
+    kind: "memory:tombstoned",
+    tombstone,
+  }));
+  db.exec("BEGIN");
+  try {
+    for (const { statement, tombstone } of prepared) {
+      insertTombstoneRow(db, tombstone, opts.cipher, statement.bodyEmbedding);
+    }
+    opts.beforeDeleteCommit(events);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  for (const event of events) opts.emit(event);
+  return tombstones;
 }
 
 function assertTombstoneMatchesRecord(record: MemoryRecord, tombstone: MemoryTombstone): void {
@@ -996,6 +1053,7 @@ type TombstoneAndAccessOps = Pick<
   MemoryVaultStore,
   | "listTombstonesByScope"
   | "listTombstonesPage"
+  | "recordForgottenStatements"
   | "hasForgetTombstoneForBody"
   | "hasSemanticallySimilarForgetTombstone"
   | "purgeTombstonesByScopeBefore"
@@ -1164,6 +1222,8 @@ function buildTombstoneAndAccessOps(
     },
     listTombstonesPage: (scopes, limit, after): MemoryTombstonePage =>
       validatedTombstonePage(db, opts, scopes, limit, after),
+    recordForgottenStatements: (statements): readonly MemoryTombstone[] =>
+      withSidecarHardening(opts, () => recordForgottenStatementRows(db, statements, opts)),
     hasForgetTombstoneForBody: (scope: MemoryScope, body: string): boolean => {
       gateMemoryScope(scope);
       const currentHash = opts.bodySuppressionHash(body);
