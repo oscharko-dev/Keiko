@@ -63,6 +63,14 @@ const nativeEntries = [
 ];
 const nativeSources = new Set(nativeEntries.map((entry) => entry.path));
 const validProperties = repositorySonarProperties;
+const capsuleRoutePaths = [
+  "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-actions.test.tsx",
+  "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-actions.tsx",
+  "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-detail-state.test.tsx",
+  "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-detail-state.ts",
+  "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-detail.test.tsx",
+  "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-detail.tsx",
+];
 
 function removePropertyPattern(properties, key, pattern) {
   return properties
@@ -189,6 +197,79 @@ describe("Sonar analysis scope", () => {
     expect(error).toHaveBeenCalledWith("sonar-inclusion-partition: FAIL - invalid path inventory");
   });
 
+  it("preserves all six literal capsule route paths in disjoint exact inclusions", () => {
+    const paths = [...capsuleRoutePaths, "src/[ab].ts", "src/space name.ts"];
+    expect(sonarInclusionPathsNeedFullScan(paths)).toBe(false);
+    const serialized = serializeSonarInclusionPartition(JSON.stringify(paths));
+    const partition = JSON.parse(serialized);
+    expect(partition).toEqual({
+      sources: [
+        "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-actions.tsx",
+        "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-detail-state.ts",
+        "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-detail.tsx",
+        "src/[ab].ts",
+        "src/space name.ts",
+      ],
+      tests: [
+        "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-actions.test.tsx",
+        "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-detail-state.test.tsx",
+        "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-detail.test.tsx",
+      ],
+    });
+    expect(new Set([...partition.sources, ...partition.tests])).toEqual(new Set(paths));
+    expect(partition.sources.some((path) => partition.tests.includes(path))).toBe(false);
+    expect(partition.sources).not.toContain("src/a.ts");
+    expect(partition.sources).not.toContain("src/b.ts");
+    const log = vi.fn();
+    const error = vi.fn();
+    expect(executeSonarInclusionSafetyCli({ source: JSON.stringify(paths), log, error })).toBe(0);
+    expect(log).toHaveBeenCalledWith("no");
+    log.mockClear();
+    expect(executeSonarInclusionPartitionCli({ source: JSON.stringify(paths), log, error })).toBe(
+      0,
+    );
+    expect(log).toHaveBeenCalledWith(serialized);
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("passes literal route inclusions through the existing scanner shell arguments unchanged", () => {
+    const partition = partitionSonarInclusions([...capsuleRoutePaths, "src/space name.ts"]);
+    const setupStart = localSonarGate.indexOf("scanner_args=()");
+    const setupEnd = localSonarGate.indexOf("# SonarQube is already started", setupStart);
+    expect(setupStart).toBeGreaterThanOrEqual(0);
+    expect(setupEnd).toBeGreaterThan(setupStart);
+    const argumentSetup = localSonarGate.slice(setupStart, setupEnd);
+    const argumentExpansion = '${scanner_args[@]+"${scanner_args[@]}"}';
+    expect(localSonarGate).toContain(argumentExpansion);
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          "analysis_scope=changed",
+          "changed_scope=changed",
+          "checkout_id=fixture",
+          'source_inclusions="$1"',
+          'test_inclusions="$2"',
+          argumentSetup,
+          `printf '%s\\0' ${argumentExpansion}`,
+        ].join("\n"),
+        "local-sonar-inclusion-fixture",
+        partition.sources.join(","),
+        partition.tests.join(","),
+      ],
+      { encoding: "utf8", timeout: 5_000 },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout.split("\0").filter(Boolean)).toEqual([
+      `-Dsonar.inclusions=${partition.sources.join(",")}`,
+      `-Dsonar.test.inclusions=${partition.tests.join(",")}`,
+    ]);
+  });
+
   it("routes every inexact inclusion inventory to the full-scan fallback", () => {
     expect(sonarInclusionPathsNeedFullScan(["src/main.ts"])).toBe(false);
     for (const path of [
@@ -196,8 +277,11 @@ describe("Sonar analysis scope", () => {
       "src/trailing.ts ",
       "src/trailing.ts\u001f",
       "src\\literal.ts",
-      "src/[dynamic].ts",
       "src/comma,name.ts",
+      "src/star*.ts",
+      "src/question?.ts",
+      "src/line\nfeed.ts",
+      "src/carriage\rreturn.ts",
     ]) {
       expect(sonarInclusionPathsNeedFullScan([path])).toBe(true);
     }

@@ -92,8 +92,15 @@ single MINOR of this class fails the required `ci` context.
    revoking each other's in-flight token.
 5. Prints the findings that land **on files this branch changed against `origin/dev`**, and exits
    non-zero if there are any. If a changed path cannot be expressed as an exact Sonar inclusion
-   (for example, a Next.js `[capsuleId]` route), analysis safely expands to the whole project while
-   the report and verdict remain losslessly filtered to the changed-file set.
+   (for example, a filename containing a literal `*`, `?`, comma, backslash, or line break), analysis
+   safely expands to the whole project while the report and verdict remain losslessly filtered to
+   the changed-file set.
+
+Next.js route brackets such as `[capsuleId]` remain literal in both inclusion properties. Sonar
+supports only `*`, `**`, and `?` as wildcards, and its
+[matching implementation](https://github.com/SonarSource/sonar-plugin-api/blob/13.8.0.4399/plugin-api/src/main/java/org/sonar/api/utils/WildcardPattern.java)
+escapes brackets. The runner passes each complete property as one quoted argument, preserving all
+selected route files in the separate source and test inventories.
 
 ```bash
 npm run gates:sonar          # findings on your diff — the pre-push question
@@ -110,9 +117,9 @@ keeps enough analyzer headroom while leaving space for the concurrently required
 inside Docker Desktop's common 8 GiB VM; the scanner's automatic heap choice can otherwise exceed
 the VM limit and terminate the bridge before it reports findings.
 
-A whole-project scan — the fallback when a changed path such as a Next.js `[capsuleId]` route
-cannot be expressed as an exact inclusion — needs more than 4.5 GiB on this repository. On a
-machine whose Docker VM has the room, raise the bridge heap for that run:
+A whole-project scan — requested with `--all` or required when a changed path cannot be expressed
+as an exact inclusion — needs more than 4.5 GiB on this repository. On a machine whose Docker VM
+has the room, raise the bridge heap for that run:
 
 ```bash
 KEIKO_LOCAL_SONAR_NODE_MAXSPACE=12288 npm run gates:sonar
