@@ -878,6 +878,17 @@ turn read each token of the same ranges, so created keys are never lost to compa
 `succeeded-unconfirmed` record or an in-flight write blocks every further write of the turn, batch
 or not, so an uncertain item still stops the draft (#2953).
 
+An interrupted Jira draft retains already parsed acknowledgement keys separately as bounded
+`draftProgress` on its existing parent Chat exchange. The server-private snapshot reuses the
+existing draft result projection and its counts/ranges, runs through the same credential/content
+floor and admitted result schema, and preserves an acknowledged but unread-back key as uncertain.
+The catalog's timeout/cancellation envelope and null data stay unchanged. Only this invocation's
+captured receipts are displayed in the deadline answer, live continuation, history and compaction;
+no recovery read or repeated write runs after expiry. The mutation journal and Activity Log keep
+no issue keys or provider bodies. This additive transcript field is readable by current readers;
+older builds with exact-key transcript validation cannot read affected rows without an explicit
+compatible migration, so rollback compatibility is not implied.
+
 *Deselection.* The approving human may deselect items; the deselection is bound into the approval
 proof and extends to every item that depends on a deselected one. The stored approval view carries
 it as `excludedItemRefs` (a subset of the draft, so no count of its own), and the transcript store admits exactly one

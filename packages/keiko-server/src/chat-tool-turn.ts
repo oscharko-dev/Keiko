@@ -79,7 +79,10 @@ import {
 import { isToolCallingVerificationFresh } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ToolConsumerContext } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
-import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  CatalogJsonObject,
+  ToolResultEnvelope,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ChatMessage } from "./store/index.js";
 import {
   CHAT_TOOL_TRANSCRIPT_BASE_BYTES,
@@ -218,6 +221,24 @@ function usableModelObservation(
 }
 
 /** Shared bounded tool loop; provider adapters own authority, consent and mutation settlement. */
+interface ActiveDraftProgress {
+  readonly actionId: string;
+  invocationId?: string;
+  snapshot?: () => CatalogJsonObject;
+}
+function interruptedDraftProgress(
+  progress: ActiveDraftProgress,
+  result: ToolResultEnvelope,
+  mutationOutcome: ChatToolExchange["mutationOutcome"],
+): CatalogJsonObject | undefined {
+  return result.data === null &&
+    progress.snapshot !== undefined &&
+    progress.invocationId === result.invocationId &&
+    mutationOutcome !== undefined &&
+    mutationOutcome !== "not-dispatched"
+    ? progress.snapshot()
+    : undefined;
+}
 export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolConsumerContext> {
   private readonly counters: RunCounters = {
     iterations: 0,
@@ -236,6 +257,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private currentToolResponse: NormalizedResponse | undefined;
   private readonly settledExchanges: ChatToolExchange[] = [];
   private usableObservation = false;
+  /** One active serial dispatch, retired before any later turn can reuse its private snapshot. */
+  private activeDraftProgress: ActiveDraftProgress | undefined;
   private readonly callIds = new Set<string>();
   private notify: ((message: ChatMessage) => void | Promise<void>) | undefined;
   private uncertainBudget = false;
@@ -280,6 +303,20 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       ...options.context,
       signal: AbortSignal.any([options.context.signal, this.abortController.signal]),
       knowledgeReviewModelId: (): string | undefined => this.activeModelId,
+      retainDraftProgress: (
+        actionId: string,
+        invocationId: string,
+        snapshot: () => CatalogJsonObject,
+      ): void => {
+        const active = this.activeDraftProgress;
+        requireDispatch(
+          active?.actionId === actionId && active.snapshot === undefined,
+          "invalid",
+          "recovery-required",
+        );
+        active.invocationId = invocationId;
+        active.snapshot = snapshot;
+      },
       confirmModelOperation: (response: NormalizedResponse): void => {
         const confirm = this.nestedModelConfirmations.get(response);
         this.nestedModelConfirmations.delete(response);
@@ -528,6 +565,26 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
           }),
     };
   }
+  private async dispatchWithProgress(
+    invocation: NonNullable<NormalizedResponse["toolCalls"][number]["invocation"]>,
+    identity: string,
+  ): Promise<{
+    outcome: Awaited<ReturnType<CatalogToolBinder["dispatch"]>>;
+    progress: ActiveDraftProgress;
+  }> {
+    const progress: ActiveDraftProgress = { actionId: identity };
+    this.activeDraftProgress =
+      invocation.toolRef.canonicalId === "keiko.jira.draft" ? progress : undefined;
+    try {
+      const outcome = await this.binder.dispatch(invocation, {
+        actionId: identity,
+        idempotencyKey: identity,
+      });
+      return { outcome, progress };
+    } finally {
+      this.activeDraftProgress = undefined;
+    }
+  }
   private async dispatch(
     call: NormalizedResponse["toolCalls"][number],
     origin?: "runtime",
@@ -548,10 +605,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     );
     await this.publish();
     const identity = sha256Hex(canonicalise({ messageId: message.id, callId: call.id }));
-    const outcome = await this.binder.dispatch(call.invocation, {
-      actionId: identity,
-      idempotencyKey: identity,
-    });
+    const { outcome, progress } = await this.dispatchWithProgress(call.invocation, identity);
     requireDispatch(outcome.kind === "settled", "invalid", "recovery-required");
     this.refreshWriteApproval(call.id);
     const descriptor = managed.catalog.descriptors.find(
@@ -560,12 +614,14 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     requireDispatch(descriptor !== undefined, "invalid", "recovery-required");
     this.budget.acceptReceipt(outcome.receipt, descriptor);
     const mutationOutcome = this.observedMutation(call, identity, outcome.result);
+    const draftProgress = interruptedDraftProgress(progress, outcome.result, mutationOutcome);
     deps.store.updateChatToolTranscript(
       message.id,
       {
         kind: "settled",
         callId: call.id,
         result: outcome.result,
+        ...(draftProgress === undefined ? {} : { draftProgress }),
         binding: {
           descriptor,
           projectionDigest: managed.projection.projectionDigest,

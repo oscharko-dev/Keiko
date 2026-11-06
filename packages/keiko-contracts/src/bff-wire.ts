@@ -530,6 +530,8 @@ export interface ChatToolExchange {
     readonly origin?: "runtime" | undefined;
   };
   readonly result?: ToolResultEnvelope | undefined;
+  /** Bound server-owned draft receipts retained beside a cancelled result, never inside it. */
+  readonly draftProgress?: Readonly<Record<string, unknown>> | undefined;
   readonly approval?: ChatToolWriteApprovalView | undefined;
   /** Durable remote-effect knowledge is independent from transport cancellation or denial. */
   readonly mutationOutcome?: JiraMutationOutcome | undefined;
@@ -1243,12 +1245,25 @@ function isDesktopChatWriteApprovalData(data: unknown): boolean {
   );
 }
 
+function isDesktopChatDraftProgress(name: unknown, progress: unknown): boolean {
+  if (progress === undefined) return true;
+  const parsed = parseSafely(() => ({
+    ok: true,
+    value:
+      name === "jira_draft" &&
+      isWireRecord(progress) &&
+      new TextEncoder().encode(JSON.stringify(progress)).length <= 262144,
+  }));
+  return parsed.ok && parsed.value;
+}
 function isDesktopChatStreamedExchange(exchange: unknown): boolean {
   return (
     isWireRecord(exchange) &&
-    exactKeys(exchange, ["call", "result", "mutationOutcome"], "exchange").length === 0 &&
+    exactKeys(exchange, ["call", "result", "mutationOutcome", "draftProgress"], "exchange")
+      .length === 0 &&
     isChatToolCallView(exchange.call) &&
     (exchange.result === undefined || isWireRecord(exchange.result)) &&
+    isDesktopChatDraftProgress(exchange.call.name, exchange.draftProgress) &&
     (exchange.mutationOutcome === undefined || typeof exchange.mutationOutcome === "string")
   );
 }

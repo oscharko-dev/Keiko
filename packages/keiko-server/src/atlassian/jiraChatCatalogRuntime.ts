@@ -202,6 +202,9 @@ function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
         arguments: draft.arguments,
         deselected: approval?.excludedItemRefs ?? [],
         context,
+        retainProgress: (snapshot): void => {
+          context.retainDraftProgress?.(intent.invocationId, context.invocationId, snapshot);
+        },
         connection: jiraChatDraftConnection(deps, current.credential),
         openTrace: () => openTraceSession(deps, turn),
         // A draft a human reviewed runs as approved; the advisory guides an unreviewed one only.

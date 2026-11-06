@@ -1,6 +1,6 @@
 // Extends the existing Jira browser fixture. Only model/Jira wire responses are scripted;
 // the browser, BFF, Knowledge store/tools, managed MCP, approval and journal stay real.
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { updateCapsuleState } from "../../../packages/keiko-local-knowledge/dist/index.js";
 import { seedCapsuleWithVectors } from "../../../packages/keiko-local-knowledge/dist/testing.js";
@@ -116,6 +116,16 @@ function fieldsFor(typeId) {
   ];
 }
 
+async function holdDeadlineConfirmation(directory, response, path) {
+  const control = join(directory, "draft-deadline.json");
+  if (!existsSync(control)) return false;
+  const { holdKey } = JSON.parse(readFileSync(control, "utf8"));
+  if (!path.endsWith(`/issue/${holdKey}`)) return false;
+  writeFileSync(join(directory, "draft-confirmation-held.json"), JSON.stringify({ holdKey }));
+  await new Promise((resolve) => response.once("close", resolve));
+  return true;
+}
+
 export function createBacklogJiraRoutes(directory, observation, bodyOf, json) {
   const issues = [];
   const persist = () =>
@@ -129,6 +139,7 @@ export function createBacklogJiraRoutes(directory, observation, bodyOf, json) {
         observation.counts.confirmations++;
         observation.persist();
       }
+      if (await holdDeadlineConfirmation(directory, response, path)) return true;
       json(response, 200, value);
       return true;
     }
@@ -201,7 +212,7 @@ function description(sections, unit) {
     )
     .join("\n\n");
 }
-function stagedItems(results) {
+function stagedItems(results, deadline) {
   const units = completed(results, "knowledge_requirements")?.items;
   if (units?.length !== 2) throw new TypeError("Missing two original requirement observations");
   return {
@@ -211,9 +222,9 @@ function stagedItems(results) {
         projectId: "10000",
         issueTypeId: EPIC,
         fields: {
-          summary: "Migration readiness",
+          summary: deadline ? "Migration deadline readiness" : "Migration readiness",
           description: description(EPIC_SECTIONS, units[0]),
-          [EPIC_NAME]: "Migration readiness",
+          [EPIC_NAME]: deadline ? "Migration deadline readiness" : "Migration readiness",
         },
         requirementIds: [units[0].reference],
       },
@@ -222,7 +233,7 @@ function stagedItems(results) {
         projectId: "10000",
         issueTypeId: TASK,
         fields: {
-          summary: "Validate migration",
+          summary: deadline ? "Validate migration after deadline" : "Validate migration",
           description: description(TASK_SECTIONS, units[1]),
         },
         requirementIds: [units[1].reference],
@@ -236,7 +247,7 @@ function reference(results) {
   if (stage === undefined) throw new TypeError("Missing actual staged draft receipt");
   return { draftId: stage.draftId, draftDigest: stage.draftDigest };
 }
-function nextBacklogCall(current, all) {
+function nextBacklogCall(current, all, deadline) {
   if (!completed(current, "knowledge_documents", (data) => data?.view === "read"))
     return ["knowledge_documents", { view: "read", ...documentRef(all) }];
   if (!completed(current, "knowledge_requirements"))
@@ -253,7 +264,8 @@ function nextBacklogCall(current, all) {
     )
       return ["jira_create_fields", { projectKey: "KEIKO", issueTypeId }];
   }
-  if (!completed(current, "jira_draft_stage")) return ["jira_draft_stage", stagedItems(all)];
+  if (!completed(current, "jira_draft_stage"))
+    return ["jira_draft_stage", stagedItems(all, deadline)];
   if (!completed(current, "jira_draft")) return ["jira_draft", reference(all)];
   return undefined;
 }
@@ -274,7 +286,8 @@ function replayReference(text) {
 }
 
 function nextJourneyCall(text, current, all) {
-  if (!text.includes("JIRA_E2E_REPLAY")) return nextBacklogCall(current, all);
+  if (!text.includes("JIRA_E2E_REPLAY"))
+    return nextBacklogCall(current, all, text.includes("JIRA_E2E_DEADLINE"));
   return completed(current, "jira_draft") ? undefined : ["jira_draft", replayReference(text)];
 }
 

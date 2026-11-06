@@ -57,6 +57,10 @@ export interface JiraChatCatalogContext extends ToolConsumerContext {
   readonly chatId: string;
   readonly authorityReference: EditorAgentGovernedAuthorityReference;
   readonly userMessageId?: string;
+  /** Server-private pure snapshot; never serialized into model/MCP arguments. */
+  readonly retainDraftProgress?:
+    | ((actionId: string, invocationId: string, snapshot: () => CatalogJsonObject) => void)
+    | undefined;
 }
 export interface JiraChatCatalogAction extends ToolConsumerActionIdentity {
   readonly tool: JiraManagedReadToolName | JiraMutationOperation | KnowledgeChatToolName;

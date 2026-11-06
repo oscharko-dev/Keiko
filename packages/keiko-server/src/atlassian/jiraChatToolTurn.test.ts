@@ -461,16 +461,19 @@ function fixture(
 }
 // #4175: a turn that reaches its deadline after settling tool calls answers from its transcript on
 // the buffered and the streamed path; the deadline admits no further model or tool work.
-function stallAfterFirstRound(f: ReturnType<typeof fixture>): void {
+function stallAfterFirstRound(f: ReturnType<typeof fixture>, onStalled?: () => void): void {
   const original = f.model.callStream;
   if (original === undefined) throw new Error("Missing stream port");
   let rounds = 0;
   const stalled = (signal: AbortSignal): AsyncIterable<GatewayStreamChunk> => ({
     async *[Symbol.asyncIterator](): AsyncIterator<GatewayStreamChunk> {
       await new Promise<never>((_resolve, reject) => {
-        signal.addEventListener("abort", () => {
+        const abort = (): void => {
           reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
-        });
+        };
+        if (signal.aborted) abort();
+        else signal.addEventListener("abort", abort, { once: true });
+        onStalled?.();
       });
       yield* [];
     },
@@ -517,6 +520,29 @@ it.each([false, true])(
   },
 );
 
+/** Drive the existing authority deadline without racing catalog, approval or remote latency. */
+function controlledTurnDeadline(runtimeMs: number): { readonly expire: () => void } {
+  let clock = Date.now();
+  const timeouts: AbortController[] = [];
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  vi.spyOn(Date, "now").mockImplementation(() => clock);
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+    if (milliseconds > runtimeMs) return timeout(milliseconds);
+    const controller = new AbortController();
+    timeouts.push(controller);
+    return controller.signal;
+  });
+  return {
+    expire: (): void => {
+      clock += runtimeMs;
+      for (const controller of timeouts)
+        controller.abort(
+          new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+        );
+    },
+  };
+}
+
 // #4175 acceptance: "A stopped or exhausted turn lists exactly the issue keys Jira shows as created."
 // A backlog draft runs, then the turn reaches its deadline before the model answers: the answer is
 // written from the transcript and names every key the synthetic Jira holds, and no other.
@@ -524,10 +550,15 @@ it.each([false, true])(
   "names exactly the keys Jira created when the turn reaches its deadline after a draft (stream=%s)",
   async (stream) => {
     const f = fixture(true, undefined, true, false, true);
+    const deadline = controlledTurnDeadline(3_000);
     Object.assign(f.deps, {
       chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 3_000 },
     });
-    stallAfterFirstRound(f);
+    let enteredAnswer!: () => void;
+    const answering = new Promise<void>((resolve) => {
+      enteredAnswer = resolve;
+    });
+    stallAfterFirstRound(f, enteredAnswer);
     const response = mockResponse({ captureBody: true });
     const ctx = {
       ...sendContext(f, `deadline-draft-${String(stream)}`),
@@ -539,13 +570,155 @@ it.each([false, true])(
     void pending.catch(() => undefined);
     await awaitReadGrantedForWrite(f);
     await decidePendingWrite(f, "approve");
+    await answering;
+    const exchange = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0];
+    expect(exchange?.mutationOutcome).toBe("succeeded");
+    expect(exchange?.result?.status).toBe("completed");
+    expect(f.writes()).toBe(DRAFT_ARGUMENTS.items.length);
+    const dispatched = f.requests();
+    deadline.expire();
     await pending;
+    expect(f.requests()).toBe(dispatched);
     const inJira = f.jira.issues.map((issue) => issue.key).sort();
     expect(inJira.length).toBeGreaterThan(0);
     const [, assistant] = f.deps.store.listMessages(f.chatId);
     expect(assistant?.content).toContain("this turn reached its time limit");
     const named = [...new Set(assistant?.content.match(/SYN-\d+/gu) ?? [])].sort();
     expect(named).toEqual(inJira);
+  },
+);
+
+type DraftDeadlinePhase = "response-unobserved" | "acknowledged" | "settled";
+function latestDraftExchange(f: ReturnType<typeof fixture>): ChatToolExchange | undefined {
+  return f.deps.store
+    .listMessages(f.chatId)
+    .filter((message) => message.role === "user")
+    .at(-1)?.toolTranscript?.exchanges[0];
+}
+function firstDraftJournal(
+  f: ReturnType<typeof fixture>,
+): ReturnType<NonNullable<UiHandlerDeps["store"]["chatToolMutations"]>["find"]> {
+  const user = f.deps.store.listMessages(f.chatId)[0];
+  const call = user?.toolTranscript?.exchanges[0]?.call;
+  if (user === undefined || call === undefined) return undefined;
+  const invocationId = sha256Hex(canonicalise({ messageId: user.id, callId: call.id }));
+  return f.deps.store.chatToolMutations?.find(
+    sha256Hex(canonicalise({ draft: invocationId, ref: "epic" })),
+  );
+}
+function isDraftCreateRequest(
+  input: Parameters<typeof fetch>[0],
+  init: Parameters<typeof fetch>[1],
+): boolean {
+  const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+  const url = input instanceof Request ? input.url : input;
+  return method === "POST" && new URL(url).pathname.endsWith("/issue");
+}
+function draftDeadlinePhaseMatches(
+  f: ReturnType<typeof fixture>,
+  phase: DraftDeadlinePhase,
+  input: Parameters<typeof fetch>[0],
+  init: Parameters<typeof fetch>[1],
+): boolean {
+  if (phase === "response-unobserved") return isDraftCreateRequest(input, init);
+  const journal = firstDraftJournal(f);
+  return phase === "acknowledged"
+    ? journal?.phase === "acknowledged"
+    : journal?.phase === "settled" && journal.outcome === "succeeded";
+}
+function holdDraftPhase(
+  f: ReturnType<typeof fixture>,
+  phase: DraftDeadlinePhase,
+): {
+  readonly entered: Promise<void>;
+  readonly release: () => void;
+  readonly restore: () => void;
+} {
+  const original = f.jira.fetch.getMockImplementation();
+  if (original === undefined) throw new TypeError("Missing Jira remote");
+  let entered!: () => void;
+  let release!: () => void;
+  const enteredPromise = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let holding = false;
+  f.jira.fetch.mockImplementation(async (input, init) => {
+    const matches = draftDeadlinePhaseMatches(f, phase, input, init);
+    if (holding || !matches) return original(input, init);
+    holding = true;
+    // An unobserved HTTP response is a real external effect, but proves no key to Keiko.
+    const response = phase === "response-unobserved" ? await original(input, init) : undefined;
+    entered();
+    await held;
+    return response ?? original(input, init);
+  });
+  return {
+    entered: enteredPromise,
+    release,
+    restore: (): void => {
+      f.jira.fetch.mockImplementation(original);
+    },
+  };
+}
+
+it.each(
+  (["response-unobserved", "acknowledged", "settled"] as const).flatMap((phase) =>
+    [false, true].map((stream) => ({ phase, stream })),
+  ),
+)(
+  "keeps observed draft keys across a controlled $phase deadline (stream=$stream)",
+  async ({ phase, stream }) => {
+    const f = fixture(true, undefined, true, false, true);
+    Object.assign(f.deps, { chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 3_000 } });
+    const deadline = controlledTurnDeadline(3_000);
+    stallAfterFirstRound(f);
+    const held = holdDraftPhase(f, phase);
+    const response = mockResponse({ captureBody: true });
+    const clientTurnId = `draft-${phase}-${String(stream)}`;
+    const ctx = { ...sendContext(f, clientTurnId), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await awaitReadGrantedForWrite(f);
+    await decidePendingWrite(f, "approve");
+    await held.entered;
+    expect(f.writes()).toBe(1);
+    expect(f.jira.issues.map((issue) => issue.key)).toEqual(["SYN-1"]);
+    expect(firstDraftJournal(f)?.phase).toBe(
+      phase === "response-unobserved" ? "dispatched" : phase,
+    );
+    const dispatched = f.requests();
+    try {
+      deadline.expire();
+      await pending;
+      const exchange = latestDraftExchange(f);
+      expect(exchange?.result).toMatchObject({ status: "timeout", data: null });
+      const assistant = f.deps.store.listMessages(f.chatId).at(-1);
+      const keys = [...new Set(assistant?.content.match(/SYN-\d+/gu) ?? [])].sort();
+      expect(keys).toEqual(phase === "response-unobserved" ? [] : ["SYN-1"]);
+      expect(f.requests()).toBe(dispatched);
+      expect(f.writes()).toBe(1);
+      if (stream) expect(response.body()).toContain("event: done");
+    } finally {
+      held.release();
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(f.requests()).toBe(dispatched);
+    expect(f.writes()).toBe(1);
+    expect(latestDraftExchange(f)?.result).toMatchObject({ status: "timeout", data: null });
+    held.restore();
+    // Retrying this exact delivered turn reuses its receipt, without another model/tool effect.
+    const calls = f.calls.length;
+    expect((await handleSendDesktopChat(sendContext(f, clientTurnId), f.deps)).status).toBe(200);
+    expect(f.requests()).toBe(dispatched);
+    expect(f.writes()).toBe(1);
+    expect(f.calls).toHaveLength(calls);
   },
 );
 

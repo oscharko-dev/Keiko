@@ -74,7 +74,7 @@ export function chatToolDraftReceipts(
   // Read defensively: a transcript stored by an older build is data, not a validated envelope.
   const result = record(exchange.result);
   if (record(result?.toolRef)?.canonicalId !== DRAFT_TOOL_ID) return undefined;
-  const receipts = draftRowReceipts(record(result?.data));
+  const receipts = draftRowReceipts(record(result?.data ?? exchange.draftProgress));
   return receipts.length === 0 ? undefined : receipts;
 }
 /** The receipts of a result's key ranges and of its rows; none for a result without rows. */

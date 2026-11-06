@@ -45,7 +45,13 @@ export function gatewayMessagesForToolExchange(
       content: JSON.stringify(
         exchange.mutationOutcome === undefined
           ? result
-          : { result, mutationOutcome: exchange.mutationOutcome },
+          : {
+              result,
+              mutationOutcome: exchange.mutationOutcome,
+              ...(exchange.draftProgress === undefined
+                ? {}
+                : { draftProgress: exchange.draftProgress }),
+            },
       ),
     },
   ];

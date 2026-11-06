@@ -156,6 +156,17 @@ reloaded history, compaction, and result card. Approval state reports the decisi
 not imply a remote effect. A failed UI decision request requires an explicit state refresh;
 it never causes an automatic mutation or approval POST retry.
 
+An interrupted Jira draft retains already parsed acknowledgement keys separately as bounded
+`draftProgress` on its existing parent Chat exchange. The server-private snapshot reuses the
+existing draft result projection and its counts/ranges, runs through the same credential/content
+floor and admitted result schema, and preserves an acknowledged but unread-back key as uncertain.
+The catalog's timeout/cancellation envelope and null data stay unchanged. Only this invocation's
+captured receipts are displayed in the deadline answer, live continuation, history and compaction;
+no recovery read or repeated write runs after expiry. The mutation journal and Activity Log keep
+no issue keys or provider bodies. This additive transcript field is readable by current readers;
+older builds with exact-key transcript validation cannot read affected rows without an explicit
+compatible migration, so rollback compatibility is not implied.
+
 When a Jira acknowledgement arrives after the Chat has already ended, message projection
 reads the existing durable turn journal and matches the original message, invocation,
 operation and exact arguments. It folds that later observation beside the unchanged

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "105a8fb71dc759b3eb5cc4e18a79cf1b2e23197aeb1366785403faeea44f5680",
+    "catalogDigest": "ccbca353caf09ca9a5f895d12fa4dbc59a78d96a06f7e9b812b3f353956182a3",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3488,6 +3488,11 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "draftReceiptCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "correlation",
@@ -3496,8 +3501,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-transcript.updated.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:82",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:505"]
+        "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:83",
+        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:599"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -60434,6 +60439,12 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "draftReceiptCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "exchangeCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -109561,7 +109572,7 @@
     {
       "op": "chat.tool-transcript.updated",
       "category": "process",
-      "site": "packages/keiko-server/src/store/chatToolTranscript.ts:85",
+      "site": "packages/keiko-server/src/store/chatToolTranscript.ts:86",
       "package": "keiko-server"
     },
     {
@@ -112014,7 +112025,7 @@
     {
       "op": "jira.mutation-execution-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:298",
+      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:300",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

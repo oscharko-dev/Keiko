@@ -18,7 +18,8 @@ export interface JiraBrowserFixture {
       | "unavailable"
       | "accessibility-en"
       | "accessibility-de"
-      | "backlog",
+      | "backlog"
+      | "deadline",
       Chat
     >
   >;

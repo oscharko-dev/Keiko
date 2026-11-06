@@ -493,6 +493,7 @@ async function createWithMetadata(
   create: CreateRequest,
   metadata: readonly JiraFieldMetadata[],
   policy: MutationPolicy,
+  onAcknowledged?: (issueKey: string) => void,
 ): Promise<JiraMutationAttempt> {
   const validated = validateJiraFieldChanges(
     createContextFields(metadata),
@@ -520,7 +521,14 @@ async function createWithMetadata(
     update: linkedUpdate(validated, plan),
   });
   const attempt = response.ok
-    ? await confirmCreatedIssue(request, response, metadata, withLinks(validated, links), plan)
+    ? await confirmCreatedIssue(
+        request,
+        response,
+        metadata,
+        withLinks(validated, links),
+        plan,
+        onAcknowledged,
+      )
     : dispatchFailure(response, metadata);
   return withDescriptionFormatting(
     attempt,
@@ -533,10 +541,12 @@ function confirmCreatedIssue(
   metadata: readonly JiraFieldMetadata[],
   values: JiraValidatedMutationFields,
   plan: JiraIssueLinkPlan,
+  onAcknowledged?: (issueKey: string) => void,
 ): Promise<JiraMutationAttempt> {
   const { key, id } = response.body ?? {};
   if (response.status !== 201 || !isSafeAtlassianIdentifier(key) || !numericId(id))
     return Promise.resolve(MALFORMED);
+  onAcknowledged?.(key);
   return completeJiraLinkedMutation(
     request,
     { issueKey: key, receipt: { issueKey: key, issueId: id }, metadata, values },
@@ -1088,6 +1098,7 @@ export async function executeJiraDraftItem(
     },
     metadata.fields,
     { templates: connection.issueTemplates, check: false },
+    connection.onCreatedIssueAcknowledged,
   );
 }
 /** The fields a draft item's create sends: with its draft identity, and traced when it is. */

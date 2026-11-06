@@ -42,3 +42,31 @@ describe("tool observation role boundary", () => {
     },
   );
 });
+
+it("keeps known draft receipts beside the unchanged timeout in ordinary model history", () => {
+  const previous = observation(undefined);
+  if (previous.result === undefined) throw new TypeError("Missing fixture result");
+  const draftProgress = {
+    outcome: "unknown",
+    items: [{ ref: "epic", state: "uncertain", issueKey: "SYN-1" }],
+  };
+  const exchange: ChatToolExchange = {
+    call: { id: "draft-timeout", name: "jira_draft", arguments: {} },
+    result: {
+      ...previous.result,
+      status: "timeout",
+      reason: "deadline-exceeded",
+      data: null,
+      page: null,
+    },
+    mutationOutcome: "succeeded-unconfirmed",
+    draftProgress,
+  };
+  const [call, result] = gatewayMessagesForToolExchange(exchange);
+  expect(call?.toolCalls?.[0]?.id).toBe("draft-timeout");
+  expect(JSON.parse(result?.content ?? "")).toMatchObject({
+    result: { status: "timeout", data: null },
+    mutationOutcome: "succeeded-unconfirmed",
+    draftProgress,
+  });
+});

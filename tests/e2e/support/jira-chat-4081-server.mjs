@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -78,6 +78,13 @@ const deps = buildUiHandlerDeps({
   },
   activityLog: log,
 });
+Object.defineProperty(deps, "chatToolTurnBudget", {
+  enumerable: true,
+  get: () =>
+    existsSync(join(directory, "draft-deadline.json"))
+      ? { maxRuntimeMs: 15_000, maxToolCalls: 100, maxPromptTokens: 1_000_000, maxPatchBytes: 0 }
+      : undefined,
+});
 for (const id of [modelId, unavailableModelId]) {
   deps.gatewayConfig.recordVerifiedCapability(
     id,
@@ -89,16 +96,22 @@ const projectPath = join(directory, "workspace");
 mkdirSync(projectPath, { recursive: true });
 deps.store.createProject(projectPath);
 const chats = Object.fromEntries(
-  ["approval", "revocation", "unavailable", "accessibility-en", "accessibility-de", "backlog"].map(
-    (name) => [
-      name,
-      deps.store.createChat(
-        projectPath,
-        `Jira browser ${name}`,
-        name === "unavailable" ? unavailableModelId : modelId,
-      ),
-    ],
-  ),
+  [
+    "approval",
+    "revocation",
+    "unavailable",
+    "accessibility-en",
+    "accessibility-de",
+    "backlog",
+    "deadline",
+  ].map((name) => [
+    name,
+    deps.store.createChat(
+      projectPath,
+      `Jira browser ${name}`,
+      name === "unavailable" ? unavailableModelId : modelId,
+    ),
+  ]),
 );
 const backlogPod = await seedBacklogPod(deps);
 saveBacklogTemplates(deps);

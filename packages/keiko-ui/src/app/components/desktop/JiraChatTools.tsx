@@ -76,11 +76,12 @@ function jiraReportOf(exchange: ChatToolExchange): ReturnType<typeof jiraReportV
 }
 function JiraToolResultDetails({ exchange }: { readonly exchange: ChatToolExchange }): ReactNode {
   const t = useTranslate();
-  if (exchange.result?.data == null) return null;
+  const data = exchange.result?.data ?? exchange.draftProgress;
+  if (data == null) return null;
   return (
     <details>
       <summary>{t(jiraToolDetailsLabel(exchange))}</summary>
-      <pre className={styles.cmpResult}>{JSON.stringify(exchange.result.data, null, 2)}</pre>
+      <pre className={styles.cmpResult}>{JSON.stringify(data, null, 2)}</pre>
     </details>
   );
 }

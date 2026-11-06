@@ -3734,6 +3734,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "draftReceiptCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "exchangeCount",
               "type": "integer",
               "dataClass": "count",

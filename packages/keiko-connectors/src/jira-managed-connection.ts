@@ -10,6 +10,8 @@ export interface JiraManagedConnection {
   /** Opaque, stable identity of the credential behind `http`; never a secret. */
   readonly identity?: string;
   readonly http: AtlassianHttpBodyPort;
+  /** Private receipt observer, called after a valid Jira create acknowledgement and before read-back. */
+  readonly onCreatedIssueAcknowledged?: ((issueKey: string) => void) | undefined;
   /** The active customer-defined issue templates; every create, edit and transition is checked. */
   readonly issueTemplates?: JiraIssueTemplateSource | undefined;
   /** Body-free facts about the applicable create-rule projection, through its composing owner. */

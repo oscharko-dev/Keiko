@@ -42,6 +42,7 @@ export type ChatToolTranscriptUpdate =
       readonly result: ToolResultEnvelope;
       readonly binding?: ToolResultValidationBinding;
       readonly mutationOutcome?: JiraMutationOutcome;
+      readonly draftProgress?: Readonly<Record<string, unknown>>;
     }
   | { readonly kind: "read-consent"; readonly grant: ChatToolReadGrantView }
   | {
@@ -95,6 +96,7 @@ const UPDATE = defineActivityLogOperation({
       values: ["started", "settled", "read-consent", "write-approval"],
     },
     exchangeCount: { type: "integer", dataClass: "count", required: true },
+    draftReceiptCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -218,29 +220,38 @@ function validEffectProjections(
 ): boolean {
   return validApproval(value, call, identity) && validMutationProjection(value, call);
 }
+function validResultBinding(value: Record<string, unknown>): boolean {
+  return (
+    value.resultBinding === undefined ||
+    (object(value.resultBinding) && exact(value.resultBinding, ["descriptor", "projectionDigest"]))
+  );
+}
 function validExchange(
   value: unknown,
   identity: TranscriptIdentity | undefined,
 ): value is StoredExchange {
   if (
     !object(value) ||
-    !exact(value, ["call", "result", "resultBinding", "approval", "mutationOutcome"]) ||
+    !exact(value, [
+      "call",
+      "result",
+      "resultBinding",
+      "approval",
+      "mutationOutcome",
+      "draftProgress",
+    ]) ||
     !validCall(value.call)
   )
     return false;
   if (!validEffectProjections(value, value.call, identity)) return false;
-  if (
-    value.resultBinding !== undefined &&
-    (!object(value.resultBinding) ||
-      !exact(value.resultBinding, ["descriptor", "projectionDigest"]))
-  )
-    return false;
+  if (!validResultBinding(value)) return false;
   if (value.result !== undefined)
     validateToolResultEnvelope(
       value.result,
       value.resultBinding as ToolResultValidationBinding | undefined,
     );
   else if (value.resultBinding !== undefined) return false;
+  if (value.draftProgress !== undefined) validateDraftProgress(value as unknown as StoredExchange);
   return true;
 }
 function validReadGrants(
@@ -294,12 +305,15 @@ export function decodeChatToolTranscript(
     ? undefined
     : {
         ...stored,
-        exchanges: stored.exchanges.map(({ call, result, approval, mutationOutcome }) => ({
-          call: canonicalCall(call),
-          ...(result === undefined ? {} : { result }),
-          ...(approval === undefined ? {} : { approval }),
-          ...(mutationOutcome === undefined ? {} : { mutationOutcome }),
-        })),
+        exchanges: stored.exchanges.map(
+          ({ call, result, approval, mutationOutcome, draftProgress }) => ({
+            call: canonicalCall(call),
+            ...(result === undefined ? {} : { result }),
+            ...(draftProgress === undefined ? {} : { draftProgress }),
+            ...(approval === undefined ? {} : { approval }),
+            ...(mutationOutcome === undefined ? {} : { mutationOutcome }),
+          }),
+        ),
       };
 }
 // Fingerprints of stored transcripts this process already verified under the same identity. The
@@ -351,7 +365,8 @@ function sameSettlement(
     existing.result === undefined ||
     (canonicalise(existing.result) === canonicalise(update.result) &&
       canonicalise(existing.resultBinding ?? null) === canonicalise(update.binding ?? null) &&
-      existing.mutationOutcome === update.mutationOutcome)
+      existing.mutationOutcome === update.mutationOutcome &&
+      canonicalise(existing.draftProgress ?? null) === canonicalise(update.draftProgress ?? null))
   );
 }
 function applyExchange(
@@ -377,6 +392,7 @@ function applyExchange(
         ? {
             ...exchange,
             result: update.result,
+            ...(update.draftProgress === undefined ? {} : { draftProgress: update.draftProgress }),
             ...(update.binding === undefined ? {} : { resultBinding: update.binding }),
             ...(update.mutationOutcome === undefined
               ? {}
@@ -427,6 +443,49 @@ function applyApproval(
     ),
   };
 }
+function observedMutation(outcome: StoredExchange["mutationOutcome"]): boolean {
+  return outcome !== undefined && outcome !== "not-dispatched";
+}
+type DraftProgressData = Pick<
+  StoredExchange,
+  "result" | "resultBinding" | "mutationOutcome" | "draftProgress"
+>;
+/** Payload/schema validation makes no claim about the call that owns this receipt. */
+function validateDraftProgressData(exchange: DraftProgressData): void {
+  const result = exchange.result;
+  const binding = exchange.resultBinding;
+  if (
+    result?.data !== null ||
+    !result.effectStarted ||
+    result.toolRef?.canonicalId !== "keiko.jira.draft" ||
+    binding === undefined ||
+    !observedMutation(exchange.mutationOutcome)
+  )
+    throw invalidRequest("Invalid draft receipt binding.");
+  const data = captureCatalogJson(exchange.draftProgress, binding.descriptor.bounds.maxResultBytes);
+  const validated = validateToolResultEnvelope(
+    {
+      ...result,
+      status: "completed",
+      reason: "none",
+      data,
+      metrics: {
+        ...result.metrics,
+        outputBytes: Buffer.byteLength(JSON.stringify(data)),
+        resultCount: 0,
+      },
+      page: { truncated: false, reason: "none", cursor: null },
+    },
+    binding,
+  );
+  if (validated.data === null) throw invalidRequest("Invalid draft receipt data.");
+}
+
+/** Ownership is checked against the actual stored call before the transaction commits. */
+function validateDraftProgress(exchange: StoredExchange): void {
+  if (exchange.call.name !== "jira_draft") throw invalidRequest("Invalid draft receipt binding.");
+  validateDraftProgressData(exchange);
+}
 function redactResult(
   update: Extract<ChatToolTranscriptUpdate, { kind: "settled" }>,
   redact: (value: string) => string,
@@ -439,6 +498,45 @@ function redactResult(
   };
   return validateToolResultEnvelope({ ...verified, data, metrics }, update.binding);
 }
+function redactDraftProgress(
+  update: Extract<ChatToolTranscriptUpdate, { kind: "settled" }>,
+  redact: (value: string) => string,
+): Readonly<Record<string, unknown>> | undefined {
+  const redactedProgress =
+    update.draftProgress === undefined
+      ? undefined
+      : deepRedactStrings(update.draftProgress, redact);
+  if (redactedProgress !== undefined && !object(redactedProgress))
+    throw invalidRequest("Invalid draft receipt data.");
+  const draftProgress = redactedProgress;
+  if (draftProgress !== undefined)
+    validateDraftProgressData({
+      result: update.result,
+      ...(update.binding === undefined ? {} : { resultBinding: update.binding }),
+      ...(update.mutationOutcome === undefined ? {} : { mutationOutcome: update.mutationOutcome }),
+      draftProgress,
+    });
+  return draftProgress;
+}
+function redactSettlement(
+  update: Extract<ChatToolTranscriptUpdate, { kind: "settled" }>,
+  redact: (value: string) => string,
+): ChatToolTranscriptUpdate {
+  const draftProgress = redactDraftProgress(update, redact);
+  return {
+    ...update,
+    result: redactResult(update, redact),
+    ...(draftProgress === undefined ? {} : { draftProgress }),
+    ...(update.binding === undefined
+      ? {}
+      : {
+          binding: {
+            ...update.binding,
+            descriptor: verifyToolDescriptor(update.binding.descriptor),
+          },
+        }),
+  };
+}
 function redactUpdate(
   update: ChatToolTranscriptUpdate,
   redact: (value: string) => string,
@@ -448,19 +546,7 @@ function redactUpdate(
     if (!validCall(call)) throw invalidRequest("Invalid tool call.");
     return { kind: "started", call: canonicalCall(call) };
   }
-  if (update.kind === "settled")
-    return {
-      ...update,
-      result: redactResult(update, redact),
-      ...(update.binding === undefined
-        ? {}
-        : {
-            binding: {
-              ...update.binding,
-              descriptor: verifyToolDescriptor(update.binding.descriptor),
-            },
-          }),
-    };
+  if (update.kind === "settled") return redactSettlement(update, redact);
   if (update.kind === "write-approval") {
     if (!isChatToolWriteApprovalView(update.approval))
       throw invalidRequest("Invalid tool approval projection.");
@@ -471,6 +557,14 @@ function redactUpdate(
   return update;
 }
 
+function draftReceiptLogFields(update: ChatToolTranscriptUpdate): { draftReceiptCount?: number } {
+  if (update.kind !== "settled" || update.draftProgress === undefined) return {};
+  return {
+    draftReceiptCount: Array.isArray(update.draftProgress.items)
+      ? update.draftProgress.items.length
+      : 0,
+  };
+}
 export function updateChatToolTranscript(
   db: DatabaseSync,
   id: string,
@@ -509,6 +603,7 @@ export function updateChatToolTranscript(
         messageDigest: sha256Hex(id),
         phase: update.kind,
         exchangeCount: count,
+        ...draftReceiptLogFields(update),
         completeness: "complete",
         loss: "none",
       },

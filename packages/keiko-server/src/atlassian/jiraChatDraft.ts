@@ -94,6 +94,8 @@ export interface JiraChatDraftExecution {
   /** Body-free progress and end-of-run counts for the Activity Log. */
   readonly activity?: ((activity: JiraDraftActivity) => void) | undefined;
   readonly now?: (() => number) | undefined;
+  /** Pure bounded receipt snapshot for this invocation's existing parent transcript. */
+  readonly retainProgress?: ((snapshot: () => CatalogJsonObject) => void) | undefined;
   /** Test seam: how long a run may create, and how long it may take in all. */
   readonly budget?: JiraDraftRunBudget | undefined;
 }
@@ -385,6 +387,45 @@ function blockedItem(
   return state === "skipped" ? skippedItem(item, keys) : { ref: item.ref, state };
 }
 
+interface DraftAcknowledgement {
+  acknowledgement: DraftItemResult | undefined;
+}
+function retainDraftProgress(
+  input: JiraChatDraftExecution,
+  draft: JiraDraft,
+  results: readonly DraftItemResult[],
+  current: DraftAcknowledgement,
+  excluded: ReadonlySet<string>,
+): void {
+  input.retainProgress?.(
+    () =>
+      draftResult(input.connection.baseUrl, [
+        ...results,
+        ...draft.items
+          .slice(results.length)
+          .map((item, index): DraftItemResult =>
+            index === 0 && current.acknowledgement !== undefined
+              ? current.acknowledgement
+              : { ref: item.ref, state: excluded.has(item.ref) ? "excluded" : "pending" },
+          ),
+      ]).data,
+  );
+}
+function acknowledgingInput(
+  input: JiraChatDraftExecution,
+  item: JiraDraftItem,
+  current: DraftAcknowledgement,
+): JiraChatDraftExecution {
+  return {
+    ...input,
+    connection: {
+      ...input.connection,
+      onCreatedIssueAcknowledged: (issueKey): void => {
+        current.acknowledgement = { ref: item.ref, state: "uncertain", issueKey };
+      },
+    },
+  };
+}
 async function runDraft(
   input: JiraChatDraftExecution,
   draft: JiraDraft,
@@ -404,22 +445,42 @@ async function runDraft(
     attempted: 0,
   };
   const results: DraftItemResult[] = [];
+  const current: DraftAcknowledgement = { acknowledgement: undefined };
+  retainDraftProgress(input, draft, results, current, excluded);
   for (const item of draft.items) {
+    current.acknowledgement = undefined;
     run.stopped ||= timeIsUp(run, clock);
     const blocked = blockedState(item, run);
     // Each item needs the keys its earlier items received; the journal admits one effect at a time.
     const settled: DraftItemResult =
       blocked === undefined
-        ? await runItem(input, item, run.keys, traces.get(item.ref), tally) // NOSONAR typescript:S9382 -- dependency order
+        ? await runItem(
+            acknowledgingInput(input, item, current),
+            item,
+            run.keys,
+            traces.get(item.ref),
+            tally,
+          ) // NOSONAR typescript:S9382 -- dependency order
         : blockedItem(item, blocked, run.keys);
-    noteSettled(run, settled, now);
-    results.push(settled);
+    // A valid 201/key remains known even when its read-back is interrupted.
+    const retained = withAcknowledgedKey(settled, current.acknowledgement);
+    noteSettled(run, retained, now);
+    results.push(retained);
+    current.acknowledgement = undefined;
     if (blocked === undefined) run.attempted++;
     if (blocked === undefined && run.attempted % PROGRESS_EVERY === 0)
       reportRun(input, "progress", results, draft.items.length, now() - clock.startedAt);
   }
   reportRun(input, "executed", results, draft.items.length, now() - clock.startedAt);
   return results;
+}
+function withAcknowledgedKey(
+  settled: DraftItemResult,
+  known: DraftItemResult | undefined,
+): DraftItemResult {
+  return known?.issueKey !== undefined && settled.issueKey === undefined
+    ? { ...settled, state: "uncertain", issueKey: known.issueKey }
+    : settled;
 }
 function noteSettled(run: RunState, settled: DraftItemResult, now: () => number): void {
   if (settled.state === "pending") run.pending.add(settled.ref);

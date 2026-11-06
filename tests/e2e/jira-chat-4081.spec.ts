@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Locator } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { ChatMessage } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { parseJiraDraftReference } from "@oscharko-dev/keiko-connectors";
 import { join } from "node:path";
@@ -124,7 +124,11 @@ test.describe("Jira surfaces accessibility and visual evidence", () => {
   }
 });
 
-async function selectBacklogSource(page: Page, region: Locator): Promise<void> {
+async function selectBacklogSource(
+  page: Page,
+  region: Locator,
+  chatId = fixture().chats.backlog.id,
+): Promise<void> {
   const source = region.getByRole("combobox", { name: "Grounding mode", exact: true });
   await source.click();
   await page
@@ -132,8 +136,7 @@ async function selectBacklogSource(page: Page, region: Locator): Promise<void> {
     .click();
   await expect
     .poll(async () => {
-      const selected = (await currentChat(page, fixture().chats.backlog.id))
-        .localKnowledgeScopes?.[0];
+      const selected = (await currentChat(page, chatId)).localKnowledgeScopes?.[0];
       return selected?.kind === "capsule" ? selected.capsuleId : undefined;
     })
     .toBe(fixture().backlogPod.id);
@@ -265,4 +268,106 @@ test("Knowledge sources become reviewed Epic and Task drafts through UI approval
     mutationOutcome: "not-dispatched",
     result: { status: "completed", data: { existingCount: 2, createdCount: 0, failedCount: 0 } },
   });
+});
+
+function deadlineStatePath(file: string): string {
+  const directory = process.env.KEIKO_E2E_JIRA_STATE;
+  if (directory === undefined) throw new TypeError("Missing private Jira fixture state directory");
+  return join(directory, file);
+}
+
+function createdBacklogKeys(): readonly string[] {
+  const issues = JSON.parse(readFileSync(deadlineStatePath("backlog-issues.json"), "utf8")) as {
+    readonly key: string;
+  }[];
+  return issues.map((issue) => issue.key);
+}
+
+async function expectDeadlineReceipt(page: Page, region: Locator, key: string): Promise<void> {
+  await expect(
+    region.getByText("Jira accepted the change; confirmation incomplete", { exact: true }),
+  ).toBeVisible();
+  const stored = await messages(page, fixture().chats.deadline.id);
+  const user = stored.find((message) => message.role === "user");
+  const draft = user?.toolTranscript?.exchanges.find(
+    (exchange) => exchange.call.name === "jira_draft",
+  );
+  expect(draft).toMatchObject({
+    result: { status: "timeout", data: null },
+    mutationOutcome: "succeeded-unconfirmed",
+    draftProgress: {
+      items: expect.arrayContaining([
+        expect.objectContaining({ issueKey: key, state: "uncertain" }),
+      ]),
+    },
+  });
+  await expect(region.getByText("Jira change confirmed", { exact: true })).toHaveCount(0);
+  await expect(region.locator('[data-role="assistant"] .chat-msg-content')).toContainText(key);
+  await region.getByText("View Jira result", { exact: true }).last().click();
+  await expect(region.locator("pre").last()).toContainText(key);
+}
+
+async function reconcileDeadlineDraft(page: Page, region: Locator, writes: number): Promise<void> {
+  const stored = await messages(page, fixture().chats.deadline.id);
+  const pending = stored.find((message) => message.role === "user");
+  await send(
+    region,
+    `JIRA_E2E_REPLAY: Reconcile this exact reviewed staged draft again. ${JSON.stringify(stagedBacklogReference(pending))}`,
+  );
+  const approve = region.getByRole("button", { name: "Approve this action", exact: true });
+  await expect(approve).toBeEnabled();
+  expect(counts().writes).toBe(writes);
+  await approve.click();
+  await expect(
+    region.getByText("JIRA_E2E_BACKLOG_DONE: the reviewed backlog is verified.", { exact: true }),
+  ).toBeVisible();
+  expect(counts().writes).toBe(writes + 1);
+  const completed = (await messages(page, fixture().chats.deadline.id))
+    .filter((message) => message.role === "user")
+    .at(-1);
+  const replay = completed?.toolTranscript?.exchanges.find(
+    (exchange) => exchange.call.name === "jira_draft",
+  );
+  expect(replay?.result?.data).toMatchObject({ existingCount: 1, createdCount: 1, failedCount: 0 });
+}
+
+test("a deadline preserves the accepted Jira key in UI and reload, then a new approved turn reconciles without duplication", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const region = await openJiraChat(page, "deadline");
+  await createAndConnect(page, region, "Jira deadline fixture");
+  await selectAskForApproval(page, region);
+  await selectBacklogSource(page, region, fixture().chats.deadline.id);
+  const before = counts();
+  const priorKeys = createdBacklogKeys();
+  const key = `KEIKO-${String(priorKeys.length + 1)}`;
+  const control = deadlineStatePath("draft-deadline.json");
+  writeFileSync(control, JSON.stringify({ holdKey: key }));
+  try {
+    await send(
+      region,
+      "JIRA_E2E_BACKLOG JIRA_E2E_DEADLINE: Create a reviewed Epic and Task draft from the selected Knowledge Pod. Show the draft for approval before writing.",
+    );
+    const approve = region.getByRole("button", { name: "Approve this action", exact: true });
+    await expect(approve).toBeEnabled();
+    await reviewBacklogPreview(region);
+    expect(counts().writes).toBe(before.writes);
+    await approve.click();
+    await expect.poll(() => counts().writes).toBe(before.writes + 1);
+    await expectDeadlineReceipt(page, region, key);
+    const expiredCounts = counts();
+    await page.reload();
+    await expectDeadlineReceipt(page, region, key);
+    expect(counts()).toEqual(expiredCounts);
+  } finally {
+    rmSync(control, { force: true });
+  }
+  await reconcileDeadlineDraft(page, region, before.writes + 1);
+  expect(createdBacklogKeys()).toEqual([
+    ...priorKeys,
+    key,
+    `KEIKO-${String(priorKeys.length + 2)}`,
+  ]);
+  expect(counts().leaks).toBe(0);
 });
