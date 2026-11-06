@@ -14,7 +14,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 59;
+export const SCHEMA_VERSION = 60;
 
 interface Migration {
   readonly version: number;
@@ -1966,6 +1966,15 @@ export const MIGRATIONS: readonly Migration[] = [
     // #4157: attachment text belongs to its admitted user turn and follows chat retention.
     sql: `ALTER TABLE chat_messages ADD COLUMN document_context_json TEXT;
       ${CHAT_DOCUMENT_HISTORY_SEARCH_SCHEMA}`,
+  },
+  {
+    version: 60,
+    // #4271: the unsent Coding Workbench composer text survives a reload, keyed by its window.
+    sql: `CREATE TABLE coding_workbench_drafts (
+      window_id TEXT PRIMARY KEY CHECK (length(window_id) BETWEEN 1 AND 64),
+      text TEXT NOT NULL,
+      revision INTEGER NOT NULL CHECK (revision >= 1)
+    ) STRICT;`,
   },
 ];
 

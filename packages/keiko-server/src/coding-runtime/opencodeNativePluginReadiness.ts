@@ -6,6 +6,10 @@ import {
   OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE,
   OPENCODE_NATIVE_DELIVERY_PLUGIN_ID,
 } from "./opencodeNativeDeliveryTools.js";
+import {
+  OPENCODE_NATIVE_LAUNCH_SECRETS_PLUGIN_FILE,
+  OPENCODE_NATIVE_LAUNCH_SECRETS_PLUGIN_ID,
+} from "./opencodeNativeLaunchSecrets.js";
 
 /**
  * The generated plugins a native run cannot do without (#3897): the policy hook that decides every
@@ -14,11 +18,16 @@ import {
  * agent's own rules, so no configured rule stands in for the policy hook; a native run becomes
  * ready only once the producer reports every plugin active. The delivery plugin is required
  * because the shell's refusal of Git writes names its tools as the way to deliver: a run without
- * them would be told to use tools it does not have.
+ * them would be told to use tools it does not have. The launch-secrets plugin is required because
+ * until it has run, a shell child could read the runtime's password from its exec environment.
  */
 export const OPENCODE_NATIVE_REQUIRED_PLUGINS = Object.freeze([
   Object.freeze({ id: "keiko.native-policy", file: "keiko_native_policy.ts" }),
   Object.freeze({ id: "keiko.native-context", file: "keiko_native_context.ts" }),
+  Object.freeze({
+    id: OPENCODE_NATIVE_LAUNCH_SECRETS_PLUGIN_ID,
+    file: `${OPENCODE_NATIVE_LAUNCH_SECRETS_PLUGIN_FILE}.ts`,
+  }),
   Object.freeze({
     id: OPENCODE_NATIVE_DELIVERY_PLUGIN_ID,
     file: `${OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE}.ts`,

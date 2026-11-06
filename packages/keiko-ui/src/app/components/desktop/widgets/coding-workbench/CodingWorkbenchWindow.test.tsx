@@ -55,6 +55,7 @@ import {
 } from "./CodingWorkbenchWindow";
 import type { CodingTaskSession } from "./useCodingTaskSession";
 import * as codingHistoryApi from "@/lib/coding-history-api";
+import { readCodingWorkbenchDraft, writeCodingWorkbenchDraft } from "@/lib/chat-draft-api";
 import { restoreConversation } from "./codingWorkbenchRestoredRun";
 import {
   resetClientDiagnosticWriter,
@@ -108,6 +109,12 @@ const chatCatalogMock = vi.hoisted(() => ({
 // PR #3625 review: whether the latest catalog refresh settled, so a test can tell an empty list
 // published mid-refresh from one a successful refresh settled on.
 const catalogRefreshMock = vi.hoisted(() => ({ settled: false }));
+vi.mock("@/lib/chat-draft-api", () => ({
+  readChatDraft: vi.fn(),
+  writeChatDraft: vi.fn(),
+  readCodingWorkbenchDraft: vi.fn(),
+  writeCodingWorkbenchDraft: vi.fn(),
+}));
 vi.mock("../../hooks/useChatSession", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../hooks/useChatSession")>()),
   useGatewayModelCatalogSettled: (): boolean => catalogRefreshMock.settled,
@@ -314,6 +321,7 @@ function actions(): CodingWorkbenchRuntimeActions {
     refreshRuntime: vi.fn(() => Promise.resolve()),
     refreshRun: vi.fn(() => Promise.resolve()),
     start: vi.fn(() => Promise.resolve()),
+    cancelStart: vi.fn(),
     decideApproval: vi.fn(() => Promise.resolve()),
     stop: vi.fn(() => Promise.resolve()),
     takeover: vi.fn(() => Promise.resolve()),
@@ -1329,6 +1337,54 @@ describe("CodingWorkbenchWindow", () => {
     view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
 
     expect(taskInput).toHaveValue("");
+  });
+
+  it("restores the unsent task text after a reload while Start was pending (#4271)", async () => {
+    const user = userEvent.setup();
+    const liveActions = actions();
+    vi.mocked(readCodingWorkbenchDraft).mockReset().mockResolvedValue({ text: "", revision: 0 });
+    vi.mocked(writeCodingWorkbenchDraft)
+      .mockReset()
+      .mockImplementation(async (_id, update) => ({
+        text: update.text,
+        revision: update.expectedRevision + 1,
+      }));
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
+    const first = render(
+      <CodingWorkbenchWindow draftKey="coding-workbench-mabc12" selectedRoot="/repo" />,
+    );
+    await waitFor(() => expect(readCodingWorkbenchDraft).toHaveBeenCalled());
+    await user.type(screen.getByLabelText("Task instructions"), "Investigate the failing test");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        mutation: { status: "pending", kind: "start", requestId: "req-1", error: null },
+      }),
+      actions: liveActions,
+    });
+    first.rerender(
+      <CodingWorkbenchWindow draftKey="coding-workbench-mabc12" selectedRoot="/repo" />,
+    );
+    await waitFor(() =>
+      expect(writeCodingWorkbenchDraft).toHaveBeenLastCalledWith("coding-workbench-mabc12", {
+        text: "Investigate the failing test",
+        expectedRevision: expect.any(Number) as unknown as number,
+      }),
+    );
+
+    // The reload ends the pending start without a run; the page comes back with the saved text.
+    first.unmount();
+    vi.mocked(readCodingWorkbenchDraft).mockResolvedValue({
+      text: "Investigate the failing test",
+      revision: 1,
+    });
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
+    render(<CodingWorkbenchWindow draftKey="coding-workbench-mabc12" selectedRoot="/repo" />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Task instructions")).toHaveValue(
+        "Investigate the failing test",
+      ),
+    );
   });
 
   it("shows one repository and branch control above the composer", () => {
@@ -3028,7 +3084,10 @@ describe("CodingWorkbenchWindow", () => {
   );
 
   it("#3386: shows exact paths before one-use Git stage approval", async () => {
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const reports: unknown[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      reports.push({ message, meta });
+    });
     const user = userEvent.setup();
     approvalReviewHookMock.mockReturnValue({
       status: "ready",
@@ -3045,15 +3104,26 @@ describe("CodingWorkbenchWindow", () => {
     const actions = renderWorkbench(editApprovalState("git-stage"));
     expect(screen.getByRole("heading", { name: "Stage changes" })).toBeInTheDocument();
     expect(screen.getByText("src/stage-only.ts")).toBeInTheDocument();
-    expect(warning).toHaveBeenCalledWith("[keiko] git stage review ready: files 1");
-    expect(JSON.stringify(warning.mock.calls)).not.toContain("src/stage-only.ts");
+    // #4271: what the review showed is a closed step and state, never its paths.
+    expect(reports).toContainEqual(
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          codingWorkbenchInteraction: {
+            interaction: "delivery-step-shown",
+            deliveryStep: "stage-review",
+            deliveryState: "ready",
+          },
+        }),
+      }),
+    );
+    expect(JSON.stringify(reports)).not.toContain("src/stage-only.ts");
+    resetClientDiagnosticWriter();
     expect(
       screen.queryByRole("region", { name: "Reviewed commit message" }),
     ).not.toBeInTheDocument();
     expect(actions.decideApproval).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Approve once" }));
     expect(actions.decideApproval).toHaveBeenCalledExactlyOnceWith("approved");
-    warning.mockRestore();
   });
 
   function commitApprovalState(
@@ -3354,15 +3424,29 @@ describe("CodingWorkbenchWindow", () => {
     },
   );
   it("#3387: records the unavailable delivery display without its rejected text", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const reports: unknown[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      reports.push({ message, meta });
+    });
     approvalReviewHookMock.mockReturnValue({
       status: "ready",
       review: draftDeliveryReview("push"),
       retry: vi.fn(),
     });
     renderWorkbench(deliveryApprovalState("pull-request"));
-    expect(warn).toHaveBeenCalledWith("[keiko] draft delivery review displayed: unavailable");
-    expect(JSON.stringify(warn.mock.calls)).not.toContain("Original template");
+    expect(reports).toContainEqual(
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          codingWorkbenchInteraction: {
+            interaction: "delivery-step-shown",
+            deliveryStep: "delivery-review",
+            deliveryState: "unavailable",
+          },
+        }),
+      }),
+    );
+    expect(JSON.stringify(reports)).not.toContain("Original template");
+    resetClientDiagnosticWriter();
   });
 
   it("#3387: denies an unavailable delivery without granting and retries its existing review channel", async () => {

@@ -14,6 +14,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 import { validateCodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "@/lib/coding-workbench-interaction";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import {
   getCodingWorkbenchRuntimeDescriptionDraft,
@@ -58,13 +59,16 @@ function useDraftDeliveryDiagnostic(
   delivery: DraftDeliveryRecord | undefined,
   runId: string | undefined,
 ): void {
-  const note =
-    delivery === undefined
-      ? null
-      : `[keiko] draft delivery displayed: ${delivery.phase} reason ${delivery.reason} head ${delivery.binding.headSha.slice(0, 12)}`;
+  const phase = delivery?.phase;
+  const head = delivery?.binding.headSha;
   useEffect(() => {
-    if (note !== null) reportClientDiagnostic(note);
-  }, [note, runId]);
+    if (phase === undefined) return;
+    reportCodingWorkbenchInteraction({
+      interaction: "delivery-step-shown",
+      deliveryStep: "draft-delivery",
+      deliveryState: phase,
+    });
+  }, [phase, head, runId]);
 }
 
 // #3386/#3387: a "push-proposed"/"pr-proposed" phase is a pending delivery-substrate permission

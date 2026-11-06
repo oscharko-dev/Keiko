@@ -13,6 +13,7 @@ import type {
   McpOAuthCredentialStore,
   StoredMcpOAuthCredential,
 } from "../mcp/mcpOAuthCredentialStore.js";
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { OPENCODE_PERSISTENCE_SCHEMAS } from "./opencodePersistenceContract.js";
 import {
   harvestMcpCredentials,
@@ -53,13 +54,13 @@ function credential(issuer: string, serverUrl = URL_): Readonly<Record<string, u
   };
 }
 
-// The credential table exactly as the pinned 2.1.4 schema has it.
+// The credential table exactly as the pinned schema has it.
 function database(rows: readonly Readonly<Record<string, unknown>>[]): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-mcp-credentials-"));
   roots.push(root);
   const path = join(root, "opencode.db");
   const handle = new DatabaseSync(path);
-  const columns = OPENCODE_PERSISTENCE_SCHEMAS["2.1.4"]?.credential ?? [];
+  const columns = OPENCODE_PERSISTENCE_SCHEMAS[OPENCODE_PINNED_VERSION]?.credential ?? [];
   handle.exec(`CREATE TABLE credential (${columns.map((column) => `"${column}"`).join(", ")})`);
   const insert = handle.prepare(
     "INSERT INTO credential (id, integration_id, label, value, active) VALUES (?, ?, ?, ?, 1)",

@@ -453,6 +453,9 @@ sent back.
   readiness, a reachable positive control, and cleanup in `finally`. `await` a condition instead of
   sleeping. Fixtures are deterministic and self-contained; separately authorized live-provider
   qualification records its actual environment and never masquerades as a hermetic unit test.
+  The real login keychain is out of reach for every test: `realKeychainWithheld` in `keiko-security`
+  withholds it under vitest, and an end-to-end server or lab instance sets `KEIKO_OS_KEYCHAIN=off`.
+  A test of that tier injects a fake `executable`.
 - **A behavioural change is documented where decisions live.** If it changes an architectural
   decision, add or update an ADR (and the index). If it's release-impacting, update the
   release-impact catalog / issue metadata.
@@ -1104,7 +1107,7 @@ title or path ever enters the line (ADR-0137 D4).
 `client.coding-workbench.interaction` records, at info and on the routine budget, what the human
 did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
 progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom
-agent's name), a jump to a pending decision, a repository bound for trust (its two body-free ids)
+agent's name), a start the human gave up before it had a run (`start-cancelled`), a jump to a pending decision, a repository bound for trust (its two body-free ids)
 and a changeset received for review (`fileCount`). It also records a history task of another
 repository or workspace that was not activated (`history-repository-switched`,
 `history-workspace-switched`; #4118) and a refused editor bridge registration
@@ -1115,7 +1118,11 @@ windowed review (`diff-windowed` with the closed `surface` `changeset-review`, `
 never a path or diff text; #4108). An unpaired window names the missing pairing once, in the
 run status sentence, and holds its secondary notices until it is paired; each hold is recorded as
 `notice-held` with the closed `notice` (`task-session`, `skills`, `mcp`, `activity`, `questions`,
-`editor-bridge`; #3880). These were warn/unknown
+`editor-bridge`; #3880). What a delivery card showed is `delivery-step-shown` with the closed
+`deliveryStep` (`delivery-review`, `stage-review`, `unstage-review`, `commit-review`,
+`commit-result`, `draft-delivery`, `ci-readiness`, `journey`) and only that step's closed
+`deliveryState` (a review's load state, a commit status, a delivery phase, a CI or journey state;
+never a head or tree digest; #4271). These were warn/unknown
 `client.diagnostic` notes before and buried the rare real browser failures. The server side of
 that bridge records each registration on `editor.agent.bridge-registration` (`registered`,
 `refreshed`, `rotated`, or `refused` at warn with the closed root-boundary reason or
@@ -1134,7 +1141,10 @@ request the Coding Workbench gave up on at its own client-side deadline (#4109):
 `question-reject`) and `deadlineMs`, under the failed request's correlation id; a mutation that
 Stop preempted is not a timeout and is not reported. The deadlines come from measurements: 10 s for
 status and snapshot reads, 15 s for Stop, 180 s for start (a cold start is unmeasured) and 60 s for
-every other, unmeasured, mutation. Stop is never queued behind another mutation: it ends the client
+every other, unmeasured, mutation. A start that hit its deadline re-reads the run, because the
+server may have started it; when the client hung up before a run existed, the server creates none
+and records `coding-runtime.operation.refused` with the route-level reason `start-abandoned`, a
+reason never stored or sent as a failure code. Stop is never queued behind another mutation: it ends the client
 wait of the one in flight (no alert, no failure) and drops those still waiting, and stays enabled
 while another mutation is pending. Closed values and one duration only.
 
@@ -1169,7 +1179,9 @@ that finished serving renews that same-generation success too (`readinessRenewal
 at startup; nothing renews or recovers a model on a timer. A conversation request, a
 coding run start, a Workbench model choice (`check=1`), opening the Workbench or a model list, or a page load checks a model that is not
 ready now; only an observed failure waits out the 30 s not-ready cooldown. Other Workbench reads
-never start a check. The Workbench profile describes the model chosen in its picker (`modelId`):
+never start a check. While a coding run is live, a background proof of a model nobody chose gives way
+and leaves no verdict (`gateway.readiness.automatic.withheld`, closed `reason` `live-run`), so a
+gateway serving one model at a time keeps the run's model loaded; the next read after the run proves it. The Workbench profile describes the model chosen in its picker (`modelId`):
 `model-verification-pending` only while a check of that model runs, an expired or unknown answer
 usable with `verification: "unverified"`, and its `verification` is that model's own observation,
 not the gateway-wide state (customer 1.3.4). The Workbench's tool-calling probe that the gateway never answered is no verdict (`tool-calling-unverified`) and is retried only when someone asks: startup, a page load or a `check=1` read when the Workbench opens or a model is chosen; a stale proof runs again once. See
@@ -1354,7 +1366,8 @@ the removed separators (`segmentSeparatorsRemoved`); any other line break is the
 and stays. Browser clips are normalized in memory to mono PCM16 WAV;
 normalization failures use the existing body-free client diagnostic sink (ADR-0100 D8).
 
-Chat draft persistence uses `chat.draft.operation` for read/save lifecycle and status only.
+Chat draft persistence uses `chat.draft.operation` for read/save lifecycle and status only; the
+Coding Workbench composer reuses that store per Workbench window (`surface: "coding-workbench"`).
 Draft text belongs to the authenticated, chat-bound private UiStore and never enters logs or
 browser persistence; stale revisions fail closed (ADR-0114 D1).
 

@@ -1,6 +1,12 @@
-import type { ChatDraft } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatDraft, ChatDraftUpdate } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError } from "@/lib/api";
-import { readChatDraft, writeChatDraft } from "@/lib/chat-draft-api";
+import {
+  readChatDraft,
+  readCodingWorkbenchDraft,
+  writeChatDraft,
+  writeCodingWorkbenchDraft,
+  type PrivateDraftSurface,
+} from "@/lib/chat-draft-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
@@ -25,6 +31,23 @@ function canSave(chatId: string, entry: DraftEntry): boolean {
   return chatId !== "" && !entry.pending && !entry.conflict && entry.phase === "unsaved";
 }
 
+interface DraftTransport {
+  readonly read: (key: string) => Promise<ChatDraft>;
+  readonly write: (key: string, update: ChatDraftUpdate) => Promise<ChatDraft>;
+}
+
+// Bound at call time, so each surface reaches only its own endpoint.
+const DRAFT_TRANSPORTS: Readonly<Record<PrivateDraftSurface, DraftTransport>> = {
+  chat: {
+    read: (key) => readChatDraft(key),
+    write: (key, update) => writeChatDraft(key, update),
+  },
+  "coding-workbench": {
+    read: (key) => readCodingWorkbenchDraft(key),
+    write: (key, update) => writeCodingWorkbenchDraft(key, update),
+  },
+};
+
 export interface DraftRuntimeState {
   readonly entries: ReadonlyMap<string, DraftEntry>;
   readonly entry: (chatId: string) => DraftEntry;
@@ -32,10 +55,14 @@ export interface DraftRuntimeState {
   readonly replaced: () => void;
   readonly schedule: (chatId: string, entry: DraftEntry) => void;
   readonly hasUnsaved: () => boolean;
+  readonly surface: PrivateDraftSurface;
 }
 
 export class ChatDraftActions {
-  constructor(private readonly state: DraftRuntimeState) {}
+  private readonly transport: DraftTransport;
+  constructor(private readonly state: DraftRuntimeState) {
+    this.transport = DRAFT_TRANSPORTS[state.surface];
+  }
   private applyRead(entry: DraftEntry, remote: ChatDraft): void {
     const previousText = entry.text;
     if (!dirty(entry)) {
@@ -66,7 +93,7 @@ export class ChatDraftActions {
     entry.pending = true;
     this.state.changed();
     try {
-      const remote = await readChatDraft(chatId);
+      const remote = await this.transport.read(chatId);
       if (!entry.disposed) this.applyRead(entry, remote);
     } catch (error) {
       if (entry.disposed) return;
@@ -107,7 +134,7 @@ export class ChatDraftActions {
     entry.phase = "saving";
     this.state.changed();
     try {
-      const saved = await writeChatDraft(chatId, {
+      const saved = await this.transport.write(chatId, {
         text: entry.text,
         expectedRevision: entry.base.revision,
       });
@@ -131,7 +158,7 @@ export class ChatDraftActions {
     entry.pending = true;
     this.state.changed();
     try {
-      const remote = await readChatDraft(chatId);
+      const remote = await this.transport.read(chatId);
       if (entry.disposed) return;
       entry.base = remote;
       entry.conflict = false;
@@ -153,7 +180,7 @@ export class ChatDraftActions {
     entry.pending = true;
     this.state.changed();
     try {
-      const remote = await readChatDraft(chatId);
+      const remote = await this.transport.read(chatId);
       if (entry.disposed) return;
       // Do not erase typing that happened after the explicit replacement click.
       if (entry.editVersion === editVersion) {

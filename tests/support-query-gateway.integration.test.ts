@@ -386,10 +386,11 @@ describe("manual support selection of actual gateway outcomes", () => {
       ),
     ).resolves.toBe("recovered");
     expect(log.events).toHaveLength(1);
+    // #4271: a transport failure is a provider outage, not an internal Keiko fault.
     expect(log.events[0]).toMatchObject({
       op: "gateway.retry.scheduled",
       level: "warn",
-      errorKind: "internal",
+      errorKind: "unavailable",
     });
     for (const entry of log.events) sink.write(entry);
     sink.flush?.();

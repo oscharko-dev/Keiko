@@ -31,7 +31,7 @@ interface SearchResult {
   readonly hits: readonly SearchHit[];
 }
 
-// The pinned 2.1.4 `grep` result: `Found <n> matches`, then per file its path and a colon, then
+// The pinned `grep` result: `Found <n> matches`, then per file its path and a colon, then
 // `  Line <n>: <text>` for every match in it (observed against the staged executable).
 const FOUND_HEADER = /^Found (\d+) matches?$/u;
 const HIT_LINE = /^ {2}Line (\d+): (.*)$/u;

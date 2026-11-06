@@ -19,6 +19,7 @@ import {
   createOpenCodeCommandsRunPort,
   projectCommands,
   projectMentionables,
+  readOnceLocationActivated,
   recordCommandsListed,
   type CommandsRun,
 } from "./opencodeCommands.js";
@@ -477,8 +478,8 @@ describe("the subagents and skills a prompt may mention (#3906)", () => {
     expect(lines(h)).toMatchObject([{ outcome: "refused", reason, agentMentionCount: agents }]);
   });
 
-  // The pinned 2.1.4 answers the first read of a location that is still loading with an empty
-  // listing (original executable); the mention is decided once the location has loaded.
+  // A runtime that does not wait answers the first read of a location that is still loading with an
+  // empty listing (original executable); the mention is decided once the location has loaded.
   it("reads a location that is still loading again before deciding, a bounded number of times", async () => {
     const pauses: number[] = [];
     let reads = 0;
@@ -499,6 +500,147 @@ describe("the subagents and skills a prompt may mention (#3906)", () => {
       ok: false,
       reason: "mention-unknown",
     });
+  });
+
+  // Each late answer takes the runtime five seconds: multiplied bounds would mean 36 reads.
+  it("keeps one bound on the reads when empty and late answers alternate", async () => {
+    let reads = 0;
+    const alternating = harness({
+      pauses: [],
+      agents: () => {
+        reads += 1;
+        return reads % 2 === 0
+          ? Promise.reject(new OpenCodeV2HttpStatusError(503))
+          : Promise.resolve([]);
+      },
+    });
+
+    const outcome = await alternating.port.admitCommand(
+      "run-1",
+      mentioned({ agents: [{ name: "explore" }] }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(reads).toBe(6);
+    expect(
+      alternating.sink.events.filter(
+        (event) => event.op === "coding-runtime.location.activation-wait",
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
+  // A runtime that waits for its location's plugins answers 503 when they are late: still loading,
+  // so the mention is decided on a later read; the wait stays visible in the Activity Log.
+  it("reads again while the location's plugins activate and records that wait", async () => {
+    const pauses: number[] = [];
+    let reads = 0;
+    const activating = harness({
+      pauses,
+      agents: () => {
+        reads += 1;
+        return reads < 3
+          ? Promise.reject(new OpenCodeV2HttpStatusError(503))
+          : Promise.resolve(AGENTS);
+      },
+    });
+    const inputs = mentioned({ agents: [{ name: "explore" }] });
+
+    await expect(activating.port.admitCommand("run-1", inputs)).resolves.toEqual({
+      ok: true,
+      inputs,
+    });
+    expect(pauses).toEqual([250, 250]);
+    expect(
+      activating.sink.events.find(
+        (event) => event.op === "coding-runtime.location.activation-wait",
+      ),
+    ).toMatchObject({
+      level: "info",
+      extra: { runId: "run-1", outcome: "recovered", activatingAnswerCount: 2 },
+    });
+  });
+
+  it.each([
+    {
+      outcome: "recovered",
+      level: "info",
+      answers: 1,
+      final: (): Promise<string> => Promise.resolve("listed"),
+    },
+    { outcome: "exhausted", level: "warn", answers: 6, final: undefined },
+    {
+      outcome: "failed",
+      level: "warn",
+      answers: 1,
+      final: (): Promise<string> => Promise.reject(new Error("socket hang up")),
+    },
+  ])(
+    "joins a $outcome wait to its run and proves the emitted line",
+    async ({ outcome, level, answers, final }) => {
+      const sink = createBufferedServerLogSink();
+      let reads = 0;
+      const read = (): Promise<string> => {
+        reads += 1;
+        return reads <= answers || final === undefined
+          ? Promise.reject(new OpenCodeV2HttpStatusError(503))
+          : final();
+      };
+      await readOnceLocationActivated(
+        { activityLog: sink, pause: () => Promise.resolve() },
+        "run-activation-wait",
+        read,
+      ).catch(() => undefined);
+
+      expect(sink.events).toHaveLength(1);
+      expect(sink.events[0]).toMatchObject({ level, correlationId: "run-activation-wait" });
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.location.activation-wait.emitted-line",
+          formatActivityLogProofLine(sink.events[0] ?? {}),
+        ),
+      ).toMatchObject({ outcome, activatingAnswerCount: answers });
+    },
+  );
+
+  it("stops reading a location that never activates and refuses the mention", async () => {
+    let reads = 0;
+    const late = harness({
+      pauses: [],
+      agents: () => {
+        reads += 1;
+        return Promise.reject(new OpenCodeV2HttpStatusError(503));
+      },
+    });
+
+    await expect(
+      late.port.admitCommand("run-1", mentioned({ agents: [{ name: "explore" }] })),
+    ).resolves.toEqual({ ok: false, reason: "mention-unavailable" });
+    expect(reads).toBe(6);
+    expect(
+      late.sink.events.find((event) => event.op === "coding-runtime.location.activation-wait"),
+    ).toMatchObject({
+      level: "warn",
+      extra: { outcome: "exhausted", activatingAnswerCount: 6 },
+    });
+  });
+
+  it("does not read again after any other status: only a late activation is a loading location", async () => {
+    let reads = 0;
+    const refused = harness({
+      pauses: [],
+      agents: () => {
+        reads += 1;
+        return Promise.reject(new OpenCodeV2HttpStatusError(500));
+      },
+    });
+
+    await expect(
+      refused.port.admitCommand("run-1", mentioned({ agents: [{ name: "explore" }] })),
+    ).resolves.toEqual({ ok: false, reason: "mention-unavailable" });
+    expect(reads).toBe(1);
+    expect(
+      refused.sink.events.some((event) => event.op === "coding-runtime.location.activation-wait"),
+    ).toBe(false);
   });
 
   it("refuses mentions it cannot confirm: a listing that failed, a mapped profile, no live run", async () => {

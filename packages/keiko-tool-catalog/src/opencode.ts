@@ -1,3 +1,4 @@
+import { OPENCODE_CATALOG_RUNTIME } from "@oscharko-dev/keiko-contracts/runtime/opencode-runtime-pins";
 import { WORKSPACE_PATH_DISCOVERY_MODES } from "@oscharko-dev/keiko-contracts/runtime/workspace";
 import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Canonical managed OpenCode descriptors, their profile and pinned native extension schemas.
@@ -50,7 +51,7 @@ export type OpenCodeToolProfile = (typeof OPENCODE_TOOL_PROFILES)[number];
 const OPEN_CODE_TOOL_PROFILES: ReadonlySet<unknown> = new Set(OPENCODE_TOOL_PROFILES);
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
 const OPENCODE_DIALECT = { id: "managed-runtime-json-schema", version: 1 } as const;
-const OPENCODE_RUNTIME = { id: "opencode", version: "2.1.4" } as const;
+const OPENCODE_RUNTIME = OPENCODE_CATALOG_RUNTIME;
 
 export interface OpenCodeNativeExtensionDefinition {
   readonly alias: "question" | "execute";

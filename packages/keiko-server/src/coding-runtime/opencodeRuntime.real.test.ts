@@ -18,6 +18,8 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
 
+import { OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256 } from "./opencodeProtocolSurface.js";
+import { OPENCODE_PINNED_VERSION, openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -84,9 +86,9 @@ const RUN_ID = "run-2254";
 const TREE_BINDING_ID = "f".repeat(64);
 const MODEL_CAPABILITY = "m".repeat(43);
 const TOOL_CAPABILITY = "t".repeat(43);
-const PROTOCOL_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
-const PROTOCOL_HANDSHAKE_DIGEST =
-  "285ecf83dd8afa8e3ab27ae3ffe1e9bb900438234997bf231a91014d6a787ae8";
+const PROTOCOL_SCHEMA_SHA256 =
+  openCodeRuntimeVersionPin(OPENCODE_PINNED_VERSION)?.rawSchemaSha256 ?? "";
+const PROTOCOL_HANDSHAKE_DIGEST = OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256;
 const PROTOCOL_HANDSHAKE_ALGORITHM = "keiko-opencode-protocol-surface-v2" as const;
 // Structural sentinel required only by the manager's test seam; it is not a native release receipt.
 const FUNCTIONAL_TEST_QUALIFICATION_RECEIPT = `sha256:${"0".repeat(64)}`;
@@ -419,7 +421,7 @@ function realPortableRuntime(testRoot: string): {
       name: "opencode-compatible",
       kind: "coding-runtime",
       upstreamName: "opencode",
-      upstreamVersion: "2.0.10",
+      upstreamVersion: OPENCODE_PINNED_VERSION,
       adapterName: "keiko-coding-sidecar",
       adapterVersion: "1",
       protocolVersion: "http-sse",
@@ -612,7 +614,7 @@ async function createGatewayHarness(
         providerCalls += 1;
         return script(request, callIndex);
       },
-    // The real v2.0.10 child issues streaming chats; without this scripted stream factory the
+    // The real child issues streaming chats; without this scripted stream factory the
     // gateway falls back to the default provider path and every post-handshake turn dies.
     codingSidecarGatewayChatStreamFactory:
       (): ((request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>) =>
@@ -1182,7 +1184,7 @@ function expectNativeCompactionActivity(harness: NativeCompactionHarness): void 
       formatActivityLogProofLine(event),
     ),
   );
-  expect(records.map((record) => record.event)).toEqual(["tail-retained", "completed", "failed"]);
+  expect(records.map((record) => record.event)).toEqual(["started", "completed", "failed"]);
   expect(records[0]?.compactionIdSha256).toBe(records[1]?.compactionIdSha256);
   expect(records[2]?.compactionIdSha256).not.toBe(records[0]?.compactionIdSha256);
   expect(new Set(records.map((record) => record.compactionIdSha256)).size).toBe(2);
@@ -1195,6 +1197,9 @@ function expectNativeCompactionActivity(harness: NativeCompactionHarness): void 
     new Set(records.map((record) => `${String(record.compactionIdSha256)}:${String(record.event)}`))
       .size,
   ).toBe(records.length);
+  // #4271: the 2.2.5 producer says whether the summary kept messages verbatim; the line carries it.
+  expect(records[0]).toMatchObject({ retainedTail: false });
+  expect(records[1]).toMatchObject({ retainedTail: true });
   expect(records[2]).toMatchObject({
     compactionErrorKind: "OpenCodeCompactionFailure",
     finishReason: "error",
@@ -1320,7 +1325,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         const unauthenticated = await globalThis.fetch(new URL("/api/info", lease.endpoint));
         expect(unauthenticated.status).toBe(401);
         await unauthenticated.body?.cancel();
-        await expect(client.info()).resolves.toMatchObject({ version: "2.0.10" });
+        await expect(client.info()).resolves.toMatchObject({ version: OPENCODE_PINNED_VERSION });
         expect(lease.pipe.writableEnded).toBe(false);
         expect(lease.pipe.destroyed).toBe(false);
         expect(lease.tree.exited).toBe(false);
@@ -1490,7 +1495,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
   );
 
   it.skipIf(!FUNCTIONAL_ENABLED)(
-    "starts and reaps the explicit staged v2.0.10 binary without native qualification claims",
+    "starts and reaps the explicit staged binary without native qualification claims",
     // eslint-disable-next-line complexity -- the real question and abort lifecycle keeps all gates visible.
     async () => {
       const root = mkdtempSync(join(tmpdir(), "keiko-opencode-functional-"));

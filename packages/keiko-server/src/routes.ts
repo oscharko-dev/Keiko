@@ -83,7 +83,12 @@ import {
   handleSendDesktopChat,
 } from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
-import { handleReadChatDraft, handleSaveChatDraft } from "./chat-draft-routes.js";
+import {
+  handleReadChatDraft,
+  handleReadCodingWorkbenchDraft,
+  handleSaveChatDraft,
+  handleSaveCodingWorkbenchDraft,
+} from "./chat-draft-routes.js";
 import {
   handleGetMcpSettings,
   handlePutMcpSettings,
@@ -698,6 +703,16 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/chats", handler: handleListChats },
   { method: "GET", pattern: "/api/chats/:id/draft", handler: handleReadChatDraft },
   { method: "PUT", pattern: "/api/chats/:id/draft", handler: handleSaveChatDraft },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/drafts/:id",
+    handler: handleReadCodingWorkbenchDraft,
+  },
+  {
+    method: "PUT",
+    pattern: "/api/coding-workbench/drafts/:id",
+    handler: handleSaveCodingWorkbenchDraft,
+  },
   { method: "POST", pattern: "/api/chats", handler: handleCreateChat },
   { method: "PATCH", pattern: "/api/chats", handler: handleUpdateChat },
   { method: "DELETE", pattern: "/api/chats", handler: handleDeleteChat },

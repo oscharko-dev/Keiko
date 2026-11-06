@@ -47,6 +47,151 @@ describe("OpenCode V2 child readiness", () => {
   });
 });
 
+describe("OpenCode V2 event stream (#4271)", () => {
+  const encoder = new TextEncoder();
+  const frame = (id: string, padding = ""): string =>
+    `data: ${JSON.stringify({ id, type: "server.connected", padding })}\n\n`;
+
+  function client(
+    respond: (init: RequestInit | undefined) => Response | Promise<Response>,
+  ): ReturnType<typeof createOpenCodeV2HttpClient> {
+    return createOpenCodeV2HttpClient({
+      endpoint: "http://127.0.0.1:4096",
+      password: "test-password",
+      eventIdleTimeoutMs: 20,
+      fetch: (_input, init) => Promise.resolve(respond(init)),
+    });
+  }
+
+  function streamResponse(body: BodyInit | null): Response {
+    return new Response(body, { headers: { "content-type": "text/event-stream" } });
+  }
+
+  async function collect(
+    events: AsyncIterable<Readonly<Record<string, unknown>>>,
+  ): Promise<readonly unknown[]> {
+    const ids: unknown[] = [];
+    for await (const event of events) ids.push(event.id);
+    return ids;
+  }
+
+  it("takes many small frames of one read, whose sum exceeds the bound of one frame", async () => {
+    const padding = "x".repeat(600 * 1024);
+    const body = `${frame("a", padding)}${frame("b", padding)}`;
+    const ids = await collect(
+      client(() => streamResponse(body)).events(new AbortController().signal),
+    );
+    expect(ids).toEqual(["a", "b"]);
+  });
+
+  it("refuses one frame over the bound, complete or still growing", async () => {
+    const padding = "x".repeat(1024 * 1024 + 1);
+    const signal = new AbortController().signal;
+    await expect(
+      collect(client(() => streamResponse(frame("a", padding))).events(signal)),
+    ).rejects.toThrow("opencode-v2-event-oversized");
+    await expect(
+      collect(client(() => streamResponse(`data: ${padding}`)).events(signal)),
+    ).rejects.toThrow("opencode-v2-event-oversized");
+  });
+
+  // Fetch rejects with the abort reason and errors the body with it; a fake has to do both itself.
+  function silentAfter(chunks: readonly string[], init: RequestInit | undefined): Response {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        init?.signal?.addEventListener("abort", () => {
+          controller.error(init.signal?.reason);
+        });
+      },
+    });
+    return streamResponse(body);
+  }
+
+  it("ends a stream that stops answering, so the monitor can reconnect", async () => {
+    await expect(
+      collect(
+        client((init) => silentAfter([frame("a")], init)).events(new AbortController().signal),
+      ),
+    ).rejects.toThrow("opencode-v2-event-idle");
+  });
+
+  it("ends a connection attempt that never answers", async () => {
+    const hanging = (init: RequestInit | undefined): Promise<Response> =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(init.signal?.reason as Error);
+        });
+      });
+    await expect(collect(client(hanging).events(new AbortController().signal))).rejects.toThrow(
+      "opencode-v2-event-idle",
+    );
+  });
+
+  // #4271 audit: a stop while the stream waits is the caller's own cancellation. Naming it an idle
+  // runtime sent the operator after a hang that never happened.
+  it.each([
+    ["while connecting", (init: RequestInit | undefined): Response => silentAfter([], init)],
+    ["while reading", (init: RequestInit | undefined): Response => silentAfter([frame("a")], init)],
+  ])(
+    "names the caller's own abort %s as a cancellation, not an idle runtime",
+    async (_, respond) => {
+      const caller = new AbortController();
+      const collected = collect(
+        createOpenCodeV2HttpClient({
+          endpoint: "http://127.0.0.1:4096",
+          password: "test-password",
+          eventIdleTimeoutMs: 60_000,
+          fetch: (_input, init) => Promise.resolve(respond(init)),
+        }).events(caller.signal),
+      );
+      setTimeout(() => {
+        caller.abort();
+      }, 5);
+      await expect(collected).rejects.toThrow("opencode-v2-event-cancelled");
+    },
+  );
+
+  it("names a stream already cancelled before it opens a cancellation", async () => {
+    const caller = new AbortController();
+    caller.abort();
+    await expect(
+      collect(client((init) => silentAfter([], init)).events(caller.signal)),
+    ).rejects.toThrow("opencode-v2-event-cancelled");
+  });
+
+  it("keeps a stream alive that only sends heartbeats, past the idle deadline", async () => {
+    const beats = 6;
+    const body = new ReadableStream<Uint8Array>({
+      async start(controller): Promise<void> {
+        await Array.from({ length: beats }).reduce<Promise<void>>(
+          (previous) =>
+            previous.then(async () => {
+              controller.enqueue(encoder.encode(": heartbeat\n\n"));
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }),
+          Promise.resolve(),
+        );
+        controller.enqueue(encoder.encode(frame("after")));
+        controller.close();
+      },
+    });
+    const ids = await collect(
+      client(() => streamResponse(body)).events(new AbortController().signal),
+    );
+    expect(ids).toEqual(["after"]);
+  });
+
+  it("leaves no timer behind and stops on the caller's abort", async () => {
+    const controller = new AbortController();
+    const events = client((init) => silentAfter([frame("a")], init)).events(controller.signal);
+    const iterator = events[Symbol.asyncIterator]();
+    await expect(iterator.next()).resolves.toMatchObject({ value: { id: "a" } });
+    controller.abort();
+    await expect(iterator.next()).rejects.toThrow();
+  });
+});
+
 describe("OpenCode V2 local HTTP deadline", () => {
   it("keeps a delayed history transport alive past ten seconds", async () => {
     vi.useFakeTimers();

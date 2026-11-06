@@ -2166,6 +2166,8 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   "pending-decision-focused",
   "repository-trust-bound",
   "changeset-review-prepared",
+  // The person gave up a start that had no run yet (#4271).
+  "start-cancelled",
   // A history task from another repository than the active one was returned and not activated: the
   // operator switched repositories, an ordinary transition and not a failure.
   "history-repository-switched",
@@ -2185,6 +2187,10 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // missing pairing once instead of every surface reporting its own failure. Closed notice only
   // (#3880).
   "notice-held",
+  // A delivery card showed a step's state: a review's load state, a verified commit's result, a
+  // draft delivery's phase, the CI readiness or the journey outcome. These were warn/unknown
+  // `client.diagnostic` sentences before (#4271). The step and its closed state only.
+  "delivery-step-shown",
 ] as const;
 export type ClientCodingWorkbenchInteractionName =
   (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
@@ -2243,6 +2249,102 @@ export const CLIENT_CODING_WORKBENCH_HELD_NOTICES = [
 ] as const;
 export type ClientCodingWorkbenchHeldNotice = (typeof CLIENT_CODING_WORKBENCH_HELD_NOTICES)[number];
 
+/** The delivery card whose state a `delivery-step-shown` interaction reports (#4271). */
+export const CLIENT_CODING_WORKBENCH_DELIVERY_STEPS = [
+  "delivery-review",
+  "stage-review",
+  "unstage-review",
+  "commit-review",
+  "commit-result",
+  "draft-delivery",
+  "ci-readiness",
+  "journey",
+] as const;
+export type ClientCodingWorkbenchDeliveryStep =
+  (typeof CLIENT_CODING_WORKBENCH_DELIVERY_STEPS)[number];
+
+/** Every closed state a delivery step can show; each step admits only its own (below). */
+export const CLIENT_CODING_WORKBENCH_DELIVERY_STATES = [
+  "idle",
+  "loading",
+  "ready",
+  "unavailable",
+  "succeeded",
+  "blocked",
+  "failed",
+  "recovery-required",
+  "verification-failed",
+  "drift",
+  "push-proposed",
+  "pushing",
+  "pushed",
+  "pr-proposed",
+  "creating-pr",
+  "draft-created",
+  "technical-ready",
+  "pending",
+  "unknown",
+  "stale",
+  "unobserved",
+  "awaiting-ready-approval",
+  "keiko-technical-ready",
+  "ready-for-human-review",
+  "awaiting-human-requirements",
+  "merged-awaiting-issue-closure",
+  "completed",
+  "cancelled",
+] as const;
+export type ClientCodingWorkbenchDeliveryState =
+  (typeof CLIENT_CODING_WORKBENCH_DELIVERY_STATES)[number];
+
+const DELIVERY_REVIEW_STATES = ["idle", "loading", "ready", "unavailable"] as const;
+const DELIVERY_STEP_STATES = {
+  "delivery-review": DELIVERY_REVIEW_STATES,
+  "stage-review": DELIVERY_REVIEW_STATES,
+  "unstage-review": DELIVERY_REVIEW_STATES,
+  "commit-review": ["ready"],
+  "commit-result": [
+    "succeeded",
+    "blocked",
+    "failed",
+    "recovery-required",
+    "verification-failed",
+    "drift",
+  ],
+  "draft-delivery": [
+    "push-proposed",
+    "pushing",
+    "pushed",
+    "pr-proposed",
+    "creating-pr",
+    "draft-created",
+    "recovery-required",
+  ],
+  "ci-readiness": [
+    "technical-ready",
+    "pending",
+    "failed",
+    "blocked",
+    "unknown",
+    "stale",
+    "unobserved",
+  ],
+  journey: [
+    "awaiting-ready-approval",
+    "keiko-technical-ready",
+    "ready-for-human-review",
+    "awaiting-human-requirements",
+    "merged-awaiting-issue-closure",
+    "completed",
+    "blocked",
+    "cancelled",
+    "recovery-required",
+    "stale",
+  ],
+} as const satisfies Readonly<
+  Record<ClientCodingWorkbenchDeliveryStep, readonly ClientCodingWorkbenchDeliveryState[]>
+>;
+
 /** Bounds a changeset's file count, like the restored-run counts above. */
 export const CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX = 100_000;
 /** Bounds a windowed diff's total line and byte counts (16 Mi lines, 1 GiB). */
@@ -2267,6 +2369,7 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
       readonly workspaceId: string;
     }
   | { readonly interaction: "changeset-review-prepared"; readonly fileCount: number }
+  | { readonly interaction: "start-cancelled" }
   | { readonly interaction: "history-repository-switched" }
   | { readonly interaction: "event-stream-reconnecting" }
   | { readonly interaction: "history-workspace-switched" }
@@ -2281,7 +2384,12 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
       readonly totalLineCount: number;
       readonly totalByteCount: number;
     }
-  | { readonly interaction: "notice-held"; readonly notice: ClientCodingWorkbenchHeldNotice };
+  | { readonly interaction: "notice-held"; readonly notice: ClientCodingWorkbenchHeldNotice }
+  | {
+      readonly interaction: "delivery-step-shown";
+      readonly deliveryStep: ClientCodingWorkbenchDeliveryStep;
+      readonly deliveryState: ClientCodingWorkbenchDeliveryState;
+    };
 
 const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_INTERACTIONS,
@@ -2327,6 +2435,7 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   },
   "agent-selected": { agent: (value) => isSetMember(value, CODING_WORKBENCH_AGENT_KIND_SET) },
   "pending-decision-focused": {},
+  "start-cancelled": {},
   "history-repository-switched": {},
   "event-stream-reconnecting": {},
   "history-workspace-switched": {},
@@ -2352,7 +2461,26 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
       isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_DIFF_BYTE_COUNT_MAX),
   },
   "notice-held": { notice: (value) => isSetMember(value, CODING_WORKBENCH_HELD_NOTICE_SET) },
+  "delivery-step-shown": {
+    deliveryStep: (value) =>
+      typeof value === "string" && Object.hasOwn(DELIVERY_STEP_STATES, value),
+    deliveryState: (value) => isSetMember(value, CODING_WORKBENCH_DELIVERY_STATE_SET),
+  },
 };
+
+const CODING_WORKBENCH_DELIVERY_STATE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_DELIVERY_STATES,
+);
+const CODING_WORKBENCH_DELIVERY_STEP_STATE_SETS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  Object.entries(DELIVERY_STEP_STATES).map(([step, states]) => [step, new Set<string>(states)]),
+);
+
+// A delivery step admits only its own states: a journey state never rides a review.
+function coherentDeliveryStep(value: Readonly<Record<string, unknown>>): boolean {
+  if (value.interaction !== "delivery-step-shown") return true;
+  const states = CODING_WORKBENCH_DELIVERY_STEP_STATE_SETS.get(value.deliveryStep as string);
+  return states !== undefined && isSetMember(value.deliveryState, states);
+}
 
 /** True for one closed interaction with exactly its own valid fields. */
 function isClientDiagnosticCodingWorkbenchInteraction(
@@ -2363,7 +2491,8 @@ function isClientDiagnosticCodingWorkbenchInteraction(
   const keys = Object.keys(value).filter((key) => key !== "interaction");
   return (
     keys.length === Object.keys(fields).length &&
-    keys.every((key) => fields[key]?.(value[key]) === true)
+    keys.every((key) => fields[key]?.(value[key]) === true) &&
+    coherentDeliveryStep(value)
   );
 }
 

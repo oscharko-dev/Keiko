@@ -644,6 +644,45 @@ The cold-start ceiling rose by 18 %. The measured p95 rose by 7 % over the 1.3.2
 unchanged 1.3.2 commit itself rose by 10 % on the same host. The next ordinary re-measurement on this
 reference uses `--recalibrate` and its shrink-only ratchet again.
 
+**Reference re-established, 2026-11-06 (owner decision, PR #4275, #4271).** The OpenCode upgrade
+from 2.1.4 to 2.2.5 changed the runtime version and payload digest, and three ruler inputs moved
+(`productionOpenCodeBackend.functional/_support.ts`, `portable-runtime-approvals.json` and
+`scripts/coding-runtime-performance-harness.mjs`). The rest of the recorded environment is
+unchanged: kernel 27.0.0, cores, memory, CPU model digest, Node 24.18.0 / npm 11.16.0, Apple Git
+2.54.0 and the secure-read helper digest. The shrink-only ratchet of #4260 had tightened the
+cold-start ceiling to 1512.4 on 2026-11-05, from a measurement of 1478.6.
+
+The 2.2.5 upgrade is not slower, but the host drifted:
+
+- First, `--recalibrate-runtime` ran. Its candidate was within every ceiling except cold start.
+- An A/B in the same quiet window, with the lab models unloaded, measured cold start at p95 1685.0
+  on 2.2.5 at the head under review and 1682.1 on the unchanged 2.1.4 merge base `033dd3bc2`.
+- Bounded throughput was faster on 2.2.5: 138.7 against 159.0.
+- An earlier attempt the same night, while two lab models were serving inference, measured p95
+  3158.4 on the head and 2520.0 on the base. Those runs were discarded as host load.
+
+The ratchet cannot raise the cold-start ceiling, so the owner decided to re-establish the
+reference for cold start only.
+
+The step 2 procedure ran at `343e103f6` in one quiet window: `npm ci`, the staged runtime,
+`--calibrate`, an independent measurement and the freshness check. Only cold start takes its fresh
+ceiling. Readiness, the first SSE byte and bounded throughput keep their previously reviewed,
+tighter ceilings.
+
+| Metric                | Previous ceiling (2026-11-05) | Fresh calibration ceiling | Committed ceiling | Measured p95 |
+| --------------------- | ----------------------------- | ------------------------- | ----------------- | ------------ |
+| `coldStartMs`         | 1512.4                        | 1799.9                    | 1799.9            | 1775.0       |
+| `readinessMs`         | 3.18                          | 5.09                      | 3.18              | 2.60         |
+| `sseFirstByteMs`      | 3.25                          | 4.03                      | 3.25              | 2.30         |
+| `boundedThroughputMs` | 160.0                         | 162.5                     | 160.0             | 142.3        |
+
+The cold-start ceiling rose by 19 %. Lower it again with `--recalibrate` once the host measures
+the base below it.
+
+Homebrew Git 2.56.0 precedes Apple Git on this host's default `PATH`, and the producer records the
+Git it finds first. Put `/usr/bin` ahead of `/opt/homebrew/bin` with the pinned Node, or the
+environment no longer matches the reference.
+
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set
 `KEIKO_PERF_EVIDENCE_BASE_REF` to the PR/merge-group base for diff-owned toolchain freshness, as for

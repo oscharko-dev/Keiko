@@ -435,6 +435,15 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
     );
   }
 
+  // OpenCode reads machine-wide configuration from these two trees and lets it win over the
+  // configuration Keiko hands the run. The read boundary is what keeps it out on macOS.
+  it("keeps machine-wide OpenCode configuration outside the native read boundary", () => {
+    const profile = nativeProfile("inherited");
+    expect(profile).not.toContain('(subpath "/Library")');
+    expect(profile).not.toContain('(subpath "/Library/Application Support');
+    expect(profile).not.toContain('(subpath "/Library/Managed Preferences');
+  });
+
   it("compiles the native profile with inherited exec and egress at Full access", () => {
     const wrapped = buildGatewaySeatbeltCommand(
       gateway,
@@ -452,6 +461,18 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
     expect(profile).not.toContain("(deny mach-lookup)");
     for (const denied of ["appleevent-send", "lsopen"])
       expect(profile).toContain(`(deny ${denied})`);
+    // #4271: named services only; a toolchain's other lookups stay open (see the pin above).
+    for (const service of [
+      "com.apple.pasteboard.1",
+      "com.apple.pboard",
+      "com.apple.SecurityServer",
+      "com.apple.secd",
+      "com.apple.securityd.xpc",
+      "com.apple.security.agent",
+      "com.apple.SecurityAgent",
+    ])
+      expect(profile).toContain(`(global-name "${service}")`);
+    expect(profile).toContain('(subpath "/usr/local/var")');
     expect(profile).toContain('(subpath "/accepted/workspace")');
     expect(profile).toContain('(deny file-read* file-write* (subpath "/Users/owner/.ssh")');
     // The workspace and the private state root are re-allowed after the denied roots, so Keiko's

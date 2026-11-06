@@ -149,7 +149,7 @@ export const OPENCODE_RUNTIME_PROVIDER_ID = "keiko-runtime";
 
 /**
  * The producer's own provider policy, fixed on every V2 profile: only the gateway-bound provider may
- * be used. Without it the pinned 2.1.4 runtime lists OpenCode's hosted free models and discovers
+ * be used. Without it the pinned runtime lists OpenCode's hosted free models and discovers
  * local servers such as Ollama on their default loopback ports (original executable), each a model
  * route that bypasses the Model Gateway. Statements are ordered; the last match wins.
  */
@@ -161,6 +161,44 @@ export const OPENCODE_GATEWAY_PROVIDER_POLICIES = Object.freeze([
     effect: "allow",
   }),
 ]);
+/**
+ * Built-in plugins no run loads, each a refused disposition of the service inventory. Removing a
+ * plugin at its source keeps its command, tool and permission rules out of the run. The browser
+ * plugin matters for more than its tools: its `skill` rule for one resource follows Keiko's whole
+ * `skill` denial, and the producer only hides a tool whose last matching rule denies everything.
+ */
+export const OPENCODE_WITHHELD_BUILT_IN_PLUGINS = Object.freeze([
+  "opencode.browser",
+  // It reads and watches `.claude` and `.agents` skill directories, also under the run's private
+  // home, where a shell can write. Keiko admits those skills itself as sanitized copies.
+  "opencode.config.compatibility",
+  "opencode.goal",
+  "opencode.provider.claude-agent",
+  // A local provider asks its default loopback port every 30 s whether a model server runs there,
+  // and reloads the catalog when one does. The provider policy would refuse the models anyway.
+  "opencode.provider.lmstudio",
+  "opencode.provider.ollama",
+  "opencode.provider.vllm",
+  "opencode.tool.artifact",
+  "opencode.tool.image-generate",
+  "opencode.tool.schedule",
+]);
+
+const OPENCODE_PLUGIN_REMOVALS = Object.freeze(
+  OPENCODE_WITHHELD_BUILT_IN_PLUGINS.map((plugin) => `-${plugin}`),
+);
+
+/** Experimental switches stated explicitly, so a changed producer default cannot open one. */
+const OPENCODE_CLOSED_EXPERIMENTS = Object.freeze({
+  artifacts: false,
+  image_generate: false,
+  // A session idle for an hour would otherwise unload the directory's plugins and tools under a
+  // run Keiko still holds; Keiko alone bounds the runtime's lifetime.
+  location_idle_timeout: false,
+  media_blob: false,
+  schedules: false,
+});
+
 export const OPENCODE_RUNTIME_READINESS_PROMPT = "Keiko runtime readiness handshake.";
 const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;
 
@@ -244,7 +282,7 @@ export function buildOpenCodeLaunchProfile(
     executable: input.executable,
     args: ["serve", "--hostname", "127.0.0.1", "--port", "0"],
     env: launchEnvironment(input, formatter, configValue, secret),
-    config: JSON.stringify(configValue),
+    config: JSON.stringify(materializedConfiguration(input, configValue)),
     configValue,
     ...nativeFormatterFacts(input, formatter),
   };
@@ -582,8 +620,10 @@ function createGovernedOpenCodeV2Config(
     default_agent: "build",
     providers: fixedOpenCodeV2Provider(contextGeometry, { image: false, pdf: false }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
+    plugins: OPENCODE_PLUGIN_REMOVALS,
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
+    experimental: OPENCODE_CLOSED_EXPERIMENTS,
     permissions,
   };
 }
@@ -651,12 +691,13 @@ function createNativeOpenCodeV2Config(
       ? {}
       : { agents: agentModels.agents }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
+    plugins: OPENCODE_PLUGIN_REMOVALS,
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     // The producer offers its plan tool (`todowrite`) only under this switch; Keiko classifies the
     // update as a read in every mode and projects it as the plan card (parity row T19, owner
     // decision of 2026-10-24).
-    experimental: { todo: true },
+    experimental: { ...OPENCODE_CLOSED_EXPERIMENTS, todo: true },
     // The operator's admitted MCP servers, and nothing else (#3903, `opencodeNativeMcp.ts`).
     mcp,
     // The operator's accepted external references, as the producer's own local references
@@ -712,6 +753,20 @@ function openCodeNativeReferences(
       { path, description: "Read-only external reference the operator accepted for this run." },
     ]),
   );
+}
+
+/**
+ * The configuration file sits in the run's private state, which a shell child can read, and a
+ * relayed MCP server's binding carries that run's capability. The native profile therefore keeps
+ * the MCP servers in the server-owned binding alone, whose copy in the exec environment the
+ * launch-secrets plugin overwrites; the runtime merges that binding after this file.
+ */
+function materializedConfiguration(
+  input: OpenCodeLaunchProfileInput,
+  config: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  if (input.toolProfile !== "native") return config;
+  return Object.fromEntries(Object.entries(config).filter(([key]) => key !== "mcp"));
 }
 
 /**

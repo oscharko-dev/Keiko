@@ -94,6 +94,7 @@ async function labEnvironment(dir, options, source = process.env) {
   const project = realpathSync(join(dir, "project"));
   const env = {
     ...parentEnv(source),
+    KEIKO_OS_KEYCHAIN: "off",
     KEIKO_STATE_DIR: join(dir, "state"),
     KEIKO_UI_DATA_DIR: join(dir, "ui"),
     KEIKO_MEMORY_DIR: join(dir, "memory"),

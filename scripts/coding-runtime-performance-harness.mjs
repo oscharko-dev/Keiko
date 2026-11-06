@@ -127,6 +127,7 @@ function runtimeDependencies(root, modules, port) {
     gatewayReadinessFetch: readinessProbeFetch(),
     env: {
       PATH: process.env.PATH,
+      KEIKO_OS_KEYCHAIN: "off",
       KEIKO_STATE_DIR: join(root, "state"),
       KEIKO_UI_PORT: String(port),
       KEIKO_CODING_RUNTIME_DEV_LANE: "1",

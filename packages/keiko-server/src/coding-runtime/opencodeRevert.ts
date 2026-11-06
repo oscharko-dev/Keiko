@@ -256,6 +256,10 @@ async function revertTurn(
     recordRevertApplied(ports.activityLog, runId, action, outcome, correlationId);
     return { ok: true, ...countsOf(outcome) };
   } catch (error) {
+    // An undo the run's teardown overtook (a server stop disposes the runtime under it) is refused
+    // like one asked after the teardown: the run is gone, the runtime did not fail (#4271).
+    if (ports.readyRun(runId) !== run)
+      return recordRevertRefusal(ports, runId, action, "run-unavailable", correlationId);
     return recordRevertRefusal(ports, runId, action, "revert-failed", correlationId, error);
   }
 }

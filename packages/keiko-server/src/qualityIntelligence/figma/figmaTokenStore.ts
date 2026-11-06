@@ -143,7 +143,7 @@ export const NO_FIGMA_KEYCHAIN: FigmaKeychainAccess = () => undefined;
 export function resolveFigmaVaultKey(
   env: Readonly<Record<string, string | undefined>>,
   vaultDir: string,
-  keychainAccess: FigmaKeychainAccess = keyFromKeychain,
+  keychainAccess: FigmaKeychainAccess = () => keyFromKeychain({ env }),
 ): ResolvedFigmaVaultKey {
   const fromEnv = keyFromEnv(env);
   if (fromEnv !== undefined) return { key: fromEnv, source: "env" };

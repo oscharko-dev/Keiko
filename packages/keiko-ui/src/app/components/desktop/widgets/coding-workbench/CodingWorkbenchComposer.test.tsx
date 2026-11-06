@@ -35,6 +35,7 @@ function composerActions(): TaskComposerActions {
     onResume: vi.fn(),
     onSend: vi.fn(),
     onStop: vi.fn(),
+    onCancelStart: vi.fn(),
   };
 }
 
@@ -98,6 +99,7 @@ function composerProps(
     mutationPending: false,
     stopPending: false,
     startBusy: false,
+    startCancellable: false,
     startBlockedReason: null,
     projectMemoryEnabled: true,
     onProjectMemoryEnabledChange: vi.fn(),
@@ -170,6 +172,21 @@ describe("Coding Workbench composer", () => {
     expect(screen.queryByRole("button", { name: "Pause run" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
     expect(actions.onStart).toHaveBeenCalledOnce();
+  });
+
+  it("offers Stop instead of a blocked Start while a start has no run yet (#4271)", async () => {
+    const user = userEvent.setup();
+    const actions = composerActions();
+    renderComposerWithOverrides({
+      actions,
+      mutationPending: true,
+      startBusy: true,
+      startCancellable: true,
+    });
+    expect(screen.queryByRole("button", { name: "Starting coding run" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Stop run" }));
+    expect(actions.onCancelStart).toHaveBeenCalledOnce();
+    expect(actions.onStop).not.toHaveBeenCalled();
   });
 
   it.each(["idle", "paused"] as const)(

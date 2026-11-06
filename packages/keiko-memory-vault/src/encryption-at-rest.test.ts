@@ -10,7 +10,7 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MemoryId, MemoryRecord, UserId } from "@oscharko-dev/keiko-contracts/memory";
-import { createMemoryVault, MEMORY_VAULT_SCHEMA_VERSION } from "./index.js";
+import { createMemoryVault, MEMORY_VAULT_SCHEMA_VERSION, MemoryStorageError } from "./index.js";
 import type { MemoryVaultStore } from "./types.js";
 
 const KEY_A = Buffer.alloc(32, 7);
@@ -154,6 +154,28 @@ describe("wrong key fails loudly", () => {
     first.close();
 
     expect(() => openVault(dir, KEY_B)).toThrow();
+  });
+
+  it("classifies the mismatch as an unreadable vault and leaves it intact for the right key", () => {
+    const dir = freshDir();
+    const first = openVault(dir, KEY_A);
+    first.insertMemory(secretMemory("m1"));
+    first.close();
+    const before = readFileSync(join(dir, "keiko-memory.db"));
+
+    let thrown: unknown;
+    try {
+      openVault(dir, KEY_B);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(MemoryStorageError);
+    expect((thrown as MemoryStorageError).code).toBe("vault-unreadable");
+    expect(readFileSync(join(dir, "keiko-memory.db")).equals(before)).toBe(true);
+
+    const reopened = openVault(dir, KEY_A);
+    expect(reopened.getMemory("m1" as MemoryId)?.body).toBe(BODY_MARKER);
+    reopened.close();
   });
 });
 

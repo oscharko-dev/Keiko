@@ -13,6 +13,11 @@ native-handoff boundary; it does not assert that release qualification has compl
   material in per-feature vaults; `keiko.config.json` stores non-secret provider metadata and stable
   secret references (`apiKeySecretRef`), never secret values. Environment-variable credentials stay
   transient and are never written back. See [ADR-0046](adr/ADR-0046-local-credential-vault.md).
+- On macOS each vault key sits in the login keychain unless its own variable supplies one.
+  `KEIKO_OS_KEYCHAIN=off` withholds the keychain from a process and its vaults, which is what
+  end-to-end servers and labs set: keys then come from `0600` keyfiles beside the stores, which is
+  weaker custody, and data sealed under a keychain key does not open. A process under vitest never
+  reaches the keychain. `security.keychain.withheld` records the choice with its closed reason.
 - UI database and memory-vault configured paths use fail-closed validation; path escapes and
   symlink-based bypasses are rejected.
 - Evidence and memory remain local machine state, not a hosted compliance archive; neither is

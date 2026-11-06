@@ -297,7 +297,7 @@ import {
   type ContainerRunnerManager,
 } from "./runtime/containerRunner.js";
 import { createBrowserSessionManager, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
-import { type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { MemoryStorageError, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { CapturePolicyOptions } from "@oscharko-dev/keiko-memory-capture";
 import type {
   MemoryRecord,
@@ -2642,23 +2642,26 @@ function buildMemoryVault(
   env: EnvSource,
   diagnostics: ServerDiagnosticSink | undefined,
   bootstrapCorrelationId: string,
-): MemoryVaultStore {
+): MemoryVaultStore | undefined {
   const postCommitAudit = createMemoryAuditHandler({ evidenceStore, redactString });
-  const vault = createBffMemoryVault(
-    redactString,
-    // #214 — wire every successful vault mutation into the audit ledger. The handler
-    // shares the same redactString closure as the live-payload redactor so audit
-    // summaries inherit the same secret-shape scrubbing as wire traffic.
-    (event) => {
-      if (event.kind === "memory:deleted" || event.kind === "memory:tombstoned") {
-        return;
-      }
-      postCommitAudit(event);
-    },
-    createMemoryAuditDeleteCommitHandler({ evidenceStore, redactString }),
-    env,
-    bootstrapCorrelationId,
+  const vault = openMemoryVaultOrWithhold(diagnostics, () =>
+    createBffMemoryVault(
+      redactString,
+      // #214 — wire every successful vault mutation into the audit ledger. The handler
+      // shares the same redactString closure as the live-payload redactor so audit
+      // summaries inherit the same secret-shape scrubbing as wire traffic.
+      (event) => {
+        if (event.kind === "memory:deleted" || event.kind === "memory:tombstoned") {
+          return;
+        }
+        postCommitAudit(event);
+      },
+      createMemoryAuditDeleteCommitHandler({ evidenceStore, redactString }),
+      env,
+      bootstrapCorrelationId,
+    ),
   );
+  if (vault === undefined) return undefined;
   // Issue #3189 — seed only the transition classifier's body-free pre-image fields after the
   // vault exists and before this composition returns it to mutation routes. This keeps the first
   // post-restart archive/accept/reject/pin mutation semantically classified without retaining
@@ -2706,9 +2709,35 @@ function serverOperatorPrincipal(options: BuildHandlerDepsOptions): () => string
   );
 }
 
+/**
+ * A stored vault that the available key cannot open (a changed or withheld keychain entry, a state
+ * directory moved to another device) leaves memory unavailable for this process instead of making
+ * the whole local server crash-loop at startup. Memory routes then answer 503 `MEMORY_UNAVAILABLE`
+ * and Chat runs without memory, while the vault stays untouched for the key that opens it. Every
+ * other open failure still fails composition closed.
+ */
+function openMemoryVaultOrWithhold(
+  diagnostics: ServerDiagnosticSink | undefined,
+  open: () => MemoryVaultStore,
+): MemoryVaultStore | undefined {
+  try {
+    return open();
+  } catch (error) {
+    if (!(error instanceof MemoryStorageError) || error.code !== "vault-unreadable") throw error;
+    emitCompositionDiagnostic(
+      diagnostics,
+      "memory-vault.open",
+      "The memory vault could not be opened with the available key.",
+      error,
+    );
+    return undefined;
+  }
+}
+
 function buildLoopbackMemoryAuthorization(
-  memoryVault: MemoryVaultStore,
-): MemoryAuthorizationContext {
+  memoryVault: MemoryVaultStore | undefined,
+): MemoryAuthorizationContext | undefined {
+  if (memoryVault === undefined) return undefined;
   return {
     reviewerId: DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID,
     authorizedScopes: () => memoryVault.listMemoryScopes(),
@@ -3361,7 +3390,7 @@ interface PeripheralManagers {
   readonly updateRemediation: UpdateRemediationManager;
   readonly containerRunner: ContainerRunnerManager;
   readonly browser: BrowserSessionManager;
-  readonly memoryVault: MemoryVaultStore;
+  readonly memoryVault: MemoryVaultStore | undefined;
   readonly editorHotExitStore: EditorHotExitStore;
   readonly editorLocalHistoryStore: EditorLocalHistoryStore;
   readonly managedLspControl: ManagedLspControlService;
@@ -3370,7 +3399,7 @@ interface PeripheralManagers {
   readonly editorSettingsEvents: EditorSettingsEventBus;
   readonly workspaceWatchService: WorkspaceWatchService;
   readonly workspaceSnippets: WorkspaceSnippetsService;
-  readonly memoryAuthorization: MemoryAuthorizationContext;
+  readonly memoryAuthorization: MemoryAuthorizationContext | undefined;
 }
 
 interface DapRuntimeReference {
@@ -5234,10 +5263,11 @@ function buildUiCodingRuntimeControlPlane(
   args: UiHandlerDepsAssemblyArgs,
   codingRuntimeEvidenceAggregator: ReturnType<typeof createCodingRuntimeEvidenceAggregator>,
   codingRuntimeHost: NonNullable<BuildHandlerDepsOptions["codingRuntimeHost"]> | undefined,
-  memoryVault: MemoryVaultStore,
+  memoryVault: MemoryVaultStore | undefined,
 ): ReturnType<typeof createCodingRuntimeControlPlane> | undefined {
   if (!args.bundle.codingRuntimeSnapshotStore || !args.bundle.workspaceLifecycle) return undefined;
-  const projectMemory = createUiCodingRuntimeProjectMemory(args, memoryVault);
+  const projectMemory =
+    memoryVault === undefined ? undefined : createUiCodingRuntimeProjectMemory(args, memoryVault);
   const repositoryInstructions = createUiCodingRuntimeRepositoryInstructions(
     args,
     codingRuntimeHost,
@@ -5257,7 +5287,7 @@ function buildUiCodingRuntimeControlPlane(
     workspaceLifecycle: args.bundle.workspaceLifecycle,
     serverPrincipal: serverOperatorPrincipal(args.options),
     ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
-    projectMemory,
+    ...(projectMemory === undefined ? {} : { projectMemory }),
     repositoryInstructions,
     // KEIKO-0225: forward the operator diagnostic sink so mid-stream SSE fan-out write failures
     // surface as one redacted record per subscriber instead of being silently swallowed.

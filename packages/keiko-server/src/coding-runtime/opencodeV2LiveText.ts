@@ -2,7 +2,7 @@
 // twice (#3873 review, PR #3876): as an empty part when the block starts and as the complete part
 // when it ends. `session.text.delta` and `session.reasoning.delta` are ephemeral events: they reach
 // the live event stream, are never persisted, and the history a read returns never contains them.
-// Measured against the pinned 2.0.10 runtime: a reasoning phase of a few seconds left the history
+// Measured against the OpenCode 2.0.10 runtime: a reasoning phase of a few seconds left the history
 // read at `""` until the response finished, while the event stream carried each delta as it arrived.
 //
 // The timeline reads history, so what the history cannot show it takes from here: this overlay

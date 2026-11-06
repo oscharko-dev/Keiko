@@ -155,6 +155,7 @@ import {
   commandDisplayText,
   createOpenCodeCommandPresentation,
   createOpenCodeCommandsRunPort,
+  readOnceLocationActivated,
   recordCommandPostRefused,
   type OpenCodeCommandPresentation,
   type OpenCodeCommandsRunPort,
@@ -1489,7 +1490,7 @@ async function selectPrimaryAgent(
   }
   const current = run.agent ?? DEFAULT_CODING_WORKBENCH_AGENT;
   if (requested === undefined || requested === current) return true;
-  if (!(await customAgentListed(run, requested, diagnostics))) return false;
+  if (!(await customAgentListed(run, requested, diagnostics, activityLog))) return false;
   try {
     await run.client.switchAgent(run.sessionId, requested);
   } catch (error) {
@@ -1510,10 +1511,13 @@ async function customAgentListed(
   run: ReadyRun,
   requested: CodingWorkbenchAgent,
   diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
 ): Promise<boolean> {
   if (isCodingWorkbenchBuiltInAgent(requested)) return true;
   try {
-    const listed = await run.client.primaryAgents(run.workspaceRoot);
+    const listed = await readOnceLocationActivated({ activityLog }, run.runId, () =>
+      run.client.primaryAgents(run.workspaceRoot),
+    );
     if (listed.some((agent) => agent.name === requested)) return true;
     recordOpenCodeTurnFailure(diagnostics, run, "agent-unsupported");
     return false;
@@ -2772,7 +2776,9 @@ function readinessV2Ports(
           // Every event reaches the live text overlay as it arrives, before coalescing can fold it
           // into a hint: the deltas are the content, and only the reads are coalesced.
           history.observeLiveEvent(sessionId, event);
-          return v2SyncHint(event, sessionId, input.onQuestionObserved);
+          return v2SyncHint(event, sessionId, input.onQuestionObserved, (identity, other) => {
+            observeChildQuestion(input, run, identity, other, combined);
+          });
         },
         (merged) => {
           mergedEvents += merged;
@@ -2991,18 +2997,21 @@ function pullSyncHint(pump: SyncHintPump): void {
   void pump.source.next().then(onNext).then(undefined, settle);
 }
 
+/**
+ * The hint one live event gives. A form of the run's own session signals a question at once; a form
+ * of any other session goes to `onOtherSessionQuestion`, which signals only once the run's session
+ * tree proves that session a child of the run (a subagent's question, #4271).
+ */
 export function v2SyncHint(
   event: Readonly<Record<string, unknown>>,
   fixedSessionId: string,
   onQuestionObserved: ((identity: string) => void) | undefined,
+  onOtherSessionQuestion?: (identity: string, sessionID: string) => void,
 ): OpenCodeSyncHint {
   const data = v2Record(event.data);
-  if (
-    event.type === "form.created" &&
-    typeof event.id === "string" &&
-    v2Record(data?.form)?.sessionID === fixedSessionId
-  )
-    onQuestionObserved?.(event.id);
+  const asked = v2QuestionFrame(event, data);
+  if (asked?.sessionID === fixedSessionId) onQuestionObserved?.(asked.identity);
+  else if (asked !== undefined) onOtherSessionQuestion?.(asked.identity, asked.sessionID);
   const state = v2ExecutionState(event.type);
   return {
     requiresHistoryIdentity: false,
@@ -3010,6 +3019,19 @@ export function v2SyncHint(
       ? { control: { sessionId: fixedSessionId, state } }
       : {}),
   };
+}
+
+/** A live `form.created` frame's identity and asking session, or nothing for any other frame. */
+function v2QuestionFrame(
+  event: Readonly<Record<string, unknown>>,
+  data: Readonly<Record<string, unknown>> | undefined,
+): { readonly identity: string; readonly sessionID: string } | undefined {
+  const sessionID = v2Record(data?.form)?.sessionID;
+  if (event.type !== "form.created" || typeof event.id !== "string" || event.id === "")
+    return undefined;
+  return typeof sessionID === "string" && sessionID !== ""
+    ? { identity: event.id, sessionID }
+    : undefined;
 }
 
 const KNOWN_V2_HISTORY_FAILURES = new Set([
@@ -4524,6 +4546,39 @@ async function nativeSessionRelation(
     });
     return undefined;
   }
+}
+
+/**
+ * A subagent's question is the run's question too (#4271): the read already lists the forms of the
+ * run's proven children (`opencodeNativeQuestions.ts`), so the live signal that prompts that read
+ * follows the same proof. The run's session tree decides; an unproven, foreign or unreadable session
+ * signals nothing, and a failed proof is recorded by `nativeSessionRelation`. The signal carries no
+ * content, only the frame's identity.
+ */
+function observeChildQuestion(
+  input: Pick<OpenCodeRuntimeCompositionInput, "onQuestionObserved" | "diagnostics">,
+  run: PreparedRun,
+  identity: string,
+  sessionID: string,
+  signal: AbortSignal,
+): void {
+  const observe = input.onQuestionObserved;
+  if (observe === undefined || signal.aborted) return;
+  void nativeSessionRelation(run, sessionID, signal, input.diagnostics).then(
+    (relation) => {
+      if (relation === "child" && !signal.aborted) observe(identity);
+    },
+    (error: unknown) => {
+      emitServerDiagnostic(input.diagnostics, {
+        correlationId: run.runId,
+        timestamp: new Date().toISOString(),
+        operation: "coding-runtime.tool-bridge",
+        source: "opencode-runtime-composition.child-question",
+        errorClass: contentFreeErrorClass(error),
+        message: "child-question-signal-failed",
+      });
+    },
+  );
 }
 
 /** The run's session tree, sharing the run's admission cache of proven children. */

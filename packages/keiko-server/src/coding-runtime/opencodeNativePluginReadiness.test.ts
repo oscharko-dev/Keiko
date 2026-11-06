@@ -19,7 +19,7 @@ const DIRECTORY = "/state/run-1/config/opencode/plugins";
 
 type Entry = Readonly<Record<string, unknown>>;
 
-// The entry shapes the pinned 2.1.4 producer reported for an active plugin, a plugin whose setup
+// The entry shapes the pinned producer reported for an active plugin, a plugin whose setup
 // threw and a module that failed to parse (the last carries no id).
 function entry(id: string | undefined, path: string, status: "active" | "failed"): Entry {
   return {

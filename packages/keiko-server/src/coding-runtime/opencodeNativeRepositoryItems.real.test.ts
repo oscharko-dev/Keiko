@@ -1052,7 +1052,7 @@ describe("pinned native OpenCode repository items", () => {
     120_000,
   );
 
-  // S15 (#3906): a `$skill` mention is the runtime's own skill attachment. The pinned 2.1.4 puts the
+  // S15 (#3906): a `$skill` mention is the runtime's own skill attachment. The pinned puts the
   // admitted SKILL.md, as Keiko copied it, ahead of the operator's text, exactly as its own interface
   // does; its shell-looking text stays literal and nothing in it runs.
   it.skipIf(skip)(

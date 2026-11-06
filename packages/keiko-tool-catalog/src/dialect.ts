@@ -4,6 +4,7 @@ import {
   type CatalogRuntimeRef,
   type CatalogVersionRef,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { OPENCODE_CATALOG_RUNTIME } from "@oscharko-dev/keiko-contracts/runtime/opencode-runtime-pins";
 import { catalogArray, catalogObject } from "./json.js";
 import { compileCatalogSchema } from "./schema.js";
 import { requireCatalog } from "./errors.js";
@@ -27,7 +28,11 @@ export { NATIVE_TOOL_CATALOG_RUNTIME };
 export function assertCatalogDialect(dialect: CatalogVersionRef, runtime: CatalogRuntimeRef): void {
   requireCatalog(dialect.version === 1 && DIALECT_IDS.has(dialect.id), "unsupported-dialect");
   if (dialect.id === "managed-runtime-json-schema") {
-    requireCatalog(runtime.id === "opencode" && runtime.version === "2.1.4", "unsupported-dialect");
+    requireCatalog(
+      runtime.id === OPENCODE_CATALOG_RUNTIME.id &&
+        runtime.version === OPENCODE_CATALOG_RUNTIME.version,
+      "unsupported-dialect",
+    );
   } else {
     requireCatalog(
       runtime.id === NATIVE_TOOL_CATALOG_RUNTIME.id &&

@@ -283,6 +283,38 @@ const NATIVE_LOOPBACK_ONLY_NETWORK_RULES =
   '(allow network-inbound (local ip "localhost:*"))' +
   '(allow network-bind (local ip "localhost:*"))';
 
+// The host services that answer with the person's data whatever the file rules say: the clipboard,
+// its legacy name, and the keychain, whose daemons read the files the rules deny and answer a tool an
+// entry trusts, such as Git's credential helper (#4271). Everything else a toolchain looks up stays
+// reachable, preferences included: Foundation tools need them, and they hold no credentials;
+// TLS verification goes through trustd, not these. Proved against curl, Git, Node, Python and Xcode
+// tools.
+const NATIVE_HOST_SECRET_SERVICE_RULE =
+  "(deny mach-lookup" +
+  ' (global-name "com.apple.pasteboard.1")' +
+  ' (global-name "com.apple.pboard")' +
+  ' (global-name "com.apple.SecurityServer")' +
+  ' (global-name "com.apple.secd")' +
+  ' (global-name "com.apple.securityd.xpc")' +
+  ' (global-name "com.apple.security.agent")' +
+  ' (global-name "com.apple.SecurityAgent"))';
+
+/**
+ * Full access keeps the internet, not the host's local services. A unix socket needs no file rule,
+ * so without this a shell reaches ssh-agent, whose keys the file rules deny, and a container daemon,
+ * which starts a container mounting anything and so escapes the workspace boundary (#4271). The
+ * resolver stays reachable, and so do the sockets the run itself creates in its own roots.
+ */
+function nativeFullAccessUnixSocketRules(filesystem: RuntimeGatewayFilesystem): string {
+  const own = [filesystem.workspaceRoot, filesystem.privateStateRoot]
+    .map((root) => `(subpath ${JSON.stringify(root)})`)
+    .join(" ");
+  return (
+    "(deny network-outbound (remote unix-socket))" +
+    `(allow network-outbound (literal "/private/var/run/mDNSResponder") ${own})`
+  );
+}
+
 /**
  * The native profile (#3897): the agent runs its own shell and toolchains like standalone
  * OpenCode. What the kernel enforces for the whole process tree is the filesystem boundary (a read
@@ -290,9 +322,10 @@ const NATIVE_LOOPBACK_ONLY_NETWORK_RULES =
  * the workspace and the private state, whose `tmp` is the runtime's TMPDIR; credential stores,
  * credential files and Keiko's state unreadable), the service escape surfaces and the process
  * boundary (signals and process information reach the tree's own sandbox only, never another
- * process of the same OS user). Network follows the run's mode: loopback only below Full access;
- * inherited at Full access, where the per-action permission policy and the accepted Authority
- * Envelope bound it.
+ * process of the same OS user; one exception no profile can close is `sysctl(KERN_PROCARGS2)`, which
+ * shows the exec environment of any process of that user, see ADR-0137 D10). Network follows the run's mode: loopback only below Full access;
+ * inherited at Full access apart from local unix sockets, where the per-action permission policy
+ * and the accepted Authority Envelope bound it.
  */
 function buildNativeSeatbeltCommand(
   command: string,
@@ -305,9 +338,12 @@ function buildNativeSeatbeltCommand(
   if (filesystem === undefined) throw new TypeError("native-seatbelt-filesystem-invalid");
   const profile =
     "(version 1)(allow default)(deny appleevent-send)(deny lsopen)" +
+    NATIVE_HOST_SECRET_SERVICE_RULE +
     OWN_PROCESS_TARGETS_SEATBELT_RULE +
     nativeWorkspaceSeatbeltRules(filesystem) +
-    (egress === "inherited" ? "" : NATIVE_LOOPBACK_ONLY_NETWORK_RULES);
+    (egress === "inherited"
+      ? nativeFullAccessUnixSocketRules(filesystem)
+      : NATIVE_LOOPBACK_ONLY_NETWORK_RULES);
   return { command: "/usr/bin/sandbox-exec", args: ["-p", profile, command, ...args] };
 }
 

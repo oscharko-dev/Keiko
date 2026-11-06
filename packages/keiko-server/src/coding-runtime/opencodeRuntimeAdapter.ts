@@ -24,6 +24,10 @@ import {
   openCodeNativeContextFacts,
   type OpenCodeNativeContextProfile,
 } from "./opencodeNativeContext.js";
+import {
+  createGeneratedOpenCodeLaunchSecretsPlugin,
+  OPENCODE_NATIVE_LAUNCH_SECRETS_PLUGIN_FILE,
+} from "./opencodeNativeLaunchSecrets.js";
 import { createGeneratedOpenCodeNativePolicyPlugin } from "./opencodeNativePolicyPlugin.js";
 import { isApprovedOpenCodeRuntimeVersion } from "./opencodeRuntimeVersions.js";
 import {
@@ -1466,6 +1470,8 @@ export function createGeneratedOpenCodeV2Plugins(
     profile === "native"
       ? {
           keiko_native_policy: createGeneratedOpenCodeNativePolicyPlugin(),
+          [OPENCODE_NATIVE_LAUNCH_SECRETS_PLUGIN_FILE]:
+            createGeneratedOpenCodeLaunchSecretsPlugin(),
           keiko_native_context: createGeneratedOpenCodeNativeContextPlugin("native"),
           [OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE]: sharedV2ToolPluginSource("native"),
         }
