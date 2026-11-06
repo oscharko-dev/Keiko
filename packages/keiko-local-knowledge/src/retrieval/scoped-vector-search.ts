@@ -711,6 +711,17 @@ function queryOutcomeIdentity(
   };
 }
 
+function rejectIncompatibleQueryIdentity(
+  adapter: OpenAIEmbeddingAdapter,
+  modelId: string,
+): RetrievalError {
+  invalidateEmbeddingCapability(adapter, modelId);
+  return new RetrievalError(
+    "INCOMPATIBLE_EMBEDDING_IDENTITY",
+    "embedding model identity changed — existing capsule vectors require re-indexing",
+  );
+}
+
 async function embedQueryFor(
   adapter: OpenAIEmbeddingAdapter,
   identity: EmbeddingModelIdentity,
@@ -752,13 +763,7 @@ async function embedQueryFor(
     outcome.value.modelRevision,
   );
   const compatibility = assertCompatibleEmbeddingIdentity(identity, current);
-  if (!compatibility.ok) {
-    invalidateEmbeddingCapability(adapter, identity.modelId);
-    return new RetrievalError(
-      "INCOMPATIBLE_EMBEDDING_IDENTITY",
-      "embedding model identity changed — existing capsule vectors require re-indexing",
-    );
-  }
+  if (!compatibility.ok) return rejectIncompatibleQueryIdentity(adapter, identity.modelId);
   return {
     vector: normalizeVectorForIdentity(outcome.value.vector, identity),
     dimensions: outcome.value.vector.length,

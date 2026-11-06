@@ -684,14 +684,12 @@ async function fieldMutation(
   );
   const update = linkedUpdate(validated, plan);
   const onlyLinkCalls = changesOnlyThroughLinkCalls(purpose, validated, update, admitted.links);
+  const convertedHeadingCount =
+    validated.descriptionConvertedHeadingCount ?? policy.descriptionConvertedHeadingCount;
   if (!onlyLinkCalls) {
     const body = { fields: validated.fields, update, ...target.body };
     const sent = await statusMutation(request, target.path, target.method, body, metadata.fields);
-    if (!sent.ok)
-      return withDescriptionFormatting(
-        sent,
-        validated.descriptionConvertedHeadingCount ?? policy.descriptionConvertedHeadingCount,
-      );
+    if (!sent.ok) return withDescriptionFormatting(sent, convertedHeadingCount);
   }
   const attempt = await completeJiraLinkedMutation(
     request,
@@ -706,10 +704,7 @@ async function fieldMutation(
     plan,
     onlyLinkCalls,
   );
-  return withDescriptionFormatting(
-    attempt,
-    validated.descriptionConvertedHeadingCount ?? policy.descriptionConvertedHeadingCount,
-  );
+  return withDescriptionFormatting(attempt, convertedHeadingCount);
 }
 function editArgumentsRefusal(args: CatalogJsonObject): Refusal | undefined {
   const fields = fieldsInput(args.fields ?? {});

@@ -10,7 +10,10 @@ import {
   createDefaultEmbeddingCapability,
   parseGatewayConfig,
   verifyEmbeddingCapability,
+  type GatewayConfig,
   type OpenAIEmbeddingAdapter,
+  type OpenAIEmbeddingOutcome,
+  type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps, currentConversationReady, type UiHandlerDeps } from "./deps.js";
 import {
@@ -42,7 +45,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function config(apiKey = "fixture-key") {
+function config(apiKey = "fixture-key"): GatewayConfig {
   return parseGatewayConfig({
     providers: ["startup-chat", EMBEDDING_MODEL].map((modelId) => ({
       modelId,
@@ -94,7 +97,13 @@ const probe = {
   expectedDimensions: 2,
 } as const;
 
-function provider() {
+function provider(): {
+  readonly embeddingCalls: () => number;
+  readonly fail: (value: boolean, status?: number, error?: Error) => void;
+  readonly hold: () => void;
+  readonly held: () => boolean;
+  readonly release: () => void;
+} {
   let embeddingCalls = 0;
   let failed = false;
   let failureStatus = 503;
@@ -124,17 +133,17 @@ function provider() {
   });
   vi.stubGlobal("fetch", fetch);
   return {
-    embeddingCalls: () => embeddingCalls,
-    fail: (value: boolean, status = 503, error?: Error) => {
+    embeddingCalls: (): number => embeddingCalls,
+    fail: (value: boolean, status = 503, error?: Error): void => {
       failed = value;
       failureStatus = status;
       failureError = error;
     },
-    hold: () => {
+    hold: (): void => {
       holdNext = true;
     },
-    held: () => release !== undefined,
-    release: () => {
+    held: (): boolean => release !== undefined,
+    release: (): void => {
       release?.();
       release = undefined;
     },
@@ -314,7 +323,7 @@ it("refuses a late successful embedding response from a replaced connection gene
   expect(network.embeddingCalls()).toBe(9);
 });
 
-function ordinaryQuery(correlationId: string) {
+function ordinaryQuery(correlationId: string): OpenAIEmbeddingRequest {
   return {
     endpoint: ENDPOINT,
     apiKey: "fixture-key",
@@ -400,9 +409,10 @@ it.each(["cancelled", "budget"] as const)(
     const adapter = adapterFor(deps);
     expect((await verifyEmbeddingCapability(adapter, probe, "connection")).ok).toBe(true);
     Object.assign(deps, {
-      localKnowledgeEmbeddingRequest: async () => {
-        if (kind === "budget") throw new ConfigInvalidError("spend-budget-exceeded");
-        return { ok: false as const, kind: "cancelled" as const };
+      localKnowledgeEmbeddingRequest: (): Promise<OpenAIEmbeddingOutcome> => {
+        if (kind === "budget")
+          return Promise.reject(new ConfigInvalidError("spend-budget-exceeded"));
+        return Promise.resolve({ ok: false, kind: "cancelled" });
       },
     });
     const request = adapter.request(ordinaryQuery("embedding-local-refused"));

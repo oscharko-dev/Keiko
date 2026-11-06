@@ -457,6 +457,7 @@ it("advertises explicit Markdown provenance only for Data Center description inp
     },
   );
   expect(created.data).toMatchObject({ outcome: "succeeded" });
+  const inputSchema: unknown = expect.anything();
   expect(created.data.items).toEqual([
     expect.objectContaining({
       id: "description",
@@ -477,7 +478,7 @@ it("advertises explicit Markdown provenance only for Data Center description inp
         ],
       },
     }),
-    expect.not.objectContaining({ inputSchema: expect.anything() }),
+    expect.not.objectContaining({ inputSchema }),
   ]);
   const cloud = await fixture({ ...REMOTE_PAGE, values }, "cloud").run("jira.create-fields", {
     projectKey: "SYN",

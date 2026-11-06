@@ -131,7 +131,7 @@ export function createJiraChatTurnReviewPorts(
       untracedAdvice: draftUntracedAdvice(options.deps, options.openTrace),
     }),
     attachmentPreview: (action) => reviewedAttachment(options, access, action),
-    draftItemRefs: (action) => {
+    draftItemRefs: (action): readonly string[] | undefined => {
       const args = proposedWriteArguments(access, action);
       if (args === undefined || !access.reviewableWrite(action)) return undefined;
       const draft = chatDraftArguments(options.deps.jiraDraftStore, options.message.chatId, args);

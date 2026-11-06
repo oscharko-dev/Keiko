@@ -146,10 +146,9 @@ function stagedDraftRefs(value: unknown, count: number): value is readonly strin
     new Set(value).size === value.length
   );
 }
-/** A successful stage names stored content, never a remote mutation or a created issue. */
-export function chatToolStagedDraftReceipt(
+function stagedDraftData(
   exchange: ChatToolExchange,
-): ChatToolStagedDraftReceipt | undefined {
+): Readonly<Record<string, unknown>> | undefined {
   const result = exchange.result;
   const data = record(result?.data);
   if (
@@ -160,6 +159,14 @@ export function chatToolStagedDraftReceipt(
     exchange.mutationOutcome !== undefined
   )
     return undefined;
+  return data;
+}
+/** A successful stage names stored content, never a remote mutation or a created issue. */
+export function chatToolStagedDraftReceipt(
+  exchange: ChatToolExchange,
+): ChatToolStagedDraftReceipt | undefined {
+  const data = stagedDraftData(exchange);
+  if (data === undefined) return undefined;
   const reference = stagedDraftReference(data);
   const counts = stagedDraftCounts(data);
   if (reference === undefined || counts === undefined) return undefined;

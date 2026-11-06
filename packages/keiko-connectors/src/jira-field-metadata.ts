@@ -432,24 +432,26 @@ function encodedDocumentStructure(value: string): boolean {
   const decoded = value.replaceAll(String.raw`\n`, "\n");
   return readJiraDescriptionSections(decoded).length > 0 || LIST_LINE.test(decoded);
 }
+function markdownDescriptionValue(field: JiraFieldMetadata, value: unknown): ValueResult {
+  const markdown = readJiraMarkdownDescription(value);
+  if (markdown === undefined || !validFieldText(field, markdown)) return INVALID;
+  const serialized = serializeJiraDescriptionHeadings(markdown);
+  if (!validFieldText(field, serialized.text)) return INVALID;
+  return {
+    ok: true,
+    value: serialized.text,
+    ...(serialized.convertedHeadingCount === 0
+      ? {}
+      : { descriptionConvertedHeadingCount: serialized.convertedHeadingCount }),
+  };
+}
 function textValue(
   field: JiraFieldMetadata,
   value: unknown,
   deployment: AtlassianConnectorDeployment,
 ): ValueResult {
-  if (deployment === "data-center" && field.id === "description" && typeof value !== "string") {
-    const markdown = readJiraMarkdownDescription(value);
-    if (markdown === undefined || !validFieldText(field, markdown)) return INVALID;
-    const serialized = serializeJiraDescriptionHeadings(markdown);
-    if (!validFieldText(field, serialized.text)) return INVALID;
-    return {
-      ok: true,
-      value: serialized.text,
-      ...(serialized.convertedHeadingCount === 0
-        ? {}
-        : { descriptionConvertedHeadingCount: serialized.convertedHeadingCount }),
-    };
-  }
+  if (deployment === "data-center" && field.id === "description" && typeof value !== "string")
+    return markdownDescriptionValue(field, value);
   if (typeof value !== "string" || !validFieldText(field, value)) return INVALID;
   if (deployment !== "cloud" || !field.richText) return { ok: true, value };
   const result = composePlainTextToAdf(value);

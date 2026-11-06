@@ -208,12 +208,15 @@ function metadataPath(
   allowed.add("issueTypeId");
   return `${path}/${args.issueTypeId}`;
 }
-function metadataResult(
+function objectReadResult(
   name: JiraManagedReadToolName,
   body: Record<string, unknown>,
   selected: ReadSelection,
+  baseUrl: string,
 ): ManagedMcpToolResult {
   const { startAt, maxResults } = selected;
+  if (ISSUE_READ_NAMES.has(name))
+    return jiraIssueReadResult(name, baseUrl, body, startAt, maxResults, selected.fields);
   if (name === "jira.transitions") return jiraTransitionsResult(body, startAt, maxResults);
   if (name === "jira.edit-fields") {
     const items = editMetadataItems(body.fields);
@@ -294,9 +297,7 @@ async function read<Context extends ManagedMcpInvocationContext>(
       withIssueLink(arrayResult(name, outcome.items, startAt, maxResults), baseUrl, args.issueKey),
     );
   if (outcome.body === undefined) return failure("malformed-payload");
-  const projected = ISSUE_READ_NAMES.has(name)
-    ? jiraIssueReadResult(name, baseUrl, outcome.body, startAt, maxResults, selected.fields)
-    : metadataResult(name, outcome.body, selected);
+  const projected = objectReadResult(name, outcome.body, selected, baseUrl);
   const result =
     name === "jira.create-fields"
       ? await withCreateTemplateMetadata(projected, args, context, connected)

@@ -371,8 +371,9 @@ class CodingJiraPodService implements CodingJiraPods {
         beforeDispatch: () => this.admit(binding, context),
       }),
       issueTemplates: jiraIssueTemplateSource(deps.store),
-      templateMetadataActivity: (activity) =>
-        recordJiraTemplateMetadata(undefined, context.correlationId, activity),
+      templateMetadataActivity: (activity): void => {
+        recordJiraTemplateMetadata(undefined, context.correlationId, activity);
+      },
     };
   }
 

@@ -300,11 +300,15 @@ describe("the template source", () => {
     upload("# Ordinary skill\nSay keiko: jira-issue-template in prose.\n");
     const story = store.markdownSkills.list().find((skill) => skill.name === "Story");
     if (story === undefined) throw new TypeError("Missing stored template");
+    const templateMatcher: unknown = expect.objectContaining({
+      project: "SYN",
+      issueType: "Story",
+    });
     expect(jiraIssueTemplateSource(store)()).toEqual({
       templates: [expect.objectContaining({ project: "SYN", issueType: "Story" })],
       references: [
         expect.objectContaining({
-          template: expect.objectContaining({ project: "SYN", issueType: "Story" }),
+          template: templateMatcher,
           id: story.id,
           revision: story.revision,
           digest: story.digest,

@@ -194,7 +194,7 @@ function fetchForDefaultSuccess(): typeof fetch {
     )
     .mockResolvedValueOnce(jsonResponse(chatPayload('{"status":"json-ok"}')))
     .mockResolvedValueOnce(jsonResponse(embeddingPayload()))
-    .mockImplementation(async () => jsonResponse(embeddingPayload())) as typeof fetch;
+    .mockImplementation(() => Promise.resolve(jsonResponse(embeddingPayload()))) as typeof fetch;
 }
 
 afterEach(() => {
@@ -805,7 +805,7 @@ describe("gateway readiness route", () => {
       .fn()
       .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
       .mockResolvedValueOnce(jsonResponse(embeddingPayload()))
-      .mockImplementation(async () => jsonResponse(embeddingPayload())) as typeof fetch;
+      .mockImplementation(() => Promise.resolve(jsonResponse(embeddingPayload()))) as typeof fetch;
     const deps = depsWith(config, fetchImpl);
 
     const report = await runGatewayReadiness({ options: { probes: ["embedding"] } }, deps);
@@ -831,7 +831,7 @@ describe("gateway readiness route", () => {
       .fn()
       .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
       .mockResolvedValueOnce(jsonResponse(embeddingPayload()))
-      .mockImplementation(async () => jsonResponse(embeddingPayload())) as typeof fetch;
+      .mockImplementation(() => Promise.resolve(jsonResponse(embeddingPayload()))) as typeof fetch;
     const deps: UiHandlerDeps = {
       ...depsWith(gatewayConfig(), fetchImpl),
       activityLog: { write: (event): void => void events.push(event) },
@@ -1897,9 +1897,9 @@ it.each([true, false])(
 it("keeps the first embedding adapter throw diagnosable without repeating probes or automatic lifecycle", async () => {
   const diagnostic = capturingDiagnostics();
   const events: ServerLogEvent[] = [];
-  const request = vi.fn(async (): Promise<never> => {
-    throw new TypeError("fixture-adapter-failure");
-  });
+  const request = vi.fn((): Promise<never> =>
+    Promise.reject(new TypeError("fixture-adapter-failure")),
+  );
   const deps: UiHandlerDeps = {
     ...depsWith(gatewayConfig(), vi.fn(), diagnostic.sink),
     localKnowledgeEmbeddingRequest: request,

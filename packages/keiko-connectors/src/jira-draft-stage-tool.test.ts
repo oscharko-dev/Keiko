@@ -488,9 +488,9 @@ describe("native staged description rendering contract", () => {
         reason: "field-validation",
         ref: "native",
         violations: [{ ruleId: "section-missing", subject: "Acceptance criteria" }],
-        guidance: expect.stringContaining("h2. Title"),
       },
     });
+    expect(refused.data.guidance).toEqual(expect.stringContaining("h2. Title"));
     expect(h.deps.store.size()).toBe(0);
     expect(h.activity.at(-1)).toMatchObject({
       phase: "refused",

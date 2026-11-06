@@ -845,6 +845,25 @@ it.each([
   },
 );
 
+function applyCitationRepairAdmissionState(
+  deps: UiHandlerDeps,
+  chatId: string,
+  controller: AbortController,
+  state: string,
+): void {
+  if (state === "authority-revoked") deps.agentAuthorityRegistry?.revokeChatAuthorities(chatId);
+  if (state === "generation-changed") {
+    const holder = deps.gatewayConfig;
+    if (holder === undefined) throw new Error("Expected gateway configuration");
+    vi.spyOn(holder, "generation").mockReturnValue(holder.generation() + 1);
+  }
+  if (state === "human-stop") controller.abort();
+}
+
+function assertCitationRepairToolTranscriptAbsent(deps: UiHandlerDeps, messageId: string): void {
+  expect(deps.store.findMessageById(messageId)?.toolTranscript?.exchanges).toBeUndefined();
+}
+
 it.each([
   "allowed",
   "caller-refused",
@@ -929,13 +948,7 @@ it.each([
   };
   const checked = withConversationReadinessAdmission(turn.meter(model), MODEL, readiness, deps);
   const budget = createGroundedSynthesisCallBudget();
-  if (state === "authority-revoked") deps.agentAuthorityRegistry?.revokeChatAuthorities(pod.chatId);
-  if (state === "generation-changed") {
-    const holder = deps.gatewayConfig;
-    if (holder === undefined) throw new Error("Expected gateway configuration");
-    vi.spyOn(holder, "generation").mockReturnValue(holder.generation() + 1);
-  }
-  if (state === "human-stop") controller.abort();
+  applyCitationRepairAdmissionState(deps, pod.chatId, controller, state);
   const invoke = (): Promise<NormalizedResponse> =>
     callPluralGroundedSynthesis({
       purpose: "citation-repair",
@@ -971,7 +984,5 @@ it.each([
       expect(budget.pendingUsage()).toEqual({ promptTokens: 60, completionTokens: 3 });
   }
   expect(toolLoop).not.toHaveBeenCalled();
-  expect(
-    deps.store.findMessageById(accepted.userMessage.id)?.toolTranscript?.exchanges,
-  ).toBeUndefined();
+  assertCitationRepairToolTranscriptAbsent(deps, accepted.userMessage.id);
 });

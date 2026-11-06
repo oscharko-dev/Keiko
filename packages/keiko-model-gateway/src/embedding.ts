@@ -447,7 +447,9 @@ async function awaitCapabilityProof(
   if (signal.aborted) return fail("cancelled");
   let onAbort: (() => void) | undefined;
   const cancelled = new Promise<EmbeddingCapabilityCheck>((resolve) => {
-    onAbort = () => resolve(fail("cancelled"));
+    onAbort = (): void => {
+      resolve(fail("cancelled"));
+    };
     signal.addEventListener("abort", onAbort, { once: true });
   });
   try {
@@ -520,6 +522,15 @@ function rememberCapabilityFailure(
   });
 }
 
+function clearCancelledCapabilityProof(
+  cache: Map<string, EmbeddingCapabilityEntry>,
+  key: string,
+  entry: EmbeddingCapabilityEntry,
+  checked: EmbeddingCapabilityCheck,
+): void {
+  if (!checked.ok && checked.reason === "cancelled" && cache.get(key) === entry) cache.delete(key);
+}
+
 /** Explicit verification renews a settled proof; concurrent startup/read requests join one probe. */
 export async function verifyEmbeddingCapability(
   adapter: OpenAIEmbeddingAdapter,
@@ -544,7 +555,7 @@ export async function verifyEmbeddingCapability(
   const start =
     onProbeStart === undefined
       ? undefined
-      : () => {
+      : (): ((checked?: EmbeddingCapabilityCheck) => void) => {
           try {
             return onProbeStart();
           } catch (error) {
@@ -568,7 +579,7 @@ export async function verifyEmbeddingCapability(
   };
   cache.set(key, entry);
   const checked = await awaitCapabilityProof(entry.promise, options.signal);
-  if (!checked.ok && checked.reason === "cancelled" && cache.get(key) === entry) cache.delete(key);
+  clearCancelledCapabilityProof(cache, key, entry, checked);
   return dimensionChecked(checked, expectedDimensions);
 }
 

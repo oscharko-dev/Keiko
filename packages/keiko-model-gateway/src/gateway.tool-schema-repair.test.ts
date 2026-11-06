@@ -1,4 +1,7 @@
-import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
+import {
+  CallerAttemptAdmissionError,
+  ContextOverflowError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
@@ -12,7 +15,14 @@ import { Gateway, type GatewayCallRequest, type GatewaySpendReservation } from "
 import type { ModelGatewayLogEvent } from "./observability.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
-import type { Clock, GatewayConfig, ModelProviderConfig, NormalizedResponse } from "./types.js";
+import { OpenAiAdapter } from "./openai-adapter.js";
+import type {
+  Clock,
+  GatewayConfig,
+  ModelProviderConfig,
+  NormalizedResponse,
+  ProviderAdapter,
+} from "./types.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -103,6 +113,147 @@ function request(): GatewayCallRequest {
     logContext: { correlationId: "correlation-1" },
   };
 }
+
+function catalogPromptCosts(input: GatewayCallRequest): {
+  readonly bare: number;
+  readonly full: number;
+} {
+  const tools = createGatewayToolCatalogBridge(input, (): number => NOW).tools;
+  return {
+    bare: countGatewayPromptTokens(input),
+    full: countGatewayPromptTokens({ ...input, tools }),
+  };
+}
+
+function adapterWithTransportCount(promptTokens: number, fetchImpl: typeof fetch): ProviderAdapter {
+  const adapter = new OpenAiAdapter({
+    fetchImpl,
+    requestId: "transport-count-proof",
+    costClass: "medium",
+    now: (): number => NOW,
+  });
+  return {
+    attemptAdmissionBoundary: "transport",
+    call: (input: GatewayCallRequest, provider): Promise<NormalizedResponse> =>
+      adapter.call(
+        {
+          ...input,
+          attemptAdmission: (
+            admission,
+          ): ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>> =>
+            input.attemptAdmission?.({ ...admission, promptTokens }),
+        },
+        provider,
+      ),
+  };
+}
+
+describe("bound catalog physical caller grant", () => {
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    "refuses malformed transport prompt count %s before caller, spend or HTTP admission",
+    async (promptTokens) => {
+      const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(successfulResponse()));
+      const settle = vi.fn();
+      const admission = vi.fn(() => ({ settle }));
+      const reserve = vi.fn(() => ({ settle }));
+      const gateway = new Gateway(config(), {
+        adapter: adapterWithTransportCount(promptTokens, fetchImpl),
+        clock: clock(),
+        spendBudget: { reserve },
+      });
+      await expect(
+        gateway.chat({ ...request(), attemptAdmission: admission }),
+      ).rejects.toBeInstanceOf(CallerAttemptAdmissionError);
+      expect(admission).not.toHaveBeenCalled();
+      expect(reserve).not.toHaveBeenCalled();
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(settle).not.toHaveBeenCalled();
+      expect(gateway.circuitStatus(MODEL_ID).consecutiveFailures).toBe(0);
+    },
+  );
+
+  it("accepts a zero transport count while retaining the existing local caller floor", async () => {
+    const input: GatewayCallRequest = {
+      modelId: MODEL_ID,
+      messages: [{ role: "user", content: "bounded fixture request" }],
+    };
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(successfulResponse()));
+    const settle = vi.fn();
+    const admission = vi.fn(() => ({ settle }));
+    const gateway = new Gateway(config(), {
+      adapter: adapterWithTransportCount(0, fetchImpl),
+      clock: clock(),
+    });
+    await expect(gateway.chat({ ...input, attemptAdmission: admission })).resolves.toMatchObject({
+      content: "corrected",
+    });
+    expect(admission).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ promptTokens: countGatewayPromptTokens(input) }),
+    );
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(settle).toHaveBeenCalledOnce();
+  });
+
+  it("refuses the full catalog prompt before HTTP when only its message text fits", async () => {
+    const initial = request();
+    const costs = catalogPromptCosts(initial);
+    const grant = Math.floor((costs.bare + costs.full) / 2);
+    expect(costs.bare).toBeLessThan(grant);
+    expect(grant).toBeLessThan(costs.full);
+    const seen: number[] = [];
+    const settled: unknown[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(successfulResponse()));
+    const gateway = new Gateway(config(), { fetchImpl, clock: clock() });
+    const failure: unknown = await gateway
+      .chat({
+        ...initial,
+        attemptAdmission: (input) => {
+          seen.push(input.promptTokens);
+          return input.promptTokens > grant
+            ? undefined
+            : {
+                settle: (usage): void => {
+                  settled.push(usage);
+                },
+              };
+        },
+      })
+      .catch((error: unknown) => error);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(failure).toBeInstanceOf(CallerAttemptAdmissionError);
+    expect(seen).toEqual([costs.full]);
+    expect(settled).toEqual([]);
+    expect(gateway.circuitStatus(MODEL_ID).consecutiveFailures).toBe(0);
+  });
+
+  it("charges the full canonical catalog prompt to a sufficient caller grant", async () => {
+    const initial = request();
+    const costs = catalogPromptCosts(initial);
+    expect(costs.full).toBeGreaterThan(costs.bare);
+    const seen: number[] = [];
+    const settled: unknown[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(successfulResponse()));
+    const gateway = new Gateway(config(), { fetchImpl, clock: clock() });
+    const answer = await gateway.chat({
+      ...initial,
+      attemptAdmission: (input) => {
+        seen.push(input.promptTokens);
+        return input.promptTokens > costs.full
+          ? undefined
+          : {
+              settle: (usage): void => {
+                settled.push(usage);
+              },
+            };
+      },
+    });
+    expect(answer.content).toBe("corrected");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(seen).toEqual([costs.full]);
+    expect(settled).toHaveLength(1);
+    expect(settled[0]).toMatchObject({ promptTokens: 12, completionTokens: 1 });
+  });
+});
 
 function providerResponse(toolCallId: string, name: string, args: unknown): Response {
   return new Response(

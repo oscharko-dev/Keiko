@@ -354,8 +354,9 @@ function connection(
       correlationId: context.correlationId,
       review: () => attachmentReview(deps, current.envelope, context),
     }),
-    templateMetadataActivity: (activity) =>
-      recordJiraTemplateMetadata(deps.activityLog, context.correlationId, activity),
+    templateMetadataActivity: (activity): void => {
+      recordJiraTemplateMetadata(deps.activityLog, context.correlationId, activity);
+    },
   };
 }
 

@@ -166,13 +166,13 @@ function record(value: unknown): Record<string, unknown> | undefined {
     ? (value as Record<string, unknown>)
     : undefined;
 }
-type ReviewParseFailure = {
+interface ReviewParseFailure {
   readonly ok: false;
   readonly validationReason: KnowledgeReviewValidationReason;
   readonly observation: KnowledgeReviewObservation;
   /** Retained only for the existing diagnostic owner; never published in data or Activity Log. */
   readonly syntaxError?: SyntaxError;
-};
+}
 export type SemanticReviewParseResult =
   | ReviewParseFailure
   | {

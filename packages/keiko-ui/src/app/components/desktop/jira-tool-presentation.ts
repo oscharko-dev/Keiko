@@ -169,11 +169,9 @@ export function jiraToolOutcomeHelp(state: WidgetMessageKey): WidgetMessageKey |
   }
 }
 
-/** Only this versioned, source-checked managed receipt can identify a review-stage failure. */
-export function knowledgeReviewFailureNotice(
-  exchange: ChatToolExchange,
-): WidgetMessageKey | undefined {
-  const result = exchange.result;
+function canonicalReviewFailureData(
+  result: ChatToolExchange["result"],
+): Record<string, unknown> | undefined {
   if (
     result?.toolRef?.canonicalId !== "keiko.knowledge.review" ||
     result.toolRef.contractVersion !== 2 ||
@@ -181,7 +179,14 @@ export function knowledgeReviewFailureNotice(
     result.reason !== "provider-reported-error"
   )
     return undefined;
-  const data = plainRecord(result.data);
+  return plainRecord(result.data);
+}
+
+/** Only this versioned, source-checked managed receipt can identify a review-stage failure. */
+export function knowledgeReviewFailureNotice(
+  exchange: ChatToolExchange,
+): WidgetMessageKey | undefined {
+  const data = canonicalReviewFailureData(exchange.result);
   if (
     data?.outcome !== "failed" ||
     data.sourceAvailable !== true ||

@@ -381,8 +381,12 @@ export async function jiraChatAttachmentLimit(
   },
 ): Promise<number | undefined> {
   const { chatId, authorityReference, signal, correlationId } = options;
-  const allowed = (): boolean =>
-    !signal.aborted && (options.readAllowed === undefined || options.readAllowed() === true);
+  const allowed = (): boolean => {
+    if (signal.aborted) return false;
+    if (options.readAllowed === undefined) return true;
+    const admitted: unknown = options.readAllowed();
+    return admitted === true;
+  };
   const current = resolveCurrentJiraChatAuthority(
     deps,
     chatId,

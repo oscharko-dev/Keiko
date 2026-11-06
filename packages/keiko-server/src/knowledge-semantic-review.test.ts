@@ -3,10 +3,7 @@ import {
   compileExternalCatalogSchema,
   describeCatalogSchemaMismatch,
 } from "@oscharko-dev/keiko-tool-catalog";
-import type {
-  CatalogJsonObject,
-  CatalogJsonValue,
-} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import {
   KNOWLEDGE_REVIEW_VALIDATION_REASONS,
@@ -172,23 +169,19 @@ describe("semantic review refusal diagnostics", () => {
 
   it("retains legacy SyntaxError behavior and refuses truncated output before JSON parsing", () => {
     const malformed = { ...response(), content: "PRIVATE_NOT_JSON" };
-    expect(parseSemanticReviewDetailed(malformed, 1)).toMatchObject({
+    const parsed = parseSemanticReviewDetailed(malformed, 1);
+    expect(parsed).toMatchObject({
       ok: false,
       validationReason: "json-syntax",
-      syntaxError: expect.any(SyntaxError),
     });
+    expect("syntaxError" in parsed ? parsed.syntaxError : undefined).toBeInstanceOf(SyntaxError);
     expect(() => parseSemanticReview(malformed, 1)).toThrow(SyntaxError);
     expect(parseSemanticReview({ ...malformed, finishReason: "length" }, 1)).toBeUndefined();
   });
 });
 
 function schemaAccepts(schema: Record<string, unknown>, payload: CatalogJsonValue): boolean {
-  return (
-    describeCatalogSchemaMismatch(
-      compileExternalCatalogSchema(schema as CatalogJsonObject),
-      payload,
-    ) === undefined
-  );
+  return describeCatalogSchemaMismatch(compileExternalCatalogSchema(schema), payload) === undefined;
 }
 
 describe("source-bound semantic review response format", () => {

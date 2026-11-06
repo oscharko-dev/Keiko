@@ -20,6 +20,7 @@ import {
 } from "./chat-tool-runtime.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
 import {
+  assertCitationRepairTurnActive,
   callGroundedSynthesisModel,
   type GroundedSynthesisPurpose,
   requiresObservedToolResult,
@@ -1909,6 +1910,7 @@ async function dispatchGroundedSynthesis(
   remaining: GroundedAnswerOptions,
 ): Promise<NormalizedResponse> {
   assertGroundedGatewayDispatchActive(ctx, original);
+  assertCitationRepairTurnActive(ctx.purpose, ctx.deps.chatToolTurn);
   logGroundedPromptSelection(
     ctx.correlationId,
     sent,

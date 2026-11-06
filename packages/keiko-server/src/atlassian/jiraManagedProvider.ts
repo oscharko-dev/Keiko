@@ -221,15 +221,18 @@ const DEFINITIONS: Readonly<
     ]),
   },
 };
+function readToolRef(name: JiraManagedReadToolName): ReturnType<typeof createToolRef> {
+  return createToolRef(
+    `keiko.${name.replaceAll("-", ".")}`,
+    name === "jira.issue" || name === "jira.search" || name === "jira.create-fields" ? 3 : 2,
+  );
+}
 function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   if (name === "jira.report") return JIRA_REPORT_DECLARATION;
   if (name === "jira.draft-stage") return JIRA_DRAFT_STAGE_DECLARATION;
   const definition = DEFINITIONS[name];
   const descriptor = createToolDescriptor({
-    toolRef: createToolRef(
-      `keiko.${name.replaceAll("-", ".")}`,
-      name === "jira.issue" || name === "jira.search" || name === "jira.create-fields" ? 3 : 2,
-    ),
+    toolRef: readToolRef(name),
     description: definition.description,
     inputSchema: object(
       {

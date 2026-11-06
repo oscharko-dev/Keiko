@@ -1237,9 +1237,9 @@ describe("connection-owned embedding capability proof", () => {
     const adapter: OpenAIEmbeddingAdapter = {
       endpoint: PROVIDER_ENDPOINT,
       apiKey: SECRET_API_KEY,
-      request: async (request) => {
+      request: (request) => {
         seen.push(request);
-        return ready ? successOutcome(2) : { ok: false, kind: "transport" };
+        return Promise.resolve(ready ? successOutcome(2) : { ok: false, kind: "transport" });
       },
     };
     expect((await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection")).ok).toBe(
@@ -1331,7 +1331,10 @@ describe("connection-owned embedding capability proof", () => {
       if (!batch.ok || batch.value[0] === undefined)
         throw new TypeError("Missing primary fixture vector");
       batch.value[0].vector.set(vector);
-      const batched: OpenAIEmbeddingAdapter = { ...adapter, requestBatch: async () => batch };
+      const batched: OpenAIEmbeddingAdapter = {
+        ...adapter,
+        requestBatch: () => Promise.resolve(batch),
+      };
       expect(
         await verifyEmbeddingCapability(batched, fingerprintProbe, "connection"),
       ).toMatchObject({ ok: false, reason: "invalid-response" });
@@ -1344,9 +1347,9 @@ describe("connection-owned embedding capability proof", () => {
     const adapter: OpenAIEmbeddingAdapter = {
       endpoint: PROVIDER_ENDPOINT,
       apiKey: SECRET_API_KEY,
-      request: async (request) => {
+      request: (request) => {
         seen.push(request);
-        return cancel ? { ok: false, kind: "cancelled" } : successOutcome(2);
+        return Promise.resolve(cancel ? { ok: false, kind: "cancelled" } : successOutcome(2));
       },
     };
     await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection");
@@ -1399,15 +1402,15 @@ describe("connection-owned embedding capability proof", () => {
     const adapter: OpenAIEmbeddingAdapter = {
       endpoint: PROVIDER_ENDPOINT,
       apiKey: SECRET_API_KEY,
-      request: async (request) => {
+      request: (request) => {
         seen.push(request);
-        return {
+        return Promise.resolve({
           ok: true,
           value: {
             vector: Float32Array.from([3, 4]),
             modelId: request.modelId,
           },
-        };
+        });
       },
     };
     const custom = { ...fingerprintProbe, dimensionsParam: 2 };
@@ -1487,9 +1490,9 @@ describe("connection-owned embedding capability proof", () => {
   });
 
   it("propagates the first unexpected adapter throw and retains a safe negative proof afterward", async () => {
-    const request = vi.fn(async (): Promise<OpenAIEmbeddingOutcome> => {
-      throw new TypeError("fixture-adapter-failure");
-    });
+    const request = vi.fn((): Promise<OpenAIEmbeddingOutcome> =>
+      Promise.reject(new TypeError("fixture-adapter-failure")),
+    );
     const adapter: OpenAIEmbeddingAdapter = {
       endpoint: PROVIDER_ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -1512,7 +1515,7 @@ describe("connection-owned embedding capability proof", () => {
     batch.value[1].vector.fill(Number.NaN);
     const adapter: OpenAIEmbeddingAdapter = {
       ...adapterReturning(successOutcome(2)),
-      requestBatch: async () => batch,
+      requestBatch: () => Promise.resolve(batch),
     };
     expect(await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection")).toMatchObject({
       ok: false,

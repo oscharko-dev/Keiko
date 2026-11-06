@@ -192,7 +192,7 @@ describe("create", () => {
     const f = fixture(SET(template([...ALL_POINTS, "requiredFields: [Story Points]"])));
     const result = await f.run("jira.create", {
       ...CREATE,
-      fields: { summary: "x", description: "## Context\nWhy" },
+      fields: { summary: "x", description: "h2. Context\nWhy" },
     });
     expect(result).toEqual({
       ok: false,
@@ -214,7 +214,7 @@ describe("create", () => {
     }));
     const result = await f.run("jira.create", {
       ...CREATE,
-      fields: { summary: "x", description: "## Context\nWhy" },
+      fields: { summary: "x", description: "h2. Context\nWhy" },
       links,
     });
     expect(result).toMatchObject({ ok: false, reason: "field-validation" });

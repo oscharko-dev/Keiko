@@ -113,6 +113,14 @@ export function pluralSynthesisCountFields(
 
 export type GroundedSynthesisPurpose = "answer" | "citation-repair";
 
+export function assertCitationRepairTurnActive(
+  purpose: GroundedSynthesisPurpose | undefined,
+  toolTurn: ChatToolTurnPort | undefined,
+): void {
+  if (purpose === "citation-repair" && toolTurn?.endedEarly === true)
+    throw new CallerAttemptAdmissionError("Citation repair cannot continue an ended tool turn");
+}
+
 interface PluralSynthesisCall {
   readonly purpose?: GroundedSynthesisPurpose | undefined;
   readonly retryFollows?: ((error: unknown) => boolean) | undefined;
@@ -128,12 +136,17 @@ interface PluralSynthesisCall {
   readonly coverage?: RequirementCoverage | undefined;
 }
 
+function assertPluralSynthesisAdmissionOpen(input: PluralSynthesisCall): void {
+  assertCitationRepairTurnActive(input.purpose, input.deps?.chatToolTurn);
+  if (input.budget.remaining() <= 0)
+    throw new CallerAttemptAdmissionError("Grounded synthesis attempt grant is exhausted");
+}
+
 /** Uses the shared physical-attempt admission; injected ports settle the same ledger. */
 export async function callPluralGroundedSynthesis(
   input: PluralSynthesisCall,
 ): Promise<NormalizedResponse> {
-  if (input.budget.remaining() <= 0)
-    throw new CallerAttemptAdmissionError("Grounded synthesis attempt grant is exhausted");
+  assertPluralSynthesisAdmissionOpen(input);
   const tracker = createGroundedSynthesisAttemptAdmission(input.budget, {
     ...input.grants,
     retryFollows: input.retryFollows,

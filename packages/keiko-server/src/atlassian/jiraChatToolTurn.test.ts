@@ -54,6 +54,7 @@ import {
   unsupportedIssueKeys,
 } from "../chat-tool-report-coverage.js";
 import { recordChatToolTurnCorrected } from "../chat-tool-turn-ending.js";
+import { conversationModelNotReadyResult } from "../conversation-readiness-admission.js";
 
 // Pass-through spies: the turn's completeness check and its log line run as in production unless a
 // test scripts the detection (the detection itself is proven in chat-tool-report-coverage.test.ts).
@@ -811,8 +812,7 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
           },
         },
       });
-      expect(JSON.stringify(result.body)).toContain("verified tool calling");
-      expect(JSON.stringify(result.body)).toContain("disconnect the Jira Pod");
+      expect(result).toMatchObject(conversationModelNotReadyResult("tool-calling"));
       expect(f.calls).toHaveLength(0);
       expect(f.requests()).toBe(0);
       expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("failed");
@@ -2074,7 +2074,11 @@ describe("four-item Epic and Task template fullchain", () => {
   function description(sections: readonly string[], ref: string): string {
     return sections.map((section) => `h2. ${section}\n${ref}: verified ${section}.`).join("\n\n");
   }
-  function backlog(): Record<string, unknown> {
+  interface BacklogFixtureItem extends Record<string, unknown> {
+    readonly ref: string;
+    fields: Record<string, unknown>;
+  }
+  function backlog(): { items: BacklogFixtureItem[] } {
     // Children intentionally precede their parents: production dependency sorting owns the order.
     return {
       items: [1, 2].flatMap((number) => {
@@ -2195,7 +2199,9 @@ describe("four-item Epic and Task template fullchain", () => {
   async function pendingApproval(
     f: ReturnType<typeof fixture>,
   ): Promise<ChatToolWriteApprovalView> {
-    await vi.waitFor(() => expect(latestExchange(f)?.approval?.state).toBe("pending"));
+    await vi.waitFor(() => {
+      expect(latestExchange(f)?.approval?.state).toBe("pending");
+    });
     const approval = latestExchange(f)?.approval;
     if (approval === undefined) throw new TypeError("Missing exact batch approval");
     return approval;
@@ -2213,18 +2219,40 @@ describe("four-item Epic and Task template fullchain", () => {
       f.deps,
     );
   }
-
-  it("approves the complete templated batch once and reconciles a later turn without duplicate parents or children", async () => {
-    const argumentsToStage = backlog() as { items: Record<string, unknown>[] };
-    const f = fixture(true, undefined, true, false, true);
+  function stageBacklog(
+    f: ReturnType<typeof fixture>,
+    items: readonly BacklogFixtureItem[],
+  ): { readonly draftId: string; readonly draftDigest: string } {
     const staged = f.deps.jiraDraftStore?.append(
       f.chatId,
       undefined,
       "fullchain-fingerprint",
-      argumentsToStage.items,
+      items,
     );
     if (staged?.ok !== true) throw new TypeError("Missing staged batch");
-    const reference = { draftId: staged.draft.id, draftDigest: staged.draft.digest };
+    return { draftId: staged.draft.id, draftDigest: staged.draft.digest };
+  }
+  function backlogMissing(
+    missing: "Epic Name" | "Epic Link" | "Task section",
+  ): ReturnType<typeof backlog> {
+    const args = backlog();
+    const firstTask = args.items.find((item) => item.ref === "task1");
+    const firstEpic = args.items.find((item) => item.ref === "epic1");
+    if (firstTask === undefined || firstEpic === undefined)
+      throw new TypeError("Missing fixture item");
+    if (missing === "Epic Link") delete firstTask.parent;
+    else {
+      const target = missing === "Epic Name" ? firstEpic : firstTask;
+      if (missing === "Epic Name") Reflect.deleteProperty(target.fields, EPIC_NAME);
+      else target.fields.description = description(TASK_SECTIONS.slice(0, -1), "1");
+    }
+    return args;
+  }
+
+  it("approves the complete templated batch once and reconciles a later turn without duplicate parents or children", async () => {
+    const argumentsToStage = backlog();
+    const f = fixture(true, undefined, true, false, true);
+    const reference = stageBacklog(f, argumentsToStage.items);
     draftToSend = reference;
     saveTemplates(f);
     const metadataReads = typedJira(f);
@@ -2306,18 +2334,7 @@ describe("four-item Epic and Task template fullchain", () => {
   it.each(["Epic Name", "Epic Link", "Task section"] as const)(
     "refuses the entire batch before approval when the saved template requires %s",
     async (missing) => {
-      const args = backlog() as { items: Record<string, unknown>[] };
-      const firstTask = args.items.find((item) => item.ref === "task1");
-      const firstEpic = args.items.find((item) => item.ref === "epic1");
-      if (firstTask === undefined || firstEpic === undefined)
-        throw new TypeError("Missing fixture item");
-      if (missing === "Epic Link") delete firstTask.parent;
-      else {
-        const target = missing === "Epic Name" ? firstEpic : firstTask;
-        const fields = target.fields as Record<string, unknown>;
-        if (missing === "Epic Name") delete fields[EPIC_NAME];
-        else fields.description = description(TASK_SECTIONS.slice(0, -1), "1");
-      }
+      const args = backlogMissing(missing);
       draftToSend = args;
       const f = fixture(true, undefined, true, false, true);
       saveTemplates(f);
@@ -2329,18 +2346,19 @@ describe("four-item Epic and Task template fullchain", () => {
       expect(f.writes()).toBe(0);
       expect(f.jira.issues).toHaveLength(0);
       expect(latestExchange(f)?.approval).toBeUndefined();
+      const violations: unknown = expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: missing === "Task section" ? "section-missing" : "field-missing",
+          subject: missing === "Task section" ? "Acceptance criteria" : missing,
+          template: missing === "Epic Name" ? "SYN/Epic" : "SYN/Task",
+        }),
+      ]);
       expect(latestExchange(f)?.result?.data).toMatchObject({
         outcome: "rejected",
         items: [
           {
             ref: missing === "Epic Name" ? "epic1" : "task1",
-            violations: expect.arrayContaining([
-              expect.objectContaining({
-                ruleId: missing === "Task section" ? "section-missing" : "field-missing",
-                subject: missing === "Task section" ? "Acceptance criteria" : missing,
-                template: missing === "Epic Name" ? "SYN/Epic" : "SYN/Task",
-              }),
-            ]),
+            violations,
           },
         ],
       });

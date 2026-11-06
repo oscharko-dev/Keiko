@@ -295,17 +295,22 @@ export function knowledgeCoverageIssues(
   return issues;
 }
 
+function isCanonicalReviewFailure(result: ChatToolExchange["result"]): boolean {
+  return (
+    result?.toolRef?.canonicalId === "keiko.knowledge.review" &&
+    result.toolRef.contractVersion === 2 &&
+    result.status === "failed" &&
+    result.reason === "provider-reported-error"
+  );
+}
+
 /** Only the canonical v2 provider error can attest that its source was read before refusal. */
 function reviewFailureReceipt(
   exchange: ChatToolExchange,
   data: Readonly<Record<string, unknown>>,
 ): object {
-  const result = exchange.result;
   if (
-    result?.toolRef?.canonicalId !== "keiko.knowledge.review" ||
-    result.toolRef.contractVersion !== 2 ||
-    result.status !== "failed" ||
-    result.reason !== "provider-reported-error" ||
+    !isCanonicalReviewFailure(exchange.result) ||
     data.outcome !== "failed" ||
     data.sourceAvailable !== true ||
     data.reason !== data.failureStage

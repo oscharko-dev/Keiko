@@ -117,8 +117,9 @@ function fixture(): TemplateReadFixture {
     baseUrl: "https://jira.example.invalid/context",
     http,
     issueTemplates: jiraIssueTemplateSource(store),
-    templateMetadataActivity: (activity) =>
-      recordJiraTemplateMetadata(sink, "template-discovery", activity),
+    templateMetadataActivity: (activity) => {
+      recordJiraTemplateMetadata(sink, "template-discovery", activity);
+    },
   };
   const read = managedReader(connection, beforeEffect);
   return {

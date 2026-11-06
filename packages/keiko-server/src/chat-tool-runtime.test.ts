@@ -639,7 +639,12 @@ describe("combined Jira review admission parity", () => {
         ),
         f.deps,
       );
-    await vi.waitFor(() => expect(terminal).toBe(true), { timeout: 5_000, interval: 10 });
+    await vi.waitFor(
+      () => {
+        expect(terminal).toBe(true);
+      },
+      { timeout: 5_000, interval: 10 },
+    );
     await pending.catch(() => undefined);
   }
   function useDraftRemote(f: Fixture): ReturnType<typeof syntheticJira> {
@@ -701,18 +706,19 @@ describe("combined Jira review admission parity", () => {
     try {
       const exchange = await observedJiraExchange(f);
       expect(exchange.approval).toBeUndefined();
+      const violations: unknown = expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "section-missing",
+          subject: "Acceptance criteria",
+          template: "SYN/Story",
+        }),
+      ]);
       expect(exchange.result?.data).toMatchObject({
         outcome: "rejected",
         items: [
           {
             ref: "story",
-            violations: expect.arrayContaining([
-              expect.objectContaining({
-                ruleId: "section-missing",
-                subject: "Acceptance criteria",
-                template: "SYN/Story",
-              }),
-            ]),
+            violations,
           },
         ],
       });
@@ -755,24 +761,25 @@ describe("combined Jira review admission parity", () => {
     const credentials = f.deps.atlassianConnectorCredentials;
     if (credentials === undefined) throw new TypeError("Missing credential owner");
     vi.mocked(credentials.httpBodyPortFactory).mockImplementation(
-      (_metadata, _correlation, lifecycle) => (request) => {
-        if (lifecycle?.beforeDispatch?.(request) !== true)
-          throw new TypeError("Expected actual attachment read admission");
-        if (request.method !== "GET") throw new TypeError("Rejected preview must never upload");
-        const response = JSON.stringify(
-          new URL(request.url).pathname.endsWith("/attachment/meta")
-            ? { enabled: true, uploadLimit: 1e6 }
-            : { id: "10001", key: "KEIKO-1", fields: { attachment: [] } },
-        );
-        lifecycle.onResponse?.(request, 200);
-        return Promise.resolve({
-          kind: "response",
-          status: 200,
-          bodyText: response,
-          bodyBytes: Buffer.byteLength(response),
-          truncated: false,
-        });
-      },
+      (_metadata, _correlation, lifecycle) =>
+        (request): ReturnType<AtlassianHttpBodyPort> => {
+          if (lifecycle?.beforeDispatch?.(request) !== true)
+            throw new TypeError("Expected actual attachment read admission");
+          if (request.method !== "GET") throw new TypeError("Rejected preview must never upload");
+          const response = JSON.stringify(
+            new URL(request.url).pathname.endsWith("/attachment/meta")
+              ? { enabled: true, uploadLimit: 1e6 }
+              : { id: "10001", key: "KEIKO-1", fields: { attachment: [] } },
+          );
+          lifecycle.onResponse?.(request, 200);
+          return Promise.resolve({
+            kind: "response",
+            status: 200,
+            bodyText: response,
+            bodyBytes: Buffer.byteLength(response),
+            truncated: false,
+          });
+        },
     );
     const pending = send(f);
     void pending.catch(() => undefined);
@@ -836,29 +843,32 @@ describe("combined Jira review admission parity", () => {
     let dispatched = 0;
     const admissions: boolean[] = [];
     vi.mocked(credentials.httpBodyPortFactory).mockImplementation(
-      (_metadata, _correlation, lifecycle) => async (request) => {
-        if (request.method !== "GET") throw new TypeError("Revoked source must never upload");
-        limitRequested = true;
-        await held;
-        const admitted = lifecycle?.beforeDispatch?.(request) === true;
-        admissions.push(admitted);
-        if (!admitted) return { kind: "network-error" };
-        dispatched++;
-        const response = JSON.stringify({ enabled: true, uploadLimit: 1e6 });
-        lifecycle.onResponse?.(request, 200);
-        return {
-          kind: "response",
-          status: 200,
-          bodyText: response,
-          bodyBytes: Buffer.byteLength(response),
-          truncated: false,
-        };
-      },
+      (_metadata, _correlation, lifecycle) =>
+        async (request): ReturnType<AtlassianHttpBodyPort> => {
+          if (request.method !== "GET") throw new TypeError("Revoked source must never upload");
+          limitRequested = true;
+          await held;
+          const admitted = lifecycle?.beforeDispatch?.(request) === true;
+          admissions.push(admitted);
+          if (!admitted) return { kind: "network-error" };
+          dispatched++;
+          const response = JSON.stringify({ enabled: true, uploadLimit: 1e6 });
+          lifecycle.onResponse?.(request, 200);
+          return {
+            kind: "response",
+            status: 200,
+            bodyText: response,
+            bodyBytes: Buffer.byteLength(response),
+            truncated: false,
+          };
+        },
     );
     const pending = send(f);
     void pending.catch(() => undefined);
     try {
-      await vi.waitFor(() => expect(limitRequested).toBe(true));
+      await vi.waitFor(() => {
+        expect(limitRequested).toBe(true);
+      });
       expect(jiraExchange(f)?.approval).toBeUndefined();
       const snapshot = settings.read(CORRELATION);
       settings.update(

@@ -266,7 +266,10 @@ function sourceAdmissions(options: AdmissionOptions): {
   const primary = {
     ...options,
     now: Date.now,
-    context: () => ({ ...options.context().jira, signal: options.context().signal }),
+    context: (): JiraChatCatalogContext => ({
+      ...options.context().jira,
+      signal: options.context().signal,
+    }),
   };
   const jira =
     options.context().primaryKind === "knowledge"

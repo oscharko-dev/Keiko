@@ -8,6 +8,7 @@ import {
   requestOpenAIEmbedding,
   invalidateEmbeddingCapability,
   type GatewayConfig,
+  type ModelProviderConfig,
   type NormalizedResponse,
   type OpenAIEmbeddingAdapter,
   type OpenAIEmbeddingOutcome,
@@ -282,6 +283,47 @@ const EMBEDDING_ADAPTERS_BY_CONFIG = new WeakMap<
   { readonly generation: number; readonly adapter: OpenAIEmbeddingAdapter }
 >();
 
+function embeddingProviderAtGeneration(
+  deps: UiHandlerDeps,
+  generation: number,
+  request: OpenAIEmbeddingRequest,
+): ModelProviderConfig | undefined {
+  const activeConfig = currentGatewayConfig(deps);
+  const provider = activeConfig?.providers.find((entry) => entry.modelId === request.modelId);
+  if (
+    provider === undefined ||
+    activeConfig === undefined ||
+    (deps.gatewayConfig?.generation() ?? 0) !== generation ||
+    !isConfiguredEmbeddingModel(activeConfig, provider.modelId)
+  ) {
+    return undefined;
+  }
+  return provider;
+}
+
+function embeddingRequestForProvider(
+  deps: UiHandlerDeps,
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  request: OpenAIEmbeddingRequest,
+  log: OpenAIEmbeddingRequest["log"],
+): OpenAIEmbeddingRequest {
+  return {
+    log,
+    ...(deps.gatewayReadinessFetch === undefined ? {} : { fetchImpl: deps.gatewayReadinessFetch }),
+    timeoutMs: provider.timeoutMs,
+    ...request,
+    endpoint: provider.baseUrl,
+    apiKey: provider.apiKey,
+    ...(provider.apiKeyHeaderName !== undefined
+      ? { apiKeyHeaderName: provider.apiKeyHeaderName }
+      : {}),
+    ...((provider.egress ?? config.egress) === undefined
+      ? {}
+      : { egress: provider.egress ?? config.egress }),
+  };
+}
+
 export function createEmbeddingAdapter(deps: UiHandlerDeps): OpenAIEmbeddingAdapter | RouteResult {
   const config = currentGatewayConfig(deps);
   if (config === undefined) {
@@ -299,32 +341,13 @@ export function createEmbeddingAdapter(deps: UiHandlerDeps): OpenAIEmbeddingAdap
     endpoint: "local-knowledge",
     apiKey: "local-knowledge",
     request: async (request): Promise<OpenAIEmbeddingOutcome> => {
-      const activeConfig = currentGatewayConfig(deps);
-      const provider = activeConfig?.providers.find((entry) => entry.modelId === request.modelId);
-      if (
-        provider === undefined ||
-        activeConfig === undefined ||
-        (deps.gatewayConfig?.generation() ?? 0) !== generation ||
-        !isConfiguredEmbeddingModel(activeConfig, provider.modelId)
-      ) {
+      const provider = embeddingProviderAtGeneration(deps, generation, request);
+      if (provider === undefined) {
         return { ok: false, kind: "unsupported-model" };
       }
-      const outcome = await requestEmbeddingImpl(deps)({
-        log,
-        ...(deps.gatewayReadinessFetch === undefined
-          ? {}
-          : { fetchImpl: deps.gatewayReadinessFetch }),
-        timeoutMs: provider.timeoutMs,
-        ...request,
-        endpoint: provider.baseUrl,
-        apiKey: provider.apiKey,
-        ...(provider.apiKeyHeaderName !== undefined
-          ? { apiKeyHeaderName: provider.apiKeyHeaderName }
-          : {}),
-        ...((provider.egress ?? config.egress) === undefined
-          ? {}
-          : { egress: provider.egress ?? config.egress }),
-      });
+      const outcome = await requestEmbeddingImpl(deps)(
+        embeddingRequestForProvider(deps, config, provider, request, log),
+      );
       const finalConfig = currentGatewayConfig(deps);
       if (
         (deps.gatewayConfig?.generation() ?? 0) !== generation ||

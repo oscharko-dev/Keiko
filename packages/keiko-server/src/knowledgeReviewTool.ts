@@ -370,6 +370,17 @@ function reviewAuthorityCurrent(context: RequirementsToolContext): boolean {
   return !context.signal.aborted && context.beforeEffect();
 }
 
+function reviewContinuationFailure(
+  environment: KnowledgeToolEnvironment,
+  args: CatalogJsonObject,
+  input: ReviewInput,
+): KnowledgeToolRead | undefined {
+  if (!reviewAuthorityCurrent(environment.context)) return knowledgeToolFailure("denied");
+  const refreshed = inputFor(environment, args);
+  if (refreshed?.fingerprint !== input.fingerprint) return knowledgeToolFailure("source-changed");
+  return undefined;
+}
+
 async function review(
   environment: KnowledgeToolEnvironment,
   args: CatalogJsonObject,
@@ -380,9 +391,8 @@ async function review(
   const key = `${input.fingerprint}|${String(input.start)}`;
   const hit = cache.get(key);
   const generated = hit === undefined ? await generateReview(environment, input) : undefined;
-  if (!reviewAuthorityCurrent(environment.context)) return knowledgeToolFailure("denied");
-  const refreshed = inputFor(environment, args);
-  if (refreshed?.fingerprint !== input.fingerprint) return knowledgeToolFailure("source-changed");
+  const continuationFailure = reviewContinuationFailure(environment, args, input);
+  if (continuationFailure !== undefined) return continuationFailure;
   if (generated !== undefined && !generated.ok) return failedReview(input, generated);
   const result = hit ?? generated?.review;
   if (result === undefined) return knowledgeToolFailure("model-port-unavailable");
