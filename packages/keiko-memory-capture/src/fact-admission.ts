@@ -621,6 +621,9 @@ const CONTEXT_NEGATION_RE = anyWordPattern([
   "wrong",
   "unwahr",
 ]);
+// Plural or bare forms; after them a name may be an object ("then tell Anna"), so only a person
+// before them counts: "They say …", "people think …".
+const BARE_SPEECH_VERBS = new Set(["say", "tell", "think", "believe", "claim"]);
 // Someone else's words or view framing the claim. A speech verb counts beside a person, a name or
 // pronoun, never beside the person themselves: "Anna says I like tables", "…, sagt Anna", "Er
 // sagte, ich …" are attributions; "I use Vim, I said" and "Claims Management" are not.
@@ -654,11 +657,7 @@ const SPEECH_VERBS = new Set([
   "believed",
   "stated",
   "reckons",
-  "say",
-  "tell",
-  "think",
-  "believe",
-  "claim",
+  ...BARE_SPEECH_VERBS,
 ]);
 const OTHER_PERSON_WORDS = new Set([
   "er",
@@ -759,9 +758,12 @@ const ATTRIBUTION_MARKER_RE = anyWordPattern([
 // "laut" is also "loud"; as attribution it names someone: "Laut Anna", "laut meinem Chef".
 const ATTRIBUTED_RE =
   /(?:^|[^\p{L}])[Ll]aut\s+(?:\p{Lu}|(?:mein(?:em|er)?|ihr|ihm|ihnen|dem|der|den)(?!\p{L}))/u;
-// "hat Anna gesagt"; "Ehrlich gesagt" names nobody.
-const PERFECT_SPEECH_RE =
-  /(?:^|[^\p{L}])(?:hat|haben|hatte|hatten)\s+(?:\p{Lu}\p{L}*|er|sie)\s+(?:gesagt|erzählt|gemeint|behauptet)(?!\p{L})/u;
+// "hat Anna gesagt", "Man hat mir gesagt"; "Ehrlich gesagt" names nobody.
+const SPEECH_PARTICIPLES = new Set(["gesagt", "erzählt", "gemeint", "behauptet"]);
+const SPEECH_AUXILIARIES = new Set(["hat", "haben", "hatte", "hatten"]);
+// Told by someone unnamed: "I was told …", "Mir wurde gesagt, …".
+const PASSIVE_SPEECH_RE =
+  /(?:^|[^\p{L}])(?:am|is|are|was|were|been|wird|werde|wurde|wurden)\s+(?:\p{L}+\s+)?(?:told|said|gesagt|erzählt)(?!\p{L})/iu;
 // The first words of each later clause, an aside in brackets included.
 const CLAUSE_HEAD_RE = /[,;:–—(-]\s*(\p{L}+)(?:\s+\p{L}+){0,2}/gu;
 const RELATIVE_LEAD_RE =
@@ -918,11 +920,14 @@ function contextDropReason(
 ): FactDropReason | null {
   const speechAct = speechActDropReason(evidence, sentence);
   if (speechAct !== null) return speechAct;
-  const opening = `${prefix}${openingToSubject(evidence)}`;
-  if (isHypothetical(evidence, opening)) return "hypothetical";
+  // A condition is read up to the first word about the person, so "Es hilft mir, wenn ich …" keeps
+  // its trailing condition; attribution is read up to the subject ("My colleague says I …").
+  const framing = `${prefix}${openingTo(evidence, [FIRST_PERSON_RE, WE_RE]) ?? ""}`;
+  if (isHypothetical(evidence, framing)) return "hypothetical";
   if (IRONY_RE.test(sentence) || IRONIC_OPENING_RE.test(sentence)) return "ironic";
   if (UNCERTAIN_RE.test(sentence)) return "uncertain";
   if (isPast(evidence)) return "past-statement";
+  const opening = `${prefix}${openingToSubject(evidence)}`;
   const rest = sentence.slice(prefix.length);
   return isDeniedByPrefix(prefix) || isReported(opening, rest) ? "negated-context" : null;
 }
@@ -931,7 +936,9 @@ function contextDropReason(
 // Anna", "I use Vim, Anna says". A relative clause or reason ("…, which says nothing", "…, weil Anna
 // es mir sagte") is no attribution; a reason is judged by the subject checks.
 function isReported(opening: string, rest: string): boolean {
+  // Being told is never the person's own statement, wherever the passive stands: "I am told I …".
   if (attributes(opening)) return true;
+  if (PASSIVE_SPEECH_RE.test(opening) || PASSIVE_SPEECH_RE.test(rest)) return true;
   return [...rest.matchAll(CLAUSE_HEAD_RE)].some(
     (head) => !RELATIVE_LEAD_RE.test(head[1] ?? "") && attributes(head[0]),
   );
@@ -939,17 +946,32 @@ function isReported(opening: string, rest: string): boolean {
 
 function attributes(text: string): boolean {
   if (ATTRIBUTION_MARKER_RE.test(text) || ATTRIBUTED_RE.test(text)) return true;
-  if (PERFECT_SPEECH_RE.test(text)) return true;
   const words = text.split(/[^\p{L}]+/u);
-  return words.some((word, at) => SPEECH_VERBS.has(word) && speaksForAnother(words, at));
+  return words.some(
+    (word, at) =>
+      (SPEECH_VERBS.has(word) && speaksForAnother(words, at)) ||
+      (SPEECH_PARTICIPLES.has(word) && saidInPerfect(words, at)),
+  );
+}
+
+// The auxiliary sits one or two words before the participle; its subject stands beside it.
+function saidInPerfect(words: readonly string[], at: number): boolean {
+  const aux = [at - 1, at - 2].find((index) =>
+    SPEECH_AUXILIARIES.has(words[index]?.toLowerCase() ?? ""),
+  );
+  if (aux === undefined) return false;
+  return isOtherPerson(words, aux - 1) || isOtherPerson(words, aux + 1);
 }
 
 // Another person stands before the verb, or after it while the person is not the one speaking.
 function speaksForAnother(words: readonly string[], at: number): boolean {
   if (isOtherPerson(words, at - 1)) return true;
+  if (BARE_SPEECH_VERBS.has(words[at] ?? "")) return false;
   const neighbours = [words[at - 1], words[at + 1]].map((word) => word?.toLowerCase() ?? "");
   if (neighbours.some((word) => SELF_SPEAKERS.has(word))) return false;
-  return isOtherPerson(words, at + 1);
+  // "says the doctor", "sagt der Arzt": the person follows the determiner.
+  const next = PERSON_DETERMINERS.has(neighbours[1] ?? "") ? at + 2 : at + 1;
+  return isOtherPerson(words, next);
 }
 
 function isOtherPerson(words: readonly string[], at: number): boolean {
