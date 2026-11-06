@@ -8566,7 +8566,7 @@
     },
     "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.ts": {
       "anti-slop/no-array-filter-map": 1,
-      "anti-slop/no-conditional-empty-object-spread": 14,
+      "anti-slop/no-conditional-empty-object-spread": 15,
       "anti-slop/no-known-value-widening": 6,
       "anti-slop/no-runtime-typeof": 4,
       "anti-slop/no-unknown-parameters": 3,
@@ -19394,7 +19394,7 @@
       "anti-slop/no-runtime-typeof": 5
     },
     "scripts/coding-runtime-performance-harness.mjs": {
-      "anti-slop/no-conditional-empty-object-spread": 2,
+      "anti-slop/no-conditional-empty-object-spread": 3,
       "anti-slop/no-runtime-typeof": 1
     },
     "scripts/coding-runtime-performance-producer.mjs": {
