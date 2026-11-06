@@ -194,6 +194,7 @@ import {
 import { openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import {
   decideOpenCodeNativePolicy,
+  nativeAuthorityRefusalMessage,
   openCodeNativeEditFiles,
   openCodeNativeVerificationKind,
   parseOpenCodeNativePolicyRequest,
@@ -4137,20 +4138,22 @@ async function handleNativePolicyRequest(
   if (run?.ready !== true || sessionRelation === undefined) {
     return { status: 403, body: "", rejection: "approval-unavailable" };
   }
-  const decided = decideOpenCodeNativePolicy({
+  const policyInput = {
     mode: run.mode,
     workspaceRoot: run.workspaceRoot,
     planRoot: openCodePlanDirectory(run.runRoot),
     request,
-    nowMs: Date.now(),
     ...(run.mcp === undefined ? {} : { mcp: run.mcp }),
     ...(deps.externalReadRoots === undefined ? {} : { externalRoots: deps.externalReadRoots }),
     webSearch: deps.nativeWebSearch?.admitted === true,
-  });
+  };
+  const decided = decideOpenCodeNativePolicy({ ...policyInput, nowMs: Date.now() });
   const decision = admittedSessionMove(run, request, decided);
   const settled = await settleNativePolicyOutcome(run, decision, request, signal, deps, {
     approvals,
     sessionRelation,
+    // A human may take minutes to decide; the files may change meanwhile (a link swapped in).
+    recheck: () => decideOpenCodeNativePolicy({ ...policyInput, nowMs: Date.now() }),
   });
   return answerNativePolicy(run, request, decision, { ...settled, sessionRelation }, deps);
 }
@@ -4191,7 +4194,7 @@ async function answerNativePolicy(
     ...(worktree === undefined ? {} : { worktree: worktree.disposition }),
   });
   return worktree === undefined
-    ? nativePolicyResult(outcome, decision)
+    ? nativePolicyResult(settled, decision)
     : nativePolicyResponse("deny", worktree.message);
 }
 
@@ -4261,21 +4264,20 @@ function noteNativeCallRefused(
 }
 
 function nativePolicyResult(
-  outcome: OpenCodeNativePolicyOutcome,
+  settled: NativePolicySettlement,
   decision: OpenCodeNativePolicyDecision,
 ): OpenCodeToolBridgeResponse {
+  const { outcome } = settled;
   if (outcome === "allowed" || outcome === "approved") return nativePolicyResponse("allow");
   if (outcome === "authority-refused" || outcome === "cancelled")
-    return nativePolicyResponse("deny", NATIVE_AUTHORITY_REFUSED_MESSAGE);
+    return nativePolicyResponse("deny", nativeAuthorityRefusalMessage(settled.authority?.reason));
+  if (settled.refusal !== undefined) return nativePolicyResponse("deny", settled.refusal);
   if (decision.effect === "deny") return nativePolicyResponse("deny", decision.message);
   return nativePolicyResponse(
     "deny",
     humanDecisionFeedback(outcome === "denied" ? "denied" : "expired"),
   );
 }
-
-const NATIVE_AUTHORITY_REFUSED_MESSAGE =
-  "Keiko refused this action: the run's authority is no longer valid or its budget is exhausted.";
 
 /**
  * The policy's answer, revalidated against live authority before an effect is released (#3897
@@ -4330,19 +4332,17 @@ async function settleNativePolicyOutcome(
   context: {
     readonly approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>;
     readonly sessionRelation: OpenCodeNativeSessionRelation;
+    readonly recheck: () => OpenCodeNativePolicyDecision;
   },
 ): Promise<NativePolicySettlement> {
-  const { approvals, sessionRelation } = context;
+  const { sessionRelation } = context;
   if (signal?.aborted === true) return { outcome: "cancelled" };
   if (decision.effect === "deny") return { outcome: decision.reason };
   if (!hasRequiredMcpIdentity(decision.classification, request))
     return { outcome: "authority-refused", authority: { reason: "unavailable" } };
-  const outcome: OpenCodeNativePolicyOutcome =
-    decision.effect === "ask"
-      ? await nativePolicyHumanDecision(run, decision, signal, deps, approvals)
-      : "allowed";
-  noteDeniedVerification(deps, request, outcome);
-  if (outcome !== "allowed" && outcome !== "approved") return { outcome };
+  const decided = await humanDecidedOutcome(run, decision, request, signal, deps, context);
+  if (decided.outcome !== "allowed" && decided.outcome !== "approved") return decided;
+  const { outcome } = decided;
   const admission = nativeEffectAdmission(
     deps,
     decision.classification.actionClass,
@@ -4357,6 +4357,43 @@ async function settleNativePolicyOutcome(
   noteAdmittedEditEvidence(run, request, decision.classification, { deps, sessionRelation });
   noteAdmittedVerification(run, deps, request);
   return { outcome, authority: { charge: admission.charge } };
+}
+
+/**
+ * An allowed action as it is, an asked one after the human's decision and the re-check of its
+ * paths: a refusal found by the re-check, or the decision itself.
+ */
+async function humanDecidedOutcome(
+  run: PreparedRun,
+  decision: OpenCodeNativePolicyDecision,
+  request: OpenCodeNativePolicyRequest,
+  signal: AbortSignal | undefined,
+  deps: ToolBridgeExecutionDeps,
+  context: {
+    readonly approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>;
+    readonly recheck: () => OpenCodeNativePolicyDecision;
+  },
+): Promise<NativePolicySettlement> {
+  const outcome: OpenCodeNativePolicyOutcome =
+    decision.effect === "ask"
+      ? await nativePolicyHumanDecision(run, decision, signal, deps, context.approvals)
+      : "allowed";
+  noteDeniedVerification(deps, request, outcome);
+  if (outcome !== "allowed" && outcome !== "approved") return { outcome };
+  return staleAfterHumanDecision(decision, context.recheck) ?? { outcome };
+}
+
+/**
+ * The human decided on the facts at ask time; the files may have changed while they read the card
+ * (a symbolic link swapped in). The policy runs once more and a hard denial then wins.
+ */
+function staleAfterHumanDecision(
+  decision: OpenCodeNativePolicyDecision,
+  recheck: () => OpenCodeNativePolicyDecision,
+): NativePolicySettlement | undefined {
+  if (decision.effect !== "ask") return undefined;
+  const again = recheck();
+  return again.effect === "deny" ? { outcome: again.reason, refusal: again.message } : undefined;
 }
 
 /** A human refused a project check: the run's verification is blocked, as for the governed one. */
@@ -4566,6 +4603,8 @@ function recordNativeStepChanged(
 interface NativePolicySettlement {
   readonly outcome: OpenCodeNativePolicyOutcome;
   readonly authority?: OpenCodeNativeAuthorityEvidence;
+  /** The model-facing reason of a refusal found after the human's decision (a re-check). */
+  readonly refusal?: string;
 }
 
 function nativeEffectAdmission(

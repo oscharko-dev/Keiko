@@ -11076,6 +11076,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "sensitive-path",
           "linked-file",
           "delivery-reserved",
+          "path-unresolvable",
           "approved",
           "denied",
           "expired",

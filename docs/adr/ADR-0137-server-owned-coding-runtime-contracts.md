@@ -2778,3 +2778,44 @@ folder whose configuration names a work tree that does not contain it counts as 
 (`keiko-git`). The mutation lane keeps filter drivers because `git-crypt` must run on commit; it
 relies on the kernel rule for the run's repository, and a person who commits in a subfolder
 repository a run created accepts its configuration as they would in a terminal.
+
+**The native shell and path policy reads options and physical locations (#4271).** A shell command
+is vetted by its program, its subcommand and its options (`opencodeNativeShellPolicy.ts`), never by
+its first operand alone. An option that executes another command or writes a file is never vetted:
+`find -exec/-ok/-delete/-fprint*`, `rg --pre`, `sort -o/--output/--compress-program`, a second
+`uniq` operand, `tree -o`, `git -c` outside a small display-only key list, `git --config-env`,
+`--exec-path`, `git diff --output`, `--ext-diff`, `--textconv` and `git grep -O`. `npm exec`/`x`,
+`pnpm exec`/`dlx`, `yarn exec`/`dlx` and `bun x` are not vetted, like `npx` with a package or a
+command option. A value option never reads as the subcommand (`mvn -pl api -am verify`,
+`mvn -f svc/pom.xml test`, `npm -w pkg run test`, `npm --prefix web test`, `pnpm --filter web test`,
+`pnpm -C web test`, `yarn workspace web test`, Gradle task paths such as `:app:test`), and a
+path-valued option (`-f`, `-s`, `--prefix`, `-C`, `--dir`, `--cwd`, `-p`, `-b`, `--manifest-path`) must
+name a place inside the workspace, lexically and after resolving links; `cd` is vetted only into one.
+Paths are read against the workspace root, never a directory a `cd` may have moved to, so a `..` that
+leaves the root asks. The repository's own wrapper scripts (`./mvnw`, `svc/gradlew`, also through
+`bash`/`sh`) are vetted like `mvn`/`gradle`; a wrapper outside the workspace is not. A quote, escape,
+parameter or command expansion, redirection other than to `/dev/null` or a descriptor duplication,
+subshell, newline or single `&` that the reader does not interpret leaves the command unvetted
+(it asks; Full access allows it). Environment assignments are vetted only from a short display and
+locale list (`CI`, `NODE_ENV`, `TZ`, `LANG`, ...), never `PATH`, `NODE_OPTIONS`, `LD_PRELOAD` or a
+`*_OPTS` variable. Plugin goals of the Maven exec family and `-Dexec.*` properties ask.
+
+Delivery stays reserved when a runner carries it: `find -exec git push`, `xargs git push`,
+`timeout 5 git push`, `npx`/`npm exec`/`pnpm dlx git push` classify the inner command like a plain
+segment and are refused as `delivery-reserved` in every mode. The reservation reads both the
+whitespace tokens and the words a shell reads, so `git 'push'` and `g''it push` are `git push`.
+
+A read or edit path is checked where it physically resolves as well as lexically. The deepest
+existing ancestor is resolved with `realpath`, the containment and sensitive-path rules run again on
+the result, and a symbolic link whose target leaves the workspace or is a protected file (a committed
+`docs/notes.md -> ../../.ssh/id_rsa`, a link to `.env`, `.github/workflows` or `.git/hooks`, a
+dangling link whose write would create the target elsewhere, an `AGENTS.md` link the read tool would
+load) is refused as `workspace-escape`, `sensitive-path` or `linked-file`. The same check covers an
+accepted external reference. A filesystem error the policy cannot answer for (a link loop, a name that
+is too long, no permission) is the closed refusal `path-unresolvable` on
+`coding-runtime.native-policy.decided` instead of a rejected hook request. After a human approves an
+ask, the policy runs again and a hard denial found then wins; the remaining window between that last
+check and the runtime's own use of the file is closed by the kernel sandbox, not by this policy. The
+model-facing message of an authority refusal names the cause (`patch-too-large` asks the model to
+split the edit; budget, expiry, revocation, an unauthorized class and a drifted binding each have
+their own sentence) instead of one catch-all, and the logged `authorityReason` is unchanged.

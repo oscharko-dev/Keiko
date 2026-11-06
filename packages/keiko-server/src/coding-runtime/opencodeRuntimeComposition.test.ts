@@ -3778,6 +3778,90 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     }
   });
 
+  // #4271 A4: every admission reason used to read as "authority no longer valid or budget exhausted",
+  // so a model whose edit was merely too large could not tell it should split the edit.
+  it.each([
+    ["patch-too-large", /smaller edits/u],
+    ["authority-budget-exceeded", /budget/u],
+    ["authority-expired", /expired/u],
+    ["revoked", /revoked/u],
+    ["action-not-authorized", /Authority Envelope/u],
+    ["workspace-drift", /changed after its authority/u],
+  ] as const)(
+    "tells the model what to do next when the authority refuses with %s",
+    async (reason, expected) => {
+      const fixture = await startBridgeFixture(
+        facadeWith(admitWith({ ok: false, reason })),
+        undefined,
+        { mode: "supervised-coding" },
+      );
+      try {
+        const response = await fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: nativeAsk("ses_tool", "edit", { messageID: "msg_1", id: "call_1" }),
+        });
+        const answer = JSON.parse(response.body) as {
+          readonly effect: string;
+          readonly message: string;
+        };
+        expect(answer.effect).toBe("deny");
+        expect(answer.message).toMatch(expected);
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+
+  // #4271 A2: the human may take minutes; a link swapped in meanwhile must not ride the approval.
+  it("re-checks the paths after the human approved, so a link swapped in while waiting is refused", async () => {
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const admit = admitWith(CHARGED);
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "governed-assist",
+      runtimeEvents,
+      activityLog,
+    });
+    const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+    const outside = mkdtempSync(join(tmpdir(), "keiko-recheck-outside-"));
+    try {
+      const ask = JSON.parse(
+        nativeAsk("ses_tool", "edit", { messageID: "msg_1", id: "call_1" }),
+      ) as Record<string, unknown>;
+      const answer = fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({ ...ask, resources: ["swapped.md"] }),
+      });
+      await vi.waitFor(() => {
+        expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(true);
+      });
+      const permission = runtimeEvents.find(
+        (event) => event.kind === "permission-requested",
+      )?.permissionRequest;
+      if (permission === undefined || Array.isArray(permission)) throw new Error("expected ask");
+      writeFileSync(join(outside, "target.md"), "outside\n");
+      symlinkSync(join(outside, "target.md"), join(workspaceRoot, "swapped.md"));
+      await expect(
+        fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, permission.requestId, "once"),
+      ).resolves.toBe(true);
+      const response = await answer;
+      expect(JSON.parse(response.body)).toMatchObject({
+        effect: "deny",
+        message: expect.stringContaining("symbolic link") as string,
+      });
+      expect(admit).not.toHaveBeenCalled();
+      const decided = activityLog.events.find(
+        (event) => event.op === "coding-runtime.native-policy.decided",
+      )?.extra;
+      expect(decided).toMatchObject({ effect: "ask", outcome: "workspace-escape" });
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+      await fixture.stop();
+    }
+  });
+
   it("cancels an already-aborted ask without consulting authority", async () => {
     const admit = admitWith(CHARGED);
     const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
