@@ -262,6 +262,33 @@ describe("the wake run's turn", () => {
     expect(h.cancelled.count).toBe(1);
   });
 
+  it("holds the lease again, records the failure and cancels the turn when the schedules cannot be read", async () => {
+    const h = harness();
+    exec(h.database, "INSERT INTO schedule VALUES ('sch_a', ?, 'active', 0, NULL)", SESSION);
+    const driven = drivenSleep();
+
+    startScheduledWakeTurn(h.run, {
+      activityLog: h.sink,
+      sleep: driven.sleep,
+      now: () => h.clock.value,
+    });
+    // The runtime's schedule table changes shape while the turn waits for it to fire.
+    exec(h.database, "DROP TABLE schedule");
+    exec(h.database, "CREATE TABLE schedule (id TEXT PRIMARY KEY)");
+    await driven.next();
+    await settled(h, 2);
+
+    expect(lines(h)[1]).toMatchObject({
+      runId: "run-wake-1",
+      action: "rehold",
+      outcome: "failed",
+      causeChain: expect.any(Array) as unknown,
+    });
+    expect(h.sink.events[1]).toMatchObject({ level: "warn", errorKind: "internal" });
+    expect(leaseOwner(h.database)).toMatchObject({ owner: SCHEDULER_HOLD_OWNER });
+    expect(h.cancelled.count).toBe(1);
+  });
+
   it("records a run that closed before its schedule fired, and touches nothing", async () => {
     const h = harness();
     exec(h.database, "INSERT INTO schedule VALUES ('sch_a', ?, 'active', 0, NULL)", SESSION);

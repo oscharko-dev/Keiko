@@ -190,7 +190,10 @@ function lines(
     .map((event) => {
       // The sink stamps completeness and loss on every line; the assertions are about the rest.
       const { completeness: _completeness, loss: _loss, ...fields } = event.extra ?? {};
-      return { ...fields, correlationId: event.correlationId };
+      return {
+        ...fields,
+        ...(event.correlationId === undefined ? {} : { correlationId: event.correlationId }),
+      };
     });
 }
 

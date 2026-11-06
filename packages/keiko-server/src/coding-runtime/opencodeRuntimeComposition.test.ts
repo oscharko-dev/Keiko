@@ -11376,6 +11376,9 @@ describe.each(["native", "direct", "code-mode"] as const)("%s session continuity
         calls.removed.push(taskId);
       },
       prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, entryCount: 0 }),
+      readEntry: () => undefined,
+      editEntry: () => ({ ok: false, reason: "no-retained-state" }),
+      listTaskIds: () => [],
     };
     const service = createCodingSessionContinuity({
       store,
