@@ -288,7 +288,9 @@ describe("v40 migration — edit refusal causes (F5, #3873)", () => {
         "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'coding_runtime_snapshots' AND name NOT LIKE 'sqlite_%' ORDER BY name",
       )
       .all() as { name: string }[];
+    // The three indexes the v40 rebuild must carry, plus the v61 successor-probe index (#4271).
     expect(indexes.map((index) => index.name)).toEqual([
+      "idx_coding_runtime_predecessor",
       "idx_coding_runtime_recent_active",
       "idx_coding_runtime_settled_oldest",
       "uniq_coding_runtime_active_slot",
@@ -633,7 +635,9 @@ describe("v40 migration — terminal run causes (F9, #3873)", () => {
         "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'coding_runtime_snapshots' AND name NOT LIKE 'sqlite_%' ORDER BY name",
       )
       .all() as { name: string }[];
+    // The three indexes the v40 rebuild must carry, plus the v61 successor-probe index (#4271).
     expect(indexes.map((index) => index.name)).toEqual([
+      "idx_coding_runtime_predecessor",
       "idx_coding_runtime_recent_active",
       "idx_coding_runtime_settled_oldest",
       "uniq_coding_runtime_active_slot",
