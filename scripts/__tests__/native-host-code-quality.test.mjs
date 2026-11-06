@@ -12,7 +12,7 @@ import {
   nativeEffectQualityFixtures,
 } from "./support/native-effect-quality-fixtures.mjs";
 
-describe("historical Effect controls and current native qualification contract (#3988)", () => {
+describe("historical native Effect controls (#3988)", () => {
   it("preserves historical harness host classes and refuses unsupported platforms", () => {
     expect(nativeHostQualityTarget("linux", "x64")).toBe("linux-x64");
     expect(nativeHostQualityTarget("darwin", "arm64")).toBe("macos-arm64");
