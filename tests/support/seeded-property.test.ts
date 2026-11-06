@@ -50,7 +50,39 @@ describe("seeded property testing", () => {
         { seed: 3, runs: 50, shrink: shrinkString },
       );
     };
-    expect(run).toThrow(/case seed \d+, base seed 3\) for input "!": bang/u);
+    expect(run).toThrow(
+      /case seed \d+, base seed 3; replay with KEIKO_PROPERTY_SEED=\d+ KEIKO_PROPERTY_RUNS=1\) for input "!": bang/u,
+    );
+  });
+
+  it("replays one failing case from the seed its report names", () => {
+    const failing = (seed: number): void => {
+      checkProperty(
+        (random) => random.integer(0, 999),
+        (input) => {
+          if (input % 7 === 3) throw new Error(`hit ${String(input)}`);
+        },
+        { seed, runs: 200 },
+      );
+    };
+    const report = ((): string => {
+      try {
+        failing(11);
+        return "";
+      } catch (error) {
+        return error instanceof Error ? error.message : "";
+      }
+    })();
+    const caseSeed = /case seed (\d+)/u.exec(report)?.[1] ?? "";
+    const hit = /: (hit \d+)$/u.exec(report)?.[1] ?? "";
+    vi.stubEnv("KEIKO_PROPERTY_SEED", caseSeed);
+    vi.stubEnv("KEIKO_PROPERTY_RUNS", "1");
+    expect(() => {
+      failing(11);
+    }).toThrow(`run 0 (case seed ${caseSeed}`);
+    expect(() => {
+      failing(11);
+    }).toThrow(hit);
   });
 
   it("passes a property that holds and refuses an invalid run count", () => {

@@ -78,6 +78,16 @@ function firstSeenUsable(calls: readonly RawCall[]): ReadonlyMap<number, string>
   return kept;
 }
 
+describe("the id shape the catalog bridge carries", () => {
+  // A literal pin of the rule itself: the properties below use it as their oracle.
+  it.each(["a", "call_1", "x.y:z-0", "A".repeat(128)])("carries %j", (id) => {
+    expect(isUsableToolCallId(id)).toBe(true);
+  });
+  it.each(["", "A".repeat(129), "call 1", "call/1", "cäll", 7, undefined])("refuses %j", (id) => {
+    expect(isUsableToolCallId(id)).toBe(false);
+  });
+});
+
 describe("tool call ids of a provider response", () => {
   it("leaves every call with an id the bridge carries and no sibling shares", () => {
     checkProperty(

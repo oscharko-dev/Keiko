@@ -320,7 +320,10 @@ file creation (`--- /dev/null`), and deletion (`+++ /dev/null`). A shape that wo
 change is refused with `PatchParseError` instead of parsing to a smaller patch: hunks under a
 `--- ` line that has no `+++ ` line, a change line between the `+++ ` header and the file's first
 hunk header, and a hunk header number outside the safe integer range (#4271, found by seeded
-property tests). A lone `--- ` line without hunks and prose after a finished hunk stay ignored.
+property tests). A lone `--- ` line without hunks stays ignored, and so does prose after a
+finished hunk once a line that is not a change line (a blank line or a fence) ended it; a change
+line directly after a hunk whose counts are spent is refused as before. Redaction of model text
+that holds a refused diff projects it as text, not as a diff (ADR-0022).
 This is not git-apply: no rename detection, no fuzzy matching, no binary patches. The parser is linear — a single pass over split
 lines with bounded per-line regexes — so it cannot backtrack catastrophically (CodeQL ReDoS guard).
 

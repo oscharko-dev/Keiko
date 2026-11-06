@@ -430,8 +430,10 @@ function redactIdentifiedPatterns(
       preserveSourceLineBreaks,
     ),
   )
-    // Runs on the whole projection, so a header a YAML or JSON region left alone is still masked.
-    .replace(AUTHORIZATION_HEADER_PATTERN, (_match, prefix: string) => `${prefix}${REDACTED}`)
+    .replace(
+      PROJECTED_AUTHORIZATION_HEADER_PATTERN,
+      (_match, prefix: string) => `${prefix}${REDACTED}`,
+    )
     .replace(GERMAN_IBAN_PATTERN, REDACTED)
     .replace(INTERNATIONAL_GERMAN_PHONE_PATTERN, REDACTED)
     .replace(DOMESTIC_GERMAN_PHONE_PATTERN, REDACTED);
@@ -463,6 +465,12 @@ function redactIssuerTokens(input: string): string {
 // authentication" or "Basic configuration" stays readable under the content opt-out.
 const AUTHORIZATION_HEADER_PATTERN =
   /\b((?:proxy-)?authorization["']?[ \t]*[:=][ \t]*["']?(?:(?:Bearer|Basic|Token)[ \t]+)?)([^\s"',;]{4,})/gi;
+// The strict projection's header pass also runs over preserved source regions, so its value is one
+// whole token ending where a header value ends: a template literal, a call, an interpolation or a
+// value already masked is never cut, and the source keeps its syntax (#4271 audit). A scheme word
+// is never taken for the value, so `Bearer [REDACTED]` keeps its scheme.
+const PROJECTED_AUTHORIZATION_HEADER_PATTERN =
+  /\b((?:proxy-)?authorization["']?[ \t]*[:=][ \t]*["']?(?:(?:Bearer|Basic|Token)[ \t]+)?)(?!(?:Bearer|Basic|Token)(?:[ \t]|$))([^\s"'`,;(){}[\]$<>]{4,})(?![^\s"',;)\]}<>])/gi;
 const AUTHORIZATION_VALUE_PATTERN = /\b(Bearer|Basic)([ \t]+)([\w.\-+/=~]{8,})/gi;
 
 function redactAuthorizationValues(input: string): string {
@@ -622,8 +630,9 @@ export function deepRedactStrings(
 }
 
 // A structured key (JSON, YAML, source property) is sensitive by the same grammar the flat text
-// path applies: a secret label that starts at a word boundary and ends the key, so
-// `openai_api_key`, `my_password` and `GITHUB_TOKEN` count while `max_tokens` and `mypassword` do not.
+// path applies: a secret label that starts at a word or camelCase boundary and ends the key, so
+// `openai_api_key`, `my_password`, `GITHUB_TOKEN` and `sessionToken` count while `max_tokens`,
+// `mypassword` and `tokenizer` do not.
 const SENSITIVE_KEY_SUFFIX = new RegExp(
   String.raw`(?<![A-Za-z0-9])(?:${SECRET_KEY_NAMES}|x-api-key|api[_-]?key)[*_]*$`,
   "iu",
@@ -635,7 +644,7 @@ function sensitiveSourceName(name: string): boolean {
     isCredentialKeyName(name) ||
     isCredentialKeyName(last) ||
     /^(?:x-)?api[_-]?key$/iu.test(last) ||
-    SENSITIVE_KEY_SUFFIX.test(name)
+    SENSITIVE_KEY_SUFFIX.test(name.replaceAll(/(?<=[a-z0-9])(?=[A-Z])/gu, "_"))
   );
 }
 

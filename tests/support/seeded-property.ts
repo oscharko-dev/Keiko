@@ -2,8 +2,9 @@
  * Seeded property testing (#4271). A property runs on many generated inputs; every input comes
  * from a mulberry32 generator seeded per run, so a failure is reproduced exactly from the seed it
  * names. The default seed and run count are fixed, so an ordinary run is deterministic and never
- * reads the wall clock or `Math.random`. `KEIKO_PROPERTY_SEED` and `KEIKO_PROPERTY_RUNS` select
- * another base seed or a longer run for a local deep search; an invalid value fails the test.
+ * reads the wall clock or `Math.random`. `KEIKO_PROPERTY_SEED` and `KEIKO_PROPERTY_RUNS` override
+ * a test's own seed and run count, for a local deep search or to replay one failing case; an
+ * invalid value fails the test.
  *
  * A failing input is shrunk greedily through the caller's candidates before it is reported, so a
  * counterexample arrives small enough to become a fixed regression pin.
@@ -25,7 +26,10 @@ export interface PropertyOptions<T> {
   /** Base seed; run `n` uses a seed derived from it. */
   readonly seed?: number;
   readonly runs?: number;
-  /** Smaller inputs to try once an input failed, most aggressive first. */
+  /**
+   * Smaller inputs to try once an input failed, most aggressive first. A candidate must still be an
+   * input the generator could produce; one that fails for another reason misleads the report.
+   */
   readonly shrink?: (input: T) => Iterable<T>;
 }
 
@@ -80,8 +84,8 @@ function settings<T>(options: PropertyOptions<T>): {
   readonly runs: number;
 } {
   return {
-    seed: options.seed ?? integerSetting("KEIKO_PROPERTY_SEED", 0, DEFAULT_PROPERTY_SEED),
-    runs: options.runs ?? integerSetting("KEIKO_PROPERTY_RUNS", 1, DEFAULT_PROPERTY_RUNS),
+    seed: integerSetting("KEIKO_PROPERTY_SEED", 0, options.seed ?? DEFAULT_PROPERTY_SEED),
+    runs: integerSetting("KEIKO_PROPERTY_RUNS", 1, options.runs ?? DEFAULT_PROPERTY_RUNS),
   };
 }
 
@@ -141,7 +145,8 @@ export function checkProperty<T>(
     const reason = shrunk.error instanceof Error ? shrunk.error.message : String(shrunk.error);
     throw new Error(
       `property failed at run ${String(run)} (case seed ${String(caseSeed)}, base seed ` +
-        `${String(seed)}) for input ${describeInput(shrunk.input)}: ${reason}`,
+        `${String(seed)}; replay with KEIKO_PROPERTY_SEED=${String(caseSeed)} ` +
+        `KEIKO_PROPERTY_RUNS=1) for input ${describeInput(shrunk.input)}: ${reason}`,
       { cause: shrunk.error },
     );
   }

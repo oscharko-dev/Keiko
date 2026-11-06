@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { redactContent } from "./content-redaction.js";
 import { redact } from "./redaction.js";
+import { isTypeScriptSource } from "./redaction-typescript.js";
 
 // Regression pins for the counterexamples of the seeded property tests (#4271). Every value is
 // synthetic.
@@ -35,6 +36,41 @@ describe("structured keys use the same secret-label grammar as flat text", () =>
 
   it.each([`y: 1\nmax_tokens: ${VALUE}`, `y: 1\nmypassword: ${VALUE}`, `{"tokens": "${VALUE}"}`])(
     "keeps a key that only contains a secret word: %s",
+    (text) => {
+      expect(redact(text)).toContain(VALUE);
+    },
+  );
+});
+
+describe("an Authorization key inside source keeps the source's syntax", () => {
+  // #4271 audit: masking header values over preserved source regions cut a template literal and a
+  // call open; the value is masked as a data literal of a sensitive key instead.
+  it.each([
+    `const headers = { Authorization: \`Bearer \${token}\` };\nconst after = "${VALUE}-public";`,
+    `const headers = { authorization: "${VALUE}" };\nexport const ready = true;`,
+    `const authorization = build(bar, baz);\nexport const ready = true;`,
+  ])("keeps valid TypeScript: %s", (source) => {
+    const output = redact(source);
+    expect(isTypeScriptSource(output)).toBe(true);
+    expect(output).not.toContain(`"${VALUE}"`);
+  });
+
+  it.each([`authorization: ${VALUE}\ny: 1`, `{"Proxy-Authorization": "${VALUE}", "a": 1}`])(
+    "masks the value of a structured authorization key: %s",
+    (text) => {
+      expect(redact(text)).not.toContain(VALUE);
+    },
+  );
+
+  it.each([`y: 1\nsessionToken: ${VALUE}`, `{"openaiApiKey": "${VALUE}", "a": 1}`])(
+    "masks a camelCase compound secret key: %s",
+    (text) => {
+      expect(redact(text)).not.toContain(VALUE);
+    },
+  );
+
+  it.each([`y: 1\ntokenizer: ${VALUE}`, `{"passwordHash": "${VALUE}", "a": 1}`])(
+    "keeps a camelCase key that does not end in a secret label: %s",
     (text) => {
       expect(redact(text)).toContain(VALUE);
     },
