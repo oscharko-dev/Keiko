@@ -28,6 +28,12 @@ import {
 import { computeFileContent, type ApplyOutcome } from "./patch-content.js";
 import { normalizeUnifiedDiffHunks } from "./patch-normalize.js";
 import { parseUnifiedDiff, PatchParseError } from "./patch-parse.js";
+import {
+  decodedSourceText,
+  sourceTextView,
+  type PatchByteOrderMark,
+  type PatchSourceTextView,
+} from "./patch-text-view.js";
 import { createContainedNodeWorkspaceWriter, type WorkspaceWriter } from "./writer.js";
 import {
   DEFAULT_PATCH_LIMITS,
@@ -50,7 +56,9 @@ interface SourceReadBudget {
 
 interface SourceSnapshot {
   readonly absolute: string;
+  /** The file's raw decoded text, byte order mark included: what a rollback writes back. */
   readonly content: string | undefined;
+  /** The digest of the text without the mark, the identity every governed reader reports. */
   readonly sourceContentHash: string;
   readonly sourceVersion?: EditorDocumentVersion | undefined;
 }
@@ -278,7 +286,7 @@ function inspectSource(
     reserveSourceBytes(stat, budget, path);
     const content = readSourceContent(fs, absolute, path);
     verifySourceBytes(content, stat, budget, path);
-    const sourceContentHash = sha256Hex(content);
+    const sourceContentHash = sha256Hex(decodedSourceText(content));
     const sourceVersion = sourceVersionFromStat(stat, sourceContentHash);
     return {
       absolute,
@@ -410,11 +418,20 @@ function isCreateOnlyModify(file: PatchFileChange): boolean {
   );
 }
 
+// The text one file change is matched against: a source with a byte order mark is read without it
+// unless the diff spells it (patch-text-view.ts).
+function sourceViewOf(
+  file: PatchFileChange,
+  sources: ReadonlyMap<string, SourceSnapshot>,
+): PatchSourceTextView {
+  return sourceTextView(file, sources.get(file.path)?.content);
+}
+
 function alignHunksToCurrentContent(
   files: readonly PatchFileChange[],
   sources: ReadonlyMap<string, SourceSnapshot>,
 ): readonly PatchFileChange[] {
-  return files.map((file) => alignFileHunks(file, sources.get(file.path)?.content));
+  return files.map((file) => alignFileHunks(file, sourceViewOf(file, sources).text));
 }
 
 function unanchoredModifyReasons(files: readonly PatchFileChange[]): PatchRejection[] {
@@ -434,8 +451,7 @@ function collectConflicts(
 ): PatchConflict[] {
   const conflicts: PatchConflict[] = [];
   for (const file of files) {
-    const current = sources.get(file.path)?.content;
-    const outcome = computeFileContent(file, current, allowOverwrite);
+    const outcome = computeFileContent(file, sourceViewOf(file, sources).text, allowOverwrite);
     for (const conflict of outcome.conflicts) {
       conflicts.push({ path: file.path, hunkIndex: conflict.hunkIndex, reason: conflict.reason });
     }
@@ -570,10 +586,17 @@ export interface ValidateDeps {
 
 export interface PatchInspectionFile {
   readonly change: PatchFileChange;
+  /**
+   * The text the diff addresses, and `outcome.content` what it makes of it: for a file with a UTF-8
+   * byte order mark and a diff that does not spell it (`byteOrderMark: "signature"`), the text
+   * without the mark, which the write puts back in front.
+   */
   readonly original: string | undefined;
   readonly outcome: ApplyOutcome;
+  /** SHA-256 of the file's decoded text without a byte order mark; the empty text when absent. */
   readonly sourceContentHash: string;
   readonly sourceVersion?: EditorDocumentVersion | undefined;
+  readonly byteOrderMark: PatchByteOrderMark;
 }
 
 export interface PatchInspection {
@@ -687,12 +710,14 @@ function patchInspectionFile(
   if (source === undefined) {
     throw new Error("patch source inspection invariant failed");
   }
+  const view = sourceTextView(change, source.content);
   return {
     change,
-    original: source.content,
-    outcome: computeFileContent(change, source.content, allowOverwrite),
+    original: view.text,
+    outcome: computeFileContent(change, view.text, allowOverwrite),
     sourceContentHash: source.sourceContentHash,
     ...(source.sourceVersion === undefined ? {} : { sourceVersion: source.sourceVersion }),
+    byteOrderMark: view.byteOrderMark,
   };
 }
 
@@ -1000,7 +1025,8 @@ function plannedWrite(
   source: SourceSnapshot,
   allowOverwrite: boolean,
 ): PlannedWrite {
-  const outcome = computeFileContent(file, source.content, allowOverwrite);
+  const view = sourceTextView(file, source.content);
+  const outcome = computeFileContent(file, view.text, allowOverwrite);
   if (outcome.conflicts.length > 0) {
     throw new PatchValidationError(
       "patch failed commit-time validation",
@@ -1012,7 +1038,9 @@ function plannedWrite(
     path: file.path,
     absolute: source.absolute,
     kind: file.kind,
-    newContent: outcome.content,
+    // A retained byte order mark goes back in front of the text the diff produced; the rollback
+    // restores the raw original, mark and all.
+    newContent: outcome.content === null ? null : `${view.signature}${outcome.content}`,
     original: source.content,
   };
 }

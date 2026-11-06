@@ -7981,7 +7981,11 @@
       "lifecycleTransitions": ["end", "failure", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["coding-runtime.editor-review.decided", "editor.agent.changeset-provenance"],
+        "state": [
+          "coding-runtime.editor-review.decided",
+          "editor.agent.changeset-byte-order-mark",
+          "editor.agent.changeset-provenance"
+        ],
         "end": ["coding-runtime.editor-mutation.settled"],
         "failure": ["coding-runtime.edit.refused"],
         "loss": []
@@ -8000,6 +8004,10 @@
           "mode": "correlation"
         },
         {
+          "op": "editor.agent.changeset-byte-order-mark",
+          "mode": "correlation"
+        },
+        {
           "op": "editor.agent.changeset-provenance",
           "mode": "correlation"
         }
@@ -8008,6 +8016,7 @@
       "resourceSignals": [
         "coding-runtime.editor-mutation.settled",
         "coding-runtime.editor-review.decided",
+        "editor.agent.changeset-byte-order-mark",
         "editor.agent.changeset-provenance"
       ],
       "replayReferences": [],
@@ -8165,6 +8174,48 @@
             "causeChain": false
           },
           "proofIds": ["coding-runtime.editor-review.decided.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "editor.agent.changeset-byte-order-mark",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "diffTextFileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "fileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "signatureFileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "stage",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["editor.agent.changeset-byte-order-mark.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         },

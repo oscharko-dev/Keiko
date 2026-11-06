@@ -1767,8 +1767,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLifecycleOperations: {
       start: [],
       // PR #3876 review: the editor route's provenance decision for a changeset's diff is a state
-      // of the same mutation, on the run's own correlation.
-      state: ["coding-runtime.editor-review.decided", "editor.agent.changeset-provenance"],
+      // of the same mutation, on the run's own correlation. So is how its inspection read a file
+      // that starts with a UTF-8 byte order mark (2026-11-06).
+      state: [
+        "coding-runtime.editor-review.decided",
+        "editor.agent.changeset-byte-order-mark",
+        "editor.agent.changeset-provenance",
+      ],
       end: ["coding-runtime.editor-mutation.settled"],
       // #3610: a governed edit refusal is a warn-level decision line, never a server failure.
       failure: ["coding-runtime.edit.refused"],
@@ -1778,6 +1783,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "coding-runtime.edit.refused",
       "coding-runtime.editor-mutation.settled",
       "coding-runtime.editor-review.decided",
+      "editor.agent.changeset-byte-order-mark",
       "editor.agent.changeset-provenance",
     ],
     requiredLossOperations: [],
@@ -1785,12 +1791,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "coding-runtime.edit.refused",
       "coding-runtime.editor-mutation.settled",
       "coding-runtime.editor-review.decided",
+      "editor.agent.changeset-byte-order-mark",
       "editor.agent.changeset-provenance",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "coding-runtime.editor-mutation.settled",
       "coding-runtime.editor-review.decided",
+      "editor.agent.changeset-byte-order-mark",
       "editor.agent.changeset-provenance",
     ],
     // #3873 follow-up: the settled and refused edit lines count the files a replacement changeset
