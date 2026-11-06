@@ -837,7 +837,9 @@ one closed `KGG1` frame, after the launch packet and before the broker open
   runtime's `PATH`. A managed task worktree gets read through the capability
   `keiko.workspace.<32 hex>`, derived from the worktree's canonical path. The mapped tool profile
   changes files through Keiko's facade, so the confined runtime never writes the worktree itself.
-  No other path is granted.
+  No other path is granted. The state directory is owner-private with inheritable entries, and a
+  resumed run's database copy is handed back to that inherited DACL (ADR-0182), so the tree's grant
+  reaches every file there.
 - **When.** The supervisor applies the grants once the broker has named the SID, before it creates
   the runtime. If any grant fails, it revokes those already applied and refuses the run.
 - **Lifetime.** Tree grants are revoked when the tree is reaped. A crash can leave such an entry, but
@@ -860,6 +862,14 @@ one closed `KGG1` frame, after the launch packet and before the broker open
   its task worktrees and runtime state under the user profile, on the system volume. A checkout on
   another volume sets `KEIKO_STATE_DIR` to a directory on the system volume. A user's own checkout
   is not granted at all.
+- **Work location.** Because only a managed worktree on the system volume can be confined, the host
+  refuses every other start before anything spawns, rather than letting the runtime fail with an
+  opaque handshake error. A start in the operator's own checkout or folder is refused as
+  `workspace-location-unsupported` (reason `local-checkout`), and a managed worktree on another
+  volume as `workspace-volume-unsupported` (reason `non-system-volume`). Both are HTTP 409 with a
+  sentence that names what to change. Readiness behind the broker lists
+  `executionLocations: ["worktree"]`, so the Workbench preselects a new worktree and offers no
+  other location. Other hosts omit the field and keep both locations.
 
 Inbound control (amended 2026-11-06, #4068, pending owner approval in review). The host drives
 OpenCode through the server the runtime opens on `127.0.0.1` inside the tree. Windows drops that

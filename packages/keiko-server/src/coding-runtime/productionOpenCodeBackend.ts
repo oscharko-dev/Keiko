@@ -323,6 +323,47 @@ export function createProductionOpenCodeBackend(
   });
 }
 
+/**
+ * #4068: a confined Windows tree reads only what it is granted, and Keiko grants a workspace only as
+ * a Keiko-managed worktree (ADR-0043 D18). A start in the operator's own checkout or folder would
+ * spawn and then fail inside the runtime with an opaque error, and an AppContainer cannot resolve a
+ * path on another volume than Windows. Both are refused before anything spawns, each with its own
+ * code, so the Workbench can name what to change. A workspace whose access cannot be resolved at all
+ * is left to the existing checks, which name that cause.
+ */
+export function assertWindowsWorkspaceLocation(
+  input: Pick<ProductionOpenCodeBackendInput, "portable" | "processEnv">,
+  run: Pick<ProductionRuntimeBackendInput, "context" | "resolveWorkspaceRootAccess">,
+): void {
+  if (windowsGatewayHelperPin(input.portable) === undefined) return;
+  if (run.resolveWorkspaceRootAccess()?.kind === "ordinary") {
+    throw new CodingRuntimeLaunchRejectedError(
+      "workspace-location-unsupported",
+      false,
+      "local-checkout",
+    );
+  }
+  if (onAnotherWindowsVolume(run.context.workspaceRoot, input.processEnv ?? process.env)) {
+    throw new CodingRuntimeLaunchRejectedError(
+      "workspace-volume-unsupported",
+      false,
+      "non-system-volume",
+    );
+  }
+}
+
+/**
+ * Whether a Windows path lies on another volume than the one Windows runs from (`SystemDrive`,
+ * default `C:`): another drive letter or a UNC share. A path in another form is no Windows host
+ * path, so it names no volume to refuse.
+ */
+export function onAnotherWindowsVolume(path: string, env: NodeJS.ProcessEnv): boolean {
+  if (/^[\\/]{2}/u.test(path)) return true;
+  const drive = /^([a-z]):[\\/]/iu.exec(path)?.[1];
+  if (drive === undefined) return false;
+  return `${drive}:`.toLowerCase() !== (env.SystemDrive ?? "C:").toLowerCase();
+}
+
 function requiredRunGeometry(
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
@@ -340,6 +381,7 @@ function createOpenCodeRun(
   toolProfile: OpenCodeToolProfile,
 ): QualifiedProductionRuntimeRun {
   assertOpenCodeRun(run);
+  assertWindowsWorkspaceLocation(input, run);
   const contextGeometry = requiredRunGeometry(input, run);
   const safeActivity = safeActivityController(
     run.minted.authorityRef.runId,

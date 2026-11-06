@@ -88,18 +88,19 @@ describe("private Coding Workbench drafts", () => {
     directories.push(directory);
     const path = join(directory, "ui.sqlite");
     const initial = createNodeUiStore(path);
-    initial.updateCodingWorkbenchDraft("coding-workbench-mabc12", {
+    // The id the desktop shell gives the singleton Workbench window (#4068).
+    initial.updateCodingWorkbenchDraft("coding", {
       text: "Synthetic task intent",
       expectedRevision: 0,
     });
     initial.close();
     const reopened = createNodeUiStore(path);
     stores.push(reopened);
-    expect(reopened.readCodingWorkbenchDraft("coding-workbench-mabc12")).toEqual({
+    expect(reopened.readCodingWorkbenchDraft("coding")).toEqual({
       text: "Synthetic task intent",
       revision: 1,
     });
-    expect(reopened.readCodingWorkbenchDraft("coding-workbench-mabc12-1")).toEqual({
+    expect(reopened.readCodingWorkbenchDraft("coding-mabc12-1")).toEqual({
       text: "",
       revision: 0,
     });
@@ -108,7 +109,7 @@ describe("private Coding Workbench drafts", () => {
   it("rejects stale writes, keeps a clear tombstone and refuses foreign keys", () => {
     const store = createInMemoryUiStore();
     stores.push(store);
-    const windowId = "coding-workbench-mabc12";
+    const windowId = "coding";
     store.updateCodingWorkbenchDraft(windowId, { text: "First", expectedRevision: 0 });
     expect(() =>
       store.updateCodingWorkbenchDraft(windowId, { text: "Stale", expectedRevision: 0 }),
@@ -117,7 +118,16 @@ describe("private Coding Workbench drafts", () => {
       text: "",
       revision: 2,
     });
-    for (const foreign of ["chat-mabc12", "coding-workbench-", "../coding-workbench-a", ""]) {
+    for (const foreign of [
+      "chat-mabc12",
+      "coding-workbench-",
+      "../coding-workbench-a",
+      "",
+      "coding-",
+      "Coding",
+      "coding/../chat-mabc12",
+      "issue-2253-coding",
+    ]) {
       expect(() => store.readCodingWorkbenchDraft(foreign)).toThrow(/not found/iu);
       expect(() =>
         store.updateCodingWorkbenchDraft(foreign, { text: "x", expectedRevision: 0 }),

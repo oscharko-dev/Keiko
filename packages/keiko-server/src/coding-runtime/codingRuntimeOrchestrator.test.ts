@@ -2774,6 +2774,29 @@ describe("CodingRuntimeOrchestrator", () => {
     );
   });
 
+  // #4068: a Windows start the broker cannot confine is refused before any run exists, with a code
+  // the Workbench names and the diagnostic's closed reason.
+  it.each([
+    ["workspace-location-unsupported", "local-checkout"],
+    ["workspace-volume-unsupported", "non-system-volume"],
+  ] as const)("refuses a Windows start as %s and records %s", async (failureCode, reason) => {
+    const captured = captureDiagnostics();
+    const f = fixture(undefined, undefined, [], captured.diagnostics);
+    f.launchResolver.resolve.mockImplementationOnce(() => {
+      throw new CodingRuntimeLaunchRejectedError(failureCode, false, reason);
+    });
+
+    expect(await f.orchestrator.start(start)).toEqual({ ok: false, failureCode, runId: "run-1" });
+    expect(f.orchestrator.getSnapshot("run-1")).toBeUndefined();
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        operation: "coding-runtime.start",
+        message: "runtime-start-failed",
+        code: `stage=start:reason=launch-resolution:${failureCode}:${reason}`,
+      }),
+    );
+  });
+
   it("diagnoses a rejected model selection without exposing selection content", async () => {
     const captured = captureDiagnostics();
     const f = fixture(undefined, undefined, [], captured.diagnostics);

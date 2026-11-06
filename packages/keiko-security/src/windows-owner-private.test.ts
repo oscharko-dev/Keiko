@@ -1,6 +1,11 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  inheritWindowsParentDacl,
   inspectWindowsOwnerPrivateFiles,
   protectWindowsOwnerPrivateFile,
   windowsOwnerPrivateVerdict,
@@ -232,6 +237,56 @@ describe("protecting a file Keiko writes", () => {
     });
   });
 
+  // #4068: a confined run's state directory passes its owner-private entries on to every file the
+  // runtime later writes there, and to the inheritable grant its tree is given.
+  it("makes a directory's owner-private entries inheritable when asked", () => {
+    const calls: Call[] = [];
+    const run: WindowsLocalVolumeRunner = (command, args, options) => {
+      calls.push({ command, args, input: options.input, env: options.env });
+      const stdout = command.endsWith("whoami.exe") ? `"host\\dev","${USER}"\r\n` : "";
+      return { status: 0, stdout, stderr: "" };
+    };
+    protectWindowsOwnerPrivateFile(FILE, {
+      runner: run,
+      resolveSystemBinary: binaries,
+      inheritToChildren: true,
+    });
+
+    expect(calls[2]?.args).toEqual([
+      FILE,
+      "/inheritance:r",
+      "/grant:r",
+      `*${USER}:(OI)(CI)(F)`,
+      "*S-1-5-18:(OI)(CI)(F)",
+      "*S-1-5-32-544:(OI)(CI)(F)",
+    ]);
+  });
+
+  // #4068: a path below such a directory gives up its own protection and inherits it again.
+  it("returns a path to its parent's inherited DACL through icacls alone", () => {
+    const calls: Call[] = [];
+    const run: WindowsLocalVolumeRunner = (command, args, options) => {
+      calls.push({ command, args, input: options.input, env: options.env });
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    inheritWindowsParentDacl(FILE, { runner: run, resolveSystemBinary: binaries });
+
+    expect(calls.map((call) => [call.command, call.args])).toEqual([
+      [binaries("icacls.exe"), [FILE, "/reset"]],
+    ]);
+    const { sink, lines } = recordingSink();
+    const failing: WindowsLocalVolumeRunner = () => ({ status: 5, stdout: "", stderr: "denied" });
+    expect(() => {
+      inheritWindowsParentDacl(FILE, {
+        runner: failing,
+        resolveSystemBinary: binaries,
+        securityLogSink: sink,
+      });
+    }).toThrow("windows-owner-private-protect-failed");
+    expect(lines).toHaveLength(1);
+    expect(lines.join("")).not.toContain(FILE);
+  });
+
   it("fails closed when icacls fails or no SID can be read, and logs body-free", () => {
     const { sink, lines } = recordingSink();
     const failing: WindowsLocalVolumeRunner = (command) =>
@@ -298,5 +353,51 @@ describe("the body-free refusal event", () => {
       formatActivityLogProofLine(events[0] ?? {}),
     );
     expect(persisted).toMatchObject({ failureKind: "Error", phase: "inspect" });
+  });
+});
+
+// #4068: the real ACL behaviour behind a resumed confined run on Windows. A protected owner-only
+// copy does not inherit a grant later added to its directory, so the run's tree could not open its
+// database; handed back to the private directory's inherited DACL, it stays private and does.
+describe.skipIf(process.platform !== "win32")("a copy handed to a private directory", () => {
+  const icacls = join(process.env.SystemRoot ?? String.raw`C:\Windows`, "System32", "icacls.exe");
+  const USERS = "*S-1-5-32-545:(OI)(CI)(M)";
+
+  function grantees(path: string): readonly string[] {
+    const sddl = execFileSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "(Get-Acl -LiteralPath $env:KEIKO_ACL_PATH).Sddl",
+      ],
+      { encoding: "utf8", env: { ...process.env, KEIKO_ACL_PATH: path } },
+    );
+    return [...sddl.matchAll(/\(A;[^;]*;[^;]*;;;([A-Z]{2}|S-[\d-]+)\)/gu)].map(
+      (ace) => ace[1] ?? "",
+    );
+  }
+
+  it("inherits a later directory grant only once it is handed back", () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-inherited-copy-"));
+    try {
+      protectWindowsOwnerPrivateFile(directory, { inheritToChildren: true });
+      const handed = join(directory, "handed.db");
+      const kept = join(directory, "kept.db");
+      for (const file of [handed, kept]) {
+        writeFileSync(file, "x");
+        protectWindowsOwnerPrivateFile(file);
+      }
+      inheritWindowsParentDacl(handed);
+      expect(grantees(handed)).not.toContain("BU");
+
+      execFileSync(icacls, [directory, "/grant", USERS], { stdio: "ignore" });
+
+      expect(grantees(handed)).toContain("BU");
+      expect(grantees(kept)).not.toContain("BU");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

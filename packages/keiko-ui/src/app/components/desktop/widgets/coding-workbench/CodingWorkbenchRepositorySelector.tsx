@@ -266,35 +266,39 @@ function BranchChip({
   );
 }
 
+const LOCATION_LABEL_KEYS = {
+  local: "codingWorkbench.repository.locationLocal",
+  worktree: "codingWorkbench.repository.locationWorktree",
+} as const satisfies Record<WorkbenchExecutionLocation, Parameters<CodingWorkbenchTranslate>[0]>;
+
+const ALL_LOCATIONS: readonly WorkbenchExecutionLocation[] = ["local", "worktree"];
+
+// #4068: only the locations the runtime can confine are offered; absent, both are.
 function LocationChip({
   location,
+  offered = ALL_LOCATIONS,
   locked,
   onSelect,
   t,
   placement,
 }: {
   readonly location: WorkbenchExecutionLocation;
+  readonly offered?: readonly WorkbenchExecutionLocation[] | undefined;
   readonly locked: boolean;
   readonly onSelect: (location: WorkbenchExecutionLocation) => void;
   readonly t: CodingWorkbenchTranslate;
   readonly placement: SelectorPlacement;
 }): ReactNode {
-  const local = t("codingWorkbench.repository.locationLocal");
-  const worktree = t("codingWorkbench.repository.locationWorktree");
   const LocationIcon = Icons.terminal;
+  const options = ALL_LOCATIONS.filter(
+    (candidate) => candidate === location || offered.includes(candidate),
+  ).map((value) => ({ value, label: t(LOCATION_LABEL_KEYS[value]) }));
   return (
     <KeikoSelect
       value={location}
-      sections={[
-        {
-          options: [
-            { value: "local", label: local },
-            { value: "worktree", label: worktree },
-          ],
-        },
-      ]}
+      sections={[{ options }]}
       onValueChange={(value): void => onSelect(value === "worktree" ? "worktree" : "local")}
-      disabled={locked}
+      disabled={locked || options.length < 2}
       ariaLabel={t("codingWorkbench.repository.locationLabel")}
       leadingVisual={<LocationIcon size={15} aria-hidden="true" />}
       {...chipTrigger(placement, 22)}
@@ -396,6 +400,7 @@ function SelectorNotice({
   branchUnavailable,
   branchDenied,
   folderMode,
+  folderUnsupported,
   catalogError,
   onRetryCatalog,
   t,
@@ -404,6 +409,8 @@ function SelectorNotice({
   readonly branchUnavailable: boolean;
   readonly branchDenied: boolean;
   readonly folderMode: boolean;
+  // #4068: the runtime confines no work in place, so this ordinary folder cannot run here.
+  readonly folderUnsupported: boolean;
   readonly catalogError: boolean;
   readonly onRetryCatalog: () => void;
   readonly t: CodingWorkbenchTranslate;
@@ -416,6 +423,17 @@ function SelectorNotice({
         role="alert"
         retry={{ label: t("codingWorkbench.repository.retryLoad"), onRetry: onRetryCatalog }}
       />
+    );
+  }
+  if (folderUnsupported) {
+    return (
+      <p
+        className={styles.cmpRepositorySelectorNotice}
+        role="alert"
+        data-testid="coding-workbench-folder-unsupported"
+      >
+        {t("codingWorkbench.repository.folderModeUnsupported")}
+      </p>
     );
   }
   if (folderMode) {
@@ -443,6 +461,7 @@ function SelectorRecovery({
   branchUnavailable,
   branchDenied,
   folderMode,
+  folderUnsupported,
   catalogError,
   onOpenGit,
   onRetryCatalog,
@@ -454,6 +473,7 @@ function SelectorRecovery({
   readonly branchUnavailable: boolean;
   readonly branchDenied: boolean;
   readonly folderMode: boolean;
+  readonly folderUnsupported: boolean;
   readonly catalogError: boolean;
   readonly onOpenGit: () => void;
   readonly onRetryCatalog: () => void;
@@ -473,6 +493,7 @@ function SelectorRecovery({
         branchUnavailable={branchUnavailable}
         branchDenied={branchDenied}
         folderMode={folderMode}
+        folderUnsupported={folderUnsupported}
         catalogError={catalogError}
         onRetryCatalog={onRetryCatalog}
         t={t}
@@ -522,6 +543,8 @@ interface CodingWorkbenchRepositorySelectorProps {
   readonly onSelect: (root: string) => void;
   readonly onSelectBranch: (branch: string) => void;
   readonly location: WorkbenchExecutionLocation;
+  /** The locations the runtime can confine (#4068); absent, both are offered. */
+  readonly offeredLocations?: readonly WorkbenchExecutionLocation[] | undefined;
   readonly onSelectLocation: (location: WorkbenchExecutionLocation) => void;
   readonly onOpenGit: () => void;
   readonly placement?: SelectorPlacement;
@@ -529,12 +552,14 @@ interface CodingWorkbenchRepositorySelectorProps {
 
 function LocationSelectorField({
   location,
+  offered,
   locked,
   onSelect,
   placement,
   t,
 }: {
   readonly location: WorkbenchExecutionLocation;
+  readonly offered: readonly WorkbenchExecutionLocation[] | undefined;
   readonly locked: boolean;
   readonly onSelect: (location: WorkbenchExecutionLocation) => void;
   readonly placement: SelectorPlacement;
@@ -544,6 +569,7 @@ function LocationSelectorField({
     <SelectorField placement={placement} label={t("codingWorkbench.repository.locationLabel")}>
       <LocationChip
         location={location}
+        offered={offered}
         locked={locked}
         onSelect={onSelect}
         t={t}
@@ -588,12 +614,14 @@ function BranchSelectorField({
 function SelectorRecoveryForState({
   root,
   state,
+  offered,
   placement,
   onOpenGit,
   t,
 }: {
   readonly root: string | null;
   readonly state: RepositorySelectorState;
+  readonly offered: readonly WorkbenchExecutionLocation[] | undefined;
   readonly placement: SelectorPlacement;
   readonly onOpenGit: () => void;
   readonly t: CodingWorkbenchTranslate;
@@ -606,6 +634,7 @@ function SelectorRecoveryForState({
       branchUnavailable={state.branchUnavailable}
       branchDenied={state.branchDenied}
       folderMode={state.folderMode}
+      folderUnsupported={state.folderMode && offered !== undefined && !offered.includes("local")}
       catalogError={state.catalog.error}
       onOpenGit={onOpenGit}
       onRetryCatalog={state.catalog.reload}
@@ -650,6 +679,7 @@ export function CodingWorkbenchRepositorySelector({
   onSelect,
   onSelectBranch,
   location,
+  offeredLocations,
   onSelectLocation,
   onOpenGit,
   placement = "composer",
@@ -668,6 +698,7 @@ export function CodingWorkbenchRepositorySelector({
       />
       <LocationSelectorField
         location={state.folderMode ? "local" : location}
+        offered={offeredLocations}
         locked={locked || root === null || state.folderMode}
         onSelect={onSelectLocation}
         t={t}
@@ -686,6 +717,7 @@ export function CodingWorkbenchRepositorySelector({
         placement={placement}
         root={root}
         state={state}
+        offered={offeredLocations}
         onOpenGit={onOpenGit}
         t={t}
       />

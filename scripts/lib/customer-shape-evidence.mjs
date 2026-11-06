@@ -67,6 +67,9 @@ const START_DIAGNOSTIC_CODES = [
   "initial-turn-dispatch",
   "initial-turn-recovery",
   "launch-resolution",
+  // #4068: a Windows start the broker cannot confine, refused before anything spawns.
+  "launch-resolution:workspace-location-unsupported:local-checkout",
+  "launch-resolution:workspace-volume-unsupported:non-system-volume",
   "manager-exception",
   "model-unavailable",
   "payload-missing",

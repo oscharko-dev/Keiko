@@ -10,6 +10,10 @@ import {
 } from "./nativeWebSearch.js";
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
+  inheritWindowsParentDacl,
+  protectWindowsOwnerPrivateFile,
+} from "@oscharko-dev/keiko-security/windows-owner-private";
+import {
   openCodeAgentModelBinding,
   type OpenCodeAgentModelBinding,
   type OpenCodeAgentModelCatalog,
@@ -632,6 +636,17 @@ export interface OpenCodeRuntimeCompositionInput {
   readonly mcpPlatform?: NodeJS.Platform | undefined;
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
+  /**
+   * How a run's state directory is kept private to this account (#4068): the directory itself, and
+   * a resumed run's database copy, which then inherits from it. Absent, the Windows default applies
+   * and every other host keeps its 0700 and 0600 mode bits.
+   */
+  readonly runStateAccess?:
+    | {
+        readonly protectRoot: (runRoot: string) => void;
+        readonly adoptCopy: (path: string) => void;
+      }
+    | undefined;
   readonly contextGeometry: OpenCodeContextGeometry;
   readonly capabilities: {
     readonly modelGatewayCapability: string;
@@ -1985,7 +2000,7 @@ async function materializePrepare(
   request: OpenCodeLifecyclePrepareRequest,
   runRoot: string,
 ): Promise<OpenCodeLifecyclePrepareResult> {
-  createPrivateState(runRoot);
+  createPrivateState(runRoot, runStateAccessOf(input).protectRoot);
   if (input.ripgrepVerified === false) refuseRipgrepDownload(runRoot);
   const continuation = seedRun(input, request, runRoot);
   await bridge.start();
@@ -2311,11 +2326,13 @@ function seedRun(
 ): RunContinuation | undefined {
   const context = continuationContext(input);
   if (context === undefined) return undefined;
-  return seedContinuation(context, {
+  const continuation = seedContinuation(context, {
     runId: request.runId,
     runRoot,
     workspaceRoot: request.env.KEIKO_CODING_WORKSPACE_ROOT ?? "",
   });
+  if (continuation !== undefined) runStateAccessOf(input).adoptCopy(runtimeDatabasePath(runRoot));
+  return continuation;
 }
 
 /** A native run's built-in formatter decision, once per prepared run (parity row C07). */
@@ -3503,9 +3520,10 @@ function distinctCapabilities(
   );
 }
 
-function createPrivateState(runRoot: string): void {
+function createPrivateState(runRoot: string, protectRunState: (path: string) => void): void {
   mkdirSync(runRoot, { recursive: true, mode: 0o700 });
   chmodSync(runRoot, 0o700);
+  protectRunState(runRoot);
   for (const name of ["config", "state", "home", "tmp"]) {
     const path = join(runRoot, name);
     mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -3521,6 +3539,38 @@ function createPrivateState(runRoot: string): void {
     mkdirSync(path, { recursive: true, mode: 0o700 });
     chmodSync(path, 0o700);
   }
+}
+
+type RunStateAccess = NonNullable<OpenCodeRuntimeCompositionInput["runStateAccess"]>;
+
+/**
+ * Windows reports synthesized mode bits, so `chmod` keeps nobody out: a run's database, history and
+ * configuration would inherit whatever the state directory's parents grant (#4068). The run root is
+ * made owner-private with inheritable entries before anything is written below it, so every file
+ * the runtime or Keiko writes there is private too. The confined tree's own grant is added to this
+ * directory at launch (ADR-0043 D18) and is inherited the same way.
+ *
+ * A resumed run's database arrives as the retained store's owner-only copy, whose protected DACL
+ * would keep that grant out, so the runtime could not open it and every resumed run on Windows ended
+ * before its first turn. The copy is handed to the run root's inherited DACL instead: exactly as
+ * private as the run root, and reachable by the tree.
+ */
+const WINDOWS_RUN_STATE_ACCESS: RunStateAccess = Object.freeze({
+  protectRoot: (runRoot: string): void => {
+    if (process.platform === "win32") {
+      protectWindowsOwnerPrivateFile(runRoot, { inheritToChildren: true });
+    }
+  },
+  // Without a copy there is nothing to hand over: the runtime creates its database below the root.
+  adoptCopy: (path: string): void => {
+    if (process.platform === "win32" && existsSync(path)) inheritWindowsParentDacl(path);
+  },
+});
+
+function runStateAccessOf(
+  input: Pick<OpenCodeRuntimeCompositionInput, "runStateAccess">,
+): RunStateAccess {
+  return input.runStateAccess ?? WINDOWS_RUN_STATE_ACCESS;
 }
 
 // OpenCode looks for `rg` on PATH, then in `<data home>/opencode/bin`, and only then downloads one

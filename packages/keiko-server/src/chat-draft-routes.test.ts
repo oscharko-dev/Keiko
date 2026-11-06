@@ -173,7 +173,8 @@ describe("private chat draft routes", () => {
 });
 
 describe("private Coding Workbench draft routes", () => {
-  const WINDOW_ID = "coding-workbench-mabc12";
+  // The id the desktop shell gives the singleton Workbench window (#4068).
+  const WINDOW_ID = "coding";
 
   it("mounts authenticated reads and writes and restores the composer text after a reload", async () => {
     const { deps, cookie } = fixture();
@@ -209,10 +210,13 @@ describe("private Coding Workbench draft routes", () => {
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     const { deps, cookie } = fixture();
     const read = vi.spyOn(deps.store, "readCodingWorkbenchDraft");
-    expect((await handleReadCodingWorkbenchDraft(context("", WINDOW_ID), deps)).status).toBe(404);
+    // A generated id is distinctive enough to prove it never reaches the log; `coding` alone is a
+    // substring of the surface name.
+    const windowId = "coding-mabc12-1";
+    expect((await handleReadCodingWorkbenchDraft(context("", windowId), deps)).status).toBe(404);
     expect(read).not.toHaveBeenCalled();
     await handleSaveCodingWorkbenchDraft(
-      context(cookie, WINDOW_ID, { text: TEXT, expectedRevision: 0 }),
+      context(cookie, windowId, { text: TEXT, expectedRevision: 0 }),
       deps,
     );
     const events = sink.events.filter((entry) => entry.op === "chat.draft.operation");
@@ -225,6 +229,6 @@ describe("private Coding Workbench draft routes", () => {
     for (const event of events)
       expectActivityLogProof("chat.draft.operation.lifecycle", formatActivityLogProofLine(event));
     expect(JSON.stringify(events)).not.toContain(TEXT);
-    expect(JSON.stringify(events)).not.toContain(WINDOW_ID);
+    expect(JSON.stringify(events)).not.toContain(windowId);
   });
 });

@@ -9,6 +9,7 @@ import {
   writeCodingWorkbenchDraft,
 } from "@/lib/chat-draft-api";
 import { notifyCodingAppSessionChanged } from "@/lib/coding-app-session-client";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { ChatDraftController } from "./chat-draft-controller";
 import { useChatDraft, useChatDraftUnloadGuard, usePrivateDraft } from "./useChatDraft";
 
@@ -248,6 +249,25 @@ describe("private chat drafts", () => {
     expect(result.current.text).toBe("retained");
     await act(() => result.current.controller.save("a"));
     expect(result.current.persistence.phase).toBe("saved");
+  });
+
+  // #4068: an unpaired browser reads every draft as 404 by design, and the server records that
+  // refusal. Reporting each one as a client failure buried the real ones; an offline read still is.
+  it("does not report a read refused as an access decision as a client failure", async () => {
+    vi.mocked(reportClientDiagnostic).mockClear();
+    vi.mocked(readChatDraft).mockRejectedValueOnce(new ApiError("NOT_FOUND", "Unavailable", 404));
+    const denied = renderHook(() => useChatDraft("a"));
+    await waitFor(() => expect(denied.result.current.persistence.phase).toBe("unavailable"));
+    expect(reportClientDiagnostic).not.toHaveBeenCalled();
+    denied.unmount();
+
+    vi.mocked(readChatDraft).mockRejectedValueOnce(new TypeError("offline"));
+    const offline = renderHook(() => useChatDraft("b"));
+    await waitFor(() => expect(offline.result.current.persistence.phase).toBe("load-failed"));
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "Private chat draft read failed.",
+      expect.objectContaining({ errorKind: expect.any(String) as unknown as string }),
+    );
   });
 
   it("queues session refresh behind a pending read", async () => {

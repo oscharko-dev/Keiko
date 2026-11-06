@@ -310,8 +310,96 @@ before anything spawns. The refusal is not configurable.
 **Resolution**
 
 Select another repository. To work on Keiko itself with Keiko, select a separate checkout or worktree
-of it, not the one that ran `dev:start`. A Windows checkout cannot start a coding run at all yet, and
-reports `gateway-service-unqualified` before this refusal can occur.
+of it, not the one that ran `dev:start`. On Windows the Workbench runs a task only in a new worktree
+(next section), which is a fresh checkout without the staged runtime, so this refusal does not occur
+there.
+
+---
+
+## "Start coding run" is refused on Windows with `WORKSPACE_LOCATION_UNSUPPORTED` or `WORKSPACE_VOLUME_UNSUPPORTED`
+
+| Field             | Value                                                                                          |
+| ----------------- | ---------------------------------------------------------------------------------------------- |
+| Severity          | Medium                                                                                         |
+| Surface           | Local UI / Coding Workbench (Windows)                                                          |
+| Stable identifier | `CODING_RUNTIME_WORKSPACE_LOCATION_UNSUPPORTED`, `CODING_RUNTIME_WORKSPACE_VOLUME_UNSUPPORTED` |
+
+**Symptom**
+
+The start is refused at once, before any run exists, with "On Windows, Keiko runs a coding task only
+in a new worktree, not in your own checkout or folder" or with "Keiko keeps its worktrees on another
+drive than Windows". An ordinary folder shows "On Windows, Keiko runs a coding task only in a new
+worktree of a Git repository" under the repository selector. Earlier builds started the run in the
+operator's checkout and failed it inside the runtime, typically with a `gateway-challenge` HTTP 500
+or a `readiness-failed` handshake.
+
+**Root Cause**
+
+On Windows each run's process tree is confined in its own AppContainer, and the tree reads only what
+Keiko grants it (ADR-0043 D18). Keiko grants a workspace only as a Keiko-managed worktree, through
+that worktree's own capability, so a run in the operator's checkout or in an ordinary folder could
+not read its workspace at all. The AppContainer also cannot resolve a path on another volume than
+the one Windows runs from (`SystemDrive`, usually `C:`). Managed worktrees live in
+`<stateDir>/task-workspaces`, so a state directory on another drive puts every worktree there. Both
+starts are refused before anything spawns. Behind the Windows broker, readiness lists
+`executionLocations: ["worktree"]`, so the Workbench preselects a new worktree and offers no other
+location.
+
+**Diagnostic Steps**
+
+1. The start's 409 response carries the code and a Support ID.
+2. Activity log, the run id: `op: "coding-runtime.start"` with
+   `code: "stage=start:reason=launch-resolution:workspace-location-unsupported:local-checkout"` or
+   `code: "stage=start:reason=launch-resolution:workspace-volume-unsupported:non-system-volume"`.
+3. `GET /api/coding-workbench/runtime/readiness` reports `executionLocations: ["worktree"]` while
+   the broker serves the runtime.
+
+**Resolution**
+
+- `WORKSPACE_LOCATION_UNSUPPORTED`: select a Git repository and keep "New local worktree" as the work
+  location. An ordinary folder cannot run on Windows yet.
+- `WORKSPACE_VOLUME_UNSUPPORTED`: set `KEIKO_STATE_DIR` to a folder on the Windows drive and restart
+  Keiko. A development checkout on another drive (`npm run dev:start`) needs the same, for example
+  `KEIKO_STATE_DIR=C:\Users\<you>\.keiko-dev`. The repository itself may stay on any drive: only the
+  worktree Keiko creates for the task must be on the Windows drive.
+
+---
+
+## A follow-up on Windows fails within seconds with `runtime-reap-unproven`
+
+| Field             | Value                                                               |
+| ----------------- | ------------------------------------------------------------------- |
+| Severity          | High                                                                |
+| Surface           | Local server / Coding Workbench (Windows)                           |
+| Stable identifier | `stage=start:reason=runtime-reap-unproven`, `RuntimeUnexpectedExit` |
+
+**Symptom**
+
+The first run of a task succeeds. The next one in the same task fails a few seconds after it starts,
+before any model call, as `runtime-failed`. A further follow-up then starts fresh and succeeds, but
+without the earlier conversation in the runtime.
+
+**Root Cause**
+
+A follow-up resumes the task's retained session: Keiko copies the retained database into the new
+run's state directory. Builds before 2026-11-06 then replaced the copy's DACL with a protected
+owner-only one. On Windows the runtime runs under its own per-tree SID, which reaches the state
+directory only through an inheritable grant (ADR-0043 D18), and a protected file does not inherit
+it. The runtime could not open its database and exited (ADR-0182).
+
+**Diagnostic Steps**
+
+1. Activity log, the run id: `coding-runtime.session-continuity` shows `action: "retain"`,
+   `outcome: "retained"` on the previous run of the task.
+2. The failed run has `runtime.confinement.spawned` with `backend: "windows-wfp"`, then
+   `server.diagnostic.failure` with `diagnosticOperation: "coding-runtime.exit"` and
+   `diagnosticErrorClass: "RuntimeUnexpectedExit"`, and no `coding-runtime.readiness.phase` line.
+3. It ends with `code: "stage=start:reason=runtime-reap-unproven"`.
+
+**Resolution**
+
+Update Keiko. The run's state directory is now owner-private with inheritable entries, and the copy
+is handed back to that inherited DACL, so it stays private and the tree's grant reaches it.
 
 ---
 

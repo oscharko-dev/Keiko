@@ -737,6 +737,23 @@ export function gatewayServiceMessageKey(
   return reason === undefined ? undefined : GATEWAY_SERVICE_MESSAGE_KEYS.get(reason);
 }
 
+// #4068: a start the Windows broker cannot confine names what to change: the work location, or the
+// drive Keiko keeps its worktrees on.
+const START_REFUSAL_SUMMARY_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map([
+  [
+    "CODING_RUNTIME_WORKSPACE_UNQUALIFIED",
+    "codingWorkbench.alert.startRefusedWorkspaceUnqualified",
+  ],
+  [
+    "CODING_RUNTIME_WORKSPACE_LOCATION_UNSUPPORTED",
+    "codingWorkbench.alert.startRefusedWorkspaceLocation",
+  ],
+  [
+    "CODING_RUNTIME_WORKSPACE_VOLUME_UNSUPPORTED",
+    "codingWorkbench.alert.startRefusedWorkspaceVolume",
+  ],
+]);
+
 // #3565 Observation 17: a start the server refused for a nameable cause gets the sentence that
 // tells the operator what to do, not the generic "review the live state and retry". #3603: a model
 // whose window cannot hold a coding run's prompt, or whose window is still being verified, says so.
@@ -751,10 +768,7 @@ function startRefusalSummaryKey(
       return "codingWorkbench.alert.startRefusedModelVerificationPending";
     return "codingWorkbench.alert.startRefusedModelUnavailable";
   }
-  if (code === "CODING_RUNTIME_WORKSPACE_UNQUALIFIED") {
-    return "codingWorkbench.alert.startRefusedWorkspaceUnqualified";
-  }
-  return "codingWorkbench.alert.actionFailedCode";
+  return START_REFUSAL_SUMMARY_KEYS.get(code) ?? "codingWorkbench.alert.actionFailedCode";
 }
 
 export function visibleAlert(

@@ -1500,6 +1500,16 @@ export interface ChatDraftUpdate {
   readonly text: string;
   readonly expectedRevision: number;
 }
+/**
+ * The window ids a Coding Workbench composer draft is kept under (#4271): the ids the desktop shell
+ * mints for the Workbench window. The Workbench is a singleton, so the shell names it by its window
+ * type, `coding`; a generated `coding-<base36>` id keeps its suffixes. The server refuses any other
+ * key, and a Workbench window restored under one keeps its text local instead (#4068).
+ */
+export const CODING_WORKBENCH_DRAFT_WINDOW_ID_PATTERN = /^coding(?:-[0-9a-z]{1,16}){0,3}$/u;
+export function isCodingWorkbenchDraftWindowId(windowId: string): boolean {
+  return CODING_WORKBENCH_DRAFT_WINDOW_ID_PATTERN.test(windowId);
+}
 export const MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS = 256;
 export const GROUNDING_SCOPE_IDENTITY_PATTERN = /^gsi-v1:[0-9a-f]{64}$/u;
 

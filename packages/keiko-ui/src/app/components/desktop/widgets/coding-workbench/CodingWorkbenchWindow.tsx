@@ -1,6 +1,7 @@
 "use client";
 
 import { isCodingWorkbenchBuiltInAgent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import { isCodingWorkbenchDraftWindowId } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ClientModelCatalogEvidence } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
@@ -594,16 +595,18 @@ function workbenchFolderMode(
   );
 }
 
-// A folder is always Local: there is no repository to put a worktree in.
+// A folder is always Local: there is no repository to put a worktree in. A repository takes the
+// locations the runtime can confine (#4068).
 function workbenchExecutionLocation(
   branchInventory: Pick<RepositoryBranchState, "ordinaryFolder" | "response">,
   activeWorkspace: WorkbenchWorkspaceApi,
   repositoryRoot: string | null,
   selected: WorkbenchExecutionLocation | undefined,
+  offered: readonly WorkbenchExecutionLocation[] | undefined,
 ): WorkbenchExecutionLocation {
   return workbenchFolderMode(branchInventory, activeWorkspace, repositoryRoot)
     ? "local"
-    : activeExecutionLocation(activeWorkspace.activeInstance, repositoryRoot, selected);
+    : activeExecutionLocation(activeWorkspace.activeInstance, repositoryRoot, selected, offered);
 }
 
 function repositoryBranchReadRoot(
@@ -661,6 +664,7 @@ function WorkbenchContextControls({
   onSelectBranch,
   onOpenGit,
   location,
+  offeredLocations,
   onSelectLocation,
   placement = "composer",
 }: {
@@ -674,6 +678,7 @@ function WorkbenchContextControls({
   readonly onSelectBranch: (branch: string) => void;
   readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
   readonly location: WorkbenchExecutionLocation;
+  readonly offeredLocations: readonly WorkbenchExecutionLocation[] | undefined;
   readonly onSelectLocation: (location: WorkbenchExecutionLocation) => void;
   readonly placement?: "composer" | "setup";
 }): ReactNode {
@@ -688,6 +693,7 @@ function WorkbenchContextControls({
       onSelect={onSelectRepository}
       onSelectBranch={onSelectBranch}
       location={location}
+      offeredLocations={offeredLocations}
       onSelectLocation={onSelectLocation}
       onOpenGit={() => onOpenGit({ root: repositoryRoot, binding: "repository" })}
       placement={placement}
@@ -889,9 +895,10 @@ function initialHistoryLocation(
   workspace: UseCodingWorkbenchRuntimeInput["workspace"],
   selectedRoot: string | undefined,
   selectedLocation: WorkbenchExecutionLocation | undefined,
+  offered: readonly WorkbenchExecutionLocation[] | undefined,
 ): WorkbenchExecutionLocation {
   const root = selectedRoot ?? workspace.activeInstance?.repositoryRoot ?? null;
-  return activeExecutionLocation(workspace.activeInstance, root, selectedLocation);
+  return activeExecutionLocation(workspace.activeInstance, root, selectedLocation, offered);
 }
 
 function locationSelectionPending(
@@ -915,12 +922,15 @@ function useCheckoutRefresh(
 /**
  * The composer's task and follow-up text lives in the window's private server draft (#4271), so a
  * reload while a start is in flight, or before a follow-up is sent, restores what was typed. Without
- * a window identity (an embedded or test render) it stays local to the component.
+ * a window identity the server keeps drafts for (an embedded or test render, or a window restored
+ * under another id) it stays local to the component instead of asking for a draft it cannot have.
  */
 function useWorkbenchComposerDraft(
   draftKey: string | undefined,
 ): readonly [string, (value: string) => void] {
-  const draft = usePrivateDraft(draftKey, "coding-workbench");
+  const key =
+    draftKey !== undefined && isCodingWorkbenchDraftWindowId(draftKey) ? draftKey : undefined;
+  const draft = usePrivateDraft(key, "coding-workbench");
   useChatDraftUnloadGuard(draft.controller, 0);
   return [draft.text, draft.setText];
 }
@@ -965,7 +975,12 @@ export function CodingWorkbenchWindow({
     active: activeRunState(runtimeState.run.value?.state),
     workspace: workspaceContext,
     root: selectedRoot,
-    location: initialHistoryLocation(activeWorkspace, selectedRoot, selectedLocation),
+    location: initialHistoryLocation(
+      activeWorkspace,
+      selectedRoot,
+      selectedLocation,
+      runtimeState.runtime.value?.executionLocations,
+    ),
     selection: historySelection,
     onSelectionHandled: onHistorySelectionHandled,
     onDraftReset: (): void => setTaskIntent(""),
@@ -1018,6 +1033,7 @@ export function CodingWorkbenchWindow({
     activeWorkspace,
     repositoryRoot,
     selectedLocation,
+    state.runtime.value?.executionLocations,
   );
   const refreshCheckout = useCheckoutRefresh(branchInventory.refresh, activeWorkspace.refresh);
   const locationState = useWorkbenchExecutionLocation({
@@ -1790,6 +1806,7 @@ function WorkbenchColumns({
       onSelectRepository={onSelectRepository}
       onSelectBranch={onSelectBranch}
       location={location}
+      offeredLocations={state.runtime.value?.executionLocations}
       onSelectLocation={onSelectLocation}
       onOpenGit={onOpenGit}
     />
@@ -1812,6 +1829,7 @@ function WorkbenchColumns({
               onSelectRepository={onSelectRepository}
               onSelectBranch={onSelectBranch}
               location={location}
+              offeredLocations={state.runtime.value?.executionLocations}
               onSelectLocation={onSelectLocation}
               onOpenGit={onOpenGit}
               placement="setup"

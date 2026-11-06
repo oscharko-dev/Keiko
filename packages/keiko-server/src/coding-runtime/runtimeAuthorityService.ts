@@ -437,6 +437,8 @@ const CODING_RUNTIME_AUTHORITY_REVALIDATION_REFUSED_OPERATION = defineActivityLo
         "model-turn-failed",
         "edits-blocked",
         "edit-retries-exhausted",
+        "workspace-location-unsupported",
+        "workspace-volume-unsupported",
       ],
     },
   },

@@ -104,6 +104,12 @@ export interface WindowsOwnerPrivateProtectOptions {
   /** Resolves a bare System32 binary name (`whoami.exe`, `icacls.exe`). */
   readonly resolveSystemBinary?: ((name: string) => string) | undefined;
   readonly securityLogSink?: SecurityLogSink | undefined;
+  /**
+   * For a directory: its entries are inheritable, so every file and directory later created below
+   * it is owner-private too, and an inheritable grant later added to the directory still reaches
+   * them (#4068: a confined run's own state directory).
+   */
+  readonly inheritToChildren?: boolean | undefined;
 }
 
 // Paths arrive as Base64 lines on standard input, so no path is ever interpolated into this fixed
@@ -309,11 +315,52 @@ function currentUserSid(runner: WindowsLocalVolumeRunner, whoami: string): strin
  * user, SYSTEM and Administrators only, so a private path Keiko writes does not inherit a profile or
  * drive ACL that lets other accounts reach it. icacls receives SIDs only and is judged by its exit
  * status. Callers protect a path they just created in their own directory and still verify a file on
- * read. A directory's new DACL is not inheritable, so each file below it is protected itself.
+ * read. A directory's new DACL is not inheritable, so each file below it is protected itself, unless
+ * the caller asks for `inheritToChildren`.
  */
 export function protectWindowsOwnerPrivateFile(
   path: string,
   options: WindowsOwnerPrivateProtectOptions = {},
+): void {
+  changeWindowsDacl(path, options, ["whoami.exe", "icacls.exe"], (binary, runner) => {
+    const sid = currentUserSid(runner, binary("whoami.exe"));
+    const icacls = binary("icacls.exe");
+    const access = options.inheritToChildren === true ? "(OI)(CI)(F)" : "(F)";
+    // /reset first drops explicit entries, which /grant:r alone would keep for other principals.
+    runSystemBinary(runner, icacls, [path, "/reset"]);
+    runSystemBinary(runner, icacls, [
+      path,
+      "/inheritance:r",
+      "/grant:r",
+      `*${sid}:${access}`,
+      `*S-1-5-18:${access}`,
+      `*S-1-5-32-544:${access}`,
+    ]);
+  });
+}
+
+/**
+ * Drops a path's explicit entries and protection, so it inherits its parent's DACL again (#4068).
+ * Callers use it only below a directory they made owner-private with `inheritToChildren`: the path
+ * is then exactly as private as that directory, and an inheritable grant added there later reaches
+ * it, which a protected DACL would block.
+ */
+export function inheritWindowsParentDacl(
+  path: string,
+  options: WindowsOwnerPrivateProtectOptions = {},
+): void {
+  changeWindowsDacl(path, options, ["icacls.exe"], (binary, runner) => {
+    runSystemBinary(runner, binary("icacls.exe"), [path, "/reset"]);
+  });
+}
+
+// One shape for every DACL change: the path is checked, the System32 binaries are resolved, and a
+// refusal at any step is logged body-free with that step before it propagates.
+function changeWindowsDacl(
+  path: string,
+  options: WindowsOwnerPrivateProtectOptions,
+  binaries: readonly string[],
+  change: (binary: (name: string) => string, runner: WindowsLocalVolumeRunner) => void,
 ): void {
   let phase: "input" | "resolve" | "protect" = "input";
   try {
@@ -321,21 +368,13 @@ export function protectWindowsOwnerPrivateFile(
     phase = "resolve";
     const resolve =
       options.resolveSystemBinary ?? ((name: string): string => resolveWindowsSystemBinary(name));
-    const whoami = resolve("whoami.exe");
-    const icacls = resolve("icacls.exe");
+    const resolved = new Map(binaries.map((name) => [name, resolve(name)]));
     phase = "protect";
-    const runner = options.runner ?? spawnSync;
-    const sid = currentUserSid(runner, whoami);
-    // /reset first drops explicit entries, which /grant:r alone would keep for other principals.
-    runSystemBinary(runner, icacls, [path, "/reset"]);
-    runSystemBinary(runner, icacls, [
-      path,
-      "/inheritance:r",
-      "/grant:r",
-      `*${sid}:(F)`,
-      "*S-1-5-18:(F)",
-      "*S-1-5-32-544:(F)",
-    ]);
+    change((name) => {
+      const binary = resolved.get(name);
+      if (binary === undefined) throw new Error("windows-owner-private-protect-failed");
+      return binary;
+    }, options.runner ?? spawnSync);
   } catch (error) {
     emitSecurityLogEvent(
       options.securityLogSink,

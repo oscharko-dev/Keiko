@@ -15,6 +15,7 @@ import {
   constants,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -708,6 +709,13 @@ type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
   readonly ripgrepVerified?: boolean;
+  /** #4068: observes the run state directory protection instead of changing a real ACL. */
+  readonly runStateAccess?:
+    | {
+        readonly protectRoot: (runRoot: string) => void;
+        readonly adoptCopy: (path: string) => void;
+      }
+    | undefined;
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   /** Extra sessions the runtime's session list reports (native child sessions, #3897). */
   readonly childSessions?: readonly Record<string, unknown>[];
@@ -1057,8 +1065,12 @@ function runtimeMode(
 
 function optionalRipgrepVerified(control: StartBridgeControl | undefined): {
   readonly ripgrepVerified?: boolean;
+  readonly runStateAccess?: NonNullable<StartBridgeControl["runStateAccess"]>;
 } {
-  return control?.ripgrepVerified === undefined ? {} : { ripgrepVerified: control.ripgrepVerified };
+  return {
+    ...(control?.ripgrepVerified === undefined ? {} : { ripgrepVerified: control.ripgrepVerified }),
+    ...(control?.runStateAccess === undefined ? {} : { runStateAccess: control.runStateAccess }),
+  };
 }
 
 function optionalActivityLog(control: StartBridgeControl | undefined): {
@@ -1667,6 +1679,36 @@ it.each([
     }
   },
 );
+
+// #4068: Windows mode bits keep nobody out, so the run root is made private before anything is
+// written below it; everything the runtime and Keiko write there then inherits that protection.
+it("protects the run state directory before anything is written below it", async () => {
+  const observed: { path: string; entries: readonly string[] }[] = [];
+  const adopted: string[] = [];
+  const fixture = await startBridgeFixture(
+    { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+    undefined,
+    {
+      runStateAccess: {
+        protectRoot: (path): void => {
+          observed.push({ path, entries: readdirSync(path) });
+        },
+        adoptCopy: (path): void => {
+          adopted.push(path);
+        },
+      },
+    },
+  );
+  try {
+    expect(observed).toEqual([
+      { path: join(fixture.stateBaseRoot, fixture.preparation.runId), entries: [] },
+    ]);
+    // A fresh run has no retained copy to hand over.
+    expect(adopted).toEqual([]);
+  } finally {
+    await fixture.stop();
+  }
+});
 
 it("selects native stdin ownership only after the production V2 prepare and keeps it open", async () => {
   const pipe = new PassThrough();
@@ -11292,6 +11334,36 @@ describe.each(["native", "direct", "code-mode"] as const)("%s session continuity
         "DELETE /api/session/ses_scratch_2",
       ]);
       expect(world.continuity.sessions).toEqual(["ses_scratch_1"]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // #4068: the retained store's owner-only copy would keep the confined tree's inherited grant out,
+  // so the copy is handed to the run root's private, inherited DACL right after the checkout.
+  it("hands a resumed run's database copy to its private run state before the runtime starts", async () => {
+    const world = continuedWorld();
+    world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+    const order: string[] = [];
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...tools,
+      continuity: world.continuity,
+      runStateAccess: {
+        protectRoot: (path): void => {
+          order.push(`protect ${path}`);
+        },
+        adoptCopy: (path): void => {
+          order.push(`adopt ${path} ${String(world.calls.checkouts.length)}`);
+        },
+      },
+    });
+    try {
+      const destination = world.calls.checkouts[0]?.destinationDatabase;
+      expect(order).toEqual([
+        `protect ${join(fixture.stateBaseRoot, FIXTURE_RUN_ID)}`,
+        `adopt ${String(destination)} 1`,
+      ]);
+      expect(world.continuity.service.outcome(FIXTURE_RUN_ID)).toEqual({ kind: "resumed" });
     } finally {
       await fixture.stop();
     }

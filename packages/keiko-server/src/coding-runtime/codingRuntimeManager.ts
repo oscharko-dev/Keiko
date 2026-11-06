@@ -124,6 +124,9 @@ export type CodingRuntimeFailureCode =
   | "model-unavailable"
   | "repository-unavailable"
   | "workspace-unqualified"
+  // #4068: a confined Windows run outside a Keiko-managed worktree, or one on another volume.
+  | "workspace-location-unsupported"
+  | "workspace-volume-unsupported"
   | "payload-missing"
   | "platform-unsupported"
   | "protocol-schema-mismatch"

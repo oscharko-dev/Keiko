@@ -881,6 +881,15 @@ describe("visibleAlert mutation failures (F-09a)", () => {
       "CODING_RUNTIME_WORKSPACE_UNQUALIFIED",
       "codingWorkbench.alert.startRefusedWorkspaceUnqualified",
     ],
+    // #4068: a start the Windows broker cannot confine names the location or the drive to change.
+    [
+      "CODING_RUNTIME_WORKSPACE_LOCATION_UNSUPPORTED",
+      "codingWorkbench.alert.startRefusedWorkspaceLocation",
+    ],
+    [
+      "CODING_RUNTIME_WORKSPACE_VOLUME_UNSUPPORTED",
+      "codingWorkbench.alert.startRefusedWorkspaceVolume",
+    ],
     ["CODING_RUNTIME_RUNTIME_UNAVAILABLE", "codingWorkbench.alert.actionFailedCode"],
   ])("explains a refused start with code %s through %s", (code, key) => {
     const alert = visibleAlert(failedMutationState("ui-correlation-3", code), tv, false);

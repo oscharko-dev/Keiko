@@ -249,6 +249,8 @@ const CODING_RUNTIME_FAILURE_CODE_FIELD = {
     "model-turn-failed",
     "edits-blocked",
     "edit-retries-exhausted",
+    "workspace-location-unsupported",
+    "workspace-volume-unsupported",
   ],
 } as const;
 

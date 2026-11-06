@@ -1698,6 +1698,33 @@ describe("coding runtime routes", () => {
     expect(validateCodingWorkbenchRuntimeReadiness(body)).toMatchObject({ ok: true });
   });
 
+  // #4068: the broker confines only a Keiko-managed worktree, so its readiness offers that location
+  // alone and the Workbench never preselects the operator's own checkout. Other hosts name none.
+  it("offers only the worktree location behind the Windows broker", () => {
+    const read = (broker: boolean): Record<string, unknown> =>
+      (
+        handleCodingRuntimeReadiness(
+          context(
+            "",
+            {},
+            "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding",
+          ),
+          runtime({
+            codingRuntimeHostQualified: true,
+            codingRuntimeOrchestrator: undefined,
+            ...(broker
+              ? { codingRuntimeGatewayService: { unavailableReason: () => undefined } }
+              : {}),
+          }),
+        ) as { body: Record<string, unknown> }
+      ).body;
+    const windows = read(true);
+
+    expect(windows.executionLocations).toEqual(["worktree"]);
+    expect(validateCodingWorkbenchRuntimeReadiness(windows)).toMatchObject({ ok: true });
+    expect(read(false)).not.toHaveProperty("executionLocations");
+  });
+
   it("does not ask the broker when the host itself is unqualified", () => {
     const unavailable = handleCodingRuntimeReadiness(
       context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),

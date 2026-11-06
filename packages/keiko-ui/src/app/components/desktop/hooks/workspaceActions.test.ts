@@ -59,6 +59,7 @@ import {
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
 } from "../editorSidebarSizing";
 import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
+import { isCodingWorkbenchDraftWindowId } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-1`): AppWindow {
   return { id, type, x: 0, y: 0, w: 10, h: 10, z: 1, cfg, max: false };
@@ -1957,6 +1958,31 @@ describe("makeMutations.add — QI run-card dedup (#270)", () => {
 // take its geometry from the registry's figmaView entry, not from hardcoded literals. This pins the
 // spawned card's w/h/min* to WIN_TYPES.figmaView (clamped against the figma-manager minimums) so a
 // future WIN_TYPES.figmaView geometry change cannot silently diverge from the spawn path.
+// #4068: the server keeps the Workbench composer draft under the window's own id. The id the shell
+// mints is the producer here, so the test asks it rather than restating its shape; the draft route
+// had refused every real Workbench window because the two disagreed.
+describe("makeMutations.add — the Coding Workbench window id keys its private draft", () => {
+  it("mints an id the draft route admits", () => {
+    let wins: AppWindow[] | null = [];
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { add } = makeMutations({
+      setWins,
+      zc: { current: 0 },
+      worldVP: () => ({ x: 0, y: 0, w: 2000, h: 2000 }),
+    });
+
+    const id = add("coding");
+    const chat = add("chat");
+    if (id === null || chat === null) throw new Error("Expected both windows to open.");
+
+    expect((wins ?? []).map((w) => w.type)).toEqual(["coding", "chat"]);
+    expect(isCodingWorkbenchDraftWindowId(id)).toBe(true);
+    expect(isCodingWorkbenchDraftWindowId(chat)).toBe(false);
+  });
+});
+
 describe("makeMutations.add — scoped Figma-view card geometry (#GEN-DUP-NEAR-007)", () => {
   it("sources the spawned figma-view card geometry from WIN_TYPES.figmaView", () => {
     let wins: AppWindow[] | null = [];

@@ -145,6 +145,8 @@ const LAUNCH_FAILURE_CODES: ReadonlyMap<
   ["model-unavailable", "model-unavailable"],
   ["repository-unavailable", "workspace-unqualified"],
   ["workspace-unqualified", "workspace-unqualified"],
+  ["workspace-location-unsupported", "workspace-location-unsupported"],
+  ["workspace-volume-unsupported", "workspace-volume-unsupported"],
 ]);
 
 /**

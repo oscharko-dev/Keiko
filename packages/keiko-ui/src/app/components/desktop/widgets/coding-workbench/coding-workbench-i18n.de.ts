@@ -525,6 +525,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der Git-Status dieses Ordners konnte nicht gelesen werden – möglicherweise ist er kein Git-Repository. Öffne Git, um das zu prüfen.",
   "codingWorkbench.repository.folderModeHint":
     "Kein Git-Repository: Der Agent bearbeitet, führt aus und prüft hier, ohne Commits oder Pushes.",
+  "codingWorkbench.repository.folderModeUnsupported":
+    "Unter Windows führt Keiko eine Coding-Aufgabe nur in einem neuen Worktree eines Git-Repositorys aus und kann daher nicht in diesem Ordner arbeiten. Wähle ein Git-Repository.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko darf diesen Ordner nicht lesen: Sein Ort ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen, etwa weil er im eigenen Zustandsordner eines Werkzeugs liegt, oder der Zugriff wurde verweigert. Das ist eine Richtlinienentscheidung, kein fehlendes Git-Repository. Wähle ein Repository außerhalb dieses Orts oder öffne Git, um die Ablehnung zu sehen.",
   "codingWorkbench.repository.loadError":
@@ -1406,6 +1408,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Das Kontextfenster des gewählten Modells ist für einen Coding-Lauf zu klein (mindestens 32.000 Tokens; {code}). Keiko konnte 32.000 Tokens dafür nicht bestätigen. Wähle ein größeres Modell oder lass das Gateway max_input_tokens für dieses Modell angeben und starte dann erneut.",
   "codingWorkbench.alert.startRefusedModelVerificationPending":
     "Keiko prüft das Kontextfenster des gewählten Modells gerade beim Gateway ({code}). Bei einem ausgelasteten Gateway kann das einige Minuten dauern; starte erneut, sobald die Prüfung abgeschlossen ist.",
+  "codingWorkbench.alert.startRefusedWorkspaceLocation":
+    "Unter Windows führt Keiko eine Coding-Aufgabe nur in einem neuen Worktree aus, nicht in deinem eigenen Checkout oder Ordner ({code}). Wähle „Neuer lokaler Worktree“ als Arbeitsort eines Git-Repositorys und starte erneut.",
+  "codingWorkbench.alert.startRefusedWorkspaceVolume":
+    "Keiko legt seine Worktrees auf einem anderen Laufwerk als Windows ab, auf dem die Windows-Sandbox keine Coding-Aufgabe ausführen kann ({code}). Ein Betreiber muss KEIKO_STATE_DIR auf einen Ordner auf dem Windows-Laufwerk, meist C:, setzen und Keiko neu starten.",
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":
     "Das gebundene Repository konnte für einen Coding-Lauf nicht qualifiziert werden ({code}). Wähle das Repository erneut über „Browse…“, damit sein echter Pfad gebunden wird, und starte erneut.",
   "codingWorkbench.alert.actionFailedSupportId": "Support-ID: {correlationId}.",

@@ -57,11 +57,14 @@ import { stageDevLaneFixture } from "./devLaneFixture/_support.js";
 import { codingSafeActivityTtlMs } from "./codingSafeActivityProjection.js";
 import { scriptedFunctionalPortable } from "./opencodeFunctionalHarness/_support.js";
 import {
+  assertWindowsWorkspaceLocation,
   createProductionOpenCodeBackend,
+  onAnotherWindowsVolume,
   recordContextTelemetry,
   windowsFilesystemGrants,
   windowsWorkspaceCapability,
 } from "./productionOpenCodeBackend.js";
+import { CodingRuntimeLaunchRejectedError, refusedLaunch } from "./launchFailure.js";
 import type { OpenCodeRipgrepResolution } from "./opencodeRipgrepLaunch.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import type {
@@ -673,6 +676,73 @@ describe("production OpenCode backend composition", () => {
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
+  });
+
+  // #4068: a confined Windows tree is granted a workspace only as a Keiko-managed worktree, and its
+  // AppContainer cannot resolve a path on another volume than Windows. Both starts would spawn and
+  // then fail inside the runtime with an opaque error, so each is refused first with its own code.
+  it("refuses a Windows start outside a managed worktree, or on another volume, before spawn", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-windows-location-"));
+    try {
+      const portable = windowsDevLaneRuntime(root);
+      const run = runInput(root);
+      const access = (kind: "ordinary" | "managed-task") => (): WorkspaceRootAccess =>
+        ({ kind }) as unknown as WorkspaceRootAccess;
+      const at = (workspaceRoot: string, kind: "ordinary" | "managed-task") => ({
+        context: { ...run.context, workspaceRoot },
+        resolveWorkspaceRootAccess: access(kind),
+      });
+      const refusal = (attempt: () => void): ReturnType<typeof refusedLaunch> => {
+        try {
+          attempt();
+        } catch (error) {
+          expect(error).toBeInstanceOf(CodingRuntimeLaunchRejectedError);
+          return refusedLaunch(error);
+        }
+        throw new Error("Expected the start to be refused.");
+      };
+      const env = { SystemDrive: "C:" };
+      const windows = { portable, processEnv: env };
+
+      expect(
+        refusal(() => assertWindowsWorkspaceLocation(windows, at("C:\\repos\\keiko", "ordinary"))),
+      ).toEqual({ ok: false, failureCode: "workspace-location-unsupported" });
+      expect(
+        refusal(() =>
+          assertWindowsWorkspaceLocation(
+            windows,
+            at("D:\\state\\task-workspaces\\t1", "managed-task"),
+          ),
+        ),
+      ).toEqual({ ok: false, failureCode: "workspace-volume-unsupported" });
+      // The managed worktree on the system volume starts, and so does any run without the broker.
+      expect(() =>
+        assertWindowsWorkspaceLocation(
+          windows,
+          at("c:\\state\\task-workspaces\\t1", "managed-task"),
+        ),
+      ).not.toThrow();
+      expect(() =>
+        assertWindowsWorkspaceLocation(
+          { portable: releaseQualifiedNativeRuntime(root), processEnv: env },
+          at("D:\\repos\\keiko", "ordinary"),
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("names a drive letter or UNC share other than the system drive as another volume", () => {
+    const env = { SystemDrive: "E:" };
+    expect(onAnotherWindowsVolume("E:\\keiko\\state", env)).toBe(false);
+    expect(onAnotherWindowsVolume("e:/keiko/state", env)).toBe(false);
+    expect(onAnotherWindowsVolume("C:\\keiko\\state", env)).toBe(true);
+    expect(onAnotherWindowsVolume("\\\\server\\share\\keiko", env)).toBe(true);
+    expect(onAnotherWindowsVolume("C:\\keiko", {})).toBe(false);
+    expect(onAnotherWindowsVolume("D:\\keiko", {})).toBe(true);
+    // A POSIX path is no Windows host path, so it names no volume.
+    expect(onAnotherWindowsVolume("/tmp/keiko", {})).toBe(false);
   });
 
   // #4068: the verified ripgrep directory is the only entry on the runtime's PATH. A checkout keeps

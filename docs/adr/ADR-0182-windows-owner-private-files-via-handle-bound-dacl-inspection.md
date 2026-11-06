@@ -78,6 +78,17 @@ each file back through the verdict above. A path that cannot be protected or ver
 retain or checkout: the failure propagates through the existing `coding-runtime.session-continuity`
 failure path, the previous entry stays and no staging or copy remains.
 
+A run's own state directory is made owner-private with inheritable entries when the run is prepared,
+before anything is written below it (`opencodeRuntimeComposition.ts`, amended 2026-11-06, #4068).
+Every file the runtime or Keiko later writes there inherits that protection, a fresh run's database
+included; before, those files inherited whatever the state directory's parents granted. A resumed
+run's checked-out copy, protected owner-only by the store, is then handed back to that directory's
+inherited DACL (`icacls /reset`), so it is exactly as private as the run root. Its protected DACL
+had kept a confined Windows run's per-tree SID out: ADR-0043 D18 grants that SID modify on the
+state directory, inheritably, at launch, and a protected child does not inherit it. Every resumed
+run on Windows then ended before its first turn (`runtime-reap-unproven` after an unexpected
+exit). A hand-over that fails refuses the prepare.
+
 ## Consequences
 
 - MCP, native plugins, remote skills, global configuration and external instruction sources become
@@ -88,7 +99,9 @@ failure path, the previous entry stays and no staging or copy remains.
 - Each read set costs one PowerShell process (about 0.2 s warm, 1–2 s cold on the qualified host);
   writes cost two short system-binary processes. Reads are rare (registry and launch-time inputs).
   A retain or checkout runs several of these synchronously: about 3 s on the qualified Windows 11
-  host, measured in the test suite. It runs when a run settles or resumes, not per turn.
+  host, measured in the test suite. It runs when a run settles or resumes, not per turn. Protecting
+  a run's state directory adds the two write processes once per prepared Windows run, and handing a
+  resumed run's copy back to it one more.
 - Enterprise hosts that block PowerShell P/Invoke cannot use these features; the refusal is
   explicit and closed.
 - Other owner-trust checks (trusted toolchain executables, Keiko-created state reported as

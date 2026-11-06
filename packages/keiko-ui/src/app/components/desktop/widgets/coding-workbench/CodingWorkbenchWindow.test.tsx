@@ -1350,9 +1350,7 @@ describe("CodingWorkbenchWindow", () => {
         revision: update.expectedRevision + 1,
       }));
     runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
-    const first = render(
-      <CodingWorkbenchWindow draftKey="coding-workbench-mabc12" selectedRoot="/repo" />,
-    );
+    const first = render(<CodingWorkbenchWindow draftKey="coding" selectedRoot="/repo" />);
     await waitFor(() => expect(readCodingWorkbenchDraft).toHaveBeenCalled());
     await user.type(screen.getByLabelText("Task instructions"), "Investigate the failing test");
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
@@ -1362,11 +1360,9 @@ describe("CodingWorkbenchWindow", () => {
       }),
       actions: liveActions,
     });
-    first.rerender(
-      <CodingWorkbenchWindow draftKey="coding-workbench-mabc12" selectedRoot="/repo" />,
-    );
+    first.rerender(<CodingWorkbenchWindow draftKey="coding" selectedRoot="/repo" />);
     await waitFor(() =>
-      expect(writeCodingWorkbenchDraft).toHaveBeenLastCalledWith("coding-workbench-mabc12", {
+      expect(writeCodingWorkbenchDraft).toHaveBeenLastCalledWith("coding", {
         text: "Investigate the failing test",
         expectedRevision: expect.any(Number) as unknown as number,
       }),
@@ -1379,12 +1375,27 @@ describe("CodingWorkbenchWindow", () => {
       revision: 1,
     });
     runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
-    render(<CodingWorkbenchWindow draftKey="coding-workbench-mabc12" selectedRoot="/repo" />);
+    render(<CodingWorkbenchWindow draftKey="coding" selectedRoot="/repo" />);
     await waitFor(() =>
       expect(screen.getByLabelText("Task instructions")).toHaveValue(
         "Investigate the failing test",
       ),
     );
+  });
+
+  // #4068: a Workbench window restored under an id the server keeps no drafts for stays local, so it
+  // never asks for a draft the route can only refuse.
+  it("keeps the task text local for a window id the draft route does not admit", async () => {
+    const user = userEvent.setup();
+    vi.mocked(readCodingWorkbenchDraft).mockReset().mockResolvedValue({ text: "", revision: 0 });
+    vi.mocked(writeCodingWorkbenchDraft).mockReset();
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: actions() });
+    render(<CodingWorkbenchWindow draftKey="issue-2253-coding-unavailable" selectedRoot="/repo" />);
+    await user.type(screen.getByLabelText("Task instructions"), "Local only");
+
+    expect(screen.getByLabelText("Task instructions")).toHaveValue("Local only");
+    expect(readCodingWorkbenchDraft).not.toHaveBeenCalled();
+    expect(writeCodingWorkbenchDraft).not.toHaveBeenCalled();
   });
 
   it("shows one repository and branch control above the composer", () => {

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
+  isCodingWorkbenchDraftWindowId,
   MAX_DESKTOP_CHAT_INPUT_BYTES,
   MAX_DESKTOP_CHAT_INPUT_CHARS,
   type ChatDraft,
@@ -7,10 +8,6 @@ import {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { invalidRequest, notFound, UiStoreError } from "./errors.js";
 import { withImmediateTransaction } from "./transaction.js";
-
-// A Coding Workbench window id as `nextWindowId` mints it (`coding-workbench-<base36>[-<n>]`). The
-// draft key is a closed, bounded token, never a path or free text.
-const CODING_WORKBENCH_WINDOW_ID = /^coding-workbench-[0-9a-z]{1,16}(?:-[0-9a-z]{1,8})?$/u;
 
 function storedDraft(row: Record<string, unknown> | undefined, label: string): ChatDraft {
   if (row === undefined) return { text: "", revision: 0 };
@@ -81,7 +78,10 @@ export function updateChatDraft(
 }
 
 function assertCodingWorkbenchWindowId(windowId: string): void {
-  if (!CODING_WORKBENCH_WINDOW_ID.test(windowId)) throw notFound("Coding Workbench draft");
+  // The draft key is the Workbench window's own id, a closed bounded token, never a path or free
+  // text. #4068: the earlier shape (`coding-workbench-…`) was one the shell never mints, so every
+  // read and save of the real window was refused.
+  if (!isCodingWorkbenchDraftWindowId(windowId)) throw notFound("Coding Workbench draft");
 }
 
 /**

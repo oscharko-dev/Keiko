@@ -640,7 +640,21 @@ export interface CodingWorkbenchRuntimeReadiness {
    * verified must not let the browser claim one.
    */
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
+  /**
+   * The work locations this deployment's runtime can confine (#4068). Absent reads as both. A
+   * confined Windows runtime reads only what it is granted, and Keiko grants a workspace only as a
+   * Keiko-managed worktree (ADR-0043 D18), so it lists `worktree` alone: the browser then preselects
+   * a new worktree and does not offer the operator's own checkout, which the server would refuse
+   * (`workspace-location-unsupported`).
+   */
+  readonly executionLocations?: readonly CodingWorkbenchExecutionLocation[] | undefined;
 }
+
+/** See `CodingWorkbenchRuntimeReadiness.executionLocations`. */
+export type CodingWorkbenchExecutionLocation = "local" | "worktree";
+
+export const CODING_WORKBENCH_EXECUTION_LOCATIONS: readonly CodingWorkbenchExecutionLocation[] =
+  Object.freeze(["local", "worktree"] as const);
 
 /** See `CodingWorkbenchRuntimeReadiness.toolProfile`. */
 export type CodingWorkbenchRuntimeToolProfile = "native" | "mapped";
@@ -2001,6 +2015,7 @@ const CODING_WORKBENCH_RUNTIME_READINESS_KEYS = [
   "promptInputs",
   "toolProfile",
   "runtimeVersion",
+  "executionLocations",
 ] as const;
 
 export function validateCodingWorkbenchRuntimeReadiness(
@@ -2025,6 +2040,7 @@ export function validateCodingWorkbenchRuntimeReadiness(
     errors,
   );
   validateRuntimeVersion(value, errors);
+  validateExecutionLocations(value.executionLocations, errors);
   // The server may confirm a NARROWER effective mode than the plain request/ceiling clamp (the
   // #2386 mode-change gate anchors it to the live run), but never a wider one: widening past the
   // clamp is the fail-closed contract boundary.
@@ -2041,6 +2057,19 @@ export function validateCodingWorkbenchRuntimeReadiness(
   }
   if (typeof value.runtimeAvailable !== "boolean") errors.push("runtimeAvailable is invalid");
   return result(value, errors);
+}
+
+/** A nonempty list of distinct known work locations, when present. */
+function validateExecutionLocations(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    new Set(value).size !== value.length ||
+    !value.every((location) => isOneOf(location, CODING_WORKBENCH_EXECUTION_LOCATIONS))
+  ) {
+    errors.push("executionLocations is invalid");
+  }
 }
 
 /**

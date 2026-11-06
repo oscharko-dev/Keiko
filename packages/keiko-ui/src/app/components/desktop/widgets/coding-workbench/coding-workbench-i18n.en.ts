@@ -500,6 +500,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "This folder's Git status could not be read, so it may not be a Git repository. Open Git to check it.",
   "codingWorkbench.repository.folderModeHint":
     "Not a Git repository: the agent edits, runs and verifies here, without commits or pushes.",
+  "codingWorkbench.repository.folderModeUnsupported":
+    "On Windows, Keiko runs a coding task only in a new worktree of a Git repository, so it cannot work in this folder. Choose a Git repository.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko may not read this folder: its location is excluded from the read surface for safety, for example because it lies inside a tool's own state directory, or access to it was denied. This is a policy decision, not a missing Git repository. Choose a repository outside that location, or open Git to see the refusal.",
   "codingWorkbench.repository.loadError":
@@ -1360,6 +1362,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The selected model's context window is too small for a coding run (minimum 32,000 tokens; {code}). Keiko could not confirm 32,000 tokens for it. Choose a larger model, or have the gateway declare this model's max_input_tokens, then start again.",
   "codingWorkbench.alert.startRefusedModelVerificationPending":
     "Keiko is still verifying the selected model's context window with the gateway ({code}). On a busy gateway this can take a few minutes; start again once the check has settled.",
+  "codingWorkbench.alert.startRefusedWorkspaceLocation":
+    "On Windows, Keiko runs a coding task only in a new worktree, not in your own checkout or folder ({code}). Choose New local worktree as the work location of a Git repository, then start again.",
+  "codingWorkbench.alert.startRefusedWorkspaceVolume":
+    "Keiko keeps its worktrees on another drive than Windows, where the Windows sandbox cannot run a coding task ({code}). An operator must set KEIKO_STATE_DIR to a folder on the Windows drive, usually C:, and restart Keiko.",
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":
     "The bound repository could not be qualified for a coding run ({code}). Choose the repository again with Browse… so its real path is bound, then start again.",
   "codingWorkbench.alert.actionFailedSupportId": "Support id: {correlationId}.",

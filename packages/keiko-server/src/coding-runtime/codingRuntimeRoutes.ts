@@ -114,6 +114,8 @@ const RUNTIME_REFUSAL_REASONS = [
   "verification-not-evidenced",
   "model-unavailable",
   "workspace-unqualified",
+  "workspace-location-unsupported",
+  "workspace-volume-unsupported",
   "start-abandoned",
   "prompt-allowance-exhausted",
   "envelope-duration-exhausted",
@@ -171,6 +173,8 @@ const RUNTIME_REFUSAL_ERROR_KINDS: Partial<
   "issue-context-unavailable": "unavailable",
   "model-unavailable": "unavailable",
   "workspace-unqualified": "conflict",
+  "workspace-location-unsupported": "conflict",
+  "workspace-volume-unsupported": "conflict",
   "active-run-conflict": "conflict",
   "recovery-required": "conflict",
   "task-drift": "conflict",
@@ -259,7 +263,13 @@ function runChannelRead(
 function failureStatus(failureCode: CodingWorkbenchRuntimeFailureCode): number {
   if (failureCode === "active-run-conflict" || failureCode === "recovery-required") return 409;
   if (failureCode === "authority-resolution-failed") return 403;
-  if (failureCode === "model-unavailable" || failureCode === "workspace-unqualified") return 409;
+  if (
+    failureCode === "model-unavailable" ||
+    failureCode === "workspace-unqualified" ||
+    failureCode === "workspace-location-unsupported" ||
+    failureCode === "workspace-volume-unsupported"
+  )
+    return 409;
   return 400;
 }
 
@@ -594,6 +604,14 @@ function runtimeAvailabilityFacts(
   };
 }
 
+// #4068: a runtime behind the Windows broker confines only a Keiko-managed worktree (ADR-0043 D18),
+// so the browser preselects one and does not offer the operator's own checkout.
+function executionLocationFacts(
+  deps: UiHandlerDeps,
+): Pick<CodingWorkbenchRuntimeReadiness, "executionLocations"> {
+  return deps.codingRuntimeGatewayService === undefined ? {} : { executionLocations: ["worktree"] };
+}
+
 export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const values = ctx.url.searchParams.getAll("requestedMode");
   const parsed = parseCodingWorkbenchRuntimeReadinessRequest({ requestedMode: values[0] });
@@ -616,6 +634,7 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
       effectiveMode: confirmedEffectiveMode(deps, parsed.value.requestedMode, deploymentCeiling),
       ...runtimeAvailabilityFacts(deps),
       ...composedProfileReadiness(deps),
+      ...executionLocationFacts(deps),
     },
   };
 }

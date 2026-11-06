@@ -162,6 +162,7 @@ describe("Coding Workbench translations", () => {
     "codingWorkbench.composer.blocked.commandsLoading",
     "codingWorkbench.event.failure.invalid-intent",
     "codingWorkbench.event.failure.workspace-unqualified",
+    "codingWorkbench.repository.folderModeUnsupported",
   ] as const)("localizes %s in both catalogs", (key) => {
     const en = translateCodingWorkbench("en", key, { name: "n", count: 1, position: 1, total: 1 });
     const de = translateCodingWorkbench("de", key, { name: "n", count: 1, position: 1, total: 1 });
@@ -178,6 +179,28 @@ describe("Coding Workbench translations", () => {
     const key = "codingWorkbench.event.failure.workspace-unqualified";
     expect(translateCodingWorkbench("en", key)).toContain("Select another repository");
     expect(translateCodingWorkbench("de", key)).toContain("Wähle ein anderes Repository");
+  });
+
+  // #4068: a start the Windows broker cannot confine must name what to change, never "try again".
+  it("names the work location or the state drive when Windows refuses a start", () => {
+    for (const locale of ["en", "de"] as const) {
+      const location = translateCodingWorkbench(
+        locale,
+        "codingWorkbench.alert.startRefusedWorkspaceLocation",
+        { code: "C" },
+      );
+      expect(location).toContain(
+        translateCodingWorkbench(locale, "codingWorkbench.repository.locationWorktree"),
+      );
+      expect(location).toContain("(C)");
+      const volume = translateCodingWorkbench(
+        locale,
+        "codingWorkbench.alert.startRefusedWorkspaceVolume",
+        { code: "C" },
+      );
+      expect(volume).toContain("KEIKO_STATE_DIR");
+      expect(volume).toContain("(C)");
+    }
   });
 
   it("keeps the placeholders the command menu fills in both languages", () => {

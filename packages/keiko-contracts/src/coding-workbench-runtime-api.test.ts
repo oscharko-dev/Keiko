@@ -511,6 +511,29 @@ describe("Coding Workbench runtime API contracts", () => {
     ).toMatchObject({ ok: false });
   });
 
+  // #4068: the work locations a runtime can confine are a closed, nonempty set without repeats.
+  it("validates the offered work locations as a closed nonempty set", () => {
+    const readiness = {
+      schemaVersion: "1",
+      requestedMode: "supervised-coding",
+      deploymentCeiling: "supervised-coding",
+      effectiveMode: "supervised-coding",
+      runtimeAvailable: true,
+      runtimeEvidenceClass: "platform-qualified",
+      selectableAgents: ["build"],
+    };
+    for (const executionLocations of [["worktree"], ["local", "worktree"], undefined]) {
+      expect(
+        validateCodingWorkbenchRuntimeReadiness({ ...readiness, executionLocations }),
+      ).toMatchObject({ ok: true });
+    }
+    for (const executionLocations of [[], ["worktree", "worktree"], ["remote"], "worktree"]) {
+      expect(validateCodingWorkbenchRuntimeReadiness({ ...readiness, executionLocations })).toEqual(
+        { ok: false, errors: ["executionLocations is invalid"] },
+      );
+    }
+  });
+
   it("validates the server-computed selectable agents as a closed list that keeps the default", () => {
     const readiness = {
       schemaVersion: "1",

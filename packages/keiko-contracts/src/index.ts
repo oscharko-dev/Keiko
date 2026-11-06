@@ -1460,6 +1460,7 @@ export type {
   CodingWorkbenchRuntimeProjectMemoryRequest,
   CodingWorkbenchRuntimePromptInputs,
   CodingWorkbenchRuntimeToolProfile,
+  CodingWorkbenchExecutionLocation,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeReadinessRequest,
   CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
