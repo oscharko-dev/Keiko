@@ -446,13 +446,13 @@ ceiling is rejected by the judge even when its calibration digest is valid. Use 
 for an explicitly reviewed ruler change; never recalibrate simply to erase a regression or change
 the reference class.
 
-When the reference environment itself no longer exists — the reference Mac's operating system was
-upgraded, so `--recalibrate`, which demands the exact previous environment, can no longer run — the
-reference is re-established, never improvised. It is an owner decision recorded here, dated, with
+When the reference environment itself no longer exists, or the owner explicitly selects a
+replacement reference machine, `--recalibrate` cannot establish the replacement because it demands
+the exact previous environment. Reference re-establishment is an owner decision recorded here, dated, with
 the old and new ceilings side by side so a regression cannot hide in the move, in the same pull
 request as the new evidence:
 
-1. Record the decision and the reason the previous environment is gone (below).
+1. Record the decision and the reason for replacing the previous environment (below).
 2. From a clean checkout at the head under review, with the pinned Node/npm installation: delete
    `docs/release/2952-coding-runtime-calibration.json`, `scripts/coding-runtime-performance-budget.json`
    and `docs/release/2952-coding-runtime-perf-evidence.json` (the one sanctioned removal), then run
