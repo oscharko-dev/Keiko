@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { redact } from "./redaction.js";
+import { isJavaSource } from "./redaction-java.js";
 
 const options = { sourceLanguage: "java" as const, preserveSourceLineBreaks: true };
 
@@ -68,4 +69,41 @@ describe("Java redaction uses the initializer's syntax ownership", () => {
     expect(output).not.toContain("private-second");
     expect(output.split("\n")).toHaveLength(input.split("\n").length);
   });
+});
+
+// java-parser predicts with ALL(*) lookahead, whose work grows superlinearly on some invalid
+// expressions: 400 characters of "x x=y&x=y&…" once took 21 s and 1,600 exhausted a 4 GB heap.
+describe("Java parsing on hostile text", () => {
+  const hostile = (count: number): string => `x ${"x=y&".repeat(count)}`;
+
+  it("refuses within its budget instead of blocking or exhausting memory", () => {
+    const started = performance.now();
+    expect(() => isJavaSource(hostile(100))).toThrow(RangeError);
+    expect(performance.now() - started).toBeLessThan(5_000);
+  }, 30_000);
+
+  it("keeps hostile text closed through the public redactor and recovers for valid Java", () => {
+    const started = performance.now();
+    const output = redact(`${hostile(100)} password=hunter2`, [], {
+      preserveSourceLineBreaks: true,
+    });
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(output).not.toContain("hunter2");
+    const valid = 'class Example { String password = "private-data"; String label = "public"; }';
+    expect(redact(valid, [], options)).toContain('"public"');
+    expect(redact(valid, [], options)).not.toContain("private-data");
+  }, 30_000);
+
+  it("answers the same hostile text again from its last outcome without a second wait", () => {
+    expect(() => isJavaSource(hostile(100))).toThrow(RangeError);
+    const started = performance.now();
+    expect(() => isJavaSource(hostile(100))).toThrow(RangeError);
+    expect(performance.now() - started).toBeLessThan(100);
+  }, 30_000);
+
+  it("still recognises ordinary Java after a refusal", () => {
+    expect(() => isJavaSource(hostile(100))).toThrow(RangeError);
+    expect(isJavaSource("class Example { int value = 1; }")).toBe(true);
+    expect(isJavaSource("Ich nutze Excel für Berichte.")).toBe(false);
+  }, 30_000);
 });

@@ -1,5 +1,9 @@
-import { createRequire } from "node:module";
-import type { CstNode, IToken } from "java-parser";
+import {
+  parseJavaBounded,
+  type JavaCstNode as CstNode,
+  type JavaCstToken as IToken,
+  type JavaCstTree,
+} from "./redaction-java-parser.js";
 import {
   projectSourceText,
   type SourceTextEdit,
@@ -89,14 +93,6 @@ function javaMask(source: string, input: JavaInput, token: JavaToken): Redaction
   return { start, end, replacement: token.kind === "character" ? "*" : "[REDACTED]" + lineBreaks };
 }
 
-const requireJava = createRequire(import.meta.url);
-let parser: typeof import("java-parser") | undefined;
-
-function javaApi(): typeof import("java-parser") {
-  parser ??= requireJava("java-parser") as typeof import("java-parser");
-  return parser;
-}
-
 export class JavaSyntaxRefusal extends Error {
   constructor() {
     super("Java code projection is unavailable");
@@ -104,14 +100,21 @@ export class JavaSyntaxRefusal extends Error {
   }
 }
 
-function javaTree(text: string): CstNode & { comments?: IToken[] } {
-  try {
-    return javaApi().parse(text);
-  } catch (error) {
-    if (error instanceof RangeError) throw error;
-    // Upstream diagnostics contain source/token bodies. Only this body-free refusal escapes.
-    throw new JavaSyntaxRefusal();
+// A parse that ran out of stack, time or memory is a resource refusal, as a stack overflow was
+// before: callers count it as a depth refusal and keep the text closed.
+export class JavaParseLimit extends RangeError {
+  constructor(readonly limit: "depth" | "budget") {
+    super("Java code projection exceeded its parse budget");
+    this.name = "JavaParseLimit";
   }
+}
+
+function javaTree(text: string): JavaCstTree {
+  const outcome = parseJavaBounded(text);
+  if (outcome.kind === "parsed") return outcome.tree;
+  // Upstream diagnostics contain source/token bodies; only these body-free refusals escape.
+  if (outcome.kind === "syntax") throw new JavaSyntaxRefusal();
+  throw new JavaParseLimit(outcome.kind);
 }
 
 function children(node: CstNode): readonly (CstNode | IToken)[] {
@@ -282,7 +285,7 @@ export function projectJavaData(source: string, ports: ProjectionPorts): readonl
     visitJavaFrame(input, frame, ports, pending, literals);
   }
   const spans = javaLiteralSpans(source, input, literals, ports);
-  for (const token of tree.comments ?? []) {
+  for (const token of tree.comments) {
     if (ports.redactPlain(token.image) === token.image) continue;
     spans.push(
       javaMask(source, input, {
@@ -299,8 +302,7 @@ export function projectJavaData(source: string, ports: ProjectionPorts): readonl
 
 export function isJavaSource(source: string): boolean {
   try {
-    const tree = javaTree(javaInput(source).text);
-    const pending = [tree];
+    const pending: CstNode[] = [javaTree(javaInput(source).text)];
     while (pending.length > 0) {
       const node = pending.pop();
       if (node === undefined) break;

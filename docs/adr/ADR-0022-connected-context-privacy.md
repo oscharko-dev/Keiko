@@ -821,6 +821,12 @@ receive their final monotonic sensitivity before one scalar span is emitted. Kno
 private keys and configured secret literals remain unconditional. Malformed inferred code, parser
 stack exhaustion and the existing source-size ceiling produce body-free refusals; a connected source
 with an unavailable projection is omitted through the existing read-failure/uncertainty path.
+Java parses run in a worker thread with a heap ceiling and a deadline that grows with the text
+(2026-11-06, #4212): the pinned java-parser's ALL(*) prediction grows superlinearly on some invalid
+expressions (400 characters took 21 s, 1,600 exhausted a 4 GB heap) and keeps its DFA caches across
+parses. A missed deadline, an exhausted worker heap or a grammar that fails to load is a depth
+refusal like stack exhaustion; the worker is replaced and only node names, token types, offsets and
+images leave it, never a library diagnostic.
 Completed standalone private-key intervals are opaque whitespace only in the parser input, with
 unchanged UTF-16 offsets and CR/LF delimiters. Unconditional masking consumes their original bytes;
 public code after a closed interval remains readable. Unclosed intervals receive no parser exemption.
