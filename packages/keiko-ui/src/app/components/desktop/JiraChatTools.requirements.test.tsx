@@ -5,6 +5,8 @@ import type {
   ChatToolTranscript,
   ChatTurnState,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 import { JiraChatTools } from "./JiraChatTools";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
@@ -105,16 +107,16 @@ describe("knowledge.requirements transcript row", () => {
 });
 
 function knowledgeReceipt(
-  data: Record<string, unknown>,
+  data: CatalogJsonObject,
   args: Record<string, unknown> = {},
   canonicalId = "keiko.knowledge.requirements",
 ): ChatToolExchange {
   const base = requirementsRead({});
-  if (base.result === undefined) throw new Error("Expected tool receipt");
+  if (base.result?.status !== "completed") throw new TypeError("Expected completed tool receipt");
   return {
     ...base,
     call: { ...base.call, arguments: args },
-    result: { ...base.result, toolRef: { canonicalId, contractVersion: 1 }, data },
+    result: { ...base.result, toolRef: createToolRef(canonicalId, 1), data },
   };
 }
 
@@ -233,7 +235,7 @@ describe("durable Knowledge coverage notice", () => {
         ...external,
         result: {
           ...external.result,
-          toolRef: { canonicalId: "external.tool", contractVersion: 1 },
+          toolRef: createToolRef("keiko.external.tool", 1),
         },
       },
     ]);

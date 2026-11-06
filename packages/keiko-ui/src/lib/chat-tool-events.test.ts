@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 import type {
   ChatMessage,
   ChatToolExchange,
@@ -211,7 +212,7 @@ function knowledgeReadReceipt(): ChatToolExchange {
       schemaVersion: 1,
       invocationId: "knowledge-result",
       projectionDigest: null,
-      toolRef: { canonicalId: "keiko.knowledge.documents", contractVersion: 1 },
+      toolRef: createToolRef("keiko.knowledge.documents", 1),
       status: "completed",
       reason: "none",
       effectStarted: false,

@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 import { JiraChatTools } from "./JiraChatTools";
@@ -13,7 +14,7 @@ function failedReview(failureStage: string, data: Record<string, unknown> = {}):
       schemaVersion: 1,
       invocationId: "review-result",
       projectionDigest: null,
-      toolRef: { canonicalId: "keiko.knowledge.review", contractVersion: 2 },
+      toolRef: createToolRef("keiko.knowledge.review", 2),
       status: "failed",
       reason: "provider-reported-error",
       effectStarted: false,
@@ -133,7 +134,7 @@ describe("source-checked Knowledge review failure", () => {
   );
 
   it.each([
-    ["external.tool", 2],
+    ["keiko.external.tool", 2],
     ["keiko.knowledge.review", 1],
   ] as const)(
     "does not trust %s contract version %s as the source-checked review contract",
@@ -143,7 +144,7 @@ describe("source-checked Knowledge review failure", () => {
       expect(
         knowledgeReviewFailureNotice({
           ...exchange,
-          result: { ...exchange.result, toolRef: { canonicalId, contractVersion } },
+          result: { ...exchange.result, toolRef: createToolRef(canonicalId, contractVersion) },
         }),
       ).toBeUndefined();
     },

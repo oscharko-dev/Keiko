@@ -711,7 +711,7 @@ describe("actual semantic review request source-bound schema", () => {
           ],
         }),
         modelPortFactory: () => ({
-          call: (request: GatewayCallRequest) => {
+          call: (request: GatewayCallRequest): Promise<NormalizedResponse> => {
             requests.push(request);
             return Promise.resolve(response({ complete: true, findings: [] }));
           },

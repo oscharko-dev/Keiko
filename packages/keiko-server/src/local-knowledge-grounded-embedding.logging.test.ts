@@ -78,7 +78,9 @@ function fixtureConfig(): GatewayConfig {
     modelId,
     baseUrl: "https://pod-embedding.example.invalid/v1",
     apiKey: "fixture-secret",
+    timeoutMs: 1000,
     maxRetries: 0,
+    retryBaseDelayMs: 1,
   }));
   const provider = providers[0];
   if (provider === undefined) throw new TypeError("Missing chat provider fixture");
