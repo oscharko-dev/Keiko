@@ -1072,6 +1072,26 @@ function itemNotFound(): Error & { status: number } {
 }
 
 describe("createKeychainCommandRunner", () => {
+  it("runs `security` without a controlling terminal, so a piped key is what it reads", () => {
+    // `getpass` prefers the controlling terminal over stdin; a foreground terminal launch would
+    // otherwise wait there and seal credentials with the fallback keyfile. The stand-in refuses
+    // unless it leads a session of its own (Linux: session id; elsewhere: process group).
+    const fakeDir = mkdtempSync(join(tmpdir(), "keiko-secret-vault-keychain-"));
+    try {
+      const leader = join(fakeDir, "security");
+      writeFileSync(
+        leader,
+        `#!/bin/sh\nif [ -r /proc/$$/stat ]; then set -- $(cat /proc/$$/stat); leader=$6; else leader=$(ps -o pgid= -p $$ | tr -d " "); fi\n[ "$leader" = "$$" ] || exit 9\ncat\n`,
+      );
+      chmodSync(leader, 0o700);
+      const run = createKeychainCommandRunner(leader, 30_000);
+
+      expect(run(["add-generic-password", "-w"], "key\nkey\n")).toBe("key\nkey\n");
+    } finally {
+      rmSync(fakeDir, { recursive: true, force: true });
+    }
+  });
+
   it("gives up on a keychain that never answers instead of waiting for it", () => {
     // Stands in for `security` blocked on a macOS unlock dialog. Against an unbounded spawn this
     // waits the full 30s and the test fails on the suite timeout.

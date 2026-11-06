@@ -297,6 +297,23 @@ describe("writeMacosKeychainSecret", () => {
     expect(readFileSync(join(dir, "stdin"), "utf8")).toContain(secret);
   });
 
+  it("writes from a session without a controlling terminal, so the piped key is what it reads", () => {
+    // `security` asks with `getpass`, which prefers the controlling terminal over stdin: under a
+    // foreground terminal launch it would wait there and time out. The stand-in refuses unless it
+    // leads a session of its own (Linux: session id; elsewhere: process group).
+    const executable = fakeSecurity(
+      `if [ -r /proc/$$/stat ]; then set -- $(cat /proc/$$/stat); leader=$6; else leader=$(ps -o pgid= -p $$ | tr -d " "); fi\n[ "$leader" = "$$" ] || exit 9\ncat > /dev/null`,
+    );
+
+    expect(
+      writeMacosKeychainSecret("svc", "acct", "secret", {
+        executable,
+        platform: "darwin",
+        timeoutMs: 30_000,
+      }),
+    ).toBe(true);
+  });
+
   it("updates an existing item rather than being refused as a duplicate", () => {
     // Without `-U`, `security` rejects an add whose item already exists (status 45, measured), so
     // the documented "replace an undecodable stored key" path would silently never replace.

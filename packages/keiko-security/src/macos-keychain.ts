@@ -348,6 +348,21 @@ export function readMacosKeychainSecret(
 }
 
 /**
+ * Spawn options that start `security` in a session of its own, without a controlling terminal.
+ *
+ * `security` asks for a password with `getpass`, which reads the controlling terminal before
+ * stdin. Launched from a terminal in the foreground, a write would wait there for a person instead
+ * of reading the piped key, time out, and leave the caller on its weaker key tier; a later detached
+ * launch could then create a different keychain key and prefer it. On POSIX, `detached` makes the
+ * child a session leader (`setsid`), so it has no terminal to read. Node's synchronous spawns honour
+ * the option (measured on Node 24 and 26: the child leads its own process group), though their type
+ * declarations omit it, hence a spread rather than a literal property.
+ */
+export const KEYCHAIN_SPAWN_WITHOUT_TERMINAL: { readonly detached: true } = Object.freeze({
+  detached: true,
+});
+
+/**
  * Stores `secret` as the generic password for `service`/`account`. Never throws; `false` means the
  * caller must fall through to its next key tier.
  */
@@ -380,6 +395,7 @@ export function writeMacosKeychainSecret(
       {
         input: `${secret}\n${secret}\n`,
         stdio: ["pipe", "ignore", "ignore"],
+        ...KEYCHAIN_SPAWN_WITHOUT_TERMINAL,
         timeout: spawn.timeout,
         killSignal: spawn.killSignal,
       },

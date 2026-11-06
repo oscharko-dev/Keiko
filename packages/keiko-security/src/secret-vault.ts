@@ -56,6 +56,7 @@ import {
   emitKeychainFallback,
   KEYCHAIN_SPAWN_TIMEOUT_MS,
   emitKeychainWithheld,
+  KEYCHAIN_SPAWN_WITHOUT_TERMINAL,
   keychainItemNotFound,
   keychainWithheldReason,
   MACOS_SECURITY_EXECUTABLE,
@@ -458,6 +459,9 @@ export function createKeychainCommandRunner(
       encoding: "utf8",
       ...(input === undefined ? {} : { input }),
       stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
+      // Without a controlling terminal: `getpass` would otherwise read a foreground launch's
+      // terminal instead of the piped key (see the constant).
+      ...KEYCHAIN_SPAWN_WITHOUT_TERMINAL,
       timeout: timeoutMs,
       killSignal: "SIGKILL",
     });
