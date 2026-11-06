@@ -1,5 +1,8 @@
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { emitServerDiagnostic } from "../diagnostics-log.js";
+
 import {
   createSecureWorkspaceTextReadPort,
   type SecureWorkspaceTextReadPort,
@@ -9,6 +12,7 @@ import {
   createPortableSecureWorkspaceReadVerifier,
   resolvePortableSecureWorkspaceReadBinding,
   type PortableSecureWorkspaceReadPlatformInspection,
+  type PortableSecureWorkspaceReadVerificationOutcome,
   type PortableSecureWorkspaceReadVerifierDeps,
 } from "./secureWorkspaceTextReadPortable.js";
 import {
@@ -70,21 +74,37 @@ function verifierDeps(
       proveImmutableResourceTree: () =>
         provePortableImmutableResourceTree(runtime.installRoot, artifactTargetFor(runtime.target)),
       platform: inspection,
+      onVerification: recordCompleteVerification,
     };
   }
   return {
     proveImmutableResourceTree: () => Promise.resolve(true),
     platform: evaluationInspection(inspection),
+    onVerification: recordCompleteVerification,
   };
+}
+
+// A complete verification is the rare event worth a line (the unchanged helper is served from its
+// identity-bound verdict in between); a refusal already ends the read with its own closed record.
+function recordCompleteVerification(outcome: PortableSecureWorkspaceReadVerificationOutcome): void {
+  if (outcome !== "verified-complete") return;
+  emitServerDiagnostic(undefined, {
+    correlationId: UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.workspace-read",
+    source: "packaged-secure-workspace-text-read.verify",
+    errorClass: "SecureReadHelperVerification",
+    message: "secure-read-helper-verified",
+    diagnosticOutcome: "routine",
+  });
 }
 
 function evaluationInspection(
   inspection: PortableSecureWorkspaceReadPlatformInspection,
 ): PortableSecureWorkspaceReadPlatformInspection {
+  const statIdentity = inspection.statIdentity?.bind(inspection);
   return Object.freeze({
-    ...(inspection.statIdentity === undefined
-      ? {}
-      : { statIdentity: (executable: string) => inspection.statIdentity!(executable) }),
+    ...(statIdentity === undefined ? {} : { statIdentity }),
     inspectPath: (resourceRoot: string, executable: string) =>
       inspection.inspectPath(resourceRoot, executable),
     openReadSameIdentity: (executable: string, maximumBytes: number) =>

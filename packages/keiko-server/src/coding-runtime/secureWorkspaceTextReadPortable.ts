@@ -1,3 +1,9 @@
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import { createHash } from "node:crypto";
 import { isAbsolute, resolve, win32 } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -88,6 +94,8 @@ export interface PortableSecureWorkspaceReadVerifierDeps {
   readonly platform: PortableSecureWorkspaceReadPlatformInspection;
   /** Test seam: the clock that bounds how long one complete verification vouches. */
   readonly now?: (() => number) | undefined;
+  /** Where a verification that threw is recorded; the process sink when absent. */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
   /** Observes the closed outcome of each point-of-use check, never a path or a digest. */
   readonly onVerification?:
     ((outcome: PortableSecureWorkspaceReadVerificationOutcome) => void) | undefined;
@@ -554,29 +562,64 @@ async function verifyOnce(
   deps: PortableSecureWorkspaceReadVerifierDeps,
   verdict: { fingerprint?: string; provenAt: number },
 ): Promise<PortableSecureWorkspaceReadVerificationOutcome> {
-  const now = deps.now ?? Date.now;
   try {
     if (!isDeepStrictEqual(binding.artifact, artifact)) return "refused";
-    const current = await currentFingerprint(binding, deps);
-    if (
-      current !== undefined &&
-      current === verdict.fingerprint &&
-      now() - verdict.provenAt < PORTABLE_SECURE_WORKSPACE_READ_VERDICT_TTL_MS &&
-      (await pathIsPlain(binding, artifact, deps))
-    )
-      return "verified-cached";
+    if (await cachedVerdictHolds(binding, artifact, deps, verdict)) return "verified-cached";
     delete verdict.fingerprint;
     const proven = await verifyAtPointOfUse(binding, artifact, deps);
     if (proven === undefined) return "refused";
-    if (proven !== "" && proven === (await currentFingerprint(binding, deps))) {
-      verdict.fingerprint = proven;
-      verdict.provenAt = now();
-    }
+    await rememberVerdict(binding, deps, verdict, proven);
     return "verified-complete";
-  } catch {
+  } catch (error) {
     delete verdict.fingerprint;
+    recordVerificationFailure(deps.diagnostics, error);
     return "refused";
   }
+}
+
+// The read is refused either way; this keeps the cause: error class, Keiko frames and cause chain,
+// never a path, a digest or the error's own text.
+function recordVerificationFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    diagnostics,
+    serverDiagnosticFromError({
+      correlationId: UNKNOWN_CORRELATION_ID,
+      operation: "coding-runtime.workspace-read",
+      source: "secure-workspace-text-read-portable.verify",
+      error,
+      summary: "secure-read-helper-verification-failed",
+      redact: () => "secure-read-helper-verification-failed",
+    }),
+  );
+}
+
+async function cachedVerdictHolds(
+  binding: PortableSecureWorkspaceReadBinding,
+  artifact: SecureWorkspaceTextReadArtifact,
+  deps: PortableSecureWorkspaceReadVerifierDeps,
+  verdict: { fingerprint?: string; provenAt: number },
+): Promise<boolean> {
+  const now = deps.now ?? Date.now;
+  if (verdict.fingerprint === undefined) return false;
+  if (now() - verdict.provenAt >= PORTABLE_SECURE_WORKSPACE_READ_VERDICT_TTL_MS) return false;
+  const current = await currentFingerprint(binding, deps);
+  return current === verdict.fingerprint && (await pathIsPlain(binding, artifact, deps));
+}
+
+// A verdict is kept only when the file that was hashed is still, by metadata, the file in place:
+// anything swapped in between hashing and now leaves no verdict, so the next read verifies again.
+async function rememberVerdict(
+  binding: PortableSecureWorkspaceReadBinding,
+  deps: PortableSecureWorkspaceReadVerifierDeps,
+  verdict: { fingerprint?: string; provenAt: number },
+  proven: string,
+): Promise<void> {
+  if (proven === "" || proven !== (await currentFingerprint(binding, deps))) return;
+  verdict.fingerprint = proven;
+  verdict.provenAt = (deps.now ?? Date.now)();
 }
 
 async function currentFingerprint(

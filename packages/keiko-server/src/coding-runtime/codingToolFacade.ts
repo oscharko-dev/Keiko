@@ -8,6 +8,8 @@ import {
 } from "../gitDelivery/verifiedCommitTypes.js";
 import { isCodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import { emitToolHandlerFailure } from "./codingToolFacadeFailure.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import {
   isCodingRuntimeGitResult,
   type CodingRuntimeGitResult,
@@ -185,6 +187,8 @@ export interface CodingToolFacadeCreateOptions extends CodingToolFacadeOptions {
    * execution (descriptor, disposition, budget, tool-catalog.* lifecycle log lines). Actions the
    * catalog does not cover dispatch exactly as before -- no behaviour change, no log line. */
   readonly catalogBridge?: CanonicalCatalogFacadeBridge | undefined;
+  /** Where a governed handler's thrown failure is recorded; the process sink when absent. */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 export function createCodingToolFacade(
@@ -198,6 +202,7 @@ export function createCodingToolFacade(
     invocationRegistry: options.invocationRegistry,
     requireInvocationRegistryForEdits: options.requireInvocationRegistryForEdits === true,
     catalogBridge: options.catalogBridge,
+    diagnostics: options.diagnostics,
     onToolSettled: options.onToolSettled,
     observeEditOutcome: options.observeEditOutcome,
     inFlight: { count: 0 },
@@ -215,6 +220,7 @@ interface ExecutionContext {
   readonly invocationRegistry: CodingToolInvocationRegistry | undefined;
   readonly requireInvocationRegistryForEdits: boolean;
   readonly catalogBridge: CanonicalCatalogFacadeBridge | undefined;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly onToolSettled: CodingToolFacadeOptions["onToolSettled"];
   readonly observeEditOutcome: ((outcome: CodingToolEditOutcome) => void) | undefined;
   readonly inFlight: { count: number };
@@ -306,13 +312,7 @@ function routeParsed(
     return executeCatalogRequest(context, input, request);
   }
   context.catalogBridge?.recordUnbound(request, input);
-  return executeAdmitted(
-    context.ports,
-    input,
-    request,
-    context.invocationRegistry,
-    context.requireInvocationRegistryForEdits,
-  );
+  return executeAdmitted(context.ports, input, request, context);
 }
 
 // F5 (#3873): the run's refusal bound counts the edit as the model received it, whatever path
@@ -409,18 +409,24 @@ async function executeAdmitted(
   ports: CodingToolFacadePorts,
   input: CodingToolFacadeInput,
   request: CodingToolActionRequest,
-  invocationRegistry: CodingToolInvocationRegistry | undefined,
-  requireInvocationRegistryForEdits: boolean,
+  options: Pick<
+    ExecutionContext,
+    "invocationRegistry" | "requireInvocationRegistryForEdits" | "diagnostics"
+  >,
 ): Promise<CodingToolResult> {
+  const { invocationRegistry, requireInvocationRegistryForEdits, diagnostics } = options;
   const admission = ports.authority.admit(input.capability, request);
   if (!admission.ok) return empty("denied");
   if (input.signal?.aborted === true) return empty("cancelled");
   if (!admission.mutationGuard.check()) return empty("denied");
   if (request.action === "edit" && invocationRegistry !== undefined) {
-    return executeStagedEdit(ports, input, request, admission, invocationRegistry);
+    return executeStagedEdit(ports, input, request, admission, {
+      registry: invocationRegistry,
+      diagnostics,
+    });
   }
   if (request.action === "edit" && requireInvocationRegistryForEdits) return empty("denied");
-  return executePlainAction(ports, input, request, admission);
+  return executePlainAction(ports, input, request, admission, diagnostics);
 }
 
 // F8 (#3413): every non-edit action's delegate call, optionally resolved as a catalog binding and
@@ -431,6 +437,7 @@ async function executePlainAction(
   input: CodingToolFacadeInput,
   request: CodingToolActionRequest,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<CodingToolResult> {
   input.onDelegateStarted?.();
   const runDelegate = (): Promise<unknown> =>
@@ -438,7 +445,8 @@ async function executePlainAction(
   try {
     const outcome = await runDelegate();
     return project(request, outcome);
-  } catch {
+  } catch (error) {
+    emitToolHandlerFailure(diagnostics, request.actionId, error);
     return projected("failed");
   }
 }
@@ -448,8 +456,12 @@ async function executeStagedEdit(
   input: CodingToolFacadeInput,
   request: Extract<CodingToolActionRequest, { readonly action: "edit" }>,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
-  registry: CodingToolInvocationRegistry,
+  staging: {
+    readonly registry: CodingToolInvocationRegistry;
+    readonly diagnostics: ServerDiagnosticSink | undefined;
+  },
 ): Promise<CodingToolResult> {
+  const { registry, diagnostics } = staging;
   const binding = admission.binding ?? admission.mutationGuard.binding;
   const payload = typeof input.body === "string" ? Buffer.from(input.body, "utf8") : input.body;
   if (binding === undefined) return wipeAndReturn(payload, empty("denied"));
@@ -470,7 +482,7 @@ async function executeStagedEdit(
   const claimed = registry.take(identity);
   if (claimed.kind !== "ready") return wipeAndReturn(payload, empty("denied"));
   try {
-    return await executeClaimedEdit(ports, input, request, admission, claimed);
+    return await executeClaimedEdit(ports, input, request, admission, { claimed, diagnostics });
   } finally {
     registry.settle(identity);
   }
@@ -488,8 +500,12 @@ async function executeClaimedEdit(
   input: CodingToolFacadeInput,
   request: Extract<CodingToolActionRequest, { readonly action: "edit" }>,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
-  claimed: Extract<CodingToolInvocationTakeResult, { readonly kind: "ready" }>,
+  staged: {
+    readonly claimed: Extract<CodingToolInvocationTakeResult, { readonly kind: "ready" }>;
+    readonly diagnostics: ServerDiagnosticSink | undefined;
+  },
 ): Promise<CodingToolResult> {
+  const { claimed, diagnostics } = staged;
   const signal =
     input.signal === undefined ? claimed.signal : AbortSignal.any([input.signal, claimed.signal]);
   if (isAborted(signal)) return empty("cancelled");
@@ -499,7 +515,8 @@ async function executeClaimedEdit(
   try {
     const result = await runDelegate();
     return isAborted(signal) ? empty("cancelled") : project(request, result);
-  } catch {
+  } catch (error) {
+    emitToolHandlerFailure(diagnostics, request.actionId, error);
     return projected("failed");
   }
 }

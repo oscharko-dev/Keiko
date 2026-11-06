@@ -190,6 +190,30 @@ function askContentKey(runId: string, event: SidecarPermissionEvent): string | u
     .digest("hex");
 }
 
+// A waiter that joined an open prompt: it gets the prompt's decision, or its own cancellation when
+// its caller goes away first, without disturbing the prompt or the other waiters.
+function joinedWaiter(
+  waiters: Set<(outcome: OpenCodeV2ApprovalOutcome) => void>,
+  joinerSignal: AbortSignal,
+): Promise<OpenCodeV2ApprovalOutcome> {
+  return new Promise<OpenCodeV2ApprovalOutcome>((joined) => {
+    const finish = (outcome: OpenCodeV2ApprovalOutcome): void => {
+      joinerSignal.removeEventListener("abort", onJoinerAbort);
+      waiters.delete(finish);
+      joined(outcome);
+    };
+    const onJoinerAbort = (): void => {
+      finish("cancelled");
+    };
+    if (joinerSignal.aborted) {
+      finish("cancelled");
+      return;
+    }
+    waiters.add(finish);
+    joinerSignal.addEventListener("abort", onJoinerAbort, { once: true });
+  });
+}
+
 // Puts the ask to the human and settles it once: the decision, the one human-decision wait, or the
 // caller going away, whichever comes first.
 function humanDecision(
@@ -211,19 +235,7 @@ function humanDecision(
       waiters.clear();
     };
     const join = (joinerSignal: AbortSignal): Promise<OpenCodeV2ApprovalOutcome> =>
-      new Promise<OpenCodeV2ApprovalOutcome>((joined) => {
-        const finish = (outcome: OpenCodeV2ApprovalOutcome): void => {
-          joinerSignal.removeEventListener("abort", onJoinerAbort);
-          waiters.delete(finish);
-          joined(outcome);
-        };
-        const onJoinerAbort = (): void => {
-          finish("cancelled");
-        };
-        if (joinerSignal.aborted) return finish("cancelled");
-        waiters.add(finish);
-        joinerSignal.addEventListener("abort", onJoinerAbort, { once: true });
-      });
+      joinedWaiter(waiters, joinerSignal);
     const onAbort = (): void => {
       settle("cancelled");
     };
@@ -269,6 +281,23 @@ function pendingForRun(pending: ReadonlyMap<string, Pending>, runId: string): nu
   return count;
 }
 
+// Body-free bookkeeping of the registry's two new decisions: counts nothing, names no ask.
+function recordAskBookkeeping(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  message: "approval-ask-coalesced" | "approval-ask-run-bound-refused",
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.opencode-composition",
+    source: "opencode.permission",
+    errorClass: "ApprovalAskBookkeeping",
+    message,
+    diagnosticOutcome: message === "approval-ask-coalesced" ? "routine" : "request-refused",
+  });
+}
+
 // Asks one human decision for an ask: it joins the open prompt for the same thing, or opens its own
 // within the per-run and global bounds, or is `unavailable`.
 function askHuman(
@@ -284,12 +313,15 @@ function askHuman(
   const { runId, onPermission, signal } = input;
   if (state.pending.has(event.requestId)) return "unavailable";
   const open = openPromptFor(state.pending, runId, event);
-  if (open !== undefined) return open.join(signal);
-  if (
-    state.pending.size >= MAX_PENDING_ASKS ||
-    pendingForRun(state.pending, runId) >= MAX_PENDING_ASKS_PER_RUN
-  )
+  if (open !== undefined) {
+    recordAskBookkeeping(diagnostics, runId, "approval-ask-coalesced");
+    return open.join(signal);
+  }
+  if (pendingForRun(state.pending, runId) >= MAX_PENDING_ASKS_PER_RUN) {
+    recordAskBookkeeping(diagnostics, runId, "approval-ask-run-bound-refused");
     return "unavailable";
+  }
+  if (state.pending.size >= MAX_PENDING_ASKS) return "unavailable";
   return humanDecision(state.pending, runId, event, onPermission, signal, diagnostics);
 }
 

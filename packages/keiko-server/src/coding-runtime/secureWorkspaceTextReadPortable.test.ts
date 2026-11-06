@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type, @typescript-eslint/no-non-null-assertion, @typescript-eslint/require-await, @typescript-eslint/unbound-method */
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
@@ -712,6 +713,36 @@ describe("portable secure workspace-read verdict reuse", () => {
     await expect(verifier.verify(binding().artifact)).resolves.toBe(false);
     await expect(verifier.verify(binding().artifact)).resolves.toBe(true);
     expect(deps.platform.verifySignature).toHaveBeenCalledTimes(3);
+  });
+
+  it("refuses a verification that threw and records its class without the error text", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    class HelperProbeBoom extends Error {}
+    const deps = {
+      ...cachingDeps({ now: 0 }, { current: metadata() }),
+      diagnostics: {
+        record: (record: ServerDiagnosticRecord): void => {
+          records.push(record);
+        },
+      },
+    };
+    vi.mocked(deps.platform.openReadSameIdentity).mockRejectedValueOnce(
+      new HelperProbeBoom("PRIVATE_PATH_CANARY /Users/example/helper"),
+    );
+    const verifier = createPortableSecureWorkspaceReadVerifier(binding(), deps);
+
+    await expect(verifier.verify(binding().artifact)).resolves.toBe(false);
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "unknown-correlation-id",
+        operation: "coding-runtime.workspace-read",
+        errorClass: "HelperProbeBoom",
+        message: "secure-read-helper-verification-failed",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("PRIVATE_PATH_CANARY");
+    // The refusal left no verdict: the next read verifies completely and succeeds.
+    await expect(verifier.verify(binding().artifact)).resolves.toBe(true);
   });
 
   it("never caches without a stat and never trusts a different artifact", async () => {

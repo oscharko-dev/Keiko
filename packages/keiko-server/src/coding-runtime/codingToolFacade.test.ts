@@ -7,7 +7,11 @@ import {
 import { CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  defaultServerDiagnosticSink,
+  type ServerDiagnosticRecord,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import { VERIFICATION_RUNNER_ERROR_CODES } from "../editor/verificationRunnerErrors.js";
 import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
 import {
@@ -1843,7 +1847,7 @@ describe("CodingToolFacade", () => {
       reasonCode,
       evidence: [{ kind: "governed-delegate", code: reasonCode }],
       // Audit 2026-11-06 finding 6: every closed read refusal tells the model its next step.
-      guidance: expect.stringMatching(/\S{3,}/u),
+      guidance: expect.stringMatching(/\S{3,}/u) as string,
     });
   });
 
@@ -2786,4 +2790,93 @@ it("keeps an observer technical failure outside the delegate catch and never exe
     }),
   ).rejects.toBe(failure);
   expect(ports.delegate.execute).not.toHaveBeenCalled();
+});
+
+// Audit 2026-11-06 finding 12: a handler that threw was answered `failed` with no trace.
+describe("a governed handler that throws", () => {
+  class HandlerBoom extends Error {}
+  const DISCARDED = "HANDLER_SECRET_CANARY";
+
+  function recorder(): { records: ServerDiagnosticRecord[]; sink: ServerDiagnosticSink } {
+    const records: ServerDiagnosticRecord[] = [];
+    return {
+      records,
+      sink: {
+        record: (record: ServerDiagnosticRecord): void => {
+          records.push(record);
+        },
+      },
+    };
+  }
+
+  function expectRecorded(records: readonly ServerDiagnosticRecord[]): void {
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: "tool-call_throw",
+      operation: "coding-runtime.tool-bridge",
+      source: "coding-tool-facade.handler",
+      errorClass: "HandlerBoom",
+      message: "tool-facade-failed",
+    });
+    expect(JSON.stringify(records)).not.toContain(DISCARDED);
+  }
+
+  it("records a plain action failure under the call's correlation and still answers failed", async () => {
+    const { records, sink } = recorder();
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.reject(new HandlerBoom(DISCARDED)));
+    const subject = createCodingToolFacade(ports, { diagnostics: sink });
+
+    await expect(
+      subject.execute({
+        body: JSON.stringify({
+          action: "read",
+          relativePath: "src/example.ts",
+          actionId: "tool:call_throw",
+          idempotencyKey: "idempotency-throw",
+        }),
+        capability,
+      }),
+    ).resolves.toMatchObject({ status: "failed" });
+    expectRecorded(records);
+  });
+
+  it("records a claimed edit failure and still answers failed", async () => {
+    const { records, sink } = recorder();
+    const ports = facade();
+    ports.authority.admit = vi.fn((): ReturnType<CodingToolAuthorityPort["admit"]> => ({
+      ok: true as const,
+      mutationGuard: { check: (): true => true },
+      binding: {
+        runId: "run-1",
+        envelopeDigest: "e".repeat(64),
+        workspaceId: "workspace-1",
+        workspaceRootDigest: "f".repeat(64),
+        expiresAt: "2030-01-01T00:00:00.000Z",
+      },
+    }));
+    ports.delegate.execute = vi.fn(() => Promise.reject(new HandlerBoom(DISCARDED)));
+    const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+    const subject = createCodingToolFacade(ports, {
+      invocationRegistry: registry,
+      requireInvocationRegistryForEdits: true,
+      diagnostics: sink,
+    });
+    try {
+      await expect(
+        subject.execute({
+          body: JSON.stringify({
+            action: "edit",
+            changeset,
+            actionId: "tool:call_throw",
+            idempotencyKey: "idempotency-throw",
+          }),
+          capability,
+        }),
+      ).resolves.toMatchObject({ status: "failed" });
+      expectRecorded(records);
+    } finally {
+      registry.dispose();
+    }
+  });
 });

@@ -16194,6 +16194,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      byteBoundCut: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      keptLines: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
@@ -20924,6 +20934,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["none", "forwarded", "discarded"],
       },
+      toolCallIdsNormalized: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -23588,6 +23603,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: ["none", "forwarded", "discarded"],
+      },
+      toolCallIdsNormalized: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",

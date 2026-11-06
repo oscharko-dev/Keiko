@@ -1,3 +1,4 @@
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -378,11 +379,13 @@ describe("CodingToolInvocationRegistry (Issue #2332)", () => {
 
   it("recovers identity capacity after expiry yet never lets an evicted identity run again", () => {
     let now = 0;
-    const evictions: { evictedCount: number; filteredCount: number }[] = [];
+    const notices: ServerDiagnosticRecord[] = [];
     const registry = createCodingToolInvocationRegistry({
       now: () => now,
-      onIdentitiesEvicted: (event): void => {
-        evictions.push(event);
+      diagnostics: {
+        record: (record): void => {
+          notices.push(record);
+        },
       },
     });
     const completed = (index: number): StagedEditRequest =>
@@ -405,7 +408,14 @@ describe("CodingToolInvocationRegistry (Issue #2332)", () => {
     expect(registry.stage(completed(0))).toEqual({ kind: "replayed" });
     const next = stagedEdit({ actionId: "completed-2048", idempotencyKey: "completed-key-2048" });
     expect(registry.stage(next)).toEqual({ kind: "staged" });
-    expect(evictions).toEqual([{ evictedCount: 2_048, filteredCount: 2_048 }]);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      correlationId: "run-2332",
+      operation: "coding-runtime.tool-invocation",
+      message: "tool-invocation-identities-evicted",
+      code: "evicted=2048:filtered=2048",
+    });
+    expect(JSON.stringify(notices)).not.toContain("completed-");
     // Replay of an evicted identity is still refused, never executed, and so is a reuse of only
     // its action id or only its idempotency key.
     for (const index of [0, 1, 1_000, 2_047]) {

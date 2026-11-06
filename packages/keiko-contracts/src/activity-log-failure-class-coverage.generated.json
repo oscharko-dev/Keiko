@@ -17977,6 +17977,12 @@
               "required": false
             },
             {
+              "name": "byteBoundCut",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "causeChain",
               "type": "string-array",
               "dataClass": "error-kind",
@@ -17986,6 +17992,12 @@
               "name": "frames",
               "type": "string-array",
               "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "keptLines",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {
@@ -24766,6 +24778,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "toolCallIdsNormalized",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             }
           ],
           "evidenceClasses": [
@@ -28284,6 +28302,12 @@
               "name": "requestId",
               "type": "string",
               "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "toolCallIdsNormalized",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             }
           ],

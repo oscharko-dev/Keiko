@@ -6231,6 +6231,63 @@ describe("private OpenCode tool bridge", () => {
     }
   });
 
+  // Audit 2026-11-06 finding 12: every transport recognizer parsed the same body again (twice each).
+  it("parses a governed tool request body once for all transport recognizers", async () => {
+    const facade: CodingToolFacade = {
+      execute: vi.fn(() => Promise.resolve(completed)),
+    };
+    const fixture = await startBridgeFixture(facade);
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      const bodyText = toolBody("call_parse_once");
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: bodyText,
+        }),
+      ).resolves.toMatchObject({ status: 200 });
+      const bodyParses = parse.mock.calls.filter(([text]) => text === bodyText).length;
+      // One generic parse, the request parse of the admission deadline and of the dispatch.
+      expect(bodyParses).toBeLessThanOrEqual(1 + 2);
+    } finally {
+      parse.mockRestore();
+      await fixture.stop();
+    }
+  });
+
+  it("answers a body that is not JSON with 400 and records only that it happened", async () => {
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+    });
+    try {
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: "{not json PRIVATE_BODY_CANARY",
+        }),
+      ).resolves.toMatchObject({ status: 400 });
+      expect(facade.execute).not.toHaveBeenCalled();
+      expect(records).toEqual([
+        expect.objectContaining({
+          correlationId: "tool-bridge-unparsed-action",
+          operation: "coding-runtime.tool-bridge",
+          message: "tool-bridge-request-body-invalid",
+        }),
+      ]);
+      expect(JSON.stringify(records)).not.toContain("PRIVATE_BODY_CANARY");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("settles facade busy and rejected calls as failed", async () => {
     const activity = activityRecorder();
     const facade: CodingToolFacade = {

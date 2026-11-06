@@ -10,6 +10,8 @@ import type {
   EditorAgentChangeset,
   EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import type { WorkspacePathDiscoveryResult } from "@oscharko-dev/keiko-contracts/runtime/workspace";
+import { codingToolDiscoveryText } from "./codingToolIpc.js";
 import {
   EDITOR_AGENT_CONFLICT_CODES,
   EDITOR_AGENT_FAILURE_CODES,
@@ -31,6 +33,7 @@ import type { CodingRuntimeEditorMutationLeaseRegistration } from "./codingRunti
 import type { CodingToolMutationGuard, MaterializedPatchCharge } from "./codingToolFacadePorts.js";
 import {
   createCodingToolReadEditPorts,
+  discoveryReadResult,
   NO_ACTIVE_SESSION_MESSAGE,
   WORKSPACE_DISCOVERY_REFUSAL_CODES,
 } from "./codingToolReadEditPorts.js";
@@ -1362,10 +1365,16 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
   // reads a small file whole", and a window past the byte bound used to be refused instead of cut.
   it("cuts an oversized window to its largest whole-line prefix and reports where to resume", async () => {
     const text = "Repository convention.\n".repeat(3_000);
+    const events: ServerLogEvent[] = [];
     const ports = createCodingToolReadEditPorts({
       secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: true, text }) },
       editorAgentClient: { action: vi.fn() },
       resolveEditorActionContext: vi.fn(),
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
     });
     const result = await ports.repositoryRead.execute(
       {
@@ -1391,6 +1400,12 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         nextStartLine: keptLines + 1,
       },
     });
+    const line = events.find((event) => event.op === "coding-runtime.workspace-read");
+    expect(line?.extra).toMatchObject({ state: "completed", byteBoundCut: true, keptLines });
+    expectActivityLogProof(
+      "coding-runtime.workspace-read.emitted-line",
+      formatActivityLogProofLine(line ?? {}),
+    );
   });
 
   it("resumes an oversized read from a later line with the right nextStartLine", async () => {
@@ -1413,11 +1428,16 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       undefined,
       { check: (): true => true },
     );
-    if (result.status !== "completed") throw new Error("expected a completed read");
-    const kept = result.read.text.split("\n").length - 1;
-    expect(result.read.byteCount).toBeLessThanOrEqual(65_536);
-    expect(result.read.text).toBe(`${lines.slice(100, 100 + kept).join("\n")}\n`);
-    expect(result.read.nextStartLine).toBe(101 + kept);
+    const read = (
+      result as { readonly read?: { text: string; byteCount: number; nextStartLine?: number } }
+    ).read;
+    if (result.status !== "completed" || read === undefined) {
+      throw new Error("expected a completed read");
+    }
+    const kept = read.text.split("\n").length - 1;
+    expect(read.byteCount).toBeLessThanOrEqual(65_536);
+    expect(read.text).toBe(`${lines.slice(100, 100 + kept).join("\n")}\n`);
+    expect(read.nextStartLine).toBe(101 + kept);
     expect(
       Buffer.byteLength(`${lines.slice(100, 100 + kept + 1).join("\n")}\n`, "utf8"),
     ).toBeGreaterThan(65_536);
@@ -3314,4 +3334,91 @@ describe("governed native text snapshot current authority", () => {
       expect(f.readTextSnapshot).not.toHaveBeenCalled();
     },
   );
+});
+
+// Audit 2026-11-06 finding 11: the listing was cut one entry at a time, re-serialising, re-splitting
+// and re-hashing the whole projection per entry. The cut must stay byte-identical to that algorithm.
+describe("discoveryReadResult", () => {
+  function referenceDiscoveryReadResult(
+    result: WorkspacePathDiscoveryResult,
+  ): ReturnType<typeof discoveryReadResult> {
+    const entries = [...result.entries];
+    const truncationReasons = [...result.truncationReasons];
+    const project = (): ReturnType<typeof discoveryReadResult> => {
+      const text = codingToolDiscoveryText(entries);
+      return {
+        text,
+        byteCount: Buffer.byteLength(text, "utf8"),
+        digest: createHash("sha256").update(text, "utf8").digest("hex"),
+        totalLines: text.length === 0 ? 0 : text.split("\n").length - 1,
+        returnedPathCount: entries.length,
+        discovery: {
+          entries,
+          truncationReasons,
+          matchedCount: result.matchedCount,
+          coverageIncomplete: truncationReasons.length > 0,
+        },
+      };
+    };
+    let read = project();
+    while (Buffer.byteLength(JSON.stringify(read), "utf8") > 65_536) {
+      entries.pop();
+      if (!truncationReasons.includes("output-limit")) truncationReasons.push("output-limit");
+      read = project();
+    }
+    return read;
+  }
+
+  function seeded(seed: number): () => number {
+    let state = seed >>> 0;
+    return (): number => {
+      state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+      return state / 0x1_0000_0000;
+    };
+  }
+
+  function discovery(random: () => number): WorkspacePathDiscoveryResult {
+    const count = Math.floor(random() * random() * 900);
+    const reasons = (["result-limit", "output-limit", "time-limit"] as const).filter(
+      () => random() < 0.25,
+    );
+    const entries = Array.from({ length: count }, (_unused, index) => ({
+      relativePath: `dir${String(index % 37)}/${"n".repeat(Math.floor(random() * 80))}${String(index)}.ts`,
+      kind: random() < 0.1 ? ("directory" as const) : ("file" as const),
+      sizeBytes: Math.floor(random() * 1_000_000),
+    }));
+    return {
+      entries,
+      text: "",
+      byteCount: 0,
+      matchedCount: count + Math.floor(random() * 500),
+      coverageIncomplete: reasons.length > 0,
+      truncationReasons: reasons,
+      stats: {} as WorkspacePathDiscoveryResult["stats"],
+    };
+  }
+
+  it("cuts exactly where the entry-by-entry algorithm cut, for several hundred random listings", () => {
+    const random = seeded(4_271);
+    let cut = 0;
+    for (let round = 0; round < 300; round += 1) {
+      const input = discovery(random);
+      const actual = discoveryReadResult(input);
+      expect(actual).toEqual(referenceDiscoveryReadResult(input));
+      if (actual.returnedPathCount !== input.entries.length) cut += 1;
+    }
+    // The generator really reaches the cut path and the whole-listing path.
+    expect(cut).toBeGreaterThan(20);
+    expect(cut).toBeLessThan(300);
+  });
+
+  it("returns an empty listing and a single oversized entry without looping", () => {
+    const empty = discovery(() => 0);
+    expect(discoveryReadResult(empty)).toEqual(referenceDiscoveryReadResult(empty));
+    const one = {
+      ...empty,
+      entries: [{ relativePath: "x".repeat(4_000), kind: "file" as const, sizeBytes: 1 }],
+    };
+    expect(discoveryReadResult(one)).toEqual(referenceDiscoveryReadResult(one));
+  });
 });

@@ -207,7 +207,12 @@ describe("OpenCode V2 approval requests", () => {
   // Audit 2026-11-06 finding 10: the cap was global and every ask was its own prompt, so one run
   // asking in a loop could use the whole registry up for the others.
   it("keeps one run to 16 open prompts so another run is still admitted", async () => {
-    const approvals = createOpenCodeV2ApprovalRequests();
+    const records: ServerDiagnosticRecord[] = [];
+    const approvals = createOpenCodeV2ApprovalRequests({
+      record: (record): void => {
+        records.push(record);
+      },
+    });
     const signal = new AbortController().signal;
     const ask = asked();
     const values = await Promise.all(
@@ -226,6 +231,12 @@ describe("OpenCode V2 approval requests", () => {
     const pending = values.slice(0, 16).map(request);
     await expect(request(values[16] ?? {})).resolves.toMatchObject({ outcome: "unavailable" });
     expect(ask.events).toHaveLength(16);
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: RUN_ID,
+        message: "approval-ask-run-bound-refused",
+      }),
+    ]);
 
     const other = approvals.request({
       value: await verificationAsk("call_other", { runId: "run-other", targetPath: "pkg/other" }),
@@ -535,7 +546,12 @@ describe("OpenCode V2 approval requests for native asks (#3897)", () => {
   // Audit 2026-11-06 finding 10: equal asks of one run (same permission and resources) were each put
   // to the human, so a model repeating a command flooded the approval lane.
   it("shows one prompt for equal asks of a run and gives every waiter the same decision", async () => {
-    const approvals = createOpenCodeV2ApprovalRequests();
+    const records: ServerDiagnosticRecord[] = [];
+    const approvals = createOpenCodeV2ApprovalRequests({
+      record: (record): void => {
+        records.push(record);
+      },
+    });
     const ask = asked();
     const first = nativeRequest(approvals, ask, "per_native_same_1", {
       actionId: NATIVE_ACTION_ID,
@@ -544,6 +560,9 @@ describe("OpenCode V2 approval requests for native asks (#3897)", () => {
       actionId: `${SESSION_ID}:call_second`,
     });
     expect(ask.events).toHaveLength(1);
+    expect(records).toEqual([
+      expect.objectContaining({ correlationId: RUN_ID, message: "approval-ask-coalesced" }),
+    ]);
     expect(approvals.resolve(RUN_ID, "per_native_same_1", true)).toBe(true);
     await expect(first).resolves.toStrictEqual({
       outcome: "approved",

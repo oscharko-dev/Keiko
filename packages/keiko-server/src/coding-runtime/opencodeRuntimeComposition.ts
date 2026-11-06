@@ -53,9 +53,10 @@ import {
   contentFreeErrorClass,
   describeError,
   emitServerDiagnostic,
+  serverDiagnosticFromError,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
-import { isValidCorrelationId } from "../correlation.js";
+import { actionCorrelationId } from "./codingToolFacadeFailure.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   createCodingRuntimeManager,
@@ -4080,18 +4081,20 @@ function handleDirectToolRequest(
   if (preflight.outcome === "rejected") {
     return Promise.resolve({ status: preflight.status, body: preflight.body });
   }
-  const read = nativeReadTransportValue(input.body);
+  // The body is parsed once; every transport recognizer below reads that one value.
+  const body = parsedToolBody(input.body, deps.diagnostics);
+  const read = nativeReadTransportValue(body);
   if (read !== undefined)
     return handleNativeReadTransport(read, input.signal, deps, runs, nativeRead);
-  const permission = parseV2PermissionRequest(input.body);
+  const permission = parseV2PermissionRequest(body);
   if (permission !== undefined) {
     return handleV2PermissionRequest(permission, input.signal, deps, approvals, runs);
   }
-  const nativePolicy = parseNativePolicyBody(input.body);
+  const nativePolicy = parseNativePolicyBody(body);
   if (nativePolicy !== undefined) {
     return handleNativePolicyRequest(nativePolicy, input.signal, deps, approvals, runs);
   }
-  const webSearch = nativeWebSearchTransportValue(input.body);
+  const webSearch = nativeWebSearchTransportValue(body);
   if (webSearch !== undefined) {
     const run = runs.get(webSearch.runId);
     return answerNativeWebSearch(
@@ -4106,16 +4109,45 @@ function handleDirectToolRequest(
   );
   if (admission === undefined) return Promise.resolve({ status: 429, body: "" });
   const detachExternalAbort = bindExternalAbort(input.signal, admission);
-  return executeToolRequest(deps, input.headers, input.body, admission).finally(
+  return executeToolRequest(deps, input.headers, input.body, body !== undefined, admission).finally(
     detachExternalAbort,
   );
 }
 
-function parseNativePolicyBody(body: string): OpenCodeNativePolicyRequest | undefined {
-  if (!validJson(body)) return undefined;
-  const parsed: unknown = JSON.parse(body);
-  return v2Record(parsed)?.action === OPENCODE_NATIVE_POLICY_ACTION
-    ? parseOpenCodeNativePolicyRequest(parsed)
+/** A request body that parsed as JSON, wrapped so a JSON `null` or `false` stays distinguishable. */
+interface ParsedToolBody {
+  readonly value: unknown;
+}
+
+// A body that is not JSON is answered 400 downstream; the record keeps that it happened, under the
+// marker correlation (no action could be read from it), never the body.
+function parsedToolBody(
+  body: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): ParsedToolBody | undefined {
+  try {
+    return { value: JSON.parse(body) as unknown };
+  } catch (error) {
+    emitServerDiagnostic(
+      diagnostics,
+      serverDiagnosticFromError({
+        correlationId: actionCorrelationId(undefined),
+        operation: "coding-runtime.tool-bridge",
+        source: "opencode-runtime-composition.request-body",
+        error,
+        summary: "tool-bridge-request-body-invalid",
+        redact: () => "tool-bridge-request-body-invalid",
+      }),
+    );
+    return undefined;
+  }
+}
+
+function parseNativePolicyBody(
+  body: ParsedToolBody | undefined,
+): OpenCodeNativePolicyRequest | undefined {
+  return v2Record(body?.value)?.action === OPENCODE_NATIVE_POLICY_ACTION
+    ? parseOpenCodeNativePolicyRequest(body?.value)
     : undefined;
 }
 
@@ -4778,10 +4810,10 @@ function nativePolicyResponse(
   };
 }
 
-function parseV2PermissionRequest(body: string): Readonly<Record<string, unknown>> | undefined {
-  if (!validJson(body)) return undefined;
-  const parsed: unknown = JSON.parse(body);
-  const value = v2Record(parsed);
+function parseV2PermissionRequest(
+  body: ParsedToolBody | undefined,
+): Readonly<Record<string, unknown>> | undefined {
+  const value = v2Record(body?.value);
   return value?.action === "permission-request" ? value : undefined;
 }
 
@@ -5053,10 +5085,11 @@ async function executeToolRequest(
   deps: ToolBridgeExecutionDeps,
   headers: Headers,
   body: string,
+  bodyIsJson: boolean,
   admission: AdmittedToolRequest,
 ): Promise<{ readonly status: number; readonly body: string }> {
   const { facade, capability, settleTool, diagnostics } = deps;
-  if (!validJson(body)) {
+  if (!bodyIsJson) {
     admission.release();
     return { status: 400, body: "" };
   }
@@ -5238,18 +5271,8 @@ function startFacadeExecution(
 // valid as-is (the canonical shape admits no `:`), so it is mapped onto `tool-<callId>` — a fixed,
 // documented prefix swap an analyzer joins back to the evidence's `actionId`. Prose, whitespace,
 // overlength and too-short values degrade to the marker.
-const TOOL_ACTION_ID_PREFIX = "tool:";
-const TOOL_ACTION_CORRELATION_PREFIX = "tool-";
-const UNPARSED_ACTION_CORRELATION_ID = "tool-bridge-unparsed-action";
-
-function actionCorrelationId(actionId: string | undefined): string {
-  if (actionId === undefined) return UNPARSED_ACTION_CORRELATION_ID;
-  const candidate = actionId.startsWith(TOOL_ACTION_ID_PREFIX)
-    ? `${TOOL_ACTION_CORRELATION_PREFIX}${actionId.slice(TOOL_ACTION_ID_PREFIX.length)}`
-    : actionId;
-  return isValidCorrelationId(candidate) ? candidate : UNPARSED_ACTION_CORRELATION_ID;
-}
-
+// The derivation itself lives in codingToolFacadeFailure.ts, shared with the facade's own failure
+// record.
 function emitFacadeFailureDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
   actionId: string | undefined,
@@ -5358,15 +5381,6 @@ function safeToolState(result: CodingToolResult): OpenCodeToolSettlementState {
   if (result.status === "denied") return "denied";
   if (result.status === "cancelled") return "cancelled";
   return "failed";
-}
-
-function validJson(body: string): boolean {
-  try {
-    JSON.parse(body);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -5530,14 +5544,14 @@ type NativeReadTransportPacket = Readonly<{
       }>
   );
 
-function nativeWebSearchTransportValue(body: string): NativeWebSearchRequest | undefined {
-  return validJson(body) ? parseNativeWebSearchRequest(JSON.parse(body)) : undefined;
+function nativeWebSearchTransportValue(
+  body: ParsedToolBody | undefined,
+): NativeWebSearchRequest | undefined {
+  return body === undefined ? undefined : parseNativeWebSearchRequest(body.value);
 }
 
-function nativeReadTransportValue(body: string): unknown {
-  if (!validJson(body)) return undefined;
-  const value: unknown = JSON.parse(body);
-  return v2Record(value)?.action === "native-read-invocation" ? value : undefined;
+function nativeReadTransportValue(body: ParsedToolBody | undefined): unknown {
+  return v2Record(body?.value)?.action === "native-read-invocation" ? body?.value : undefined;
 }
 
 /** Capture transport data only; the existing parent owns authority, replay and physical work. */

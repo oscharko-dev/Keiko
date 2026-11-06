@@ -675,23 +675,49 @@ function discoveryReadProjection(discovery: CodingToolDiscoveryResult): CodingTo
   };
 }
 
-function discoveryReadResult(result: WorkspacePathDiscoveryResult): CodingToolReadResult {
-  const entries = [...result.entries];
+// The projection that keeps the first `kept` discovered entries; once any entry is cut it names the
+// closed `output-limit` reason, exactly once, after the reasons the discovery already reported.
+function projectDiscoveryPrefix(
+  result: WorkspacePathDiscoveryResult,
+  kept: number,
+): CodingToolReadResult {
   const truncationReasons = [...result.truncationReasons];
-  const project = (): CodingToolReadResult =>
-    discoveryReadProjection({
-      entries,
-      truncationReasons,
-      matchedCount: result.matchedCount,
-      coverageIncomplete: truncationReasons.length > 0,
-    });
-  let read = project();
-  while (Buffer.byteLength(JSON.stringify(read), "utf8") > MAX_READ_BYTES) {
-    entries.pop();
-    if (!truncationReasons.includes("output-limit")) truncationReasons.push("output-limit");
-    read = project();
+  if (kept < result.entries.length && !truncationReasons.includes("output-limit")) {
+    truncationReasons.push("output-limit");
   }
-  return read;
+  return discoveryReadProjection({
+    entries: result.entries.slice(0, kept),
+    truncationReasons,
+    matchedCount: result.matchedCount,
+    coverageIncomplete: truncationReasons.length > 0,
+  });
+}
+
+function fitsReadBound(read: CodingToolReadResult): boolean {
+  return Buffer.byteLength(JSON.stringify(read), "utf8") <= MAX_READ_BYTES;
+}
+
+/**
+ * The discovery as a read result within the read byte bound: the whole listing when it fits, else its
+ * longest prefix that does. A prefix's size never shrinks as the prefix grows, so a binary search
+ * finds that longest prefix in O(log n) projections instead of re-serialising, re-splitting and
+ * re-hashing the whole listing once per dropped entry.
+ */
+export function discoveryReadResult(result: WorkspacePathDiscoveryResult): CodingToolReadResult {
+  const whole = projectDiscoveryPrefix(result, result.entries.length);
+  if (fitsReadBound(whole) || result.entries.length === 0) return whole;
+  let low = 0;
+  let high = result.entries.length - 1;
+  let best = projectDiscoveryPrefix(result, 0);
+  while (low <= high) {
+    const middle = (low + high) >>> 1;
+    const candidate = projectDiscoveryPrefix(result, middle);
+    if (fitsReadBound(candidate)) {
+      best = candidate;
+      low = middle + 1;
+    } else high = middle - 1;
+  }
+  return best;
 }
 
 async function executeRead(
@@ -1052,6 +1078,10 @@ const CODING_RUNTIME_WORKSPACE_READ_OPERATION = defineActivityLogOperation({
     targetPathSha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     startLine: { type: "integer", dataClass: "count", required: false },
     maxLines: { type: "integer", dataClass: "count", required: false },
+    // The window was cut to its largest whole-line prefix at the read byte bound (audit
+    // 2026-11-06, finding 6); `keptLines` counts that prefix. Both absent for an uncut window.
+    byteBoundCut: { type: "boolean", dataClass: "closed-enum", required: false },
+    keptLines: { type: "integer", dataClass: "count", required: false },
     frames: CODING_RUNTIME_WORKSPACE_READ_FRAMES_FIELD,
     causeChain: CODING_RUNTIME_WORKSPACE_READ_CAUSE_CHAIN_FIELD,
   },
@@ -1299,7 +1329,7 @@ function completedRead(
     );
     return readRefusal("too-large");
   }
-  recordCompletedRead(deps, binding, request);
+  recordCompletedRead(deps, binding, request, byteBoundCut(requested, window, request.startLine));
   return {
     status: "completed",
     read: {
@@ -1322,10 +1352,22 @@ export function wholeFileDigest(text: string): string {
   return secureWorkspaceTextDigest(text);
 }
 
+// The prefix length when the byte bound cut the requested window, else nothing.
+function byteBoundCut(
+  requested: ReadWindowResult,
+  fitted: ReadWindowResult,
+  startLine: number | undefined,
+): number | undefined {
+  return fitted === requested || fitted.nextStartLine === undefined
+    ? undefined
+    : fitted.nextStartLine - (startLine ?? 1);
+}
+
 function recordCompletedRead(
   deps: CodingToolReadEditPortDeps,
   binding: RuntimeProducerBinding | undefined,
   request: RepositoryReadRequest,
+  keptLines?: number,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
@@ -1337,6 +1379,7 @@ function recordCompletedRead(
         targetPathSha256: targetPathDigest(request.relativePath),
         startLine: request.startLine ?? 1,
         maxLines: request.maxLines ?? 0,
+        ...(keptLines === undefined ? {} : { byteBoundCut: true, keptLines }),
       },
     ),
   );

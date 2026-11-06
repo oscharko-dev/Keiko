@@ -1,4 +1,6 @@
 import { CodingToolReplayFilter } from "./codingToolReplayFilter.js";
+import { correlationIdOrUnknown } from "../correlation.js";
+import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
 import {
   captureToolInvocationReceipt,
   type ToolInvocationReceipt,
@@ -92,10 +94,8 @@ export interface CodingToolInvocationRegistry {
 
 export interface CodingToolInvocationRegistryOptions {
   readonly now?: (() => number) | undefined;
-  /** Body-free notice that settled, expired identities of a run moved to its replay filter. */
-  readonly onIdentitiesEvicted?:
-    | ((event: { readonly evictedCount: number; readonly filteredCount: number }) => void)
-    | undefined;
+  /** Where the bookkeeping notice of an eviction goes (counts only); the process sink if absent. */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 interface Entry {
@@ -139,7 +139,7 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
 
   public constructor(
     private readonly now: () => number,
-    private readonly onEvicted?: CodingToolInvocationRegistryOptions["onIdentitiesEvicted"],
+    private readonly diagnostics?: ServerDiagnosticSink,
   ) {}
 
   public stage(request: CodingToolInvocationStage): CodingToolInvocationStageResult {
@@ -359,7 +359,16 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
     }
     if (evictedCount === 0) return;
     this.evicted.set(runId, filter);
-    this.onEvicted?.({ evictedCount, filteredCount: Math.floor(filter.size / 3) });
+    emitServerDiagnostic(this.diagnostics, {
+      correlationId: correlationIdOrUnknown(runId),
+      timestamp: new Date(this.now()).toISOString(),
+      operation: "coding-runtime.tool-invocation",
+      source: "coding-tool-invocation-registry.evict",
+      errorClass: "ReplayIdentityEviction",
+      message: "tool-invocation-identities-evicted",
+      code: `evicted=${String(evictedCount)}:filtered=${String(Math.floor(filter.size / 3))}`,
+      diagnosticOutcome: "routine",
+    });
   }
 
   private hasCapacity(request: CodingToolInvocationStage): boolean {
@@ -567,5 +576,5 @@ function keyForRun(key: string, runId: string): boolean {
 export function createCodingToolInvocationRegistry(
   options: CodingToolInvocationRegistryOptions = {},
 ): CodingToolInvocationRegistry {
-  return new InvocationRegistry(options.now ?? Date.now, options.onIdentitiesEvicted);
+  return new InvocationRegistry(options.now ?? Date.now, options.diagnostics);
 }
