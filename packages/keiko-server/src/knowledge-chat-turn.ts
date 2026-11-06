@@ -85,6 +85,7 @@ export async function createKnowledgeChatToolTurn(
   correlationId: string | undefined,
 ): Promise<KnowledgeChatToolTurn | undefined> {
   if (chatKnowledgeScopes(deps.store.findChatById(message.chatId)).length === 0) return undefined;
+  if (deps.knowledgeChatCatalog === undefined) return undefined;
   const correlation = correlationIdOrUnknown(correlationId);
   if (!chatModelSupportsTools(deps, modelId)) {
     const generation = deps.gatewayConfig?.generation();
@@ -98,11 +99,7 @@ export async function createKnowledgeChatToolTurn(
     nowMs: Date.now(),
     correlationId: correlation,
   });
-  requireDispatch(
-    authority.ok && deps.knowledgeChatCatalog !== undefined,
-    "denied",
-    "authority-invalid",
-  );
+  requireDispatch(authority.ok, "denied", "authority-invalid");
   const remaining = Date.parse(authority.envelope.expiresAt) - Date.now();
   requireDispatch(remaining > 0, "denied", "authority-expired");
   return new KnowledgeChatToolTurn({

@@ -472,7 +472,7 @@ function splitTableRow(line: string): { cells: string[]; escapedPipeCount: numbe
   if (cells.length > 1 && start === row.length) cells.pop();
   // GFM example 200: this escape belongs to the table, even inside inline code. Keep every
   // other backslash intact; source offsets are still owned by the original Markdown text.
-  return { cells: cells.map((cell) => cell.replaceAll("\\|", "|")), escapedPipeCount };
+  return { cells: cells.map((cell) => cell.replaceAll(String.raw`\|`, "|")), escapedPipeCount };
 }
 
 function isSeparatorRow(cells: string[]): boolean {

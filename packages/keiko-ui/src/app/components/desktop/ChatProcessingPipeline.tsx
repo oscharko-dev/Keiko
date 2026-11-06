@@ -10,13 +10,21 @@ import {
 import { Icons } from "./Icons";
 import styles from "./ChatProcessingPipeline.module.css";
 
+const {
+  check: CheckIcon,
+  close: CloseIcon,
+  info: InfoIcon,
+  lock: LockIcon,
+  dots: DotsIcon,
+} = Icons;
+
 function StepIcon({ state }: { readonly state: ChatProcessingState }): ReactNode {
-  if (state === "done") return <Icons.check size={14} />;
+  if (state === "done") return <CheckIcon size={14} />;
   if (state === "failed" || state === "cancelled" || state === "blocked")
-    return <Icons.close size={14} />;
-  if (state === "attention") return <Icons.info size={14} />;
-  if (state === "approval") return <Icons.lock size={14} />;
-  return <Icons.dots size={14} />;
+    return <CloseIcon size={14} />;
+  if (state === "attention") return <InfoIcon size={14} />;
+  if (state === "approval") return <LockIcon size={14} />;
+  return <DotsIcon size={14} />;
 }
 
 function pipelineSummary(steps: readonly ChatProcessingStep[], t: OptionalWidgetTranslate): string {
@@ -78,9 +86,9 @@ export function ChatProcessingPipeline({
           <ProcessingStep key={step.id} step={step} index={index} />
         ))}
       </ol>
-      <p className={styles.cmpAnnouncement} role="status" aria-atomic="true">
+      <output className={styles.cmpAnnouncement} aria-live="polite" aria-atomic="true">
         {pipelineSummary(steps, t)}
-      </p>
+      </output>
     </section>
   );
 }

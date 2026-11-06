@@ -315,7 +315,7 @@ function responseObservation(
     reviewFinishReason: response.finishReason,
     reviewOutputChars: response.content.length,
     reviewToolCallCount: response.toolCalls.length,
-    ...(Number.isSafeInteger(anchorCount) && anchorCount >= 0 && anchorCount <= 0xffff_ffff
+    ...(Number.isSafeInteger(anchorCount) && anchorCount >= 0 && anchorCount <= 4_294_967_295
       ? { reviewAnchorCount: anchorCount }
       : {}),
   };

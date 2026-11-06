@@ -91,6 +91,7 @@ import {
 } from "./diagnostics-log.js";
 import type { WorkspaceReconciliationService } from "./task-workspace/types.js";
 import { currentOpenSseStreamCount } from "./sse-write.js";
+import { KNOWLEDGE_CHAT_TOOLS } from "./requirementsToolName.js";
 import { createWorkspaceWatchService } from "./editor/watch/workspaceWatchService.js";
 import type {
   WorkspaceInstance,
@@ -3905,9 +3906,9 @@ it("shares one lazy Jira catalog per graph and closes it on disposal (#4089)", a
     if (runtime === undefined) throw new Error("Expected graph-owned managed catalog");
     const [first, second] = await Promise.all([runtime.get(), runtime.get()]);
     expect(second).toBe(first);
-    // Every canonical Jira tool, read or write, is one handler (#4178 added `jira.draft`), beside
-    // the one local `knowledge.requirements` read the same catalog hosts (#4179).
-    const toolCount = Object.keys(JIRA_MANAGED_ACTION_TYPES).length + 1;
+    // Every canonical Jira tool, read or write, is one handler beside the local Knowledge tools
+    // declared by the same managed catalog's provider.
+    const toolCount = Object.keys(JIRA_MANAGED_ACTION_TYPES).length + KNOWLEDGE_CHAT_TOOLS.length;
     expect(
       activityLog.events.filter((event) => event.op === "mcp.managed.lifecycle"),
     ).toMatchObject([

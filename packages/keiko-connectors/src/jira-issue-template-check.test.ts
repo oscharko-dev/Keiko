@@ -463,12 +463,10 @@ describe("native description rendering contract", () => {
 
   it("refuses Markdown section credit for a native Jira description without rewriting it", () => {
     const description = "## Criteria\n# first\n## nested\n## Source\nReference";
-    const before = description;
-    expect(ids(required, subject({ description }))).toEqual([
-      "section-missing:Criteria",
-      "section-missing:Source",
-    ]);
-    expect(description).toBe(before);
+    const issue = subject({ description });
+    const before = structuredClone(issue);
+    expect(ids(required, issue)).toEqual(["section-missing:Criteria", "section-missing:Source"]);
+    expect(issue).toEqual(before);
   });
 
   it("accepts native wiki headings and explicit Markdown using the same section contract", () => {

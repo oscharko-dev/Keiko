@@ -268,6 +268,11 @@ function search(environment: KnowledgeToolEnvironment, args: CatalogJsonObject):
   });
 }
 
+function handlerForView(view: View): typeof inventory {
+  if (view === "inventory") return inventory;
+  return view === "search" ? search : read;
+}
+
 export function createKnowledgeDocumentsTool<Context extends RequirementsToolContext>(
   deps: UiHandlerDeps,
 ): ManagedMcpTool<Context> {
@@ -305,7 +310,7 @@ export function createKnowledgeDocumentsTool<Context extends RequirementsToolCon
     descriptor,
     execute: (args, context): Promise<ManagedMcpToolResult> => {
       const view: View = VIEWS.find((candidate) => candidate === args.view) ?? "inventory";
-      const handler = view === "inventory" ? inventory : view === "search" ? search : read;
+      const handler = handlerForView(view);
       return executeKnowledgeTool(deps, context, view, (environment) => handler(environment, args));
     },
   };

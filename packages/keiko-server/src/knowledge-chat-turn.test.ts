@@ -179,6 +179,36 @@ function assertRuntimeContext(
   ).toBe(original);
 }
 
+it("does not admit a Knowledge tool turn when no catalog is available", async () => {
+  const { pod, deps } = await fixture();
+  configure(deps, 1024, 4096, false);
+  const { knowledgeChatCatalog, ...withoutCatalog } = deps;
+  expect(knowledgeChatCatalog).toBeDefined();
+  expect(deps.store.findChatById(pod.chatId)?.localKnowledgeScopes).toHaveLength(1);
+  const accepted = deps.store.admitChatTurn("knowledge-no-catalog", {
+    chatId: pod.chatId,
+    role: "user",
+    content: "Read the attached document",
+    timestamp: Date.now(),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+  if (accepted.kind !== "admitted") throw new TypeError("Expected accepted human turn");
+  const factory = vi.fn(() => undefined);
+  const turn = await createChatToolTurn(
+    { ...withoutCatalog, modelPortFactory: factory },
+    MODEL,
+    accepted.userMessage,
+    new AbortController().signal,
+    "knowledge-no-catalog",
+  );
+  expect(turn).toBeUndefined();
+  expect(factory).not.toHaveBeenCalled();
+});
+
 it("refuses connected Knowledge-only tools with an accurate service-neutral message when tool calling is unavailable", async () => {
   const { pod, deps } = await fixture();
   configure(deps, 1024, 4096, false);

@@ -6,11 +6,11 @@ import {
   type KnowledgeStore,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type { UiHandlerDeps } from "./deps.js";
-import type { PageCursor } from "./requirement-inventory.js";
 import {
   chatKnowledgeScopes,
   decodeCursor,
   scopeRefusal,
+  type PageCursor,
   type ScopeRefusal,
 } from "./requirement-inventory.js";
 

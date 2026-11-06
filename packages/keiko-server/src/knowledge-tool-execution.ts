@@ -40,6 +40,11 @@ export function knowledgeToolFailure(reason: string): KnowledgeToolRead {
   return { data: { outcome: "failed", reason } };
 }
 
+function readDisposition(read: KnowledgeToolRead): KnowledgeDocumentActivity["disposition"] {
+  if (read.data.reason === "unavailable") return "unavailable";
+  return read.data.outcome === "failed" ? "refused" : "served";
+}
+
 function logRead(
   context: RequirementsToolContext,
   operation: KnowledgeDocumentActivity["operation"],
@@ -48,12 +53,7 @@ function logRead(
 ): void {
   logKnowledgeDocumentOperation(context.correlationId, {
     operation,
-    disposition:
-      read.data.reason === "unavailable"
-        ? "unavailable"
-        : read.data.outcome === "failed"
-          ? "refused"
-          : "served",
+    disposition: readDisposition(read),
     documentCount,
     returnedCount: Array.isArray(read.data.items) ? read.data.items.length : 0,
     sourceChars: read.sourceChars ?? 0,

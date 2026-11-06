@@ -613,12 +613,10 @@ function isEncodedRichText(
   value: unknown,
   deployment: AtlassianConnectorDeployment,
 ): boolean {
-  const text =
-    typeof value === "string"
-      ? value
-      : deployment === "data-center" && field.id === "description"
-        ? readJiraMarkdownDescription(value)
-        : undefined;
+  let text: string | undefined;
+  if (typeof value === "string") text = value;
+  else if (deployment === "data-center" && field.id === "description")
+    text = readJiraMarkdownDescription(value);
   return (
     field.kind === "text" && field.richText && text !== undefined && encodedDocumentStructure(text)
   );

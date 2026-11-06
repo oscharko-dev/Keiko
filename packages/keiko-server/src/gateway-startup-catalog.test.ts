@@ -2147,17 +2147,47 @@ it("keeps a declared tool-calling model unproven when the live probe is refused"
   expect(startupModels(deps)[0]?.toolCallingVerification?.status).not.toBe("verified");
 });
 
+function startupEmbeddingBatchResponse(body: string, model: string | undefined): Response {
+  const payload: unknown = JSON.parse(body);
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    !("input" in payload) ||
+    !Array.isArray(payload.input)
+  ) {
+    throw new TypeError("Expected a startup embedding batch request.");
+  }
+  return Response.json({
+    model,
+    data: payload.input.map((_value: unknown, index: number) => ({
+      index,
+      embedding: [3, 4],
+    })),
+  });
+}
+
 // #3905 AC4: embedding identity stays separate from coding models. A refresh that discovers an
 // embedding alias configures it as an embedding model, which no chat or Coding picker offers and
 // no tool-calling probe ever addresses.
 it("keeps a newly discovered embedding model out of the Chat and Coding pickers", async () => {
-  const probedModels: string[] = [];
+  const chatProbedModels: string[] = [];
+  const toolProbedModels: string[] = [];
+  const embeddingProbedModels: string[] = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn((_input: unknown, init: RequestInit) => {
+    vi.fn((input: Parameters<typeof globalThis.fetch>[0], init: RequestInit) => {
+      const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
       const body = typeof init.body === "string" ? init.body : "";
       const model = /"model":"([^"]+)"/u.exec(body)?.[1];
-      if (model !== undefined) probedModels.push(model);
+      if (path.endsWith("/embeddings")) {
+        if (model !== undefined) embeddingProbedModels.push(model);
+        return Promise.resolve(startupEmbeddingBatchResponse(body, model));
+      }
+      expect(path.endsWith("/chat/completions")).toBe(true);
+      if (model !== undefined) {
+        chatProbedModels.push(model);
+        if (body.includes("report_readiness")) toolProbedModels.push(model);
+      }
       return Promise.resolve(
         Response.json({
           choices: [
@@ -2206,7 +2236,11 @@ it("keeps a newly discovered embedding model out of the Chat and Coding pickers"
   expect(models.models.filter(isCodingWorkbenchModel).map((model) => model.id)).toEqual([
     "chat-model",
   ]);
-  expect(probedModels).not.toContain("text-embedding-house");
+  expect(chatProbedModels).toContain("chat-model");
+  expect(chatProbedModels).not.toContain("text-embedding-house");
+  expect(toolProbedModels).toContain("chat-model");
+  expect(toolProbedModels).not.toContain("text-embedding-house");
+  expect(embeddingProbedModels).toEqual(["text-embedding-house"]);
   const profile = await handleCodingSidecarGatewayProfile(
     {
       correlationId: "corr-embedding-separation",

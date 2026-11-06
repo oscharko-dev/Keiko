@@ -49,7 +49,6 @@ import type {
   ConnectorGraphProps,
   RowActionKind,
 } from "./connector-graph-types";
-import { STATUS_LABEL_KEYS } from "./connector-graph-types";
 import { useConnectorGraph } from "./connector-graph-state";
 import { PodDragHandle } from "./pod-drag-handle";
 import { beginPodSelectionEvidence } from "./pod-selection-evidence";

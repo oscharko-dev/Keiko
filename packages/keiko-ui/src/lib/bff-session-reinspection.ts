@@ -36,10 +36,10 @@ export async function reinspectSessionAfterMutationRefusal(
       correlationId: error.correlationId,
       errorKind: error.status === 404 ? "unavailable" : "authority-denied",
     });
-  } catch (failure) {
+  } catch (error_) {
     reportClientDiagnostic("App session reinspection could not be requested.", {
       correlationId: error.correlationId,
-      errorEvidence: clientErrorEvidence(failure),
+      errorEvidence: clientErrorEvidence(error_),
     });
   }
 }

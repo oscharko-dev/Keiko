@@ -1530,11 +1530,10 @@ it("ends a tool turn whose corrected round is rejected again without progress", 
   );
   expect(response.status, JSON.stringify(response.body)).toBe(200);
   // Five tool-turn attempts: the gateway corrects each streak once and the turn carries one
-  // correction round; the sixth is the grounded answer's own later synthesis pass, which must not
-  // inherit the ended turn's correction.
-  expect(requests).toHaveLength(6);
+  // correction round. The ended turn must not dispatch a sixth request for citation repair.
+  expect(requests).toHaveLength(5);
   expect(requests[3]).toContain("rejected before execution");
-  expect(requests[5]).not.toContain("rejected before execution");
+  expect(requests[5]).toBeUndefined();
   expect(f.jiraRequests).toEqual(["GET"]);
   expect((response.body as GroundedAnswer).content).toContain("the model request failed");
 });
@@ -1577,10 +1576,10 @@ it("ends a tool turn whose corrected round is empty again without progress", asy
     f.deps,
   );
   expect(response.status, JSON.stringify(response.body)).toBe(200);
-  // The fourth is the grounded answer's own later synthesis pass, which inherits no correction.
-  expect(requests).toHaveLength(4);
+  // The third attempt carries the correction; the ended turn must not dispatch a fourth request.
+  expect(requests).toHaveLength(3);
   expect(requests[2]).toContain(EMPTY_ANSWER_CORRECTED);
-  expect(requests[3]).not.toContain(EMPTY_ANSWER_CORRECTED);
+  expect(requests[3]).toBeUndefined();
   expect(f.jiraRequests).toEqual(["GET"]);
   expect((response.body as GroundedAnswer).content).toContain("the model request failed");
 });
@@ -1598,7 +1597,9 @@ it("adds no round after the gateway's own repair of an empty answer failed", asy
     f.deps,
   );
   expect(response.status, JSON.stringify(response.body)).toBe(200);
-  expect(requests).toHaveLength(4);
+  expect(requests).toHaveLength(3);
+  expect(requests[3]).toBeUndefined();
+  expect(f.jiraRequests).toEqual(["GET"]);
   expect(requests[2]).toContain("ended after reasoning");
   for (const request of requests) expect(request).not.toContain(EMPTY_ANSWER_CORRECTED);
   expect((response.body as GroundedAnswer).content).toContain("the model request failed");

@@ -1,5 +1,8 @@
 import { gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
-import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  deriveContextProfileFromCapability,
+  estimateTokens,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { chatKnowledgeScopes } from "./requirement-inventory.js";
 import { randomUUID } from "node:crypto";
 import { createCatalogToolBinder } from "./tool-catalog/catalogToolDispatch.js";
@@ -59,7 +62,6 @@ import {
   unsupportedIssueKeyCorrection,
   unsupportedIssueKeys,
 } from "./chat-tool-report-coverage.js";
-import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   findConfiguredCapability,
   ContextOverflowError,
