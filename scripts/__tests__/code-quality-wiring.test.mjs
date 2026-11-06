@@ -151,10 +151,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
     expect(assess().result.violations).toEqual([]);
   });
 
-  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
-  // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
-  it.skip("rejects native contracts reflection outside the qualified observation coordinate", async () => {
+  it("rejects native contracts reflection outside the qualified observation coordinate", async () => {
     const root = contractsAssertionFixture();
     const path = "packages/alpha/src/index.ts";
     const original = read("packages/keiko-contracts/src/memory-fixtures.ts");
