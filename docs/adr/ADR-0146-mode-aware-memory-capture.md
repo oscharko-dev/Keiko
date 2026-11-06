@@ -269,6 +269,15 @@ D2 lets a fact through.
   followed by a single value on its line ("Meine Mail: a@b.de") covers that line alone. Tense and
   pronouns are judged on the claim itself, not on its reason or condition, so "Ich nutze Tabellen,
   weil sie übersichtlich sind" stands; a decision, switch or migration made in the past holds now.
+  The rest of the sentence after a span is read too, because a span that stops at a comma would
+  otherwise store the opposite: a retraction ("…, aber nicht mehr seit Mai", "…; stimmt gar nicht",
+  "…, nein, …"), a restriction ("…, außer montags", "…, aber nur wenn …") or a change ahead ("…, but
+  I'm quitting tomorrow") drops the fact, while "…, nicht Numbers" and "…, aber auch VS Code" take
+  nothing back. A trailing reason or condition stays part of the claim as before, so "Ich bevorzuge
+  Tabellen, wenn du mir Zahlen zeigst" stands; a condition the span leaves out is not stored with it.
+  A clause after "dass" holds what its main clause says of it: a main clause without the person's
+  own subject in which someone else wants or says it ("Mein Chef will, dass ich …") makes the claim
+  theirs, and a span copied with its "dass" opens at the subject.
   The fact is about the person: labelled `self`, with a first-person word, and naming no one else:
   a titled person, a relation behind a possessive or genitive, a family word, a role a determiner
   points at ("dem Kunden", but not "mit Kunden" or "die Kunden-Tickets"), a partner, another
@@ -279,7 +288,8 @@ D2 lets a fact through.
   couple or a household and another group's name ("The marketing team decided …") is no marker. The
   rest of the claim passes every person check above, and the fact is stored only in the project
   scope, never outside a project, and compared only with that scope's facts, so it never confirms or
-  replaces a private one; "X und ich" and "Wir und X" name a person and are dropped. A person named
+  replaces a private one; "X und ich" and "Wir und X" name a person and are dropped, also when the
+  span opens at "ich" or at the verb behind it ("Anna und ich nutzen Vim"). A person named
   by their relation (Vermieterin, landlord, Eltern, Oma, "meine Leute") is a third party. A leading pronoun ("Sie beginnen immer mit einer Zusammenfassung") counts as the person's
   own thing only when the model's statement names that thing and the person's previous message in
   the same chat named it as theirs ("meine Berichte"); possessive and noun come from the person's
@@ -309,8 +319,11 @@ D2 lets a fact through.
   same single transaction. A learned fact replaces only what Keiko learned in the person's own scope:
   a clear statement (D4b) and anything outside that scope are fixed, so a learned fact never
   overwrites them. A newer clear statement replaces an older learned fact, and a learned fact the
-  person rewrites is their own statement from then on. When another turn changed the older fact in
-  between, only that replacement is refused; the turn's other facts still settle.
+  person rewrites is their own statement from then on. The precondition is the older fact as the
+  learner read it before the model call, not a fresh read before the write: when the person or
+  another turn changed it while the capture ran, only that replacement is refused; the turn's other
+  facts still settle. A clear statement whose learned predecessor changed while its embedding was
+  computed is stored beside it and replaces nothing.
 - **Reinforcement.** Only the person strengthens a memory: saying it again records a confirmation.
   An answer that repeats a memory records a use for "Vergiss das" and never a reinforcement, so a
   false memory cannot entrench itself by being repeated back.

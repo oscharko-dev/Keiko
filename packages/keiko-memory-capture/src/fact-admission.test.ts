@@ -857,3 +857,145 @@ describe("material the person passes on", () => {
     expect(admit(text, evidence).admitted).toBe(true);
   });
 });
+
+describe("the rest of the sentence after a short span", () => {
+  it.each<[string, string, string, FactDropReason]>([
+    [
+      "a retraction",
+      "Ich nutze Excel, aber nicht mehr seit Mai.",
+      "Ich nutze Excel",
+      "negated-context",
+    ],
+    [
+      "a retraction with no comma",
+      "Ich nutze Excel aber nicht mehr.",
+      "Ich nutze Excel",
+      "negated-context",
+    ],
+    ["a denial of it", "Ich nutze Excel; stimmt gar nicht.", "Ich nutze Excel", "negated-context"],
+    ["an English denial", "I use vim, that's not true.", "I use vim", "negated-context"],
+    ["no longer", "I use vim, but no longer at work.", "I use vim", "negated-context"],
+    ["a joke", "Ich liebe Montage, nur ein Scherz.", "Ich liebe Montage", "negated-context"],
+    ["a change ahead", "I use vim, but I'm quitting tomorrow.", "I use vim", "negated-context"],
+    [
+      "a German change ahead",
+      "Ich nutze Excel, aber ich wechsle bald zu Numbers.",
+      "Ich nutze Excel",
+      "negated-context",
+    ],
+    [
+      "a restriction",
+      "Ich nutze Excel, aber nur wenn es sein muss.",
+      "Ich nutze Excel",
+      "hypothetical",
+    ],
+    ["an exception", "Ich arbeite remote, außer montags.", "Ich arbeite remote", "hypothetical"],
+    ["an English restriction", "I use vim, but only at work.", "I use vim", "hypothetical"],
+    ["a no on its own", "I use Excel, no, actually Numbers.", "I use Excel", "negated-context"],
+    [
+      "a switch ahead",
+      "I use vim, but I switch to emacs tomorrow.",
+      "I use vim",
+      "negated-context",
+    ],
+    [
+      "a no after it",
+      "Ich nutze Excel, nein, eigentlich Numbers.",
+      "Ich nutze Excel",
+      "negated-context",
+    ],
+  ])("drops %s", (_label, text, evidence, reason) => {
+    expect(reasonOf(text, evidence)).toBe(reason);
+  });
+
+  it.each([
+    ["Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.", "Ich bevorzuge Tabellen"],
+    ["I prefer tables when you show me numbers.", "I prefer tables"],
+    ["Ich nutze Excel, nicht Numbers.", "Ich nutze Excel"],
+    ["Ich nutze Vim, aber auch VS Code.", "Ich nutze Vim"],
+    ["Ich nutze Excel, weil es schnell ist.", "Ich nutze Excel"],
+    ["I use vim, no doubt about it.", "I use vim"],
+    ["I drink coffee, no sugar.", "I drink coffee"],
+    ["I like tea, no milk please.", "I like tea"],
+    ["Ich mag Kaffee, nein zu Zucker.", "Ich mag Kaffee"],
+    ["Ich nutze Excel, nicht mehr als nötig.", "Ich nutze Excel"],
+    ["Ich nutze Vim, aber ich wechsle die Tabs mit Strg.", "Ich nutze Vim"],
+    ["I use vim, but I switch between tabs a lot.", "I use vim"],
+    ["I live in Berlin, not really downtown.", "I live in Berlin"],
+    ["Ich nutze Excel, aber ich höre dabei Musik.", "Ich nutze Excel"],
+    ["Ich mag Tabellen, Listen mag ich auch.", "Ich mag Tabellen"],
+  ])("keeps %s", (text, evidence) => {
+    expect(admit(text, evidence).admitted).toBe(true);
+  });
+});
+
+describe("a pair whose span opens at the person", () => {
+  it.each<[string, string, FactDropReason]>([
+    ["Anna und ich nutzen Vim.", "ich nutzen Vim", "we-statement"],
+    ["Anna und ich nutzen Vim.", "nutzen Vim", "we-statement"],
+    ["Meine Frau und ich wohnen in Berlin.", "wohnen in Berlin", "we-statement"],
+    ["My wife and I live in Berlin.", "I live in Berlin", "we-statement"],
+    ["Today Anna and I use Jira.", "I use Jira", "we-statement"],
+  ])("drops %s with the span %s", (text, evidence, reason) => {
+    expect(reasonOf(text, evidence)).toBe(reason);
+  });
+
+  it("drops the team's pair with someone named", () => {
+    expect(
+      reasonOf("Anna und wir nutzen im Team Jira.", "wir nutzen im Team Jira", undefined, "team"),
+    ).toBe("third-party");
+  });
+
+  it.each([
+    ["Ich mag Tabellen und ich nutze Excel.", "ich nutze Excel"],
+    ["I like Vim and I use Linux.", "I use Linux"],
+    ["Heute regnet es und ich bleibe drinnen.", "ich bleibe drinnen"],
+    ["Meine Frau kocht gern und ich wasche ab.", "ich wasche ab"],
+  ])("keeps %s with the span %s", (text, evidence) => {
+    expect(admit(text, evidence).admitted).toBe(true);
+  });
+});
+
+describe("a clause after dass whose main clause is someone else's", () => {
+  it.each([
+    ["Mein Chef will, dass ich Excel nutze.", "dass ich Excel nutze"],
+    ["Mein Chef will, dass ich Excel nutze.", "ich Excel nutze"],
+    ["Mein Chef will dass ich Excel nutze.", "ich Excel nutze"],
+    ["Der Kunde Meier möchte, dass ich Excel nutze.", "ich Excel nutze"],
+    ["Anna will, dass ich Excel nutze.", "ich Excel nutze"],
+    ["My boss wants that I use Excel.", "that I use Excel"],
+  ])("drops %s with the span %s", (text, evidence) => {
+    expect(reasonOf(text, evidence)).toBe("third-party");
+  });
+
+  it("reads a denial before a copied dass", () => {
+    expect(reasonOf("Es stimmt nicht, dass ich Tabellen mag.", "dass ich Tabellen mag")).toBe(
+      "negated-context",
+    );
+  });
+
+  it.each([
+    ["Ich sage immer, dass ich Tabellen mag.", "dass ich Tabellen mag", "Ich Tabellen mag"],
+    ["Mir ist wichtig, dass ich pünktlich bin.", "ich pünktlich bin", "Ich pünktlich bin"],
+  ])("keeps %s and stores it from the subject", (text, evidence, claim) => {
+    const admission = admit(text, evidence);
+    expect(admission.admitted && admission.claim).toBe(claim);
+  });
+});
+
+describe("a change or a no after a short span", () => {
+  it.each<[string, string]>([
+    ["Ich nutze Excel, aber ich höre bald auf.", "Ich nutze Excel"],
+    ["Ich nutze Excel, aber wechsle nächste Woche.", "Ich nutze Excel"],
+    ["I use vim, nope.", "I use vim"],
+  ])("drops %s", (text, evidence) => {
+    expect(reasonOf(text, evidence)).toBe("negated-context");
+  });
+
+  it.each<[string, string]>([
+    ["I use vim, no kidding.", "I use vim"],
+    ["Ich nutze Vim, aber höre dabei Musik.", "Ich nutze Vim"],
+  ])("keeps %s", (text, evidence) => {
+    expect(admit(text, evidence).admitted).toBe(true);
+  });
+});

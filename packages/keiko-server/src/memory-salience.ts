@@ -74,7 +74,7 @@ import {
   SENSITIVE_MEMORY_ACTION_BODY,
   SENSITIVE_MEMORY_REJECTION_REASON,
 } from "./memory-capture-policy.js";
-import { applyLearnedSupersession } from "./memory-learned-facts.js";
+import { applyLearnedSupersession, type SeenFact } from "./memory-learned-facts.js";
 import {
   logLearnedDrop,
   logLearnedExtraction,
@@ -145,14 +145,22 @@ const SALIENCE_RESPONSE_FORMAT: ResponseFormat = {
 // turn must not queue a second copy. A sensitive body is not shown to the model again. Refused bodies
 // (forgotten / rejected) are deliberately NOT here: they stay with the suppression gate in
 // persistCandidate, which records the refusal as a capture-decision audit event.
+// What it reads is also how each fact stood then, which a later replacement is checked against.
+interface KnownFactSnapshot {
+  readonly facts: readonly KnownFact[];
+  readonly seen: ReadonlyMap<MemoryId, SeenFact>;
+}
+
 function gatherKnownFacts(
   vault: MemoryVaultStore,
   context: ConversationMemoryRuntimeContext,
-): readonly KnownFact[] {
+): KnownFactSnapshot {
   const known: KnownFact[] = [];
+  const seen = new Map<MemoryId, SeenFact>();
   for (const scope of conversationMemoryScopes(context)) {
     for (const record of vault.listMemoriesByScope(scope, { status: ["accepted", "proposed"] })) {
       if (record.provenance.sensitivity !== "public") continue;
+      seen.set(record.id, { status: record.status, updatedAt: record.updatedAt });
       known.push({
         id: record.id,
         body: record.body,
@@ -160,10 +168,10 @@ function gatherKnownFacts(
         fixed: record.provenance.evidenceSpan === undefined || record.scope.kind !== "user",
         scopeKind: record.scope.kind,
       });
-      if (known.length >= MAX_KNOWN_FACTS) return known;
+      if (known.length >= MAX_KNOWN_FACTS) return { facts: known, seen };
     }
   }
-  return known;
+  return { facts: known, seen };
 }
 
 function buildSalienceContext(context: ConversationMemoryRuntimeContext): CaptureContext {
@@ -442,6 +450,7 @@ function rejectedCandidate(
 function noveltyOptions(
   vault: MemoryVaultStore,
   relation: LearnedFactRelation,
+  seen: ReadonlyMap<MemoryId, SeenFact>,
   onSuperseded: (decision: LearnedRelationDecision) => void,
 ): NoveltyInsertOptions {
   if (relation.kind === "same-unconfirmed") return { onlyConfirm: true };
@@ -449,7 +458,12 @@ function noveltyOptions(
   return {
     replaces: relation.memoryId,
     insert: (record): MemoryRecord => {
-      const applied = applyLearnedSupersession(vault, record, relation.memoryId);
+      const applied = applyLearnedSupersession(
+        vault,
+        record,
+        relation.memoryId,
+        seen.get(relation.memoryId),
+      );
       if (applied.pendingApproval) onSuperseded("supersession-proposed");
       else if (applied.superseded !== undefined) onSuperseded("superseded");
       return applied.record;
@@ -465,6 +479,8 @@ interface LearningTrace {
   readonly conversationId: string;
   // What the person said in the turn, which they may have forgotten while this capture was running.
   readonly statement: string;
+  // How the facts the learner compared with stood before the model call.
+  readonly seen: ReadonlyMap<MemoryId, SeenFact>;
 }
 
 function recordRelation(
@@ -531,7 +547,7 @@ async function persistCandidate(
     deps,
     vault,
     candidate,
-    noveltyOptions(vault, outcome.relation, (settled) => {
+    noveltyOptions(vault, outcome.relation, trace.seen, (settled) => {
       decision = settled;
     }),
   );
@@ -679,7 +695,11 @@ export function scheduleMemorySalienceCapture(
 type TurnSalienceExtraction =
   | { readonly kind: "unavailable" }
   | { readonly kind: "refused"; readonly reason: RejectionReason }
-  | { readonly kind: "outcomes"; readonly outcomes: readonly SalienceOutcome[] };
+  | {
+      readonly kind: "outcomes";
+      readonly outcomes: readonly SalienceOutcome[];
+      readonly seen: ReadonlyMap<MemoryId, SeenFact>;
+    };
 
 // The per-turn scalars `extractTurnSalienceOutcomes` and `runSalienceCapture` both thread through
 // unchanged, bundled into one parameter so neither function's positional-argument count crosses
@@ -731,12 +751,13 @@ async function extractTurnSalienceOutcomes(
   if (refusalReason !== null) return { kind: "refused", reason: refusalReason };
   const sourceMessageCount = request.sourceMessageId === undefined ? 0 : 1;
   const previous = previousUserText(deps, request, context, policy);
+  const known = gatherKnownFacts(vault, context);
   const outcomes = await extractSalientMemories(
     {
       userText: request.content,
       ...(previous === undefined ? {} : { previousUserText: previous }),
       assistantText,
-      knownFacts: gatherKnownFacts(vault, context),
+      knownFacts: known.facts,
       ...(request.sourceMessageId === undefined
         ? {}
         : { sourceMessageIds: [request.sourceMessageId] }),
@@ -758,7 +779,7 @@ async function extractTurnSalienceOutcomes(
       },
     },
   );
-  return { kind: "outcomes", outcomes };
+  return { kind: "outcomes", outcomes, seen: known.seen };
 }
 
 interface SalienceCaptureSummary {
@@ -890,7 +911,7 @@ async function runSalienceCapture(
     recordTurnCaptureRefusal(deps, mode, surface, context, captureContext.nowMs, extraction.reason);
     return [];
   }
-  const { outcomes } = extraction;
+  const { outcomes, seen } = extraction;
   const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, {
     surface,
     mode,
@@ -898,6 +919,7 @@ async function runSalienceCapture(
     sourceMessageCount: request.sourceMessageId === undefined ? 0 : 1,
     conversationId: context.conversationId,
     statement: request.content,
+    seen,
   });
   if (outcomes.length > 0) logSalienceCaptureSummary(mode, summary, deps, correlationId);
   return actions;

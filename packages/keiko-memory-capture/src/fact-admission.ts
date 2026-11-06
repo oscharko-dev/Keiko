@@ -73,6 +73,7 @@ const QUOTE_TOGGLES = new Set(['"', "“"]);
 const SENTENCE_END_RE = /[.!?…\n]/u;
 const INNER_SENTENCE_RE = /[.!?…]\s+\p{Lu}/u;
 const SUBORDINATE_LEAD_RE = /(?:^|[^\p{L}])(?:dass|that)\s*$/iu;
+const SUBORDINATE_OPENING_RE = /^(?:dass|that)\s+(?=(?:ich|i|wir|we)(?![\p{L}\p{N}]))/iu;
 const CLAUSE_LEAD_RE = /(?:^|[\s,;:([–—-])(?:dass|that|und|and|aber|but|doch|denn)\s*$/iu;
 const CLAUSE_SPLIT_RE = /[,;:–—]/u;
 // The longest clause lead ("dass", "that") and the mark before it.
@@ -890,6 +891,94 @@ function leadInReaches(text: string, colonEnd: number, start: number): boolean {
   return start < lineEnd || !SINGLE_VALUE_RE.test(text.slice(colonEnd, lineEnd).trim());
 }
 
+// What follows a span in its sentence can take the claim back: "Ich nutze Excel, aber nicht mehr seit
+// Mai", "I use vim, but I'm quitting tomorrow", "Ich nutze Excel; stimmt gar nicht". A span that stops
+// before such a tail would store the opposite of what the person said, so the tail is read as well.
+// "Ich nutze Excel, nicht Numbers" and "…, aber auch VS Code" take nothing back.
+const TAIL_START_RE = /^[\s,;:–—-]+/u;
+const CONTRAST_LEAD_RE =
+  /^(?:aber|doch|jedoch|allerdings|but|however|though|although|yet)(?![\p{L}\p{N}])[\s,]*/iu;
+// A bare "nein", "no", "nicht wirklich" or "not really" takes the claim back only on its own: "…, no
+// sugar", "…, nicht mehr als nötig" and "…, not really downtown" qualify it instead.
+const ON_ITS_OWN = String.raw`(?=\s*(?:[,.;:!?…]|$)|\s+(?:actually|really|eigentlich|wirklich|i\s+mean|ich\s+meine)(?![\p{L}\p{N}]))`;
+const RETRACTION_RE = new RegExp(
+  String.raw`^(?:(?:das|es|this|that|it)(?:\s+|(?=['’])))?(?:nicht\s+mehr(?!\s+(?:als|wie|nur)(?![\p{L}\p{N}]))|no\s+longer|not\s+any\s?more|stimmt\s+(?:(?:gar|überhaupt|so)\s+)?nicht|(?:is|['’]s|was)\s+not\s+true|isn['’]t\s+true|(?:just\s+)?(?:kidding|joking)|(?:nur\s+)?(?:ein\s+)?(?:scherz|spaß|spass)|(?:nicht\s+wirklich|not\s+really|nein|nö|nee|no|nope)${ON_ITS_OWN})(?![\p{L}\p{N}])`,
+  "iu",
+);
+// A restriction the span left out: "…, aber nur wenn mein Chef es verlangt", "…, außer montags".
+const RESTRICTION_RE = /^(?:außer|ausser|except|unless|es\s+sei\s+denn)(?![\p{L}\p{N}])/iu;
+const CONTRAST_RESTRICTION_RE =
+  /^(?:nur|only)\s+(?:wenn|falls|bei|am|im|in|auf|if|when|at|in|on|for)(?![\p{L}\p{N}])/iu;
+// A change the person is making or about to make. A habitual "I switch between tabs" changes nothing,
+// so a plain "switch" or "wechsle" needs a time ahead: "aber ich wechsle bald zu Numbers".
+const CHANGE_AHEAD_RE =
+  /^(?:(?:ich|i|i['’]m|i['’]ll|i\s+am|i\s+will)\s+)?(?:\p{L}+\s+){0,2}?(?:quit|quitting|stopping|switching|aufhören|umsteigen|höre\s+(?:\p{L}+\s+){0,2}?auf|(?:switch|wechsle|wechseln)\s+(?:\p{L}+\s+){0,3}?(?:bald|demnächst|morgen|nächste\p{L}*|soon|tomorrow|next))(?![\p{L}\p{N}])/iu;
+
+function tailDropReason(tail: string): FactDropReason | null {
+  const clause = tail.replace(TAIL_START_RE, "");
+  if (RESTRICTION_RE.test(clause)) return "hypothetical";
+  const contrast = CONTRAST_LEAD_RE.exec(clause);
+  const rest = contrast === null ? clause : clause.slice(contrast[0].length);
+  if (RETRACTION_RE.test(rest)) return "negated-context";
+  return contrast === null ? null : contrastDropReason(rest);
+}
+
+function contrastDropReason(rest: string): FactDropReason | null {
+  if (CONTRAST_RESTRICTION_RE.test(rest) || RESTRICTION_RE.test(rest)) return "hypothetical";
+  return CHANGE_AHEAD_RE.test(rest) ? "negated-context" : null;
+}
+
+// "Anna und ich nutzen Vim" with a span that opens at "ich": the clause opens after "und", but its
+// subject is the pair, so the pair is read with the words before it. "Ich mag Tabellen und ich nutze
+// Excel" joins two of the person's own clauses.
+const PAIR_JOIN_RE = /(?:^|[^\p{L}])(?:und|and)\s*$/iu;
+const OPENS_WITH_SUBJECT_RE = /^(?:ich|i|wir|we)(?![\p{L}\p{N}])/iu;
+const PAIR_BESIDE_WORDS = 2;
+
+function opensAsPair(prefix: string, words: string): boolean {
+  if (!PAIR_JOIN_RE.test(prefix) || !OPENS_WITH_SUBJECT_RE.test(words)) return false;
+  const clause = prefix.split(CLAUSE_SPLIT_RE).at(-1) ?? "";
+  const joined = `${clause}${words}`;
+  const beside = clause.replace(PAIR_JOIN_RE, "").trim().split(/\s+/u);
+  return (
+    ME_AND_OTHER_RES.some((pattern) => pattern.test(joined)) ||
+    WE_AND_OTHER_RES.some((pattern) => pattern.test(joined)) ||
+    speaksAsEnglishPair(joined) ||
+    namesOtherPerson(beside.slice(-PAIR_BESIDE_WORDS).join(" "))
+  );
+}
+
+// "Mein Chef will, dass ich Excel nutze": a clause after "dass" holds what its main clause says of
+// it. A main clause in which someone else wants or says it makes the claim theirs; one of the
+// person's own ("Ich sage immer, dass …", "Mir ist wichtig, dass …") keeps it.
+const OWN_SUBJECT_RE = anyWordPattern(["ich", "i", "wir", "we"]);
+
+function governedByOther(prefix: string): boolean {
+  if (!SUBORDINATE_LEAD_RE.test(prefix)) return false;
+  const main = prefix.replace(SUBORDINATE_LEAD_RE, "").trimEnd().split(CLAUSE_SPLIT_RE);
+  const clause = main.at(-1)?.trim() === "" ? (main.at(-2) ?? "") : (main.at(-1) ?? "");
+  if (OWN_SUBJECT_RE.test(clause)) return false;
+  return (
+    namesOtherPerson(clause) ||
+    claimNamesOtherPronoun(clause) ||
+    GERMAN_ATTRIBUTION_RE.test(clause) ||
+    ENGLISH_ATTRIBUTION_RE.test(clause)
+  );
+}
+
+function surroundingDropReason(
+  text: string,
+  span: ClauseSpan,
+  about: string,
+): FactDropReason | null {
+  const prefix = text.slice(span.from, span.start);
+  if (opensAsPair(prefix, span.words)) {
+    return about.trim().toLowerCase() === "team" ? "third-party" : "we-statement";
+  }
+  if (governedByOther(prefix)) return "third-party";
+  return tailDropReason(text.slice(span.start + span.words.length, span.to));
+}
+
 function isHypothetical(evidence: string, prefix: string): boolean {
   // A condition behind the claim is part of it ("Ich bevorzuge Tabellen, wenn du ..."). One that
   // opens the claim leaves the claim itself open.
@@ -1254,7 +1343,9 @@ export function admitProposedFact(
   if (looksLikePersonalIdentifier(words) || looksLikePersonalIdentifier(fact.body)) {
     return dropped("personal-identifier");
   }
-  const reason = contextDropReason(words, sentence, userText.slice(from, start));
+  const reason =
+    contextDropReason(words, sentence, userText.slice(from, start)) ??
+    surroundingDropReason(userText, span, fact.about);
   if (reason !== null) return dropped(reason);
   const claim = resolvedClaim(fact.body, words, context);
   return admittedClaim(fact, { claim, evidence: words, opensSentence: start === from }, sentence);
@@ -1277,8 +1368,11 @@ function clauseSpan(text: string, evidence: string): ClauseSpan | FactDropReason
   const end = copied + evidence.length;
   const { from, to } = sentenceAround(text, copied, end);
   if (!endsAtClause(text, end)) return "not-clause-boundary";
-  const start = clauseStart(text, { copied, end, sentenceFrom: from });
-  return start === null ? "evidence-too-long" : { start, from, to, words: text.slice(start, end) };
+  const opened = clauseStart(text, { copied, end, sentenceFrom: from });
+  if (opened === null) return "evidence-too-long";
+  // A span copied with its "dass" opens at the subject, so the lead is read with what comes before.
+  const start = opened + (SUBORDINATE_OPENING_RE.exec(text.slice(opened, end))?.[0].length ?? 0);
+  return { start, from, to, words: text.slice(start, end) };
 }
 
 interface CopiedSpan {

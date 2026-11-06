@@ -661,6 +661,26 @@ describe("what a pronoun and a team's decision become", () => {
   });
 });
 
+// The person changes a stored fact while the model call of a capture is still running.
+function changingDuringCall(model: ModelPort, change: () => void): ModelPort {
+  let changed = false;
+  return {
+    call(request): Promise<NormalizedResponse> {
+      if (!changed) {
+        changed = true;
+        change();
+      }
+      return model.call(request);
+    },
+  };
+}
+
+function changeWhileRunning(vault: MemoryVaultStore, ctx: ConversationMemoryRuntimeContext): void {
+  const [older] = recordsWith(vault, ctx, "accepted");
+  if (older === undefined) throw new Error("expected a stored fact");
+  vault.updateMemory(older.id, { tags: ["edited"] }, older.updatedAt + 1);
+}
+
 describe("a replacement that cannot complete", () => {
   async function replaceWith(
     fault: (vault: MemoryVaultStore) => MemoryVaultStore,
@@ -700,33 +720,48 @@ describe("a replacement that cannot complete", () => {
     expect(failures).toBeGreaterThan(0);
   });
 
-  it("keeps the fact that changed in between instead of overwriting it", async () => {
-    const { vault, ctx, failures } = await replaceWith((real) => ({
-      ...real,
-      getMemory: (id): MemoryRecord | undefined => {
-        const record = real.getMemory(id);
-        return record === undefined ? undefined : { ...record, updatedAt: record.updatedAt - 1 };
+  it("keeps the fact the person changed while the capture was still running", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, "Ich nutze PostgreSQL 14", [stated("Ich nutze PostgreSQL 14")]);
+    let failures = 0;
+    const deps: UiHandlerDeps = {
+      ...makeDeps(vault, [stated("Ich nutze PostgreSQL 16")]),
+      modelPortFactory: () =>
+        changingDuringCall(scriptedModel([stated("Ich nutze PostgreSQL 16")]), () => {
+          changeWhileRunning(vault, ctx);
+        }),
+      diagnostics: {
+        record: (diagnostic): void => {
+          if (diagnostic.source === "memory-salience.settleCandidate") failures += 1;
+        },
       },
-    }));
+    };
+    await captureSalientFromTurn(
+      deps,
+      { content: "Ich nutze PostgreSQL 16", memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "ok",
+    );
 
     expect(liveBodies(vault, ctx)).toEqual(["Ich nutze PostgreSQL 14"]);
-    expect(failures).toBeGreaterThan(0);
+    expect(recordsWith(vault, ctx, "superseded")).toEqual([]);
+    expect(failures).toBe(1);
   });
 
   it("still settles the turn's other facts when one replacement lost its race", async () => {
     const vault = makeVault();
     const ctx = context();
     await say(vault, ctx, "Ich nutze PostgreSQL 14", [stated("Ich nutze PostgreSQL 14")]);
-    const stale: MemoryVaultStore = {
-      ...vault,
-      getMemory: (id): MemoryRecord | undefined => {
-        const record = vault.getMemory(id);
-        return record === undefined ? undefined : { ...record, updatedAt: record.updatedAt - 1 };
-      },
-    };
+    const items = [stated("Ich nutze PostgreSQL 16"), stated("Ich trinke gern Tee")];
     let failures = 0;
     const deps: UiHandlerDeps = {
-      ...makeDeps(stale, [stated("Ich nutze PostgreSQL 16"), stated("Ich trinke gern Tee")]),
+      ...makeDeps(vault, items),
+      modelPortFactory: () =>
+        changingDuringCall(scriptedModel(items), () => {
+          changeWhileRunning(vault, ctx);
+        }),
       diagnostics: {
         record: (diagnostic): void => {
           if (diagnostic.source === "memory-salience.settleCandidate") failures += 1;

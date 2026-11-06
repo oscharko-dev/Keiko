@@ -152,14 +152,23 @@ function replacementOptions(
 ): NoveltyInsertOptions {
   const learned = vault
     .listMemoriesByScope(candidate.scope, { status: ["accepted", "proposed"] })
-    .filter((record) => record.provenance.evidenceSpan !== undefined)
-    .map((record) => ({ id: record.id, body: record.body }));
-  const replaced = factReplacedByStatement(candidate.body, learned);
+    .filter((record) => record.provenance.evidenceSpan !== undefined);
+  const replaced = factReplacedByStatement(
+    candidate.body,
+    learned.map((record) => ({ id: record.id, body: record.body })),
+  );
   if (replaced === null) return {};
   const replaces = replaced.id as MemoryId;
+  const seen = learned.find((record) => record.id === replaces);
+  // The novelty gate awaits an embedding before the write. A fact changed meanwhile is no longer the
+  // one compared, so the clear statement is stored beside it and replaces nothing.
   return {
     replaces,
-    insert: (record) => applyLearnedSupersession(vault, record, replaces).record,
+    insert: (record): MemoryRecord => {
+      const current = vault.getMemory(replaces);
+      const unchanged = current?.status === seen?.status && current?.updatedAt === seen?.updatedAt;
+      return applyLearnedSupersession(vault, record, replaces, unchanged ? seen : undefined).record;
+    },
   };
 }
 
