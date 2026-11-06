@@ -1423,7 +1423,8 @@ Limits:
 
 - **Model.** The model was the one the dev UI was configured with, not an owner-approved model
   (item E of the proposal). Its evidence stays `functional-not-platform-qualified`.
-- **Coverage.** Only Ask for approval was exercised. Delivery and the other modes were not.
+- **Coverage.** All three modes and a local commit were exercised (see below). Push and pull
+  requests were not.
 - **User checkout.** A run on the user's own checkout (Lokal) gets no workspace grant. It still
   starts and then fails inside the runtime; it should be refused before spawn with a closed reason.
 - **Volumes.** The volume finding comes from one host and one non-system volume. A refusal that names
@@ -1446,6 +1447,28 @@ Write tasks, same host and setup, Ask for approval mode, new managed worktrees:
   materializer's check hash the secure text read, which drops a leading BOM. The patch inspection
   in `keiko-tools` hashes `readFileSync(…, "utf8")`, which keeps it, and the review admission
   compares the two. This is a platform-independent defect, tracked separately from this record.
+
+The other modes, same host, scratch repository with a `node --test` script:
+
+- **Supervised workspace.** The routine edit and the test command ran without asking. The run
+  reported `not-run`, because that repository had no test script yet, and did not claim success.
+- **Full access, with Git's defaults.** The edit and `npm test` passed. Every stage was then blocked
+  as `unsupported-transformation`, so nothing was committed. Git for Windows sets
+  `core.autocrlf=true` at system scope. Keiko stages only exact bytes and refuses while the effective
+  value is not `false`, which is a deliberate fail-closed rule. The model got no guidance for this
+  reason and guessed at file locks and hooks. The stage result now names the line-ending conversion
+  and the operator's local opt-out (`git config core.autocrlf false`), and tells the model not to
+  retry.
+- **Full access, with the repository opted out locally.** The edit, test, stage and verified commit
+  went through. The commit `feat: add multiply` landed on the task branch with a recorded commit
+  proof. Without an explicit message the model's first commit was refused by the message policy
+  (`missing-conventional-prefix`), and it stopped instead of correcting the message as its
+  instructions say. That is model behaviour, not a Windows defect.
+
+The W1 `HKCU\Environment` blocker stays open. On the same host a plain AppContainer root read the
+user's real key. A less privileged AppContainer, a deny entry for the tree's SID and a medium
+no-read-up label each failed to stop it; the proposal's section C records why. The remaining fix
+changes the key's own access list, which is an owner decision. No code for it is part of this branch.
 
 ## Update impact
 

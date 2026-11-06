@@ -947,6 +947,10 @@ const STAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
     "An editor session holds unsaved changes in this workspace, so the bytes to stage are not settled. Report the blocker; only the operator can save or discard them.",
   "proposal-limit":
     "Too many stage proposals are open. Redeem the ones you need with keiko_git_execute or let them expire before proposing again.",
+  // #4068: Git for Windows sets core.autocrlf=true for the whole system, so every stage there was
+  // refused and the model guessed at file locks and hooks.
+  "unsupported-transformation":
+    "Git would change these files' bytes while staging them: the effective core.autocrlf or core.safecrlf is not false (Git for Windows sets core.autocrlf=true by default), or a .gitattributes text, eol or filter rule applies. Keiko stages only the exact bytes it verified. Do not retry. Report to the operator that this repository must opt out locally, for example with `git config core.autocrlf false`, before Keiko can stage and commit here.",
 };
 
 // An unstage proposal is refused for its own reasons (#3902 AC2).

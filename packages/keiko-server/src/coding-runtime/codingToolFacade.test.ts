@@ -1321,6 +1321,45 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  // #4068: on a stock Git for Windows host the system scope sets core.autocrlf=true, so every stage
+  // was blocked as unsupported-transformation and the model guessed at file locks and hooks.
+  it("names the line-ending conversion and the operator's opt-out for a blocked stage", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        evidence: [],
+        git: {
+          kind: "stage",
+          proposalId: "stage-4068",
+          status: "blocked",
+          reason: "unsupported-transformation",
+          pathCount: 2,
+        },
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({
+        action: "git",
+        operation: "stage",
+        phase: "propose",
+        paths: ["math.js", "math.test.js"],
+      }),
+      capability,
+    });
+    const guidance = (result as { readonly guidance?: string }).guidance ?? "";
+
+    expect(result).toMatchObject({
+      status: "completed",
+      git: { kind: "stage", status: "blocked", reason: "unsupported-transformation" },
+    });
+    expect(guidance).toContain("core.autocrlf");
+    expect(guidance).toContain("git config core.autocrlf false");
+    expect(guidance).toContain("Do not retry");
+  });
+
   // #3907: a task branch Keiko refused is a completed Git result with a closed reason, and each
   // refusal the model can act on carries the one step that is its own.
   it.each([
