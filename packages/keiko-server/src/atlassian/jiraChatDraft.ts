@@ -454,13 +454,13 @@ async function runDraft(
     // Each item needs the keys its earlier items received; the journal admits one effect at a time.
     const settled: DraftItemResult =
       blocked === undefined
-        ? await runItem(
+        ? await /* NOSONAR typescript:S9382 -- next item needs prior keys, journal and budget. */ runItem(
             acknowledgingInput(input, item, current),
             item,
             run.keys,
             traces.get(item.ref),
             tally,
-          ) // NOSONAR typescript:S9382 -- dependency order
+          )
         : blockedItem(item, blocked, run.keys);
     // A valid 201/key remains known even when its read-back is interrupted.
     const retained = withAcknowledgedKey(settled, current.acknowledgement);

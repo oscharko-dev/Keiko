@@ -150,11 +150,14 @@ async function settleStartupModels(ctx: RouteContext, deps: UiHandlerDeps): Prom
   };
   try {
     do {
-      await raceAbortDeadline(
+      await /* NOSONAR typescript:S9382 -- discovery must precede its readiness. */ raceAbortDeadline(
         () => deps.waitForStartupGatewayCatalog?.() ?? Promise.resolve(),
         bounds,
       );
-      await awaitPendingConversationReadiness(deps, bounds);
+      await /* NOSONAR typescript:S9382 -- rejoin after prior generation settles. */ awaitPendingConversationReadiness(
+        deps,
+        bounds,
+      );
     } while (pendingConversationReadiness(deps).length > 0);
     return handleModels(ctx, deps);
   } finally {

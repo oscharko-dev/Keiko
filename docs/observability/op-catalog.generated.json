@@ -111303,7 +111303,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:3281",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:3284",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

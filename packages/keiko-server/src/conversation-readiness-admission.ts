@@ -179,16 +179,20 @@ export function withConversationReadinessAdmission(
   const stream = model.callStream.bind(model);
   return {
     call,
-    callStream: async function* (request, signal): AsyncIterable<GatewayStreamChunk> {
-      assert(request, signal);
-      const observation = deps.gatewayConfig?.verifiedCapability(modelId);
-      try {
-        yield* stream(request, signal);
-      } catch (error) {
-        observeConversationFailure(deps, admission, observation, request, error);
-        throw error;
-      }
-    },
+    callStream:
+      /* NOSONAR typescript:S7503 -- yield* awaits async next/throw/return delegation. */ async function* (
+        request,
+        signal,
+      ): AsyncIterable<GatewayStreamChunk> {
+        assert(request, signal);
+        const observation = deps.gatewayConfig?.verifiedCapability(modelId);
+        try {
+          yield* stream(request, signal);
+        } catch (error) {
+          observeConversationFailure(deps, admission, observation, request, error);
+          throw error;
+        }
+      },
   };
 }
 

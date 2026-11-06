@@ -151,7 +151,7 @@ class GatewayStartupChecks {
     let pending: Promise<void>;
     do {
       pending = this.catalogRead;
-      await pending;
+      await /* NOSONAR typescript:S9382 -- observe replacement after the current catalog settles. */ pending;
     } while (pending !== this.catalogRead);
   }
 

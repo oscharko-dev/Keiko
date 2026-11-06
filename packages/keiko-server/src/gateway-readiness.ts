@@ -3067,7 +3067,10 @@ export async function awaitPendingConversationReadiness(
   let generation: number | undefined;
   do {
     generation = deps.gatewayConfig?.generation();
-    await raceAbortDeadline(() => Promise.allSettled(pendingConversationReadiness(deps)), bounds);
+    await /* NOSONAR typescript:S9382 -- rejoin after current readiness settles. */ raceAbortDeadline(
+      () => Promise.allSettled(pendingConversationReadiness(deps)),
+      bounds,
+    );
   } while (generation !== deps.gatewayConfig?.generation());
 }
 
