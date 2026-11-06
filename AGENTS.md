@@ -1435,6 +1435,13 @@ second root review-policy file.
 test:e2e:smoke`. Performance-evidence and per-feature suites have their own `test:e2e:*` scripts.
 - Cover the input space, not one happy path: empty, boundary, malformed, and hostile inputs;
   both branches of every guard you add.
+- **Pure text rules also get seeded property tests** (`*.property.test.ts`) on the repo-owned
+  harness [`tests/support/property-testing.ts`](tests/support/property-testing.ts) — no
+  third-party dependency. It draws inputs from a fixed seed, shrinks a failure and prints
+  `KEIKO_PROPERTY_SEED=<n>` to replay it; `KEIKO_PROPERTY_RUNS=<n>` widens a local or nightly run.
+  `measureScaling` proves linear time by comparing two input sizes, never one absolute time. Guard
+  each property against vacuity (count what it actually reached) and prove it red against the
+  defect class it names before relying on it.
 
 ---
 

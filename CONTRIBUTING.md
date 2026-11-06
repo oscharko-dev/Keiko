@@ -15,6 +15,10 @@ on one independently reviewable result; split unrelated changes so a failed expe
 reverted without undoing unrelated work. Use the existing gates to verify the actual changed
 behavior and report command, result, environment and limitations in the PR.
 
+Rules that read free text (memory capture, redaction, intent parsing) carry seeded property tests
+beside their examples, on the shared harness in `tests/support/property-testing.ts`; AGENTS.md §10
+describes replay, scaling and the failure-first proof each property needs.
+
 Consult [EXPERIENCE.md](EXPERIENCE.md) for relevant repository traps and maintain a lesson only
 when evidence changes it. Review follows the existing
 [review standards](docs/qa/review-standards.md) and
