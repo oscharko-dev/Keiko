@@ -179,7 +179,7 @@ export function withConversationReadinessAdmission(
   const stream = model.callStream.bind(model);
   return {
     call,
-    callStream:
+    callStream /* NOSONAR typescript:S7503 -- async iterator delegation. */:
       /* NOSONAR typescript:S7503 -- yield* awaits async next/throw/return delegation. */ async function* (
         request,
         signal,

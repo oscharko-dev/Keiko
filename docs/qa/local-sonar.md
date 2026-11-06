@@ -74,6 +74,13 @@ A green `check:sonar-rules` therefore says **nothing** about these. Only a real 
 is what this command runs. The `Coverage and SonarCloud` job demands **zero** unresolved issues, so a
 single MINOR of this class fails the required `ci` context.
 
+PR #4276 also confirmed that `NOSONAR` must be on the diagnostic's **primary start line**, not a
+later line in its range. For an object-property async function, S7503 starts at the property name,
+even when `async function` starts on the following line. An async generator delegating with `yield*`
+already awaits the delegated async iterator and preserves its `next`/`throw`/`return` protocol;
+retain that behavior when recording this evidenced false positive. Check the reported primary
+location after formatting rather than assuming the `await` or `async` line is always its start.
+
 ## What it does, exactly
 
 1. Starts a **self-hosted** SonarQube (digest-pinned, bound to `127.0.0.1:9234`) from
