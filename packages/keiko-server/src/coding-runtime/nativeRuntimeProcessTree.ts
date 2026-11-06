@@ -23,6 +23,20 @@ export interface NativeRuntimeHelperProcess {
 // so a pipe that never closes cannot hold a reap judgement open (audit 2026-10, finding 7).
 const CONTROL_DRAIN_GRACE_MS = 2_000;
 
+// The supervisor's KRS1 error codes (keiko_runtime_supervisor.c `error_code`), as closed words.
+const SUPERVISOR_REFUSALS: Readonly<Record<number, string>> = {
+  1: "supervisor-protocol",
+  2: "supervisor-job-create",
+  3: "supervisor-process-create",
+  4: "supervisor-job-assign",
+  5: "supervisor-job-observe",
+  6: "supervisor-grants-frame",
+  7: "supervisor-grants-directory",
+  8: "supervisor-grants-acl",
+  9: "supervisor-grants-capability",
+  10: "supervisor-gateway-connect",
+};
+
 export class NativeRuntimeTree implements RuntimeProcessTree {
   public readonly treeId: string;
   public readonly stdin: Writable;
@@ -33,6 +47,7 @@ export class NativeRuntimeTree implements RuntimeProcessTree {
   private responseBytes = Buffer.alloc(0);
   private proved = false;
   private ended = false;
+  private refusal: string | undefined;
   // The helper exited but its control pipe has not closed yet: a proof may still arrive.
   private draining = false;
   private drainTimer: ReturnType<typeof setTimeout> | undefined;
@@ -132,7 +147,16 @@ export class NativeRuntimeTree implements RuntimeProcessTree {
       if (this.proved) this.resolveProofWaiters(true);
       return;
     }
+    if (kind === 3 && packet.length === RESPONSE_HEADER_BYTES + 2) {
+      this.refusal =
+        SUPERVISOR_REFUSALS[packet.readUInt16LE(RESPONSE_HEADER_BYTES)] ?? "supervisor-unknown";
+    }
     this.finish(null);
+  }
+
+  /** The closed step at which the supervisor refused the tree, when it said so (#4068). */
+  public failureReason(): string | undefined {
+    return this.refusal;
   }
 
   private finish(code: number | null, awaitControlDrain = false): void {

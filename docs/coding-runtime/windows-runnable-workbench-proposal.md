@@ -1,7 +1,8 @@
 # Proposal: a runnable Coding Workbench on Windows
 
 Issue [#4068](https://github.com/oscharko-dev/Keiko/issues/4068). Status: **draft for owner
-decision**, 2026-11-06. A1 is implemented for review; B–E remain proposals.
+decision**, 2026-11-06. A1 and B1 are implemented for review; C–E remain proposals. D1 is next:
+the confined runtime now starts, and the host's first request to it fails.
 
 ## Goal
 
@@ -72,6 +73,12 @@ reports `gateway-service-unqualified`.
     with a closed reason until a separate decision.
   - **Crash:** a stale ACE names a SID no later process can obtain. A startup sweep removes Keiko's
     stale `S-1-15-2-…` ACEs, mirroring the D18 crash rule.
+- **As implemented (2026-11-06, ADR-0043 D18).** It differs from the plan above in four points:
+  - The runtime root and the state directory are granted to the per-tree SID at launch and revoked
+    at reap. The plan named a per-installation capability for the runtime root.
+  - The worktree capability is derived from the worktree's canonical path.
+  - Its ACE is set at the worktree's first run and then kept.
+  - The startup sweep is not implemented yet.
 - **B2: per-run ACE on the worktree root.** The strongest isolation, but every run walks the whole
   tree to propagate it and then walks it again to remove it.
 - **B3: no grant; every read goes through a Keiko helper.** OpenCode's own working directory and
@@ -110,6 +117,9 @@ reports `gateway-service-unqualified`.
 3. **B1.**
    - The tree reads its worktree and writes its state.
    - Denied: another worktree, a user checkout, and the runtime root for writing.
+   - Implemented on 2026-11-06, ahead of D1, because without it the runtime could not start. The
+     runtime now starts confined and announces its server. The denial probes have not run on Windows 11
+     yet ([record](../qa/opencode-windows-qualification.md)).
 4. **C1 or C2.** The `HKCU\Environment` probe in `runtime_boundary.test.c` is denied, and every
    positive control passes.
 5. **First Workbench runs.**

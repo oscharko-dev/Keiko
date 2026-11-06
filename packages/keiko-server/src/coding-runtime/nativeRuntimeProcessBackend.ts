@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 import {
@@ -24,9 +24,13 @@ import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   encodeLaunchPacket,
+  encodeWindowsGatewayGrants,
   encodeWindowsGatewayOpen,
   validateLaunchPacketRequest,
+  validWindowsGrantCapability,
+  WINDOWS_FILESYSTEM_GRANTS_MAX,
   type ValidatedLaunchPacketPaths,
+  type WindowsFilesystemGrant,
 } from "./nativeRuntimeProcessProtocol.js";
 import {
   RUNTIME_CONFINEMENT_FAILED_OPERATION,
@@ -42,6 +46,7 @@ import { NativeRuntimeTree, type NativeRuntimeHelperProcess } from "./nativeRunt
 import {
   prepareRuntimeGatewayProcessSandbox,
   recordRuntimeGatewayConfinementSpawned,
+  recordWindowsGatewayConfinementSpawned,
   runtimeProfileAttestsGit,
 } from "./runtimeGatewayProcessSandbox.js";
 import type {
@@ -80,6 +85,8 @@ export interface NativeRuntimeProcessBackendOptions {
    * direct launches. Windows requires the pinned SCM helper and the mapped gateway policy.
    */
   readonly gatewayConfinement?: RuntimeGatewayConfinement | undefined;
+  /** The directories the confined Windows tree may reach (#4068); sent only with the gateway. */
+  readonly windowsFilesystemGrants?: readonly WindowsFilesystemGrant[] | undefined;
   /** Activity-log port for the closed gateway-confinement refusal below; defaults to the process sink. */
   readonly activityLog?: ServerLogSink | undefined;
   readonly probeAvailability?: (() => BackendAvailability) | undefined;
@@ -95,6 +102,7 @@ interface ValidatedBackendOptions {
   readonly identity: Pick<LongLivedRuntimeQualification, "platform" | "arch" | "backend">;
   readonly spawnHelper: NativeRuntimeHelperSpawn;
   readonly gatewayConfinement?: RuntimeGatewayConfinement | undefined;
+  readonly windowsFilesystemGrants: readonly WindowsFilesystemGrant[];
   readonly activityLog: ServerLogSink;
   readonly probeAvailability: () => BackendAvailability;
   readonly resolveGitExecutable: () => AttestedDarwinGitExecutable;
@@ -195,8 +203,10 @@ function spawnWindowsGateway(
   )
     invalidRequest();
   const pin = options.expectedHelperSha256 ?? invalidRequest();
+  // The supervisor reads these in order: the launch, the tree's filesystem grants, then the open.
   const packet = Buffer.concat([
     encodeLaunchPacket(request, paths),
+    encodeWindowsGatewayGrants(resolvedWindowsFilesystemGrants(options.windowsFilesystemGrants)),
     encodeWindowsGatewayOpen(policy, request.recoveryHandle),
   ]);
   const child = spawnVerifiedHelper(options.helperPath, pin, options.spawnHelper, [
@@ -205,6 +215,12 @@ function spawnWindowsGateway(
   ]);
   const tree = new NativeRuntimeTree(request.recoveryHandle, child);
   child.controlInput.write(packet);
+  recordWindowsGatewayConfinementSpawned(
+    options.activityLog,
+    request.runId,
+    policy,
+    options.windowsFilesystemGrants,
+  );
   return tree;
 }
 
@@ -238,6 +254,7 @@ function validateBackendOptions(
     ...(expectedHelperSha256 === undefined ? {} : { expectedHelperSha256 }),
     workspaceRoot,
     runtimeRoots,
+    windowsFilesystemGrants: validWindowsFilesystemGrants(options.windowsFilesystemGrants),
     identity:
       options.identity ??
       Object.freeze({
@@ -251,6 +268,38 @@ function validateBackendOptions(
     resolveGitExecutable: options.resolveGitExecutable ?? resolveDarwinGitExecutable,
     ...(gatewayConfinement === undefined ? {} : { gatewayConfinement }),
   };
+}
+
+/**
+ * Write access only ever goes to the tree's own SID, and a capability names a managed worktree's
+ * identity, nothing else (#4068). The directories may not exist yet: a run's private state is
+ * created after its backend, so each path resolves to its real directory at spawn.
+ */
+function validWindowsFilesystemGrants(
+  grants: readonly WindowsFilesystemGrant[] = [],
+): readonly WindowsFilesystemGrant[] {
+  if (grants.length > WINDOWS_FILESYSTEM_GRANTS_MAX || !grants.every(validWindowsFilesystemGrant))
+    throw new Error("native-runtime-config-invalid");
+  return Object.freeze([...grants]);
+}
+
+// The options arrive from the caller as data, so each grant's shape is checked as a closed pair.
+const WINDOWS_GRANT_SHAPES: ReadonlySet<string> = new Set([
+  "tree:read",
+  "tree:modify",
+  "capability:read",
+]);
+
+function validWindowsFilesystemGrant(grant: WindowsFilesystemGrant): boolean {
+  if (!isAbsolute(grant.path) || !WINDOWS_GRANT_SHAPES.has(`${grant.principal}:${grant.access}`))
+    return false;
+  return grant.principal === "tree" || validWindowsGrantCapability(grant.capability);
+}
+
+function resolvedWindowsFilesystemGrants(
+  grants: readonly WindowsFilesystemGrant[],
+): readonly WindowsFilesystemGrant[] {
+  return grants.map((grant) => ({ ...grant, path: safeRealDirectory(grant.path) }));
 }
 
 /**

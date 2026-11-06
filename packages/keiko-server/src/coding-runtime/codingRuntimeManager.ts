@@ -1642,7 +1642,13 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     // count-only, so without this record the numeric exit status exists nowhere: an operator sees
     // an opaque `runtime-failed` and has nothing to diagnose it with. The code is a bounded number,
     // never content, and rides the redacted channel keyed by the run's correlation id.
-    emitRuntimeExitDiagnostic(this.deps.diagnostics, active.context.runId, code, this.deps.now);
+    emitRuntimeExitDiagnostic(
+      this.deps.diagnostics,
+      active.context.runId,
+      code,
+      this.deps.now,
+      active.tree.failureReason?.(),
+    );
     // #3099 P1: publish the result-bearing crash teardown on `stopPromise` so a racing stop() /
     // takeover() / reconcile() awaits the REAL reap outcome — not a synthesized `{ok:true}` that
     // would let the orchestrator clear the active slot while the tree is still recovery-required
@@ -1929,6 +1935,8 @@ function emitRuntimeExitDiagnostic(
   runId: string,
   code: number | null,
   now: () => number,
+  // A closed supervisor refusal (#4068): without it a refused Windows launch read as "signal".
+  refusal?: string,
 ): void {
   const { frames } = describeError(new Error("runtime-exit-observed"));
   emitServerDiagnostic(diagnostics, {
@@ -1940,7 +1948,7 @@ function emitRuntimeExitDiagnostic(
     // Issue #3245: the process exit code is unbounded per-invocation data, not a fixed condition
     // label — moved to `code` (the field this data actually belongs on), `message` stays fixed.
     message: "runtime-exit-code",
-    code: code === null ? "signal" : String(code),
+    code: refusal ?? (code === null ? "signal" : String(code)),
     frames,
   });
 }

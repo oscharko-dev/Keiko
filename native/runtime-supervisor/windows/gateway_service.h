@@ -4,7 +4,8 @@
 
 struct keiko_gateway_connection {
   HANDLE pipe;
-  HANDLE server;
+  /* The running broker's PID as the SCM records it, matched against the pipe's server PID. */
+  DWORD server_pid;
   PSID sid;
   wchar_t profile[48];
   BYTE nonce[KEIKO_GATEWAY_CHALLENGE_BYTES];

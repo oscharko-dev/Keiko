@@ -51,27 +51,33 @@ static void tree_name(const BYTE *nonce, wchar_t name[48]) {
   name[offset] = 0;
 }
 
-/* Trust the system's running service PID, never an identity asserted by the pipe. Hold
- * the process through acknowledgement so Windows cannot recycle its PID. */
-static HANDLE scm_peer(HANDLE pipe) {
+static DWORD running_service_pid(void) {
   SC_HANDLE manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
   SC_HANDLE service = manager ? OpenServiceW(manager, KEIKO_GATEWAY_SERVICE_NAME, SERVICE_QUERY_STATUS) : NULL;
   SERVICE_STATUS_PROCESS status;
-  DWORD bytes, pid;
-  HANDLE server = NULL;
-  if (service && GetNamedPipeServerProcessId(pipe, &pid)) {
-    server = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (server && (!QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO, (BYTE *)&status,
-        sizeof(status), &bytes) || status.dwServiceType != SERVICE_WIN32_OWN_PROCESS ||
-        status.dwCurrentState != SERVICE_RUNNING || status.dwProcessId != pid ||
-        WaitForSingleObject(server, 0) != WAIT_TIMEOUT)) {
-      CloseHandle(server);
-      server = NULL;
-    }
-  }
+  DWORD bytes, pid = 0;
+  if (service && QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO, (BYTE *)&status,
+      sizeof(status), &bytes) && status.dwServiceType == SERVICE_WIN32_OWN_PROCESS &&
+      status.dwCurrentState == SERVICE_RUNNING)
+    pid = status.dwProcessId;
   if (service) CloseServiceHandle(service);
   if (manager) CloseServiceHandle(manager);
-  return server;
+  return pid;
+}
+
+/* Trust the system's running service PID, never an identity asserted by the pipe. The SCM's
+ * record of the running broker must name the process that serves this connected pipe.
+ *
+ * #4068: this no longer opens the broker process. It runs as LocalSystem, and Windows denies a
+ * standard user even SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION on it, so every
+ * non-elevated launch failed here; the hosted proofs run elevated and never saw it. Holding that
+ * handle is not what kept a recycled PID out: a connected pipe belongs to the process that served
+ * it, and if the broker exits the pipe breaks, so no later process can answer on it. */
+static int scm_peer(HANDLE pipe, DWORD *server_pid) {
+  DWORD pid = 0, service = running_service_pid();
+  if (service == 0 || !GetNamedPipeServerProcessId(pipe, &pid) || pid != service) return 0;
+  *server_pid = pid;
+  return 1;
 }
 
 int keiko_gateway_connect(struct keiko_gateway_connection *c) {
@@ -82,8 +88,10 @@ int keiko_gateway_connect(struct keiko_gateway_connection *c) {
     fprintf(stderr, "gateway pipe unavailable: %lu\n", GetLastError());
     return 0;
   }
-  c->server = scm_peer(c->pipe);
-  if (!c->server) { fputs("gateway SCM identity unavailable\n", stderr); return 0; }
+  if (!scm_peer(c->pipe, &c->server_pid)) {
+    fputs("gateway SCM identity unavailable\n", stderr);
+    return 0;
+  }
   if (!transfer(c->pipe, hello, sizeof(hello), TRUE, NULL) ||
       !transfer(c->pipe, c->nonce, CHALLENGE_SIZE, FALSE, NULL)) {
     fputs("gateway peer challenge unavailable\n", stderr); return 0;
@@ -101,18 +109,18 @@ int keiko_gateway_connect(struct keiko_gateway_connection *c) {
 int keiko_gateway_confirm(struct keiko_gateway_connection *c, HANDLE job, BYTE *frame) {
   BYTE acknowledgement[4 + CHALLENGE_SIZE];
   UINT64 value = (UINT64)(ULONG_PTR)job;
+  DWORD pid = 0;
   memcpy(frame + 12, c->nonce, CHALLENGE_SIZE);
   memcpy(frame + 76, &value, sizeof(value));
   return transfer(c->pipe, frame, KEIKO_GATEWAY_OPEN_BYTES, TRUE, NULL) &&
       transfer(c->pipe, acknowledgement, sizeof(acknowledgement), FALSE, NULL) &&
       !memcmp(acknowledgement, "KGA1", 4) &&
       !memcmp(acknowledgement + 4, c->nonce, CHALLENGE_SIZE) &&
-      WaitForSingleObject(c->server, 0) == WAIT_TIMEOUT;
+      scm_peer(c->pipe, &pid) && pid == c->server_pid;
 }
 
 void keiko_gateway_disconnect(struct keiko_gateway_connection *c) {
   if (c->pipe && c->pipe != INVALID_HANDLE_VALUE) CloseHandle(c->pipe);
-  if (c->server) CloseHandle(c->server);
   if (c->sid) {
     HRESULT deleted = DeleteAppContainerProfile(c->profile);
     if (FAILED(deleted)) fprintf(stderr, "gateway profile cleanup failed: %08lx\n", (unsigned long)deleted);

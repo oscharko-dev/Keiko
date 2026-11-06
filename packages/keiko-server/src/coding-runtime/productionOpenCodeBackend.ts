@@ -87,6 +87,7 @@ import {
 import { exactWorkspaceRead, type SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { createDevLaneRuntimeProcessBackend } from "./devLaneRuntimeProcessBackend.js";
 import { createNativeRuntimeProcessBackend } from "./nativeRuntimeProcessBackend.js";
+import type { WindowsFilesystemGrant } from "./nativeRuntimeProcessProtocol.js";
 import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
 import type { McpCredentialRelay } from "../mcp/mcpCredentialRelay.js";
 import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
@@ -661,7 +662,10 @@ function linkedFilesField(
   );
 }
 
-function nativePrivateStateRoot(input: LaunchInput, run: ProductionRuntimeBackendInput): string {
+function nativePrivateStateRoot(
+  input: Pick<ProductionOpenCodeBackendInput, "runtimeStateRoot">,
+  run: ProductionRuntimeBackendInput,
+): string {
   return join(
     realpathSync(input.runtimeStateRoot),
     "coding-runtime",
@@ -1322,7 +1326,11 @@ function runtimeSupervisor(
     backend: createNativeRuntimeProcessBackend({
       helperPath: input.portable.nativeHelperPath,
       ...(installedPin
-        ? { useInstalledWindowsGateway: true, expectedHelperSha256: installedPin }
+        ? {
+            useInstalledWindowsGateway: true,
+            expectedHelperSha256: installedPin,
+            windowsFilesystemGrants: windowsFilesystemGrants(input.portable, input, run),
+          }
         : {}),
       runtimeRoots: [join(input.portable.installRoot, input.portable.sidecar.payloadRootPath)],
       workspaceRoot,
@@ -1382,7 +1390,12 @@ function devLaneSupervisor(
     ...(installedPin ? { planSandbox: planWindowsGatewayRuntimeSandbox } : {}),
     backend: createNativeRuntimeProcessBackend({
       helperPath: portable.nativeHelperPath,
-      ...(installedPin ? { useInstalledWindowsGateway: true } : {}),
+      ...(installedPin
+        ? {
+            useInstalledWindowsGateway: true,
+            windowsFilesystemGrants: windowsFilesystemGrants(portable, input, run),
+          }
+        : {}),
       expectedHelperSha256: portable.nativeHelperSha256,
       runtimeRoots: [join(portable.installRoot, portable.sidecar.payloadRootPath)],
       workspaceRoot: run.context.workspaceRoot,
@@ -1498,6 +1511,42 @@ function gatewayFilesystem(
         : {}),
     },
   };
+}
+
+/**
+ * What a confined Windows tree may reach on disk (#4068, ADR-0043 D18). Its runtime and its private
+ * state are granted to the tree alone. A Keiko-managed worktree is readable through that worktree's
+ * capability. The mapped profile's tools act through Keiko's facade, so the private state is the
+ * only writable grant. A user's own checkout gets none.
+ */
+export function windowsFilesystemGrants(
+  portable: ResolvedPortableOpenCodeRuntime,
+  input: Pick<ProductionOpenCodeBackendInput, "runtimeStateRoot">,
+  run: ProductionRuntimeBackendInput,
+): readonly WindowsFilesystemGrant[] {
+  const grants: WindowsFilesystemGrant[] = [
+    {
+      path: join(portable.installRoot, portable.sidecar.payloadRootPath),
+      access: "read",
+      principal: "tree",
+    },
+    { path: nativePrivateStateRoot(input, run), access: "modify", principal: "tree" },
+  ];
+  if (run.resolveWorkspaceRootAccess()?.kind === "managed-task") {
+    grants.push({
+      path: run.context.workspaceRoot,
+      access: "read",
+      principal: "capability",
+      capability: windowsWorkspaceCapability(run.context.workspaceRoot),
+    });
+  }
+  return grants;
+}
+
+/** One capability per managed worktree, so only that worktree's runs can read it. */
+export function windowsWorkspaceCapability(workspaceRoot: string): string {
+  const identity = createHash("sha256").update(workspaceRoot.toLowerCase()).digest("hex");
+  return `keiko.workspace.${identity.slice(0, 32)}`;
 }
 
 /** A linked worktree's proven common Git directory, recorded body-free (#3897 review). */

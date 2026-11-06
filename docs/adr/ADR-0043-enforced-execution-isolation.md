@@ -46,6 +46,9 @@ without recording a command, argument, path or output (2026-10-06).
 elevate (2026-11-02); and D20: governed repository verification on Windows stays container-backed
 (2026-11-03).
 
+1.9 — #4068 amends D18 with the confined Windows tree's filesystem grants, and D19 with the broker
+lookups a standard user can make (2026-11-06).
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -822,6 +825,32 @@ list through the documented `NetworkIsolationSetAppContainerConfig` API
   the broker revokes the exemption of every SID that still carries a persistent durable deny
   guard; the guards themselves stay, and their recovery remains open work.
 
+Filesystem grants (amended 2026-11-06, #4068, pending owner approval in review). A fresh per-tree
+SID can open nothing it was not granted. On 2026-11-06 the first confined run on a standard user's
+machine could not load its own runtime. The host now sends the tree's grants to the supervisor as
+one closed `KGG1` frame, after the launch packet and before the broker open
+(`native/runtime-supervisor/windows/gateway_grants.c`):
+
+- **What.** The per-tree SID gets read on the runtime root and modify on the run's private state
+  directory. A managed task worktree gets read through the capability `keiko.workspace.<32 hex>`,
+  derived from the worktree's canonical path. The mapped tool profile changes files through Keiko's
+  facade, so the confined runtime never writes the worktree itself. No other path is granted.
+- **When.** The supervisor applies the grants once the broker has named the SID, before it creates
+  the runtime. If any grant fails, it revokes those already applied and refuses the run.
+- **Lifetime.** Tree grants are revoked when the tree is reaped. A crash can leave such an entry, but
+  its SID comes from a per-run nonce, so it grants nothing to a later process. The worktree
+  capability is set once, inheritable, and kept, so no per-run change touches the worktree's ACL. It
+  admits only AppContainer tokens that carry the capability, and the ordinary access check still
+  applies, so it grants nothing the user does not already hold.
+- **Refusals.** The frame is limited to eight grants, all on absolute paths. Write access through a
+  capability, an unknown capability name, a missing directory and a reparse point are refused. The
+  supervisor's refusal names the closed step that failed (`supervisor-grants-frame`,
+  `supervisor-grants-directory`, `supervisor-grants-acl`, `supervisor-grants-capability`,
+  `supervisor-gateway-connect`), and the runtime's exit diagnostic records it.
+- **Evidence.** `runtime.confinement.spawned` records `backend: windows-wfp`,
+  `childExecutablePolicy: appcontainer-inherited`, the number of tree grants and whether a worktree
+  capability applied. It never records a path or a capability name.
+
 D13 still holds: no D1–D10 denial is relaxed, and no endpoint beyond D11's attested gateway becomes
 reachable. The installed Windows transport proof (`test-windows-gateway-scm.ps1 -VerifyTransport`)
 is the qualification evidence for this decision. It passed on 2026-11-01 (head `9b851924a`, Windows Server 2025): the confined root connected to
@@ -873,7 +902,11 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
   `ERROR_ACCESS_DENIED`, and the launch path used the same lookup. The hosted runner had run every
   proof elevated, so it could not see this. Only the
   exact command line install writes is accepted. A configuration that names another image than the
-  one running still fails closed at the pipe's image-identity authentication.
+  one running still fails closed at the pipe's image-identity authentication. The launch's own pipe
+  authentication had the same defect: it opened the broker process, which a standard user cannot do,
+  so every confined launch was refused as a protocol error. The supervisor now accepts the pipe only
+  when its server process id is the one the service manager reports for the running service, and
+  checks that again before it confirms the tree.
 
 Every action records body-free lifecycle evidence as `cli.gateway-service.*`, with its closed `lane`
 (`release-qualified` or `dev-checkout`), and a change of broker state records

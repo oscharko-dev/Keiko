@@ -59,7 +59,10 @@ import { scriptedFunctionalPortable } from "./opencodeFunctionalHarness/_support
 import {
   createProductionOpenCodeBackend,
   recordContextTelemetry,
+  windowsFilesystemGrants,
+  windowsWorkspaceCapability,
 } from "./productionOpenCodeBackend.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import type {
   ProductionOpenCodeBackendInput,
   ResolvedPortableOpenCodeRuntime,
@@ -605,11 +608,49 @@ describe("production OpenCode backend composition", () => {
         expect.objectContaining({
           useInstalledWindowsGateway: true,
           expectedHelperSha256: portable.nativeHelperSha256,
+          // A user's own checkout: the tree gets its runtime and private state, and no worktree.
+          windowsFilesystemGrants: [
+            {
+              path: join(portable.installRoot, portable.sidecar.payloadRootPath),
+              access: "read",
+              principal: "tree",
+            },
+            expect.objectContaining({ access: "modify", principal: "tree" }),
+          ],
         }),
       );
       const facts = windowsGatewayServiceFacts({ activityLog: { write: vi.fn() } }, portable);
       // The fixture's helper is no executable, so the status read runs to no exit at all.
       expect(facts.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  // #4068 (proposal B1): a Keiko-managed worktree is readable through its own capability only.
+  it("grants a managed worktree read access through that worktree's capability", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-windows-managed-grants-"));
+    try {
+      const portable = windowsDevLaneRuntime(root);
+      const run = runInput(root);
+      const managed = {
+        ...run,
+        resolveWorkspaceRootAccess: (): WorkspaceRootAccess =>
+          ({ kind: "managed-task" }) as unknown as WorkspaceRootAccess,
+      };
+      const grants = windowsFilesystemGrants(portable, backendInput(root, portable), managed);
+      const capability = windowsWorkspaceCapability(run.context.workspaceRoot);
+
+      expect(capability).toMatch(/^keiko\.workspace\.[a-f0-9]{32}$/u);
+      expect(windowsWorkspaceCapability(run.context.workspaceRoot.toUpperCase())).toBe(capability);
+      expect(grants.at(-1)).toEqual({
+        path: run.context.workspaceRoot,
+        access: "read",
+        principal: "capability",
+        capability,
+      });
+      expect(grants.filter((grant) => grant.access === "modify")).toHaveLength(1);
+      expect(windowsFilesystemGrants(portable, backendInput(root, portable), run)).toHaveLength(2);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

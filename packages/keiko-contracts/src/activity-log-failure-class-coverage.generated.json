@@ -41194,6 +41194,18 @@
               "required": true
             },
             {
+              "name": "windowsTreeGrantCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "windowsWorktreeAccess",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "workspaceAccess",
               "type": "string",
               "dataClass": "closed-enum",
@@ -41203,6 +41215,7 @@
           "evidenceClasses": [
             "closed-enum",
             "completeness-state",
+            "count",
             "digest",
             "loss-state",
             "opaque-id"

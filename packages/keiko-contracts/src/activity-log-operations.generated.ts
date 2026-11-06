@@ -34364,7 +34364,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["bubblewrap", "unshare", "seatbelt"],
+        values: ["bubblewrap", "unshare", "seatbelt", "windows-wfp"],
       },
       policyDigest: {
         type: "string",
@@ -34406,7 +34406,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["namespace-inherited", "runtime-and-attested-git-only", "toolchain-inherited"],
+        values: [
+          "namespace-inherited",
+          "runtime-and-attested-git-only",
+          "toolchain-inherited",
+          "appcontainer-inherited",
+        ],
       },
       egressDisposition: {
         type: "string",
@@ -34449,6 +34454,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: ["read-write"],
+      },
+      windowsTreeGrantCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      windowsWorktreeAccess: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["capability-read", "none"],
       },
     },
     causal: "correlation",

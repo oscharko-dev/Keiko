@@ -1,4 +1,5 @@
 /* KRP1/KRC1/KRS1 no-shell Windows Job Object runtime supervisor. */
+#include "gateway_grants.h"
 #include "gateway_install.h"
 #include "gateway_service.h"
 #include <shlobj.h>
@@ -26,7 +27,14 @@ enum error_code {
   ERROR_JOB_CREATE = 2,
   ERROR_PROCESS_CREATE = 3,
   ERROR_JOB_ASSIGN = 4,
-  ERROR_JOB_OBSERVE = 5
+  ERROR_JOB_OBSERVE = 5,
+  /* #4068: the confined tree's filesystem grants, by the step that refused them. */
+  ERROR_GRANTS_FRAME = 6,
+  ERROR_GRANTS_DIRECTORY = 7,
+  ERROR_GRANTS_ACL = 8,
+  ERROR_GRANTS_CAPABILITY = 9,
+  /* The broker could not be reached or did not prove its SCM identity. */
+  ERROR_GATEWAY_CONNECT = 10
 };
 
 struct launch_request {
@@ -401,12 +409,18 @@ static int admit_gateway(struct keiko_gateway_connection *gateway, HANDLE job,
 }
 
 static int launch_in_job(const struct launch_request *request, HANDLE job,
-                         PROCESS_INFORMATION *process, struct keiko_gateway_connection *gateway) {
+                         PROCESS_INFORMATION *process, struct keiko_gateway_connection *gateway,
+                         struct keiko_gateway_grants *grants) {
   STARTUPINFOEXW startup;
   SECURITY_CAPABILITIES capabilities = {0};
   wchar_t *appdata = NULL;
   if (gateway) {
     capabilities.AppContainerSid = gateway->sid;
+    /* A managed worktree's capability, granted read access before this spawn (#4068). */
+    if (grants != NULL && grants->capability_count != 0) {
+      capabilities.Capabilities = grants->capabilities;
+      capabilities.CapabilityCount = grants->capability_count;
+    }
     /* AppContainer process creation needs LOCALAPPDATA even when the caller submits a
      * hermetic environment. Resolve it for this user; never trust a packet-supplied path. */
     if (FAILED(SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, NULL, &appdata))) return 0;
@@ -601,6 +615,7 @@ cleanup:
 
 int wmain(int argc, wchar_t **argv) {
   struct keiko_gateway_connection gateway = {0};
+  struct keiko_gateway_grants grants = {0};
   int confined = argc == 2 && wcscmp(argv[1], L"--gateway-supervised") == 0;
   struct launch_request request;
   PROCESS_INFORMATION process;
@@ -640,15 +655,31 @@ int wmain(int argc, wchar_t **argv) {
     return 1;
   }
   if (confined && !keiko_gateway_connect(&gateway)) {
-    send_error(ERROR_PROTOCOL);
+    send_error(ERROR_GATEWAY_CONNECT);
     goto cleanup;
+  }
+  /* #4068: the tree's filesystem grants follow the launch packet. They need the SID the broker
+   * just named and must exist before the suspended root does; a refused grant refuses the launch. */
+  if (confined && !keiko_gateway_grants_read(3, &grants)) {
+    send_error(ERROR_GRANTS_FRAME);
+    goto cleanup;
+  }
+  if (confined) {
+    int refused = keiko_gateway_grants_apply(&grants, gateway.sid);
+    if (refused != KEIKO_GRANTS_APPLIED) {
+      send_error(refused == KEIKO_GRANTS_REFUSED_DIRECTORY    ? ERROR_GRANTS_DIRECTORY
+                 : refused == KEIKO_GRANTS_REFUSED_CAPABILITY ? ERROR_GRANTS_CAPABILITY
+                                                              : ERROR_GRANTS_ACL);
+      goto cleanup;
+    }
   }
   job = configured_job(request.recovery_handle, &completion_port);
   if (job == NULL) {
     send_error(ERROR_JOB_CREATE);
     goto cleanup;
   }
-  if (!launch_in_job(&request, job, &process, confined ? &gateway : NULL)) {
+  if (!launch_in_job(&request, job, &process, confined ? &gateway : NULL,
+                     confined ? &grants : NULL)) {
     send_error(ERROR_PROCESS_CREATE);
     goto cleanup;
   }
@@ -667,6 +698,9 @@ cleanup:
   if (process.hProcess != NULL) CloseHandle(process.hProcess);
   if (completion_port != NULL) CloseHandle(completion_port);
   if (job != NULL) CloseHandle(job);
+  /* The tree is reaped or never started; its own grants go before its profile does. */
+  if (gateway.sid != NULL) keiko_gateway_grants_revoke(&grants, gateway.sid);
+  keiko_gateway_grants_clear(&grants);
   keiko_gateway_disconnect(&gateway);
   clear_request(&request);
   return result;

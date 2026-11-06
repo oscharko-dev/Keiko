@@ -1325,6 +1325,53 @@ Limits:
   because it needs an elevated shell.
 - No CI lane runs a checkout broker.
 
+## The confined tree gets its filesystem grants, and the runtime starts (W1/W11, 2026-11-06)
+
+Step B of the [proposal](../coding-runtime/windows-runnable-workbench-proposal.md) is implemented
+for review, and ADR-0043 D18 records the grants:
+
+- The per-tree SID gets read on the runtime root and modify on the run's private state directory.
+  Both are revoked when the tree is reaped.
+- A managed task worktree gets read through the capability `keiko.workspace.<32 hex>`, set once and
+  inheritable.
+- The supervisor applies the grants after the broker names the SID and before it creates the
+  runtime. It refuses the run if any grant fails.
+
+Same host, user and broker install as the previous section. The first launches with grants surfaced
+two more defects that the elevated hosted runner could not show:
+
+| Defect                                                                                                                                                                                | Seen on this host                                                                                                                 | Repair                                                                                                                                                                                                                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The host recorded every supervisor refusal as exit code `signal`.                                                                                                                     | The run exited before its handshake, and the log did not name the step that failed.                                               | The supervisor's refusal codes map to closed reasons, and the runtime's exit diagnostic records them.                                                                                                                                                                           |
+| The supervisor authenticated the broker pipe by opening the LocalSystem broker process. Windows denies a standard user even `SYNCHRONIZE \| PROCESS_QUERY_LIMITED_INFORMATION` on it. | Once the reason was visible, every confined launch was refused with `supervisor-protocol`, before any grant or protocol exchange. | The supervisor accepts the pipe only when its server process id is the one the service manager reports for the running service, and checks it again before it confirms the tree. A connected pipe belongs to the process that served it, so a recycled PID cannot answer on it. |
+
+Result:
+
+- **Spawn.** The next run was spawned confined and passed `target-attestation`,
+  `config-materialization` and `endpoint`. No supervisor refusal and no `runtime.confinement.failed`
+  were logged. Reaching `endpoint` means the runtime loaded and announced its server.
+- **Stop.** The host's `authenticated-health` request failed after about 320 ms
+  (`OpenCodeHandshakeFailure`), and the start settled as `protocol-schema-mismatch`.
+- **Cause (likely, not yet proven).** OpenCode listens inside the AppContainer, and nothing admits
+  the host's inbound connection. That is step D of the proposal and its verification item 2.
+
+That run predates the new `runtime.confinement.spawned` line for Windows. Launches of this build
+record `backend: windows-wfp`, the number of tree grants and whether a worktree capability applied,
+never a path or a capability name.
+
+Limits:
+
+- No model turn was reached.
+- The denial probes of the proposal's step B (another worktree, a user checkout, the runtime root
+  for writing) have not run on this host.
+- The proposal's startup sweep of stale tree ACEs is not implemented. A stale entry names a SID no
+  later process can obtain.
+- The worktree capability is derived from the worktree's canonical path, so a moved worktree
+  receives a new capability.
+- `gateway_grants.test.c` covers the frame, apply and revoke on temporary directories, a capability
+  that persists without duplicating, and a missing directory. It runs in
+  `check-windows-native-quality.ps1`.
+
 ## Update impact
 
 Release-impacting supervisor reliability fix: retain inherited-handle storage through Windows
