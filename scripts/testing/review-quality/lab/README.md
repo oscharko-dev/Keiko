@@ -83,6 +83,10 @@ Run everything from the checkout root.
 
 To stop a lab that is still up, for example after a crash, run `lab.sh stop`.
 
+`cleanup-proof.sh` checks the cleanup without models or network. It runs `lab.sh run` against stub
+servers on ports 18080, 18081 and 14000 and checks that a failing gate, Ctrl-C, SIGTERM and a taken
+port each keep the right exit status and leave no server running.
+
 ## Model builds
 
 | Role            | 4 bit                                                            | 8 bit                                                            |
