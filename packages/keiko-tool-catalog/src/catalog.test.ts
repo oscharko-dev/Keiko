@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { CatalogVersionRef } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogVersionRef,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   CATALOG_DIALECTS,
   compileToolProjection,
@@ -32,6 +35,22 @@ describe("canonical descriptors and version axes", () => {
       expect(() => createToolRef(id, 1)).toThrow();
     for (const version of [0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1])
       expect(() => createToolRef("keiko.fixture.read", version)).toThrow();
+  });
+  it("accepts the native timer ceiling and refuses a descriptor that would overflow it", () => {
+    const input = declaration();
+    const bounds = createToolDescriptor(input).bounds;
+    expect(() =>
+      createToolDescriptor({
+        ...input,
+        bounds: { ...bounds, maxDurationMs: Number.MAX_SAFE_INTEGER },
+      }),
+    ).toThrow("invalid-shape");
+    expect(
+      createToolDescriptor({
+        ...input,
+        bounds: { ...bounds, maxDurationMs: TOOL_CATALOG_LIMITS.maxDurationMs },
+      }).bounds.maxDurationMs,
+    ).toBe(TOOL_CATALOG_LIMITS.maxDurationMs);
   });
   it("freezes a detached descriptor and every nested schema", () => {
     const input = declaration();

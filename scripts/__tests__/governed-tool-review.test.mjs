@@ -6,6 +6,7 @@ import {
   keikoStackFrames,
   causeChain,
 } from "../../packages/keiko-activity-log/dist/stack-frames.js";
+import { GOVERNED_TOOL_CONTRACT_PINS as PINS } from "../lib/governed-tool-contract-pins.mjs";
 import { checkGovernedToolContractNegatives } from "../check-governed-tool-contract.mjs";
 import {
   checkInventoryProbes,
@@ -283,6 +284,7 @@ function inventoryFixture() {
   const sources = [
     ...original.inventory.filter((row) => !retired.includes(row.id)),
     ...Object.values(original.inventoryMigrations).flatMap((row) => row.replacements),
+    ...Object.values(PINS.retainedInventoryProbes).flat(),
   ];
   for (const source of sources) {
     const file = join(target, source.path);

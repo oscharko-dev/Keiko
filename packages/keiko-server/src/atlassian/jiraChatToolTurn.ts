@@ -2,6 +2,7 @@ import { reserveChatToolPrompt } from "../chat-tool-approvals.js";
 import { JIRA_TOOL_GUIDANCE } from "./jiraToolGuidance.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatMessage } from "../store/index.js";
 import {
   JIRA_MUTATION_OPERATIONS,
@@ -17,8 +18,6 @@ import {
 } from "./jiraChatAttachment.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { correlationIdOrUnknown } from "../correlation.js";
-import { ConversationModelNotReadyError } from "../conversation-readiness-admission.js";
-import { logConversationAdmission } from "../conversation-readiness-log.js";
 import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import {
   mintAcceptedJiraChatAuthority,
@@ -28,6 +27,8 @@ import {
 import {
   createJiraChatCatalogAdmission,
   jiraChatCatalogConsumerPort,
+  type JiraChatAdmissionOptions,
+  type JiraChatCatalogAction,
   type JiraChatCatalogConsumer,
   type JiraChatCatalogContext,
 } from "./jiraChatCatalogConsumer.js";
@@ -38,18 +39,18 @@ import {
   type JiraChatTemplatePreflightPorts,
 } from "./jiraChatTemplatePreflight.js";
 import { jiraChatMutationOutcome } from "./jiraChatMutationOutcome.js";
-import { jiraDraftUntracedAdvice, observedJiraDraftOutcome } from "./jiraChatDraft.js";
+import {
+  jiraDraftUntracedAdvice,
+  observedJiraDraftOutcome,
+  jiraDraftRequirementRefusal,
+} from "./jiraChatDraft.js";
 import { untracedAdvisory } from "./jiraChatCatalogRuntime.js";
 import type { TraceSession } from "../requirement-trace.js";
 import type {
   CatalogJsonObject,
   ToolResultEnvelope,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import {
-  ChatToolTurn,
-  bindChatToolCatalog,
-  chatModelSupportsTools as jiraChatModelSupportsTools,
-} from "../chat-tool-turn.js";
+import { ChatToolTurn, bindChatToolCatalog, mintAndBoundChatTurn } from "../chat-tool-turn.js";
 export { chatModelSupportsTools as jiraChatModelSupportsTools } from "../chat-tool-turn.js";
 type TurnDeps = JiraChatAuthorityDeps &
   JiraChatAttachmentDeps &
@@ -89,6 +90,101 @@ function draftUntracedAdvice(
     );
 }
 
+function draftRequirementsCheck(
+  openTrace: JiraChatTurnOptions["openTrace"],
+): JiraChatTemplatePreflightPorts["draftRequirements"] {
+  return (args, context): ReturnType<typeof jiraDraftRequirementRefusal> => {
+    const items = parseJiraDraft(args)?.items;
+    if (items === undefined) return undefined;
+    return jiraDraftRequirementRefusal(
+      items,
+      openTrace === undefined ? undefined : (): TraceSession => openTrace(context),
+      context.correlationId,
+    );
+  };
+}
+
+type ReviewAction = Pick<JiraChatCatalogAction, "actionId" | "argumentsDigest">;
+export type JiraChatTurnReviewPorts = Required<
+  Pick<JiraChatAdmissionOptions, "preflightWrite" | "attachmentPreview" | "draftItemRefs">
+>;
+interface JiraChatTurnReviewAccess {
+  readonly writeExchange: (actionId: string) => ChatToolExchange | undefined;
+  readonly reviewableWrite: (action: ReviewAction) => boolean;
+  readonly readAllowed: (action: JiraChatCatalogAction) => boolean;
+}
+
+/** The model's proposed write, only while it matches the persisted approval digest. */
+function proposedWriteArguments(
+  access: JiraChatTurnReviewAccess,
+  action: ReviewAction,
+): CatalogJsonObject | undefined {
+  const exchange = access.writeExchange(action.actionId);
+  const args: unknown = exchange?.call.arguments;
+  return exchange !== undefined &&
+    typeof args === "object" &&
+    args !== null &&
+    !Array.isArray(args) &&
+    sha256Hex(canonicalise(args)) === action.argumentsDigest
+    ? (args as CatalogJsonObject)
+    : undefined;
+}
+
+/** The same Jira review owners serve a Jira-only turn and a turn with other connected sources. */
+export function createJiraChatTurnReviewPorts(
+  options: JiraChatTurnOptions,
+  access: JiraChatTurnReviewAccess,
+): JiraChatTurnReviewPorts {
+  return {
+    preflightWrite: createJiraChatTemplatePreflight({
+      deps: options.deps,
+      writeArguments: (action) => proposedWriteArguments(access, action),
+      readAllowed: access.readAllowed,
+      draftRequirements: draftRequirementsCheck(options.openTrace),
+      untracedAdvice: draftUntracedAdvice(options.deps, options.openTrace),
+    }),
+    attachmentPreview: (action) => reviewedAttachment(options, access, action),
+    draftItemRefs: (action): readonly string[] | undefined => {
+      const args = proposedWriteArguments(access, action);
+      if (args === undefined || !access.reviewableWrite(action)) return undefined;
+      const draft = chatDraftArguments(options.deps.jiraDraftStore, options.message.chatId, args);
+      return draft.ok ? parseJiraDraft(draft.arguments)?.items.map((item) => item.ref) : undefined;
+    },
+  };
+}
+
+/** The file the model proposes to attach, read now for the human's review (#4176). */
+async function reviewedAttachment(
+  options: JiraChatTurnOptions,
+  access: JiraChatTurnReviewAccess,
+  action: JiraChatCatalogAction,
+): Promise<JiraAttachmentPreview | undefined> {
+  const { deps, message, correlationId, authority, signal } = options;
+  const args = proposedWriteArguments(access, action);
+  const parsed =
+    args !== undefined && access.reviewableWrite(action)
+      ? parseJiraAttachmentArguments(args)
+      : undefined;
+  if (parsed === undefined || !access.readAllowed(action)) return undefined;
+  // The instance's own limit bounds the review exactly as it bounds the send.
+  const maxBytes = await jiraChatAttachmentLimit(deps, {
+    chatId: message.chatId,
+    authorityReference: authority.reference,
+    signal,
+    correlationId,
+    readAllowed: () => access.readAllowed(action),
+  });
+  if (!access.readAllowed(action)) return undefined;
+  const preview = await previewJiraChatAttachment(
+    deps,
+    message.chatId,
+    parsed,
+    correlationId,
+    maxBytes,
+  );
+  return access.readAllowed(action) ? preview : undefined;
+}
+
 export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
   public constructor(private readonly jiraOptions: JiraChatTurnOptions) {
     const { authority, deps, managed, signal, correlationId, message } = jiraOptions;
@@ -123,67 +219,15 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
             context: () => current,
             now: Date.now,
             ...this.consentPorts(),
-            preflightWrite: createJiraChatTemplatePreflight({
-              deps,
-              writeArguments: (action) => this.proposedWriteArguments(action),
+            ...createJiraChatTurnReviewPorts(jiraOptions, {
+              writeExchange: (actionId) => this.writeExchange(actionId),
+              reviewableWrite: (action) => this.reviewableWrite(action),
               readAllowed: () => !current.signal.aborted,
-              untracedAdvice: draftUntracedAdvice(deps, jiraOptions.openTrace),
             }),
-            attachmentPreview: (action) => this.reviewedAttachment(action),
           }),
         }),
     });
   }
-  /** The model's proposed arguments for a write, only while they match the approval digest. */
-  private proposedWriteArguments(action: {
-    readonly actionId: string;
-    readonly argumentsDigest: string;
-  }): CatalogJsonObject | undefined {
-    const exchange = this.writeExchange(action.actionId);
-    const args: unknown = exchange?.call.arguments;
-    return exchange !== undefined &&
-      typeof args === "object" &&
-      args !== null &&
-      !Array.isArray(args) &&
-      sha256Hex(canonicalise(args)) === action.argumentsDigest
-      ? (args as CatalogJsonObject)
-      : undefined;
-  }
-
-  /** Refs of the draft the human reviews: the staged draft the call names, or its own items. */
-  protected override draftItemRefs(action: {
-    readonly actionId: string;
-    readonly argumentsDigest: string;
-  }): readonly string[] | undefined {
-    const exchange = this.writeExchange(action.actionId);
-    if (exchange === undefined || !this.reviewableWrite(action)) return undefined;
-    const { deps, message } = this.jiraOptions;
-    const draft = chatDraftArguments(deps.jiraDraftStore, message.chatId, exchange.call.arguments);
-    return draft.ok ? parseJiraDraft(draft.arguments)?.items.map((item) => item.ref) : undefined;
-  }
-
-  /** The file the model proposes to attach, read now for the human's review (#4176). */
-  private async reviewedAttachment(action: {
-    readonly actionId: string;
-    readonly argumentsDigest: string;
-  }): Promise<JiraAttachmentPreview | undefined> {
-    const { deps, message, correlationId, authority, signal } = this.jiraOptions;
-    const args: unknown = this.writeExchange(action.actionId)?.call.arguments;
-    const parsed =
-      this.reviewableWrite(action) && typeof args === "object" && args !== null
-        ? parseJiraAttachmentArguments(args as CatalogJsonObject)
-        : undefined;
-    if (parsed === undefined) return undefined;
-    // The instance's own limit bounds the review exactly as it bounds the send.
-    const maxBytes = await jiraChatAttachmentLimit(deps, {
-      chatId: message.chatId,
-      authorityReference: authority.reference,
-      signal,
-      correlationId,
-    });
-    return previewJiraChatAttachment(deps, message.chatId, parsed, correlationId, maxBytes);
-  }
-
   protected override reserveAuthorityPrompt(promptTokens: number): boolean {
     return reserveChatToolPrompt(this.jiraOptions, reserveCurrentJiraChatAuthority, promptTokens);
   }
@@ -244,32 +288,24 @@ export async function createJiraChatToolTurn(
   openTrace?: JiraChatTurnOptions["openTrace"],
 ): Promise<JiraChatToolTurn | undefined> {
   if (deps.store.findChatById(message.chatId)?.jiraPodBinding === undefined) return undefined;
-  if (!jiraChatModelSupportsTools(deps, modelId)) {
-    const generation = deps.gatewayConfig?.generation();
-    logConversationAdmission("observation-unavailable", correlationId, generation, generation);
-    throw new ConversationModelNotReadyError("tool-calling");
-  }
-  const authority = mintAcceptedJiraChatAuthority(deps, {
-    chatId: message.chatId,
-    userMessageId: message.id,
-    startedAtMs: message.timestamp,
-    nowMs: Date.now(),
-    correlationId: correlationIdOrUnknown(correlationId),
-  });
-  requireDispatch(
-    authority.ok && deps.jiraChatCatalog !== undefined,
-    "denied",
-    "authority-invalid",
+  const catalog = deps.jiraChatCatalog;
+  requireDispatch(catalog !== undefined, "denied", "authority-invalid");
+  const managed = await catalog.get();
+  const correlation = correlationIdOrUnknown(correlationId);
+  const bound = mintAndBoundChatTurn<JiraChatTurnOptions["authority"]>(
+    deps,
+    modelId,
+    message,
+    correlation,
+    (turn) => mintAcceptedJiraChatAuthority(deps, turn),
+    [signal],
   );
-  const remaining = Date.parse(authority.envelope.expiresAt) - Date.now();
-  requireDispatch(remaining > 0, "denied", "authority-expired");
   return new JiraChatToolTurn({
     deps,
     message,
-    authority,
-    managed: await deps.jiraChatCatalog.get(),
-    signal: AbortSignal.any([signal, AbortSignal.timeout(remaining)]),
-    correlationId: correlationIdOrUnknown(correlationId),
+    ...bound,
+    managed,
+    correlationId: correlation,
     openTrace,
   });
 }

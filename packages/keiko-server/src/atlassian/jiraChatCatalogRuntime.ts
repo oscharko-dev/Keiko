@@ -1,3 +1,4 @@
+import { createManagedChatCatalogRuntime } from "../tool-catalog/managedChatCatalogRuntime.js";
 import { randomUUID } from "node:crypto";
 import {
   createJiraDraftStore,
@@ -23,7 +24,7 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "../deps.js";
 import type { CatalogHandlerContext } from "../tool-catalog/catalogToolPorts.js";
 import type { CatalogLifecycleLogPort } from "../tool-catalog/catalogToolLifecycle.js";
-import { CatalogDispatchFault, requireDispatch } from "../tool-catalog/catalogToolErrors.js";
+import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import {
   createManagedProviderCatalog,
   managedCatalogToolDefinitions,
@@ -39,7 +40,7 @@ import {
   type JiraChatCatalogConsumer,
 } from "./jiraChatCatalogConsumer.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
-import { executeJiraChatDraft } from "./jiraChatDraft.js";
+import { executeJiraChatDraft, jiraDraftRequirementRefusal } from "./jiraChatDraft.js";
 import {
   chatReportRequirementIds,
   createKnowledgeRequirementsProvider,
@@ -56,7 +57,7 @@ import {
 } from "../requirement-trace.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
-import { jiraIssueTemplateSource } from "./jiraTemplateLog.js";
+import { jiraIssueTemplateSource, recordJiraTemplateMetadata } from "./jiraTemplateLog.js";
 import { recordJiraReportActivity } from "./jiraReportActivity.js";
 import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
 import { draftRefusalData, readableChatDraft } from "./jiraChatDraftArguments.js";
@@ -67,9 +68,6 @@ import {
 } from "./jiraChatAttachment.js";
 
 type ChatCatalog = ManagedProviderCatalog<JiraChatCatalogConsumer>;
-type CatalogInitialization =
-  | { readonly ok: true; readonly value: ChatCatalog }
-  | { readonly ok: false; readonly error: unknown };
 type MutationExecutor = JiraManagedMutationExecutor<CatalogHandlerContext<JiraChatCatalogConsumer>>;
 type ApprovalRegistry = NonNullable<UiHandlerDeps["atlassianActionApprovalRegistry"]>;
 const JIRA_CHAT_PROFILE = { id: "jira-chat", version: 1 } as const;
@@ -204,6 +202,9 @@ function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
         arguments: draft.arguments,
         deselected: approval?.excludedItemRefs ?? [],
         context,
+        retainProgress: (snapshot): void => {
+          context.retainDraftProgress?.(intent.invocationId, context.invocationId, snapshot);
+        },
         connection: jiraChatDraftConnection(deps, current.credential),
         openTrace: () => openTraceSession(deps, turn),
         // A draft a human reviewed runs as approved; the advisory guides an unreviewed one only.
@@ -356,6 +357,9 @@ function connection(
       correlationId: context.correlationId,
       review: () => attachmentReview(deps, current.envelope, context),
     }),
+    templateMetadataActivity: (activity): void => {
+      recordJiraTemplateMetadata(deps.activityLog, context.correlationId, activity);
+    },
   };
 }
 
@@ -383,6 +387,24 @@ function draftTool(
   return {
     store,
     owner: (context) => context.chatId,
+    checkRequirements: (items, context): ReturnType<typeof jiraDraftRequirementRefusal> => {
+      context.signal.throwIfAborted();
+      requireDispatch(context.beforeEffect(), "denied", "effect-denied");
+      const refusal = jiraDraftRequirementRefusal(
+        items,
+        () =>
+          openTraceSession(deps, {
+            chatId: context.chatId,
+            userMessageId: context.userMessageId,
+            correlationId: context.correlationId,
+          }),
+        context.correlationId,
+      );
+      if (refusal === undefined) return undefined;
+      const data = { ...refusal.data };
+      delete data.items;
+      return { ...refusal, data };
+    },
     activity: (activity, context): void => {
       recordJiraDraftActivity(deps.activityLog, context.correlationId, activity);
     },
@@ -447,48 +469,9 @@ export function createJiraChatCatalogRuntime(
   store: JiraReportStore = createJiraReportStore(),
   draftStore: JiraDraftStore = createJiraDraftStore(),
 ): JiraChatCatalogRuntime {
-  let catalog: Promise<CatalogInitialization> | undefined;
-  let closing: Promise<void> | undefined;
-  let closed = false;
-  const requireOpen = (): void => {
-    if (closed) throw new CatalogDispatchFault("failed", "handler-unavailable");
-  };
-  const initialize = (): Promise<CatalogInitialization> => {
-    const pending: Promise<CatalogInitialization> = initializeCatalog(
-      deps,
-      log,
-      store,
-      draftStore,
-    ).then(
-      (value) => ({ ok: true, value }),
-      (error: unknown) => {
-        // The managed initializer logs and disposes this failed host. Preserve the error for
-        // its waiting callers, but never let that attempt poison a later initialization.
-        if (catalog === pending) catalog = undefined;
-        return { ok: false, error };
-      },
-    );
-    return pending;
-  };
-  return {
-    toolDefinitions: staticToolDefinitions(deps, store, draftStore),
-    get: async (): Promise<ChatCatalog> => {
-      requireOpen();
-      catalog ??= initialize();
-      const admitted = await catalog;
-      if (!admitted.ok) throw admitted.error;
-      requireOpen();
-      return admitted.value;
-    },
-    close: (): Promise<void> => {
-      closed = true;
-      closing ??=
-        catalog === undefined
-          ? Promise.resolve()
-          : catalog.then((admitted) => (admitted.ok ? admitted.value.close() : undefined));
-      return closing;
-    },
-  };
+  return createManagedChatCatalogRuntime(staticToolDefinitions(deps, store, draftStore), () =>
+    initializeCatalog(deps, log, store, draftStore),
+  );
 }
 
 export function installJiraChatCatalogRuntime(

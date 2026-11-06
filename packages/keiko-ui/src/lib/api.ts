@@ -4,8 +4,11 @@
  * Never logs response bodies.
  */
 
+import { reinspectSessionAfterMutationRefusal } from "./bff-session-reinspection";
+
 import type {
   BffError,
+  GatewayModelsResponseWire,
   ChatConnectedScope,
   ChatGitChangeScope,
   ChatLocalKnowledgeScope,
@@ -294,9 +297,10 @@ function combineAbortSignals(caller: AbortSignal, deadline: AbortSignal): AbortS
 function withReadDeadline(
   init: RequestInit | undefined,
   isStateChanging: boolean,
+  readTimeoutMs = DEFAULT_READ_TIMEOUT_MS,
 ): AbortSignal | null {
   if (isStateChanging) return init?.signal ?? null;
-  const deadline = AbortSignal.timeout(DEFAULT_READ_TIMEOUT_MS);
+  const deadline = AbortSignal.timeout(readTimeoutMs);
   const caller = init?.signal;
   return caller === undefined || caller === null ? deadline : combineAbortSignals(caller, deadline);
 }
@@ -320,16 +324,17 @@ async function fetchJson<T>(
   init?: RequestInit,
   validator?: ResponseValidator,
   correlationId?: string,
+  readTimeoutMs?: number,
 ): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const isStateChanging = method !== "GET" && method !== "HEAD";
   const res = await fetch(path, {
     ...init,
-    signal: withReadDeadline(init, isStateChanging),
+    signal: withReadDeadline(init, isStateChanging, readTimeoutMs),
     headers: fetchJsonHeaders(init, isStateChanging, correlationId),
   });
 
-  if (!res.ok) throw await bffFailure(res);
+  if (!res.ok) throw await bffFailure(res, method, path);
 
   if (res.status === 204) {
     return undefined as T;
@@ -348,7 +353,7 @@ async function fetchJson<T>(
 // transport's own record of the id; the envelope carries the same id when a route writes it into
 // the body. Either ties this failure to one redacted server diagnostic (#3385 — a refused issue
 // preview names its correlation id in the UI state).
-async function bffFailure(res: Response): Promise<ApiError> {
+async function bffFailure(res: Response, method = "GET", path?: string): Promise<ApiError> {
   let code = "INTERNAL";
   let message = `HTTP ${res.status.toString()}`;
   let envelopeCorrelationId: string | undefined;
@@ -366,6 +371,7 @@ async function bffFailure(res: Response): Promise<ApiError> {
   const error = new ApiError(code, message, res.status);
   const correlationId = res.headers.get(CORRELATION_HEADER) ?? envelopeCorrelationId;
   if (correlationId !== undefined) error.correlationId = correlationId;
+  await reinspectSessionAfterMutationRefusal(error, method, path);
   return error;
 }
 
@@ -550,7 +556,7 @@ export type { FetchConfigResponse };
 // ---------------------------------------------------------------------------
 
 interface InflightModelsRequest {
-  readonly promise: Promise<{ models: ModelCapability[] }>;
+  readonly promise: Promise<GatewayModelsResponseWire>;
   readonly correlationId: string | undefined;
 }
 
@@ -566,7 +572,17 @@ let modelsRefreshRequest: InflightModelsRequest | undefined;
 export async function fetchModels(
   correlationId?: string,
   refreshCatalog = false,
-): Promise<{ models: ModelCapability[] }> {
+  startup?: { readonly waitForStartup: true; readonly signal: AbortSignal },
+): Promise<GatewayModelsResponseWire> {
+  if (startup !== undefined) {
+    return fetchJson<GatewayModelsResponseWire>(
+      "/api/models?settleStartup=1",
+      { cache: "no-store", signal: startup.signal },
+      undefined,
+      correlationId,
+      600_000,
+    );
+  }
   const candidates = refreshCatalog
     ? [modelsRefreshRequest]
     : [modelsRefreshRequest, modelsRequest];
@@ -575,7 +591,7 @@ export async function fetchModels(
     (request) => request !== undefined && request.correlationId === correlationId,
   );
   if (active === undefined) {
-    const pending = fetchJson<{ models: ModelCapability[] }>(
+    const pending = fetchJson<GatewayModelsResponseWire>(
       refreshCatalog ? "/api/models?refresh=1" : "/api/models",
       {
         cache: "no-store",
@@ -754,7 +770,7 @@ export async function streamAssistantSpeech(
     throw failure;
   });
   if (!res.ok) {
-    const error = await bffFailure(res);
+    const error = await bffFailure(res, "POST", "/api/voice/speak/stream");
     error.correlationId ??= correlationId;
     throw error;
   }
@@ -1790,7 +1806,7 @@ export async function sendDesktopChatStream(
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("text/event-stream")) {
-    const failure = await bffFailure(res);
+    const failure = await bffFailure(res, "POST", "/api/desktop/chat/stream");
     failure.correlationId ??= responseCorrelationId;
     if (failure.code !== "STREAMING_UNSUPPORTED") throw failure;
     const unavailable = new StreamingUnavailableError(failure.code, failure.message);

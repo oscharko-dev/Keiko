@@ -19,10 +19,10 @@ import {
   type JiraPodAccessDeps,
 } from "../atlassian/jiraPodAccess.js";
 import {
-  activityErrorFields,
+  activityActionFields,
   activityStateLevel,
-  definedActivityFields,
   type ActivityActionLine,
+  type ActivityCountFields,
 } from "../activity-line-fields.js";
 
 /**
@@ -183,7 +183,7 @@ export function codingRunMcpServers(
 
 // ─── Activity Log ───────────────────────────────────────────────────────────────────────────────
 
-const JIRA_POD_ACTIONS = ["bind", "call"] as const;
+const JIRA_POD_ACTIONS = ["bind", "call", "serialize-description"] as const;
 const JIRA_POD_OUTCOMES = ["bound", "refused", "completed", "failed"] as const;
 const JIRA_POD_REASONS = [
   "unavailable",
@@ -251,6 +251,7 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
     linkRequestedCount: { type: "integer", dataClass: "count", required: false },
     linkCreatedCount: { type: "integer", dataClass: "count", required: false },
     linkFailedCount: { type: "integer", dataClass: "count", required: false },
+    descriptionConvertedHeadingCount: { type: "integer", dataClass: "count", required: false },
     durationMs: { type: "integer", dataClass: "duration", required: false },
     frames: {
       type: "string-array",
@@ -279,18 +280,36 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
-export interface CodingJiraPodLine extends ActivityActionLine<
-  (typeof JIRA_POD_ACTIONS)[number],
-  (typeof JIRA_POD_OUTCOMES)[number],
-  (typeof JIRA_POD_REASONS)[number]
-> {
-  readonly tool?: CodingJiraTool | undefined;
+export interface CodingJiraPodLine
+  extends
+    ActivityActionLine<
+      (typeof JIRA_POD_ACTIONS)[number],
+      (typeof JIRA_POD_OUTCOMES)[number],
+      (typeof JIRA_POD_REASONS)[number]
+    >,
+    ActivityCountFields<
+      | "toolCount"
+      | "linkRequestedCount"
+      | "linkCreatedCount"
+      | "linkFailedCount"
+      | "descriptionConvertedHeadingCount"
+    > {
+  readonly tool?:
+    (typeof JIRA_MANAGED_READ_TOOLS)[number] | (typeof CODING_JIRA_MUTATIONS)[number] | undefined;
   readonly risk?: McpToolRisk | undefined;
-  readonly toolCount?: number | undefined;
-  readonly linkRequestedCount?: number | undefined;
-  readonly linkCreatedCount?: number | undefined;
-  readonly linkFailedCount?: number | undefined;
 }
+
+const CODING_JIRA_POD_LINE_FIELDS = [
+  "reason",
+  "tool",
+  "risk",
+  "toolCount",
+  "linkRequestedCount",
+  "linkCreatedCount",
+  "linkFailedCount",
+  "descriptionConvertedHeadingCount",
+  "durationMs",
+] as const;
 
 /** Closed values and counts only: never a Pod id or name, a URL, an issue key or any text. */
 export function recordCodingJiraPod(
@@ -305,21 +324,7 @@ export function recordCodingJiraPod(
         correlationId,
         ...activityStateLevel(line.outcome),
       },
-      {
-        action: line.action,
-        outcome: line.outcome,
-        ...definedActivityFields(line, [
-          "reason",
-          "tool",
-          "risk",
-          "toolCount",
-          "linkRequestedCount",
-          "linkCreatedCount",
-          "linkFailedCount",
-          "durationMs",
-        ] as const),
-        ...activityErrorFields(line),
-      },
+      activityActionFields(line, CODING_JIRA_POD_LINE_FIELDS),
     ),
   );
 }

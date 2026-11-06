@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "47c77eae5c4f33e8291fe16322fb75a82d4aaca3df0580bf2e4c757c6201f804"
+    "catalogDigest": "ccbca353caf09ca9a5f895d12fa4dbc59a78d96a06f7e9b812b3f353956182a3"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 645,
-    "proofCount": 667,
-    "resolvedProofCount": 667,
-    "failureClassCount": 392,
+    "operationCount": 642,
+    "proofCount": 664,
+    "resolvedProofCount": 664,
+    "failureClassCount": 389,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -142,6 +142,7 @@
         "jira.attachment.source",
         "jira.field.admission",
         "jira.template.admission",
+        "jira.template.metadata",
         "pr-description.chat.turn.admitted",
         "pr-description.chat.turn.denied",
         "project.workspace.reconnect",
@@ -241,6 +242,7 @@
         "embedding.scalar-ladder.item-completed",
         "embedding.scalar-ladder.item-failed",
         "gateway.catalog.automatic.completed",
+        "gateway.catalog.metadata.wait",
         "gateway.chat.completed",
         "gateway.chat.failed",
         "gateway.chat.started",
@@ -389,7 +391,6 @@
         "coding-runtime.mentions.listed",
         "coding-runtime.native-external-roots.resolved",
         "coding-runtime.native-formatter.bound",
-        "coding-runtime.native-mcp-local.refused",
         "coding-runtime.native-narrowing.refused",
         "coding-runtime.native-policy.decided",
         "coding-runtime.native-question.observed",
@@ -444,7 +445,6 @@
         "coding-runtime.verification",
         "coding-runtime.verification-summarized",
         "coding-runtime.websearch.performed",
-        "coding-runtime.windows-gateway-service",
         "coding-runtime.workspace-discovery",
         "coding-runtime.workspace-read",
         "coding-sidecar.gateway.outcome",
@@ -558,6 +558,7 @@
         "indexing.source.started",
         "indexing.start.accepted",
         "indexing.start.refused",
+        "knowledge.documents.operation",
         "knowledge.log.sink-failed",
         "knowledge.requirement-trace.applied",
         "knowledge.requirements.read",
@@ -762,9 +763,6 @@
         "cli.audit.completed",
         "cli.audit.failed",
         "cli.audit.started",
-        "cli.gateway-service.completed",
-        "cli.gateway-service.failed",
-        "cli.gateway-service.started",
         "cli.install-layout.normalized",
         "cli.support.export.failed",
         "cli.uninstall.completed",
@@ -793,7 +791,6 @@
         "security.windows-lifecycle-opener.system-binary-missing",
         "security.windows-lifecycle-opener.system-root-refused",
         "security.windows-local-volume.refused",
-        "security.windows-owner-private.refused",
         "security.windows-portable-alert.system-binary-missing",
         "security.windows-portable-alert.system-root-refused",
         "security.windows-portable-legacy-launcher.system-binary-missing",
@@ -864,8 +861,6 @@
     "chat-admission": ["bff.rejection"],
     "chat-turn": ["bff.dependency-failure"],
     "cli-audit": ["runtime-packages.dependency-failure"],
-    "cli-gateway-service": ["runtime-packages.dependency-failure"],
-    "windows-gateway-service": ["tools-workflows.dependency-failure"],
     "cli-install-layout-normalization": ["runtime-packages.dependency-failure"],
     "cli-support-export": ["runtime-packages.dependency-failure"],
     "cli-uninstall": ["runtime-packages.dependency-failure"],
@@ -1211,7 +1206,6 @@
     "windows-alert-spawn": ["lifecycle-crash.dependency-failure"],
     "windows-authenticode-system-binary": ["runtime-packages.rejection"],
     "windows-local-volume": ["runtime-packages.rejection"],
-    "windows-owner-private": ["runtime-packages.rejection"],
     "windows-shortcut-system-binary": ["runtime-packages.dependency-failure"],
     "windows-shortcut-system-root": ["runtime-packages.rejection"],
     "windows-system-binary-unavailable": ["runtime-packages.dependency-failure"],
@@ -1390,6 +1384,7 @@
       "packages/keiko-server/src/atlassian/chatWriteApprovalState.test.ts"
     ],
     "chat.tool-mutation.emitted-line": [
+      "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts",
       "packages/keiko-server/src/store/chatToolMutations.test.ts"
     ],
     "chat.tool-mutation.projected.line": [
@@ -1401,19 +1396,15 @@
     "chat.tool-turn.context-fitted.line": [
       "packages/keiko-server/src/chat-tool-turn-ending.test.ts"
     ],
-    "chat.tool-turn.corrected.line": ["packages/keiko-server/src/chat-tool-turn-ending.test.ts"],
+    "chat.tool-turn.corrected.line": [
+      "packages/keiko-server/src/atlassian/jiraChatToolTurn.test.ts",
+      "packages/keiko-server/src/chat-tool-turn-ending.test.ts"
+    ],
     "chat.tool-turn.ended.line": ["packages/keiko-server/src/chat-tool-turn-ending.test.ts"],
     "chat.turn.started.shape": ["packages/keiko-server/src/chat-activity.test.ts"],
     "cli.audit.completed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
     "cli.audit.failed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
     "cli.audit.started.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
-    "cli.gateway-service.completed.real-sink-line": [
-      "packages/keiko-cli/src/gateway-service.test.ts"
-    ],
-    "cli.gateway-service.failed.real-sink-line": ["packages/keiko-cli/src/gateway-service.test.ts"],
-    "cli.gateway-service.started.real-sink-line": [
-      "packages/keiko-cli/src/gateway-service.test.ts"
-    ],
     "cli.install-layout.normalized.before-support-snapshot": [
       "packages/keiko-cli/src/install-layout.activity-log-proof.test.ts"
     ],
@@ -1732,9 +1723,6 @@
     "coding-runtime.native-formatter.bound.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
-    "coding-runtime.native-mcp-local.refused.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
-    ],
     "coding-runtime.native-narrowing.refused.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
@@ -1865,8 +1853,7 @@
     ],
     "coding-runtime.session-continuity.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingSessionContinuity.test.ts",
-      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
-      "packages/keiko-server/src/coding-runtime/opencodeSessionRetention.test.ts"
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
     "coding-runtime.sidecar-session.bound.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
@@ -1904,9 +1891,6 @@
     ],
     "coding-runtime.websearch.performed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/nativeWebSearch.test.ts"
-    ],
-    "coding-runtime.windows-gateway-service.real-sink-line": [
-      "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.test.ts"
     ],
     "coding-runtime.workspace-discovery.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolDiscoveryLifecycle.test.ts",
@@ -2127,6 +2111,9 @@
     ],
     "evidence.retention.line": ["packages/keiko-server/src/evidence-retention-log.test.ts"],
     "gateway.catalog.automatic.completed.line": [
+      "packages/keiko-server/src/gateway-startup-catalog.test.ts"
+    ],
+    "gateway.catalog.metadata.wait.line": [
       "packages/keiko-server/src/gateway-startup-catalog.test.ts"
     ],
     "gateway.chat.completed.emitted-line": [
@@ -2577,6 +2564,12 @@
     "jira.template.admission.line": [
       "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts"
     ],
+    "jira.template.metadata.line": [
+      "packages/keiko-server/src/atlassian/jiraCreateTemplateMetadata.test.ts"
+    ],
+    "knowledge.documents.operation.line": [
+      "packages/keiko-server/src/knowledgeDocumentsTool.test.ts"
+    ],
     "knowledge.log.sink-failed.body-free": [
       "packages/keiko-local-knowledge/src/knowledge-log.test.ts"
     ],
@@ -2737,7 +2730,6 @@
     ],
     "runtime.confinement.spawned.emitted-line": [
       "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.test.ts",
-      "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.windows-grants.test.ts",
       "packages/keiko-server/src/coding-runtime/runtimeGatewayProcessSandbox.egress.test.ts"
     ],
     "runtime.confinement.unavailable.emitted-line": [
@@ -2900,9 +2892,6 @@
     ],
     "security.windows-local-volume.refused.phase": [
       "packages/keiko-security/src/windows-local-volume.test.ts"
-    ],
-    "security.windows-owner-private.refused.phase": [
-      "packages/keiko-security/src/windows-owner-private.test.ts"
     ],
     "security.windows-portable-alert.system-binary-missing.emitted-line": [
       "packages/keiko-cli/src/security-log.activity-log-proof.test.ts"

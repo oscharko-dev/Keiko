@@ -1,4 +1,7 @@
-import type { JiraIssueTemplateSource } from "@oscharko-dev/keiko-connectors";
+import type {
+  JiraIssueTemplateSource,
+  JiraManagedConnection,
+} from "@oscharko-dev/keiko-connectors";
 import {
   type JiraFieldValidationFailure,
   type JiraMutationAttempt,
@@ -22,12 +25,66 @@ export function jiraIssueTemplateSource(
   return () => {
     const entries = store.markdownSkills.jiraTemplates();
     const broken = entries.filter((entry) => entry.template === undefined);
+    // The parser cache shares equal bodies; each stored revision needs its own source binding.
+    const readable = entries.flatMap(({ skill, template }) =>
+      template === undefined ? [] : [{ skill, template: { ...template } }],
+    );
     return {
-      templates: entries.flatMap((entry) => (entry.template === undefined ? [] : [entry.template])),
+      templates: readable.map(({ template }) => template),
+      references: readable.map(({ skill, template }) => ({
+        template,
+        id: skill.id,
+        revision: skill.revision,
+        digest: skill.digest,
+      })),
       unreadable: broken.length,
       unreadableNames: broken.map((entry) => entry.skill.name),
     };
   };
+}
+
+type TemplateMetadataActivity = Parameters<
+  NonNullable<JiraManagedConnection["templateMetadataActivity"]>
+>[0];
+const METADATA_COUNT = { type: "integer", dataClass: "count", required: true } as const;
+const TEMPLATE_METADATA = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "jira.template.metadata",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "atlassian.jiraTemplateLog.recordJiraTemplateMetadata",
+  fields: {
+    matchedCount: METADATA_COUNT,
+    returnedCount: METADATA_COUNT,
+    omittedCount: METADATA_COUNT,
+    unreadableCount: METADATA_COUNT,
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["markdown-skill-library"],
+  proofIds: ["jira.template.metadata.line"],
+  releaseImpact: "patch",
+});
+
+/** Counts only: no template identifiers, names, section titles, field names or bodies. */
+export function recordJiraTemplateMetadata(
+  sink: UiHandlerDeps["activityLog"],
+  correlationId: string | undefined,
+  activity: TemplateMetadataActivity,
+): void {
+  (sink ?? processServerLogSink()).write(
+    activityLogEvent(
+      TEMPLATE_METADATA,
+      {
+        correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+      },
+      { ...activity, completeness: "complete", loss: "none" },
+    ),
+  );
 }
 
 const TEMPLATE_ADMISSION = defineActivityLogOperation({

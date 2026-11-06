@@ -62,6 +62,30 @@ afterEach(() => {
 });
 
 describe("Jira write approvals never show the request as JSON (#4178)", () => {
+  it.each(["jira.create", "jira.draft"] as const)(
+    "shows the canonical Data Center description without mutating %s arguments",
+    async (operation) => {
+      const description =
+        "## Requirement\nExact\n## Criteria\n* one\n* two\n* three\n* four\n* five\n## Source\nExact source";
+      const fields = Object.freeze({
+        summary: "Synthetic",
+        description: Object.freeze({ format: "markdown", text: description }),
+      });
+      const issue = Object.freeze({ ref: "one", projectId: "10000", issueTypeId: "10002", fields });
+      const args =
+        operation === "jira.draft"
+          ? { items: [issue] }
+          : { projectId: "10000", issueTypeId: "10002", fields };
+      const before = JSON.stringify(args);
+      const review = await reviewed(operation, args);
+      expect(review.text).toContain(
+        "h2. Requirement\nExact\nh2. Criteria\n* one\n* two\n* three\n* four\n* five\nh2. Source\nExact source",
+      );
+      expect(JSON.stringify(args)).toBe(before);
+      expect(fields.description).toEqual({ format: "markdown", text: description });
+    },
+  );
+
   it("shows a created issue's type, project, summary and field values by name", async () => {
     const review = await reviewed("jira.create", {
       projectId: "10000",

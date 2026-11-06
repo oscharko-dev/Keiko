@@ -306,22 +306,33 @@ describe("ChatWindow no-eligible-models error (AC #1)", () => {
       }),
     );
     expect(screen.getByRole("combobox", { name: "Models" })).toHaveTextContent("Loading models");
-    expect(screen.queryByText(/No conversation-eligible model is configured/i)).toBeNull();
+    expect(screen.queryByText(/No conversation model is currently available/i)).toBeNull();
     expect(screen.getByRole("button", { name: "Send message" })).toHaveAttribute(
       "aria-disabled",
       "true",
     );
   });
 
-  it("renders a role=alert message containing 'Settings' when noEligibleModels is true", () => {
+  it("announces unavailable models with Settings guidance and links disabled controls", () => {
     // activeChat required so the composer footer (containing the alert) renders (#146).
     renderWindow(
       makeSession({ noEligibleModels: true, selectedModel: undefined, activeChat: makeChat() }),
     );
-    const alert = screen.getByText(/No conversation-eligible model is configured/i);
+    const alert = screen.getByText(/No conversation model is currently available/i, {
+      selector: '[role="alert"]',
+    });
     expect(alert).toHaveAttribute("role", "alert");
     expect(alert).toBeInTheDocument();
     expect(alert.textContent).toMatch(/Settings/i);
+    expect(alert.id).not.toBe("");
+    expect(screen.getByRole("combobox", { name: "Models" })).toHaveAttribute(
+      "aria-describedby",
+      alert.id,
+    );
+    expect(screen.getByRole("button", { name: "Send message" })).toHaveAttribute(
+      "aria-describedby",
+      alert.id,
+    );
   });
 
   it("shows a failed catalog as unavailable and permits opening the picker to retry", async () => {
@@ -340,7 +351,7 @@ describe("ChatWindow no-eligible-models error (AC #1)", () => {
     const picker = screen.getByRole("combobox", { name: "Models" });
     expect(picker).toHaveTextContent("Model list unavailable");
     expect(picker).toBeEnabled();
-    expect(screen.queryByText(/No conversation-eligible model is configured/i)).toBeNull();
+    expect(screen.queryByText(/No conversation model is currently available/i)).toBeNull();
     expect(screen.getByRole("button", { name: "Send message" })).toHaveAttribute(
       "aria-disabled",
       "true",
@@ -359,7 +370,7 @@ describe("ChatWindow no-eligible-models error (AC #1)", () => {
     );
     // The only role="alert" present should be for session errors, not the no-model
     // alert. Since error is undefined and noEligibleModels is false, no alert fires.
-    expect(screen.queryByText(/No conversation-eligible model/i)).toBeNull();
+    expect(screen.queryByText(/No conversation model is currently available/i)).toBeNull();
   });
 
   it("does not render embedding-only models in the chat selector", async () => {

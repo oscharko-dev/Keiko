@@ -30,3 +30,9 @@ export {
   type ScopeDocumentSection,
   type ScopeSpan,
 } from "./scopeDocuments.js";
+
+export {
+  listScopeDocumentInventory,
+  type ScopeDocumentInventory,
+  type ScopeDocumentInventoryEntry,
+} from "./documentInventory.js";

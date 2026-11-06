@@ -181,7 +181,13 @@ function ConnectorRow({ connector }: { readonly connector: ChatContextConnectorW
   const t = useTranslate();
   const locale = useLocale();
   const kind = t(
-    connector.kind === "jira" ? "chat.context.connector.jira" : "chat.context.connector.mcp",
+    (
+      {
+        jira: "chat.context.connector.jira",
+        mcp: "chat.context.connector.mcp",
+        knowledge: "chat.context.connector.knowledge",
+      } as const
+    )[connector.kind],
   );
   const count = connector.toolCount;
   return (

@@ -21,6 +21,11 @@ export interface ActivityActionLine<
   readonly durationMs?: number | undefined;
 }
 
+/** Optional body-free counts share the same scalar shape across action producers. */
+export type ActivityCountFields<Key extends string> = Readonly<
+  Partial<Record<Key, number | undefined>>
+>;
+
 /** A refusal or failure is a warning; a failure is also an internal error. */
 export function activityStateLevel(outcome: string): {
   readonly level?: "warn";
@@ -51,6 +56,28 @@ export function activityErrorFields(line: ActivityStateLine): {
   return line.error === undefined
     ? {}
     : { frames: keikoStackFrames(line.error), causeChain: causeChain(line.error) };
+}
+
+type ActionFields<
+  Line extends ActivityActionLine<string, string, string>,
+  Key extends keyof Line & string,
+> = Pick<Line, "action" | "outcome"> &
+  ReturnType<typeof activityErrorFields> & {
+    readonly [Field in Key]?: Extract<Line[Field], number | string>;
+  };
+
+/** Pure fields only: each producer retains its operation, emission, level and correlation. */
+export function activityActionFields<
+  Line extends ActivityActionLine<string, string, string>,
+  Key extends keyof Line & string,
+>(line: Line, keys: readonly Key[]): ActionFields<Line, Key> {
+  // The projection keeps only selected scalar keys; diagnostics add only their fixed keys.
+  return {
+    action: line.action,
+    outcome: line.outcome,
+    ...definedActivityFields(line, keys),
+    ...activityErrorFields(line),
+  } as ActionFields<Line, Key>;
 }
 
 /** Failure registrations share the reviewed frame classification and existing diagnostic bounds. */

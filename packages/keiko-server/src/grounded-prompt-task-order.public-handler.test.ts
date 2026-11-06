@@ -57,7 +57,10 @@ afterEach(async () => {
   rmSync(state, { recursive: true, force: true });
 });
 
-function configuredRuntime(topology: Topology): {
+function configuredRuntime(
+  topology: Topology,
+  retainCatalog = false,
+): {
   readonly deps: UiHandlerDeps;
   readonly chatId: string;
 } {
@@ -76,7 +79,11 @@ function configuredRuntime(topology: Topology): {
   deps.store.createProject(project, "Task order proof");
   const chat = deps.store.createChat(project, "Task order proof", MODEL);
   connectFolders(deps, chat.id, topology);
-  return { deps, chatId: chat.id };
+  // Prompt/repair ordering owns text-only synthesis, independent of Knowledge tool admission.
+  // Keep the actual Gateway, spend owner, source stores and disposal.
+  const { knowledgeChatCatalog, ...withoutCatalog } = deps;
+  expect(knowledgeChatCatalog).toBeDefined();
+  return { deps: retainCatalog ? deps : withoutCatalog, chatId: chat.id };
 }
 
 function configureGateway(deps: UiHandlerDeps): void {
@@ -227,6 +234,26 @@ function hybridEvidenceBlocks(user: string): readonly string[] {
 }
 
 describe("public grounded prompt task placement", () => {
+  it("requires tool capability for selected Knowledge tools before synthesis or repair", async () => {
+    const calls: (readonly GatewayChatMessage[])[] = [];
+    scriptedTransport("hybrid", calls);
+    const { deps, chatId } = configuredRuntime("hybrid", true);
+    await connectPod(deps, chatId);
+    const result = await handleGroundedAsk(
+      {
+        req: mockRequest({ body: JSON.stringify({ chatId, content: QUESTION }) }),
+        res: mockResponse().res,
+        params: {},
+        url: new URL("http://127.0.0.1/api/chats/messages/grounded"),
+        correlationId: "task-order-capability-proof",
+      },
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "CONVERSATION_UNAVAILABLE_MODEL" } });
+    expect(calls).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it.each<Topology>(["single", "multi", "hybrid"])(
     "keeps the current question and bounded repair after supplied evidence (%s)",
     async (topology) => {

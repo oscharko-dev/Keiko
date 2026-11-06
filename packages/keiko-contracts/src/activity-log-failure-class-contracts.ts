@@ -260,24 +260,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLifecycleOperations: {
       start: [],
       state: ["jira.template.admission", "skills.library.operation", "skills.workflow.attached"],
-      end: [],
+      end: ["jira.template.metadata"],
       failure: [],
       loss: [],
     },
     requiredCausalOperations: [
       "jira.template.admission",
+      "jira.template.metadata",
       "skills.library.operation",
       "skills.workflow.attached",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "jira.template.admission",
+      "jira.template.metadata",
       "skills.library.operation",
       "skills.workflow.attached",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "jira.template.admission",
+      "jira.template.metadata",
       "skills.library.operation",
       "skills.workflow.attached",
     ],
@@ -469,23 +472,26 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["gateway.setup.metadata.resolved"],
+      state: ["gateway.catalog.metadata.wait", "gateway.setup.metadata.resolved"],
       end: ["gateway.catalog.automatic.completed"],
       failure: [],
       loss: [],
     },
     requiredCausalOperations: [
       "gateway.catalog.automatic.completed",
+      "gateway.catalog.metadata.wait",
       "gateway.setup.metadata.resolved",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "gateway.catalog.automatic.completed",
+      "gateway.catalog.metadata.wait",
       "gateway.setup.metadata.resolved",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "gateway.catalog.automatic.completed",
+      "gateway.catalog.metadata.wait",
       "gateway.setup.metadata.resolved",
     ],
     requiredEvidenceClasses: [
@@ -7668,18 +7674,28 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLifecycleOperations: {
       start: [],
       state: [],
-      end: ["knowledge.requirement-trace.applied", "knowledge.requirements.read"],
+      end: [
+        "knowledge.documents.operation",
+        "knowledge.requirement-trace.applied",
+        "knowledge.requirements.read",
+      ],
       failure: [],
       loss: [],
     },
     requiredCausalOperations: [
+      "knowledge.documents.operation",
       "knowledge.requirement-trace.applied",
       "knowledge.requirements.read",
     ],
     requiredLossOperations: [],
-    requiredProofOperations: ["knowledge.requirement-trace.applied", "knowledge.requirements.read"],
+    requiredProofOperations: [
+      "knowledge.documents.operation",
+      "knowledge.requirement-trace.applied",
+      "knowledge.requirements.read",
+    ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
+      "knowledge.documents.operation",
       "knowledge.requirement-trace.applied",
       "knowledge.requirements.read",
     ],

@@ -28,8 +28,12 @@ describe("governed catalog frozen generic vocabulary", () => {
         "utf8",
       ),
     ) as { bounds: Record<string, number>; statuses: Record<string, readonly string[]> };
-    for (const [key, value] of Object.entries(TOOL_CATALOG_LIMITS))
+    // The historical v1 census predates the native timer ceiling added by ADR-0181.
+    // Its existing bounds remain frozen; the new ceiling is pinned separately below.
+    const { maxDurationMs, ...frozenV1Bounds } = TOOL_CATALOG_LIMITS;
+    for (const [key, value] of Object.entries(frozenV1Bounds))
       expect(value).toBe(architecture.bounds[key]);
+    expect(maxDurationMs).toBe(2 ** 31 - 1);
     expect(TOOL_RESULT_REASONS).toEqual(architecture.statuses);
     expect(Object.keys(TOOL_RESULT_REASONS)).toEqual([
       "completed",

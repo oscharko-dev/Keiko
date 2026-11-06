@@ -16,6 +16,7 @@ import { recordChatToolMutation } from "./chatToolMutationActivity.js";
 import type {
   ChatToolMutationIntent,
   ChatToolMutationLinkCounts,
+  ChatToolMutationMetrics,
   ChatToolMutationRecord,
   ChatToolMutationPreparation,
   ChatToolMutationLocalRefusal,
@@ -447,6 +448,7 @@ class MutationStore implements ChatToolMutationStore {
     links?: ChatToolMutationLinkCounts,
     evidence?: ChatToolMutationSettleEvidence,
     refusal?: ChatToolMutationLocalRefusal,
+    metrics?: ChatToolMutationMetrics,
   ): ChatToolMutationRecord {
     const change = durableWrite(this.db, (): MutationChange => {
       const current = this.requireRecord(invocationId);
@@ -466,6 +468,7 @@ class MutationStore implements ChatToolMutationStore {
       change.event,
       settled ? links : undefined,
       settled ? refusal : undefined,
+      settled ? metrics : undefined,
     );
     return change.record;
   }

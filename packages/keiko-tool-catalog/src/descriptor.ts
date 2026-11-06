@@ -101,7 +101,7 @@ export function resultBoundsFrom(
     maxArgumentBytes: catalogPositive(bounds.maxArgumentBytes, argumentLimits.maxArgumentBytes),
     maxResultBytes: catalogPositive(bounds.maxResultBytes, TOOL_CATALOG_LIMITS.maxResultBytes),
     maxResultCount: catalogPositive(bounds.maxResultCount, TOOL_CATALOG_LIMITS.maxArrayItems),
-    maxDurationMs: catalogPositive(bounds.maxDurationMs),
+    maxDurationMs: catalogPositive(bounds.maxDurationMs, TOOL_CATALOG_LIMITS.maxDurationMs),
   };
 }
 

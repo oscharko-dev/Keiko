@@ -221,10 +221,11 @@ export function partitionSonarInclusions(paths) {
 
 export function sonarInclusionPathsNeedFullScan(paths) {
   if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string")) return true;
+  // Sonar's WildcardPattern treats brackets literally; only * and ? are wildcard characters.
   return paths.some(
     (path) =>
       path.length === 0 ||
-      /[,*?[\]\\\r\n]/u.test(path) ||
+      /[,*?\\\r\n]/u.test(path) ||
       (path.codePointAt(0) ?? 0) <= 0x20 ||
       (path.codePointAt(path.length - 1) ?? 0) <= 0x20,
   );

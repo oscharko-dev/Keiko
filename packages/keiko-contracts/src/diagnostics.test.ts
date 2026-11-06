@@ -1518,6 +1518,36 @@ describe("client module and markdown identity boundaries", () => {
       ).toBe(false);
     },
   );
+  it("accepts a table-only count without inventing list coordinates", () => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...base,
+        kind: "markdown-layout",
+        markdownLayout: { messageId: "msg_1", escapedPipeCount: 3 },
+      }),
+    ).toBe(true);
+  });
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 1_000_000_000, "private text"])(
+    "rejects an invalid table escape count %s",
+    (escapedPipeCount) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...base,
+          kind: "markdown-layout",
+          markdownLayout: { escapedPipeCount },
+        }),
+      ).toBe(false);
+    },
+  );
+  it("still rejects incomplete list coordinates, even alongside a table count", () => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...base,
+        markdownLayout: { listStart: 1, escapedPipeCount: 3 },
+      }),
+    ).toBe(false);
+    expect(isClientDiagnosticIngestRequest({ ...base, markdownLayout: {} })).toBe(false);
+  });
   it("rejects an unregistered module name", () => {
     expect(
       isClientDiagnosticIngestRequest({ ...base, moduleLoadFailure: "private module URL" }),

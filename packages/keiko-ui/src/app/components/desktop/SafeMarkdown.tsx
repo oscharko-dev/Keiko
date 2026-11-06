@@ -892,13 +892,14 @@ function renderMarkdownTree(
 const EMPTY_ROOTS: readonly RepositoryReferenceRoot[] = Object.freeze([]);
 
 // Emit layout coordinates only; the stable message identity joins re-renders to their message.
-function reportListStarts(
+function reportMarkdownLayout(
   tree: readonly SafeMarkdownNode[],
   correlationId: string | undefined,
-  cursor: { index: number; messageId?: string | undefined },
+  cursor: { index: number; escapedPipeCount: number; messageId?: string | undefined },
   depth = 0,
 ): void {
   for (const node of tree) {
+    if (node.kind === "table") cursor.escapedPipeCount += node.escapedPipeCount ?? 0;
     if (node.kind === "ol") {
       const listIndex = cursor.index++;
       if (node.start !== undefined && node.start !== 1) {
@@ -910,11 +911,11 @@ function reportListStarts(
       }
     }
     if (node.children !== undefined)
-      reportListStarts(node.children, correlationId, cursor, depth + 1);
+      reportMarkdownLayout(node.children, correlationId, cursor, depth + 1);
   }
 }
 
-function useMarkdownListEvidence(
+function useMarkdownLayoutEvidence(
   tree: readonly SafeMarkdownNode[],
   streaming: boolean,
   correlationId: string | undefined,
@@ -924,7 +925,15 @@ function useMarkdownListEvidence(
   useEffect(() => {
     if (streaming || lastReported.current === tree) return;
     lastReported.current = tree;
-    reportListStarts(tree, correlationId, { index: 0, messageId });
+    const cursor = { index: 0, escapedPipeCount: 0, messageId };
+    reportMarkdownLayout(tree, correlationId, cursor);
+    if (cursor.escapedPipeCount > 0) {
+      reportClientDiagnostic("markdown:escaped-table-pipes", {
+        kind: "markdown-layout",
+        correlationId,
+        markdownLayout: { messageId, escapedPipeCount: cursor.escapedPipeCount },
+      });
+    }
   }, [tree, streaming, correlationId, messageId]);
 }
 
@@ -1011,7 +1020,7 @@ function SafeMarkdownImpl({
   richContent,
 }: SafeMarkdownProps): ReactNode {
   const tree = useMarkdownTree(source, literalUserInput, richContent);
-  useMarkdownListEvidence(tree, streaming, diagnosticCorrelationId, diagnosticMessageId);
+  useMarkdownLayoutEvidence(tree, streaming, diagnosticCorrelationId, diagnosticMessageId);
   const repositoryPathLabels = useMemo(
     () =>
       literalUserInput || openRepositoryReference === undefined

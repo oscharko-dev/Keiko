@@ -77,8 +77,9 @@ function jiraGet(request: { readonly url: string }): ReturnType<AtlassianHttpBod
     return Promise.resolve(
       response({
         issues: [
-          { fields: { description: "## Context\nA\n## Acceptance criteria\nB" } },
-          { fields: { description: "## Context\nC\n## Acceptance criteria\nD" } },
+          // Search returns native Data Center wiki, not an explicitly tagged Markdown input.
+          { fields: { description: "h2. Context\nA\nh2. Acceptance criteria\nB" } },
+          { fields: { description: "h2. Context\nC\nh2. Acceptance criteria\nD" } },
           { fields: { description: "free text" } },
         ],
       }),

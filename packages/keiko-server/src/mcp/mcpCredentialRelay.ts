@@ -16,10 +16,10 @@ import {
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import {
-  activityErrorFields,
+  activityActionFields,
   activityStateLevel,
-  definedActivityFields,
   type ActivityActionLine,
+  type ActivityCountFields,
 } from "../activity-line-fields.js";
 
 /**
@@ -251,19 +251,31 @@ const MCP_RELAY_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-export interface McpRelayLine extends ActivityActionLine<
-  "bind" | "request",
-  (typeof OUTCOMES)[number],
-  RelayReason
-> {
+export interface McpRelayLine
+  extends
+    ActivityActionLine<"bind" | "request", (typeof OUTCOMES)[number], RelayReason>,
+    ActivityCountFields<
+      | "relayedServerCount"
+      | "refusedServerCount"
+      | "requestBytes"
+      | "responseBytes"
+      | "redactedCount"
+    > {
   readonly method?: McpRelayMethod | undefined;
   readonly status?: number | undefined;
-  readonly relayedServerCount?: number | undefined;
-  readonly refusedServerCount?: number | undefined;
-  readonly requestBytes?: number | undefined;
-  readonly responseBytes?: number | undefined;
-  readonly redactedCount?: number | undefined;
 }
+
+const MCP_RELAY_LINE_FIELDS = [
+  "reason",
+  "method",
+  "status",
+  "relayedServerCount",
+  "refusedServerCount",
+  "requestBytes",
+  "responseBytes",
+  "redactedCount",
+  "durationMs",
+] as const;
 
 /** Counts and closed values only; never a credential, a URL or a server name. */
 export function recordMcpRelay(
@@ -278,22 +290,7 @@ export function recordMcpRelay(
         correlationId,
         ...activityStateLevel(line.outcome),
       },
-      {
-        action: line.action,
-        outcome: line.outcome,
-        ...definedActivityFields(line, [
-          "reason",
-          "method",
-          "status",
-          "relayedServerCount",
-          "refusedServerCount",
-          "requestBytes",
-          "responseBytes",
-          "redactedCount",
-          "durationMs",
-        ] as const),
-        ...activityErrorFields(line),
-      },
+      activityActionFields(line, MCP_RELAY_LINE_FIELDS),
     ),
   );
 }

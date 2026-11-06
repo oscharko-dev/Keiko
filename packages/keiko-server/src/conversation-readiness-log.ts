@@ -8,13 +8,13 @@ import { getServerLogger } from "./observability/index.js";
 export type ConversationAdmissionDisposition =
   | "allowed-untracked"
   | "allowed-fresh"
-  | "allowed-continuation"
+  | "allowed-cached"
   | "model-changed"
   | "generation-changed"
   | "observation-unavailable"
   | "probe-failed"
   | "timestamp-invalid"
-  | "expired";
+  | "provider-rejected";
 
 const CONVERSATION_ADMISSION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -31,13 +31,13 @@ const CONVERSATION_ADMISSION = defineActivityLogOperation({
       values: [
         "allowed-untracked",
         "allowed-fresh",
-        "allowed-continuation",
+        "allowed-cached",
         "model-changed",
         "generation-changed",
         "observation-unavailable",
         "probe-failed",
         "timestamp-invalid",
-        "expired",
+        "provider-rejected",
       ],
     },
     admittedGeneration: { type: "integer", dataClass: "count", required: false },

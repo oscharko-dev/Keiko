@@ -1,0 +1,114 @@
+.cmpPipeline {
+  align-self: start;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: var(--text-body-sm);
+}
+
+.cmpTitle {
+  display: block;
+  margin-block-end: var(--space-5);
+}
+
+.cmpSteps {
+  display: grid;
+  gap: var(--space-5);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.cmpStep {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.cmpStep:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  inset-inline-start: 11px;
+  inset-block-start: var(--space-8);
+  height: calc(100% - var(--space-8) + var(--space-5));
+  border-inline-start: 1px solid var(--border-strong);
+}
+
+.cmpIcon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 var(--space-8);
+  width: var(--space-8);
+  height: var(--space-8);
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--text-secondary);
+  background: var(--surface-inset);
+}
+
+.cmpStep[data-state="done"] .cmpIcon {
+  color: var(--feedback-success);
+}
+
+.cmpStep[data-state="active"] .cmpIcon {
+  color: var(--accent-text);
+  border-color: var(--accent-line);
+  background: var(--accent-dim);
+}
+
+.cmpStep[data-state="approval"] .cmpIcon,
+.cmpStep[data-state="attention"] .cmpIcon,
+.cmpStep[data-state="blocked"] .cmpIcon {
+  color: var(--feedback-warning);
+}
+
+.cmpStep[data-state="failed"] .cmpIcon {
+  color: var(--feedback-danger);
+}
+
+.cmpCopy {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cmpState {
+  color: var(--text-secondary);
+  font-size: inherit;
+}
+
+.cmpMore {
+  margin-block-start: var(--space-4);
+}
+
+.cmpAnnouncement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Wrapping stays readable at narrow chat widths and under the workspace's content zoom.
+   No animation is required: state changes remain visible with reduced motion enabled. */
+@container (max-width: 40rem) {
+  .cmpSteps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-5) var(--space-7);
+  }
+
+  .cmpStep {
+    flex: 0 1 12rem;
+  }
+
+  .cmpStep::after {
+    display: none;
+  }
+}

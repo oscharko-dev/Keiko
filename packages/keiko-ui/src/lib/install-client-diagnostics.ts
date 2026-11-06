@@ -644,12 +644,17 @@ async function sendClientDiagnosticBody(
   signal?: AbortSignal,
 ): Promise<boolean> {
   try {
-    await bffFetchJson<undefined>("/api/diagnostics/client", {
-      method: "POST",
-      body: JSON.stringify(body),
-      keepalive: true,
-      signal: signal ?? AbortSignal.timeout(CLIENT_DIAGNOSTIC_ACK_TIMEOUT_MS),
-    });
+    // Delivery failures are counted below, never sent back through their own diagnostic transport.
+    await bffFetchJson<undefined>(
+      "/api/diagnostics/client",
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+        keepalive: true,
+        signal: signal ?? AbortSignal.timeout(CLIENT_DIAGNOSTIC_ACK_TIMEOUT_MS),
+      },
+      { repairSession: false },
+    );
     return true;
   } catch (error) {
     recordFailedPost(loss, error);
