@@ -110,6 +110,11 @@ export function parseNormalizedToolCalls(raw: unknown): readonly NormalizedToolC
 export const SYNTHESIZED_TOOL_CALL_ID_PREFIX = "keiko-call-";
 const USABLE_TOOL_CALL_ID = /^[A-Za-z0-9_.:-]{1,128}$/u;
 
+/** The one id shape the catalog bridge carries; the normalizer mints only ids of this shape. */
+export function isUsableToolCallId(id: unknown): id is string {
+  return typeof id === "string" && USABLE_TOOL_CALL_ID.test(id);
+}
+
 // A provider may omit a call id, send one the catalog bridge cannot carry (empty, over 128 characters,
 // other characters) or repeat one across parallel calls. None of that is the model's fault, and the
 // bridge refuses such a batch whole, which used to end the turn. The first layer that sees the ids
@@ -119,10 +124,10 @@ const USABLE_TOOL_CALL_ID = /^[A-Za-z0-9_.:-]{1,128}$/u;
 // minted id that a later response repeated would make a new call look like a replay of an old one.
 function normalizeToolCallIds(calls: readonly NormalizedToolCall[]): readonly NormalizedToolCall[] {
   const held = new Set<string>();
-  const kept = new Set(calls.map((call) => call.id).filter((id) => USABLE_TOOL_CALL_ID.test(id)));
+  const kept = new Set(calls.map((call) => call.id).filter((id) => isUsableToolCallId(id)));
   let response: string | undefined;
   return calls.map((call, position) => {
-    if (USABLE_TOOL_CALL_ID.test(call.id) && !held.has(call.id)) {
+    if (isUsableToolCallId(call.id) && !held.has(call.id)) {
       held.add(call.id);
       return call;
     }
