@@ -284,6 +284,13 @@ const HYPOTHETICAL_RE = anyWordPattern([
   "unless",
   "provided",
   "what if",
+  "im falle",
+  "sofern",
+  "vorausgesetzt",
+  "für den fall",
+  "in case",
+  "as long as",
+  "even if",
 ]);
 const LEADING_CONDITION_RE = /^\s*(?:wenn|falls|angenommen|if|suppose|imagine)(?!\p{L})/iu;
 const SUBJUNCTIVE_RE = anyWordPattern([
@@ -613,34 +620,89 @@ const CONTEXT_NEGATION_RE = anyWordPattern([
   "wrong",
   "unwahr",
 ]);
-// Someone else's words or view framing the claim: "Laut Anna nutze ich Vim", "Anna findet, ich ...".
-// "Das Daily findet montags statt" is no view. A reason ("weil Anna es mir sagte") is judged as one.
-const REPORTED_SPEECH_RE = anyWordPattern([
-  "sagte?",
-  "meinte?",
-  "behauptete?",
+// Someone else's words or view framing the claim. A speech verb counts beside a person, a name or
+// pronoun, never beside the person themselves: "Anna says I like tables", "…, sagt Anna", "Er
+// sagte, ich …" are attributions; "I use Vim, I said" and "Claims Management" are not.
+const SPEECH_VERBS = new Set([
+  "sagt",
+  "sagte",
+  "sagten",
+  "sagen",
+  "meint",
+  "meinte",
+  "meinten",
+  "behauptet",
+  "behauptete",
   "glaubt",
+  "glaubte",
   "denkt",
-  String.raw`findet(?=\s*(?:,|dass(?!\p{L})))`,
-  "zufolge",
-  "angeblich",
+  "dachte",
+  "erzählt",
+  "erzählte",
+  "erklärt",
+  "erklärte",
   "says",
   "said",
+  "tells",
+  "told",
   "claims",
   "claimed",
-  "told me",
   "thinks",
+  "thought",
+  "believes",
+  "believed",
+  "stated",
+  "reckons",
+]);
+const OTHER_PERSON_WORDS = new Set(["er", "sie", "ihr", "man", "du", "he", "she", "they", "you"]);
+const NOT_A_PERSON = new Set([
+  "ich",
+  "i",
+  "wir",
+  "we",
+  "mir",
+  "me",
+  "mich",
+  "uns",
+  "us",
+  "es",
+  "it",
+  "das",
+  "dies",
+  "diese",
+  "dieser",
+  "dieses",
+  "this",
+  "that",
+  "there",
+  "was",
+  "what",
+]);
+// Markers that name a source whatever stands beside them.
+const ATTRIBUTION_MARKER_RE = anyWordPattern([
+  "zufolge",
+  "angeblich",
+  "anscheinend",
+  "offenbar",
+  "vermeintlich",
+  "gemäß",
+  String.raw`findet(?=\s*(?:,|dass(?!\p{L})))`,
   "according to",
   "supposedly",
   "allegedly",
+  "reportedly",
+  "apparently",
 ]);
 // "laut" is also "loud"; as attribution it names someone: "Laut Anna", "laut meinem Chef".
-// The first two words of each later clause.
-const CLAUSE_HEAD_RE = /[,;:–—-]\s*(\p{L}+)(?:\s+\p{L}+)?/gu;
-const RELATIVE_LEAD_RE =
-  /^(?:which|that|who|whom|whose|where|because|since|der|die|das|den|dem|welche[rsmn]?|weil|da|wo|denn|obwohl)$/iu;
 const ATTRIBUTED_RE =
   /(?:^|[^\p{L}])[Ll]aut\s+(?:\p{Lu}|(?:mein(?:em|er)?|ihr|ihm|ihnen|dem|der|den)(?!\p{L}))/u;
+// "hat Anna gesagt"; "Ehrlich gesagt" names nobody.
+const PERFECT_SPEECH_RE =
+  /(?:^|[^\p{L}])(?:hat|haben|hatte|hatten)\s+(?:\p{Lu}\p{L}*|er|sie)\s+(?:gesagt|erzählt|gemeint|behauptet)(?!\p{L})/u;
+// The first words of each later clause, an aside in brackets included.
+const CLAUSE_HEAD_RE = /[,;:–—(-]\s*(\p{L}+)(?:\s+\p{L}+){0,2}/gu;
+const RELATIVE_LEAD_RE =
+  /^(?:which|that|who|whom|whose|where|because|since|der|die|das|den|dem|welche[rsmn]?|weil|da|wo|denn|obwohl)$/iu;
 
 function sentenceAround(text: string, start: number, end: number): { from: number; to: number } {
   let from = start;
@@ -806,10 +868,27 @@ function contextDropReason(
 // Anna", "I use Vim, Anna says". A relative clause or reason ("…, which says nothing", "…, weil Anna
 // es mir sagte") is no attribution; a reason is judged by the subject checks.
 function isReported(opening: string, rest: string): boolean {
-  if (REPORTED_SPEECH_RE.test(opening) || ATTRIBUTED_RE.test(opening)) return true;
+  if (attributes(opening)) return true;
   return [...rest.matchAll(CLAUSE_HEAD_RE)].some(
-    (head) => !RELATIVE_LEAD_RE.test(head[1] ?? "") && REPORTED_SPEECH_RE.test(head[0]),
+    (head) => !RELATIVE_LEAD_RE.test(head[1] ?? "") && attributes(head[0]),
   );
+}
+
+function attributes(text: string): boolean {
+  if (ATTRIBUTION_MARKER_RE.test(text) || ATTRIBUTED_RE.test(text)) return true;
+  if (PERFECT_SPEECH_RE.test(text)) return true;
+  const words = text.split(/[^\p{L}]+/u);
+  return words.some(
+    (word, at) =>
+      SPEECH_VERBS.has(word) && (isOtherPerson(words[at - 1]) || isOtherPerson(words[at + 1])),
+  );
+}
+
+function isOtherPerson(word: string | undefined): boolean {
+  if (word === undefined) return false;
+  const lower = word.toLowerCase();
+  if (NOT_A_PERSON.has(lower)) return false;
+  return OTHER_PERSON_WORDS.has(lower) || /^\p{Lu}/u.test(word);
 }
 
 // The words up to the person's own subject frame the claim like the words before it: "Anna says I

@@ -241,7 +241,9 @@ D2 lets a fact through.
   person's own subject are read like the words before the clause, so "Anna says I like tables" and
   "Stell dir vor ich nutze Excel" are dropped with or without a comma, and so is an attribution that
   opens a later clause ("Dass ich Tabellen mag, sagt Anna"); a relative clause or a reason is no
-  attribution ("I use vim, which says nothing" stands, "weil Anna es mir sagte" is a third party's). The clause is not a question, request,
+  attribution ("I use vim, which says nothing" stands, "weil Anna es mir sagte" is a third party's). A speech verb counts beside another person, a name or a pronoun, never beside the person
+  themselves, so "I use Vim, I said" and "claims processing" stand; markers such as "laut Anna",
+  "angeblich" or "according to" count wherever they frame the claim. The clause is not a question, request,
   quotation, hypothesis, irony, hedge ("Ich glaube, …"), denial or past statement. Tense and
   pronouns are judged on the claim itself, not on its reason or condition, so "Ich nutze Tabellen,
   weil sie übersichtlich sind" stands; a decision, switch or migration made in the past holds now.

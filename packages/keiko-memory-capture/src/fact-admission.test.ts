@@ -469,6 +469,14 @@ describe("a span copied without the first words of its clause", () => {
     ["Dass ich Tabellen mag, sagt Anna.", "Dass ich Tabellen mag", "negated-context"],
     ["Ich nutze Jira, sagt Anna.", "Ich nutze Jira, sagt Anna", "negated-context"],
     ["I use Vim, Anna says.", "I use Vim", "negated-context"],
+    ["Ich nutze Vim, laut Anna.", "Ich nutze Vim", "negated-context"],
+    ["Ich nutze Vim, wie Anna sagt.", "Ich nutze Vim", "negated-context"],
+    ["Ich nutze Vim, hat Anna gesagt.", "Ich nutze Vim", "negated-context"],
+    ["I use Vim (Anna says).", "I use Vim (Anna says)", "negated-context"],
+    ["Anna believes I use Vim.", "I use Vim", "negated-context"],
+    ["Meine Eltern meinten, ich nutze Vim.", "ich nutze Vim", "negated-context"],
+    ["Im Falle eines Fehlers nutze ich Vim.", "nutze ich Vim", "hypothetical"],
+    ["Sofern ich Zeit habe, nutze ich Vim.", "nutze ich Vim", "hypothetical"],
     ["Laut Anna nutze ich Vim.", "Laut Anna nutze ich Vim", "negated-context"],
     ["Laut meinem Chef nutze ich Vim.", "nutze ich Vim", "negated-context"],
     ["According to Anna I use Vim.", "I use Vim", "negated-context"],
@@ -489,6 +497,11 @@ describe("a span copied without the first words of its clause", () => {
     ["Ich sage immer, dass ich Tabellen mag.", "dass ich Tabellen mag"],
     ["Ehrlich gesagt mag ich Tabellen.", "Ehrlich gesagt mag ich Tabellen"],
     ["Ich höre gern laute Musik.", "Ich höre gern laute Musik"],
+    ["I work in insurance, claims processing.", "I work in insurance, claims processing"],
+    ["Ich arbeite bei der Bank, Claims Management.", "Ich arbeite bei der Bank, Claims Management"],
+    ["I use Vim, I said.", "I use Vim"],
+    ["Kurz gesagt nutze ich Vim.", "Kurz gesagt nutze ich Vim"],
+    ["Ich spreche laut Englisch.", "Ich spreche laut Englisch"],
   ])("keeps a genuine statement that only resembles one: %s", (text, evidence) => {
     expect(admit(text, evidence).admitted).toBe(true);
   });
