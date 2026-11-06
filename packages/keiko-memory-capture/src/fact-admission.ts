@@ -919,12 +919,21 @@ export function admitProposedFact(
   return admittedClaim(fact, { claim, opensSentence: start === from }, sentence);
 }
 
-// A clause taken from inside a sentence opens the stored fact: "…, ich bin Oliver" → "Ich bin Oliver".
 // A span may end at a comma or dash; the stored fact does not: "Ich mag Tabellen," → "Ich mag Tabellen".
+const TRAILING_MARKS = new Set([",", ";", ":", "-", "–", "—"]);
+
 function withoutTrailingMarks(claim: string): string {
-  return claim.replace(/[\s,;:\-–—]+$/u, "");
+  let end = claim.length;
+  while (
+    end > 0 &&
+    (TRAILING_MARKS.has(claim.charAt(end - 1)) || /\s/u.test(claim.charAt(end - 1)))
+  ) {
+    end -= 1;
+  }
+  return claim.slice(0, end);
 }
 
+// A clause taken from inside a sentence opens the stored fact: "…, ich bin Oliver" → "Ich bin Oliver".
 function sentenceCase(claim: string): string {
   const first = claim.charAt(0);
   return first === first.toLowerCase() && first !== first.toUpperCase()
