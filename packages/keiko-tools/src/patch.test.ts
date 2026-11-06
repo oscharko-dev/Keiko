@@ -1040,3 +1040,162 @@ describe("applyPatch — multi-file atomicity (rollback)", () => {
     ]);
   });
 });
+
+// A UTF-8 byte order mark is the file's encoding signature, not its text. Every governed reader
+// decodes it away as WHATWG UTF-8 decoding does (the secure workspace read whose digest a changeset
+// is bound to, the editor's document read), so the diff the server renders from that text and the
+// digest it declares carry no mark. The inspection binds a file to the same decoded text, matches
+// such a diff against it and writes the mark back; a diff that spells the mark on its first line,
+// as a full-file rewrite of the raw bytes does, still addresses the bytes it spells.
+describe("UTF-8 byte order mark", () => {
+  const BOM = "\uFEFF";
+  const LINE_ENDINGS = [
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+  ] as const;
+
+  function decodedText(rel: string): string {
+    return new TextDecoder("utf-8").decode(readFileSync(join(root, rel)));
+  }
+
+  function bytesOf(rel: string): Buffer {
+    return readFileSync(join(root, rel));
+  }
+
+  // One body line per entry; a CRLF line keeps its carriage return as diff text, as Git writes it.
+  function diffOf(path: string, header: string, lines: readonly string[], eol: string): string {
+    const cr = eol === "\r\n" ? "\r" : "";
+    const body = lines.map((line) => `${line}${cr}`);
+    return [`--- a/${path}`, `+++ b/${path}`, header, ...body, ""].join("\n");
+  }
+
+  it.each(LINE_ENDINGS)(
+    "binds a %s file with a mark to the text every reader decodes",
+    (_name, eol) => {
+      write("src/bom.js", `${BOM}one${eol}two${eol}`);
+      const diff = diffOf("src/bom.js", "@@ -1,2 +1,2 @@", ["-one", "+ONE", " two"], eol);
+
+      const inspection = inspectPatch(info, diff);
+      const file = requiredInspectionFile(inspection, "src/bom.js");
+
+      expect(inspection.validation).toMatchObject({ ok: true, reasons: [], conflicts: [] });
+      expect(file.sourceContentHash).toBe(sha256Hex(decodedText("src/bom.js")));
+      expect(requiredSourceVersion(file)).toMatchObject({
+        sizeBytes: bytesOf("src/bom.js").byteLength,
+        contentHash: sha256Hex(decodedText("src/bom.js")),
+      });
+      expect(file.byteOrderMark).toBe("signature");
+      expect(file.original).toBe(`one${eol}two${eol}`);
+      expect(file.outcome).toEqual({ content: `ONE${eol}two${eol}`, conflicts: [] });
+    },
+  );
+
+  it.each(LINE_ENDINGS)(
+    "edits the first line of a %s file with a mark and writes the mark back",
+    (_name, eol) => {
+      write("src/bom.js", `${BOM}one${eol}two${eol}`);
+      const diff = diffOf("src/bom.js", "@@ -1,2 +1,2 @@", ["-one", "+ONE", " two"], eol);
+
+      applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() });
+
+      expect(bytesOf("src/bom.js")).toEqual(Buffer.from(`${BOM}ONE${eol}two${eol}`, "utf8"));
+      expect(bytesOf("src/bom.js").subarray(0, 3)).toEqual(Buffer.from([0xef, 0xbb, 0xbf]));
+    },
+  );
+
+  it("keeps the mark when a hunk away from the first line is applied", () => {
+    write("src/bom.js", `${BOM}one\ntwo\nthree\nfour\nfive\n`);
+    const diff = diffOf("src/bom.js", "@@ -4,2 +4,2 @@", [" four", "-five", "+FIVE"], "\n");
+
+    applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() });
+
+    expect(read("src/bom.js")).toBe(`${BOM}one\ntwo\nthree\nfour\nFIVE\n`);
+  });
+
+  it("deletes a file with a mark from its pre-image without the mark", () => {
+    write("src/bom.js", `${BOM}one\r\ntwo\r\n`);
+    const diff = "--- a/src/bom.js\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-one\r\n-two\r\n";
+
+    expect(validatePatch(info, diff)).toMatchObject({ ok: true, conflicts: [] });
+    applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() });
+
+    expect(existsSync(join(root, "src/bom.js"))).toBe(false);
+  });
+
+  it("fills a file that holds only a mark and keeps the mark", () => {
+    write("src/bom.js", BOM);
+    const diff = "--- a/src/bom.js\n+++ b/src/bom.js\n@@ -0,0 +1,1 @@\n+filled\n";
+
+    const file = requiredInspectionFile(inspectPatch(info, diff), "src/bom.js");
+    applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() });
+
+    expect(file.sourceContentHash).toBe(sha256Hex(""));
+    expect(read("src/bom.js")).toBe(`${BOM}filled\n`);
+  });
+
+  it("restores the exact bytes with the mark when a later write fails", () => {
+    write("src/bom.js", `${BOM}A0\n`);
+    write("src/b.txt", "B0\n");
+    const diffA = "--- a/src/bom.js\n+++ b/src/bom.js\n@@ -1,1 +1,1 @@\n-A0\n+A1\n";
+    const diffB = "--- a/src/b.txt\n+++ b/src/b.txt\n@@ -1,1 +1,1 @@\n-B0\n+B1\n";
+    const rec = recordingWriter(join(root, "src/b.txt"));
+
+    expect(() =>
+      applyPatch(info, diffA + diffB, {
+        applyEnabled: true,
+        signal: liveSignal(),
+        writer: rec.writer,
+      }),
+    ).toThrow(PatchApplyError);
+    expect(rec.writes().map((entry) => entry.content)).toEqual([`${BOM}A1\n`, `${BOM}A0\n`]);
+  });
+
+  // The full-file rewrite of the workspace replace preflight spells the raw first line, mark and
+  // all: that diff addresses the bytes it spells, as it always did.
+  it("applies a diff that spells the mark on the first line to the bytes it spells", () => {
+    write("src/bom.js", `${BOM}one\ntwo\n`);
+    const diff = diffOf(
+      "src/bom.js",
+      "@@ -1,2 +1,2 @@",
+      [`-${BOM}one`, "-two", `+${BOM}one`, "+TWO"],
+      "\n",
+    );
+
+    const file = requiredInspectionFile(inspectPatch(info, diff), "src/bom.js");
+    applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() });
+
+    expect(file.byteOrderMark).toBe("diff-text");
+    expect(file.sourceContentHash).toBe(sha256Hex("one\ntwo\n"));
+    expect(read("src/bom.js")).toBe(`${BOM}one\nTWO\n`);
+  });
+
+  it("removes the mark when a diff that spells it removes it", () => {
+    write("src/bom.js", `${BOM}one\n`);
+    const diff = diffOf("src/bom.js", "@@ -1,1 +1,1 @@", [`-${BOM}one`, "+one"], "\n");
+
+    applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() });
+
+    expect(bytesOf("src/bom.js")).toEqual(Buffer.from("one\n", "utf8"));
+  });
+
+  it("binds a file without a mark and an empty file to their exact text", () => {
+    write("src/plain.js", "one\r\ntwo\r\n");
+    write("src/empty.js", "");
+    const diff =
+      diffOf("src/plain.js", "@@ -1,2 +1,2 @@", ["-one", "+ONE", " two"], "\r\n") +
+      "--- a/src/empty.js\n+++ b/src/empty.js\n@@ -0,0 +1,1 @@\n+filled\n";
+
+    const inspection = inspectPatch(info, diff);
+    const plain = requiredInspectionFile(inspection, "src/plain.js");
+    const empty = requiredInspectionFile(inspection, "src/empty.js");
+    applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() });
+
+    expect(plain).toMatchObject({
+      byteOrderMark: "none",
+      sourceContentHash: sha256Hex("one\r\ntwo\r\n"),
+    });
+    expect(empty).toMatchObject({ byteOrderMark: "none", sourceContentHash: sha256Hex("") });
+    expect(read("src/plain.js")).toBe("ONE\r\ntwo\r\n");
+    expect(read("src/empty.js")).toBe("filled\n");
+  });
+});

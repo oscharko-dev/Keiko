@@ -17483,6 +17483,53 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "editor.agent.changeset-byte-order-mark",
+    category: "security",
+    owner: "keiko-server",
+    emitter: "editor.changesetByteOrderMarkEvidence.recordChangesetByteOrderMarks",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      stage: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["admission", "result"],
+      },
+      fileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      signatureFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      diffTextFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "capability",
+    failureClasses: ["coding-editor-mutation"],
+    proofIds: ["editor.agent.changeset-byte-order-mark.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "editor.agent.changeset-provenance",
     category: "security",
     owner: "keiko-server",

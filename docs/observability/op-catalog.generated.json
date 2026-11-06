@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ccbca353caf09ca9a5f895d12fa4dbc59a78d96a06f7e9b812b3f353956182a3",
+    "catalogDigest": "7f7d8635fbc86c2c43156f1257fabfc47b1bce4f7b5ff62bae9666abce469e01",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -17912,6 +17912,55 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/bridgeRegistrationEvidence.ts:16",
         "emitterSites": ["packages/keiko-server/src/editor/bridgeRegistrationEvidence.ts:65"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "editor.agent.changeset-byte-order-mark",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "editor.changesetByteOrderMarkEvidence.recordChangesetByteOrderMarks",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "stage": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["admission", "result"]
+          },
+          "fileCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "signatureFileCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "diffTextFileCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "capability",
+        "failureClasses": ["coding-editor-mutation"],
+        "proofIds": ["editor.agent.changeset-byte-order-mark.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/editor/changesetByteOrderMarkEvidence.ts:23",
+        "emitterSites": ["packages/keiko-server/src/editor/changesetByteOrderMarkEvidence.ts:63"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -47298,7 +47347,11 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": ["coding-runtime.editor-review.decided", "editor.agent.changeset-provenance"],
+          "state": [
+            "coding-runtime.editor-review.decided",
+            "editor.agent.changeset-byte-order-mark",
+            "editor.agent.changeset-provenance"
+          ],
           "end": ["coding-runtime.editor-mutation.settled"],
           "failure": ["coding-runtime.edit.refused"],
           "loss": []
@@ -47307,6 +47360,7 @@
           "coding-runtime.edit.refused",
           "coding-runtime.editor-mutation.settled",
           "coding-runtime.editor-review.decided",
+          "editor.agent.changeset-byte-order-mark",
           "editor.agent.changeset-provenance"
         ],
         "requiredLossOperations": [],
@@ -47314,12 +47368,14 @@
           "coding-runtime.edit.refused",
           "coding-runtime.editor-mutation.settled",
           "coding-runtime.editor-review.decided",
+          "editor.agent.changeset-byte-order-mark",
           "editor.agent.changeset-provenance"
         ],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
           "coding-runtime.editor-mutation.settled",
           "coding-runtime.editor-review.decided",
+          "editor.agent.changeset-byte-order-mark",
           "editor.agent.changeset-provenance"
         ],
         "requiredEvidenceClasses": [
@@ -64758,7 +64814,11 @@
           "lifecycleTransitions": ["end", "failure", "state"],
           "lifecycleOperations": {
             "start": [],
-            "state": ["coding-runtime.editor-review.decided", "editor.agent.changeset-provenance"],
+            "state": [
+              "coding-runtime.editor-review.decided",
+              "editor.agent.changeset-byte-order-mark",
+              "editor.agent.changeset-provenance"
+            ],
             "end": ["coding-runtime.editor-mutation.settled"],
             "failure": ["coding-runtime.edit.refused"],
             "loss": []
@@ -64777,6 +64837,10 @@
               "mode": "correlation"
             },
             {
+              "op": "editor.agent.changeset-byte-order-mark",
+              "mode": "correlation"
+            },
+            {
               "op": "editor.agent.changeset-provenance",
               "mode": "correlation"
             }
@@ -64785,6 +64849,7 @@
           "resourceSignals": [
             "coding-runtime.editor-mutation.settled",
             "coding-runtime.editor-review.decided",
+            "editor.agent.changeset-byte-order-mark",
             "editor.agent.changeset-provenance"
           ],
           "replayReferences": [],
@@ -64942,6 +65007,48 @@
                 "causeChain": false
               },
               "proofIds": ["coding-runtime.editor-review.decided.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "editor.agent.changeset-byte-order-mark",
+              "owner": "keiko-server",
+              "category": "security",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "capability",
+              "safeContextFields": [
+                {
+                  "name": "diffTextFileCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "fileCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "signatureFileCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "stage",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["editor.agent.changeset-byte-order-mark.emitted-line"],
               "replayReferences": [],
               "missingObligations": []
             },
@@ -108898,14 +109005,14 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/agentRoutes.ts:3332",
+      "site": "packages/keiko-server/src/editor/agentRoutes.ts:3343",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/agentRoutes.ts:3430",
+      "site": "packages/keiko-server/src/editor/agentRoutes.ts:3441",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111000,21 +111107,21 @@
     {
       "op": "editor.agent.applyChangeset",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/agentRoutes.ts:1932",
+      "site": "packages/keiko-server/src/editor/agentRoutes.ts:1943",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "editor.agent.applyChangeset",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/agentRoutes.ts:798",
+      "site": "packages/keiko-server/src/editor/agentRoutes.ts:809",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "editor.agent.applyPatch",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/agentRoutes.ts:920",
+      "site": "packages/keiko-server/src/editor/agentRoutes.ts:931",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111022,6 +111129,12 @@
       "op": "editor.agent.bridge-registration",
       "category": "security",
       "site": "packages/keiko-server/src/editor/bridgeRegistrationEvidence.ts:19",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.agent.changeset-byte-order-mark",
+      "category": "security",
+      "site": "packages/keiko-server/src/editor/changesetByteOrderMarkEvidence.ts:26",
       "package": "keiko-server"
     },
     {
@@ -113629,6 +113742,7 @@
     "editor.agent.applyChangeset",
     "editor.agent.applyPatch",
     "editor.agent.bridge-registration",
+    "editor.agent.changeset-byte-order-mark",
     "editor.agent.changeset-provenance",
     "editor.agent.root-containment",
     "editor.buffer-safety.state",
