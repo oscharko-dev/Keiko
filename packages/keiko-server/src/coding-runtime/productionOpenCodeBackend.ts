@@ -32,6 +32,7 @@ import {
   nativeBuildInheritedEnvNames,
   nativeBuildCacheReadRoots,
   nativeBuildToolReadRoots,
+  nativeBuildWrapperReadRoots,
   nativeOpenSslReadRoots,
   nativeToolchainReadRoots,
   type LongLivedRuntimeSandboxAttestation,
@@ -1447,7 +1448,7 @@ function nativeSupportReadRoots(
     // Below Full access there is no network: the user's warm Maven cache opens read-only. At Full
     // access the run resolves into its own writable private cache instead (`nativeBuildSettings`).
     ...(nativeBuildCacheAdmitted(run.minted.effectiveMode)
-      ? nativeBuildCacheReadRoots(homedir())
+      ? [...nativeBuildCacheReadRoots(homedir()), ...nativeBuildWrapperReadRoots(homedir())]
       : []),
   ];
 }

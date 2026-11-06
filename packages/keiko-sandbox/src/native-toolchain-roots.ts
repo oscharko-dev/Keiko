@@ -430,3 +430,19 @@ export function nativeBuildCacheReadRoots(home: string): readonly string[] {
     ? [repository]
     : [];
 }
+
+/**
+ * The Maven wrapper's downloaded distributions (`~/.m2/wrapper/dists`), as one READ-ONLY root beside
+ * the cache (#4271). Without it `./mvnw` in a run without network tries to download the
+ * distribution a standalone shell already finds. The Gradle wrapper is not admitted: it takes a lock
+ * file inside its distribution even when that is installed, which a read-only root refuses.
+ */
+export function nativeBuildWrapperReadRoots(home: string): readonly string[] {
+  const resolvedHome = resolvedPath(home) ?? home;
+  const dists = resolvedPath(join(resolvedHome, ".m2", "wrapper", "dists"));
+  return dists !== undefined &&
+    insideOrEqual(join(resolvedHome, ".m2"), dists) &&
+    isInstallPrefix(dists, resolvedHome)
+    ? [dists]
+    : [];
+}

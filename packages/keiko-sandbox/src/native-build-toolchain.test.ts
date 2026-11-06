@@ -1,10 +1,11 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   nativeBuildInheritedEnvNames,
   nativeBuildToolReadRoots,
+  nativeBuildWrapperReadRoots,
 } from "./native-toolchain-roots.js";
 
 describe("native build-tool environment and roots (#4271)", () => {
@@ -47,6 +48,21 @@ describe("native build-tool environment and roots (#4271)", () => {
     mkdirSync(join(home, "bin"), { recursive: true });
     writeFileSync(join(home, "bin", "java"), "");
     expect(nativeBuildToolReadRoots({ JAVA_HOME: home, PATH: "" }, home)).toEqual([]);
+  });
+
+  it("admits the Maven wrapper's installed distributions, and only below ~/.m2", () => {
+    const root = tree();
+    const home = join(root, "home");
+    expect(nativeBuildWrapperReadRoots(home)).toEqual([]);
+    const dists = join(home, ".m2", "wrapper", "dists");
+    mkdirSync(join(dists, "apache-maven-3.9.9", "bin"), { recursive: true });
+    expect(nativeBuildWrapperReadRoots(home)).toEqual([dists]);
+    // A dists link that leaves ~/.m2 is not a wrapper distribution.
+    rmSync(dists, { recursive: true });
+    const outside = join(home, "Documents");
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, dists);
+    expect(nativeBuildWrapperReadRoots(home)).toEqual([]);
   });
 
   it("admits the directory of an explicit certificate bundle", () => {

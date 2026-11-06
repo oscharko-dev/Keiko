@@ -24,6 +24,7 @@ export {
   nativeBuildCacheReadRoots,
   nativeBuildInheritedEnvNames,
   nativeBuildToolReadRoots,
+  nativeBuildWrapperReadRoots,
 } from "./native-toolchain-roots.js";
 export {
   NATIVE_LINKED_FILES_MAX,

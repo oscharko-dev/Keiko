@@ -30,7 +30,10 @@ import {
 import { type IncomingHttpHeaders, type IncomingMessage } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { nativeBuildCacheReadRoots } from "@oscharko-dev/keiko-sandbox";
+import {
+  nativeBuildCacheReadRoots,
+  nativeBuildWrapperReadRoots,
+} from "@oscharko-dev/keiko-sandbox";
 import { nativeBuildCacheAdmitted, prepareNativeBuildSettings } from "./nativeBuildSettings.js";
 import { DatabaseSync } from "node:sqlite";
 import type {
@@ -2045,8 +2048,8 @@ function preparedRunEnvironment(
 
 /**
  * The sanitized build settings of a native run (#4271): the environment that binds them, empty for
- * the mapped profiles. The Maven cache is bound read-only below Full access, matching the kernel
- * read root the backend opens for it (`nativeBuildCacheReadRoots`).
+ * the mapped profiles. The Maven cache and the Maven wrapper's distributions are bound read-only
+ * below Full access, matching the kernel read roots the backend opens for them.
  */
 function admitNativeBuildSettings(
   input: OpenCodeRuntimeCompositionInput,
@@ -2056,15 +2059,14 @@ function admitNativeBuildSettings(
   if (input.toolProfile !== "native") return {};
   const realHome = input.buildSettingsHome ?? homedir();
   const mode = request.env.KEIKO_CODING_MODE;
-  const repository = nativeBuildCacheAdmitted(mode)
-    ? nativeBuildCacheReadRoots(realHome)[0]
-    : undefined;
+  const offline = nativeBuildCacheAdmitted(mode);
   return prepareNativeBuildSettings({
     runId: request.runId,
     mode,
     realHome,
     stateRoot: runRoot,
-    readOnlyMavenRepository: repository,
+    readOnlyMavenRepository: offline ? nativeBuildCacheReadRoots(realHome)[0] : undefined,
+    readOnlyMavenWrapperDists: offline ? nativeBuildWrapperReadRoots(realHome)[0] : undefined,
     activityLog: input.activityLog,
   }).env;
 }

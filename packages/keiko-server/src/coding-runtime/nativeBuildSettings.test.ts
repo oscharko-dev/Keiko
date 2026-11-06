@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -187,6 +195,40 @@ describe("prepareNativeBuildSettings (#4271)", () => {
     );
     expect(nativeBuildCacheAdmitted("autonomous-delivery")).toBe(false);
     expect(nativeBuildCacheAdmitted("governed-assist")).toBe(true);
+  });
+
+  it("links the Maven wrapper's read-only distributions into the private home below Full access", () => {
+    const { realHome, stateRoot } = fixture();
+    const dists = join(realHome, ".m2", "wrapper", "dists");
+    mkdirSync(join(dists, "apache-maven-3.9.9", "bin"), { recursive: true });
+    writeFileSync(join(dists, "apache-maven-3.9.9", "bin", "mvn"), "");
+    const log = sink();
+    prepareNativeBuildSettings({
+      runId: "run-0004",
+      mode: "supervised-coding",
+      realHome,
+      stateRoot,
+      readOnlyMavenWrapperDists: dists,
+      activityLog: log.sink,
+    });
+    const link = join(stateRoot, "home", ".m2", "wrapper", "dists");
+    expect(realpathSync(link)).toBe(realpathSync(dists));
+    expect(existsSync(join(link, "apache-maven-3.9.9", "bin", "mvn"))).toBe(true);
+    expect(log.events[0]?.extra).toMatchObject({ mavenCache: "none", mavenWrapper: "read-only" });
+  });
+
+  it("leaves the wrapper's distributions private at Full access", () => {
+    const { realHome, stateRoot } = fixture();
+    const log = sink();
+    prepareNativeBuildSettings({
+      runId: "run-0005",
+      mode: "autonomous-delivery",
+      realHome,
+      stateRoot,
+      activityLog: log.sink,
+    });
+    expect(existsSync(join(stateRoot, "home", ".m2", "wrapper"))).toBe(false);
+    expect(log.events[0]?.extra).toMatchObject({ mavenCache: "private", mavenWrapper: "private" });
   });
 
   it("refuses an oversized or non-file settings source without throwing", () => {

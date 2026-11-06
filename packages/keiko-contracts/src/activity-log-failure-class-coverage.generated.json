@@ -11633,6 +11633,12 @@
               "required": true
             },
             {
+              "name": "mavenWrapper",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "npmConfig",
               "type": "string",
               "dataClass": "closed-enum",

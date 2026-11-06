@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -255,6 +255,7 @@ export function sanitizeGradleProperties(text: string): KeyValueSanitized {
 
 type FileDisposition = "sanitized" | "absent" | "refused";
 const CACHE_DISPOSITIONS = ["read-only", "private", "none"] as const;
+type CacheDisposition = (typeof CACHE_DISPOSITIONS)[number];
 
 const NATIVE_BUILD_SETTINGS_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -295,6 +296,12 @@ const NATIVE_BUILD_SETTINGS_OPERATION = defineActivityLogOperation({
       required: true,
       values: [...CACHE_DISPOSITIONS],
     },
+    mavenWrapper: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...CACHE_DISPOSITIONS],
+    },
     strippedElementCount: { type: "integer", dataClass: "count", required: true },
     droppedLineCount: { type: "integer", dataClass: "count", required: true },
   },
@@ -315,6 +322,8 @@ export interface NativeBuildSettingsInput {
   readonly stateRoot: string;
   /** The user's Maven repository when it is admitted read-only (`nativeBuildCacheReadRoots`). */
   readonly readOnlyMavenRepository?: string | undefined;
+  /** The Maven wrapper's distributions when admitted read-only (`nativeBuildWrapperReadRoots`). */
+  readonly readOnlyMavenWrapperDists?: string | undefined;
   readonly activityLog?: ServerLogSink | undefined;
 }
 
@@ -411,6 +420,7 @@ export function prepareNativeBuildSettings(
   writePrivate(join(home, ".m2", "settings.xml"), maven.value?.text ?? emptyMavenSettings(run));
   writeAdmitted(join(home, ".gradle", "gradle.properties"), gradle);
   writeAdmitted(userConfig, npm);
+  linkMavenWrapperDists(home, input);
   const result: NativeBuildSettingsResult = {
     env: npm.value === undefined ? {} : { NPM_CONFIG_USERCONFIG: userConfig },
     mavenSettings: maven.disposition,
@@ -427,6 +437,22 @@ function mavenRunBinding(input: NativeBuildSettingsInput): MavenRunBinding {
   return offline && input.readOnlyMavenRepository !== undefined
     ? { offline, localRepository: input.readOnlyMavenRepository }
     : { offline };
+}
+
+/**
+ * `./mvnw` looks for its distribution under `$HOME/.m2/wrapper/dists`; the private home links that
+ * name to the user's read-only distributions, so an installed wrapper runs as in a standalone shell.
+ */
+function linkMavenWrapperDists(home: string, input: NativeBuildSettingsInput): void {
+  if (input.readOnlyMavenWrapperDists === undefined) return;
+  const link = join(home, ".m2", "wrapper", "dists");
+  mkdirSync(dirname(link), { recursive: true, mode: 0o700 });
+  symlinkSync(input.readOnlyMavenWrapperDists, link, "dir");
+}
+
+function readOnlyDisposition(mode: string | undefined, root: string | undefined): CacheDisposition {
+  if (!nativeBuildCacheAdmitted(mode)) return "private";
+  return root === undefined ? "none" : "read-only";
 }
 
 function writeAdmitted(path: string, admitted: Admitted<Sanitized>): void {
@@ -447,11 +473,6 @@ function recordNativeBuildSettingsAdmitted(
   result: NativeBuildSettingsResult,
 ): void {
   const mode = NATIVE_BUILD_MODES.find((value) => value === input.mode);
-  const cache = !nativeBuildCacheAdmitted(input.mode)
-    ? "private"
-    : input.readOnlyMavenRepository === undefined
-      ? "none"
-      : "read-only";
   (input.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       NATIVE_BUILD_SETTINGS_OPERATION,
@@ -462,7 +483,8 @@ function recordNativeBuildSettingsAdmitted(
         mavenSettings: result.mavenSettings,
         npmConfig: result.npmConfig,
         gradleProperties: result.gradleProperties,
-        mavenCache: cache,
+        mavenCache: readOnlyDisposition(input.mode, input.readOnlyMavenRepository),
+        mavenWrapper: readOnlyDisposition(input.mode, input.readOnlyMavenWrapperDists),
         strippedElementCount: result.strippedElementCount,
         droppedLineCount: result.droppedLineCount,
       },

@@ -10842,6 +10842,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["read-only", "private", "none"],
       },
+      mavenWrapper: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["read-only", "private", "none"],
+      },
       strippedElementCount: {
         type: "integer",
         dataClass: "count",

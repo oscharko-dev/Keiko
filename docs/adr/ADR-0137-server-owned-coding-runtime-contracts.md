@@ -2321,8 +2321,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   never be read, and the real file stays denied); `~/.gradle/gradle.properties` keeps proxy and daemon
   keys only. Below Full access the sanitized Maven settings run `offline` against the user's
   `~/.m2/repository` opened as one READ-ONLY root (`nativeBuildCacheReadRoots`), so a warm cache builds
-  without a network and a run can never poison the user's cache; at Full access the run resolves into
-  its own writable private cache. An in-repo `.npmrc` stays kernel-denied: no sanitized view is
+  without a network and a run can never poison the user's cache. The Maven wrapper's installed
+  distributions (`~/.m2/wrapper/dists`) open the same way (`nativeBuildWrapperReadRoots`) and are
+  linked into the private home, so `./mvnw` runs the distribution a standalone shell runs instead of
+  trying a download without a network; the Gradle wrapper is not admitted, because it takes a lock
+  file inside its installed distribution. At Full access the run resolves into its own writable
+  private cache and downloads a wrapper distribution there. The admission line records the cache
+  and wrapper dispositions (`mavenCache`, `mavenWrapper`). An in-repo `.npmrc` stays kernel-denied: no sanitized view is
   possible without rewriting a workspace read, and registry routing is available through the user
   config instead. The launch gate that keeps a host secret out of the child compares the
   child env (allowlisted non-secret names plus Keiko's own run projection) against the host values
