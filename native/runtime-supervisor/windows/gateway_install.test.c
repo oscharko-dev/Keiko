@@ -38,9 +38,35 @@ static int status_rules(void) {
        state == KEIKO_GATEWAY_SERVICE_IMAGE_MISMATCH || state == KEIKO_GATEWAY_SERVICE_STATE_UNKNOWN);
 }
 
+/* #4068: the running image is read from the service command line install writes, because a
+ * standard user cannot query the LocalSystem service process itself. Only that exact shape counts. */
+static int command_image_rules(void) {
+  wchar_t path[64];
+  wchar_t small[8];
+  static const wchar_t *refused[] = {
+      L"C:\\P\\keiko-runtime-supervisor.exe --gateway-service",
+      L"\"C:\\P\\keiko-runtime-supervisor.exe\"",
+      L"\"C:\\P\\keiko-runtime-supervisor.exe\" --gateway-service --extra",
+      L"\"C:\\P\\keiko-runtime-supervisor.exe\" --gateway-supervised",
+      L"\"C:\\P\\keiko-runtime-supervisor.exe\"  --gateway-service",
+      L"\"\" --gateway-service",
+      L"\"C:\\P\\keiko-runtime-supervisor.exe",
+      L""};
+  if (!keiko_gateway_service_command_image(
+          L"\"C:\\P\\keiko-runtime-supervisor.exe\" --gateway-service", path, 64) ||
+      wcscmp(path, L"C:\\P\\keiko-runtime-supervisor.exe") != 0)
+    return 0;
+  for (size_t i = 0; i < sizeof(refused) / sizeof(*refused); i++)
+    if (keiko_gateway_service_command_image(refused[i], path, 64)) return 0;
+  return !keiko_gateway_service_command_image(NULL, path, 64) &&
+      !keiko_gateway_service_command_image(
+          L"\"C:\\P\\keiko-runtime-supervisor.exe\" --gateway-service", small, 8);
+}
+
 int main(void) {
   if (!pin_rules()) { puts("gateway-install-pin: failed"); return 1; }
   if (!path_rules()) { puts("gateway-install-paths: failed"); return 1; }
+  if (!command_image_rules()) { puts("gateway-install-command-image: failed"); return 1; }
   if (!status_rules()) { puts("gateway-install-status: failed"); return 1; }
   puts("gateway-install-rules: passed");
   return 0;

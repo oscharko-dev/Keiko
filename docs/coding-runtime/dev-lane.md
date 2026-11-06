@@ -18,11 +18,22 @@ activation, not a platform qualification:
   terminates a fresh POSIX process group best-effort; a descendant that leaves the group survives
   unobserved, and tree exit is proven only for the direct child. Windows uses the native Job Object
   supervisor staged with the runtime. Neither development path claims a release qualification.
-- **A Windows checkout cannot start a coding run.** Every Windows launch carries the gateway policy,
-  and only the installed broker can enforce it, which only a release-qualified package may use
-  (ADR-0043). The lane still activates and the rest of the dev UI works, but readiness reports
-  `gateway-service-unqualified`, the Workbench offers no Start, and `dev:start` prints
-  `coding runs unavailable`. No unconfined fallback exists.
+- **A Windows checkout needs its own installed broker.** Every Windows launch carries the gateway
+  policy, and only the installed broker can enforce it (ADR-0043 D18/D19). A checkout installs that
+  broker once, pinned to the runtime supervisor it built:
+
+  ```bash
+  npm run build
+  node dist/cli/index.js gateway-service install --dev-lane
+  ```
+
+  Windows asks for approval through UAC, and the command needs Node 24. Until the broker is ready,
+  the lane activates and the rest of the dev UI works. Readiness then reports the broker's
+  `gateway-service-*` state, the Workbench offers no Start, and `dev:start` prints
+  `coding runs unavailable` with the command to run. After `npm run dev:coding-runtime:stage`
+  rebuilds the supervisor, run `repair --dev-lane`. Remove the broker with `uninstall --dev-lane`.
+  No unconfined fallback exists, and a checkout run never counts as platform qualification.
+
 - **Forgone: platform signature chains.** The OpenCode payload is verified byte-for-byte against
   the review-approved redistribution catalog (`portable-runtime-approvals.json`), and the
   secure-read helper is digest-pinned at build time and re-verified on every read — but no
@@ -96,7 +107,10 @@ When readiness reports `false`, the `runtimeUnavailableReason` names the first f
 | `secure-read-unavailable`     | Helper or its manifest missing, digest/size drifted, or helper source changed since the build.                                        | `npm run dev:coding-runtime:stage`                          |
 | `loopback-unavailable`        | `KEIKO_UI_PORT` unset or invalid in the server process.                                                                               | Use `npm run dev:start` (exports it) or export it manually. |
 | `runtime-unqualified`         | Generic composition fallback (for example, no task-workspace stack).                                                                  | Check server composition.                                   |
-| `gateway-service-unqualified` | A Windows runtime that is not release-qualified, so no broker may enforce its gateway policy.                                         | None in a checkout: use a release-qualified package.        |
+| `gateway-service-unqualified` | A Windows runtime that yields no broker pin (an evaluation package, the npm runtime lane), so no broker may enforce its policy.       | Use a release-qualified package or a Windows checkout.      |
+| `gateway-service-absent`      | Windows checkout: the runtime gateway is not installed.                                                                               | `node dist/cli/index.js gateway-service install --dev-lane` |
+| `gateway-service-stale`       | Windows checkout: the installed broker is another supervisor build, for example after re-staging.                                     | `node dist/cli/index.js gateway-service repair --dev-lane`  |
+| `gateway-service-stopped`     | The installed broker is not running.                                                                                                  | `node dist/cli/index.js gateway-service repair --dev-lane`  |
 
 A start can also be refused after readiness. On a macOS checkout selected as its own workspace, the
 run fails with `workspace-unqualified` and a sentence asking for another repository, and the dev log

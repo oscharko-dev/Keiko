@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8eae3098d09187c94cd994e146ce401810672b9a7496d73e91e82e31e9e3d91f",
+    "catalogDigest": "8f37195155cb99786e7671ccce450537c56e68853d309cd91ee008e972ddd446",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3915,6 +3915,12 @@
             "required": true,
             "values": ["status", "install", "repair", "uninstall"]
           },
+          "lane": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["release-qualified", "dev-checkout"]
+          },
           "state": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -3933,8 +3939,8 @@
         "failureClasses": ["cli-gateway-service"],
         "proofIds": ["cli.gateway-service.completed.real-sink-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/gateway-service.ts:66",
-        "emitterSites": ["packages/keiko-cli/src/gateway-service.ts:248"]
+        "registrationSite": "packages/keiko-cli/src/gateway-service.ts:85",
+        "emitterSites": ["packages/keiko-cli/src/gateway-service.ts:292"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3960,6 +3966,12 @@
             "required": true,
             "values": ["status", "install", "repair", "uninstall"]
           },
+          "lane": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["release-qualified", "dev-checkout"]
+          },
           "reason": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -3967,6 +3979,7 @@
             "values": [
               "unsupported-platform",
               "helper-not-qualified",
+              "dev-checkout-unverified",
               "helper-unavailable",
               "elevation-declined",
               "source-mismatch",
@@ -3998,8 +4011,8 @@
         "failureClasses": ["cli-gateway-service"],
         "proofIds": ["cli.gateway-service.failed.real-sink-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/gateway-service.ts:91",
-        "emitterSites": ["packages/keiko-cli/src/gateway-service.ts:261"]
+        "registrationSite": "packages/keiko-cli/src/gateway-service.ts:111",
+        "emitterSites": ["packages/keiko-cli/src/gateway-service.ts:305"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4024,6 +4037,12 @@
             "dataClass": "closed-enum",
             "required": true,
             "values": ["status", "install", "repair", "uninstall"]
+          },
+          "lane": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["release-qualified", "dev-checkout"]
           }
         },
         "causal": "correlation",
@@ -4032,8 +4051,8 @@
         "failureClasses": ["cli-gateway-service"],
         "proofIds": ["cli.gateway-service.started.real-sink-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/gateway-service.ts:50",
-        "emitterSites": ["packages/keiko-cli/src/gateway-service.ts:240"]
+        "registrationSite": "packages/keiko-cli/src/gateway-service.ts:69",
+        "emitterSites": ["packages/keiko-cli/src/gateway-service.ts:280"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -9124,9 +9143,9 @@
         "failureClasses": ["coding-runtime-context-usage"],
         "proofIds": ["coding-runtime.context-usage.observed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:145",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:146",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:1632"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:1647"
         ]
       },
       {
@@ -9506,9 +9525,9 @@
         "failureClasses": ["coding-runtime-dev-lane"],
         "proofIds": ["coding-runtime.dev-lane.activated.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:88",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:90",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:537"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:541"
         ]
       },
       {
@@ -9558,9 +9577,9 @@
         "failureClasses": ["coding-runtime-dev-lane"],
         "proofIds": ["coding-runtime.dev-lane.refused.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:135",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:137",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:556"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:560"
         ]
       },
       {
@@ -61281,6 +61300,12 @@
                   "required": true
                 },
                 {
+                  "name": "lane",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
                   "name": "state",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -61323,6 +61348,12 @@
                   "required": true
                 },
                 {
+                  "name": "lane",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
                   "name": "reason",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -61354,6 +61385,12 @@
               "safeContextFields": [
                 {
                   "name": "action",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "lane",
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
@@ -107410,19 +107447,19 @@
     {
       "op": "cli.gateway-service.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/gateway-service.ts:69",
+      "site": "packages/keiko-cli/src/gateway-service.ts:88",
       "package": "keiko-cli"
     },
     {
       "op": "cli.gateway-service.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/gateway-service.ts:94",
+      "site": "packages/keiko-cli/src/gateway-service.ts:114",
       "package": "keiko-cli"
     },
     {
       "op": "cli.gateway-service.started",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/gateway-service.ts:53",
+      "site": "packages/keiko-cli/src/gateway-service.ts:72",
       "package": "keiko-cli"
     },
     {
@@ -110170,7 +110207,7 @@
     {
       "op": "coding-runtime.context-usage.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:148",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:149",
       "package": "keiko-server"
     },
     {
@@ -110194,13 +110231,13 @@
     {
       "op": "coding-runtime.dev-lane.activated",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:91",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:93",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.dev-lane.refused",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:138",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:140",
       "package": "keiko-server"
     },
     {

@@ -200,6 +200,37 @@ describe("dev-start runtime health gate", () => {
     expect(health).toBe("ok · coding runs unavailable (gateway-service-unqualified)");
     expect(healthyDevServer(health)).toBe(true);
   });
+
+  // #4068 (ADR-0043 D19): a checkout without its broker yet must still start, and must say how to
+  // install or repair it.
+  it.each([
+    [
+      "gateway-service-absent",
+      "install it: node dist/cli/index.js gateway-service install --dev-lane",
+    ],
+    [
+      "gateway-service-stopped",
+      "repair it: node dist/cli/index.js gateway-service repair --dev-lane",
+    ],
+    [
+      "gateway-service-stale",
+      "repair it: node dist/cli/index.js gateway-service repair --dev-lane",
+    ],
+    ["gateway-service-unknown", "coding runs unavailable (gateway-service-unknown)"],
+  ])(
+    "passes a Windows checkout whose broker is %s, and names the next step",
+    async (reason, text) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue({
+        ok: true,
+        json: async () => ({ runtimeAvailable: false, runtimeUnavailableReason: reason }),
+      });
+
+      const health = await requiredRuntimeHealth("http://127.0.0.1:1", true);
+
+      expect(healthyDevServer(health)).toBe(true);
+      expect(health).toContain(text);
+    },
+  );
 });
 
 describe("dev-start coding runtime lifecycle", () => {

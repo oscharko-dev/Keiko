@@ -343,7 +343,22 @@ async function fetchOk(url, validate = async () => true) {
   return (await validate(response)) ? "ok" : "unexpected response";
 }
 
-const WINDOWS_LANE_WITHOUT_RUNS = "gateway-service-unqualified";
+// The installed Windows runtime gateway decides whether a checkout can start coding runs (#4068,
+// ADR-0043 D19). Every `gateway-service-*` reason leaves the rest of the dev UI working.
+const WINDOWS_GATEWAY_REASON = /^gateway-service-[a-z]+$/u;
+const DEV_GATEWAY_COMMAND = "node dist/cli/index.js gateway-service install --dev-lane";
+const DEV_GATEWAY_HINTS = {
+  "gateway-service-absent": `install it: ${DEV_GATEWAY_COMMAND}`,
+  "gateway-service-stopped": `repair it: ${DEV_GATEWAY_COMMAND.replace("install", "repair")}`,
+  "gateway-service-stale": `repair it: ${DEV_GATEWAY_COMMAND.replace("install", "repair")}`,
+};
+
+function windowsGatewayHealth(reason) {
+  const hint = DEV_GATEWAY_HINTS[reason];
+  return hint === undefined
+    ? `ok · coding runs unavailable (${reason})`
+    : `ok · coding runs unavailable (${reason}); ${hint}`;
+}
 
 export async function codingRuntimeHealth(baseUrl, fetchFn = globalThis.fetch) {
   const response = await fetchFn(`${baseUrl}${CODING_RUNTIME_READINESS_PATH}`, {
@@ -368,9 +383,10 @@ export async function codingRuntimeHealth(baseUrl, fetchFn = globalThis.fetch) {
     typeof body?.runtimeUnavailableReason === "string"
       ? body.runtimeUnavailableReason
       : "invalid-readiness";
-  // A Windows checkout's lane cannot start a coding run (#4068, ADR-0043), and the rest of the dev UI
-  // works. Failing the gate on this one reason would time out every Windows dev:start.
-  if (reason === WINDOWS_LANE_WITHOUT_RUNS) return `ok · coding runs unavailable (${reason})`;
+  // A Windows checkout starts coding runs only through the installed gateway, and the rest of the
+  // dev UI works without it. Failing the gate on these reasons would time out every Windows
+  // dev:start that has no broker yet.
+  if (WINDOWS_GATEWAY_REASON.test(reason)) return windowsGatewayHealth(reason);
   return `unavailable (${reason})`;
 }
 

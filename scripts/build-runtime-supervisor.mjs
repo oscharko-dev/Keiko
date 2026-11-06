@@ -49,10 +49,15 @@ function compilerInvocation(argv) {
         "/DUNICODE",
         "/D_UNICODE",
         "/D_CRT_SECURE_NO_WARNINGS",
+        // Identical sources yield identical bytes (#4068). The installed broker is pinned to this
+        // digest, and dev:start rebuilds the supervisor on every start; a timestamped image would
+        // leave that broker stale after each start.
+        "/Brepro",
         `/Fe:${output}`,
         WINDOWS_SOURCE,
         ...windowsGatewaySources,
         "/link",
+        "/Brepro",
         // Restrict implicit DLL dependencies before the first instruction runs; wmain's own
         // SetDefaultDllDirectories call only governs later dynamic loads.
         "/DEPENDENTLOADFLAG:0x800",

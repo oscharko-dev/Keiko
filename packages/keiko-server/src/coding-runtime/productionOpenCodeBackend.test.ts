@@ -556,16 +556,17 @@ describe("production OpenCode backend composition", () => {
   );
 
   // #4068: composition binds the gateway policy into every Windows run (ADR-0043), and the native
-  // backend can enforce it only through the installed broker, which only a release-qualified package
-  // may use. So these lanes refuse every start, and readiness must not offer one.
-  it.each(["dev", "evaluation"] as const)(
+  // backend can enforce it only through the installed broker. A runtime that yields no broker pin
+  // (an evaluation package, the npm runtime lane) therefore refuses every start, and readiness must
+  // not offer one.
+  it.each(["evaluation", "npm-lane"] as const)(
     "refuses every %s Windows run before a helper starts, and readiness says so",
     (lane) => {
       const root = mkdtempSync(join(tmpdir(), "keiko-windows-unqualified-lane-"));
       try {
         const portable: ResolvedPortableOpenCodeRuntime =
-          lane === "dev"
-            ? windowsDevLaneRuntime(root)
+          lane === "npm-lane"
+            ? { ...windowsDevLaneRuntime(root), lane: "npm-runtime-package" }
             : {
                 ...releaseQualifiedNativeRuntime(root),
                 platformAssurance: "evaluation-unqualified",
@@ -589,6 +590,30 @@ describe("production OpenCode backend composition", () => {
       }
     },
   );
+
+  // #4068 (ADR-0043 D19): a Windows dev checkout installs the same broker, pinned to the runtime
+  // supervisor it built, so its runs take the release path's confinement rather than a refusal.
+  it("runs a Windows dev checkout through the broker it pinned, and readiness asks that broker", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-windows-dev-checkout-"));
+    try {
+      const portable = windowsDevLaneRuntime(root);
+      const factory = vi.spyOn(nativeBackend, "createNativeRuntimeProcessBackend");
+      createProductionOpenCodeBackend(backendInput(root, portable)).createRun(runInput(root));
+
+      expect(portable.nativeHelperSha256).toMatch(/^[a-f0-9]{64}$/u);
+      expect(factory).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          useInstalledWindowsGateway: true,
+          expectedHelperSha256: portable.nativeHelperSha256,
+        }),
+      );
+      const facts = windowsGatewayServiceFacts({ activityLog: { write: vi.fn() } }, portable);
+      // The fixture's helper is no executable, so the status read runs to no exit at all.
+      expect(facts.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 
   it("asks the installed broker for a release-qualified Windows runtime", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-windows-released-lane-"));

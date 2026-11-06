@@ -40,21 +40,52 @@ BOOL keiko_gateway_protected_image_path(const wchar_t *path) {
   return ok;
 }
 
+BOOL keiko_gateway_service_command_image(const wchar_t *command, wchar_t *path, DWORD length) {
+  static const wchar_t suffix[] = L"\" --gateway-service";
+  const wchar_t *end;
+  size_t image;
+  if (command == NULL || path == NULL || length == 0 || command[0] != L'"') return FALSE;
+  end = wcschr(command + 1, L'"');
+  if (end == NULL || wcscmp(end, suffix) != 0) return FALSE;
+  image = (size_t)(end - (command + 1));
+  if (image == 0 || image >= length) return FALSE;
+  wmemcpy(path, command + 1, image);
+  path[image] = L'\0';
+  return TRUE;
+}
+
+static BOOL configured_image(SC_HANDLE service, wchar_t *path, DWORD length) {
+  QUERY_SERVICE_CONFIGW *config = NULL;
+  DWORD needed = 0;
+  BOOL ok = FALSE;
+  if (QueryServiceConfigW(service, NULL, 0, &needed) || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+    return FALSE;
+  config = malloc(needed);
+  if (config != NULL && QueryServiceConfigW(service, config, needed, &needed) &&
+      config->dwServiceType == SERVICE_WIN32_OWN_PROCESS)
+    ok = keiko_gateway_service_command_image(config->lpBinaryPathName, path, length);
+  free(config);
+  return ok;
+}
+
+/* #4068: the image of the running service comes from its configuration, which the default service
+ * DACL lets an interactive standard user read. The service process runs as LocalSystem and denies
+ * that user PROCESS_QUERY_LIMITED_INFORMATION, so asking the process failed with
+ * ERROR_ACCESS_DENIED on every non-elevated status read and launch. A configuration that names
+ * another image than the one running fails closed later, at the broker's image-identity
+ * authentication of the pipe client. */
 BOOL keiko_gateway_running_image(wchar_t *path, DWORD length) {
   SC_HANDLE manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
-  SC_HANDLE service = manager ? OpenServiceW(manager, KEIKO_GATEWAY_SERVICE_NAME, SERVICE_QUERY_STATUS) : NULL;
+  SC_HANDLE service = manager ? OpenServiceW(manager, KEIKO_GATEWAY_SERVICE_NAME,
+                                             SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG)
+                              : NULL;
   SERVICE_STATUS_PROCESS status;
   DWORD bytes;
   BOOL ok = FALSE;
   if (service && QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO, (BYTE *)&status,
       sizeof(status), &bytes) && status.dwServiceType == SERVICE_WIN32_OWN_PROCESS &&
-      status.dwCurrentState == SERVICE_RUNNING) {
-    HANDLE server = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, status.dwProcessId);
-    if (server) {
-      ok = QueryFullProcessImageNameW(server, 0, path, &length);
-      CloseHandle(server);
-    }
-  }
+      status.dwCurrentState == SERVICE_RUNNING)
+    ok = configured_image(service, path, length);
   if (service) CloseServiceHandle(service);
   if (manager) CloseServiceHandle(manager);
   return ok;

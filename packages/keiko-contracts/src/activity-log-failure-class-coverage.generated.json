@@ -4475,6 +4475,12 @@
               "required": true
             },
             {
+              "name": "lane",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
               "name": "state",
               "type": "string",
               "dataClass": "closed-enum",
@@ -4517,6 +4523,12 @@
               "required": true
             },
             {
+              "name": "lane",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
               "name": "reason",
               "type": "string",
               "dataClass": "closed-enum",
@@ -4548,6 +4560,12 @@
           "safeContextFields": [
             {
               "name": "action",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "lane",
               "type": "string",
               "dataClass": "closed-enum",
               "required": true

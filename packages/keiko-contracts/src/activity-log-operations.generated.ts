@@ -3775,6 +3775,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["status", "install", "repair", "uninstall"],
       },
+      lane: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["release-qualified", "dev-checkout"],
+      },
       state: {
         type: "string",
         dataClass: "closed-enum",
@@ -3818,6 +3824,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["status", "install", "repair", "uninstall"],
       },
+      lane: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["release-qualified", "dev-checkout"],
+      },
       reason: {
         type: "string",
         dataClass: "closed-enum",
@@ -3825,6 +3837,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "unsupported-platform",
           "helper-not-qualified",
+          "dev-checkout-unverified",
           "helper-unavailable",
           "elevation-declined",
           "source-mismatch",
@@ -3880,6 +3893,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: ["status", "install", "repair", "uninstall"],
+      },
+      lane: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["release-qualified", "dev-checkout"],
       },
     },
     causal: "correlation",

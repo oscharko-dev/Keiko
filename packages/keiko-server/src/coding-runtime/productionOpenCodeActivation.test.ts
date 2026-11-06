@@ -366,9 +366,9 @@ describe("production OpenCode activation", () => {
     });
   });
 
-  // #4068: activation still succeeds, because the rest of the Workbench works. Only starting a run
-  // cannot, and readiness has to say so before anyone presses Start.
-  it("states that a staged Windows dev lane cannot start a coding run", () => {
+  // #4068 (ADR-0043 D19): a staged Windows dev lane carries its own supervisor's broker pin, so
+  // readiness reports that broker's state before anyone presses Start, instead of refusing outright.
+  it("reads the broker state for a staged Windows dev lane", () => {
     const staged = devLaneFixture("windows-x64");
     const result = resolveProductionOpenCodeActivation(
       activationInput(
@@ -377,7 +377,8 @@ describe("production OpenCode activation", () => {
       ),
     );
 
-    expect(result.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unqualified");
+    // The fixture's helper is no executable, so the status read runs to no exit at all.
+    expect(result.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
   });
 
   it("has no Windows gateway fact for a macOS dev lane", () => {

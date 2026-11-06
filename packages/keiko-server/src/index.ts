@@ -55,6 +55,7 @@ export {
   discoverReleasedWindowsGatewayHelper,
   portableInstallCarriesReleaseSignature,
 } from "./coding-runtime/productionPortableCodingRuntime.js";
+export { discoverDevCheckoutWindowsGatewayHelper } from "./coding-runtime/devLanePortableCodingRuntime.js";
 export { createUpdateCandidateAuthority } from "./update-candidate-authority.js";
 export {
   createUpdateLocalStateManager,

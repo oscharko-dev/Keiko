@@ -46,6 +46,7 @@ import {
   resolveNativeGitMetadata,
 } from "./opencodeNativeGitMetadata.js";
 import {
+  devCheckoutWindowsGatewayHelperPin,
   devLaneCheckoutRoot,
   npmLanePackageRoot,
   type DevLanePortableOpenCodeRuntime,
@@ -1312,7 +1313,7 @@ function runtimeSupervisor(
   if (input.portable.target === "linux-x64") {
     return linuxNamespaceGatewaySupervisor(input.portable, input, run, toolProfile);
   }
-  const installedPin = releasedWindowsHelperPin(input.portable);
+  const installedPin = windowsGatewayHelperPin(input.portable);
   if (isEvaluationLaneRuntime(input.portable) && input.portable.target !== "windows-x64") {
     return appSandboxSupervisor(input.portable, input, run, toolProfile);
   }
@@ -1332,8 +1333,17 @@ function runtimeSupervisor(
   });
 }
 
-function releasedWindowsHelperPin(portable: ResolvedPortableOpenCodeRuntime): string | undefined {
-  return "platformAssurance" in portable ? releasedWindowsGatewayHelperPin(portable) : undefined;
+/**
+ * The digest the installed D18 broker must carry for this runtime, or `undefined` when no broker may
+ * enforce its gateway policy, which refuses every Windows start (ADR-0043 D14/D19). A
+ * release-qualified package and a Windows dev checkout yield one; an evaluation package, the npm
+ * runtime lane and the functional test runtime do not.
+ */
+export function windowsGatewayHelperPin(
+  portable: ResolvedPortableOpenCodeRuntime,
+): string | undefined {
+  if ("platformAssurance" in portable) return releasedWindowsGatewayHelperPin(portable);
+  return isDevLaneRuntime(portable) ? devCheckoutWindowsGatewayHelperPin(portable) : undefined;
 }
 
 function linuxNamespaceGatewaySupervisor(
@@ -1365,9 +1375,14 @@ function devLaneSupervisor(
   if (portable.target !== "windows-x64")
     return appSandboxSupervisor(portable, input, run, toolProfile);
   if (portable.nativeHelperPath === undefined) throw new Error("dev-lane-supervisor-missing");
+  // A checkout's runs go through the broker it installed with its own supervisor's pin, exactly as
+  // a release's do; without that pin the native backend refuses the gateway launch (ADR-0043 D19).
+  const installedPin = devCheckoutWindowsGatewayHelperPin(portable);
   return createRuntimeProcessSupervisor({
+    ...(installedPin ? { planSandbox: planWindowsGatewayRuntimeSandbox } : {}),
     backend: createNativeRuntimeProcessBackend({
       helperPath: portable.nativeHelperPath,
+      ...(installedPin ? { useInstalledWindowsGateway: true } : {}),
       expectedHelperSha256: portable.nativeHelperSha256,
       runtimeRoots: [join(portable.installRoot, portable.sidecar.payloadRootPath)],
       workspaceRoot: run.context.workspaceRoot,

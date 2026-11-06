@@ -61,7 +61,10 @@ import {
 } from "./devLanePortableCodingRuntime.js";
 import { createDevLaneSecureWorkspaceTextReadPort } from "./devLaneSecureWorkspaceTextRead.js";
 import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
-import { createProductionOpenCodeBackend } from "./productionOpenCodeBackend.js";
+import {
+  createProductionOpenCodeBackend,
+  windowsGatewayHelperPin,
+} from "./productionOpenCodeBackend.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import type {
   ProductionOpenCodeBackendInput,
@@ -72,7 +75,6 @@ import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRun
 import {
   discoverQualifiedPortableOpenCode,
   readWindowsGatewayServiceStatus,
-  releasedWindowsGatewayHelperPin,
 } from "./productionPortableCodingRuntime.js";
 import {
   createWindowsGatewayServiceProbe,
@@ -445,13 +447,15 @@ export function windowsGatewayServiceFacts(
   portable: ResolvedPortableOpenCodeRuntime,
 ): { readonly windowsGatewayService?: WindowsGatewayServiceProbe } {
   if (portable.target !== "windows-x64") return {};
-  if (!("platformAssurance" in portable)) return UNQUALIFIED_WINDOWS_RUNTIME;
-  const helperSha256 = releasedWindowsGatewayHelperPin(portable);
-  return helperSha256 === undefined
+  // A release-qualified package and a Windows dev checkout carry a broker pin (ADR-0043 D19); both
+  // then report the installed broker's state, so a checkout without one is told to install it.
+  const helperSha256 = windowsGatewayHelperPin(portable);
+  const helperPath = portable.nativeHelperPath;
+  return helperSha256 === undefined || helperPath === undefined
     ? UNQUALIFIED_WINDOWS_RUNTIME
     : {
         windowsGatewayService: createWindowsGatewayServiceProbe({
-          helperPath: portable.nativeHelperPath,
+          helperPath,
           helperSha256,
           activityLog: input.activityLog ?? processServerLogSink(),
           runStatus: readWindowsGatewayServiceStatus,

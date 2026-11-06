@@ -1286,6 +1286,45 @@ Limits: no coding run has started on this host, so W6, W8, W12 and W15 gain no e
 real run on Windows needs a release-qualified package with an installed broker, or an owner decision
 to let a checkout use the broker, and in either case the open workspace-grant design above.
 
+## A checkout installs the broker, and the first confined run starts (W1/W12, 2026-11-06)
+
+The proposal [windows-runnable-workbench-proposal.md](../coding-runtime/windows-runnable-workbench-proposal.md)
+asks the owner to let a Windows checkout use the D18 broker (step A1). This branch implements it for
+review. `keiko gateway-service install --dev-lane` installs the same broker, pinned to the supervisor
+the checkout built; launch and readiness use that pin. ADR-0043 D19 records the change.
+
+Host: Windows 11 Home x64 10.0.26200, standard user, Smart App Control off, Node 24.18.0. The broker
+was installed through the product path, with one UAC approval by the human.
+
+Two production defects surfaced that the elevated hosted runner could not show:
+
+| Defect                                                                                                                            | Seen on this host                                                                                 | Repair                                                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Status and launch read the running broker's image by opening its process. A standard user is denied that (`ERROR_ACCESS_DENIED`). | Status of a running broker with the right digest: `state-unknown`                                 | Read the image from the service configuration, which an interactive user may query, and accept only the exact command line install writes. Status then reported `image-mismatch` for the old broker and `ready` after `repair`. |
+| The supervisor build embedded a timestamp, and `dev:start` rebuilds it on every start.                                            | Two builds of identical sources: two digests. The installed broker became stale after each start. | Build with `/Brepro`. Two builds now produce one digest, and readiness stayed ready across `dev:start`.                                                                                                                         |
+
+The native install rules gain a command-line case; the supervisor still builds with `/W4 /WX
+/analyze`.
+
+Result:
+
+- **Readiness.** The dev UI reported `runtimeAvailable: true` with evidence class
+  `functional-not-platform-qualified` and runtime `2.2.5` from `dev-checkout`. This is the first time
+  a Windows checkout offered Start.
+- **First run.** A read-only task in a scratch repository, in Ask for approval mode, was spawned
+  confined through the broker. No `runtime.confinement.failed` was logged. The runtime then exited
+  after about 0.8 s, before its handshake: `RuntimeUnexpectedExit`, then `readiness-failed`, then
+  `stage=start:reason=runtime-reap-unproven`.
+- **Cause.** The run's state directory stayed empty. The per-tree AppContainer has no grant on its
+  state directory, its runtime root or the workspace. That is open step B of the proposal.
+
+Limits:
+
+- No model turn was reached, so W6, W8 and W15 still gain no execution evidence.
+- The transport proof `test-windows-gateway-scm.ps1 -VerifyTransport` was not run on this host,
+  because it needs an elevated shell.
+- No CI lane runs a checkout broker.
+
 ## Update impact
 
 Release-impacting supervisor reliability fix: retain inherited-handle storage through Windows

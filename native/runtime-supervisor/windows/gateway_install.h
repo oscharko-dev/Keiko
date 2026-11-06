@@ -38,6 +38,8 @@ BOOL keiko_gateway_install_paths(wchar_t *directory, wchar_t *image, wchar_t *st
 BOOL keiko_gateway_image_matches(HANDLE image, const wchar_t *pin);
 BOOL keiko_gateway_protected_image_path(const wchar_t *path);
 BOOL keiko_gateway_running_image(wchar_t *path, DWORD length);
+/* The image of the command line install writes, `"<image>" --gateway-service`, and nothing else. */
+BOOL keiko_gateway_service_command_image(const wchar_t *command, wchar_t *path, DWORD length);
 
 /* Read-only; needs no administrator rights. */
 int keiko_gateway_service_status(const wchar_t *pin);
