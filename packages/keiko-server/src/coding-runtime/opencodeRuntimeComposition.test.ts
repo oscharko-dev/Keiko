@@ -1273,6 +1273,17 @@ function fixtureContextGeometry(control: StartBridgeControl | undefined): Fixtur
   };
 }
 
+/**
+ * The pinned runtime creates its database when it starts, before a session is bound; a native run
+ * holds its scheduler there and fails readiness without it (#4271). An inherited database is kept.
+ */
+function createRuntimeDatabase(runRoot: string): void {
+  const database = join(runRoot, "state", "opencode.db");
+  if (existsSync(database)) return;
+  mkdirSync(join(runRoot, "state"), { recursive: true });
+  new DatabaseSync(database).close();
+}
+
 function buildSettingsHomeOption(control: StartBridgeControl | undefined): {
   readonly buildSettingsHome?: string;
 } {
@@ -1308,6 +1319,7 @@ async function startBridgeFixture(
       spawnOwnedTree: (request): RuntimeProcessTree => {
         capturedLaunch = request;
         control?.onSpawn?.();
+        createRuntimeDatabase(join(root, "state", FIXTURE_RUN_ID));
         stdout.end(fixtureStartupLine(request, control));
         return {
           treeId: "tool-bridge-tree",
@@ -2977,7 +2989,8 @@ describe("private OpenCode run control", () => {
           source: "opencode.turn",
           errorClass: "OpenCodeTurnFailure",
           message: "runtime-turn-failed",
-          code: "stage=terminal:db=missing",
+          // The fixture runtime creates its database without message tables, as at a fresh start.
+          code: "stage=terminal:db=unavailable",
         }),
       ]);
       const serialized = JSON.stringify(records);
