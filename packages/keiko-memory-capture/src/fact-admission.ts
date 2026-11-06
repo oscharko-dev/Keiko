@@ -765,9 +765,14 @@ const SPEECH_AUXILIARIES = new Set(["hat", "haben", "hatte", "hatten"]);
 const PASSIVE_SPEECH_RE =
   /(?:^|[^\p{L}])(?:am|is|are|was|were|been|wird|werde|wurde|wurden)\s+(?:\p{L}+\s+)?(?:told|said|gesagt|erzählt)(?!\p{L})/iu;
 // The first words of each later clause, an aside in brackets included.
-const CLAUSE_HEAD_RE = /[,;:–—(-]\s*(\p{L}+)(?:\s+\p{L}+){0,2}/gu;
+// Each later clause up to the next mark, an aside in brackets included.
+const CLAUSE_HEAD_RE = /[,;:–—(-]\s*(\p{L}+)[^,;:–—()]*/gu;
+// A relative clause, reason or condition is no attribution: "…, which says nothing", "…, weil Anna
+// es mir sagte", "…, wenn man sagt, was zu tun ist".
 const RELATIVE_LEAD_RE =
-  /^(?:which|that|who|whom|whose|where|because|since|der|die|das|den|dem|welche[rsmn]?|weil|da|wo|denn|obwohl)$/iu;
+  /^(?:which|that|who|whom|whose|where|because|since|when|whenever|if|der|die|das|den|dem|welche[rsmn]?|weil|da|wo|denn|obwohl|wenn|falls|sobald)$/iu;
+// How far before a verb its speaker may stand: "Anna also says", "My boss always says".
+const SPEAKER_REACH = 3;
 
 function sentenceAround(text: string, start: number, end: number): { from: number; to: number } {
   let from = start;
@@ -932,21 +937,38 @@ function contextDropReason(
   return isDeniedByPrefix(prefix) || isReported(opening, rest) ? "negated-context" : null;
 }
 
-// Attribution before the person's subject, or opening a later clause: "Dass ich Tabellen mag, sagt
-// Anna", "I use Vim, Anna says". A relative clause or reason ("…, which says nothing", "…, weil Anna
-// es mir sagte") is no attribution; a reason is judged by the subject checks.
+// Attribution before the person's subject, or in a later clause: "Anna also says I …", "Dass ich
+// Tabellen mag, sagt Anna", "I use Vim, hat mein Chef gesagt". Before the subject the person cannot
+// be the speaker, so any speech verb counts unless "ich" or "I" stands right before it ("Wie ich
+// sagte, …"); in a later clause another person must stand by the verb.
 function isReported(opening: string, rest: string): boolean {
   // Being told is never the person's own statement, wherever the passive stands: "I am told I …".
-  if (attributes(opening)) return true;
   if (PASSIVE_SPEECH_RE.test(opening) || PASSIVE_SPEECH_RE.test(rest)) return true;
+  if (namesSource(opening) || speaksInOpening(splitWords(opening))) return true;
   return [...rest.matchAll(CLAUSE_HEAD_RE)].some(
-    (head) => !RELATIVE_LEAD_RE.test(head[1] ?? "") && attributes(head[0]),
+    (head) => !RELATIVE_LEAD_RE.test(head[1] ?? "") && speaksInClause(head[0]),
   );
 }
 
-function attributes(text: string): boolean {
-  if (ATTRIBUTION_MARKER_RE.test(text) || ATTRIBUTED_RE.test(text)) return true;
-  const words = text.split(/[^\p{L}]+/u);
+function namesSource(text: string): boolean {
+  return ATTRIBUTION_MARKER_RE.test(text) || ATTRIBUTED_RE.test(text);
+}
+
+function splitWords(text: string): readonly string[] {
+  return text.split(/[^\p{L}]+/u);
+}
+
+function speaksInOpening(words: readonly string[]): boolean {
+  return words.some(
+    (word, at) =>
+      (SPEECH_VERBS.has(word) && !SELF_SPEAKERS.has(words[at - 1]?.toLowerCase() ?? "")) ||
+      (SPEECH_PARTICIPLES.has(word) && saidInPerfect(words, at)),
+  );
+}
+
+function speaksInClause(clause: string): boolean {
+  if (namesSource(clause)) return true;
+  const words = splitWords(clause);
   return words.some(
     (word, at) =>
       (SPEECH_VERBS.has(word) && speaksForAnother(words, at)) ||
@@ -954,18 +976,22 @@ function attributes(text: string): boolean {
   );
 }
 
-// The auxiliary sits one or two words before the participle; its subject stands beside it.
+// "hat Anna gesagt", "Das hat mir mein Chef gesagt": the auxiliary stands up to four words before
+// the participle, and another person stands beside it or between them.
 function saidInPerfect(words: readonly string[], at: number): boolean {
-  const aux = [at - 1, at - 2].find((index) =>
-    SPEECH_AUXILIARIES.has(words[index]?.toLowerCase() ?? ""),
-  );
+  const aux = [1, 2, 3, 4]
+    .map((back) => at - back)
+    .find((index) => SPEECH_AUXILIARIES.has(words[index]?.toLowerCase() ?? ""));
   if (aux === undefined) return false;
-  return isOtherPerson(words, aux - 1) || isOtherPerson(words, aux + 1);
+  const around = [aux - 1, ...Array.from({ length: at - aux - 1 }, (_, step) => aux + 1 + step)];
+  return around.some((index) => isOtherPerson(words, index));
 }
 
-// Another person stands before the verb, or after it while the person is not the one speaking.
+// Another person stands shortly before the verb, or right after it while the person is not the one
+// speaking.
 function speaksForAnother(words: readonly string[], at: number): boolean {
-  if (isOtherPerson(words, at - 1)) return true;
+  const before = Array.from({ length: SPEAKER_REACH }, (_, step) => at - 1 - step);
+  if (before.some((index) => isOtherPerson(words, index))) return true;
   if (BARE_SPEECH_VERBS.has(words[at] ?? "")) return false;
   const neighbours = [words[at - 1], words[at + 1]].map((word) => word?.toLowerCase() ?? "");
   if (neighbours.some((word) => SELF_SPEAKERS.has(word))) return false;
