@@ -109,6 +109,7 @@ import {
   isCodingWorkbenchProbeUnanswered,
   isConversationReadinessCheckRunning,
   renewConversationReadinessFromAnswer,
+  withholdRunningWorkbenchProbesForLiveRun,
 } from "./gateway-readiness.js";
 import { getServerLogger } from "./observability/index.js";
 import { STREAMING, errorBody, type RouteContext, type RouteResult } from "./routes.js";
@@ -4780,6 +4781,9 @@ export async function awaitCodingRunModelReadiness(
   modelId: string | undefined,
   correlationId: string | undefined,
 ): Promise<void> {
+  // A run is starting: a background proof of a model nobody chose that is already in flight gives
+  // the gateway's single slot back now, not when its own bound ends.
+  withholdRunningWorkbenchProbesForLiveRun(deps);
   const usable = usableCodingProfile(deps, modelId);
   if (usable.status !== "available") return;
   if (currentConversationReadinessObservation(deps, usable.modelAlias) === true) return;

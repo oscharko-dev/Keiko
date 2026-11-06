@@ -2286,6 +2286,12 @@ export async function runGatewayReadiness(
     probes,
     verifiedCapabilities: verifiedCapabilities(probes),
   };
+  // Keiko ended this run itself (a live run outranks it, shutdown, a replaced configuration): the
+  // gateway did not fail, so no verdict about it is recorded and nothing is reconciled.
+  if (deps.gatewayReadinessSignal?.aborted === true) {
+    logReadinessRunCompleted(deps, run, report);
+    return report;
+  }
   // F-01: this run is the product's only live evidence about the gateway. Record its outcome on the
   // config holder so the surfaces that used to infer readiness from configuration alone (the editor
   // AI-assist badge, the Coding Workbench source projection) report what was actually observed.
@@ -2359,6 +2365,8 @@ interface WorkbenchProbeEntry {
   readonly holder: UiHandlerDeps["gatewayConfig"];
   readonly cancelQueued: () => void;
   readonly withhold: () => boolean;
+  /** Ends the probe a live run outranks while it is in flight; false when it is not eligible. */
+  readonly abortForLiveRun: () => boolean;
   prioritized: boolean;
   running: boolean;
   at: number;
@@ -2658,6 +2666,18 @@ function withholdForLiveRun(
   return true;
 }
 
+// A run starting while a probe of a model nobody chose is already in flight: the probe may hold the
+// gateway's single slot for minutes (a cold load), so it ends now instead of after its own bound.
+// Its conclusion is discarded (the run is the reason, not the gateway), the entry is dropped so the
+// next read proves the model again, and the same closed withheld line records why.
+export function withholdRunningWorkbenchProbesForLiveRun(deps: UiHandlerDeps): number {
+  let aborted = 0;
+  for (const entry of [...workbenchProbes.values()]) {
+    if (entry.holder === deps.gatewayConfig && entry.abortForLiveRun()) aborted += 1;
+  }
+  return aborted;
+}
+
 function createWorkbenchProbeEntry(
   deps: UiHandlerDeps,
   target: WorkbenchProbeTarget,
@@ -2666,6 +2686,8 @@ function createWorkbenchProbeEntry(
   prioritized: boolean,
   key: string,
 ): WorkbenchProbeEntry {
+  const inFlight = new AbortController();
+  let withheldInFlight = false;
   let finish: () => void = (): void => undefined;
   const promise = new Promise<void>((resolve) => {
     finish = resolve;
@@ -2679,15 +2701,31 @@ function createWorkbenchProbeEntry(
       finish();
     },
     withhold: (): boolean => withholdForLiveRun(deps, entry, key, target.modelId, correlationId),
+    abortForLiveRun: (): boolean => {
+      if (!entry.running || entry.settled || entry.prioritized || withheldInFlight) return false;
+      withheldInFlight = true;
+      inFlight.abort();
+      return true;
+    },
     perform: async (): Promise<void> => {
-      const controlled =
+      const queueSignal =
         deps.gatewayConfig === undefined
-          ? deps
-          : cancellableConversationProbeDeps(
-              deps,
-              conversationQueue(deps.gatewayConfig).controller.signal,
-            );
+          ? undefined
+          : conversationQueue(deps.gatewayConfig).controller.signal;
+      const controlled = cancellableConversationProbeDeps(
+        deps,
+        queueSignal === undefined
+          ? inFlight.signal
+          : AbortSignal.any([queueSignal, inFlight.signal]),
+      );
       const outcome = await runWorkbenchProbe(controlled, target, correlationId, trigger);
+      if (withheldInFlight) {
+        if (workbenchProbes.get(key) === entry) workbenchProbes.delete(key);
+        entry.settled = true;
+        logAutomaticReadinessWithheld(deps, target.modelId, correlationId);
+        finish();
+        return;
+      }
       entry.settled = true;
       entry.outcome = outcome;
       entry.at = Date.now();
