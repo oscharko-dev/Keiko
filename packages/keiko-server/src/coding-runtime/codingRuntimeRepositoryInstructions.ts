@@ -224,6 +224,10 @@ const CODING_RUNTIME_REPOSITORY_INSTRUCTIONS_CONTEXT_OPERATION = defineActivityL
       required: false,
       values: ["discovery", "remote"],
     },
+    // #4279: how long the load or refresh took up to this line, and the part of it spent finding
+    // the additional sources, so a slow first turn can be attributed from the log alone.
+    durationMs: { type: "integer", dataClass: "duration", required: false },
+    discoveryDurationMs: { type: "integer", dataClass: "duration", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -372,25 +376,60 @@ async function materializeForRun(
   request: CodingRuntimeRepositoryInstructionsCopyRequest,
   remoteCache: Map<string, string | undefined>,
 ): Promise<boolean> {
+  const startedAtMs = performance.now();
   const additional = await additionalSources(input, request, remoteCache);
   const counts = additional?.counts;
+  const timing: StepTiming = {
+    startedAtMs,
+    ...(additional === undefined ? {} : { discoveryDurationMs: elapsedMs(startedAtMs) }),
+  };
   const bounded = await readBoundedInstructions(
     input,
     request,
     instructionBounds("native-copy", request.contentByteBudget),
     counts,
+    timing,
   );
   const next = instructionsCopy(bounded, additional?.sections ?? []);
   let changed: boolean;
   try {
     changed = replaceCopy(request.targetPath, next);
   } catch (error) {
-    recordEmpty(input.activityLog, request.runId, refusal("exception", error), counts);
+    recordEmpty(input.activityLog, request.runId, refusal("exception", error), counts, timing);
     return false;
   }
   if (bounded !== undefined)
-    recordBounded(input.activityLog, request.runId, bounded, estimateTokens(next ?? ""), counts);
+    recordBounded(
+      input.activityLog,
+      request.runId,
+      bounded,
+      estimateTokens(next ?? ""),
+      counts,
+      timing,
+    );
   return changed;
+}
+
+/** When a load or refresh began (`performance.now()`), so each line it writes carries its time. */
+interface StepTiming {
+  readonly startedAtMs: number;
+  readonly discoveryDurationMs?: number;
+}
+
+function elapsedMs(startedAtMs: number): number {
+  return Math.max(0, Math.round(performance.now() - startedAtMs));
+}
+
+function timingFields(timing: StepTiming | undefined): {
+  readonly durationMs?: number;
+  readonly discoveryDurationMs?: number;
+} {
+  if (timing === undefined) return {};
+  const { discoveryDurationMs } = timing;
+  return {
+    durationMs: elapsedMs(timing.startedAtMs),
+    ...(discoveryDurationMs === undefined ? {} : { discoveryDurationMs }),
+  };
 }
 
 function replaceCopy(targetPath: string, next: string | undefined): boolean {
@@ -511,6 +550,7 @@ async function additionalSources(
       request.runId,
       refusal("exception", error),
       undefined,
+      undefined,
       "discovery",
     );
     return undefined;
@@ -576,6 +616,7 @@ async function remoteText(
       input.activityLog,
       request.runId,
       refusal("source-unavailable", error),
+      undefined,
       undefined,
       "remote",
     );
@@ -844,14 +885,24 @@ async function loadForRun(
   input: CodingRuntimeRepositoryInstructionsInput,
   request: CodingRuntimeRepositoryInstructionsRequest,
 ): Promise<string | undefined> {
+  const timing: StepTiming = { startedAtMs: performance.now() };
   const bounded = await readBoundedInstructions(
     input,
     request,
     instructionBounds("initial-turn", request.contentByteBudget),
+    undefined,
+    timing,
   );
   if (bounded === undefined) return undefined;
   const rendered = renderRepositoryInstructions(bounded);
-  recordBounded(input.activityLog, request.runId, bounded, estimateTokens(rendered));
+  recordBounded(
+    input.activityLog,
+    request.runId,
+    bounded,
+    estimateTokens(rendered),
+    undefined,
+    timing,
+  );
   return rendered;
 }
 
@@ -870,13 +921,14 @@ async function readBoundedInstructions(
   request: Pick<CodingRuntimeRepositoryInstructionsRequest, "runId" | "isRunWorkspace" | "signal">,
   bounds: InstructionBounds,
   counts?: SourceCounts,
+  timing?: StepTiming,
 ): Promise<BoundedRepositoryInstructions | undefined> {
   const { source, activityLog } = input;
   const { runId, signal } = request;
   const { maxBytes, maxLines } = bounds;
   const refused = admissionRefusal(input, maxBytes);
   if (refused !== undefined || source === undefined) {
-    recordEmpty(activityLog, runId, refused ?? refusal("source-unavailable"), counts);
+    recordEmpty(activityLog, runId, refused ?? refusal("source-unavailable"), counts, timing);
     return undefined;
   }
   try {
@@ -895,11 +947,11 @@ async function readBoundedInstructions(
         result.text,
         maxLines,
       );
-    recordEmpty(activityLog, runId, readFailureOutcome(result.reason), counts);
+    recordEmpty(activityLog, runId, readFailureOutcome(result.reason), counts, timing);
     return undefined;
   } catch (error) {
     const reason = error instanceof WorkspaceReadError ? "redaction-unavailable" : "exception";
-    recordEmpty(activityLog, runId, refusal(reason, error), counts);
+    recordEmpty(activityLog, runId, refusal(reason, error), counts, timing);
     return undefined;
   }
 }
@@ -937,6 +989,7 @@ function recordEmpty(
   runId: string,
   outcome: EmptyOutcome,
   counts?: SourceCounts,
+  timing?: StepTiming,
   sourceKind?: "discovery" | "remote",
 ): void {
   const { state, reason, error } = outcome;
@@ -961,6 +1014,7 @@ function recordEmpty(
           ? {}
           : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
         ...counts,
+        ...timingFields(timing),
         ...(sourceKind === undefined ? {} : { sourceKind }),
       },
     ),
@@ -973,6 +1027,7 @@ function recordBounded(
   bounded: BoundedRepositoryInstructions,
   estimatedTokens: number,
   counts?: SourceCounts,
+  timing?: StepTiming,
 ): void {
   activityLog?.write(
     activityLogEvent(
@@ -994,6 +1049,7 @@ function recordBounded(
             }
           : {}),
         ...counts,
+        ...timingFields(timing),
       },
     ),
   );

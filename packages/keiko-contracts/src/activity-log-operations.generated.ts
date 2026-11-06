@@ -12571,6 +12571,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["discovery", "remote"],
       },
+      durationMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      discoveryDurationMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "state",

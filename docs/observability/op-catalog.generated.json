@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8005d42eb698cf6fa148e1144614a85dd7c6ad91431115f92ff306e066e78542",
+    "catalogDigest": "4111b5fc55a587cbe92bdd0b5ce3e1bd44bbf8552eae4525726f4caea2abe4e4",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -9197,7 +9197,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:958",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:5229"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:5234"
         ]
       },
       {
@@ -9785,7 +9785,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:605",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:2886"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:2888"
         ]
       },
       {
@@ -13094,6 +13094,16 @@
             "dataClass": "closed-enum",
             "required": false,
             "values": ["discovery", "remote"]
+          },
+          "durationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "discoveryDurationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
           }
         },
         "causal": "correlation",
@@ -13104,8 +13114,8 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:162",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:948",
-          "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:978"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:1001",
+          "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:1033"
         ]
       },
       {
@@ -13782,7 +13792,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:836",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:3710"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:3712"
         ]
       },
       {
@@ -13833,7 +13843,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:815",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:3692"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:3694"
         ]
       },
       {
@@ -13926,7 +13936,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:794",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:3581"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:3583"
         ]
       },
       {
@@ -13988,7 +13998,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:865",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:3769"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:3771"
         ]
       },
       {
@@ -14125,7 +14135,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:926",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:4325"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:4330"
         ]
       },
       {
@@ -14244,7 +14254,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:775",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:2846"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:2848"
         ]
       },
       {
@@ -14791,7 +14801,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:893",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:3876"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:3878"
         ]
       },
       {
@@ -48064,6 +48074,7 @@
           "completeness-state",
           "count",
           "digest",
+          "duration",
           "error-kind",
           "loss-state",
           "opaque-id"
@@ -70171,6 +70182,18 @@
                   "required": false
                 },
                 {
+                  "name": "discoveryDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
                   "name": "estimatedTokens",
                   "type": "integer",
                   "dataClass": "count",
@@ -70266,6 +70289,7 @@
                 "completeness-state",
                 "count",
                 "digest",
+                "duration",
                 "error-kind",
                 "loss-state",
                 "opaque-id"

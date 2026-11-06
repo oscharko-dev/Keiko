@@ -13337,6 +13337,18 @@
               "required": false
             },
             {
+              "name": "discoveryDurationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
               "name": "estimatedTokens",
               "type": "integer",
               "dataClass": "count",
@@ -13432,6 +13444,7 @@
             "completeness-state",
             "count",
             "digest",
+            "duration",
             "error-kind",
             "loss-state",
             "opaque-id"
