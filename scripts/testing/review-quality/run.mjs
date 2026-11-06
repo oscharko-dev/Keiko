@@ -15,12 +15,13 @@ const scriptPath = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(scriptPath), "..", "..", "..");
 
 /**
- * The gate's steps in order. Only the npm step may need a shell: Node starts a Windows `.cmd`
- * file only through one (CVE-2024-27980), and the other steps run the Node executable itself.
+ * The gate's steps in order. Only the npm step may run through a shell, because Node starts a
+ * Windows `.cmd` file only through one (CVE-2024-27980). The other steps run the Node executable.
  */
 export function gateSteps(gateArgs, platform = process.platform, nodePath = process.execPath) {
   const npm = npmCommand(platform);
   return [
+    // SECURITY-SHELL-OK: npm/npm.cmd on Windows only, selected by npmCommand(); fixed argv, no input.
     { command: npm, args: ["run", "build:packages"], shell: shouldShellNpmCommand(npm, platform) },
     { command: nodePath, args: ["scripts/stage-dev-coding-runtime.mjs"], shell: false },
     {
@@ -39,6 +40,7 @@ export function gateSteps(gateArgs, platform = process.platform, nodePath = proc
 /** Runs the steps in order and returns the first non-zero exit status, or 0. */
 export function runGateSteps(steps, spawn = spawnSync) {
   for (const { command, args, shell } of steps) {
+    // SECURITY-SHELL-OK: `shell` is true only for the npm step that gateSteps() marks above.
     const result = spawn(command, args, { cwd: REPO_ROOT, stdio: "inherit", shell });
     if (result.error !== undefined) throw result.error;
     if (result.status !== 0) return result.status ?? 1;
