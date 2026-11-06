@@ -13,7 +13,8 @@ export type ConversationAdmissionDisposition =
   | "generation-changed"
   | "observation-unavailable"
   | "probe-failed"
-  | "timestamp-invalid";
+  | "timestamp-invalid"
+  | "provider-rejected";
 
 const CONVERSATION_ADMISSION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -36,6 +37,7 @@ const CONVERSATION_ADMISSION = defineActivityLogOperation({
         "observation-unavailable",
         "probe-failed",
         "timestamp-invalid",
+        "provider-rejected",
       ],
     },
     admittedGeneration: { type: "integer", dataClass: "count", required: false },

@@ -21,6 +21,7 @@ import {
 import { probeGatewayToolCalling } from "../../../packages/keiko-server/dist/gateway-tool-calling-probe.js";
 import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "../../../packages/keiko-server/dist/coding-app-session/launcherSessionPairingPort.js";
 import { startJiraChatTransports } from "./jira-chat-4081-transport.mjs";
+import { seedBacklogPod, saveBacklogTemplates } from "./jira-chat-4081-backlog.mjs";
 
 const directory = process.env.KEIKO_E2E_JIRA_STATE;
 if (!directory) throw new TypeError("KEIKO_E2E_JIRA_STATE is required");
@@ -43,7 +44,9 @@ const raw = {
     ...createDefaultChatCapability(provider.modelId),
     streaming: true,
     toolCalling: true,
-    contextWindow: 32768,
+    structuredOutput: true,
+    supportsResponseFormat: true,
+    contextWindow: 131072,
     maxOutputTokens: 2048,
   })),
   egress: { caBundlePath: transport.caPath },
@@ -66,6 +69,10 @@ const deps = buildUiHandlerDeps({
   evidenceDir: join(directory, "evidence"),
   uiDbPath: join(directory, "ui.db"),
   env: {
+    KEIKO_STATE_DIR: directory,
+    KEIKO_MEMORY_DIR: join(directory, "memory"),
+    KEIKO_MEMORY_KEY: randomBytes(32).toString("base64"),
+    KEIKO_OS_KEYCHAIN: "off",
     [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: secret,
     KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: randomBytes(32).toString("base64"),
   },
@@ -82,15 +89,19 @@ const projectPath = join(directory, "workspace");
 mkdirSync(projectPath, { recursive: true });
 deps.store.createProject(projectPath);
 const chats = Object.fromEntries(
-  ["approval", "revocation", "unavailable", "accessibility-en", "accessibility-de"].map((name) => [
-    name,
-    deps.store.createChat(
-      projectPath,
-      `Jira browser ${name}`,
-      name === "unavailable" ? unavailableModelId : modelId,
-    ),
-  ]),
+  ["approval", "revocation", "unavailable", "accessibility-en", "accessibility-de", "backlog"].map(
+    (name) => [
+      name,
+      deps.store.createChat(
+        projectPath,
+        `Jira browser ${name}`,
+        name === "unavailable" ? unavailableModelId : modelId,
+      ),
+    ],
+  ),
 );
+const backlogPod = await seedBacklogPod(deps);
+saveBacklogTemplates(deps);
 writeFileSync(
   join(directory, "fixture.json"),
   JSON.stringify({
@@ -100,6 +111,7 @@ writeFileSync(
     modelId,
     unavailableModelId,
     jiraBaseUrl: transport.baseUrl,
+    backlogPod,
   }),
   { mode: 0o600 },
 );

@@ -59,6 +59,82 @@ function scopeOf(references: string): string {
   return references;
 }
 
+describe("source acceptance criteria before a Jira draft can be staged or approved", () => {
+  it("refuses a traced item that omits an original acceptance criterion", async () => {
+    const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+    const trace = open();
+    try {
+      const omitted = trace.resolve(["LH-001"], { description: "Thema 1 ist verfügbar." });
+      expect(omitted).toMatchObject({
+        ok: false,
+        reason: "references",
+        problems: [
+          {
+            reason: "acceptance-criteria-missing",
+          },
+        ],
+      });
+      if (omitted.ok) throw new TypeError("Expected omitted source criterion refusal");
+      expect(omitted.problems[0]?.reference).toMatch(/:LH-001\/AC2$/u);
+      expect(
+        trace.resolve(["LH-001"], {
+          description: "Thema 1 ist verfügbar. Fehler zu Thema 1 werden nicht gemeldet.",
+        }).ok,
+      ).toBe(false);
+    } finally {
+      trace.close();
+    }
+  });
+
+  it.each(["native", "markdown"] as const)(
+    "accepts all original criteria in %s descriptions with only whitespace normalized",
+    async (format) => {
+      const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+      const trace = open();
+      const text = "Thema 1 ist verfügbar.\r\nFehler zu Thema 1\nwerden gemeldet.";
+      try {
+        const description = format === "native" ? text : { format: "markdown", text };
+        expect(trace.resolve(["LH-001"], { description }).ok).toBe(true);
+      } finally {
+        trace.close();
+      }
+    },
+  );
+
+  it("validates the exact criterion an explicit criterion reference implements", async () => {
+    const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+    const trace = open();
+    try {
+      expect(trace.resolve(["LH-001/AC1"], { description: "Thema 1 ist verfügbar." }).ok).toBe(
+        true,
+      );
+      expect(
+        trace.resolve(["LH-001/AC1"], { description: "Fehler zu Thema 1 werden gemeldet." }).ok,
+      ).toBe(false);
+    } finally {
+      trace.close();
+    }
+  });
+});
+
+describe("criterion text is active content, not a substring or quotation", () => {
+  it.each([
+    "Not: Thema 1 ist verfügbar.",
+    "Not:\nThema 1 ist verfügbar.",
+    "> Thema 1 ist verfügbar.",
+    "{quote}\nThema 1 ist verfügbar.\n{quote}",
+    "{code}\nThema 1 ist verfügbar.\n{code}",
+  ])("refuses a criterion copied only into non-evidence content: %s", async (description) => {
+    const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
+    const trace = open();
+    try {
+      expect(trace.resolve(["LH-001/AC1"], { description }).ok).toBe(false);
+    } finally {
+      trace.close();
+    }
+  });
+});
+
 describe("trace session", () => {
   it("resolves a scoped reference to doc-scoped labels and a footer with the document and revision", async () => {
     const { f, open } = await session([

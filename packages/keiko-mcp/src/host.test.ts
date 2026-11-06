@@ -14,6 +14,7 @@ import type {
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createManagedMcpHost, ManagedMcpError } from "./index.js";
+import { toolDefinition } from "./definitions.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -746,4 +747,38 @@ describe("managed MCP invocation durations", () => {
     await finished.promise;
     expect(allowed).toBe(false);
   });
+});
+
+it("preserves closed-world tool metadata through actual MCP discovery and refuses hint drift", async () => {
+  const execute = vi.fn<ManagedMcpTool<Context>["execute"]>(() =>
+    Promise.resolve({ data: { text: "x", binding: "test" } }),
+  );
+  const metadata = { openWorldHint: false, idempotentHint: false };
+  const tool: ManagedMcpTool<Context> = {
+    name: "fixture.echo",
+    title: "Local semantic review",
+    risk: "read",
+    descriptor: deepFreeze(descriptor),
+    annotations: metadata,
+    execute,
+  };
+  const host = createManagedMcpHost<Context>({
+    providers: [{ id: "fixture", tools: (): readonly ManagedMcpTool<Context>[] => [tool] }],
+    log: { write: () => undefined },
+  });
+  hosts.push(host);
+  expect(toolDefinition(tool)).toMatchObject({
+    title: "Local semantic review",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+      idempotentHint: false,
+    },
+  });
+  await host.admit("metadata-proof");
+  expect(host.catalog()).toMatchObject([{ title: "Local semantic review", annotations: metadata }]);
+  metadata.openWorldHint = true;
+  expect(() => host.catalog()).toThrow(new ManagedMcpError("descriptor-drift"));
+  expect(execute).not.toHaveBeenCalled();
 });

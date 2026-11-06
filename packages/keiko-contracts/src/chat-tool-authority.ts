@@ -63,7 +63,8 @@ export interface ChatToolAuthorityEnvelope {
   readonly requestedMode: CodingWorkbenchMode;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly effectiveMode: CodingWorkbenchMode;
-  readonly actionClasses: readonly ["connector-access", "network-egress"];
+  readonly actionClasses:
+    readonly ["connector-access"] | readonly ["connector-access", "network-egress"];
   readonly connectorScopes: readonly (
     "issue-tracker.read" | "issue-tracker.write" | "mcp.tools" | "knowledge.read"
   )[];
@@ -162,15 +163,20 @@ function scopesFor(subject: unknown): ReadonlySet<string> {
     ? new Set(["mcp.tools"])
     : CONNECTOR_SCOPES;
 }
+function validActionClasses(subject: unknown, actions: unknown): boolean {
+  if (!Array.isArray(actions)) return false;
+  const expected =
+    isRecord(subject) && subject.kind === "knowledge-pods"
+      ? ["connector-access"]
+      : ["connector-access", "network-egress"];
+  return (
+    actions.length === expected.length &&
+    expected.every((action, index) => actions[index] === action)
+  );
+}
 function validateCapabilities(value: Record<string, unknown>, errors: string[]): void {
-  if (
-    !Array.isArray(value.actionClasses) ||
-    value.actionClasses.length !== 2 ||
-    value.actionClasses[0] !== "connector-access" ||
-    value.actionClasses[1] !== "network-egress"
-  ) {
-    errors.push("chatAuthority.actionClasses must contain only connector and network access");
-  }
+  if (!validActionClasses(value.subject, value.actionClasses))
+    errors.push("chatAuthority.actionClasses must match its local or connected subject");
   const scopes: unknown = value.connectorScopes;
   const allowed = scopesFor(value.subject);
   if (

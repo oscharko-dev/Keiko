@@ -32,6 +32,7 @@ vi.mock("@/lib/coding-app-session-client", async (original) => ({
 }));
 
 let active = true;
+let inspectionClock = 0;
 function inspection(): BrowserApprovalManagementResult {
   return active
     ? {
@@ -66,6 +67,9 @@ function RefreshCounter(): ReactNode {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // Independent cases are separate denial bursts, beyond the production five-second cooldown.
+  inspectionClock += 10_000;
+  vi.spyOn(performance, "now").mockReturnValue(inspectionClock);
   active = true;
   vi.mocked(codingAppSessionPairingSettled).mockResolvedValue(false);
   vi.mocked(api.inspectBrowserApprovals).mockImplementation(async () => inspection());
@@ -80,11 +84,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
   resetClientDiagnosticWriter();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("browser notice authentication lifecycle", () => {
   it.each(["grounded", "streamed", "draft"] as const)(
-    "replaces a stale positive browser inspection after a concealed %s mutation refusal",
+    "reinspects only session-concealing %s mutation refusals",
     async (surface) => {
       render(<BrowserApprovalNotice compact />);
       await waitFor(() => expect(api.inspectBrowserApprovals).toHaveBeenCalledOnce());
@@ -122,9 +127,12 @@ describe("browser notice authentication lifecycle", () => {
               : writeChatDraft("a", { text: "Retain this prompt.", expectedRevision: 1 });
         await expect(pending).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
       });
-      await screen.findByRole("button", { name: "Connect browser" });
+      // ADR-0141 D6: only private drafts conceal missing session authority here.
+      // Ordinary missing Chat responses stay final and do not invalidate the held inspection.
+      if (surface === "draft") await screen.findByRole("button", { name: "Connect browser" });
+      else expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull();
       expect(fetchMock).toHaveBeenCalledOnce();
-      expect(api.inspectBrowserApprovals).toHaveBeenCalledTimes(3);
+      expect(api.inspectBrowserApprovals).toHaveBeenCalledTimes(surface === "draft" ? 3 : 1);
       expect(api.requestBrowserApproval).not.toHaveBeenCalled();
       expect(openLauncherBrowser).not.toHaveBeenCalled();
     },
@@ -202,7 +210,8 @@ describe("browser notice authentication lifecycle", () => {
         askGrounded({ chatId: "removed", content: "Keep this prompt." }),
       ).rejects.toMatchObject(new ApiError("NOT_FOUND", "Chat not found.", 404));
     });
-    await waitFor(() => expect(api.inspectBrowserApprovals).toHaveBeenCalledTimes(2));
+    // ADR-0141 D6 preserves ordinary missing-resource errors without a global refresh.
+    expect(api.inspectBrowserApprovals).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: "Connect browser" })).toBeNull();
   });
 

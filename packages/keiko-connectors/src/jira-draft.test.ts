@@ -899,3 +899,13 @@ describe("findJiraDraftItem", () => {
     expect(writes(jira)).toBe(1);
   });
 });
+
+it("retains full collision-safe Knowledge references and refuses over-bound or unsafe values", () => {
+  const reference = `${"a".repeat(32)}:${"R".repeat(80)}/AC20`;
+  const parsed = parseJiraDraft({ items: [item("source", { requirementIds: [reference] })] });
+  expect(parsed?.items[0]?.requirementIds).toEqual([reference]);
+  for (const invalid of ["r".repeat(121), `${reference}\n`, `${reference}?`])
+    expect(
+      parseJiraDraft({ items: [item("invalid", { requirementIds: [invalid] })] }),
+    ).toBeUndefined();
+});

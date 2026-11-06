@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { probeVerifiedGatewayConfig } from "../_support.js";
 import { admitCodingRunModel } from "../coding-sidecar-gateway.js";
-import { CONVERSATION_READINESS_MAX_AGE_MS } from "../deps.js";
+import { CONVERSATION_READINESS_CACHED_AFTER_MS } from "../deps.js";
 
 import {
   DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
@@ -66,7 +66,9 @@ describe("production runtime workspace authority", () => {
   // defaults the live Gemma qualification re-sized (ADR-0137 D2). Every expectation below derives
   // from the exported bounds or the parser that owns them, never from a restated literal
   // (AGENTS.md §7), so a future re-sizing cannot leave a stale number green here.
-  it("checks chat serving only at a new run mint and preserves already admitted authority after expiry", () => {
+  // ADR-0171 owner amendment 2026-11-05: observation age is diagnostic only. The old
+  // expiry refusal moves to explicit failed/missing-generation controls below; no guard is removed.
+  it("mints from a cached success but refuses failed and replaced proofs without changing admitted authority", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const nowMs = Date.now();
     const checkedAt = new Date(nowMs).toISOString();
@@ -120,17 +122,40 @@ describe("production runtime workspace authority", () => {
     const context = resolveProductionRuntimeContext(input, request);
     expect(resolveModel).toHaveBeenCalledOnce();
     const admittedFacts = productionRuntimeAuthorityFacts(input, context);
-    vi.setSystemTime(nowMs + CONVERSATION_READINESS_MAX_AGE_MS);
+    vi.setSystemTime(nowMs + CONVERSATION_READINESS_CACHED_AFTER_MS);
     expect(productionRuntimeAuthorityFacts(input, context)).toEqual(admittedFacts);
     expect(resolveModel).toHaveBeenCalledOnce();
+    const cached = resolveProductionRuntimeContext(input, {
+      ...request,
+      runId: "run-next",
+      requestId: "request-next",
+    });
+    expect(cached).toBeDefined();
+    expect(resolveModel).toHaveBeenCalledTimes(2);
+    holder.recordVerifiedCapability(
+      "served-model",
+      { conversationReady: false },
+      new Date().toISOString(),
+      holder.generation(),
+    );
     expect(() =>
       resolveProductionRuntimeContext(input, {
         ...request,
-        runId: "run-next",
-        requestId: "request-next",
+        runId: "run-failed",
+        requestId: "request-failed",
+      }),
+    ).toThrow(expect.objectContaining({ reason: "conversation-not-ready" }) as Error);
+    expect(productionRuntimeAuthorityFacts(input, context)).toEqual(admittedFacts);
+    holder.set(config, true);
+    expect(() =>
+      resolveProductionRuntimeContext(input, {
+        ...request,
+        runId: "run-replaced",
+        requestId: "request-replaced",
       }),
     ).toThrow(expect.objectContaining({ reason: "model-verification-pending" }) as Error);
-    expect(resolveModel).toHaveBeenCalledTimes(2);
+    expect(productionRuntimeAuthorityFacts(input, context)).toEqual(admittedFacts);
+    expect(resolveModel).toHaveBeenCalledTimes(4);
   });
 
   it("binds an explicit deployment prompt budget only into newly resolved authority", () => {

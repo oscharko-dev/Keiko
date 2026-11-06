@@ -6,6 +6,7 @@ import {
 } from "./conversation-readiness-admission.js";
 import {
   groundedToolAttemptConfirmation,
+  groundedNestedToolCallRelease,
   createGroundedSynthesisCallBudget,
   createGroundedSynthesisAttemptAdmission,
   groundedSynthesisAttemptUsage,
@@ -337,4 +338,34 @@ describe("exact nested synthesis attempt confirmation", () => {
     expect(budget.remaining()).toBe(1);
     expect(groundedToolAttemptConfirmation({ settle: vi.fn() })).toBeUndefined();
   });
+});
+
+it("releases only the owned nested call slot and preserves unconfirmed and unknown output charges", () => {
+  const budget = createGroundedSynthesisCallBudget();
+  const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+    inputTokensMax: 1000,
+    outputTokensMax: 100,
+  });
+  const first = tracker.admission({ promptTokens: 100, maxOutputTokens: 25 });
+  if (first === undefined) throw new TypeError("Missing first reservation");
+  first.settle({ promptTokens: 100, completionTokens: 5 }, true, "observed");
+  const confirm = groundedToolAttemptConfirmation(first);
+  const release = groundedNestedToolCallRelease(first);
+  release?.();
+  expect(budget.remaining()).toBe(2);
+  const next = tracker.admission({ promptTokens: 100, maxOutputTokens: 25 });
+  if (next === undefined) throw new TypeError("Missing next reservation");
+  confirm?.();
+  release?.();
+  expect(budget.remaining()).toBe(1);
+  next.settle({ promptTokens: 100, completionTokens: 0 }, true, "unknown");
+  groundedNestedToolCallRelease(next)?.();
+  expect(budget.remaining()).toBe(2);
+  expect(budget.pendingUsage()).toEqual({ promptTokens: 100, completionTokens: 25 });
+  expect(budget.reservedOutputTokens()).toBe(25);
+  expect(() => {
+    tracker.confirmToolRound();
+  }).toThrow(CallerAttemptAdmissionError);
+  expect(budget.takeUsage()).toEqual({ promptTokens: 200, completionTokens: 30 });
+  expect(groundedNestedToolCallRelease({ settle: () => undefined })).toBeUndefined();
 });

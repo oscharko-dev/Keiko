@@ -44,6 +44,11 @@ import {
 import type { JiraPodAccessDeps, JiraLivePodCredential } from "../atlassian/jiraPodAccess.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+} from "../diagnostics-log.js";
 import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
 
 import {
@@ -400,15 +405,6 @@ class CodingJiraPodService implements CodingJiraPods {
     let attempt: JiraMutationAttempt;
     try {
       attempt = validJiraMutationAttempt(await execute(http), operation);
-      recordJiraTemplateAttempt(context.correlationId, operation, attempt);
-      if (attempt.descriptionConvertedHeadingCount !== undefined)
-        recordCodingJiraPod(this.log, context.correlationId, {
-          action: "serialize-description",
-          outcome: "completed",
-          tool,
-          risk: "write",
-          descriptionConvertedHeadingCount: attempt.descriptionConvertedHeadingCount,
-        });
     } catch (error) {
       recordCodingJiraPod(this.log, context.correlationId, {
         action: "call",
@@ -420,7 +416,39 @@ class CodingJiraPodService implements CodingJiraPods {
       });
       attempt = { ok: false, reason: "unavailable" };
     }
+    this.recordMutationAttempt(context.correlationId, operation, tool, attempt);
     return jiraAttemptToolResult(mutationOutcome(attempt, dispatch), attempt);
+  }
+
+  /** Logging cannot turn an already confirmed mutation into a retryable tool failure. */
+  private recordMutationAttempt(
+    correlationId: string,
+    operation: JiraMutationOperation,
+    tool: NonNullable<CodingJiraPodLine["tool"]>,
+    attempt: JiraMutationAttempt,
+  ): void {
+    try {
+      recordJiraTemplateAttempt(correlationId, operation, attempt);
+      if (attempt.descriptionConvertedHeadingCount !== undefined)
+        recordCodingJiraPod(this.log, correlationId, {
+          action: "serialize-description",
+          outcome: attempt.ok ? "completed" : "failed",
+          tool,
+          risk: "write",
+          descriptionConvertedHeadingCount: attempt.descriptionConvertedHeadingCount,
+        });
+    } catch (error) {
+      emitServerDiagnostic(
+        undefined,
+        serverDiagnosticFromError({
+          correlationId,
+          operation: "coding.jira-pod.audit",
+          source: "coding.jira-pod",
+          error,
+          redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+        }),
+      );
+    }
   }
 
   private trackedTransport(

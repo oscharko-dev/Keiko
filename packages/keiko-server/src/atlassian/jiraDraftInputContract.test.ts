@@ -147,6 +147,49 @@ afterAll(async () => {
 });
 
 describe("the Jira draft schema actually offered to Chat", () => {
+  it("imports and offers the staged UUID conjunction with the exact native identifier grammar", () => {
+    for (const value of PATTERNS.find((fixture) => fixture.name === "saved draft ids")?.values ??
+      []) {
+      const accepted = new RegExp(JIRA_DRAFT_ID_PATTERN).test(value);
+      expect(
+        describeCatalogSchemaMismatch(parameters("jira_draft_stage"), {
+          draftId: value,
+          items: [ITEM],
+        }) === undefined,
+        value,
+      ).toBe(accepted);
+    }
+  });
+
+  it("offers only the four canonical lowercase document-scope widths through real MCP schemas", () => {
+    for (const width of Array.from({ length: 40 }, (_, index) => index + 1)) {
+      const documentScope = "a".repeat(width);
+      const accepted = [8, 16, 24, 32].includes(width);
+      for (const alias of ["knowledge_documents", "knowledge_review", "knowledge_requirements"]) {
+        const args =
+          alias === "knowledge_requirements"
+            ? { documents: [documentScope] }
+            : {
+                ...(alias === "knowledge_documents" ? { view: "read" } : {}),
+                documentScope,
+                revisionDigest: "0".repeat(64),
+              };
+        expect(
+          describeCatalogSchemaMismatch(parameters(alias), args) === undefined,
+          `${alias}:${String(width)}`,
+        ).toBe(accepted);
+      }
+    }
+    for (const documentScope of ["g".repeat(8), "A".repeat(16), "a".repeat(8) + "\n"]) {
+      expect(
+        describeCatalogSchemaMismatch(parameters("knowledge_review"), {
+          documentScope,
+          revisionDigest: "0".repeat(64),
+        }),
+      ).toBeDefined();
+    }
+  });
+
   it.each(CASES)("matches the handler's root forms: %s", (_label, args, accepted) => {
     const handlerAccepts =
       parseJiraDraft(args) !== undefined || parseJiraDraftReference(args) !== undefined;

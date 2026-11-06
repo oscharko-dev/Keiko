@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   readJiraDescriptionSections,
+  readJiraDescriptionBlocks,
   serializeJiraDescriptionHeadings,
   projectJiraDescriptionInput,
   readJiraMarkdownDescription,
@@ -267,5 +268,78 @@ describe("native Jira wiki section admission", () => {
       { level: 2, title: "Criteria", hasContent: true },
       { level: 2, title: "Source", hasContent: true },
     ]);
+  });
+});
+
+describe("native wiki code and source-content blocks", () => {
+  it.each(["```", "~~~"])("does not treat Markdown %s as a native wiki fence", (fence) => {
+    expect(readJiraDescriptionSections(`${fence}\nh2. Goal\nBody`, "jira-wiki")).toEqual([
+      { level: 2, title: "Goal", hasContent: true },
+    ]);
+  });
+
+  it.each(["code", "noformat"])("ignores headings inside a matching native {%s} block", (macro) => {
+    expect(
+      readJiraDescriptionSections(
+        `{${macro}}\nh2. Not a section\n{${macro}}\nh2. Goal\nBody`,
+        "jira-wiki",
+      ),
+    ).toEqual([{ level: 2, title: "Goal", hasContent: true }]);
+  });
+
+  it("keeps multiline native prose and setext-looking rules out of the heading inventory", () => {
+    expect(
+      readJiraDescriptionSections("First line\nSecond line\n---\nh2. Goal\nBody", "jira-wiki"),
+    ).toEqual([{ level: 2, title: "Goal", hasContent: true }]);
+  });
+
+  it("collects only complete active paragraphs or bullets outside quotes and code", () => {
+    expect(
+      readJiraDescriptionBlocks(
+        [
+          "h2. Acceptance criteria",
+          "* Original one.",
+          "* Wrapped original",
+          "criterion two.",
+          "",
+          "> Quoted source.",
+          "lazy quoted continuation",
+          "",
+          "{quote}",
+          "Quoted macro.",
+          "{quote}",
+          "{code}",
+          "Code source.",
+          "{noformat}",
+          "Still code.",
+          "{code}",
+          "",
+          "Plain block.",
+        ].join("\n"),
+        "jira-wiki",
+      ),
+    ).toEqual(["Original one.", "Wrapped original\ncriterion two.", "Plain block."]);
+  });
+
+  for (const syntax of ["markdown", "jira-wiki"] as const) {
+    it(`keeps dense whitespace list boundaries and Unicode line-separator prose in ${syntax}`, () => {
+      const whitespace = " ".repeat(32_000);
+      expect(
+        readJiraDescriptionBlocks(`Prior.\n*${whitespace}Original criterion.`, syntax),
+      ).toEqual(["Prior.", "Original criterion."]);
+      for (const separator of ["\u2028", "\u2029"]) {
+        const prose = `*${whitespace}${separator}Original criterion.`;
+        expect(readJiraDescriptionBlocks(`Prior.\n${prose}`, syntax)).toEqual([`Prior.\n${prose}`]);
+      }
+    });
+  }
+
+  it("does not credit Markdown fenced, indented, heading or quoted text as a criterion block", () => {
+    expect(
+      readJiraDescriptionBlocks(
+        "## Heading\n```\nFenced.\n```\n\n    Indented.\n\n> Quoted.\n\n- Actual.",
+        "markdown",
+      ),
+    ).toEqual(["Actual."]);
   });
 });

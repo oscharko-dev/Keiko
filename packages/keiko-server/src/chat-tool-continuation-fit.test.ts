@@ -433,3 +433,36 @@ describe("stored Jira stage receipt compaction", () => {
     },
   );
 });
+
+it.each([8, 16, 24, 32])(
+  "preserves a %s-character Knowledge scope through forced context compaction",
+  (width) => {
+    const reference = `${"a".repeat(width)}:REQ-1`;
+    const requirements = exchange(60, {
+      status: "completed",
+      toolRef: { canonicalId: "keiko.knowledge.requirements", contractVersion: 1 },
+      data: {
+        outcome: "succeeded",
+        view: "units",
+        items: [{ reference, title: "Requirement", statement: BULK }],
+        totals: { detectedCount: 1 },
+        nextCursor: "bounded-next-page",
+      },
+    });
+    const newest = EXCHANGES.at(-1);
+    if (newest === undefined) throw new TypeError("Missing newest exchange");
+    const exchanges = [requirements, newest];
+    const continuation = continuationOf(exchanges);
+    const before = JSON.stringify(exchanges);
+    const fitted = fitToolContinuation(continuation, exchanges, 0);
+    expect(fitted.elidedCount).toBe(1);
+    expect(JSON.parse(fitted.messages[1]?.content ?? "")).toMatchObject({
+      elided: true,
+      requirements: [{ reference, title: "Requirement" }],
+      nextCursor: "bounded-next-page",
+      totals: { detectedCount: 1 },
+    });
+    expect(fitted.messages.at(-1)).toEqual(continuation.at(-1));
+    expect(JSON.stringify(exchanges)).toBe(before);
+  },
+);

@@ -20451,6 +20451,43 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "gateway.catalog.metadata.wait",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "gateway-startup-activity.logStartupMetadataWait",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["settled", "timeout", "aborted", "failed"],
+      },
+      elapsedMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-setup-metadata"],
+    proofIds: ["gateway.catalog.metadata.wait.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "gateway.chat.completed",
     category: "gateway",
     owner: "keiko-model-gateway",
@@ -21150,6 +21187,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "observation-unavailable",
           "probe-failed",
           "timestamp-invalid",
+          "provider-rejected",
         ],
       },
       admittedGeneration: {

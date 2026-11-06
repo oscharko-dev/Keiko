@@ -31,18 +31,29 @@ function combinedReservation(parent: Reservation, nested: Reservation): Reservat
   };
 }
 
+type ParentReservationObserver = (reservation: Reservation) => (() => void) | undefined;
+
+function observedReservation(
+  reservation: Reservation,
+  observe: ParentReservationObserver | undefined,
+): Reservation {
+  const afterSettlement = observe?.(reservation);
+  return afterSettlement === undefined
+    ? reservation
+    : combinedReservation({ settle: afterSettlement }, reservation);
+}
+
 /** A nested model call spends its own grant and the current enclosing caller's grant. */
 export function withNestedCallerAdmission(
   request: GatewayCallRequest,
   parent: GatewayCallRequest["attemptAdmission"],
-  observeParent?: (reservation: Reservation) => void,
+  observeParent?: ParentReservationObserver,
 ): GatewayCallRequest {
   if (parent === undefined) return request;
   if (parent === request.attemptAdmission && observeParent === undefined) return request;
   const enclosing: Admission = (input) => {
     const reservation = parent(input);
-    if (reservation !== undefined) observeParent?.(reservation);
-    return reservation;
+    return reservation === undefined ? undefined : observedReservation(reservation, observeParent);
   };
   const nested = parent === request.attemptAdmission ? undefined : request.attemptAdmission;
   if (nested === undefined) return { ...request, attemptAdmission: enclosing };

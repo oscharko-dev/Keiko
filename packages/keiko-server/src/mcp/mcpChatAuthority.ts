@@ -186,8 +186,15 @@ export function reserveCurrentMcpChatAuthority(
 ): CurrentMcpChatAuthority {
   const current = resolveCurrentMcpChatAuthority(deps, chatId, reference, nowIso, correlationId);
   return (
-    reserveResolvedChatToolAuthority(deps, current, reference, usage, nowIso, correlationId) ??
-    INVALID
+    reserveResolvedChatToolAuthority(
+      deps,
+      current,
+      reference,
+      usage,
+      nowIso,
+      correlationId,
+      deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist",
+    ) ?? INVALID
   );
 }
 

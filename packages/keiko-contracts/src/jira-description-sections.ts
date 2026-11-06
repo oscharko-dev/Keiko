@@ -4,7 +4,8 @@
  * headings. Projected native Data Center descriptions use jira-wiki mode, where only hN. headings
  * count; numbered lists and setext-looking prose are content, never section headings.
  *
- * Both modes retain the same line/title bounds, code fences and section hierarchy. A deeper
+ * Both modes retain the same line/title bounds and section hierarchy. Markdown fences belong only
+ * to Markdown; native wiki blocks use matching {code} or {noformat} macros. A deeper
  * heading belongs to the enclosing section; the next heading of the same or a shallower level
  * ends it. Nothing backtracks: every line is classified in time linear in its bounded length.
  */
@@ -31,7 +32,7 @@ interface HeadingSpan extends Heading {
   readonly startLine: number;
   readonly endLine: number;
 }
-type Fence = { readonly char: string; readonly length: number } | "wiki" | undefined;
+type Fence = { readonly char: string; readonly length: number } | "code" | "noformat" | undefined;
 
 function leadingSpaces(line: string): number {
   let count = 0;
@@ -83,16 +84,25 @@ function setextLevel(line: string): number | undefined {
 
 // A wiki macro that closes on its own opening line (`{code}x = 1{code}`) is one line of text, not a
 // block: opening a fence for it would hide every heading after it.
-function wikiMacroOpening(text: string): boolean {
-  const macro = ["{code", "{noformat"].find((marker) => text.startsWith(marker));
-  if (macro === undefined) return false;
+function wikiMacroOpening(text: string): "code" | "noformat" | undefined {
+  const macro = ["{code", "{noformat"].find(
+    (marker) =>
+      text.startsWith(marker) &&
+      (text.charAt(marker.length) === "}" || text.charAt(marker.length) === ":"),
+  );
+  if (macro === undefined) return undefined;
   const afterMarker = text.slice(text.indexOf("}") + 1);
-  return !afterMarker.includes(macro);
+  if (afterMarker.includes(macro)) return undefined;
+  return macro === "{code" ? "code" : "noformat";
 }
 
-function fenceOpening(line: string): Fence {
+function fenceOpening(line: string, syntax: "markdown" | "jira-wiki"): Fence {
   const text = line.trimStart();
-  if (leadingSpaces(line) <= 3 && (text.startsWith("```") || text.startsWith("~~~"))) {
+  if (
+    syntax === "markdown" &&
+    leadingSpaces(line) <= 3 &&
+    (text.startsWith("```") || text.startsWith("~~~"))
+  ) {
     const char = text.charAt(0);
     let length = 0;
     while (text.charAt(length) === char) length += 1;
@@ -100,12 +110,12 @@ function fenceOpening(line: string): Fence {
     if (char === "`" && text.includes("`", length)) return undefined;
     return { char, length };
   }
-  return wikiMacroOpening(text) ? "wiki" : undefined;
+  return wikiMacroOpening(text);
 }
 
 function fenceCloses(fence: Exclude<Fence, undefined>, line: string): boolean {
   const text = line.trim();
-  if (fence === "wiki") return text.startsWith("{code") || text.startsWith("{noformat");
+  if (typeof fence === "string") return text.startsWith(`{${fence}}`);
   if (text.length < fence.length) return false;
   for (const char of text) if (char !== fence.char) return false;
   return true;
@@ -163,7 +173,7 @@ class SectionReader {
         return;
       }
     }
-    const opening = fenceOpening(line);
+    const opening = fenceOpening(line, this.syntax);
     if (opening !== undefined) {
       this.fence = opening;
       this.content(line);
@@ -223,6 +233,120 @@ export function readJiraDescriptionSections(
   const reader = new SectionReader(syntax);
   reader.read(text.slice(0, DESCRIPTION_CHARS_MAX).replace(/\r\n?/gu, "\n").split("\n"));
   return reader.sections;
+}
+
+interface DescriptionBlocks {
+  readonly blocks: string[];
+  paragraph: string[];
+  fence: Fence;
+  quoted: boolean;
+  quoteParagraph: boolean;
+}
+function flushDescriptionBlock(state: DescriptionBlocks): void {
+  if (state.paragraph.length > 0) state.blocks.push(state.paragraph.join("\n"));
+  state.paragraph = [];
+}
+function descriptionCodeFence(line: string, syntax: "markdown" | "jira-wiki"): Fence {
+  const opening = fenceOpening(line, syntax);
+  if (opening !== undefined) return opening;
+  const markers = [line.indexOf("{code"), line.indexOf("{noformat")].filter((index) => index >= 0);
+  return markers.length === 0 ? undefined : wikiMacroOpening(line.slice(Math.min(...markers)));
+}
+function quotedDescriptionLine(state: DescriptionBlocks, text: string): boolean {
+  const quotes = text.split("{quote}").length - 1;
+  if (quotes > 0) {
+    flushDescriptionBlock(state);
+    if (quotes % 2 === 1) state.quoted = !state.quoted;
+    return true;
+  }
+  if (state.quoted) return true;
+  if (text.startsWith(">") || /^bq\.[ \t]/u.test(text)) {
+    flushDescriptionBlock(state);
+    state.quoteParagraph = true;
+    return true;
+  }
+  return state.quoteParagraph;
+}
+function fencedDescriptionLine(
+  state: DescriptionBlocks,
+  line: string,
+  syntax: "markdown" | "jira-wiki",
+): boolean {
+  if (state.fence !== undefined) {
+    if (fenceCloses(state.fence, line)) state.fence = undefined;
+    return true;
+  }
+  const opening = descriptionCodeFence(line, syntax);
+  if (opening !== undefined || line.includes("{code") || line.includes("{noformat")) {
+    flushDescriptionBlock(state);
+    state.fence = opening;
+    return true;
+  }
+  return false;
+}
+function indentedMarkdownContent(line: string, syntax: "markdown" | "jira-wiki"): boolean {
+  return syntax === "markdown" && (line.startsWith("\t") || leadingSpaces(line) > 3);
+}
+function descriptionBulletContent(text: string): string | undefined {
+  // Preserve the original single-line capture: Unicode line separators remain plain prose.
+  if (text.includes("\u2028") || text.includes("\u2029")) return undefined;
+  const prefix = /^(?:[*#]+[ \t]+|[-+][ \t]+|\d+[.)][ \t]+)/u.exec(text)?.[0];
+  return prefix === undefined ? undefined : text.slice(prefix.length);
+}
+function descriptionContentLine(
+  state: DescriptionBlocks,
+  line: string,
+  syntax: "markdown" | "jira-wiki",
+): void {
+  const text = line.trim();
+  if (state.quoted) {
+    quotedDescriptionLine(state, text);
+    return;
+  }
+  if (fencedDescriptionLine(state, line, syntax)) return;
+  if (text.length === 0) {
+    flushDescriptionBlock(state);
+    state.quoteParagraph = false;
+    return;
+  }
+  if (quotedDescriptionLine(state, text)) return;
+  if (indentedMarkdownContent(line, syntax)) {
+    flushDescriptionBlock(state);
+    return;
+  }
+  const bullet = descriptionBulletContent(text);
+  if (bullet !== undefined) flushDescriptionBlock(state);
+  state.paragraph.push(bullet ?? text);
+}
+
+/** Full active paragraphs/list items only; headings, quotes and code never prove source content. */
+export function readJiraDescriptionBlocks(
+  text: string,
+  syntax: "markdown" | "jira-wiki" = "markdown",
+): readonly string[] {
+  const lines = text.slice(0, DESCRIPTION_CHARS_MAX).replace(/\r\n?/gu, "\n").split("\n");
+  const reader = new SectionReader(syntax);
+  reader.read(lines);
+  const headings = new Map<number, HeadingSpan>();
+  for (const heading of reader.headings)
+    for (let index = heading.startLine; index < heading.endLine; index += 1)
+      headings.set(index, heading);
+  const state: DescriptionBlocks = {
+    blocks: [],
+    paragraph: [],
+    fence: undefined,
+    quoted: false,
+    quoteParagraph: false,
+  };
+  for (const [index, line] of lines.entries()) {
+    const heading = headings.get(index);
+    if (heading !== undefined) {
+      if (heading.syntax === "setext") state.paragraph = [];
+      else flushDescriptionBlock(state);
+    } else descriptionContentLine(state, line, syntax);
+  }
+  flushDescriptionBlock(state);
+  return state.blocks;
 }
 
 export interface JiraDescriptionHeadingSerialization {

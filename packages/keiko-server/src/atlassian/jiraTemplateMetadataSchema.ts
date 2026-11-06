@@ -43,6 +43,7 @@ export const JIRA_APPLICABLE_TEMPLATES_SCHEMA = object(
           "project",
           "issueType",
           "operation",
+          "source",
           "summary",
           "requiredFields",
           "requiredSections",

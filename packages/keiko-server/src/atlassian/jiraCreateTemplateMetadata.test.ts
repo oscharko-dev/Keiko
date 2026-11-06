@@ -192,10 +192,16 @@ describe("applicable create template metadata through the managed read", () => {
     expect(JSON.stringify(f.sink.events)).not.toContain("Akzeptanzkriterien");
   });
 
-  it("preserves no-template output and performs only its existing field read", async () => {
+  it("explicitly reports a complete empty rule set using only its existing field read", async () => {
     const f = fixture();
     const result = await f.read();
-    expect(result.data).not.toHaveProperty("applicableTemplates");
+    expect(result.data.applicableTemplates).toEqual({
+      items: [],
+      matchedCount: 0,
+      omittedCount: 0,
+      unreadableCount: 0,
+      complete: true,
+    });
     expect(result.data).toMatchObject({
       outcome: "succeeded",
       startAt: 0,
@@ -226,6 +232,50 @@ describe("applicable create template metadata through the managed read", () => {
       ],
     });
     expect(f.http).toHaveBeenCalledOnce();
+  });
+
+  it("distinguishes no matching rule from incomplete rule metadata", async () => {
+    const f = fixture();
+    f.add(template("Task", "FOREIGN"));
+    expect((await f.read()).data.applicableTemplates).toEqual({
+      items: [],
+      matchedCount: 0,
+      omittedCount: 0,
+      unreadableCount: 0,
+      complete: true,
+    });
+    expect(f.http).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not repeat rule identity reads or metadata logs on a later field page", async () => {
+    const f = fixture();
+    f.add(template("Task"));
+    await f.read();
+    expect(f.http).toHaveBeenCalledTimes(3);
+    const result = await f.read({
+      projectKey: "SYN",
+      issueTypeId: "10003",
+      startAt: 25,
+      maxResults: 25,
+    });
+    expect(result.data).not.toHaveProperty("applicableTemplates");
+    expect(f.http).toHaveBeenCalledTimes(4);
+    expect(f.sink.events.filter((event) => event.op === "jira.template.metadata")).toHaveLength(1);
+  });
+
+  it("does not claim complete rule metadata when an exact source reference is missing", async () => {
+    const f = fixture();
+    f.add(template("Task"));
+    const original = f.connection.issueTemplates;
+    if (original === undefined) throw new TypeError("Missing rule source");
+    Object.assign(f.connection, { issueTemplates: () => ({ ...original(), references: [] }) });
+    expect((await f.read()).data.applicableTemplates).toEqual({
+      items: [],
+      matchedCount: 1,
+      omittedCount: 1,
+      unreadableCount: 0,
+      complete: false,
+    });
   });
 
   it("reads the current stored revision after the actor-bound identity reads", async () => {

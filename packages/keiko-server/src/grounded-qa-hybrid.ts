@@ -2449,7 +2449,7 @@ function withHybridAnswerDuration(
 ): HybridGroundedAnswer {
   const elapsedMs = Math.max(0, Date.now() - (ctx.startedAtMs ?? Date.now()));
   return {
-    ...withToolResultsAsSource(answer, ctx.deps.store),
+    ...withToolResultsAsSource(answer, ctx.deps.chatToolTurn),
     elapsedMs,
     contextPack: {
       ...answer.contextPack,

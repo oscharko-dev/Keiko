@@ -17,7 +17,10 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { createGroundedSynthesisCallBudget } from "./grounded-answer.js";
-import { callPluralGroundedSynthesis } from "./grounded-plural-synthesis.js";
+import {
+  callPluralGroundedSynthesis,
+  type GroundedSynthesisPurpose,
+} from "./grounded-plural-synthesis.js";
 import { currentContentRedactor, withChatContentPolicy } from "./content-redactor.js";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
@@ -1031,6 +1034,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       input.signal ?? new AbortController().signal,
       profile,
       retryFollows,
+      input.citationRepair === true ? "citation-repair" : "answer",
     );
   }
 
@@ -1048,12 +1052,14 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     signal: AbortSignal,
     profile: ContextProfile | undefined,
     retryFollows: (error: unknown) => boolean,
+    purpose: GroundedSynthesisPurpose,
   ): Promise<NormalizedResponse> {
     const toolTurn = this.context.deps.chatToolTurn;
     if (toolTurn === undefined) return this.model.call(request, signal);
     const limits = profile ?? DEFAULT_CONTEXT_PROFILE;
     const outputTokensMax = limits.reservedOutputTokens;
     return callPluralGroundedSynthesis({
+      purpose,
       retryFollows,
       model: this.model,
       deps: this.context.deps,
@@ -2902,7 +2908,7 @@ async function persistScopedGroundedAnswer(
   );
   const finalAnswer = withToolResultsAsSource(
     withScopedPromptContext(entailed, persistedInput.promptContext),
-    deps.store,
+    deps.chatToolTurn,
   );
   attachGroundedAnswerWithPreviewCitations(
     deps,

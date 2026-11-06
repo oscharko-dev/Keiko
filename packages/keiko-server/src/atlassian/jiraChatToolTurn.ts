@@ -18,8 +18,6 @@ import {
 } from "./jiraChatAttachment.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { correlationIdOrUnknown } from "../correlation.js";
-import { ConversationModelNotReadyError } from "../conversation-readiness-admission.js";
-import { logConversationAdmission } from "../conversation-readiness-log.js";
 import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import {
   mintAcceptedJiraChatAuthority,
@@ -41,18 +39,18 @@ import {
   type JiraChatTemplatePreflightPorts,
 } from "./jiraChatTemplatePreflight.js";
 import { jiraChatMutationOutcome } from "./jiraChatMutationOutcome.js";
-import { jiraDraftUntracedAdvice, observedJiraDraftOutcome } from "./jiraChatDraft.js";
+import {
+  jiraDraftUntracedAdvice,
+  observedJiraDraftOutcome,
+  jiraDraftRequirementRefusal,
+} from "./jiraChatDraft.js";
 import { untracedAdvisory } from "./jiraChatCatalogRuntime.js";
 import type { TraceSession } from "../requirement-trace.js";
 import type {
   CatalogJsonObject,
   ToolResultEnvelope,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import {
-  ChatToolTurn,
-  bindChatToolCatalog,
-  chatModelSupportsTools as jiraChatModelSupportsTools,
-} from "../chat-tool-turn.js";
+import { ChatToolTurn, bindChatToolCatalog, mintAndBoundChatTurn } from "../chat-tool-turn.js";
 export { chatModelSupportsTools as jiraChatModelSupportsTools } from "../chat-tool-turn.js";
 type TurnDeps = JiraChatAuthorityDeps &
   JiraChatAttachmentDeps &
@@ -92,6 +90,20 @@ function draftUntracedAdvice(
     );
 }
 
+function draftRequirementsCheck(
+  openTrace: JiraChatTurnOptions["openTrace"],
+): JiraChatTemplatePreflightPorts["draftRequirements"] {
+  return (args, context): ReturnType<typeof jiraDraftRequirementRefusal> => {
+    const items = parseJiraDraft(args)?.items;
+    if (items === undefined) return undefined;
+    return jiraDraftRequirementRefusal(
+      items,
+      openTrace === undefined ? undefined : (): TraceSession => openTrace(context),
+      context.correlationId,
+    );
+  };
+}
+
 type ReviewAction = Pick<JiraChatCatalogAction, "actionId" | "argumentsDigest">;
 export type JiraChatTurnReviewPorts = Required<
   Pick<JiraChatAdmissionOptions, "preflightWrite" | "attachmentPreview" | "draftItemRefs">
@@ -128,6 +140,7 @@ export function createJiraChatTurnReviewPorts(
       deps: options.deps,
       writeArguments: (action) => proposedWriteArguments(access, action),
       readAllowed: access.readAllowed,
+      draftRequirements: draftRequirementsCheck(options.openTrace),
       untracedAdvice: draftUntracedAdvice(options.deps, options.openTrace),
     }),
     attachmentPreview: (action) => reviewedAttachment(options, access, action),
@@ -275,32 +288,24 @@ export async function createJiraChatToolTurn(
   openTrace?: JiraChatTurnOptions["openTrace"],
 ): Promise<JiraChatToolTurn | undefined> {
   if (deps.store.findChatById(message.chatId)?.jiraPodBinding === undefined) return undefined;
-  if (!jiraChatModelSupportsTools(deps, modelId)) {
-    const generation = deps.gatewayConfig?.generation();
-    logConversationAdmission("observation-unavailable", correlationId, generation, generation);
-    throw new ConversationModelNotReadyError("tool-calling");
-  }
-  const authority = mintAcceptedJiraChatAuthority(deps, {
-    chatId: message.chatId,
-    userMessageId: message.id,
-    startedAtMs: message.timestamp,
-    nowMs: Date.now(),
-    correlationId: correlationIdOrUnknown(correlationId),
-  });
-  requireDispatch(
-    authority.ok && deps.jiraChatCatalog !== undefined,
-    "denied",
-    "authority-invalid",
+  const catalog = deps.jiraChatCatalog;
+  requireDispatch(catalog !== undefined, "denied", "authority-invalid");
+  const managed = await catalog.get();
+  const correlation = correlationIdOrUnknown(correlationId);
+  const bound = mintAndBoundChatTurn<JiraChatTurnOptions["authority"]>(
+    deps,
+    modelId,
+    message,
+    correlation,
+    (turn) => mintAcceptedJiraChatAuthority(deps, turn),
+    [signal],
   );
-  const remaining = Date.parse(authority.envelope.expiresAt) - Date.now();
-  requireDispatch(remaining > 0, "denied", "authority-expired");
   return new JiraChatToolTurn({
     deps,
     message,
-    authority,
-    managed: await deps.jiraChatCatalog.get(),
-    signal: AbortSignal.any([signal, AbortSignal.timeout(remaining)]),
-    correlationId: correlationIdOrUnknown(correlationId),
+    ...bound,
+    managed,
+    correlationId: correlation,
     openTrace,
   });
 }

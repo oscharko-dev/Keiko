@@ -526,7 +526,7 @@ export interface ChatAssistantResponseVersion {
 /** A call/result pair stays attached to its canonical human turn during history selection. */
 export interface ChatToolExchange {
   readonly call: Pick<NormalizedToolCall, "id" | "name" | "arguments"> & {
-    /** Present only for an application-initiated observation, never a model-authored call. */
+    /** Legacy transcript metadata may be read; current writers and public projections omit it. */
     readonly origin?: "runtime" | undefined;
   };
   readonly result?: ToolResultEnvelope | undefined;
@@ -2251,6 +2251,7 @@ export type BffErrorCode =
   // English strings (no echoing of model ids, file names, or byte counts) so they pass
   // through the BFF redactor without leaking any caller-supplied value.
   | "CONVERSATION_UNAVAILABLE_MODEL"
+  | "CONVERSATION_MODEL_NOT_READY"
   | "CONVERSATION_UNSUPPORTED_MODALITY"
   | "CONVERSATION_UNSUPPORTED_FILE_TYPE"
   | "CONVERSATION_OVERSIZED_CONTEXT"

@@ -14,6 +14,14 @@ import {
   type JiraFieldCatalogEntry,
   type JiraTemplateSubject,
 } from "./jira-issue-template-check.js";
+import { deriveJiraTemplateSections } from "./jira-issue-template-instance.js";
+
+describe("sections sampled from native Jira descriptions", () => {
+  it("does not invent Markdown headings from native lists, underlines or fence text", () => {
+    const native = "# First item\nParagraph\n---\n```\nh2. Goal\nBody\n```";
+    expect(deriveJiraTemplateSections([native, native])).toEqual(["Goal"]);
+  });
+});
 
 const CATALOG: readonly JiraFieldCatalogEntry[] = [
   { id: "summary", name: "Summary" },
@@ -136,11 +144,10 @@ describe("description sections", () => {
     expect(ids(template, subject({}))).toHaveLength(2);
   });
 
-  it("does not take a heading from fenced code or a wiki code block", () => {
+  it("judges native backticks as text and excludes native wiki code blocks", () => {
     const fenced = "h2. Context\nWhy\n```\nh2. Acceptance criteria\nfake\n```\n";
-    expect(ids(template, subject({ description: fenced }))).toEqual([
-      "section-missing:Acceptance criteria",
-    ]);
+    // ADR-0128's native-wire section contract: backticks are not Jira wiki code macros.
+    expect(ids(template, subject({ description: fenced }))).toEqual([]);
     const wiki = "h2. Context\nWhy\n{code}\nh2. Acceptance criteria\nfake\n{code}\n";
     expect(ids(template, subject({ description: wiki }))).toEqual([
       "section-missing:Acceptance criteria",

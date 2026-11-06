@@ -1973,7 +1973,7 @@ export function currentGatewayVerification(
 }
 
 /** Legacy freshness window used only to describe the age of observed readiness in diagnostics. */
-export const CONVERSATION_READINESS_MAX_AGE_MS = 5 * 60_000;
+export const CONVERSATION_READINESS_CACHED_AFTER_MS = 5 * 60_000;
 
 export function conversationReadinessAgeMs(
   observation: VerifiedModelCapabilityObservation,

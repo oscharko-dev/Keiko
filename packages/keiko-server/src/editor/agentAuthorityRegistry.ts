@@ -843,7 +843,8 @@ function sharedChatFacts(envelope: ChatToolAuthorityEnvelope): string {
     requestedMode: envelope.requestedMode,
     effectiveMode: envelope.effectiveMode,
     deploymentCeiling: envelope.deploymentCeiling,
-    actionClasses: envelope.actionClasses,
+    // Each validated subject owns its action classes: local Knowledge has no network egress.
+    // Only task ownership, mode, lifetime and the shared budget must be identical across sources.
     expiresAt: envelope.expiresAt,
     budget: envelope.budget,
   });

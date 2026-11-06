@@ -1692,3 +1692,27 @@ describe("file content in a model tool call", () => {
     ).toThrow(GatewayToolCatalogError);
   });
 });
+
+it("offers bounded name guidance for an unknown native alias without authorizing retry or echoing input", () => {
+  const bridge = createGatewayToolCatalogBridge(
+    { ...request(), toolCatalog: advertisement() },
+    (): number => NOW,
+  );
+  let rejected: unknown;
+  try {
+    bridge.bind({ id: "near-alias", name: "read_fil", arguments: { private: "PRIVATE_ARGUMENT" } });
+  } catch (error) {
+    rejected = error;
+  }
+  expect(rejected).toBeInstanceOf(GatewayToolCatalogError);
+  if (!(rejected instanceof GatewayToolCatalogError))
+    throw new TypeError("Expected catalog rejection");
+  expect(rejected.retryable).toBe(false);
+  expect(rejected.repair).toBeUndefined();
+  const correction = rejected.correction();
+  expect(correction).toContain("read_file");
+  expect(correction).not.toContain("read_fil,");
+  expect(correction).not.toContain("PRIVATE_ARGUMENT");
+  expect(new TextEncoder().encode(correction).byteLength).toBeLessThanOrEqual(8192);
+  expect(JSON.stringify(rejected)).not.toContain("Examples of valid names");
+});

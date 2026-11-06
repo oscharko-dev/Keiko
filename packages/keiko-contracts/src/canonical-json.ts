@@ -1,21 +1,51 @@
 import { compareStrings } from "./comparators.js";
 
-// Canonical JSON: object keys sorted recursively, array order preserved, undefined values omitted
-// (matching JSON.stringify semantics). Two structurally equal inputs serialise to byte-identical
-// strings regardless of key insertion order, so SHA-256 over the canonical form is order-stable.
+// Canonical JSON: recursively sorted plain data objects, preserved array order and JSON's
+// undefined/-0 normalization. Unsupported values fail closed rather than colliding with JSON data.
 export function canonicalise(value: unknown): string {
-  if (value === undefined) {
-    return "null";
-  }
-  if (value === null || typeof value !== "object") {
+  return encode(value, new Set<object>());
+}
+
+function encode(value: unknown, ancestors: Set<object>): string {
+  if (value === undefined || value === null) return "null";
+  if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError("Canonical JSON requires a finite number.");
     return JSON.stringify(value);
   }
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => canonicalise(item)).join(",")}]`;
+  if (typeof value !== "object") throw new TypeError("Unsupported canonical JSON value.");
+  if (ancestors.has(value)) throw new TypeError("Canonical JSON cannot contain a cycle.");
+  ancestors.add(value);
+  try {
+    return Array.isArray(value) ? encodeArray(value, ancestors) : encodeObject(value, ancestors);
+  } finally {
+    ancestors.delete(value);
   }
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, v]) => v !== undefined)
-    .sort(([a], [b]) => compareStrings(a, b))
-    .map(([key, v]) => `${JSON.stringify(key)}:${canonicalise(v)}`);
+}
+
+function dataValue(descriptor: PropertyDescriptor | undefined): unknown {
+  if (descriptor === undefined) return undefined;
+  if (!Object.hasOwn(descriptor, "value"))
+    throw new TypeError("Canonical JSON cannot contain an accessor.");
+  return descriptor.value;
+}
+
+function encodeArray(value: readonly unknown[], ancestors: Set<object>): string {
+  return `[${Array.from({ length: value.length }, (_, index) =>
+    encode(dataValue(Object.getOwnPropertyDescriptor(value, index)), ancestors),
+  ).join(",")}]`;
+}
+
+function encodeObject(value: object, ancestors: Set<object>): string {
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (prototype !== null && prototype !== Object.prototype)
+    throw new TypeError("Canonical JSON requires a plain object.");
+  if (Object.getOwnPropertySymbols(value).length > 0)
+    throw new TypeError("Canonical JSON cannot contain symbol keys.");
+  const entries: string[] = [];
+  for (const key of Object.keys(value).sort(compareStrings)) {
+    const item = dataValue(Object.getOwnPropertyDescriptor(value, key));
+    if (item !== undefined) entries.push(`${JSON.stringify(key)}:${encode(item, ancestors)}`);
+  }
   return `{${entries.join(",")}}`;
 }

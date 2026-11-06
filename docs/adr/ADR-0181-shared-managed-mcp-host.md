@@ -68,6 +68,15 @@ model deadline. The active model's canonical context profile supplies its output
 bounded by provider capacity, context fit and the enclosing caller and turn grants. Ordinary
 internal tools retain their own declared durations.
 
+Application-initiated corpus receipts use the same synthetic assistant tool call and tool-result
+pair as model-initiated observations. Pod metadata never gains a user role. Runtime provenance
+remains inside the active turn's explicit dispatch path; provider-controlled ids cannot assert it.
+Persisted calls retain only `id`, `name` and `arguments` for compatibility with the previous reader.
+Legacy `origin` metadata remains readable but is removed from public projections and every write.
+Rollback compatibility covers transcripts written by the corrected writer. Untouched local
+pre-release records containing `origin` are not rewritten by a read; they need a normal write
+through the current version before the previous build can read those records.
+
 Provider handler references are captured with the initial metadata and served from
 immutable host-owned bindings. A provider must return stable functions across
 registration queries. Replacing a handler while retaining its name/schema/digest is
@@ -350,6 +359,17 @@ binding, so its gateway work is charged to the original authority and remains ca
 application graph owns the lazy catalogs and closes their MCP hosts with the graph; a status read
 only derives the static tool definitions for context accounting.
 
+A selected Pod set grants access to that logical, server-owned set, like a selected folder, rather
+than freezing its member IDs into a second authority registry. Its identity participates in the
+selection digest; replacing that selected set invalidates the authority. Changing the membership
+of the same set does not by itself invalidate the retained authority. Every source operation
+resolves the current members through the existing scope resolver and reapplies containment,
+lifecycle and model-use policy. Source snapshots and continuation fingerprints include the resolved
+members: a membership change during an operation refuses its result as `source-changed`, and old
+source-page cursors cannot continue against the changed membership. This dynamic-set contract does
+not permit reads outside the currently resolved selection or transfer its authority to another set.
+Authority previews do not open another Knowledge database or retain a membership cache.
+
 Before synthesis, a turn with selected Knowledge Pods obtains one bounded metadata inventory page
 through the existing catalog offer, binder and dispatch path. It consumes the same authority and
 tool budget as a model-requested read; no extra synthesis allowance or semantic review is implicit.
@@ -390,9 +410,15 @@ authority and result-bound checks can confirm its own factory-owned synthesis re
 orchestration. Confirmation is bound to that exact reservation and response, including concurrent
 results; it cannot release another attempt or a generic caller's grant. Physical usage remains in
 the reported total and the accepted turn's cumulative budget. Invalid, stale, cancelled or
-unobserved reviews retain their synthesis charge. A valid partial review can confirm its observed
+unobserved reviews retain their synthesis token and unknown-output charge. A physically settled
+nested review releases only its own synthesis call slot, independently of parsed-result
+confirmation. The exact reservation's settlement owns that idempotent release, including failures
+and retries; cancellation of a caller's wait cannot release a newer or still-running attempt.
+The accepted turn's model-call, prompt and cost ceilings remain authoritative. A valid partial review can confirm its observed
 work without claiming complete source coverage. Data-only preparation and synthesis keep their
-existing path.
+existing path. Marker-only citation repair is explicitly classified on every grounded path,
+including Knowledge Pods, and uses the admitted model without re-entering the tool loop. An ended
+tool turn is refused at repair admission and cannot start another call through its own entry point.
 
 An empty connected-evidence pack still permits the already admitted Jira turn to run.
 When neither governed Memory context nor the existing own-assessment policy permits an

@@ -136,6 +136,30 @@ function text(value: unknown): string {
 }
 
 describe("jira.draft-stage (#4178)", () => {
+  it("refuses source-criterion failure before Jira metadata reads or a staged digest", async () => {
+    const h = harness();
+    const target = connection();
+    const append = vi.spyOn(h.deps.store, "append");
+    const checkRequirements = vi.fn(() => ({
+      data: { outcome: "rejected", reason: "field-validation" },
+      violationCount: 1,
+    }));
+    const result = await executeJiraDraftStageTool(pageOf("source"), CONTEXT, target, {
+      ...h.deps,
+      checkRequirements,
+    });
+    expect(result).toMatchObject({
+      isError: true,
+      data: { outcome: "rejected", reason: "field-validation" },
+    });
+    expect(checkRequirements).toHaveBeenCalledExactlyOnceWith(pageOf("source").items, CONTEXT);
+    expect(target.http).not.toHaveBeenCalled();
+    expect(append).not.toHaveBeenCalled();
+    expect(h.activity).toMatchObject([
+      { phase: "refused", refusal: "invalid-fields", violationCount: 1 },
+    ]);
+  });
+
   it("assembles a 70-item draft in pages and resolves to exactly those items", async () => {
     const h = harness();
     const first = await h.stage({ items: page(0, JIRA_DRAFT_PAGE_ITEMS_MAX) });

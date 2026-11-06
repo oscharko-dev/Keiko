@@ -144,30 +144,52 @@ export function reviewWindowCount(source: string): number {
   return count;
 }
 
-export function reviewPrompt(
-  document: ReadKnowledgeDocument,
-  anchors: readonly ReviewAnchor[],
-): string {
-  const first = anchors[0]?.characterStart ?? 0;
-  const end = anchors.at(-1)?.characterEnd ?? 0;
+export interface ReviewBaseline {
+  readonly entries: readonly {
+    readonly reference: string;
+    readonly characterStart: number;
+    readonly characterEnd: number;
+    readonly acceptanceCriterionCount: number;
+  }[];
+  readonly omittedCount: number;
+}
+export const REVIEW_BASELINE_WINDOW_MAX = 64;
+
+/** Retain bounded, compact detector facts rather than the source inventory's text fields. */
+export function deriveReviewBaseline(document: ReadKnowledgeDocument): ReviewBaseline {
   const inventory = deriveRequirementInventory({
     text: document.text,
     sections: document.sections,
     documentKey: String(document.documentId),
+    ...(document.documentScope === undefined ? {} : { documentScope: document.documentScope }),
     maxEntries: 5000,
   });
-  const baseline = inventory.entries
-    .filter((entry) => entry.characterStart < end && entry.characterEnd > first)
-    .map((entry) => ({
+  return {
+    entries: inventory.entries.map((entry) => ({
       reference: requirementReference(entry),
       characterStart: entry.characterStart,
       characterEnd: entry.characterEnd,
       acceptanceCriterionCount: entry.acceptanceCriteria.length,
-    }));
+    })),
+    omittedCount: inventory.totalCount - inventory.entries.length,
+  };
+}
+
+export function reviewPrompt(
+  document: ReadKnowledgeDocument,
+  anchors: readonly ReviewAnchor[],
+  baseline = deriveReviewBaseline(document),
+): string {
+  const first = anchors[0]?.characterStart ?? 0;
+  const end = anchors.at(-1)?.characterEnd ?? 0;
+  const selected = baseline.entries.filter(
+    (entry) => entry.characterStart < end && entry.characterEnd > first,
+  );
   return JSON.stringify({
     anchors,
-    deterministicBaseline: baseline,
-    baselineOmittedCount: inventory.totalCount - inventory.entries.length,
+    deterministicBaseline: selected.slice(0, REVIEW_BASELINE_WINDOW_MAX),
+    baselineOmittedCount:
+      baseline.omittedCount + Math.max(0, selected.length - REVIEW_BASELINE_WINDOW_MAX),
   });
 }
 
@@ -379,6 +401,7 @@ export function renderSemanticFindings(
     readonly textRevision: string;
   },
   redact: (value: string) => string,
+  quoteChars = 100,
 ): readonly CatalogJsonObject[] {
   return review.findings.map((finding): CatalogJsonObject => ({
     proposalId: knowledgeDigest(JSON.stringify([identity, finding])).slice(0, 16),
@@ -396,8 +419,8 @@ export function renderSemanticFindings(
               ...identity,
               characterStart: anchor.characterStart,
               characterEnd: anchor.characterEnd,
-              quote: reviewText(anchor.text, 100),
-              quoteTruncated: anchor.text.length > 100,
+              quote: reviewText(anchor.text, quoteChars),
+              quoteTruncated: anchor.text.length > quoteChars,
             },
           ];
     }),

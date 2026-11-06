@@ -1080,8 +1080,11 @@ the approval.
   Data Center wire description is judged in native wiki mode: only `hN.` headings count, so a
   native `#` numbered list or setext-looking text never satisfies a required section. Explicit
   Markdown is serialized to native headings before this check; native strings remain unchanged.
-  Neither mode takes headings inside fenced code (``` and ~~~ fences, `{code}` and `{noformat}`),
-  on a line over 512 characters, or through a backtracking expression. A deeper heading belongs to the enclosing
+  Backtick and tilde fences are Markdown syntax only: native descriptions and the native samples
+  from which a template is proposed recognize matching `{code}` and `{noformat}` blocks instead.
+  Markdown heading discovery ignores backtick/tilde fences and wiki code macros. Native wire
+  validation and native samples ignore matching `{code}` and `{noformat}` blocks only. Neither
+  accepts a heading on a line over 512 characters or through a backtracking expression. A deeper heading belongs to the enclosing
   section, so a section made only of subsections has content; a section ends at the next heading of
   the same or a shallower level. Patterns use a closed regular-expression subset (literals,
   classes, `. ^ $ \b \B`, `\d \w \s` and their negations, escapes, alternation, groups, greedy
@@ -1461,6 +1464,16 @@ without answer or tool-result bodies.
   The traced labels and footer are part of the item the customer-template gate (#4177) judges, so a
   template that governs `description` or `labels` sees the final values, not the model's draft; the
   pre-approval dry run of a create or edit judges the values as the model wrote them.
+  A traced draft also preserves the original acceptance criteria before a page is staged, before
+  human approval and again before final execution. Each referenced unit requires all its original
+  criteria; an explicit criterion reference requires that exact criterion. The canonical description
+  projection must contain each criterion as a whole active paragraph or list item, or the complete
+  ordered criterion set as one paragraph. Unicode normalization and whitespace wrapping may differ;
+  prefixes, substrings, headings, quotes and code do not establish preservation. A missing criterion
+  refuses the draft with `acceptance-criteria-missing` before a digest, approval or Jira mutation;
+  no approved description is silently rewritten. This proves content preservation, not semantic
+  implementation or fulfillment of a criterion. The existing source lifecycle and model-use guards,
+  preview digest, template checks, journal and idempotent reconciliation continue to apply.
 - _Change check._ A new document version is compared with the backlog through the labels alone;
   no earlier inventory is kept anywhere, so the baseline is what Jira holds. `change-queries`
   returns, per document, label-only JQL batches under the JQL length bound for items whose revision

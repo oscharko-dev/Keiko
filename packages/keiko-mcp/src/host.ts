@@ -69,6 +69,18 @@ async function capturedResult<Context extends ManagedMcpInvocationContext>(
   return validated.value;
 }
 
+function sameProtocolMetadata(
+  left: ManagedMcpToolDeclaration,
+  right: ManagedMcpToolDeclaration,
+): boolean {
+  return (
+    left.title === right.title &&
+    left.annotations?.openWorldHint === right.annotations?.openWorldHint &&
+    left.annotations?.idempotentHint === right.annotations?.idempotentHint &&
+    Object.keys(left.annotations ?? {}).length === Object.keys(right.annotations ?? {}).length
+  );
+}
+
 class ManagedHost<Context extends ManagedMcpInvocationContext> implements ManagedMcpHost<Context> {
   readonly #contexts = new AsyncLocalStorage<Context>();
   readonly #requests = new WeakMap<Request, Context>();
@@ -96,15 +108,17 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
   ) {
     const tools = toolsOf(providers);
     this.#tools = deepFreeze(
-      tools.map(({ name, risk, descriptor, execute }) => ({
+      tools.map(({ name, risk, descriptor, execute, title, annotations }) => ({
         name,
         risk,
         descriptor: structuredClone(descriptor),
         execute,
+        ...(title === undefined ? {} : { title }),
+        ...(annotations === undefined ? {} : { annotations: structuredClone(annotations) }),
       })),
     );
     this.#catalog = deepFreeze(
-      this.#tools.map(({ name, risk, descriptor }) => ({ name, risk, descriptor })),
+      this.#tools.map(({ execute: _execute, ...declaration }) => declaration),
     );
     this.#expected = definitionIdentity(tools.map(toolDefinition));
     this.#declarations = this.declarationIdentity(tools);
@@ -128,7 +142,13 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
 
   private declarationIdentity(tools: readonly ManagedMcpTool<Context>[]): string {
     return canonicalise(
-      tools.map((tool) => ({ name: tool.name, risk: tool.risk, descriptor: tool.descriptor })),
+      tools.map((tool) => ({
+        name: tool.name,
+        risk: tool.risk,
+        descriptor: tool.descriptor,
+        title: tool.title,
+        annotations: tool.annotations,
+      })),
     );
   }
 
@@ -142,6 +162,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
           tool.descriptor === frozen[index] &&
           tool.name === admitted?.name &&
           tool.risk === admitted.risk &&
+          sameProtocolMetadata(tool, admitted) &&
           tool.execute === admitted.execute
         );
       })
@@ -183,6 +204,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
       server.registerTool(
         tool.name,
         {
+          ...(definition.title === undefined ? {} : { title: definition.title }),
           description: tool.descriptor.description,
           inputSchema: fromJsonSchema<CatalogJsonObject>(tool.descriptor.inputSchema),
           outputSchema: fromJsonSchema<CatalogJsonObject>(tool.descriptor.resultSchema),

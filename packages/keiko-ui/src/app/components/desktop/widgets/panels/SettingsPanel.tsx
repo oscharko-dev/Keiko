@@ -1835,7 +1835,7 @@ export function SettingsPanel({
 }: {
   readonly openUpdatesWindow?: (() => void) | undefined;
   readonly openWorkspaceTrust?: (() => void) | undefined;
-  readonly initialTab?: "mcp" | undefined;
+  readonly initialTab?: "mcp" | "models" | undefined;
   readonly onInitialTabHandled?: (() => void) | undefined;
   readonly root?: string | undefined;
 } = {}): ReactNode {
@@ -1843,8 +1843,8 @@ export function SettingsPanel({
   const workspaceT = useGlobalTranslate();
   const [tab, setTab] = useState<Tab>("models");
   useEffect(() => {
-    if (initialTab === "mcp") {
-      setTab("mcp");
+    if (initialTab !== undefined) {
+      setTab(initialTab);
       onInitialTabHandled?.();
     }
   }, [initialTab, onInitialTabHandled]);

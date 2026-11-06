@@ -40,7 +40,7 @@ import {
   type JiraChatCatalogConsumer,
 } from "./jiraChatCatalogConsumer.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
-import { executeJiraChatDraft } from "./jiraChatDraft.js";
+import { executeJiraChatDraft, jiraDraftRequirementRefusal } from "./jiraChatDraft.js";
 import {
   chatReportRequirementIds,
   createKnowledgeRequirementsProvider,
@@ -384,6 +384,24 @@ function draftTool(
   return {
     store,
     owner: (context) => context.chatId,
+    checkRequirements: (items, context): ReturnType<typeof jiraDraftRequirementRefusal> => {
+      context.signal.throwIfAborted();
+      requireDispatch(context.beforeEffect(), "denied", "effect-denied");
+      const refusal = jiraDraftRequirementRefusal(
+        items,
+        () =>
+          openTraceSession(deps, {
+            chatId: context.chatId,
+            userMessageId: context.userMessageId,
+            correlationId: context.correlationId,
+          }),
+        context.correlationId,
+      );
+      if (refusal === undefined) return undefined;
+      const data = { ...refusal.data };
+      delete data.items;
+      return { ...refusal, data };
+    },
     activity: (activity, context): void => {
       recordJiraDraftActivity(deps.activityLog, context.correlationId, activity);
     },

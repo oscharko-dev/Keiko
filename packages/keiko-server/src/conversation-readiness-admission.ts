@@ -1,5 +1,11 @@
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import type { GatewayCallRequest, GatewayStreamChunk } from "@oscharko-dev/keiko-model-gateway";
+import {
+  AuthenticationError,
+  ProviderError,
+  UnknownModelError,
+  type GatewayCallRequest,
+  type GatewayStreamChunk,
+} from "@oscharko-dev/keiko-model-gateway";
 
 import {
   ConversationModelNotReadyError,
@@ -9,7 +15,7 @@ import {
 } from "./conversation-readiness-error.js";
 
 import {
-  CONVERSATION_READINESS_MAX_AGE_MS,
+  CONVERSATION_READINESS_CACHED_AFTER_MS,
   conversationReadinessAgeMs,
   currentConversationReady,
   type UiHandlerDeps,
@@ -34,7 +40,9 @@ export function conversationModelNotReadyResult(
   return {
     status: 400,
     body: errorBody(
-      requiredCapability === "tool-calling" ? "CONVERSATION_UNAVAILABLE_MODEL" : "BAD_REQUEST",
+      requiredCapability === "tool-calling"
+        ? "CONVERSATION_UNAVAILABLE_MODEL"
+        : "CONVERSATION_MODEL_NOT_READY",
       requiredCapability === "tool-calling"
         ? TOOL_CALLING_REQUIRED_MESSAGE
         : CONVERSATION_REQUIRED_MESSAGE,
@@ -98,7 +106,42 @@ function observationDisposition(
       : "observation-unavailable";
   const ageMs = conversationReadinessAgeMs(observation);
   if (!Number.isFinite(ageMs) || ageMs < 0) return "timestamp-invalid";
-  return ageMs < CONVERSATION_READINESS_MAX_AGE_MS ? "allowed-fresh" : "allowed-cached";
+  return ageMs < CONVERSATION_READINESS_CACHED_AFTER_MS ? "allowed-fresh" : "allowed-cached";
+}
+
+function observeConversationFailure(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  admission: ConversationReadinessAdmission,
+  observation: VerifiedModelCapabilityObservation | undefined,
+  request: GatewayCallRequest,
+  error: unknown,
+): void {
+  const definitive =
+    error instanceof AuthenticationError ||
+    error instanceof UnknownModelError ||
+    (error instanceof ProviderError && error.httpStatus === 404);
+  const holder = deps.gatewayConfig;
+  if (
+    !definitive ||
+    holder === undefined ||
+    observation === undefined ||
+    holder.generation() !== admission.gatewayConfigGeneration ||
+    holder.verifiedCapability(admission.modelId) !== observation
+  )
+    return;
+  holder.recordVerifiedCapability(
+    admission.modelId,
+    { ...observation.fields, conversationReady: false },
+    observation.checkedAt,
+    admission.gatewayConfigGeneration,
+    new Date().toISOString(),
+  );
+  logConversationAdmission(
+    "provider-rejected",
+    request.logContext?.correlationId,
+    admission.gatewayConfigGeneration,
+    holder.generation(),
+  );
 }
 
 /** Read the current generation-bound result at dispatch; never send a readiness probe. */
@@ -124,7 +167,13 @@ export function withConversationReadinessAdmission(
   };
   const call: ModelPort["call"] = async (request, signal) => {
     assert(request, signal);
-    return model.call(request, signal);
+    const observation = deps.gatewayConfig?.verifiedCapability(modelId);
+    try {
+      return await model.call(request, signal);
+    } catch (error) {
+      observeConversationFailure(deps, admission, observation, request, error);
+      throw error;
+    }
   };
   if (model.callStream === undefined) return { call };
   const stream = model.callStream.bind(model);
@@ -132,7 +181,13 @@ export function withConversationReadinessAdmission(
     call,
     callStream: async function* (request, signal): AsyncIterable<GatewayStreamChunk> {
       assert(request, signal);
-      yield* stream(request, signal);
+      const observation = deps.gatewayConfig?.verifiedCapability(modelId);
+      try {
+        yield* stream(request, signal);
+      } catch (error) {
+        observeConversationFailure(deps, admission, observation, request, error);
+        throw error;
+      }
     },
   };
 }

@@ -13,6 +13,7 @@ import type { AcceptedJiraChatTurn } from "./atlassian/jiraChatAuthority.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatToolAuthorityResolution } from "./editor/agentAuthorityRegistry.js";
 import { chatToolTurnBudget } from "./chat-tool-turn-budget.js";
+import type { ToolConsumerContext } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 
 type AuthorityFailure = Extract<ChatToolAuthorityResolution, { readonly ok: false }>;
 type CurrentChatToolAuthority =
@@ -70,7 +71,10 @@ export function acceptedChatToolAuthorityEnvelope<
     requestedMode,
     deploymentCeiling,
     effectiveMode: resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling),
-    actionClasses: ["connector-access", "network-egress"],
+    actionClasses:
+      "kind" in subject && subject.kind === "knowledge-pods"
+        ? ["connector-access"]
+        : ["connector-access", "network-egress"],
     connectorScopes,
     budget,
     expiresAt: new Date(turn.startedAtMs + budget.maxRuntimeMs).toISOString(),
@@ -85,6 +89,20 @@ export function acceptedChatToolAuthorityEnvelope<
       }),
     ),
   };
+}
+
+/** A retained capability belongs to this exact active Chat authority. */
+export function chatCapabilityMatches(
+  context: Pick<ToolConsumerContext, "authority" | "signal"> & {
+    readonly authorityReference: EditorAgentGovernedAuthorityReference;
+  },
+  capability: string | undefined,
+): boolean {
+  return (
+    !context.signal.aborted &&
+    capability === context.authority &&
+    capability === context.authorityReference.envelopeDigest
+  );
 }
 
 export function isRequestedChatToolModeCurrent(
@@ -102,13 +120,13 @@ export function reserveResolvedChatToolAuthority<Current extends CurrentChatTool
   usage: CodingWorkbenchRuntimeDelegationUsage,
   nowIso: string,
   correlationId: string,
-  deploymentCeiling?: CodingWorkbenchMode,
+  deploymentCeiling: CodingWorkbenchMode,
 ): Current | AuthorityFailure | undefined {
   if (!current.ok) return current;
   const reserved = deps.agentAuthorityRegistry?.reserveForChat(
     reference,
     current.envelope.subject,
-    deploymentCeiling ?? current.envelope.deploymentCeiling,
+    deploymentCeiling,
     usage,
     nowIso,
     correlationId,

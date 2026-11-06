@@ -503,6 +503,11 @@ export const EN_MESSAGES = {
   // broken gateway, and neither text blames the size of the request.
   "chat.modelSelectionUnavailable":
     "The selected model is temporarily unavailable. Choose another available model or wait for it to recover.",
+  "chat.error.modelNotReady.title": "Model verification needed",
+  "chat.error.modelNotReady.message": "The selected model has not passed its readiness check.",
+  "chat.error.modelNotReady.remediation":
+    "Open model settings, run the readiness check, then send your message again.",
+  "chat.error.modelNotReady.action": "Open model verification",
   "chat.error.capabilityUnavailable.title": "Model capability unavailable",
   "chat.error.capabilityUnavailable.message":
     "The selected model cannot currently run the required Chat capabilities.",

@@ -32,7 +32,8 @@ import {
   JIRA_UNCERTAIN_GUIDANCE,
 } from "./jiraMutationResult.js";
 import { jiraChatDraftConnection } from "./jiraChatCatalogRuntime.js";
-import type { TraceSession } from "../requirement-trace.js";
+import { openTraceSession, type TraceSession } from "../requirement-trace.js";
+import { podFixture, specification } from "../_requirementSupport.js";
 import {
   executeJiraChatDraft,
   jiraDraftChildIntent,
@@ -827,6 +828,54 @@ describe("executeJiraChatDraft (#4178)", () => {
 });
 
 describe("source traceability of a draft (#4179)", () => {
+  it.each([false, true])(
+    "checks immutable source criteria before final execution (complete=%s)",
+    async (complete) => {
+      const source = await podFixture([{ capsuleId: "draft-source", text: specification(1).text }]);
+      cleanup.push(source.cleanup);
+      const jira = syntheticJira();
+      const description = complete
+        ? "h2. Acceptance criteria\n* Thema 1 ist verfügbar.\n* Fehler zu Thema 1 werden gemeldet."
+        : "h2. Acceptance criteria\n* Thema 1 ist verfügbar.";
+      const args: CatalogJsonObject = {
+        items: [
+          {
+            ref: "traced",
+            projectId: "10000",
+            issueTypeId: "10001",
+            fields: { summary: "Source requirement", description },
+            requirementIds: ["LH-001"],
+          },
+        ],
+      };
+      const result = await executeJiraChatDraft({
+        ...execution(jira, args),
+        openTrace: () =>
+          openTraceSession(source.deps, {
+            chatId: source.chatId,
+            userMessageId: "draft-source-turn",
+            correlationId: "draft-source-proof",
+          }),
+      });
+      if (complete) {
+        expect(result.data).toMatchObject({ outcome: "succeeded", createdCount: 1 });
+        expect(jira.posts()).toHaveLength(1);
+        expect(jira.issues[0]?.fields.description).toContain(description);
+        expect(jira.issues[0]?.fields.description).toContain("Keiko traceability");
+      } else {
+        expect(result.data).toMatchObject({
+          outcome: "rejected",
+          requirementProblems: [{ ref: "traced", reason: "acceptance-criteria-missing" }],
+        });
+        expect(jira.fetch).not.toHaveBeenCalled();
+      }
+      const declaration = JIRA_MUTATION_DECLARATIONS.find((entry) => entry.name === "jira.draft");
+      expect(
+        describeCatalogSchemaMismatch(declaration?.descriptor.resultSchema ?? {}, result.data),
+      ).toBeUndefined();
+    },
+  );
+
   const FOOTER =
     "----\nKeiko traceability\nRequirement: LH-001 · Anmeldung\nEnd of Keiko traceability";
   const TRACE = {

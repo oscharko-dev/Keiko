@@ -1744,9 +1744,11 @@ function assertOriginalMutationRetryGrant(
 }
 
 // Size the original cumulative grant around the complete provider prompts, including tool schemas.
-// The assertions below certify actual physical costs; only the confirmed write leaves this grant.
+// Current schema metadata makes the write continuation exceed the former 8192 allowance; the
+// dedicated negative below retains that boundary and its committed receipt. These positive cases
+// reach the overflow itself; physical-cost assertions derive from the owning gateway counter.
+// Only the confirmed write leaves this grant.
 it.each([
-  { grant: 8192, calls: 2 },
   { grant: 10000, calls: 2 },
   { grant: 12000, calls: 2 },
   { grant: 17000, calls: 3 },
@@ -1782,11 +1784,39 @@ it.each([
   },
 );
 
+it("keeps a caller's exhausted 8192 continuation grant refused after retaining its one committed write", async () => {
+  const f = runtime(true);
+  const grant = 8192;
+  boundCallerSynthesisInput(grant);
+  const requests = provider(["write", "overflow", "answer"]);
+  const body = {
+    chatId: f.chatId,
+    projectPath: f.root,
+    content: "Explain src/Feature.ts and add the Jira comment.",
+    modelId: MODEL,
+    clientTurnId: "mixed-continuation-caller-refused",
+  };
+  const result = await handleSendDesktopChat(context(body), f.deps);
+  expect(result).toMatchObject({
+    status: 403,
+    body: { error: { code: "GATEWAY_ATTEMPT_ADMISSION_DENIED" } },
+  });
+  expect(requests).toHaveLength(1);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  const costs = physicallyDispatchedPromptCosts(f.deps, requests);
+  expect(costs).toHaveLength(1);
+  expect(costs[0]).toBeLessThanOrEqual(grant);
+  const pendingPrompt = gatewayPromptAdmissions(f.deps).at(-1)?.promptTokens;
+  expect(pendingPrompt).toBeGreaterThan(grant);
+  const messages = f.deps.store.listMessages(f.chatId);
+  expect(messages[0]?.toolTranscript?.exchanges[0]?.mutationOutcome).toBe("succeeded");
+});
+
 it.each(["cancel", "scope"] as const)(
   "keeps a %s interruption before the adopted retry's preflight terminal",
   async (kind) => {
     const f = runtime(true);
-    boundCallerSynthesisInput(8192);
+    boundCallerSynthesisInput(10000);
     beforeAdoptedGroundedRetry(async () => {
       if (kind === "scope") await changeOwnedMode(f, f.chatId);
       else interruptChatGenerations(f.deps, f.chatId);
@@ -2019,13 +2049,18 @@ async function connectDataPod(
 
 function assertRuntimeInventoryRequest(request: string | undefined, content: string): void {
   const firstRequest = JSON.parse(request ?? "{}") as {
-    messages: { role: string; content: string }[];
+    messages: {
+      role: string;
+      content: string;
+      tool_call_id?: string;
+      tool_calls?: { id: string; function: { name: string } }[];
+    }[];
   };
-  const inventory = firstRequest.messages.find((message) =>
-    message.content.includes('"kind":"runtime-tool-observation"'),
+  const inventory = firstRequest.messages.find(
+    (message) => message.role === "tool" && message.content.includes('"documentCount":9'),
   );
   expect(inventory).toBeDefined();
-  expect(inventory?.role).toBe("user");
+  expect(inventory?.role).toBe("tool");
   const lastUser = firstRequest.messages.filter((message) => message.role === "user").at(-1);
   expect(lastUser?.content).toContain(content);
   expect(lastUser?.content).not.toContain('"kind":"runtime-tool-observation"');
@@ -2033,7 +2068,16 @@ function assertRuntimeInventoryRequest(request: string | undefined, content: str
   expect(inventory?.content).toContain('"inventoryComplete":true');
   for (let index = 1; index < 9; index++)
     expect(inventory?.content).toContain(`inventory-document-${String(index)}.md`);
-  expect(firstRequest.messages.some((message) => message.role === "assistant")).toBe(false);
+  expect(
+    firstRequest.messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        message.tool_calls?.some(
+          (call) =>
+            call.id === inventory?.tool_call_id && call.function.name === "knowledge_documents",
+        ),
+    ),
+  ).toBe(true);
 }
 
 it.each(["grounded", "desktop-mixed"] as const)(
@@ -2074,7 +2118,7 @@ it.each(["grounded", "desktop-mixed"] as const)(
     const exchanges = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges;
     expect(exchanges).toHaveLength(1);
     expect(exchanges?.[0]).toMatchObject({
-      call: { name: "knowledge_documents", origin: "runtime", arguments: { view: "inventory" } },
+      call: { name: "knowledge_documents", arguments: { view: "inventory" } },
       result: { status: "completed" },
     });
     expect(f.jiraRequests).toHaveLength(0);
@@ -2153,7 +2197,13 @@ it("retains a Data-Pod turn's committed write across the existing adopted-window
   assertPreservedWriteContinuation(requests);
   const messages = f.deps.store.listMessages(f.chatId);
   const exchanges = messages[0]?.toolTranscript?.exchanges;
-  expect(exchanges?.find((exchange) => exchange.call.origin === "runtime")).toMatchObject({
+  expect(
+    exchanges?.find(
+      (exchange) =>
+        exchange.result?.toolRef?.canonicalId === "keiko.knowledge.documents" &&
+        exchange.call.arguments.view === "inventory",
+    ),
+  ).toMatchObject({
     call: { name: "knowledge_documents" },
     result: { status: "completed" },
   });

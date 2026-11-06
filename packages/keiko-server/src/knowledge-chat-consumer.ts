@@ -1,3 +1,4 @@
+import { chatCapabilityMatches } from "./chat-tool-authority.js";
 import type { ToolAuthorityAvailability } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type {
   CatalogConsumerPort,
@@ -48,10 +49,8 @@ function preview(
   );
   const allowed =
     current.ok &&
-    !context.signal.aborted &&
     READS.has(action.tool) &&
-    capability === context.authority &&
-    capability === context.authorityReference.envelopeDigest &&
+    chatCapabilityMatches(context, capability) &&
     current.envelope.expiresAt === context.authorityExpiresAt;
   recordChatAuthorityResult(
     "catalog-read",

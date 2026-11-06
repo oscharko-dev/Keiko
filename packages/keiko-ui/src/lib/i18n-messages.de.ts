@@ -517,6 +517,12 @@ export const DE_MESSAGES = {
   // ist kein defektes Gateway, und keiner der Texte macht die Größe der Anfrage verantwortlich.
   "chat.modelSelectionUnavailable":
     "Das ausgewählte Modell ist vorübergehend nicht verfügbar. Wähle ein anderes verfügbares Modell oder warte auf seine Wiederherstellung.",
+  "chat.error.modelNotReady.title": "Modellprüfung erforderlich",
+  "chat.error.modelNotReady.message":
+    "Das ausgewählte Modell hat die Bereitschaftsprüfung noch nicht bestanden.",
+  "chat.error.modelNotReady.remediation":
+    "Öffne die Modelleinstellungen, starte die Bereitschaftsprüfung und sende deine Nachricht danach erneut.",
+  "chat.error.modelNotReady.action": "Modellprüfung öffnen",
   "chat.error.capabilityUnavailable.title": "Modellfunktion nicht verfügbar",
   "chat.error.capabilityUnavailable.message":
     "Das ausgewählte Modell kann die benötigten Chat-Funktionen derzeit nicht ausführen.",

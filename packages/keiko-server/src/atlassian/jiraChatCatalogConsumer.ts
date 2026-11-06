@@ -1,3 +1,4 @@
+import { chatCapabilityMatches } from "../chat-tool-authority.js";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { KNOWLEDGE_CHAT_TOOLS, type KnowledgeChatToolName } from "../requirementsToolName.js";
 import { createChatToolAuthorityPort, reserveChatToolInvocation } from "../chat-tool-approvals.js";
@@ -259,11 +260,7 @@ function preview(
   claim?: ChatWriteApprovalClaim,
 ): ToolAuthorityAvailability {
   const context = options.context();
-  const valid =
-    capability === context.authority &&
-    capability === context.authorityReference.envelopeDigest &&
-    CHAT_TOOLS.has(action.tool) &&
-    !context.signal.aborted;
+  const valid = chatCapabilityMatches(context, capability) && CHAT_TOOLS.has(action.tool);
   const read = valid ? readPermission(options, action) : DENIED;
   const outcome =
     read.ok && !READ_TOOLS.has(action.tool)

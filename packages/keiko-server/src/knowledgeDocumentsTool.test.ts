@@ -1,3 +1,4 @@
+import { deriveRequirementInventory } from "@oscharko-dev/keiko-quality-intelligence";
 import { activityLogOperationSchema } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   KNOWLEDGE_REVIEW_FAILURE_STAGES,
@@ -16,7 +17,11 @@ import {
   describeCatalogSchemaMismatch,
 } from "@oscharko-dev/keiko-tool-catalog";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
-import { updateCapsuleDetails } from "@oscharko-dev/keiko-local-knowledge";
+import {
+  createCapsuleSet,
+  deleteCapsuleSet,
+  updateCapsuleDetails,
+} from "@oscharko-dev/keiko-local-knowledge";
 import { sealedLocalPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import { podFixture, specification, type PodFixture } from "./_requirementSupport.js";
 import {
@@ -33,16 +38,29 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
-import { decodeKnowledgeCursor, knowledgeDigest } from "./knowledge-document-source.js";
+import {
+  decodeKnowledgeCursor,
+  knowledgeDigest,
+  KNOWLEDGE_SEARCH_DOCUMENT_STRIDE,
+} from "./knowledge-document-source.js";
 import { encodeCursor } from "./requirement-inventory.js";
 import { GATEWAY_BUFFERED_BUDGET_FLOOR_MS } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { REVIEW_WINDOW_CHARS, parseSemanticReview } from "./knowledge-semantic-review.js";
-import { executeKnowledgeTool } from "./knowledge-tool-execution.js";
+import {
+  executeKnowledgeTool,
+  KNOWLEDGE_TOOL_PAYLOAD_BYTES_MAX,
+} from "./knowledge-tool-execution.js";
 import { buildRedactor } from "./deps.js";
+
+vi.mock("@oscharko-dev/keiko-quality-intelligence", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-quality-intelligence")>();
+  return { ...actual, deriveRequirementInventory: vi.fn(actual.deriveRequirementInventory) };
+});
 
 const fixtures: PodFixture[] = [];
 let sink: BufferedServerLogSink;
 beforeEach(() => {
+  vi.mocked(deriveRequirementInventory).mockClear();
   sink = createBufferedServerLogSink();
   setServerLogger(createServerLogger({ sink, level: "info" }));
 });
@@ -155,6 +173,116 @@ function addDocuments(f: PodFixture, count: number): void {
 }
 
 describe("managed scoped document access", () => {
+  it("resolves current Pod-set membership per read and refuses results settled after membership changes", async () => {
+    const f = await podFixture(
+      [
+        { capsuleId: "cap-set-a", text: specification(1, { prefix: "AA" }).text, name: "A.md" },
+        { capsuleId: "cap-set-b", text: specification(1, { prefix: "BB" }).text, name: "B.md" },
+      ],
+      { bindPods: false },
+    );
+    fixtures.push(f);
+    const setId = "live-pod-set" as Parameters<typeof createCapsuleSet>[1]["id"];
+    const member = (index: number): Parameters<typeof createCapsuleSet>[1]["capsuleIds"] => {
+      const capsuleId = f.capsuleIds[index];
+      if (capsuleId === undefined) throw new Error("Expected a seeded Pod.");
+      return [capsuleId];
+    };
+    f.withStore((store) =>
+      createCapsuleSet(store, { id: setId, displayName: "Set", tags: [], capsuleIds: member(0) }),
+    );
+    f.deps.store.updateChat(f.chatId, {
+      localKnowledgeScopes: [{ kind: "capsule-set", capsuleSetId: setId, connectedAtMs: 1 }],
+    });
+    const original = await documentArgs(f);
+    const generated = vi.fn(() => {
+      f.withStore((store) => {
+        deleteCapsuleSet(store, setId);
+        createCapsuleSet(store, { id: setId, displayName: "Set", tags: [], capsuleIds: member(1) });
+      });
+      return Promise.resolve(response({ complete: true, findings: [] }));
+    });
+    Object.assign(f.deps, { modelPortFactory: () => ({ call: generated }) });
+    expect(await call(f, "knowledge.review", original)).toMatchObject({
+      outcome: "failed",
+      reason: "source-changed",
+    });
+    expect(generated).toHaveBeenCalledTimes(1);
+    expect(await call(f, "knowledge.documents", { view: "read", ...original })).toMatchObject({
+      outcome: "failed",
+    });
+    const updated = await call(f, "knowledge.documents", { view: "inventory" });
+    expect(items(updated).map((item) => item.documentName)).toEqual(["B.md"]);
+    expect(JSON.stringify(await call(f, "knowledge.requirements", {}))).toContain("BB-001");
+    expect(JSON.stringify(await call(f, "knowledge.requirements", {}))).not.toContain("AA-001");
+    const current = await documentArgs(f);
+    f.withStore((store) =>
+      updateCapsuleDetails(store, "cap-set-b" as Parameters<typeof updateCapsuleDetails>[1], {
+        modelUsePolicy: sealedLocalPodModelUsePolicy(),
+      }),
+    );
+    expect(await call(f, "knowledge.documents", { view: "read", ...current })).toMatchObject({
+      outcome: "failed",
+      reason: "stale",
+    });
+  });
+
+  it("uses one collision-disambiguated inventory for document reads, reviews and requirements", async () => {
+    const f = await fixture();
+    const collisionIds = [
+      "00000000-0000-4000-8000-00000001bbfc",
+      "00000000-0000-4000-8000-00000001eacf",
+    ];
+    f.withStore((store) => {
+      for (const id of collisionIds) {
+        store._internal.db
+          .prepare(
+            "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) SELECT ?, capsule_id, source_id, ?, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, ? FROM documents WHERE id = 'doc-cap-documents'",
+          )
+          .run(id, id, `${id}.md`);
+        store._internal.db
+          .prepare(
+            "INSERT INTO document_texts (capsule_id, document_id, normalized_text) SELECT capsule_id, ?, normalized_text FROM document_texts WHERE document_id = 'doc-cap-documents'",
+          )
+          .run(id);
+      }
+    });
+    const generated = vi.fn(() => Promise.resolve(response({ complete: true, findings: [] })));
+    Object.assign(f.deps, { modelPortFactory: () => ({ call: generated }) });
+    const inventory = await call(f, "knowledge.documents", { view: "inventory" });
+    const colliding = items(inventory).filter(
+      (item) => typeof item.documentScope === "string" && item.documentScope.startsWith("46980558"),
+    );
+    expect(colliding.map((item) => item.documentScope).sort()).toEqual([
+      "4698055848705ae7",
+      "46980558d62a4967",
+    ]);
+    expect(
+      items(inventory).find((item) => item.documentName === "cap-documents.md")?.documentScope,
+    ).toMatch(/^[0-9a-f]{8}$/u);
+    for (const item of colliding) {
+      const args = {
+        documentScope: item.documentScope ?? "",
+        revisionDigest: item.revisionDigest ?? "",
+      };
+      expect(await call(f, "knowledge.documents", { view: "read", ...args })).toMatchObject({
+        outcome: "succeeded",
+      });
+      expect(await call(f, "knowledge.review", args)).toMatchObject({ outcome: "succeeded" });
+      const requirements = await call(f, "knowledge.requirements", {
+        documents: [item.documentScope ?? ""],
+      });
+      expect(items(requirements)).toHaveLength(5);
+      expect(items(requirements).every((unit) => unit.documentScope === item.documentScope)).toBe(
+        true,
+      );
+      expect(
+        await call(f, "knowledge.documents", { view: "read", ...args, documentScope: "46980558" }),
+      ).toMatchObject({ outcome: "failed" });
+    }
+    expect(generated).toHaveBeenCalledTimes(2);
+  });
+
   it("pages the whole metadata inventory beyond the requirement-reader limit and keeps failed formats visible", async () => {
     const f = await fixture();
     addDocuments(f, 65);
@@ -242,7 +370,10 @@ describe("managed scoped document access", () => {
     const skipped = await call(f, "knowledge.documents", {
       view: "search",
       query: "absent",
-      cursor: encodeCursor({ offset: 251 * 4_000_001, fingerprint: parsed?.fingerprint ?? "" }),
+      cursor: encodeCursor({
+        offset: 251 * KNOWLEDGE_SEARCH_DOCUMENT_STRIDE,
+        fingerprint: parsed?.fingerprint ?? "",
+      }),
     });
     expect(skipped).toMatchObject({
       outcome: "succeeded",
@@ -269,6 +400,7 @@ describe("managed scoped document access", () => {
     }
     const page = await call(f, "knowledge.documents", { view: "search", query: "after-marker" });
     expect(items(page)).toHaveLength(1);
+    expect(page.coverage).toMatchObject({ searchComplete: true, atEnd: true });
     expect(items(page)[0]).toMatchObject({
       positionSpace: "redacted-document-text",
       characterStart: projected.indexOf("after-marker"),
@@ -346,6 +478,186 @@ describe("managed scoped document access", () => {
     );
   });
 
+  it("fills one bounded literal-search page across several selected documents", async () => {
+    const f = await podFixture(
+      ["a", "b", "c"].map((suffix) => ({
+        capsuleId: `scan-${suffix}`,
+        text: "needle ".repeat(5),
+      })),
+      { redactor: (value) => value },
+    );
+    fixtures.push(f);
+    const first = await call(f, "knowledge.documents", { view: "search", query: "needle" });
+    expect(items(first)).toHaveLength(12);
+    expect(first.coverage).toMatchObject({ documentsVisited: 3, atEnd: false });
+    const last = await call(f, "knowledge.documents", {
+      view: "search",
+      query: "needle",
+      cursor: first.nextCursor ?? "",
+    });
+    expect(items(last)).toHaveLength(3);
+    expect(last.coverage).toMatchObject({ atEnd: true });
+    expect(new Set([...items(first), ...items(last)].map((item) => item.documentScope)).size).toBe(
+      3,
+    );
+    const absent = await call(f, "knowledge.documents", { view: "search", query: "absent" });
+    expect(absent).toMatchObject({
+      items: [],
+      coverage: { documentsVisited: 3, searchComplete: true, atEnd: true },
+    });
+  });
+
+  it("bounds each search scan and preserves continuation through unreadable metadata entries", async () => {
+    const f = await fixture("No literal hit here.");
+    addDocuments(f, 105);
+    const first = await call(f, "knowledge.documents", { view: "search", query: "absent" });
+    expect(first.coverage).toMatchObject({
+      documentsVisited: 100,
+      atEnd: false,
+      searchComplete: false,
+    });
+    expect(first.nextCursor).toBeTypeOf("string");
+    const last = await call(f, "knowledge.documents", {
+      view: "search",
+      query: "absent",
+      cursor: first.nextCursor ?? "",
+    });
+    expect(last.coverage).toMatchObject({
+      documentsVisited: 5,
+      atEnd: true,
+      searchComplete: false,
+    });
+    expect(last.nextCursor).toBeUndefined();
+  });
+
+  it("rechecks cancellation before reading the next selected search document", async () => {
+    const firstSource = "First source has no literal match.";
+    const secondSource = "Second source must not be read after cancellation.";
+    const redact = vi.fn((value: unknown): unknown => value);
+    const f = await podFixture(
+      [
+        { capsuleId: "cancel-a", text: firstSource },
+        { capsuleId: "cancel-b", text: secondSource },
+      ],
+      { redactor: redact },
+    );
+    fixtures.push(f);
+    const beforeEffect = vi
+      .fn(() => false)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true);
+    expect(
+      await call(f, "knowledge.documents", { view: "search", query: "absent" }, { beforeEffect }),
+    ).toMatchObject({ outcome: "failed", reason: "denied" });
+    expect(redact.mock.calls.some(([value]) => value === firstSource)).toBe(true);
+    expect(redact.mock.calls.some(([value]) => value === secondSource)).toBe(false);
+  });
+
+  it("keeps escaped search snippets within bytes without skipping literal matches", async () => {
+    const f = await fixture("Initial source.");
+    f.withStore((store) => {
+      store._internal.db
+        .prepare("UPDATE document_texts SET normalized_text = ?")
+        .run(store._internal.contentCipher.sealText("\u0001".repeat(8000)));
+    });
+    const starts: number[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const page = await call(f, "knowledge.documents", {
+        view: "search",
+        query: "\u0001".repeat(200),
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      expect(page.outcome).toBe("succeeded");
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(
+        KNOWLEDGE_TOOL_PAYLOAD_BYTES_MAX,
+      );
+      for (const item of items(page)) {
+        if (typeof item.characterStart !== "number") throw new Error("Expected a match position.");
+        starts.push(item.characterStart);
+      }
+      cursor = typeof page.nextCursor === "string" ? page.nextCursor : undefined;
+      pages++;
+    } while (cursor !== undefined && pages < 20);
+    expect(cursor).toBeUndefined();
+    expect(starts).toEqual(Array.from({ length: 40 }, (_, index) => index * 200));
+  });
+
+  it("keeps later documents reachable when redaction expands a real source beyond search coordinates", async () => {
+    const source = "x".repeat(Math.floor(KNOWLEDGE_SEARCH_DOCUMENT_STRIDE / 4) + 1);
+    const f = await podFixture(
+      [
+        { capsuleId: "projection-too-wide", text: "Initial source.", name: "Wide.md" },
+        { capsuleId: "projection-later", text: "Later source needle.", name: "Later.md" },
+      ],
+      {
+        redactor: (value) =>
+          typeof value === "string" && value === source ? value.replaceAll("x", "safe") : value,
+      },
+    );
+    fixtures.push(f);
+    f.withStore((store) =>
+      store._internal.db
+        .prepare("UPDATE document_texts SET normalized_text = ? WHERE document_id = ?")
+        .run(store._internal.contentCipher.sealText(source), "doc-projection-too-wide"),
+    );
+    const inventory = await call(f, "knowledge.documents", { view: "inventory" });
+    const unavailableScope = items(inventory).find(
+      (item) => item.documentName === "Wide.md",
+    )?.documentScope;
+    const result = await call(f, "knowledge.documents", { view: "search", query: "needle" });
+    expect(result.outcome).toBe("succeeded");
+    expect(items(result).map((item) => item.documentName)).toEqual(["Later.md"]);
+    expect(result.coverage).toMatchObject({
+      documentsVisited: 2,
+      searchComplete: false,
+      atEnd: true,
+      documentReadable: false,
+      unavailableDocumentScopes: [unavailableScope],
+    });
+    expect(result.nextCursor).toBeUndefined();
+  });
+
+  it("reports unreadable selected sources while scanning later documents", async () => {
+    const f = await podFixture(
+      [
+        { capsuleId: "scan-readable", text: "Ordinary readable source." },
+        { capsuleId: "scan-unavailable", text: "Initial source." },
+      ],
+      { redactor: (value) => value },
+    );
+    fixtures.push(f);
+    f.withStore((store) => {
+      store._internal.db
+        .prepare("UPDATE document_texts SET normalized_text = ? WHERE document_id = ?")
+        .run(
+          store._internal.contentCipher.sealText("x".repeat(KNOWLEDGE_SEARCH_DOCUMENT_STRIDE)),
+          "doc-scan-unavailable",
+        );
+    });
+    const page = await call(f, "knowledge.documents", { view: "search", query: "absent" });
+    expect(page).toMatchObject({
+      outcome: "succeeded",
+      items: [],
+      totals: { documentsNotExtracted: 0 },
+      coverage: {
+        documentsVisited: 2,
+        documentReadable: false,
+        searchComplete: false,
+        atEnd: true,
+      },
+    });
+    const coverage = page.coverage;
+    if (
+      coverage === null ||
+      typeof coverage !== "object" ||
+      !("unavailableDocumentScopes" in coverage)
+    )
+      throw new Error("Expected search coverage.");
+    expect(coverage.unavailableDocumentScopes).toHaveLength(1);
+  });
+
   it("does not expose a credential cut across source-window boundaries", async () => {
     const secret = "Bearer sk-test-secret-value-should-never-leave";
     const source = `${"x".repeat(4994)} ${secret} end`;
@@ -377,7 +689,9 @@ describe("managed scoped document access", () => {
         ...(cursor === undefined ? {} : { cursor }),
       });
       expect(page.outcome).toBe("succeeded");
-      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(29_952);
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(
+        KNOWLEDGE_TOOL_PAYLOAD_BYTES_MAX,
+      );
       expect(page.contentTrust).toBe("untrusted-document-text");
       pieces.push(itemText(page));
       cursor = typeof page.nextCursor === "string" ? page.nextCursor : undefined;
@@ -563,6 +877,80 @@ describe("managed scoped document access", () => {
 });
 
 describe("bounded semantic review through the model gateway port", () => {
+  it("coalesces simultaneous review windows and keeps joining cancellation local", async () => {
+    const f = await fixture();
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const generated = vi.fn(async () => {
+      await held;
+      return response({ complete: true, findings: [] });
+    });
+    Object.assign(f.deps, { modelPortFactory: () => ({ call: generated }) });
+    const args = await documentArgs(f);
+    const producer = call(f, "knowledge.review", args);
+    await vi.waitFor(() => {
+      expect(generated).toHaveBeenCalledTimes(1);
+    });
+    const waiterAbort = new AbortController();
+    const cancelledWaiter = call(f, "knowledge.review", args, {
+      signal: waiterAbort.signal,
+      invocationId: "cancelled-joiner",
+    });
+    const joiningWaiter = call(f, "knowledge.review", args, { invocationId: "retained-joiner" });
+    waiterAbort.abort();
+    expect(await cancelledWaiter).toMatchObject({ outcome: "failed" });
+    release?.();
+    expect(await producer).toMatchObject({ outcome: "succeeded", coverage: { cached: false } });
+    expect(await joiningWaiter).toMatchObject({ outcome: "succeeded", coverage: { cached: true } });
+    expect(generated).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deriveRequirementInventory)).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses the source baseline across windows and invalidates it on text revision", async () => {
+    const original = specification(80).text;
+    const f = await fixture(original);
+    const generated = vi.fn(() => Promise.resolve(response({ complete: true, findings: [] })));
+    Object.assign(f.deps, { modelPortFactory: () => ({ call: generated }) });
+    const args = await documentArgs(f);
+    const first = await call(f, "knowledge.review", args);
+    expect(typeof first.nextCursor).toBe("string");
+    expect(
+      (await call(f, "knowledge.review", { ...args, cursor: first.nextCursor ?? "" })).outcome,
+    ).toBe("succeeded");
+    expect(generated).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(deriveRequirementInventory)).toHaveBeenCalledTimes(1);
+    f.withStore((store) =>
+      store._internal.db
+        .prepare("UPDATE document_texts SET normalized_text = ?")
+        .run(
+          store._internal.contentCipher.sealText(
+            original + "\nDas System muss eine weitere Anforderung erfüllen.",
+          ),
+        ),
+    );
+    expect((await call(f, "knowledge.review", args)).outcome).toBe("succeeded");
+    expect(generated).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(deriveRequirementInventory)).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes failed in-flight reviews so a later admitted attempt can recover", async () => {
+    const f = await fixture();
+    const generated = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("fixture provider failure"))
+      .mockResolvedValue(response({ complete: true, findings: [] }));
+    Object.assign(f.deps, { modelPortFactory: () => ({ call: generated }) });
+    const args = await documentArgs(f);
+    expect(await call(f, "knowledge.review", args)).toMatchObject({ outcome: "failed" });
+    expect(await call(f, "knowledge.review", args)).toMatchObject({
+      outcome: "succeeded",
+      coverage: { cached: false },
+    });
+    expect(generated).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps model-proposed criteria separate from original source and caches each document revision", async () => {
     const f = await fixture();
     const generated = vi.fn(() =>
@@ -640,6 +1028,7 @@ describe("bounded semantic review through the model gateway port", () => {
       expect(page.outcome).toBe("succeeded");
       cursor = typeof page.nextCursor === "string" ? page.nextCursor : undefined;
       pages++;
+      if (pages === 128) await call(f, "knowledge.review", args);
     } while (cursor !== undefined && pages < 140);
     expect(pages).toBe(129);
     expect(page.coverage).toMatchObject({
@@ -647,8 +1036,56 @@ describe("bounded semantic review through the model gateway port", () => {
       totalWindows: 129,
       documentReviewComplete: false,
     });
+    expect((await call(f, "knowledge.review", args)).coverage).toMatchObject({ cached: true });
     expect(generated).toHaveBeenCalledTimes(129);
   }, 30_000);
+
+  it("fits valid escaped review findings by shortening quotes and preserves all proposals", async () => {
+    const source = `${"\u0001".repeat(100)}${"a".repeat(650)}${"\u0001".repeat(100)}${"b".repeat(650)}`;
+    const f = await fixture(source);
+    const proposal = `p${"\u0001".repeat(299)}`;
+    const question = `q${"\u0001".repeat(159)}`;
+    const payload = {
+      complete: true,
+      findings: Array.from({ length: 8 }, () => ({
+        kind: "obligation",
+        anchors: [0, 1],
+        proposal,
+        question,
+      })),
+    };
+    const requests: GatewayCallRequest[] = [];
+    const generated = vi.fn((request: GatewayCallRequest): Promise<NormalizedResponse> => {
+      requests.push(request);
+      return Promise.resolve({ ...response(null), content: "", structuredOutput: payload });
+    });
+    Object.assign(f.deps, { modelPortFactory: () => ({ call: generated }) });
+    const args = await documentArgs(f);
+    const page = await call(f, "knowledge.review", args);
+    expect(page.outcome).toBe("succeeded");
+    expect(items(page)).toHaveLength(8);
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(
+      KNOWLEDGE_TOOL_PAYLOAD_BYTES_MAX,
+    );
+    expect(items(page)[0]).toMatchObject({ proposal, question });
+    const sources = items(page)[0]?.sources;
+    if (!Array.isArray(sources)) throw new Error("Expected source references.");
+    const first: unknown = sources[0];
+    if (
+      first === null ||
+      typeof first !== "object" ||
+      !("quote" in first) ||
+      typeof first.quote !== "string"
+    )
+      throw new Error("Expected a source quote.");
+    expect(first.quote.length).toBeLessThan(100);
+    expect(first).toMatchObject({ quoteTruncated: true });
+    const request = requests[0];
+    if (request === undefined) throw new Error("Expected the complete source request.");
+    expect(reviewAnchorTexts(request).join("")).toBe(source);
+    expect((await call(f, "knowledge.review", args)).coverage).toMatchObject({ cached: true });
+    expect(generated).toHaveBeenCalledOnce();
+  });
 
   it("does not import another turn's review windows when returning a cached last window", async () => {
     const f = await fixture("A source window. ".repeat(500));

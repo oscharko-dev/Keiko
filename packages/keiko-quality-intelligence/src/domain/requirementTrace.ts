@@ -12,6 +12,7 @@ import { redact } from "@oscharko-dev/keiko-security";
 import { stripUnsafeFormatChars } from "./assertions.js";
 import {
   REQUIREMENT_DIGEST_SHORT_LENGTH,
+  REQUIREMENT_DOCUMENT_SCOPE_MAX_LENGTH,
   type RequirementCriterion,
   type RequirementInventoryEntry,
 } from "./requirementInventory.js";
@@ -85,7 +86,10 @@ export type RequirementReferenceResolution<
   | { readonly ok: true; readonly resolved: readonly ResolvedRequirementReference<Unit>[] }
   | { readonly ok: false; readonly problems: readonly RequirementReferenceProblem[] };
 
-const REFERENCE_SHAPE = /^(?:([0-9a-f]{8}):)?(.+?)(?:\/AC(\d{1,3}))?$/u;
+const REFERENCE_SHAPE = new RegExp(
+  String.raw`^(?:([0-9a-f]{8}(?:[0-9a-f]{8}){0,${String(REQUIREMENT_DOCUMENT_SCOPE_MAX_LENGTH / 8 - 1)}}):)?(.+?)(?:/AC(\d{1,3}))?$`,
+  "u",
+);
 
 function resolveOne<Unit extends RequirementTraceUnit>(
   reference: string,

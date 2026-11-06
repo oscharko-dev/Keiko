@@ -1926,7 +1926,7 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
   ensureNotCancelled(ctx.signal);
   const completedAnswer = withToolResultsAsSource(
     withAnswerDuration(answer, startedAtMs),
-    ctx.deps.store,
+    ctx.deps.chatToolTurn,
   );
   recordMultiSourceAnswer(ctx, retrieved, completedAnswer, persisted.assistantMessageId, abstained);
   return { status: 200, body: completedAnswer };

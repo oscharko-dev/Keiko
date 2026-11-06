@@ -14,6 +14,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 
+import { buildRedactor } from "./deps.js";
+
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
   expectActivityLogProof,
@@ -347,6 +349,26 @@ describe("filters and views", () => {
     expect(stale.every((row) => String(row.jql).length <= 1800)).toBe(true);
     expect(stale.flatMap((row) => row.requirementIds as string[])).toHaveLength(120);
     expect(rows.some((row) => row.purpose === "traced")).toBe(true);
+  });
+
+  it("matches requirement queries only against the credential-safe projection", async () => {
+    const secret = "fixture-credential-8a30762e";
+    const text = specification(1).text.replace("Thema 1;", `Thema 1 mit ${secret};`);
+    const f = await fixture([{ capsuleId: "cap-safe-query", text }], {
+      redactor: buildRedactor({ FIGMA_ACCESS_TOKEN: secret }),
+    });
+
+    for (const query of [secret, secret.slice(0, 18), secret.slice(-12)]) {
+      const page = await call(f, { query });
+      expect(page.outcome).toBe("succeeded");
+      expect(page.items).toEqual([]);
+      expect(page.totals?.matchedCount).toBe(0);
+      expect(JSON.stringify(page)).not.toContain(secret);
+    }
+    const visible = await call(f, { query: "unterstützt" });
+    expect(visible.items).toHaveLength(1);
+    expect(visible.totals?.matchedCount).toBe(1);
+    expect(JSON.stringify(visible)).not.toContain(secret);
   });
 
   it("redacts document text with the Chat content policy before it reaches the model", async () => {
@@ -1093,4 +1115,35 @@ it("checks cursor width, canonical offsets and both reader limits", () => {
     "1".repeat(513),
   ])
     expect(decodeKnowledgeCursor(value)).toBeUndefined();
+});
+
+it("declares local knowledge tools as closed-world with a non-idempotent semantic review", async () => {
+  const f = await fixture([{ capsuleId: "metadata-pod", text: specification(1).text }]);
+  const tools = createKnowledgeRequirementsProvider<RequirementsToolContext>(
+    f.deps,
+    reports,
+  ).tools();
+  expect(
+    tools.map(({ descriptor, title, annotations }) => ({
+      id: descriptor.toolRef.canonicalId,
+      title,
+      annotations,
+    })),
+  ).toEqual([
+    {
+      id: "keiko.knowledge.requirements",
+      title: "Knowledge requirements",
+      annotations: { openWorldHint: false, idempotentHint: true },
+    },
+    {
+      id: "keiko.knowledge.documents",
+      title: "Knowledge documents",
+      annotations: { openWorldHint: false, idempotentHint: true },
+    },
+    {
+      id: "keiko.knowledge.review",
+      title: "Review knowledge",
+      annotations: { openWorldHint: false, idempotentHint: false },
+    },
+  ]);
 });

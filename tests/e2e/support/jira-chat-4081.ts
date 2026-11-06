@@ -13,11 +13,21 @@ export interface JiraBrowserFixture {
   readonly projectPath: string;
   readonly chats: Readonly<
     Record<
-      "approval" | "revocation" | "unavailable" | "accessibility-en" | "accessibility-de",
+      | "approval"
+      | "revocation"
+      | "unavailable"
+      | "accessibility-en"
+      | "accessibility-de"
+      | "backlog",
       Chat
     >
   >;
   readonly jiraBaseUrl: string;
+  readonly backlogPod: {
+    readonly id: string;
+    readonly name: string;
+    readonly criteria: readonly string[];
+  };
 }
 export type JiraBrowserLocale = "en" | "de";
 export const JIRA_BROWSER_COPY = {

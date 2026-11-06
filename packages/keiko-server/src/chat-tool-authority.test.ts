@@ -1,6 +1,10 @@
+import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import { describe, expect, it } from "vitest";
 import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts";
-import { acceptedChatToolAuthorityEnvelope } from "./chat-tool-authority.js";
+import {
+  acceptedChatToolAuthorityEnvelope,
+  reserveResolvedChatToolAuthority,
+} from "./chat-tool-authority.js";
 
 // Frozen compatibility vectors from the existing three source adapters' issued envelope format.
 // Changing a source adapter must not silently change an accepted turn's persisted proof identity.
@@ -66,7 +70,10 @@ describe("shared accepted Chat source envelope", () => {
         requestedMode: "governed-assist",
         deploymentCeiling: "autonomous-delivery",
         effectiveMode: "governed-assist",
-        actionClasses: ["connector-access", "network-egress"],
+        actionClasses:
+          "kind" in subject && subject.kind === "knowledge-pods"
+            ? ["connector-access"]
+            : ["connector-access", "network-egress"],
         connectorScopes: scopes,
         budget: BUDGET,
         expiresAt: "2026-11-06T09:01:00.000Z",
@@ -74,4 +81,32 @@ describe("shared accepted Chat source envelope", () => {
       });
     },
   );
+});
+
+it.each(CASES)("refuses a lowered current reserve ceiling for $subject", ({ subject, scopes }) => {
+  const envelope = acceptedChatToolAuthorityEnvelope(
+    TURN,
+    typeof subject.podId === "string"
+      ? { ...subject, podId: "11111111-1111-4111-8111-111111111111" }
+      : subject,
+    "governed-assist",
+    "autonomous-delivery",
+    BUDGET,
+    scopes,
+  );
+  const registry = new EditorAgentAuthorityRegistry();
+  const now = new Date(TURN.nowMs).toISOString();
+  const accepted = registry.registerChat(envelope, "autonomous-delivery", now, TURN.correlationId);
+  if (!accepted.ok) throw new TypeError("Expected initial source authority");
+  expect(
+    reserveResolvedChatToolAuthority(
+      { agentAuthorityRegistry: registry },
+      { ok: true, envelope },
+      accepted.authorityRef,
+      { toolCalls: 1, promptTokens: 0, patchBytes: 0 },
+      now,
+      TURN.correlationId,
+      "governed-assist",
+    ),
+  ).toEqual({ ok: false, reason: "invalid" });
 });

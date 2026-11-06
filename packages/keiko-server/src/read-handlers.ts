@@ -1,5 +1,6 @@
 import { createRequestCancellation } from "./request-cancellation.js";
-import { raceAbortDeadline } from "./abort-race.js";
+import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";
+import { logStartupMetadataWait } from "./gateway-startup-activity.js";
 // The six read-only BFF endpoints (ADR-0011 D5 routes 2,3,4,10,11,12). Each returns a redacted JSON
 // projection of already-safe data: config via `toSafeObject` (strips apiKey), configured model
 // capabilities, the workflow launch-form descriptors, the workspace summary built from the workspace
@@ -82,8 +83,13 @@ export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResu
 // TRI-STATE on the wire (see currentConversationReadinessObservation): the observation store is
 // process-local, so a hard `false` for never-probed models told the UI after every restart that
 // nothing was usable until a manual probe plus reload (customer field incident, 0.3.11). Absent
-// means "unknown — the on-demand probe at the conversation entry points decides honestly".
-export function handleModels(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+// means "unknown — the configuration-owned startup result or explicit Settings verification
+// determines readiness". Passive reads and conversation entry points never start another probe.
+export function handleModels(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  startupCatalogPending?: true,
+): RouteResult {
   if (ctx.url.searchParams.get("refresh") === "1") deps.refreshGatewayCatalog?.(ctx.correlationId);
   const config = currentGatewayConfig(deps);
   const models =
@@ -103,7 +109,9 @@ export function handleModels(ctx: RouteContext, deps: UiHandlerDeps): RouteResul
     status: 200,
     body: {
       models,
-      ...(pendingConversationReadiness(deps).length > 0 ? { startupReadinessPending: true } : {}),
+      ...(startupCatalogPending === true || pendingConversationReadiness(deps).length > 0
+        ? { startupReadinessPending: true }
+        : {}),
     },
   };
 }
@@ -114,8 +122,23 @@ export async function handleModelsAfterStartupCatalog(
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   if (ctx.url.searchParams.get("settleStartup") === "1") return settleStartupModels(ctx, deps);
-  await deps.waitForStartupGatewayCatalog?.();
-  return handleModels(ctx, deps);
+  const startedAt = Date.now();
+  const cancellation = createRequestCancellation(ctx, "startup catalog metadata read cancelled");
+  let outcome: "settled" | "timeout" | "aborted" | "failed" = "settled";
+  try {
+    await raceAbortDeadline(() => deps.waitForStartupGatewayCatalog?.() ?? Promise.resolve(), {
+      signal: cancellation.signal,
+      deadlineAtMs: startedAt + 1000,
+      nowMs: Date.now,
+    });
+  } catch (error) {
+    outcome = error instanceof AbortDeadlineRaceError ? error.reason : "failed";
+    if (outcome !== "timeout") throw error;
+  } finally {
+    cancellation.dispose();
+    logStartupMetadataWait(deps, ctx.correlationId, outcome, Math.max(0, Date.now() - startedAt));
+  }
+  return handleModels(ctx, deps, outcome === "timeout" ? true : undefined);
 }
 
 async function settleStartupModels(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {

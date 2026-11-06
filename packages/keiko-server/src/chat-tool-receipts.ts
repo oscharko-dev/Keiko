@@ -1,3 +1,4 @@
+import { REQUIREMENT_DOCUMENT_SCOPE_PATTERN } from "@oscharko-dev/keiko-quality-intelligence";
 import {
   JIRA_DRAFT_ITEM_STATES,
   JIRA_DRAFT_ID_PATTERN,
@@ -174,7 +175,17 @@ export function chatToolStagedDraftReceipt(
   return { ...reference, ...counts, unresolvedRefs: data.unresolvedRefs };
 }
 
-const REQUIREMENT_REFERENCE = /^[0-9a-f]{8}:[A-Za-z0-9._-]{1,80}$/u;
+const REQUIREMENT_SCOPE = new RegExp(REQUIREMENT_DOCUMENT_SCOPE_PATTERN, "u");
+const REQUIREMENT_ID = /^[A-Za-z0-9._-]{1,80}$/u;
+function isRequirementReference(value: string): boolean {
+  const separator = value.indexOf(":");
+  return (
+    separator >= 0 &&
+    value === value.trim() &&
+    REQUIREMENT_SCOPE.test(value.slice(0, separator)) &&
+    REQUIREMENT_ID.test(value.slice(separator + 1))
+  );
+}
 const REQUIREMENT_RECEIPTS_MAX = 50;
 const RECEIPT_TEXT_CHARS = 60;
 
@@ -187,7 +198,7 @@ export interface ChatToolRequirementReceipt {
 function requirementReceipt(value: unknown): ChatToolRequirementReceipt | undefined {
   const item = record(value);
   const reference = item?.reference;
-  if (item === undefined || typeof reference !== "string" || !REQUIREMENT_REFERENCE.test(reference))
+  if (item === undefined || typeof reference !== "string" || !isRequirementReference(reference))
     return undefined;
   const title = typeof item.title === "string" ? item.title.slice(0, RECEIPT_TEXT_CHARS) : "";
   const priority =

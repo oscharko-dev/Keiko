@@ -1,3 +1,4 @@
+import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatToolMutationIntent } from "./chatToolMutationTypes.js";
 import { validateToolResultEnvelope } from "@oscharko-dev/keiko-tool-catalog";
 import type { JiraChatToolWriteApprovalView as ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
@@ -78,15 +79,42 @@ function result(): ToolResultEnvelope {
     metrics: { inputBytes: 0, outputBytes: 0, resultCount: 0, durationMs: 0 },
   };
 }
+function persistedCall(store: UiStore, id: string): ChatToolExchange["call"] | undefined {
+  return store.findMessageById(id)?.toolTranscript?.exchanges[0]?.call;
+}
 describe("ordinary Chat structured tool transcript", () => {
-  it("retains runtime provenance and rejects unknown call origins", () => {
-    const { store, id } = fixture();
+  it("keeps runtime calls rollback-compatible and rejects unknown call origins", () => {
+    const { store, db, id } = fixture();
     store.updateChatToolTranscript(
       id,
       { kind: "started", call: { ...call, origin: "runtime" } },
       "runtime-origin-proof",
     );
-    expect(store.findMessageById(id)?.toolTranscript?.exchanges[0]?.call.origin).toBe("runtime");
+    expect(persistedCall(store, id)).toEqual(call);
+    const row = db.prepare("SELECT tool_transcript_json FROM chat_messages WHERE id = ?").get(id);
+    if (typeof row?.tool_transcript_json !== "string")
+      throw new TypeError("Missing stored transcript");
+    const stored = JSON.parse(row.tool_transcript_json) as {
+      exchanges: { call: typeof call & { origin?: "runtime" } }[];
+    };
+    const storedCall = stored.exchanges[0]?.call;
+    expect(Object.keys(storedCall ?? {}).sort()).toEqual(["arguments", "id", "name"]);
+    if (storedCall === undefined) throw new TypeError("Missing stored call");
+    storedCall.origin = "runtime";
+    db.prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?").run(
+      JSON.stringify(stored),
+      id,
+    );
+    expect(persistedCall(store, id)).toEqual(call);
+    const untouched = db
+      .prepare("SELECT tool_transcript_json FROM chat_messages WHERE id = ?")
+      .get(id);
+    expect(untouched?.tool_transcript_json).toBe(JSON.stringify(stored));
+    store.updateChatToolTranscript(id, { kind: "started", call }, "runtime-origin-proof");
+    const rewritten = db
+      .prepare("SELECT tool_transcript_json FROM chat_messages WHERE id = ?")
+      .get(id);
+    expect(rewritten?.tool_transcript_json).toBe(row.tool_transcript_json);
     expect(() => {
       store.updateChatToolTranscript(
         id,

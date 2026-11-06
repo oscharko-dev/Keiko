@@ -783,23 +783,27 @@ test("scrolls and searches twelve models while hiding unsupported attachments @s
   request,
 }) => {
   await page.setViewportSize({ width: 1116, height: 850 });
-  await page.route("**/api/models", async (route) => {
-    const response = await route.fetch();
-    const body = (await response.json()) as { models: ModelCapability[] };
-    const model = body.models.find((entry) => entry.id === CHAT_MODEL_ID);
-    if (model === undefined) throw new TypeError("Missing configured fixture model");
-    await route.fulfill({
-      response,
-      json: {
-        models: Array.from({ length: 12 }, (_, index) => ({
-          ...model,
-          id: index === 0 ? CHAT_MODEL_ID : `e2e-model-${String(index)}`,
-          supportsImageInput: false,
-          supportsDocumentInput: false,
-        })),
-      },
-    });
-  });
+  await page.route(
+    (url) => url.pathname === "/api/models",
+    async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as { models: ModelCapability[] };
+      const model = body.models.find((entry) => entry.id === CHAT_MODEL_ID);
+      if (model === undefined) throw new TypeError("Missing configured fixture model");
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          models: Array.from({ length: 12 }, (_, index) => ({
+            ...model,
+            id: index === 0 ? CHAT_MODEL_ID : `e2e-model-${String(index)}`,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+          })),
+        },
+      });
+    },
+  );
   await openFixtureComposer(page, request);
   await expect(page.getByRole("button", { name: "Attach file", exact: true })).toHaveCount(0);
   await page.getByRole("combobox", { name: "Models", exact: true }).click();

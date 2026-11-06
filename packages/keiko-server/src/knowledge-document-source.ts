@@ -1,8 +1,6 @@
 import { sha256Hex } from "@oscharko-dev/keiko-security";
-import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
 import {
   QualityIntelligenceHandoff,
-  resolveEnumerationScope,
   type KnowledgeStore,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type { UiHandlerDeps } from "./deps.js";
@@ -10,16 +8,20 @@ import {
   chatKnowledgeScopes,
   documentScopeFallback,
   decodeCursor,
-  scopeRefusal,
+  admittedKnowledgeDocumentInventory,
+  KNOWLEDGE_DOCUMENT_INVENTORY_MAX,
+  type ScopedKnowledgeDocument,
   type PageCursor,
   type ScopeRefusal,
 } from "./requirement-inventory.js";
 
-export const KNOWLEDGE_DOCUMENTS_MAX = 10_000;
+export const KNOWLEDGE_DOCUMENTS_MAX = KNOWLEDGE_DOCUMENT_INVENTORY_MAX;
 export const KNOWLEDGE_SEARCH_DOCUMENT_STRIDE =
   QualityIntelligenceHandoff.SCOPE_DOCUMENT_CHARS_MAX + 1;
-export type KnowledgeDocument = QualityIntelligenceHandoff.ScopeDocumentInventoryEntry;
-export type ReadKnowledgeDocument = QualityIntelligenceHandoff.ScopeDocument;
+export type KnowledgeDocument = ScopedKnowledgeDocument;
+export type ReadKnowledgeDocument = QualityIntelligenceHandoff.ScopeDocument & {
+  readonly documentScope?: string;
+};
 type Scope = QualityIntelligenceHandoff.ScopeDocumentScope;
 
 export function knowledgeDigest(value: string): string {
@@ -31,8 +33,10 @@ export function decodeKnowledgeCursor(value: string): PageCursor | undefined {
   return decodeCursor(value, 64, KNOWLEDGE_DOCUMENTS_MAX * KNOWLEDGE_SEARCH_DOCUMENT_STRIDE);
 }
 
-export function knowledgeDocumentScope(document: Pick<KnowledgeDocument, "documentId">): string {
-  return documentScopeFallback(document);
+export function knowledgeDocumentScope(
+  document: Pick<KnowledgeDocument, "documentId"> & { readonly documentScope?: string },
+): string {
+  return document.documentScope ?? documentScopeFallback(document);
 }
 
 export function knowledgeDocumentRevision(document: KnowledgeDocument): string {
@@ -72,65 +76,17 @@ export interface KnowledgeDocumentSnapshot {
   readonly fingerprint: string;
 }
 
-/** Deduplicate overlapping Pods and Pod sets while retaining each capsule's own source filter. */
-function mergeScope(
-  targets: Map<KnowledgeCapsuleId, Set<KnowledgeSourceId> | undefined>,
-  scope: Scope,
-): void {
-  for (const capsule of scope.capsuleIds) {
-    if (targets.has(capsule) && targets.get(capsule) === undefined) continue;
-    if (scope.sourceFilter === undefined) targets.set(capsule, undefined);
-    else targets.set(capsule, new Set([...(targets.get(capsule) ?? []), ...scope.sourceFilter]));
-  }
-}
-
-function admittedScopes(
-  deps: UiHandlerDeps,
-  store: KnowledgeStore,
-  chatId: string,
-): {
-  readonly scopes: readonly Scope[];
-  readonly refusals: readonly ScopeRefusal[];
-} {
-  const targets = new Map<KnowledgeCapsuleId, Set<KnowledgeSourceId> | undefined>();
-  const refusals: ScopeRefusal[] = [];
-  for (const query of chatKnowledgeScopes(deps.store.findChatById(chatId))) {
-    const resolved = resolveEnumerationScope(store, {
-      ...(query.capsuleId === undefined ? {} : { capsuleId: query.capsuleId }),
-      ...(query.capsuleSetId === undefined ? {} : { capsuleSetId: query.capsuleSetId }),
-    });
-    const refusal = resolved.ok ? scopeRefusal(resolved.scope.capsules ?? []) : "scope-unavailable";
-    if (!resolved.ok || refusal !== undefined) {
-      refusals.push(refusal ?? "scope-unavailable");
-      continue;
-    }
-    mergeScope(targets, resolved.scope);
-  }
-  const scopes = [...targets].map(([capsule, filter]): Scope => ({
-    capsuleIds: [capsule],
-    ...(filter === undefined ? {} : { sourceFilter: [...filter] }),
-  }));
-  return { scopes, refusals };
-}
-
 /** Reads metadata for every admitted format, including files whose extraction failed. */
 export function knowledgeDocumentSnapshot(
   deps: UiHandlerDeps,
   store: KnowledgeStore,
   chatId: string,
 ): KnowledgeDocumentSnapshot {
-  const admitted = admittedScopes(deps, store, chatId);
-  const documents: KnowledgeDocument[] = [];
-  let totalCount = 0;
-  for (const scope of admitted.scopes) {
-    const read = QualityIntelligenceHandoff.listScopeDocumentInventory(
-      store,
-      scope,
-      KNOWLEDGE_DOCUMENTS_MAX - documents.length,
-    );
-    documents.push(...read.documents);
-    totalCount += read.totalCount;
-  }
+  const admitted = admittedKnowledgeDocumentInventory(
+    store,
+    chatKnowledgeScopes(deps.store.findChatById(chatId)),
+  );
+  const { documents, totalCount } = admitted;
   const fingerprint = knowledgeDigest(
     JSON.stringify([
       admitted.scopes,
@@ -172,8 +128,9 @@ export function readKnowledgeDocument(
     candidate.capsuleIds.includes(document.capsuleId),
   );
   if (scope === undefined || document.extractionStatus !== "extracted") return undefined;
-  return QualityIntelligenceHandoff.readScopeDocuments(store, scope, {
+  const read = QualityIntelligenceHandoff.readScopeDocuments(store, scope, {
     maxDocuments: 1,
     documentIds: [document.documentId],
   }).documents[0];
+  return read === undefined ? undefined : { ...read, documentScope: document.documentScope };
 }

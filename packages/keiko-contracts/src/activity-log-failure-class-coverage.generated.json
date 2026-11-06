@@ -27077,7 +27077,7 @@
       "lifecycleTransitions": ["end", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["gateway.setup.metadata.resolved"],
+        "state": ["gateway.catalog.metadata.wait", "gateway.setup.metadata.resolved"],
         "end": ["gateway.catalog.automatic.completed"],
         "failure": [],
         "loss": []
@@ -27088,12 +27088,20 @@
           "mode": "correlation"
         },
         {
+          "op": "gateway.catalog.metadata.wait",
+          "mode": "correlation"
+        },
+        {
           "op": "gateway.setup.metadata.resolved",
           "mode": "correlation"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["gateway.catalog.automatic.completed", "gateway.setup.metadata.resolved"],
+      "resourceSignals": [
+        "gateway.catalog.automatic.completed",
+        "gateway.catalog.metadata.wait",
+        "gateway.setup.metadata.resolved"
+      ],
       "replayReferences": [],
       "operations": [
         {
@@ -27201,6 +27209,36 @@
             "causeChain": false
           },
           "proofIds": ["gateway.catalog.automatic.completed.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "gateway.catalog.metadata.wait",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "elapsedMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "duration", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["gateway.catalog.metadata.wait.line"],
           "replayReferences": [],
           "missingObligations": []
         },

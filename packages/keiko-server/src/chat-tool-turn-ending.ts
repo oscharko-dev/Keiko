@@ -446,14 +446,6 @@ export function recordChatToolTurnCorrected(
   }
 }
 
-interface ToolTranscriptLookup {
-  findMessageById(id: string):
-    | {
-        readonly toolTranscript?: { readonly exchanges: readonly ChatToolExchange[] } | undefined;
-      }
-    | undefined;
-}
-
 /**
  * An answer built on settled tool results has a visible source: those results. Calling it
  * untraceable would be false, so only that note goes; a marker that cites nothing valid stays.
@@ -463,15 +455,9 @@ export function withToolResultsAsSource<
     readonly userMessageId: string;
     readonly uncertainty: readonly GroundedUncertainty[];
   },
->(answer: Answer, store: ToolTranscriptLookup): Answer {
-  const exchanges = store.findMessageById(answer.userMessageId)?.toolTranscript?.exchanges ?? [];
-  // Runtime inventory establishes document membership, not support for uncited content claims.
-  if (
-    !exchanges.some(
-      (exchange) => exchange.call.origin !== "runtime" && exchange.result?.status === "completed",
-    )
-  )
-    return answer;
+>(answer: Answer, turn: { readonly hasUsableObservation: () => boolean } | undefined): Answer {
+  // The request owns origin custody; persisted legacy-compatible rows cannot authenticate it.
+  if (turn?.hasUsableObservation() !== true) return answer;
   return {
     ...answer,
     uncertainty: answer.uncertainty.filter((marker) => marker.kind !== "uncited-answer"),

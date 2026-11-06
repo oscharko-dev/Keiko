@@ -15,6 +15,7 @@ import type {
   CapsuleSetId,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
+  KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
 import type { Chat } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
@@ -29,6 +30,7 @@ import {
   assessRequirementInventoryQuality,
   deriveRequirementInventory,
   requirementReference,
+  documentScopesOf,
   type RequirementInventoryEntry,
   type RequirementTraceUnit,
 } from "@oscharko-dev/keiko-quality-intelligence";
@@ -127,12 +129,14 @@ interface Accumulator {
 function readDocument(
   accumulator: Accumulator,
   document: QualityIntelligenceHandoff.ScopeDocument,
+  documentScope: string,
 ): void {
   const room = REQUIREMENT_UNITS_MAX - accumulator.units.length;
   const inventory = deriveRequirementInventory({
     text: document.text,
     sections: document.sections,
     documentKey: String(document.documentId),
+    documentScope,
     maxEntries: Math.max(1, Math.min(room, REQUIREMENT_INVENTORY_ENTRIES_MAX * 10)),
   });
   const entries = inventory.entries.slice(0, Math.max(0, room));
@@ -154,7 +158,7 @@ function readDocument(
   accumulator.referenceOnly += inventory.referenceOnlyCount;
   accumulator.rejected += inventory.rejectedCandidateCount;
   accumulator.documents.push({
-    documentScope: entries[0]?.documentScope ?? documentScopeFallback(document),
+    documentScope,
     name: document.displayName,
     digest: document.contentHash,
     unitCount: entries.length,
@@ -171,36 +175,109 @@ export function documentScopeFallback(
     .slice(0, 8);
 }
 
+/** Deduplicate overlapping Pods and Pod sets while retaining each capsule's own source filter. */
+function mergeScope(
+  targets: Map<KnowledgeCapsuleId, Set<KnowledgeSourceId> | undefined>,
+  scope: QualityIntelligenceHandoff.ScopeDocumentScope,
+): void {
+  for (const capsule of scope.capsuleIds) {
+    if (targets.has(capsule) && targets.get(capsule) === undefined) continue;
+    if (scope.sourceFilter === undefined) targets.set(capsule, undefined);
+    else targets.set(capsule, new Set([...(targets.get(capsule) ?? []), ...scope.sourceFilter]));
+  }
+}
+
+function admittedScopes(
+  store: KnowledgeStore,
+  queries: readonly RequirementScopeQuery[],
+): {
+  readonly scopes: readonly QualityIntelligenceHandoff.ScopeDocumentScope[];
+  readonly refusals: readonly ScopeRefusal[];
+} {
+  const targets = new Map<KnowledgeCapsuleId, Set<KnowledgeSourceId> | undefined>();
+  const refusals: ScopeRefusal[] = [];
+  for (const query of queries) {
+    const resolved = resolveEnumerationScope(store, {
+      ...(query.capsuleId === undefined ? {} : { capsuleId: query.capsuleId }),
+      ...(query.capsuleSetId === undefined ? {} : { capsuleSetId: query.capsuleSetId }),
+    });
+    const refusal = resolved.ok ? scopeRefusal(resolved.scope.capsules ?? []) : "scope-unavailable";
+    if (!resolved.ok || refusal !== undefined) {
+      refusals.push(refusal ?? "scope-unavailable");
+      continue;
+    }
+    mergeScope(targets, resolved.scope);
+  }
+  const scopes = [...targets].map(
+    ([capsule, filter]): QualityIntelligenceHandoff.ScopeDocumentScope => ({
+      capsuleIds: [capsule],
+      ...(filter === undefined ? {} : { sourceFilter: [...filter] }),
+    }),
+  );
+  return { scopes, refusals };
+}
+
+export const KNOWLEDGE_DOCUMENT_INVENTORY_MAX = 10_000;
+export type ScopedKnowledgeDocument = QualityIntelligenceHandoff.ScopeDocumentInventoryEntry & {
+  readonly documentScope: string;
+};
+
+export function admittedKnowledgeDocumentInventory(
+  store: KnowledgeStore,
+  queries: readonly RequirementScopeQuery[],
+): {
+  readonly scopes: readonly QualityIntelligenceHandoff.ScopeDocumentScope[];
+  readonly refusals: readonly ScopeRefusal[];
+  readonly documents: readonly ScopedKnowledgeDocument[];
+  readonly totalCount: number;
+  readonly omittedCount: number;
+} {
+  const admitted = admittedScopes(store, queries);
+  const documents: QualityIntelligenceHandoff.ScopeDocumentInventoryEntry[] = [];
+  let totalCount = 0;
+  for (const scope of admitted.scopes) {
+    const read = QualityIntelligenceHandoff.listScopeDocumentInventory(
+      store,
+      scope,
+      KNOWLEDGE_DOCUMENT_INVENTORY_MAX - documents.length,
+    );
+    documents.push(...read.documents);
+    totalCount += read.totalCount;
+  }
+  const scopes = documentScopesOf(documents.map((document) => String(document.documentId)));
+  return {
+    ...admitted,
+    documents: documents.map((document) => ({
+      ...document,
+      documentScope: scopes.get(String(document.documentId)) ?? documentScopeFallback(document),
+    })),
+    totalCount,
+    omittedCount: totalCount - documents.length,
+  };
+}
+
 function readScope(
   store: KnowledgeStore,
-  query: RequirementScopeQuery,
+  scope: QualityIntelligenceHandoff.ScopeDocumentScope,
+  documents: readonly ScopedKnowledgeDocument[],
   accumulator: Accumulator,
 ): void {
-  const resolved = resolveEnumerationScope(store, {
-    ...(query.capsuleId === undefined ? {} : { capsuleId: query.capsuleId }),
-    ...(query.capsuleSetId === undefined ? {} : { capsuleSetId: query.capsuleSetId }),
-  });
-  if (!resolved.ok) {
-    accumulator.refusals.push("scope-unavailable");
-    accumulator.cuts.add("scope-refused");
-    return;
-  }
-  const refusal = scopeRefusal(resolved.scope.capsules ?? []);
-  if (refusal !== undefined) {
-    accumulator.refusals.push(refusal);
-    accumulator.cuts.add("scope-refused");
-    return;
-  }
-  const read = QualityIntelligenceHandoff.readScopeDocuments(store, {
-    capsuleIds: resolved.scope.capsuleIds,
-    sourceFilter: resolved.scope.sourceFilter,
+  const selected = documents.filter((document) => scope.capsuleIds.includes(document.capsuleId));
+  const read = QualityIntelligenceHandoff.readScopeDocuments(store, scope, {
+    documentIds: selected.map((document) => document.documentId),
   });
   accumulator.documentsNotExtracted += read.notExtractedDocumentCount;
   accumulator.documentsScanned += read.documents.length;
   accumulator.documentsOmitted += read.omittedByCountCount + read.omittedByTextCount;
   if (read.omittedByCountCount > 0) accumulator.cuts.add("document-bound");
   if (read.omittedByTextCount > 0) accumulator.cuts.add("document-text-bound");
-  for (const document of read.documents) readDocument(accumulator, document);
+  const byId = new Map(
+    selected.map((document) => [String(document.documentId), document.documentScope]),
+  );
+  for (const document of read.documents) {
+    const documentScope = byId.get(String(document.documentId));
+    if (documentScope !== undefined) readDocument(accumulator, document, documentScope);
+  }
 }
 
 function ambiguousIdsOf(units: readonly LocatedRequirementUnit[]): readonly string[] {
@@ -233,7 +310,12 @@ export function collectRequirementUnits(
     referenceOnly: 0,
     rejected: 0,
   };
-  for (const scope of scopes) readScope(store, scope, accumulator);
+  const admitted = admittedKnowledgeDocumentInventory(store, scopes);
+  accumulator.refusals.push(...admitted.refusals);
+  accumulator.documentsOmitted += admitted.omittedCount;
+  if (admitted.refusals.length > 0) accumulator.cuts.add("scope-refused");
+  if (admitted.omittedCount > 0) accumulator.cuts.add("document-bound");
+  for (const scope of admitted.scopes) readScope(store, scope, admitted.documents, accumulator);
   return Object.freeze({
     units: accumulator.units,
     documents: accumulator.documents,
@@ -270,21 +352,26 @@ export function pageLabelOf(
 // ─── Selection and paging ────────────────────────────────────────────────────
 
 export interface RequirementFilter {
-  /** Document scopes (the 8-hex ids a `documents` view lists). */
+  /** Document scopes from the `documents` view (extended only to disambiguate collisions). */
   readonly documents?: readonly string[] | undefined;
   readonly query?: string | undefined;
   readonly ids?: readonly string[] | undefined;
   readonly priorities?: readonly string[] | undefined;
 }
 
-function matchesQuery(entry: RequirementInventoryEntry, needle: string): boolean {
+function matchesQuery(
+  entry: RequirementInventoryEntry,
+  needle: string,
+  redact: (value: string) => string,
+): boolean {
   const haystack = [entry.id, entry.title, entry.statement, ...entry.sectionPath].join("\n");
-  return haystack.toLowerCase().includes(needle);
+  return redact(haystack).toLowerCase().includes(needle);
 }
 
 export function selectUnits(
   units: readonly LocatedRequirementUnit[],
   filter: RequirementFilter,
+  redact: (value: string) => string,
 ): readonly LocatedRequirementUnit[] {
   const needle = filter.query?.trim().toLowerCase();
   const wantedIds = filter.ids === undefined ? undefined : new Set(filter.ids);
@@ -301,7 +388,7 @@ export function selectUnits(
       !wantedPriorities.has((entry.priority ?? "").toLowerCase())
     )
       return false;
-    return needle === undefined || needle.length === 0 || matchesQuery(entry, needle);
+    return needle === undefined || needle.length === 0 || matchesQuery(entry, needle, redact);
   });
 }
 

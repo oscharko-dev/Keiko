@@ -222,7 +222,7 @@ function objectReadResult(
     const items = editMetadataItems(body.fields);
     return items === undefined
       ? failure("malformed-payload")
-      : localJiraPage(items, startAt, maxResults);
+      : localJiraPage(descriptionMetadataItems(items), startAt, maxResults);
   }
   if (name === "jira.issue-types")
     return remoteJiraPage(body, issueTypeItems(body.values), startAt, maxResults);
@@ -233,11 +233,17 @@ function objectReadResult(
 
 /** Machine-readable provenance for new Markdown; legacy strings remain native wiki verbatim. */
 function createMetadataItems(value: unknown): readonly CatalogJsonObject[] | undefined {
-  return metadataItems(value)?.map((item) =>
+  const items = metadataItems(value);
+  return items === undefined ? undefined : descriptionMetadataItems(items);
+}
+function descriptionMetadataItems(
+  items: readonly CatalogJsonObject[],
+): readonly CatalogJsonObject[] {
+  return items.map((item) =>
     item.id === "description"
       ? {
           ...item,
-          inputSchema: JIRA_DESCRIPTION_INPUT_SCHEMA,
+          inputSchema: structuredClone(JIRA_DESCRIPTION_INPUT_SCHEMA),
           nativeFormat: "jira-wiki",
           markdownSerialization: "headings-only",
         }

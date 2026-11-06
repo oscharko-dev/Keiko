@@ -112,6 +112,19 @@ function exact(value: Record<string, unknown>, keys: readonly string[]): boolean
   const allowed = new Set(keys);
   return Object.keys(value).every((key) => allowed.has(key));
 }
+/** Current calls retain the previous reader's three keys; legacy provenance is never rewritten. */
+function canonicalCall(call: ChatToolExchange["call"]): ChatToolExchange["call"] {
+  return { id: call.id, name: call.name, arguments: call.arguments };
+}
+function encodeTranscript(transcript: StoredTranscript): string {
+  return JSON.stringify({
+    ...transcript,
+    exchanges: transcript.exchanges.map((exchange) => ({
+      ...exchange,
+      call: canonicalCall(exchange.call),
+    })),
+  });
+}
 function validCall(value: unknown): value is ChatToolExchange["call"] {
   return (
     object(value) &&
@@ -282,7 +295,7 @@ export function decodeChatToolTranscript(
     : {
         ...stored,
         exchanges: stored.exchanges.map(({ call, result, approval, mutationOutcome }) => ({
-          call,
+          call: canonicalCall(call),
           ...(result === undefined ? {} : { result }),
           ...(approval === undefined ? {} : { approval }),
           ...(mutationOutcome === undefined ? {} : { mutationOutcome }),
@@ -349,7 +362,7 @@ function applyExchange(
   const existing = current.exchanges.find((exchange) => exchange.call.id === id);
   if (update.kind === "started") {
     if (existing !== undefined) {
-      if (canonicalise(existing.call) !== canonicalise(update.call))
+      if (canonicalise(canonicalCall(existing.call)) !== canonicalise(canonicalCall(update.call)))
         throw invalidRequest("Tool call identity conflict.");
       return current;
     }
@@ -433,7 +446,7 @@ function redactUpdate(
   if (update.kind === "started") {
     const call = deepRedactStrings(update.call, redact);
     if (!validCall(call)) throw invalidRequest("Invalid tool call.");
-    return { kind: "started", call };
+    return { kind: "started", call: canonicalCall(call) };
   }
   if (update.kind === "settled")
     return {
@@ -483,7 +496,7 @@ export function updateChatToolTranscript(
     };
     const redacted = redactUpdate(update, redact);
     const next = applyUpdate(current, redacted, row.chat_id, id);
-    const json = JSON.stringify(next);
+    const json = encodeTranscript(next);
     decodeChatToolTranscript(json, { messageId: id, chatId: row.chat_id });
     db.prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?").run(json, id);
     return next.exchanges.length;

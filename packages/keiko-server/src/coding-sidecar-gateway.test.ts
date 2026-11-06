@@ -62,7 +62,7 @@ import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contra
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   buildRedactor,
-  CONVERSATION_READINESS_MAX_AGE_MS,
+  CONVERSATION_READINESS_CACHED_AFTER_MS,
   currentConversationReadinessObservation,
   type UiHandlerDeps,
 } from "./deps.js";
@@ -2149,7 +2149,9 @@ describe("coding-sidecar gateway", () => {
             finishReason,
           }),
       );
-    const expired = new Date(Date.now() - CONVERSATION_READINESS_MAX_AGE_MS - 60_000).toISOString();
+    const expired = new Date(
+      Date.now() - CONVERSATION_READINESS_CACHED_AFTER_MS - 60_000,
+    ).toISOString();
     const withObservation = (
       runId: string,
       conversationReady: boolean,
@@ -4129,7 +4131,7 @@ describe("coding-sidecar gateway", () => {
     holder.recordVerifiedCapability(
       "azure-coding-model",
       { conversationReady: true },
-      new Date(Date.now() - CONVERSATION_READINESS_MAX_AGE_MS - 60_000).toISOString(),
+      new Date(Date.now() - CONVERSATION_READINESS_CACHED_AFTER_MS - 60_000).toISOString(),
       holder.generation(),
     );
     const fetch = vi.fn(() =>
@@ -10232,7 +10234,7 @@ describe("configuration-bound chat serving for new coding tasks", () => {
       const before = await request();
       assertRouteResult(before);
       expect(before.status).toBe(200);
-      vi.setSystemTime(issuedAtMs + CONVERSATION_READINESS_MAX_AGE_MS);
+      vi.setSystemTime(issuedAtMs + CONVERSATION_READINESS_CACHED_AFTER_MS);
       expect(liveHolder.verifiedCapability("azure-coding-model")).toMatchObject({
         checkedAt: observation.checkedAt,
         conversationCheckedAt: observation.checkedAt,
@@ -10292,7 +10294,7 @@ describe("configuration-bound chat serving for new coding tasks", () => {
     holder.recordVerifiedCapability(
       "azure-coding-model",
       { toolCalling: true, conversationReady: true },
-      new Date(Date.now() - CONVERSATION_READINESS_MAX_AGE_MS - 60_000).toISOString(),
+      new Date(Date.now() - CONVERSATION_READINESS_CACHED_AFTER_MS - 60_000).toISOString(),
       holder.generation(),
     );
     const fetch = vi.fn(() =>
@@ -10431,10 +10433,12 @@ describe("configuration-bound chat serving for new coding tasks", () => {
       await observeChat(deps, true);
       expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
       vi.setSystemTime(
-        Date.parse("2026-10-08T12:00:00.000Z") + CONVERSATION_READINESS_MAX_AGE_MS - 1,
+        Date.parse("2026-10-08T12:00:00.000Z") + CONVERSATION_READINESS_CACHED_AFTER_MS - 1,
       );
       expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
-      vi.setSystemTime(Date.parse("2026-10-08T12:00:00.000Z") + CONVERSATION_READINESS_MAX_AGE_MS);
+      vi.setSystemTime(
+        Date.parse("2026-10-08T12:00:00.000Z") + CONVERSATION_READINESS_CACHED_AFTER_MS,
+      );
       expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
       vi.setSystemTime(Date.parse("2026-10-08T12:00:00.000Z") + 86_400_000);
       expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });

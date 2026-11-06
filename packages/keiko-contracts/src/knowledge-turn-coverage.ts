@@ -251,6 +251,11 @@ function observe(tally: Tally, exchange: ChatToolExchange): void {
   observeStream(tally, exchange, data);
 }
 function observeUnavailableSources(tally: Tally, data: Readonly<Record<string, unknown>>): void {
+  const unavailableScopes = record(data.coverage)?.unavailableDocumentScopes;
+  if (Array.isArray(unavailableScopes)) {
+    for (const scope of unavailableScopes)
+      if (typeof scope === "string") tally.unavailableSources.add(scope);
+  }
   if (!Array.isArray(data.items)) return;
   for (const value of data.items) {
     const item = record(value);

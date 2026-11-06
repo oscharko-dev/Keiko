@@ -7,6 +7,7 @@ import {
   jiraDraftDependencies,
   jiraTemplateViolationGuidance,
   parseJiraDraft,
+  parseRequirementIds,
   type AtlassianHttpBodyPort,
   type JiraDraft,
   type JiraDraftActivity,
@@ -623,23 +624,42 @@ interface ResolvedTraces {
  * for a refused draft. An item the human deselected, or that hangs from one, never runs, so a
  * reference it names cannot refuse the items that do.
  */
+function draftItemDescription(item: object): unknown {
+  const fields = "fields" in item ? item.fields : undefined;
+  return fields !== null && typeof fields === "object" && "description" in fields
+    ? fields.description
+    : undefined;
+}
+function resolveDraftItemTrace(
+  session: TraceSession | undefined,
+  item: object,
+): TraceResolution | undefined {
+  const references = parseRequirementIds(
+    "requirementIds" in item ? item.requirementIds : undefined,
+  );
+  if (references === null) return undefined;
+  if (references === undefined)
+    return { ok: false, reason: "references", problems: [{ reference: "", reason: "malformed" }] };
+  if (session === undefined) return { ok: false, reason: "unavailable", problems: [] };
+  return session.resolve(references, { description: draftItemDescription(item) });
+}
+
 function resolveItemTraces(
   session: TraceSession | undefined,
-  draft: JiraDraft,
+  draft: { readonly items: readonly object[] },
   tally: TraceTally,
   excluded: ReadonlySet<string>,
 ): ResolvedTraces {
   const traces = new Map<string, ItemTrace>();
   const refused = new Map<string, Extract<TraceResolution, { ok: false }>>();
   for (const item of draft.items) {
-    if (item.requirementIds === undefined || excluded.has(item.ref)) continue;
-    const resolution: TraceResolution =
-      session === undefined
-        ? { ok: false, reason: "unavailable", problems: [] }
-        : session.resolve(item.requirementIds);
-    if (resolution.ok) traces.set(item.ref, resolution.trace);
+    const ref = "ref" in item && typeof item.ref === "string" ? item.ref : "";
+    if (excluded.has(ref)) continue;
+    const resolution = resolveDraftItemTrace(session, item);
+    if (resolution === undefined) continue;
+    if (resolution.ok) traces.set(ref, resolution.trace);
     else {
-      refused.set(item.ref, resolution);
+      refused.set(ref, resolution);
       tallyRefusal(tally, resolution);
     }
   }
@@ -726,6 +746,24 @@ function refusedDraft(
     },
     isError: true,
   };
+}
+
+/** Same immutable source criteria before staging, human approval and final draft execution. */
+export function jiraDraftRequirementRefusal(
+  items: readonly object[],
+  openTrace: (() => TraceSession) | undefined,
+  correlationId: string,
+): { readonly data: CatalogJsonObject; readonly violationCount: number } | undefined {
+  const session = openTrace?.();
+  const tally = newTally();
+  try {
+    const resolved = resolveItemTraces(session, { items }, tally, new Set());
+    if (resolved.refused.size === 0) return undefined;
+    logTrace(correlationId, "draft", tally);
+    return { data: refusedDraft(resolved.refused).data, violationCount: tally.problems };
+  } finally {
+    session?.close();
+  }
 }
 
 export async function executeJiraChatDraft(

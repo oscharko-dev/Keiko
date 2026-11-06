@@ -22,14 +22,26 @@ type ModelAttemptReservation = NonNullable<
 interface OwnedSynthesisAttemptReservation extends ModelAttemptReservation {
   confirmToolRound(): boolean;
   releaseUnusableAttempt(): void;
+  releaseCallSlot(): void;
 }
-const toolAttemptConfirmations = new WeakMap<ModelAttemptReservation, () => void>();
+interface ToolAttemptSettlement {
+  readonly confirm: () => void;
+  readonly releaseCallSlot: () => void;
+}
+const toolAttemptConfirmations = new WeakMap<ModelAttemptReservation, ToolAttemptSettlement>();
 
 /** Only this owner's exact reservation can release its provisional synthesis charge. */
 export function groundedToolAttemptConfirmation(
   reservation: ModelAttemptReservation,
 ): (() => void) | undefined {
-  return toolAttemptConfirmations.get(reservation);
+  return toolAttemptConfirmations.get(reservation)?.confirm;
+}
+
+/** Only the exact factory-owned nested attempt may release its call slot; all usage stays charged. */
+export function groundedNestedToolCallRelease(
+  reservation: ModelAttemptReservation,
+): (() => void) | undefined {
+  return toolAttemptConfirmations.get(reservation)?.releaseCallSlot;
 }
 
 export interface GroundedAnswerUsage {
@@ -271,29 +283,40 @@ function assertSynthesisAttemptActive(options: GroundedSynthesisAttemptOptions):
     throw new TimeoutError("Synthesis deadline elapsed before provider dispatch");
 }
 
+function ownedCallSlotRelease(budget: GroundedSynthesisCallBudget): () => void {
+  let released = false;
+  return (): void => {
+    if (released) return;
+    released = true;
+    budget.releaseReservation();
+  };
+}
+
 function synthesisAttemptReservation(
   budget: GroundedSynthesisCallBudget,
   promptTokens: number,
   maxOutputTokens: number,
 ): OwnedSynthesisAttemptReservation {
   let settled = false;
+  const releaseCallSlot = ownedCallSlotRelease(budget);
   let observed: GroundedAnswerUsage | undefined;
   let charged: GroundedAnswerUsage | undefined;
   const reservation: OwnedSynthesisAttemptReservation = {
     maxOutputTokens,
+    releaseCallSlot,
     releaseUnusableAttempt(): void {
       if (charged === undefined) return;
       budget.recordToolRoundUsage(charged);
       charged = undefined;
       observed = undefined;
-      budget.releaseReservation();
+      releaseCallSlot();
     },
     confirmToolRound(): boolean {
       if (observed === undefined) return false;
       budget.recordToolRoundUsage(observed);
       observed = undefined;
       charged = undefined;
-      budget.releaseReservation();
+      releaseCallSlot();
       return true;
     },
     settle(reported, dispatched, outputState = "observed"): void {
@@ -301,7 +324,7 @@ function synthesisAttemptReservation(
       settled = true;
       if (dispatched && outputState === "unknown") budget.recordOutputReservation(maxOutputTokens);
       if (!dispatched) {
-        budget.releaseReservation();
+        releaseCallSlot();
         return;
       }
       const usage = groundedSynthesisAttemptUsage(
@@ -320,12 +343,17 @@ function synthesisAttemptReservation(
 function retainToolAttemptConfirmation(
   reservation: ReturnType<typeof synthesisAttemptReservation>,
 ): void {
-  const confirm = (): void => {
-    if (toolAttemptConfirmations.get(reservation) !== confirm) return;
-    confirmObservedToolRound(reservation);
-    toolAttemptConfirmations.delete(reservation);
+  const settlement: ToolAttemptSettlement = {
+    confirm(): void {
+      if (toolAttemptConfirmations.get(reservation) !== settlement) return;
+      confirmObservedToolRound(reservation);
+      toolAttemptConfirmations.delete(reservation);
+    },
+    releaseCallSlot: (): void => {
+      reservation.releaseCallSlot();
+    },
   };
-  toolAttemptConfirmations.set(reservation, confirm);
+  toolAttemptConfirmations.set(reservation, settlement);
 }
 
 export function combinedGroundedSynthesisFields(

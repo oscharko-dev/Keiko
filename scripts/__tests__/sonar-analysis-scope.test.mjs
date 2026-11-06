@@ -272,6 +272,10 @@ describe("Sonar analysis scope", () => {
 
   it("routes every inexact inclusion inventory to the full-scan fallback", () => {
     expect(sonarInclusionPathsNeedFullScan(["src/main.ts"])).toBe(false);
+    // #2880's exact-path guarantee is retained: Sonar WildcardPattern escapes brackets;
+    // only *, ** and ? are wildcard syntax. See docs/qa/local-sonar.md and its pinned
+    // SonarSource matching-implementation reference; a Next.js route is a literal inclusion.
+    expect(sonarInclusionPathsNeedFullScan(["src/[dynamic].ts"])).toBe(false);
     for (const path of [
       " src/leading.ts",
       "src/trailing.ts ",

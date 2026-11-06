@@ -18,11 +18,16 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { type KnowledgeStore } from "@oscharko-dev/keiko-local-knowledge";
 import {
+  REQUIREMENT_DOCUMENT_SCOPE_SCHEMA,
   requirementChangeQueries,
   requirementReference,
   shortRequirementDigest,
 } from "@oscharko-dev/keiko-quality-intelligence";
-import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  compileExternalCatalogSchema,
+  createToolDescriptor,
+  createToolRef,
+} from "@oscharko-dev/keiko-tool-catalog";
 
 import { object, text } from "./atlassian/jiraManagedSchemas.js";
 import { KNOWLEDGE_REQUIREMENTS_TOOL } from "./requirementsToolName.js";
@@ -93,7 +98,7 @@ const ARGUMENTS = object({
   documents: {
     type: "array",
     maxItems: 20,
-    items: { type: "string", pattern: "^[0-9a-f]{8}$" },
+    items: REQUIREMENT_DOCUMENT_SCOPE_SCHEMA,
   },
   query: text(200),
   ids: { type: "array", maxItems: LISTED_IDS_MAX, items: text(80) },
@@ -122,7 +127,7 @@ const UNIT = {
     },
     criteriaTruncated: { type: "boolean" },
     findings: { type: "array", maxItems: 16, items: text(64) },
-    documentScope: text(8),
+    documentScope: REQUIREMENT_DOCUMENT_SCOPE_SCHEMA,
     documentName: text(300),
     sectionPath: { type: "array", maxItems: 12, items: text(300) },
     pageLabel: text(64),
@@ -216,8 +221,8 @@ function declaration(): ManagedMcpToolDeclaration {
   const descriptor = createToolDescriptor({
     toolRef: createToolRef("keiko.knowledge.requirements", 1),
     description: DESCRIPTION,
-    inputSchema: ARGUMENTS,
-    resultSchema: RESULT,
+    inputSchema: compileExternalCatalogSchema(ARGUMENTS),
+    resultSchema: compileExternalCatalogSchema(RESULT),
     effects: ["connector-access"],
     actionMapping: [{ action: KNOWLEDGE_REQUIREMENTS_TOOL, effects: ["connector-access"] }],
     policyReferences: ["adr-0128.d4"],
@@ -234,6 +239,8 @@ function declaration(): ManagedMcpToolDeclaration {
   return Object.freeze({
     name: KNOWLEDGE_REQUIREMENTS_TOOL,
     risk: "read",
+    title: "Knowledge requirements",
+    annotations: { openWorldHint: false, idempotentHint: true },
     descriptor,
   });
 }
@@ -388,7 +395,7 @@ function buildView(
   parsed: ParsedArguments,
   redact: (value: string) => string,
 ): ViewItems {
-  const selected = selectUnits(collection.units, parsed.filter);
+  const selected = selectUnits(collection.units, parsed.filter, redact);
   if (parsed.view === "documents")
     return {
       items: collection.documents.map((document): CatalogJsonObject => ({

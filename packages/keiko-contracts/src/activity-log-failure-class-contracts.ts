@@ -472,23 +472,26 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["gateway.setup.metadata.resolved"],
+      state: ["gateway.catalog.metadata.wait", "gateway.setup.metadata.resolved"],
       end: ["gateway.catalog.automatic.completed"],
       failure: [],
       loss: [],
     },
     requiredCausalOperations: [
       "gateway.catalog.automatic.completed",
+      "gateway.catalog.metadata.wait",
       "gateway.setup.metadata.resolved",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "gateway.catalog.automatic.completed",
+      "gateway.catalog.metadata.wait",
       "gateway.setup.metadata.resolved",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "gateway.catalog.automatic.completed",
+      "gateway.catalog.metadata.wait",
       "gateway.setup.metadata.resolved",
     ],
     requiredEvidenceClasses: [

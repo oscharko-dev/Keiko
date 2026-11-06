@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-contracts";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
-import type { GatewayCallRequest, GatewayStreamChunk } from "@oscharko-dev/keiko-model-gateway";
+import {
+  AuthenticationError,
+  ProviderError,
+  RateLimitError,
+  TimeoutError,
+  UnknownModelError,
+  type GatewayCallRequest,
+  type GatewayStreamChunk,
+} from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
@@ -20,7 +28,7 @@ import {
   withConversationReadinessAdmission,
 } from "./conversation-readiness-admission.js";
 import {
-  CONVERSATION_READINESS_MAX_AGE_MS,
+  CONVERSATION_READINESS_CACHED_AFTER_MS,
   currentConversationReady,
   type UiHandlerDeps,
   type VerifiedModelCapabilityObservation,
@@ -142,8 +150,22 @@ function currentReadyDeps(state: MutableReadiness): Pick<UiHandlerDeps, "gateway
       generation: () => state.generation,
       recordVerification: () => undefined,
       verifiedCapability: () => state.observation,
-      recordVerifiedCapability: (): void => {
+      recordVerifiedCapability: (
+        modelId,
+        fields,
+        checkedAt,
+        generation,
+        conversationCheckedAt,
+      ): void => {
         state.globalWrites += 1;
+        if (generation !== undefined && generation !== state.generation) return;
+        state.observation = {
+          modelId,
+          fields,
+          checkedAt,
+          generation: state.generation,
+          ...(conversationCheckedAt === undefined ? {} : { conversationCheckedAt }),
+        };
       },
       clearVerifiedCapability: () => false,
     },
@@ -151,7 +173,7 @@ function currentReadyDeps(state: MutableReadiness): Pick<UiHandlerDeps, "gateway
 }
 
 function expiredClock(): void {
-  vi.setSystemTime(Date.now() + CONVERSATION_READINESS_MAX_AGE_MS + 1);
+  vi.setSystemTime(Date.now() + CONVERSATION_READINESS_CACHED_AFTER_MS + 1);
 }
 
 function completedLongResponse(): Promise<NormalizedResponse> {
@@ -272,6 +294,7 @@ describe("configuration-bound readiness without request-time model probes", () =
     resetServerLogger();
   });
 
+  // ADR-0171, owner amendment 2026-11-05: age is diagnostic, generation remains authoritative.
   it("reuses an old startup success across turns without changing its evidence", async () => {
     const port = new ContinuationPort();
     const fixture = continuationFixture(port);
@@ -333,7 +356,7 @@ describe("configuration-bound readiness without request-time model probes", () =
     const { wrapped } = continuationFixture(port);
     const controller = new AbortController();
     controller.abort();
-    await expect(callBuffered(wrapped, controller.signal)).rejects.toBeDefined();
+    await expect(callBuffered(wrapped, controller.signal)).rejects.toBe(controller.signal.reason);
     expect(port.bufferedCalls).toBe(0);
   });
 
@@ -419,4 +442,103 @@ it("keeps the shared tool-calling refusal clear for every connected tool without
   });
   expect(mappedConversationReadinessError(error)).toEqual(result);
   expect(error.message).not.toMatch(/Jira|Settings|check|disconnect/iu);
+});
+
+it.each([
+  [
+    "authentication",
+    (): AuthenticationError => new AuthenticationError("synthetic rejected credential"),
+  ],
+  ["missing-model", (): ProviderError => new ProviderError("synthetic missing model", 404)],
+  ["unknown-model", (): UnknownModelError => new UnknownModelError("synthetic unknown model")],
+] as const)(
+  "withdraws readiness after an actual %s answer without another probe",
+  async (_label, failure) => {
+    const error = failure();
+    const dispatch = vi.fn(() => Promise.reject(error));
+    const fixture = continuationFixture({ call: dispatch });
+    await expect(callBuffered(fixture.wrapped)).rejects.toBe(error);
+    expect(fixture.state.observation?.fields.conversationReady).toBe(false);
+    expect(fixture.state.globalWrites).toBe(1);
+    await expect(callBuffered(fixture.wrapped)).rejects.toBeInstanceOf(
+      ConversationModelNotReadyError,
+    );
+    expect(dispatch).toHaveBeenCalledOnce();
+  },
+);
+
+it.each([
+  (): RateLimitError => new RateLimitError("synthetic rate limit"),
+  (): TimeoutError => new TimeoutError("synthetic timeout"),
+  (): ProviderError => new ProviderError("synthetic unavailable", 503),
+  (): ProviderError => new ProviderError("synthetic validation", 400),
+])("keeps a ready observation after transient or request-specific failure", async (failure) => {
+  const error = failure();
+  const dispatch = vi.fn(() => Promise.reject(error));
+  const fixture = continuationFixture({ call: dispatch });
+  const observation = fixture.state.observation;
+  await expect(callBuffered(fixture.wrapped)).rejects.toBe(error);
+  expect(fixture.state.observation).toBe(observation);
+  expect(fixture.state.globalWrites).toBe(0);
+});
+
+it.each(["generation", "observation"] as const)(
+  "does not overwrite a newer %s with a late provider refusal",
+  async (replacement) => {
+    let rejectCall: (error: unknown) => void = () => undefined;
+    const pending = new Promise<NormalizedResponse>((_resolve, reject) => {
+      rejectCall = reject;
+    });
+    const fixture = continuationFixture({ call: () => pending });
+    const call = callBuffered(fixture.wrapped);
+    const error = new AuthenticationError("synthetic late credential refusal");
+    const rejected = expect(call).rejects.toBe(error);
+    if (replacement === "generation") fixture.state.generation += 1;
+    else {
+      const previous = fixture.state.observation;
+      if (previous === undefined) throw new TypeError("Expected observation");
+      fixture.state.observation = { ...previous, fields: { ...previous.fields } };
+    }
+    rejectCall(error);
+    await rejected;
+    expect(fixture.state.observation?.fields.conversationReady).toBe(true);
+    expect(fixture.state.globalWrites).toBe(0);
+  },
+);
+
+it("withdraws streamed readiness after a definitive provider refusal", async () => {
+  const error = new ProviderError("synthetic removed model", 404);
+  const fixture = continuationFixture({
+    call: () => Promise.resolve(doneResponse()),
+    callStream: async function* () {
+      yield await Promise.reject(error);
+    },
+  });
+  const stream = fixture.wrapped.callStream;
+  if (stream === undefined) throw new TypeError("Expected stream");
+  await expect(async () => {
+    for await (const _chunk of stream(ADMITTED_REQUEST, new AbortController().signal)) {
+      /* consume */
+    }
+  }).rejects.toBe(error);
+  expect(fixture.state.observation?.fields.conversationReady).toBe(false);
+  expect(fixture.state.globalWrites).toBe(1);
+});
+
+it("names explicit Settings verification with a closed readiness refusal and zero provider calls", async () => {
+  const dispatch = vi.fn(() => Promise.resolve(doneResponse()));
+  const fixture = continuationFixture({ call: dispatch });
+  const observation = fixture.state.observation;
+  if (observation === undefined) throw new TypeError("Expected observation");
+  fixture.state.observation = { ...observation, fields: { conversationReady: false } };
+  const result = captureConversationReadinessAdmission(fixture.deps, ADMITTED_MODEL);
+  expect(result).toMatchObject({
+    status: 400,
+    body: { error: { code: "CONVERSATION_MODEL_NOT_READY" } },
+  });
+  expect(JSON.stringify(result)).toContain("Settings > Models");
+  await expect(callBuffered(fixture.wrapped)).rejects.toBeInstanceOf(
+    ConversationModelNotReadyError,
+  );
+  expect(dispatch).not.toHaveBeenCalled();
 });

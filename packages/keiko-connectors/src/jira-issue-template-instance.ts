@@ -153,7 +153,7 @@ export async function readJiraTemplateInstanceMetadata(
 
 function headingsOf(description: string): readonly string[] {
   const seen = new Map<string, string>();
-  for (const { title } of readJiraDescriptionSections(description)) {
+  for (const { title } of readJiraDescriptionSections(description, "jira-wiki")) {
     const key = normalizeJiraSectionHeading(title);
     if (key.length > 0 && key.length <= 120 && !seen.has(key)) seen.set(key, title.trim());
   }

@@ -31,20 +31,14 @@ export function gatewayMessagesForToolExchange(
     reason: "observation-unavailable",
     effect: "unknown",
   };
-  if (exchange.call.origin === "runtime")
-    return [
-      {
-        role: "user",
-        content: JSON.stringify({
-          kind: "runtime-tool-observation",
-          sourceTrust: "untrusted-data",
-          call: exchange.call,
-          result,
-        }),
-      },
-    ];
   return [
-    { role: "assistant", content: "", toolCalls: [exchange.call] },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        { id: exchange.call.id, name: exchange.call.name, arguments: exchange.call.arguments },
+      ],
+    },
     {
       role: "tool",
       toolCallId: exchange.call.id,
@@ -64,15 +58,8 @@ function transcriptMessages(
   const exchanges = message.toolTranscript?.exchanges;
   if (exchanges === undefined || exchanges.length === 0) return undefined;
   const turn: GatewayConversationMessage = { role: message.role, content };
-  const runtime = exchanges
-    .filter((exchange) => exchange.call.origin === "runtime")
-    .flatMap(gatewayMessagesForToolExchange);
-  const tools = exchanges
-    .filter((exchange) => exchange.call.origin !== "runtime")
-    .flatMap(gatewayMessagesForToolExchange);
-  // Keep the actual human message last among user-role context entries: attachments and prompt
-  // selection must still bind to the person, not to a runtime observation.
-  return message.role === "assistant" ? [...runtime, ...tools, turn] : [...runtime, turn, ...tools];
+  const tools = exchanges.flatMap(gatewayMessagesForToolExchange);
+  return message.role === "assistant" ? [...tools, turn] : [turn, ...tools];
 }
 
 export const MAX_CONTEXT_MESSAGES = 24;

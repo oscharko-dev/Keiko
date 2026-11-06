@@ -309,3 +309,18 @@ it("derives review completion only from current-turn settled windows and their i
       .reviewedDocumentCount,
   ).toBe(0);
 });
+
+it("retains unreadable search documents even when metadata reports extraction success", () => {
+  const page = exchange(
+    {
+      outcome: "succeeded",
+      view: "search",
+      items: [],
+      totals: { documentCount: 2, documentsNotExtracted: 0 },
+      coverage: { atEnd: true, unavailableDocumentScopes: ["unreadable-scope"] },
+    },
+    { view: "search", query: "absent" },
+    "keiko.knowledge.documents",
+  );
+  expect(requiredCoverage([page]).unavailableDocumentCount).toBe(1);
+});

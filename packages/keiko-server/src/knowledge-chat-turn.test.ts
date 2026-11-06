@@ -28,6 +28,7 @@ import {
   createDefaultChatCapability,
   findConfiguredCapability,
   CallerAttemptAdmissionError,
+  ProviderError,
   createGatewayToolCatalogBridge,
   parseGatewayConfig,
   toolCallingConfigurationFingerprint,
@@ -38,6 +39,7 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { podFixture, specification, type PodFixture } from "./_requirementSupport.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { createChatToolTurn } from "./chat-tool-runtime.js";
+import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
 import { installKnowledgeChatCatalogRuntime } from "./knowledge-chat-catalog.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { chatConnectorTools } from "./chat-context-connectors.js";
@@ -170,7 +172,7 @@ function assertRuntimeContext(
 ): void {
   expect(request?.messages.filter((message) => message.role === "user").at(-1)).toEqual(human);
   const projection = usableGatewayTurns(history)[0]?.content;
-  expect(projection).toContain("runtime-tool-observation");
+  expect(projection).toContain('"role":"tool"');
   expect(projection).toContain("knowledge-chat-pod.md");
   expect(
     conversationForGateway(history)
@@ -618,53 +620,98 @@ it.each([
   },
 );
 
-it("charges the runtime inventory to a one-tool envelope without exempting final synthesis", async () => {
-  const { pod, deps } = await fixture();
-  Object.assign(deps, {
-    chatToolTurnBudget: {
-      maxRuntimeMs: 60_000,
-      maxToolCalls: 1,
-      maxPromptTokens: 100_000,
-      maxPatchBytes: 0,
-    },
-  });
-  const accepted = deps.store.admitChatTurn("runtime-inventory-budget", {
-    chatId: pod.chatId,
-    role: "user",
-    content: "List the selected documents",
-    timestamp: Date.now(),
-    runId: undefined,
-    workflowId: undefined,
-    workflowStatus: undefined,
-    shortResult: undefined,
-    taskType: undefined,
-  });
-  if (accepted.kind !== "admitted") throw new Error("Expected human turn");
-  const turn = await createChatToolTurn(
-    deps,
-    MODEL,
-    accepted.userMessage,
-    new AbortController().signal,
-    "runtime-inventory-budget",
-  );
-  if (turn === undefined) throw new Error("Expected Knowledge turn");
-  const calls: GatewayCallRequest[] = [];
-  const answer = await turn.call(
-    turn.meter(model(calls, "knowledge.documents", { view: "inventory" })),
-    { modelId: MODEL, messages: [{ role: "user", content: "List the selected documents" }] },
-    new AbortController().signal,
-  );
-  expect(calls).toHaveLength(0);
-  const exchanges = deps.store.findMessageById(accepted.userMessage.id)?.toolTranscript?.exchanges;
-  expect(exchanges).toHaveLength(1);
-  expect(exchanges?.[0]).toMatchObject({
-    call: { origin: "runtime", name: "knowledge_documents" },
-    result: { status: "completed" },
-  });
-  expect(answer.content).toContain("this turn used up its tool-call or prompt budget");
-  expect(answer.content).not.toContain("Source coverage:");
-  expect(turn.endedEarly).toBe(true);
-});
+it.each(["call", "stream", "meter"] as const)(
+  "charges the runtime inventory to a one-tool envelope before %s re-entry",
+  async (entry) => {
+    const { pod, deps } = await fixture();
+    Object.assign(deps, {
+      chatToolTurnBudget: {
+        maxRuntimeMs: 60_000,
+        maxToolCalls: 1,
+        maxPromptTokens: 100_000,
+        maxPatchBytes: 0,
+      },
+    });
+    const accepted = deps.store.admitChatTurn("runtime-inventory-budget", {
+      chatId: pod.chatId,
+      role: "user",
+      content: "List the selected documents",
+      timestamp: Date.now(),
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    if (accepted.kind !== "admitted") throw new Error("Expected human turn");
+    const turn = await createChatToolTurn(
+      deps,
+      MODEL,
+      accepted.userMessage,
+      new AbortController().signal,
+      "runtime-inventory-budget",
+    );
+    if (turn === undefined) throw new Error("Expected Knowledge turn");
+    const calls: GatewayCallRequest[] = [];
+    const answer = await turn.call(
+      turn.meter(model(calls, "knowledge.documents", { view: "inventory" })),
+      { modelId: MODEL, messages: [{ role: "user", content: "List the selected documents" }] },
+      new AbortController().signal,
+    );
+    expect(calls).toHaveLength(0);
+    const exchanges = deps.store.findMessageById(accepted.userMessage.id)?.toolTranscript
+      ?.exchanges;
+    expect(exchanges).toHaveLength(1);
+    expect(exchanges?.[0]).toMatchObject({
+      call: { name: "knowledge_documents" },
+      result: { status: "completed" },
+    });
+    expect(answer.content).toContain("this turn used up its tool-call or prompt budget");
+    expect(answer.content).not.toContain("Source coverage:");
+    expect(turn.endedEarly).toBe(true);
+    if (entry === "call") {
+      await expect(
+        turn.call(
+          turn.meter(model(calls, "knowledge.documents", { view: "inventory" })),
+          { modelId: MODEL, messages: [{ role: "user", content: "Continue the ended turn" }] },
+          new AbortController().signal,
+        ),
+      ).rejects.toBeInstanceOf(CallerAttemptAdmissionError);
+    } else if (entry === "meter") {
+      const dispatched = vi.fn();
+      const metered = turn.meter({
+        call: (request): Promise<NormalizedResponse> => {
+          const reservation = request.attemptAdmission?.({ promptTokens: 1, maxOutputTokens: 1 });
+          if (reservation === undefined)
+            throw new CallerAttemptAdmissionError("Synthetic ended grant refused");
+          dispatched();
+          throw new TypeError("An ended turn dispatched provider work");
+        },
+      });
+      await expect(
+        metered.call(
+          { modelId: MODEL, messages: [{ role: "user", content: "Continue the ended turn" }] },
+          new AbortController().signal,
+        ),
+      ).rejects.toBeInstanceOf(CallerAttemptAdmissionError);
+      expect(dispatched).not.toHaveBeenCalled();
+    } else {
+      const provider = vi.fn<NonNullable<ModelPort["callStream"]>>();
+      const consume = async (): Promise<void> => {
+        for await (const event of turn.stream(
+          provider,
+          { modelId: MODEL, messages: [{ role: "user", content: "Continue the ended turn" }] },
+          new AbortController().signal,
+        )) {
+          if (event.type === "done") return;
+        }
+      };
+      await expect(consume()).rejects.toBeInstanceOf(CallerAttemptAdmissionError);
+      expect(provider).not.toHaveBeenCalled();
+    }
+    expect(calls).toHaveLength(0);
+  },
+);
 
 function installSemanticExternalCatalog(deps: UiHandlerDeps): void {
   const { settings } = requiredReviewOwners(deps);
@@ -711,12 +758,14 @@ function installSemanticExternalCatalog(deps: UiHandlerDeps): void {
 }
 
 it.each([
-  { complete: true, external: false },
-  { complete: false, external: false },
-  { complete: true, external: true },
+  { complete: true, external: false, failure: "none" },
+  { complete: false, external: false, failure: "none" },
+  { complete: true, external: true, failure: "none" },
+  { complete: true, external: false, failure: "invalid" },
+  { complete: true, external: false, failure: "provider" },
 ])(
-  "keeps three parsed semantic windows inside the tool envelope before final synthesis (complete: $complete, external: $external)",
-  async ({ complete, external }) => {
+  "keeps three semantic window attempts inside the tool envelope before final synthesis (complete: $complete, external: $external, failure: $failure)",
+  async ({ complete, external, failure }) => {
     const { pod, deps } = await fixture(3);
     Object.assign(deps, {
       chatToolTurnBudget: {
@@ -779,6 +828,14 @@ it.each([
         reservation.settle(response.usage, true, "observed");
         if (request.toolCatalog?.kind !== "bound") {
           reviewed++;
+          if (failure !== "none" && reviewed <= 2) {
+            if (failure === "provider") {
+              const error = new ProviderError("Synthetic nested provider failure", 503);
+              error.partialUsage = { promptTokens: 100, completionTokens: 10, streamedChars: 0 };
+              return Promise.reject(error);
+            }
+            return Promise.resolve({ ...response, content: "Invalid structured review" });
+          }
           return Promise.resolve({
             ...response,
             content: JSON.stringify({ complete, findings: [] }),
@@ -844,16 +901,13 @@ it.each([
       turn,
     );
     expect(result.content).toContain("reviewed source proposals");
+    expect(result.usage).toMatchObject({ promptTokens: 700, completionTokens: 70 });
     expect(reviewed).toBe(3);
     expect(calls).toHaveLength(7);
     expect(budget.remaining()).toBe(1);
     expect(budget.pendingUsage()).toEqual({
-      promptTokens: 100,
-      completionTokens: 10,
-    });
-    expect(budget.takeUsage()).toEqual({
-      promptTokens: 700,
-      completionTokens: 70,
+      promptTokens: failure === "none" ? 100 : 300,
+      completionTokens: failure === "none" ? 10 : 30,
     });
     const reference = authority;
     if (reference === undefined) throw new Error("Expected accepted source authority");
@@ -870,8 +924,20 @@ it.each([
       );
     expect(reserve(301).ok).toBe(false);
     expect(reserve(300).ok).toBe(true);
-    expect(tracker.admission({ promptTokens: 100, maxOutputTokens: 25 })).toBeDefined();
+    // Synthesis has its own pending usage; the turn registry above accounts for every tool round.
+    const pendingSynthesis = budget.pendingUsage();
+    const remainingInput = 1000 - pendingSynthesis.promptTokens;
+    const remainingOutput = 1000 - pendingSynthesis.completionTokens;
+    expect(
+      tracker.admission({ promptTokens: remainingInput + 1, maxOutputTokens: 25 }),
+    ).toBeUndefined();
+    const finalGrant = tracker.admission({ promptTokens: remainingInput, maxOutputTokens: 25 });
+    expect(finalGrant?.maxOutputTokens).toBe(Math.min(25, remainingOutput));
     expect(tracker.admission({ promptTokens: 1, maxOutputTokens: 1 })).toBeUndefined();
+    expect(budget.takeUsage()).toEqual({
+      promptTokens: 700,
+      completionTokens: 70,
+    });
   },
 );
 
@@ -1015,4 +1081,114 @@ it.each([
   }
   expect(toolLoop).not.toHaveBeenCalled();
   assertCitationRepairToolTranscriptAbsent(deps, accepted.userMessage.id);
+});
+
+async function inventoryAdmissionFixture(): Promise<{
+  readonly pod: PodFixture;
+  readonly deps: UiHandlerDeps;
+  readonly turn: NonNullable<Awaited<ReturnType<typeof createChatToolTurn>>>;
+  readonly calls: GatewayCallRequest[];
+  readonly request: GatewayCallRequest;
+  readonly accepted: Extract<
+    ReturnType<UiHandlerDeps["store"]["admitChatTurn"]>,
+    { readonly kind: "admitted" }
+  >;
+}> {
+  const { pod, deps } = await fixture();
+  const accepted = deps.store.admitChatTurn("inventory-admission", {
+    chatId: pod.chatId,
+    role: "user",
+    content: "Read the selected sources",
+    timestamp: Date.now(),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+  if (accepted.kind !== "admitted") throw new TypeError("Expected accepted human turn");
+  const turn = await createChatToolTurn(
+    deps,
+    MODEL,
+    accepted.userMessage,
+    new AbortController().signal,
+    "inventory-admission",
+  );
+  if (turn === undefined) throw new TypeError("Expected Knowledge turn");
+  const calls: GatewayCallRequest[] = [];
+  const request = {
+    modelId: MODEL,
+    messages: [{ role: "user" as const, content: accepted.userMessage.content }],
+  };
+  return { pod, deps, turn, calls, request, accepted };
+}
+
+it("does not retain rejected inventory preparation across a safe turn re-entry", async () => {
+  const f = await inventoryAdmissionFixture();
+  const failed = new TypeError("Synthetic pre-dispatch persistence failure");
+  vi.spyOn(f.deps.store, "updateChatToolTranscript").mockImplementationOnce(() => {
+    throw failed;
+  });
+  const admittedModel = f.turn.meter(model(f.calls, "knowledge.documents", { view: "inventory" }));
+  await expect(f.turn.call(admittedModel, f.request, new AbortController().signal)).rejects.toBe(
+    failed,
+  );
+  expect(f.calls).toHaveLength(0);
+  const answer = await f.turn.call(admittedModel, f.request, new AbortController().signal);
+  expect(answer.content).toContain("Observed the Knowledge Pod");
+  expect(f.calls).toHaveLength(2);
+});
+
+it.each(["cancelled", "deadline", "capability-changed"] as const)(
+  "refuses runtime inventory before dispatch when %s",
+  async (state) => {
+    const f = await inventoryAdmissionFixture();
+    const controller = new AbortController();
+    if (state === "cancelled") controller.abort();
+    if (state === "deadline") vi.spyOn(Date, "now").mockReturnValue(f.turn.deadlineAtMs);
+    if (state === "capability-changed") configure(f.deps, 1024, 4096, false);
+    await expect(
+      f.turn.call(
+        f.turn.meter(model(f.calls, "knowledge.documents", { view: "inventory" })),
+        f.request,
+        controller.signal,
+      ),
+    ).rejects.toBeInstanceOf(CatalogDispatchFault);
+    expect(f.calls).toHaveLength(0);
+    expect(f.deps.store.findMessageById(f.accepted.userMessage.id)?.toolTranscript).toBeUndefined();
+  },
+);
+
+it("does not register source authority when catalog preparation fails", async () => {
+  const { pod, deps } = await fixture();
+  const accepted = deps.store.admitChatTurn("catalog-before-authority", {
+    chatId: pod.chatId,
+    role: "user",
+    content: "Read documents",
+    timestamp: Date.now(),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+  if (
+    accepted.kind !== "admitted" ||
+    deps.knowledgeChatCatalog === undefined ||
+    deps.agentAuthorityRegistry === undefined
+  )
+    throw new TypeError("Expected Knowledge owners");
+  const register = vi.spyOn(deps.agentAuthorityRegistry, "registerChat");
+  const failure = new TypeError("Synthetic catalog preparation failure");
+  vi.spyOn(deps.knowledgeChatCatalog, "get").mockRejectedValueOnce(failure);
+  await expect(
+    createChatToolTurn(
+      deps,
+      MODEL,
+      accepted.userMessage,
+      new AbortController().signal,
+      "catalog-before-authority",
+    ),
+  ).rejects.toBe(failure);
+  expect(register).not.toHaveBeenCalled();
 });

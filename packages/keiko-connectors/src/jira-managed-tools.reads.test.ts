@@ -17,6 +17,16 @@ import type {
 import { createJiraManagedProvider, type JiraManagedConnection } from "./jira-managed-tools.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { field, response } from "../../../tests/support/jira-managed-remote.js";
+import { asRecord } from "./atlassian-sync-classify.js";
+
+function descriptionSchemaOf(result: ManagedMcpToolResult): object {
+  const items = result.data.items;
+  if (!Array.isArray(items)) throw new TypeError("Missing edit metadata");
+  const description = items.map(asRecord).find((item) => item?.id === "description");
+  const schema = asRecord(description?.inputSchema);
+  if (schema === undefined) throw new TypeError("Missing description schema");
+  return schema;
+}
 
 // The connector owns handler selection, argument validation and remote projection; the server
 // owns the public schemas. These private declarations exercise every advertised read handler.
@@ -485,6 +495,35 @@ it("advertises explicit Markdown provenance only for Data Center description inp
     issueTypeId: "1",
   });
   expect(cloud.data).toMatchObject({ outcome: "failed", reason: "unsupported-deployment" });
+});
+
+it("offers the same isolated Markdown input contract when editing a description", async () => {
+  const f = fixture({
+    fields: {
+      description: field("description", "string"),
+      environment: field("environment", "string"),
+    },
+  });
+  const first = await f.run("jira.edit-fields", { issueKey: "SYN-1" });
+  const firstItems = first.data.items;
+  if (!Array.isArray(firstItems)) throw new TypeError("Missing first edit metadata items");
+  expect(firstItems).toHaveLength(2);
+  expect(firstItems[0]).toMatchObject({
+    id: "description",
+    nativeFormat: "jira-wiki",
+    markdownSerialization: "headings-only",
+  });
+  expect(firstItems[1]).not.toHaveProperty("inputSchema");
+  const originalSchema = structuredClone(descriptionSchemaOf(first));
+  expect(originalSchema).toHaveProperty("oneOf.0", { type: "string", maxLength: 32768 });
+  Reflect.set(descriptionSchemaOf(first), "oneOf", []);
+  const second = await f.run("jira.edit-fields", { issueKey: "SYN-1" });
+  const secondItems = second.data.items;
+  if (!Array.isArray(secondItems)) throw new TypeError("Missing second edit metadata items");
+  expect(secondItems).toHaveLength(2);
+  expect(secondItems[0]).toMatchObject({ id: "description" });
+  expect(secondItems[1]).not.toHaveProperty("inputSchema");
+  expect(descriptionSchemaOf(second)).toEqual(originalSchema);
 });
 
 it("retains transition metadata availability and safely omits malformed targets", async () => {

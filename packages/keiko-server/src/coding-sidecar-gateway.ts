@@ -4689,7 +4689,7 @@ function configuredConversationSubset(
   };
 }
 
-/** A new run is admitted only on fresh serving evidence; its start checked the model just before. */
+/** A new run needs a positive current-generation serving observation; its age never starts a probe. */
 function resolveFreshCodingProfile(
   config: GatewayConfig | undefined,
   holder: RuntimeGatewayConfig | undefined,
@@ -4717,8 +4717,8 @@ function resolveFreshCodingProfile(
 
 /**
  * What the Workbench may claim before a run, judged as Chat judges its picker: an observed failure
- * is not ready, and a model whose answer expired or that nobody checked yet is usable, because the
- * start of its run checks it first (`awaitCodingRunModelReadiness`). A fresh-only projection turned
+ * is not ready. An unknown choice remains selectable, but run minting requires its positive startup
+ * or explicit Settings observation; neither picker reads nor run starts initiate a probe. An age-only projection turned
  * every expired answer into "Keiko is still checking the model source" with no check running
  * (customer, 1.3.4).
  */

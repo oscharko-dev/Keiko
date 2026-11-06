@@ -390,6 +390,9 @@ describe("the dry run before approval", () => {
       readonly fields?: readonly unknown[];
       readonly existing?: readonly unknown[];
       readonly metadataFails?: boolean;
+      readonly draftRequirements?: JiraChatTemplatePreflightPorts["draftRequirements"];
+      readonly readAllowed?: boolean;
+      readonly signal?: AbortSignal;
       readonly untracedAdvice?: JiraChatTemplatePreflightPorts["untracedAdvice"];
     } = {},
   ): {
@@ -439,7 +442,8 @@ describe("the dry run before approval", () => {
         atlassianConnectorCredentials: { httpBodyPortFactory: () => http },
       } as never,
       writeArguments: () => args as never,
-      readAllowed: () => true,
+      readAllowed: () => jira.readAllowed ?? true,
+      draftRequirements: jira.draftRequirements,
       untracedAdvice: jira.untracedAdvice,
     });
     return {
@@ -449,7 +453,7 @@ describe("the dry run before approval", () => {
           chatId: "chat",
           correlationId: "preflight-1",
           authorityReference: {},
-          signal: new AbortController().signal,
+          signal: jira.signal ?? new AbortController().signal,
         } as never),
     };
   }
@@ -495,6 +499,42 @@ describe("the dry run before approval", () => {
       fields: { summary: `Item ${ref}`, description },
     });
     const GOOD = "h2. Acceptance criteria\n* works";
+
+    it("returns source-criterion failure before approval and before Jira metadata reads", async () => {
+      const data = {
+        outcome: "rejected",
+        reason: "field-validation",
+        requirementRefusal: "references",
+      };
+      const draftRequirements = vi.fn(() => ({ data, violationCount: 1 }));
+      const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
+        draftRequirements,
+      });
+      expect(await f.run()).toEqual(data);
+      expect(draftRequirements).toHaveBeenCalledTimes(1);
+      expect(f.http).not.toHaveBeenCalled();
+    });
+
+    it.each(["cancelled", "read-denied"] as const)(
+      "does not read source criteria when %s",
+      async (state) => {
+        const controller = new AbortController();
+        if (state === "cancelled") controller.abort();
+        const draftRequirements = vi.fn();
+        const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
+          draftRequirements,
+          signal: controller.signal,
+          readAllowed: state !== "read-denied",
+        });
+        await expect(f.run()).rejects.toMatchObject(
+          state === "cancelled"
+            ? { name: "AbortError" }
+            : { status: "denied", reason: "effect-denied" },
+        );
+        expect(draftRequirements).not.toHaveBeenCalled();
+        expect(f.http).not.toHaveBeenCalled();
+      },
+    );
 
     it("refuses an invalid item that follows a valid one, before any approval, and never writes", async () => {
       const sink = logs();

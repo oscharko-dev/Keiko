@@ -10,6 +10,7 @@ import {
   JIRA_FIELD_VALIDATION_FAILURES,
   JIRA_MUTATION_DETAIL_LIMITS,
   JIRA_MUTATION_OPERATIONS,
+  JIRA_REQUIREMENT_REFERENCE_CHARS_MAX,
   JIRA_MUTATION_RESULT_STATES,
   JIRA_TEMPLATE_RULE_IDS,
   JIRA_TEMPLATE_VIOLATIONS_MAX,
@@ -32,27 +33,37 @@ import {
 import { KEY_RANGE_ENTRY_CHARS } from "./jiraDraftKeyRanges.js";
 import { jiraMutationToolId } from "./jiraMutationToolId.js";
 
+/** Conjunction preserves the native lowercase UUID grammar within the safe schema dialect. */
+export const JIRA_DRAFT_ID_SCHEMA = { ...text(36), format: "uuid", pattern: "^[0-9a-f-]{36}$" };
+
 const ISSUE_KEY = { ...text(128), minLength: 1 };
-const REQUIREMENT_IDS = { type: "array", maxItems: JIRA_REQUIREMENT_IDS_MAX, items: text(80) };
+const REQUIREMENT_IDS = {
+  type: "array",
+  maxItems: JIRA_REQUIREMENT_IDS_MAX,
+  items: text(JIRA_REQUIREMENT_REFERENCE_CHARS_MAX),
+};
 const TRACE_RESULT = object({
   labelsApplied: { type: "boolean" },
   footerApplied: { type: "boolean" },
   droppedLabels: { type: "array", maxItems: 16, items: text(255) },
 });
-const REQUIREMENT_PROBLEMS = {
+export const REQUIREMENT_PROBLEMS = {
   type: "array",
   maxItems: 32,
   items: object(
     {
       ref: text(32),
-      reference: text(80),
-      reason: { type: "string", enum: ["malformed", "unknown", "ambiguous"] },
+      reference: text(JIRA_REQUIREMENT_REFERENCE_CHARS_MAX),
+      reason: {
+        type: "string",
+        enum: ["malformed", "unknown", "ambiguous", "acceptance-criteria-missing"],
+      },
       candidates: { type: "array", maxItems: 8, items: text(120) },
     },
     ["reference", "reason"],
   ),
 };
-const REQUIREMENT_REFUSAL = {
+export const REQUIREMENT_REFUSAL = {
   type: "string",
   enum: ["no-knowledge-pod", "unavailable", "references", "untraced"],
 };
@@ -461,7 +472,7 @@ const DEFINITIONS: Readonly<
         ),
         object(
           {
-            draftId: { ...text(36), format: "uuid", pattern: "^[0-9a-f-]{36}$" },
+            draftId: JIRA_DRAFT_ID_SCHEMA,
             draftDigest: { ...text(64), pattern: JIRA_DRAFT_DIGEST_PATTERN },
           },
           ["draftId", "draftDigest"],

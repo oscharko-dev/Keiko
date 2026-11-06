@@ -567,6 +567,9 @@ export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorAction
   ] as const satisfies readonly AtlassianConnectorActionType[]);
 
 /** One mapping from canonical tools to the existing connector policy vocabulary. */
+/** Full source reference: collision-safe document scope, requirement id and optional criterion. */
+export const JIRA_REQUIREMENT_REFERENCE_CHARS_MAX = 120;
+
 export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   Record<JiraManagedReadToolName | JiraMutationOperation, AtlassianConnectorActionType>
 > = Object.freeze({
@@ -1596,6 +1599,7 @@ export {
 export {
   JIRA_HEADING_LINE_CHARS_MAX,
   readJiraDescriptionSections,
+  readJiraDescriptionBlocks,
   serializeJiraDescriptionHeadings,
   JIRA_DESCRIPTION_INPUT_SCHEMA,
   readJiraMarkdownDescription,

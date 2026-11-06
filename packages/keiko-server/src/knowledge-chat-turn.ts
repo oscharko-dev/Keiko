@@ -1,5 +1,5 @@
 import { reserveChatToolPrompt } from "./chat-tool-approvals.js";
-import { ChatToolTurn, bindChatToolCatalog, chatModelSupportsTools } from "./chat-tool-turn.js";
+import { ChatToolTurn, bindChatToolCatalog, mintAndBoundChatTurn } from "./chat-tool-turn.js";
 import {
   mintAcceptedKnowledgeChatAuthority,
   reserveCurrentKnowledgeChatAuthority,
@@ -13,11 +13,8 @@ import type {
   JiraChatCatalogContext,
 } from "./atlassian/jiraChatCatalogConsumer.js";
 import type { ManagedProviderCatalog } from "./tool-catalog/managedProviderCatalog.js";
-import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { chatKnowledgeScopes } from "./requirement-inventory.js";
-import { ConversationModelNotReadyError } from "./conversation-readiness-admission.js";
-import { logConversationAdmission } from "./conversation-readiness-log.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/index.js";
 
@@ -87,27 +84,20 @@ export async function createKnowledgeChatToolTurn(
   if (chatKnowledgeScopes(deps.store.findChatById(message.chatId)).length === 0) return undefined;
   if (deps.knowledgeChatCatalog === undefined) return undefined;
   const correlation = correlationIdOrUnknown(correlationId);
-  if (!chatModelSupportsTools(deps, modelId)) {
-    const generation = deps.gatewayConfig?.generation();
-    logConversationAdmission("observation-unavailable", correlation, generation, generation);
-    throw new ConversationModelNotReadyError("tool-calling");
-  }
-  const authority = mintAcceptedKnowledgeChatAuthority(deps, {
-    chatId: message.chatId,
-    userMessageId: message.id,
-    startedAtMs: message.timestamp,
-    nowMs: Date.now(),
-    correlationId: correlation,
-  });
-  requireDispatch(authority.ok, "denied", "authority-invalid");
-  const remaining = Date.parse(authority.envelope.expiresAt) - Date.now();
-  requireDispatch(remaining > 0, "denied", "authority-expired");
+  const managed = await deps.knowledgeChatCatalog.get();
+  const bound = mintAndBoundChatTurn<KnowledgeChatTurnOptions["authority"]>(
+    deps,
+    modelId,
+    message,
+    correlation,
+    (turn) => mintAcceptedKnowledgeChatAuthority(deps, turn),
+    [signal],
+  );
   return new KnowledgeChatToolTurn({
     deps,
     message,
-    authority,
-    managed: await deps.knowledgeChatCatalog.get(),
-    signal: AbortSignal.any([signal, AbortSignal.timeout(remaining)]),
+    ...bound,
+    managed,
     correlationId: correlation,
   });
 }

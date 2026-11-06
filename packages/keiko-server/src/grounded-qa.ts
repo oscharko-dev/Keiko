@@ -2621,7 +2621,7 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
         ? { promptContext: output.promptContext }
         : {}),
     },
-    deps.store,
+    deps.chatToolTurn,
   );
   deps.store.attachGroundedAnswer(assistantMessage.id, answer);
   if (sourceEvidenceAvailable) {

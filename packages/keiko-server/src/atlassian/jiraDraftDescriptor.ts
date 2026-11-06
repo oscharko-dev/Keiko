@@ -11,8 +11,11 @@ import {
 import { object, text } from "./jiraManagedSchemas.js";
 import {
   JIRA_DRAFT_ITEM_SCHEMA,
+  JIRA_DRAFT_ID_SCHEMA,
   JIRA_FAILURE_MESSAGES_SCHEMA,
   JIRA_VIOLATIONS_SCHEMA,
+  REQUIREMENT_PROBLEMS,
+  REQUIREMENT_REFUSAL,
 } from "./jiraManagedMutationDescriptors.js";
 
 const DESCRIPTION =
@@ -31,7 +34,7 @@ export const JIRA_DRAFT_STAGE_DECLARATION: ManagedMcpToolDeclaration = Object.fr
     inputSchema: compileExternalCatalogSchema(
       object(
         {
-          draftId: { ...text(36), format: "uuid", pattern: "^[0-9a-f-]{36}$" },
+          draftId: JIRA_DRAFT_ID_SCHEMA,
           items: {
             type: "array",
             minItems: 1,
@@ -46,6 +49,8 @@ export const JIRA_DRAFT_STAGE_DECLARATION: ManagedMcpToolDeclaration = Object.fr
       {
         outcome: { type: "string", enum: ["succeeded", "failed", "rejected"] },
         reason: text(64),
+        requirementRefusal: REQUIREMENT_REFUSAL,
+        requirementProblems: REQUIREMENT_PROBLEMS,
         draftId: text(64),
         draftDigest: text(64),
         newDraft: { type: "boolean" },

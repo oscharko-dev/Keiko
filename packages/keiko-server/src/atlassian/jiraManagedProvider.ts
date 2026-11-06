@@ -138,7 +138,7 @@ const DEFINITIONS: Readonly<
   },
   "jira.create-fields": {
     description:
-      "Read current create fields and applicable stored CREATE template rules for a project and issue type. Unsupported fields cannot be written. All field pages are needed to identify required fields. Keep every applicable template's required sections and rules; omitted templates mean incomplete rule metadata.",
+      "Read current create fields and applicable stored CREATE template rules for a project and issue type. Unsupported fields cannot be written. All field pages are needed to identify required fields. The first page carries applicableTemplates when the stored-rule source is available; matchedCount 0 with complete true means no matching rule. Keep every returned template's required sections and rules. complete false or omittedCount greater than 0 means rule metadata is incomplete, including missing source provenance.",
     arguments: {
       projectKey: text(128),
       issueTypeId: { type: "string", pattern: "^[0-9]{1,32}$", maxLength: 32 },

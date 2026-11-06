@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   deriveRequirementInventory,
+  documentScopesOf,
   type RequirementInventoryEntry,
 } from "../domain/requirementInventory.js";
 import {
@@ -287,4 +288,25 @@ describe("change queries (#4179 review, defect 10)", () => {
     expect(removed.map((query) => query.documentScope)).toEqual([small[0]?.documentScope]);
     expect(queries.filter((query) => query.purpose === "traced")).toHaveLength(2);
   });
+});
+
+it("resolves widened references uniquely and refuses an ambiguous legacy prefix", () => {
+  const keys = ["00000000-0000-4000-8000-00000001bbfc", "00000000-0000-4000-8000-00000001eacf"];
+  const scopes = documentScopesOf(keys);
+  const units = keys.flatMap((documentKey) =>
+    unitsOf(
+      deriveRequirementInventory({
+        text: TEXT.join("\n"),
+        documentKey,
+        documentScope: scopes.get(documentKey) ?? "",
+      }).entries,
+    ),
+  );
+  for (const scope of scopes.values()) {
+    expect(resolveRequirementReferences([`${scope}:LH-001/AC1`], units)).toMatchObject({
+      ok: true,
+      resolved: [{ unit: { entry: { documentScope: scope } }, criterion: { id: "LH-001/AC1" } }],
+    });
+  }
+  expect(resolveRequirementReferences(["46980558:LH-001"], units)).toMatchObject({ ok: false });
 });

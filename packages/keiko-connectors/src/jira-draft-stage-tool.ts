@@ -65,6 +65,13 @@ export interface JiraDraftToolDeps<Context extends ManagedMcpInvocationContext> 
   /** Binds a draft to the Chat that started it. */
   readonly owner: (context: Context) => string;
   readonly activity?: ((activity: JiraDraftActivity, context: Context) => void) | undefined;
+  /** Source-bound criterion checks supplied by the composing Chat before a draft digest is minted. */
+  readonly checkRequirements?:
+    | ((
+        items: readonly StagedJiraDraftItem[],
+        context: Context,
+      ) => { readonly data: CatalogJsonObject; readonly violationCount: number } | undefined)
+    | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -282,6 +289,38 @@ function pageFieldRefusals(
   return jiraDraftFieldRefusals(parsed, context, connection, { reconcile: false });
 }
 
+function pageRequirementRefusal<Context extends ManagedMcpInvocationContext>(
+  run: StageRun<Context>,
+  items: readonly StagedJiraDraftItem[],
+): ManagedMcpToolResult | undefined {
+  const requirements = run.deps.checkRequirements?.(items, run.context);
+  if (requirements === undefined) return undefined;
+  refuseStage(run, "invalid-fields", items.length, {
+    violationCount: requirements.violationCount,
+  });
+  return { isError: true, data: requirements.data };
+}
+
+function stagedActivity<Context extends ManagedMcpInvocationContext>(
+  run: StageRun<Context>,
+  draft: StagedJiraDraft,
+  args: StageArgs,
+  now: () => number,
+): void {
+  run.deps.activity?.(
+    activityOf(
+      {
+        phase: "staged",
+        newDraft: args.draftId === undefined,
+        pageItemCount: args.items.length,
+        durationMs: now() - run.startedAt,
+      },
+      draft,
+    ),
+    run.context,
+  );
+}
+
 /** `jira.draft-stage`: append a page of validated items to a draft; it changes nothing in Jira. */
 export async function executeJiraDraftStageTool<Context extends ManagedMcpInvocationContext>(
   rawArgs: CatalogJsonObject,
@@ -298,6 +337,8 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
     return { ...refused, data: { ...refused.data, guidance: invalidPageGuidance(rawArgs) } };
   }
   if (connection.deployment !== "data-center") return refuseStage(run, "unsupported-deployment", 0);
+  const requirements = pageRequirementRefusal(run, args.items);
+  if (requirements !== undefined) return requirements;
   const template = await firstJiraDraftTemplateRefusal(args.items, context, connection);
   if (template !== undefined) {
     refuseStage(run, "template-violation", args.items.length, {
@@ -318,18 +359,7 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
     args.items,
   );
   if (!appended.ok) return refuseStage(run, appended.refusal, args.items.length);
-  deps.activity?.(
-    activityOf(
-      {
-        phase: "staged",
-        newDraft: args.draftId === undefined,
-        pageItemCount: args.items.length,
-        durationMs: now() - startedAt,
-      },
-      appended.draft,
-    ),
-    context,
-  );
+  stagedActivity(run, appended.draft, args, now);
   return stagedView(appended.draft, args.draftId === undefined);
 }
 

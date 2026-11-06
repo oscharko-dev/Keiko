@@ -106,3 +106,32 @@ describe("nested caller admission", () => {
     expect(inner).toHaveBeenCalledTimes(1);
   });
 });
+
+it.each([false, true])(
+  "settles the exact parent before releasing its nested call slot (throwing: %s)",
+  (throws) => {
+    const failure = new Error("Synthetic parent settlement failure");
+    const release = vi.fn();
+    const settle = vi.fn(() => {
+      if (throws) throw failure;
+    });
+    const request = withNestedCallerAdmission(
+      REQUEST,
+      () => ({ settle }),
+      () => release,
+    );
+    const reservation = request.attemptAdmission?.(INPUT);
+    expect(release).not.toHaveBeenCalled();
+    const usage = { promptTokens: 100, completionTokens: 25 };
+    const finish = (): void => {
+      reservation?.settle(usage, true, "unknown");
+    };
+    if (throws) expect(finish).toThrow(failure);
+    else finish();
+    expect(settle).toHaveBeenCalledExactlyOnceWith(usage, true, "unknown");
+    expect(release).toHaveBeenCalledOnce();
+    reservation?.settle(usage, true, "unknown");
+    expect(settle).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  },
+);

@@ -9,7 +9,7 @@ import {
   toolCallingConfigurationFingerprint,
 } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
-import { handleModels } from "./read-handlers.js";
+import { handleModels, handleModelsAfterStartupCatalog } from "./read-handlers.js";
 import {
   refreshLiteLlmGatewayCatalog,
   parseModelDiscovery,
@@ -22,6 +22,7 @@ import {
   ensureCodingWorkbenchContextWindows,
   initializeLiteLlmCodingReadiness,
   runGatewayReadiness,
+  awaitPendingConversationReadiness,
   resetCodingWorkbenchContextWindowProbesForTests,
   withReadinessParentCorrelation,
 } from "./gateway-readiness.js";
@@ -235,7 +236,10 @@ it("reuses startup discovery on repeated browser reloads without provider traffi
   } as RouteContext;
   for (let reload = 0; reload < 3; reload += 1) {
     const result = handleModels(context, deps);
-    expect(result).toMatchObject({ status: 200, body: { models: [{ id: "chat-model" }] } });
+    expect(result).toMatchObject({
+      status: 200,
+      body: { models: [{ id: "chat-model" }] },
+    });
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(discovery).toHaveBeenCalledOnce();
   }
@@ -261,6 +265,8 @@ it("serves the settled startup catalog on the first mounted browser read without
     throw new TypeError("Expected mounted models route.");
   }
   const context = {
+    req: new EventEmitter(),
+    res: new EventEmitter(),
     correlationId: "corr-cold-browser-catalog",
     url: new URL("http://127.0.0.1/api/models"),
   } as RouteContext;
@@ -2515,4 +2521,89 @@ it("waits for the replacement generation instead of adopting a superseded startu
     oldGate.resolve(undefined);
     newGate.resolve(undefined);
   }
+});
+
+function passiveModelContext(): RouteContext {
+  return {
+    req: new EventEmitter(),
+    res: new EventEmitter(),
+    correlationId: "corr-passive-metadata-bound",
+    url: new URL("http://127.0.0.1/api/models"),
+  } as RouteContext;
+}
+
+it("bounds ordinary model catalog joins without cancelling discovery or probing again", async () => {
+  vi.useFakeTimers();
+  const gate = deferredValue<undefined>();
+  const provider = vi.fn();
+  vi.stubGlobal("fetch", provider);
+  const events: ServerLogEvent[] = [];
+  const owner = startupDeps(undefined, events);
+  const wait = vi.fn(() => gate.promise);
+  const deps: UiHandlerDeps = {
+    ...owner,
+    gatewayConfig: undefined,
+    config: startupConfig(),
+    waitForStartupGatewayCatalog: wait,
+  };
+  const ctx = passiveModelContext();
+  let settled = false;
+  const response = handleModelsAfterStartupCatalog(ctx, deps).then((value) => {
+    settled = true;
+    return value;
+  });
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(settled).toBe(true);
+  await expect(response).resolves.toMatchObject({
+    status: 200,
+    body: { models: [{ id: "chat-model" }], startupReadinessPending: true },
+  });
+  expect(provider).not.toHaveBeenCalled();
+  expect(wait).toHaveBeenCalledOnce();
+  expect(ctx.req.listenerCount("aborted")).toBe(0);
+  expect(ctx.res.listenerCount("close")).toBe(0);
+  const event = events.find((entry) => entry.op === "gateway.catalog.metadata.wait");
+  expect(event?.extra).toMatchObject({ outcome: "timeout", elapsedMs: 1000 });
+  expectActivityLogProof(
+    "gateway.catalog.metadata.wait.line",
+    formatActivityLogProofLine(event ?? {}),
+  );
+  gate.resolve(undefined);
+  await vi.advanceTimersByTimeAsync(0);
+  await expect(handleModelsAfterStartupCatalog(ctx, deps)).resolves.toMatchObject({ status: 200 });
+  expect(provider).not.toHaveBeenCalled();
+});
+
+it("cancels an ordinary model catalog join and keeps its shared startup work alive", async () => {
+  const gate = deferredValue<undefined>();
+  const owner = startupDeps(undefined);
+  const deps = { ...owner, waitForStartupGatewayCatalog: (): Promise<undefined> => gate.promise };
+  const ctx = passiveModelContext();
+  const response = handleModelsAfterStartupCatalog(ctx, deps);
+  const rejected = expect(response).rejects.toMatchObject({ reason: "aborted" });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  ctx.req.emit("aborted");
+  await rejected;
+  expect(ctx.req.listenerCount("aborted")).toBe(0);
+  expect(ctx.res.listenerCount("close")).toBe(0);
+  gate.resolve(undefined);
+  await expect(handleModelsAfterStartupCatalog(passiveModelContext(), deps)).resolves.toMatchObject(
+    { status: 200 },
+  );
+});
+
+it("keeps one absolute deadline while readiness generations continuously change", async () => {
+  const owner = startupDeps(undefined);
+  const holder = owner.gatewayConfig;
+  if (holder === undefined) throw new TypeError("Expected configuration owner");
+  let generation = 0;
+  let clock = 0;
+  const deps = { ...owner, gatewayConfig: { ...holder, generation: (): number => generation++ } };
+  await expect(
+    awaitPendingConversationReadiness(deps, {
+      deadlineAtMs: 5,
+      nowMs: () => clock++,
+    }),
+  ).rejects.toMatchObject({ name: "AbortDeadlineRaceError", reason: "timeout" });
+  expect(generation).toBeLessThan(20);
 });

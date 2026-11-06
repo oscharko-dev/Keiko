@@ -16,15 +16,17 @@ import { jiraReadFailure } from "./jira-managed-metadata.js";
 const TEMPLATES_MAX = 8;
 const TEMPLATE_BYTES_MAX = 16_384;
 
-function ruleFacts(template: JiraIssueTemplate, set: JiraIssueTemplateSet): CatalogJsonObject {
+function ruleFacts(
+  template: JiraIssueTemplate,
+  set: JiraIssueTemplateSet,
+): CatalogJsonObject | undefined {
   const source = set.references?.find((reference) => reference.template === template);
+  if (source === undefined) return undefined;
   return {
     project: template.project,
     issueType: template.issueType,
     operation: "create",
-    ...(source === undefined
-      ? {}
-      : { source: { id: source.id, revision: source.revision, digest: source.digest } }),
+    source: { id: source.id, revision: source.revision, digest: source.digest },
     summary: { ...template.summary },
     requiredFields: [...template.requiredFields],
     requiredSections: [...template.requiredSections],
@@ -40,6 +42,7 @@ function boundedRules(
   const items: CatalogJsonObject[] = [];
   for (const template of matching) {
     const item = ruleFacts(template, set);
+    if (item === undefined) continue;
     if (
       items.length === TEMPLATES_MAX ||
       Buffer.byteLength(JSON.stringify([...items, item])) > TEMPLATE_BYTES_MAX
@@ -96,9 +99,7 @@ function matchedRulesResult(
     omittedCount: matching.length - returnedCount,
     unreadableCount: 0,
   });
-  return matching.length === 0
-    ? result
-    : { ...result, data: { ...result.data, applicableTemplates: rules } };
+  return { ...result, data: { ...result.data, applicableTemplates: rules } };
 }
 
 function admitted(context: ManagedMcpInvocationContext): boolean {
@@ -119,6 +120,10 @@ function readIdentity(
   );
 }
 
+function isTemplateMetadataPage(result: ManagedMcpToolResult, args: CatalogJsonObject): boolean {
+  return result.data.outcome === "succeeded" && (args.startAt === undefined || args.startAt === 0);
+}
+
 /** Read the same rules the create gate will judge, without selecting another instruction skill. */
 export async function withCreateTemplateMetadata(
   result: ManagedMcpToolResult,
@@ -126,7 +131,9 @@ export async function withCreateTemplateMetadata(
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
 ): Promise<ManagedMcpToolResult> {
-  if (result.data.outcome !== "succeeded" || connection.issueTemplates === undefined) return result;
+  // The first page owns rule discovery; later field pages must not repeat identity reads or logs.
+  if (!isTemplateMetadataPage(result, args) || connection.issueTemplates === undefined)
+    return result;
   if (!admitted(context)) return jiraReadFailure("permission-denied");
   const initial = connection.issueTemplates();
   if (initial.unreadable > 0) return unreadableRules(connection, initial.unreadable);
@@ -135,7 +142,7 @@ export async function withCreateTemplateMetadata(
       template.activations.some((activation) => activation.kind === "create"),
     )
   )
-    return result;
+    return matchedRulesResult(result, [], initial, connection);
   const identity = await readIdentity(args, context, connection);
   if ("ok" in identity) return jiraReadFailure(identity.reason);
   if (!admitted(context)) return jiraReadFailure("permission-denied");

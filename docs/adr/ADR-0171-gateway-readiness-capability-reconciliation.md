@@ -253,9 +253,18 @@ withdrawn is also kept pending while the server renews it: the models wire repor
 `toolCallingRenewalPending` for a LiteLLM chat model whose automatic verification is open, and the
 browser holds only such a choice (`isCodingWorkbenchProofRenewing`). A choice that is refuted,
 never proven, not a chat model, observed unready or not being renewed still falls back to a usable
-alternative. The compatibility wire field `conversationReadinessStale` is no longer emitted for
-elapsed basic-chat observation age: cached success stays ready. Explicit verification or a changed
-connection can replace that result. Repeated pending-profile timer reads reuse the catalog
+alternative. The retired wire field `conversationReadinessStale` is removed from the contract:
+cached success stays ready. `CONVERSATION_READINESS_CACHED_AFTER_MS` distinguishes fresh and cached
+admission evidence only; it is not an expiry. Explicit verification or a changed connection can
+replace that result. A definitive authentication or missing-model failure on an actual model call
+records `conversationReady: false` for the exact observation that admitted dispatch. A late failure
+cannot overwrite a new generation or a newer verification. Rate limits, timeouts and transient
+provider failures preserve positive readiness. The refusal uses the closed
+`CONVERSATION_MODEL_NOT_READY` code and names explicit Settings verification; it never initiates a
+probe. Ordinary model-list reads join startup discovery for at most one second and then return the
+current projection with `startupReadinessPending`; the existing settlement read retains its absolute
+600-second deadline across generation changes. Browser cancellation stops only the reader's wait,
+never shared startup work. `gateway.catalog.metadata.wait` records closed outcomes and elapsed time. Repeated pending-profile timer reads reuse the catalog
 already held; existing configuration, readiness and explicit-refresh notifications deliver subsequent
 catalog changes through the window bus.
 Catalog adoption, held/restored/fallback/refused selections and profile refresh use the existing

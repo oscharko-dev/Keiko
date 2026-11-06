@@ -365,7 +365,7 @@ function assertCatalogInventoryOnly(setup: Fixture): void {
     // The real tool turn prepares one source-membership receipt, without model-requested tools.
     expect(exchanges).toHaveLength(1);
     expect(exchanges?.[0]).toMatchObject({
-      call: { origin: "runtime", arguments: { view: "inventory" } },
+      call: { name: "knowledge_documents", arguments: { view: "inventory" } },
       result: {
         status: "completed",
         toolRef: { canonicalId: "keiko.knowledge.documents" },
