@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0f00b0d63aedbba15659846340471830bdf488205f60adb939db6cb19a610da9",
+    "catalogDigest": "8e0c287e6e5a947c6c2ef169e02e744787125eb6b2d60591b71cfe2a12d15d5e",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -23518,7 +23518,7 @@
         "proofIds": ["gateway.route.rejected.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:693",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:2649"]
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:2662"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -108574,14 +108574,14 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:324",
+      "site": "packages/keiko-server/src/grounded-qa.ts:325",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3345",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3347",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111455,7 +111455,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3745",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3747",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -112042,7 +112042,7 @@
     {
       "op": "retrieval-activity.tryBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2476",
+      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2519",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
