@@ -881,7 +881,8 @@ function isPassedOn(text: string, start: number): boolean {
   });
 }
 
-const SINGLE_VALUE_RE = /^\S{1,80}$/u;
+// A value, not a word: an address, a number or a path such as "a@b.de"; "Hallo" opens material.
+const SINGLE_VALUE_RE = /^(?=\S*[@\d/.])\S{1,80}$/u;
 
 function leadInReaches(text: string, colonEnd: number, start: number): boolean {
   const newline = text.indexOf("\n", colonEnd);

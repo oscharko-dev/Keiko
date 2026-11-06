@@ -180,7 +180,7 @@ const TASK_VERBS = new Set(
   (
     "nimm nehmt nutze nutz benutze benutz verwende verwend schreib schreibe mach mache ersetze " +
     "ersetz ändere änder probier probiere wechsle wechsel use take write make replace change try " +
-    "switch pick nehmen schau schaue arbeite look go"
+    "switch pick nehmen schau schaue arbeite"
   ).split(" "),
 );
 
@@ -191,9 +191,15 @@ function asksForTask(target: string): boolean {
       .slice(match.index + match[0].length)
       .trim()
       .split(/\s+/u, 4);
-    const first = words.find((word) => !CONJUNCTIONS.has(word.toLowerCase())) ?? "";
-    return TASK_VERBS.has(first.toLowerCase().replace(/\P{L}+$/u, ""));
+    const at = words.findIndex((word) => !CONJUNCTIONS.has(word.toLowerCase()));
+    return isTaskVerb(words[at] ?? "", words[at + 1] ?? "");
   });
+}
+
+// "look" asks for work only as "look at": "look, I moved" corrects the thing to forget.
+function isTaskVerb(word: string, next: string): boolean {
+  const verb = word.toLowerCase().replace(/\P{L}+$/u, "");
+  return TASK_VERBS.has(verb) || (verb === "look" && next.toLowerCase() === "at");
 }
 
 function forgetTargetOf(text: string): string | null {
