@@ -55,8 +55,12 @@ describe("saved Jira workspace node", () => {
     vi.mocked(listAtlassianConnectors).mockResolvedValue([POD]);
     render(node());
     expect(await screen.findByText("Current Jira name")).toBeVisible();
-    expect(screen.getByText("Verified Jira Pod")).toBeVisible();
-    expect(screen.getByText("Live Jira tools")).toBeVisible();
+    expect(screen.queryByText("Verified Jira Pod")).not.toBeInTheDocument();
+    expect(screen.queryByText("Live Jira tools")).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Jira" })).toHaveAttribute(
+      "src",
+      "/assets/brands/jira.svg?v=ad20a139",
+    );
     expect(fetchCapsules).not.toHaveBeenCalled();
   });
 

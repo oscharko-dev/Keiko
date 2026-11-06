@@ -20,6 +20,7 @@ import type {
   CapsulesResponse,
   CapsuleSetsResponse,
   CapsuleActionResponse,
+  CapsuleDetailResponse,
   CapsuleSetActionResponse,
   CapsuleListEntry,
   CapsuleSetListEntry,
@@ -30,6 +31,11 @@ import type {
   CapsuleLifecycleState,
 } from "@oscharko-dev/keiko-contracts";
 import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticWriter,
+} from "@/lib/client-diagnostics";
 
 const pushMock = vi.fn();
 
@@ -64,6 +70,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetClientDiagnosticWriter();
   window.localStorage.removeItem(I18N_STORAGE_KEY);
   stubPlatform(originalPlatform);
 });
@@ -103,6 +110,30 @@ function makeCapsuleSet(overrides: Partial<CapsuleSetListEntry> = {}): CapsuleSe
 
 function okAction(capsuleId: KnowledgeCapsuleId): Promise<CapsuleActionResponse> {
   return Promise.resolve({ ok: true, capsuleId });
+}
+
+function createdPod(id: KnowledgeCapsuleId, displayName: string): CapsuleDetailResponse {
+  return {
+    capsule: {
+      id,
+      displayName,
+      tags: [],
+      sourceIds: [],
+      retrievalEffort: "default",
+      outputMode: "snippets",
+      answerGroundingPolicy: "require-citations",
+      embeddingModelIdentity: {
+        provider: "openai-compatible:test",
+        modelId: "test-embedding",
+        vectorDimensions: 8,
+        vectorMetric: "cosine",
+      },
+      lifecycleState: "draft",
+      storageReference: `capsules/${id}`,
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  };
 }
 
 function okSetAction(capsuleSetId: CapsuleSetId): Promise<CapsuleSetActionResponse> {
@@ -925,13 +956,138 @@ describe("ConnectorGraph — LK-02 keyboard add-to-workspace", () => {
 });
 
 describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
+  it("does not certify a selection before an external detail view actually opens", async () => {
+    const diagnostic = vi.fn<ClientDiagnosticWriter>();
+    setClientDiagnosticWriter(diagnostic);
+    const onOpenCapsule = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([makeCapsule({ displayName: "Selection" })])}
+        onOpenCapsule={onOpenCapsule}
+      />,
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Actions for Knowledge Pod Selection" }),
+    );
+    await user.click(
+      screen.getByRole("menuitem", { name: "Open details for Knowledge Pod Selection" }),
+    );
+    expect(onOpenCapsule).toHaveBeenCalledOnce();
+    expect(
+      diagnostic.mock.calls.some(([message]) => message === "Knowledge Pod selection settled."),
+    ).toBe(false);
+  });
+
+  it("records a failed open after successful creation without misclassifying it as a create failure", async () => {
+    const diagnostic = vi.fn<ClientDiagnosticWriter>();
+    setClientDiagnosticWriter(diagnostic);
+    const createdId = makeCapsuleId("open-failure");
+    const createCapsuleImpl = vi.fn().mockResolvedValue(createdPod(createdId, "Created Pod"));
+    const onOpenCapsule = vi.fn(() => {
+      throw new Error("PRIVATE opening failure");
+    });
+    const user = userEvent.setup();
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={emptyFetch}
+        createCapsuleImpl={createCapsuleImpl}
+        onOpenCapsule={onOpenCapsule}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: "Create Knowledge Pod" }));
+    const dialog = screen.getByRole("dialog", { name: "Create Knowledge Pod" });
+    await user.type(within(dialog).getByLabelText("Knowledge Pod display name"), "Created Pod");
+    await user.click(within(dialog).getByRole("button", { name: "Create Knowledge Pod" }));
+    await waitFor(() =>
+      expect(diagnostic).toHaveBeenCalledWith(
+        "Knowledge Pod opening failed.",
+        expect.objectContaining({
+          correlationId: expect.any(String),
+          errorEvidence: expect.any(Object),
+        }),
+      ),
+    );
+    expect(
+      diagnostic.mock.calls.some(([message]) => message === "Knowledge Pod creation failed."),
+    ).toBe(false);
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("PRIVATE opening failure");
+    expect(screen.queryByRole("dialog", { name: "Create Knowledge Pod" })).toBeNull();
+  });
+
+  it("setup regression: opens the newly created pod instead of leaving setup on an existing pod", async () => {
+    const createdId = makeCapsuleId("new-migration");
+    const onOpenCapsule = vi.fn();
+    const createCapsuleImpl = vi.fn().mockResolvedValue(createdPod(createdId, "Migration"));
+    const user = userEvent.setup();
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([makeCapsule({ displayName: "Existing documents" })])}
+        createCapsuleImpl={createCapsuleImpl}
+        onOpenCapsule={onOpenCapsule}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: "Create Knowledge Pod" }));
+    const dialog = screen.getByRole("dialog", { name: "Create Knowledge Pod" });
+    await user.type(within(dialog).getByLabelText("Knowledge Pod display name"), "Migration");
+    await user.click(within(dialog).getByRole("button", { name: "Create Knowledge Pod" }));
+    await waitFor(() => expect(onOpenCapsule).toHaveBeenCalledExactlyOnceWith(createdId));
+  });
+
+  it("setup regression: offers document setup for an empty pod and opens that exact pod", async () => {
+    const emptyId = makeCapsuleId("empty-migration");
+    const onOpenCapsule = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([
+          makeCapsule({ displayName: "Existing documents" }),
+          makeCapsule({
+            id: emptyId,
+            displayName: "Migration",
+            lifecycleState: "draft",
+            sourceCount: 0,
+          }),
+        ])}
+        onOpenCapsule={onOpenCapsule}
+      />,
+    );
+    const row = await screen.findByRole("article", { name: "Knowledge Pod: Migration" });
+    await user.click(
+      within(row).getByRole("button", { name: "Add documents to Knowledge Pod Migration" }),
+    );
+    expect(onOpenCapsule).toHaveBeenCalledExactlyOnceWith(emptyId);
+    expect(
+      within(row).queryByRole("button", { name: "Add Knowledge Pod Migration to workspace" }),
+    ).toBeNull();
+  });
+
+  it("setup regression: does not present an indexed pod as needing initial indexing", async () => {
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([makeCapsule({ displayName: "Ready documents" })])}
+      />,
+    );
+    const row = await screen.findByRole("article", { name: "Knowledge Pod: Ready documents" });
+    expect(within(row).queryByRole("button", { name: /start indexing/i })).toBeNull();
+    expect(
+      within(row).getByRole("button", { name: "Add Knowledge Pod Ready documents to workspace" }),
+    ).toBeEnabled();
+  });
+
   it("submits only the trimmed display name", async () => {
     const createCapsuleImpl = vi
       .fn()
-      .mockResolvedValue({ ok: true, capsuleId: makeCapsuleId("create") });
+      .mockResolvedValue(createdPod(makeCapsuleId("create"), "Treasury Docs"));
     const user = userEvent.setup();
 
-    render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} createCapsuleImpl={createCapsuleImpl} />);
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={emptyFetch}
+        createCapsuleImpl={createCapsuleImpl}
+        onOpenCapsule={vi.fn()}
+      />,
+    );
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /^create Knowledge Pod$/i })).toBeInTheDocument();
@@ -1261,6 +1417,38 @@ describe("ConnectorGraph — error states", () => {
     expect(
       screen.getByRole("button", { name: /retry loading Knowledge Pods/i }),
     ).toBeInTheDocument();
+    expect(screen.queryByTestId("empty-state")).toBeNull();
+    expect(screen.queryByRole("button", { name: /create your first Knowledge Pod/i })).toBeNull();
+  });
+
+  it("shows the empty state only after a failed load is retried successfully", async () => {
+    const user = userEvent.setup();
+    const fetchCapsulesImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network error"))
+      .mockResolvedValue({ capsules: [] });
+    render(<ConnectorGraph fetchCapsulesImpl={fetchCapsulesImpl} />);
+    const retry = await screen.findByRole("button", { name: /retry loading Knowledge Pods/i });
+    expect(screen.queryByTestId("empty-state")).toBeNull();
+    await user.click(retry);
+    expect(await screen.findByTestId("empty-state")).toBeInTheDocument();
+    expect(screen.queryByText("network error")).toBeNull();
+  });
+
+  it("retains cached Pod rows when a reload fails", async () => {
+    const user = userEvent.setup();
+    const capsule = makeCapsule({ displayName: "Cached Pod", lifecycleState: "draft" });
+    const fetchCapsulesImpl = vi
+      .fn()
+      .mockResolvedValueOnce({ capsules: [capsule] })
+      .mockRejectedValue(new Error("network error"));
+    render(<ConnectorGraph fetchCapsulesImpl={fetchCapsulesImpl} startIndexingImpl={okAction} />);
+    await user.click(
+      await screen.findByRole("button", { name: /start indexing Knowledge Pod Cached Pod/i }),
+    );
+    expect(await screen.findByText("network error")).toBeInTheDocument();
+    expect(screen.getByText("Cached Pod")).toBeInTheDocument();
+    expect(screen.queryByTestId("empty-state")).toBeNull();
   });
 
   it("renders an alert when an action rejects", async () => {

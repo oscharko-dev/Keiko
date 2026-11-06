@@ -1496,3 +1496,19 @@ it.each([true, false])(
     expect(copied).toContain('"modelId": "chat-fixture"');
   },
 );
+
+it("returns an already open Settings panel to model verification without automatically probing", async () => {
+  primeFetches([{ ...chatCapability("test-chat-failed"), conversationReady: false }]);
+  const handled = vi.fn();
+  const view = render(<SettingsPanel initialTab="mcp" onInitialTabHandled={handled} />);
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Models" })).toHaveAttribute("aria-pressed", "false"),
+  );
+  runGatewayReadinessMock.mockImplementationOnce(() => new Promise(() => undefined));
+  view.rerender(<SettingsPanel initialTab="models" onInitialTabHandled={handled} />);
+  const verify = await screen.findByRole("button", { name: "Run readiness check" });
+  expect(screen.getByRole("button", { name: "Models" })).toHaveAttribute("aria-pressed", "true");
+  expect(runGatewayReadinessMock).not.toHaveBeenCalled();
+  fireEvent.click(verify);
+  expect(runGatewayReadinessMock).toHaveBeenCalledWith("test-chat-failed", undefined);
+});

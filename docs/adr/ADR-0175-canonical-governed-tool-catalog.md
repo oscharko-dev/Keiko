@@ -780,3 +780,16 @@ request, as its description states.
 | 1.2 | 2026-09-10 | D4: the catalog ceilings also bound the arguments recorded in the sidecar's durable tool-part rows and derive the history response budget; a refused part row is named body-free in the reconciliation diagnostic (PR #3452). |
 | 1.1 | 2026-09-09 | Record the completed #3394 squash-delivery semantics: final signed source and dev-reachable merge are distinct identities with equal complete Git trees; pin exact-schema required-check and review-settlement receipts and the refreshed owned-source closure (#3414, #3415). |
 | 1.0 | 2026-09-04 | Accept the governed-tool ownership, pure package boundary, version/digest/result/state/evidence contract and workspace-only coding raw-coordinate lane (#3411); implementation belongs to the named delivery owners. Consolidate delivery into owner-selected PR #3394 with reviewed producer checkpoints instead of dedicated dev merges. |
+
+
+### Native alias correction in Chat (2026-11-06, PR #4276)
+
+An unknown native function name is never bound or executed. When the current catalog, projection
+and offer still validate, the existing Chat turn may spend its single correction allowance to show
+a fixed protocol instruction containing only current offered aliases (at most 128 names and 8192
+UTF-8 bytes). The model must issue a new valid call; Keiko never guesses a closest name or replays
+arguments. This correction does not make the gateway error retryable and grants no provider retry.
+The next call still enters ordinary authority and caller-budget admission. A second unusable round
+without tool progress ends with nonretryable `GATEWAY_MALFORMED_TOOL_CALL` (HTTP 502); the human turn
+is retained. Invalid catalog identities, altered offer bindings, expired metadata and OpenCode's
+separate native-extension transport retain their hard refusal and never receive spelling guidance.

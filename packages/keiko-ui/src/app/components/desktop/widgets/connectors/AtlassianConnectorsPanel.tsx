@@ -230,7 +230,7 @@ function ConnectorsFeedback({
         </p>
       ) : null}
       {state.loading ? <p className="acx-muted">{t("atlassianConnectors.loading")}</p> : null}
-      {!state.loading && empty ? (
+      {!state.loading && state.error === undefined && empty ? (
         <p className={`acx-empty ${styles.cmpPodEmpty}`}>
           {t(jiraLive ? "atlassianConnectors.live.empty" : "atlassianConnectors.empty")}
         </p>

@@ -1,8 +1,9 @@
 // #3578 (last residual): a configured chat model nobody had proven tool calling for stayed
 // `no-tool-calling` behind every gateway that is not a recognised LiteLLM, because only the LiteLLM
-// startup probe ever asked such a model for its forced tool-call proof. Opening the Workbench now
-// asks for it through the same bounded automatic verification as an expired proof or a short window
-// (`workbenchProbesNeeded`), whatever gateway serves the model.
+// startup probe ever asked such a model for its forced tool-call proof. ADR-0171
+// owner amendment 2026-11-05: passive profile reads are metadata-only. The explicit
+// check=1 action alone may request the existing bounded tool/context verification;
+// no read, model selection or diagnostic age starts a basic-chat health probe.
 
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -204,13 +205,21 @@ function workbenchRuns(events: readonly ServerLogEvent[]): readonly ServerLogEve
 }
 
 describe("a never-proven chat model behind a plain gateway", () => {
-  it("is probed when the Workbench profile is read and admitted once the probe proves tool calling", async () => {
+  it("is probed only by an explicit check and admitted once the probe proves tool calling", async () => {
     const gateway = stubGateway("calls");
     const { deps } = await observedDeps(plainConfig([neverProvenChat()]));
     expect(codingWorkbenchModelEligibility(storedChat(deps))).toBe("ineligible");
     expect(gateway.toolCalls()).toBe(0);
+    const callsBeforePassive = gateway.calls.length;
+    await handleCodingSidecarGatewayProfile(profileContext("profile-passive-read"), deps);
+    await codingWorkbenchProbesSettledForTests();
+    expect(gateway.calls).toHaveLength(callsBeforePassive);
+    expect(codingWorkbenchModelEligibility(storedChat(deps))).toBe("ineligible");
 
-    const profile = await handleCodingSidecarGatewayProfile(profileContext(), deps);
+    const profile = await handleCodingSidecarGatewayProfile(
+      profileContext("profile-explicit-check", true),
+      deps,
+    );
 
     expect(gateway.toolCalls()).toBe(1);
     expect(profile.body).toMatchObject({ status: "available", modelAlias: CHAT });
@@ -225,7 +234,10 @@ describe("a never-proven chat model behind a plain gateway", () => {
     const gateway = stubGateway("refuses");
     const { deps, events } = await observedDeps(plainConfig([neverProvenChat()]));
 
-    const first = await handleCodingSidecarGatewayProfile(profileContext(), deps);
+    const first = await handleCodingSidecarGatewayProfile(
+      profileContext(PROFILE_CORRELATION, true),
+      deps,
+    );
     await codingWorkbenchProbesSettledForTests();
     // A refused forced tool call may be retried in another request shape within the one probe.
     const requestsOfTheProbe = gateway.toolCalls();
@@ -254,9 +266,20 @@ describe("a never-proven chat model behind a plain gateway", () => {
     });
     const gateway = stubGateway("calls", gate);
     const { deps, events } = await observedDeps(plainConfig([neverProvenChat()]));
+    const callsBeforePassive = gateway.calls.length;
+    await Promise.all(
+      [1, 2, 3].map((index) =>
+        handleCodingSidecarGatewayProfile(profileContext(`passive-${String(index)}`), deps),
+      ),
+    );
+    expect(gateway.calls).toHaveLength(callsBeforePassive);
+    expect(workbenchRuns(events)).toHaveLength(0);
 
     const reads = [1, 2, 3].map((index) =>
-      handleCodingSidecarGatewayProfile(profileContext(`profile-read-${String(index)}`), deps),
+      handleCodingSidecarGatewayProfile(
+        profileContext(`profile-read-${String(index)}`, true),
+        deps,
+      ),
     );
     await vi.waitFor(() => {
       expect(gateway.toolCalls()).toBe(1);
@@ -279,7 +302,10 @@ describe("a never-proven chat model behind a plain gateway", () => {
     setServerLogger(createServerLogger({ sink, level: "info" }));
     gateway.busy = true;
 
-    const first = await handleCodingSidecarGatewayProfile(profileContext(), deps);
+    const first = await handleCodingSidecarGatewayProfile(
+      profileContext(PROFILE_CORRELATION, true),
+      deps,
+    );
     await codingWorkbenchProbesSettledForTests();
     const callsOfTheProbe = gateway.calls.length;
     const second = await handleCodingSidecarGatewayProfile(
@@ -310,13 +336,13 @@ describe("a never-proven chat model behind a plain gateway", () => {
     ]);
   });
 
-  it("checks an unanswered model again when the Workbench opens or a model is chosen", async () => {
+  it("retries an unanswered tool proof only after another explicit check", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       const gateway = stubGateway("calls");
       const { deps, events } = await observedDeps(plainConfig([neverProvenChat()]));
       gateway.busy = true;
-      await handleCodingSidecarGatewayProfile(profileContext(), deps);
+      await handleCodingSidecarGatewayProfile(profileContext(PROFILE_CORRELATION, true), deps);
       await codingWorkbenchProbesSettledForTests();
       expect(workbenchRuns(events)).toHaveLength(1);
 
@@ -340,12 +366,15 @@ describe("a never-proven chat model behind a plain gateway", () => {
     const { deps } = await observedDeps(plainConfig([neverProvenChat(), embeddingCapability()]));
     const callsBefore = gateway.calls.length;
 
-    await handleCodingSidecarGatewayProfile(profileContext(), deps);
+    await handleCodingSidecarGatewayProfile(profileContext(PROFILE_CORRELATION, true), deps);
     await codingWorkbenchProbesSettledForTests();
 
     expect(gateway.toolCalls()).toBe(1);
     expect(gateway.calls.slice(callsBefore).map((call) => call.model)).not.toContain(EMBEDDING);
-    expect(gateway.calls.map((call) => call.model)).not.toContain(EMBEDDING);
+    // Configuration owns the embedding startup proof. This Workbench action never adds one.
+    expect(gateway.calls.filter((call) => call.model === EMBEDDING)).toHaveLength(
+      gateway.calls.slice(0, callsBefore).filter((call) => call.model === EMBEDDING).length,
+    );
   });
 
   it("asks nothing of a gateway that serves no chat model at all", async () => {
@@ -362,7 +391,7 @@ describe("a never-proven chat model behind a plain gateway", () => {
     stubGateway("calls");
     const { deps, events } = await observedDeps(plainConfig([neverProvenChat()]));
 
-    await handleCodingSidecarGatewayProfile(profileContext(), deps);
+    await handleCodingSidecarGatewayProfile(profileContext(PROFILE_CORRELATION, true), deps);
 
     const [started] = workbenchRuns(events);
     expect(started).toMatchObject({
@@ -421,14 +450,22 @@ describe("a file-configured chat model whose tool-calling proof aged out", () =>
     });
   }
 
-  it("is renewed by the Workbench profile read with no manual readiness run", async () => {
+  it("is renewed only by an explicit tool check after a passive read leaves it unchanged", async () => {
     const gateway = stubGateway("calls");
     const { deps } = await observedDeps(agedProofConfig());
     // The loader refuses tools on the aged proof; only a renewed proof may admit them.
     expect(storedChat(deps).toolCalling).toBe(false);
     expect(gateway.toolCalls()).toBe(0);
+    const callsBeforePassive = gateway.calls.length;
+    await handleCodingSidecarGatewayProfile(profileContext("profile-passive-read"), deps);
+    await codingWorkbenchProbesSettledForTests();
+    expect(gateway.calls).toHaveLength(callsBeforePassive);
+    expect(codingWorkbenchModelEligibility(storedChat(deps))).toBe("tool-calling-unverified");
 
-    const profile = await handleCodingSidecarGatewayProfile(profileContext(), deps);
+    const profile = await handleCodingSidecarGatewayProfile(
+      profileContext("profile-explicit-check", true),
+      deps,
+    );
 
     expect(gateway.toolCalls()).toBe(1);
     expect(profile.body).toMatchObject({ status: "available", modelAlias: CHAT });

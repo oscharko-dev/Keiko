@@ -4,6 +4,7 @@ import {
   resetActivityLogLossCountersForTests,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
+  MalformedToolCallError,
   ProviderEmptyAnswerError,
   ProviderError,
   ProviderOutputExhaustedError,
@@ -306,6 +307,12 @@ describe("activityLogErrorKind", () => {
     ["an empty answer", new ProviderEmptyAnswerError("model")],
     ["an exhausted output budget", new ProviderOutputExhaustedError("model")],
   ])("does not classify %s as an internal fault", (_label, error) => {
+    expect(activityLogErrorKind(error)).toBe("validation-failed");
+  });
+  it.each([
+    new MalformedToolCallError("untrusted provider body"),
+    { code: "GATEWAY_MALFORMED_TOOL_CALL", name: "ProviderError" },
+  ])("classifies malformed tool calls as validation failures by stable code", (error) => {
     expect(activityLogErrorKind(error)).toBe("validation-failed");
   });
   // #4271 L1.4: a provider that could not be reached is a reachability outcome, not a Keiko

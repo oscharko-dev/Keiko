@@ -192,6 +192,8 @@ export type JiraMutationAttempt =
       readonly ok: true;
       readonly receipt: JiraMutationReceipt;
       readonly links?: JiraMutationLinkAccount;
+      /** Internal bounded serializer evidence; omitted from model results and remote receipts. */
+      readonly descriptionConvertedHeadingCount?: number;
     }
   | {
       readonly ok: false;
@@ -202,6 +204,8 @@ export type JiraMutationAttempt =
       readonly links?: JiraMutationLinkAccount;
       /** Only an issue-template refusal (`field-validation`) carries violations (#4177). */
       readonly violations?: readonly JiraTemplateViolation[];
+      /** A prepared description is evidence even when the provider refuses the subsequent write. */
+      readonly descriptionConvertedHeadingCount?: number;
     };
 
 // eslint-disable-next-line no-control-regex -- remote text is shown to a model, not a terminal.

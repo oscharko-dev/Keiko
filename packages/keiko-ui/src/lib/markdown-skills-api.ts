@@ -10,9 +10,16 @@ import type {
 import { codingAppSessionPairingSettled } from "./coding-app-session-client";
 import { bffFetchJson } from "./http";
 
-async function skillRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function skillRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  correlationId?: string,
+): Promise<T> {
   await codingAppSessionPairingSettled();
-  return bffFetchJson<T>(path, { signal: AbortSignal.timeout(15_000), ...init });
+  const request = { signal: AbortSignal.timeout(15_000), ...init };
+  return correlationId === undefined
+    ? bffFetchJson<T>(path, request)
+    : bffFetchJson<T>(path, request, { correlationId });
 }
 
 export async function fetchMarkdownSkills(): Promise<readonly MarkdownSkillMetadata[]> {
@@ -21,10 +28,13 @@ export async function fetchMarkdownSkills(): Promise<readonly MarkdownSkillMetad
 
 export async function readMarkdownSkill(
   skill: MarkdownSkillReference,
+  correlationId?: string,
 ): Promise<MarkdownSkillDocument> {
   return (
     await skillRequest<{ skill: MarkdownSkillDocument }>(
       `/api/skills/${encodeURIComponent(skill.id)}?revision=${String(skill.revision)}`,
+      {},
+      correlationId,
     )
   ).skill;
 }

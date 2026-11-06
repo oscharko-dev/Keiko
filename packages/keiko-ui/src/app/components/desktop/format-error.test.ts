@@ -10,14 +10,14 @@ import { formatUserError, toUserErrorNotice } from "./format-error";
 
 describe("formatUserError", () => {
   it.each(["en", "de"] as const)(
-    "explains unavailable Chat capabilities and Jira remedies in %s",
+    "explains unavailable Chat capabilities without service-specific checks in %s",
     async (locale) => {
       await loadLocaleMessages(locale);
       window.localStorage.setItem(I18N_STORAGE_KEY, locale);
       try {
         const error = new ApiError(
           "CONVERSATION_UNAVAILABLE_MODEL",
-          "Jira access requires verified tool calling.",
+          "The selected model cannot use the connected tools. Choose a model with tool calling.",
           400,
         );
         error.correlationId = "tool-capability-proof";
@@ -27,9 +27,27 @@ describe("formatUserError", () => {
         );
         expect(notice.remediation).toBe(
           locale === "de"
-            ? "Wähle ein einsatzbereites Chat-Modell. Prüfe für den Jira-Zugriff Tool-Calling unter Einstellungen > Modelle oder trenne den Jira-Pod."
-            : "Select a ready Chat model. For Jira access, run the tool-calling check in Settings > Models or disconnect the Jira Pod.",
+            ? "Wähle ein verfügbares Chat-Modell, das die benötigten Funktionen unterstützt."
+            : "Choose an available Chat model that supports the required capabilities.",
         );
+        expect(notice.message).toBe(
+          locale === "de"
+            ? "Das ausgewählte Modell kann die benötigten Chat-Funktionen derzeit nicht ausführen."
+            : "The selected model cannot currently run the required Chat capabilities.",
+        );
+        expect(`${notice.message} ${notice.remediation}`).not.toMatch(
+          /Jira|connected tools|verbundenen Werkzeuge|tool.call|Settings|check|disconnect|Einstellungen|prüf|trenn/iu,
+        );
+        const nonTool = toUserErrorNotice(
+          new ApiError(
+            "CONVERSATION_UNAVAILABLE_MODEL",
+            "Selected model is not available for conversation. Pick a chat-capable model.",
+            400,
+          ),
+          "Could not send message.",
+        );
+        expect(nonTool.message).toBe(notice.message);
+        expect(nonTool.remediation).toBe(notice.remediation);
         expect(notice.correlationId).toBe("tool-capability-proof");
         expect(notice.code).toBe("CONVERSATION_UNAVAILABLE_MODEL");
         expect(formatUserError(error, "Could not send message.")).toContain(

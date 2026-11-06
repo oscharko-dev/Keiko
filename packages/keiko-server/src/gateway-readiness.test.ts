@@ -15,6 +15,7 @@ import {
   TESTED_CONTEXT_TOKENS_PATTERN,
   WORKBENCH_PROBE_TIMEOUT_FLOOR_MS,
   handleGatewayReadiness,
+  initializeConfiguredEmbeddingReadiness,
   longContextTokens,
   runGatewayReadiness,
 } from "./gateway-readiness.js";
@@ -192,7 +193,8 @@ function fetchForDefaultSuccess(): typeof fetch {
       }),
     )
     .mockResolvedValueOnce(jsonResponse(chatPayload('{"status":"json-ok"}')))
-    .mockResolvedValueOnce(jsonResponse(embeddingPayload())) as typeof fetch;
+    .mockResolvedValueOnce(jsonResponse(embeddingPayload()))
+    .mockImplementation(() => Promise.resolve(jsonResponse(embeddingPayload()))) as typeof fetch;
 }
 
 afterEach(() => {
@@ -802,7 +804,8 @@ describe("gateway readiness route", () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
-      .mockResolvedValueOnce(jsonResponse(embeddingPayload())) as typeof fetch;
+      .mockResolvedValueOnce(jsonResponse(embeddingPayload()))
+      .mockImplementation(() => Promise.resolve(jsonResponse(embeddingPayload()))) as typeof fetch;
     const deps = depsWith(config, fetchImpl);
 
     const report = await runGatewayReadiness({ options: { probes: ["embedding"] } }, deps);
@@ -827,7 +830,8 @@ describe("gateway readiness route", () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
-      .mockResolvedValueOnce(jsonResponse(embeddingPayload())) as typeof fetch;
+      .mockResolvedValueOnce(jsonResponse(embeddingPayload()))
+      .mockImplementation(() => Promise.resolve(jsonResponse(embeddingPayload()))) as typeof fetch;
     const deps: UiHandlerDeps = {
       ...depsWith(gatewayConfig(), fetchImpl),
       activityLog: { write: (event): void => void events.push(event) },
@@ -1889,3 +1893,36 @@ it.each([true, false])(
     }
   },
 );
+
+it("keeps the first embedding adapter throw diagnosable without repeating probes or automatic lifecycle", async () => {
+  const diagnostic = capturingDiagnostics();
+  const events: ServerLogEvent[] = [];
+  const request = vi.fn((): Promise<never> =>
+    Promise.reject(new TypeError("fixture-adapter-failure")),
+  );
+  const deps: UiHandlerDeps = {
+    ...depsWith(gatewayConfig(), vi.fn(), diagnostic.sink),
+    localKnowledgeEmbeddingRequest: request,
+    activityLog: {
+      write: (event): void => {
+        events.push(event);
+      },
+    },
+  };
+  try {
+    await initializeConfiguredEmbeddingReadiness(deps, "embedding-first-throw");
+    expect(diagnostic.records).toHaveLength(1);
+    expect(diagnostic.records[0]?.operation).toBe("gateway.readiness");
+    expect(request).toHaveBeenCalledOnce();
+    await initializeConfiguredEmbeddingReadiness(deps, "embedding-cached-failure");
+    expect(request).toHaveBeenCalledOnce();
+    expect(
+      events.filter((event) => event.op === "gateway.readiness.automatic.started"),
+    ).toHaveLength(1);
+    expect(
+      events.filter((event) => event.op === "gateway.readiness.automatic.completed"),
+    ).toHaveLength(1);
+  } finally {
+    deps.store.close();
+  }
+});

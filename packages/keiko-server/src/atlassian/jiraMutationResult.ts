@@ -81,7 +81,18 @@ function failedAttempt(
     ...(receipt === undefined ? {} : { receipt }),
     ...(links === undefined ? {} : { links }),
     ...(violations === undefined ? {} : { violations }),
+    ...descriptionFormattingFacts(value),
   };
+}
+
+/** Internal serializer evidence has a hard count bound and never enters a receipt or model data. */
+function descriptionFormattingFacts(
+  value: JiraMutationAttempt,
+): Pick<JiraMutationAttempt, "descriptionConvertedHeadingCount"> {
+  const count = value.descriptionConvertedHeadingCount;
+  return typeof count === "number" && Number.isInteger(count) && count > 0 && count <= 32768
+    ? { descriptionConvertedHeadingCount: count }
+    : {};
 }
 
 function boundedViolations(
@@ -117,7 +128,12 @@ export function validJiraMutationAttempt(
     validIdentities(receipt);
   if (!valid) return { ok: false, reason: "malformed-payload" };
   const links = sanitizeJiraMutationLinkAccount(value.links);
-  return { ok: true, receipt, ...(links === undefined ? {} : { links }) };
+  return {
+    ok: true,
+    receipt,
+    ...(links === undefined ? {} : { links }),
+    ...descriptionFormattingFacts(value),
+  };
 }
 
 /** Counts only: how many links were requested, present afterwards and missing. */

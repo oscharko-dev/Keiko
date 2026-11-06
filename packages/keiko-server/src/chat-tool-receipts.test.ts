@@ -96,3 +96,21 @@ describe("draft receipts of a large draft (#4178)", () => {
     ]);
   });
 });
+
+it.each([8, 16, 24, 32])("retains canonical %s-character collision scopes", (width) => {
+  const reference = `${"a".repeat(width)}:${"R".repeat(80)}`;
+  expect(
+    chatToolRequirementReceipts({ view: "units", items: [{ reference, title: "Bounded" }] }),
+  ).toEqual([{ reference, title: "Bounded" }]);
+});
+
+it.each([
+  ...[0, 7, 9, 15, 17, 23, 25, 31, 33].map((width) => `${"a".repeat(width)}:REQ-1`),
+  ...[8, 9, 16, 17, 24, 25, 32, 33].map((width) => "a".repeat(width)),
+  `${"A".repeat(16)}:REQ-1`,
+  `${"a".repeat(16)}:${"R".repeat(81)}`,
+  `${"a".repeat(16)}:REQ:1`,
+  `${"a".repeat(16)}:REQ-1\n`,
+])("refuses noncanonical scoped requirement reference %s", (reference) => {
+  expect(chatToolRequirementReceipts({ view: "units", items: [{ reference }] })).toBeUndefined();
+});

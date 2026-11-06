@@ -58,6 +58,8 @@ export interface ScopeDocumentLimits {
   readonly maxDocuments?: number;
   readonly maxCharsPerDocument?: number;
   readonly maxTotalChars?: number;
+  /** An exact subset of the already resolved scope; never grants access to another document. */
+  readonly documentIds?: readonly DocumentId[];
 }
 
 export interface ScopeDocumentScope {
@@ -268,10 +270,14 @@ export function readScopeDocuments(
   const maxTotal = limits.maxTotalChars ?? SCOPE_TOTAL_CHARS_MAX;
   const { db, contentCipher } = store._internal;
   const rows = eligibleDocumentRows(db, scope);
+  const selected =
+    limits.documentIds === undefined
+      ? rows
+      : rows.filter((row) => limits.documentIds?.includes(row.id as DocumentId));
   const documents: ScopeDocument[] = [];
   let omittedByText = 0;
   let held = 0;
-  for (const row of rows.slice(0, maxDocuments)) {
+  for (const row of selected.slice(0, maxDocuments)) {
     const text = readWholeText(db, contentCipher, row, Math.min(maxChars, maxTotal - held));
     if (text === undefined) {
       omittedByText += 1;
@@ -282,9 +288,9 @@ export function readScopeDocuments(
   }
   return {
     documents,
-    eligibleDocumentCount: rows.length,
+    eligibleDocumentCount: selected.length,
     notExtractedDocumentCount: notExtractedCount(db, scope),
-    omittedByCountCount: Math.max(0, rows.length - maxDocuments),
+    omittedByCountCount: Math.max(0, selected.length - maxDocuments),
     omittedByTextCount: omittedByText,
   };
 }

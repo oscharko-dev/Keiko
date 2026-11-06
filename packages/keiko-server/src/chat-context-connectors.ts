@@ -1,3 +1,4 @@
+import { chatKnowledgeScopes } from "./requirement-inventory.js";
 // The tool definitions a Chat's active connectors add to every tool-capable request, for the
 // context meter (owner request 2026-11-02): the configured MCP servers the Chat offers and its bound
 // Jira Pod. A status read is a peek. It never connects an MCP transport, awaits one, admits a host or
@@ -34,11 +35,14 @@ export interface ChatConnectorTools {
 interface ConnectorChat {
   readonly mcpServers?: Chat["mcpServers"] | undefined;
   readonly jiraPodBinding?: Chat["jiraPodBinding"] | undefined;
+  readonly localKnowledgeScope?: Chat["localKnowledgeScope"] | undefined;
+  readonly localKnowledgeScopes?: Chat["localKnowledgeScopes"] | undefined;
 }
 type ConnectorDepsKey =
   | "mcpSettings"
   | "mcpConnections"
   | "jiraChatCatalog"
+  | "knowledgeChatCatalog"
   | "atlassianConnectorCredentials"
   | "serverPrincipal"
   | "diagnostics";
@@ -145,6 +149,26 @@ function jiraReading(
   }
 }
 
+function knowledgeReading(
+  deps: ConnectorDeps,
+  chat: ConnectorChat,
+  correlationId: string,
+): Reading | undefined {
+  if (
+    chat.jiraPodBinding !== undefined ||
+    chatKnowledgeScopes(chat).length === 0 ||
+    deps.knowledgeChatCatalog === undefined
+  )
+    return undefined;
+  try {
+    const definitions = deps.knowledgeChatCatalog.toolDefinitions();
+    return { connector: { kind: "knowledge", toolCount: definitions.length }, definitions };
+  } catch (error) {
+    reportUnavailable(deps, correlationId, error);
+    return { connector: { kind: "knowledge" }, definitions: [] };
+  }
+}
+
 // The accounting's fixed overhead belongs to the request, not to its tools: subtract the empty
 // request, as the conversation shares do.
 function definitionTokens(
@@ -167,8 +191,11 @@ export function chatConnectorTools(
 ): ChatConnectorTools {
   if (chat === undefined) return { tokens: 0, connectors: [] };
   const correlation = correlationIdOrUnknown(correlationId);
-  const jira = jiraReading(deps, chat, correlation);
-  const readings = [...mcpReadings(deps, chat, correlation), ...(jira === undefined ? [] : [jira])];
+  const primary = jiraReading(deps, chat, correlation) ?? knowledgeReading(deps, chat, correlation);
+  const readings = [
+    ...mcpReadings(deps, chat, correlation),
+    ...(primary === undefined ? [] : [primary]),
+  ];
   return {
     tokens: definitionTokens(
       readings.flatMap((reading) => reading.definitions),

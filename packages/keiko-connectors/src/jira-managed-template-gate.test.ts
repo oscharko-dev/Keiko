@@ -14,7 +14,7 @@ import {
 import { field, LINKS_FIELD, response } from "../../../tests/support/jira-managed-remote.js";
 
 const SECTIONS = "## Context\n## Acceptance criteria\n";
-const FULL_DESCRIPTION = "## Context\nWhy\n## Acceptance criteria\n* works";
+const FULL_DESCRIPTION = "h2. Context\nWhy\nh2. Acceptance criteria\n* works";
 
 function named(id: string, type: string, name: string, required = false): Record<string, unknown> {
   return { ...field(id, type, required), name };
@@ -192,7 +192,7 @@ describe("create", () => {
     const f = fixture(SET(template([...ALL_POINTS, "requiredFields: [Story Points]"])));
     const result = await f.run("jira.create", {
       ...CREATE,
-      fields: { summary: "x", description: "## Context\nWhy" },
+      fields: { summary: "x", description: "h2. Context\nWhy" },
     });
     expect(result).toEqual({
       ok: false,
@@ -214,7 +214,7 @@ describe("create", () => {
     }));
     const result = await f.run("jira.create", {
       ...CREATE,
-      fields: { summary: "x", description: "## Context\nWhy" },
+      fields: { summary: "x", description: "h2. Context\nWhy" },
       links,
     });
     expect(result).toMatchObject({ ok: false, reason: "field-validation" });

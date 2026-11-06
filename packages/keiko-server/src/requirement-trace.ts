@@ -2,8 +2,9 @@
 //
 // An item names the requirements it derives from in an explicit `requirementIds` argument. The
 // references are validated against the units the Chat's Knowledge Pods hold; an unknown or
-// ambiguous reference refuses the write before anything is sent. Nothing is read from the item's
-// summary, labels or description.
+// ambiguous reference refuses the write before anything is sent. References are never inferred
+// from summary, labels or description. When supplied, the description is checked independently
+// for preservation of the resolved source acceptance criteria.
 
 import {
   REQUIREMENT_TRACE_FOOTER_END,
@@ -11,10 +12,17 @@ import {
   REQUIREMENT_REVISION_LABEL_PREFIX,
   requirementTrace,
   resolveRequirementReferences,
+  normaliseText,
   type RequirementReferenceProblem,
   type RequirementTraceUnit,
+  type ResolvedRequirementReference,
 } from "@oscharko-dev/keiko-quality-intelligence";
 import type { JiraTraceOutcome, JiraTraceRequest } from "@oscharko-dev/keiko-connectors";
+import {
+  projectJiraDescriptionInput,
+  JIRA_REQUIREMENT_REFERENCE_CHARS_MAX,
+  readJiraDescriptionBlocks,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { KnowledgeStore } from "@oscharko-dev/keiko-local-knowledge";
 
@@ -38,16 +46,30 @@ import {
 /** The labels and footer of a validated item; the connector applies them and reports back. */
 export type ItemTrace = Omit<JiraTraceRequest, "report">;
 
+type TraceProblem =
+  | RequirementReferenceProblem
+  | {
+      readonly reference: string;
+      readonly reason: "acceptance-criteria-missing";
+      readonly candidates?: never;
+    };
+interface TraceDescriptionCheck {
+  readonly description: unknown;
+}
+
 export type TraceResolution =
   | { readonly ok: true; readonly trace: ItemTrace }
   | {
       readonly ok: false;
       readonly reason: "no-knowledge-pod" | "unavailable" | "references";
-      readonly problems: readonly RequirementReferenceProblem[];
+      readonly problems: readonly TraceProblem[];
     };
 
 export interface TraceSession {
-  readonly resolve: (references: readonly string[]) => TraceResolution;
+  readonly resolve: (
+    references: readonly string[],
+    description?: TraceDescriptionCheck,
+  ) => TraceResolution;
   /** How many requirement units the Chat's Knowledge Pods hold; zero when none can be read. */
   readonly unitCount: () => number;
   readonly close: () => void;
@@ -89,13 +111,49 @@ function withPage(store: KnowledgeStore, unit: LocatedRequirementUnit): Requirem
   return pageLabel === undefined ? unit : { ...unit, source: { ...unit.source, pageLabel } };
 }
 
+function criterionText(value: string): string {
+  return normaliseText(value).replace(/\s+/gu, " ");
+}
+
+function acceptanceCriteriaProblems(
+  resolved: readonly ResolvedRequirementReference[],
+  description: TraceDescriptionCheck,
+  redact: (value: string) => string,
+): readonly TraceProblem[] {
+  const projected = projectJiraDescriptionInput(description.description)?.text ?? "";
+  const syntax = typeof description.description === "string" ? "jira-wiki" : "markdown";
+  const blocks = new Set(readJiraDescriptionBlocks(projected, syntax).map(criterionText));
+  const criteria = new Map<string, string>();
+  for (const item of resolved) {
+    const required =
+      item.criterion === undefined ? item.unit.entry.acceptanceCriteria : [item.criterion];
+    for (const criterion of required)
+      criteria.set(
+        `${item.unit.entry.documentScope}:${criterion.id}`,
+        criterionText(redact(criterion.text)),
+      );
+  }
+  const texts = [...criteria.values()];
+  const completeBlock = texts.every((text) => text.length > 0) && blocks.has(texts.join(" "));
+  return [...criteria].flatMap(([reference, text]): TraceProblem[] =>
+    completeBlock || (text.length > 0 && blocks.has(text))
+      ? []
+      : [{ reference, reason: "acceptance-criteria-missing" }],
+  );
+}
+
 function resolveAgainst(
   opened: Opened,
   references: readonly string[],
   redact: (value: string) => string,
+  description?: TraceDescriptionCheck,
 ): TraceResolution {
   const resolution = resolveRequirementReferences(references, opened.collection.units);
   if (!resolution.ok) return { ok: false, reason: "references", problems: resolution.problems };
+  if (description !== undefined) {
+    const problems = acceptanceCriteriaProblems(resolution.resolved, description, redact);
+    if (problems.length > 0) return { ok: false, reason: "references", problems };
+  }
   const located = resolution.resolved.map((item) => ({
     ...item,
     unit: withPage(opened.store, item.unit),
@@ -139,12 +197,12 @@ export function openTraceSession(deps: UiHandlerDeps, turn: TraceTurn): TraceSes
     }
   };
   return {
-    resolve: (references): TraceResolution => {
+    resolve: (references, description): TraceResolution => {
       const current = open();
       if (current === "unavailable") return { ok: false, reason: "unavailable", problems: [] };
       if (current === "no-knowledge-pod")
         return { ok: false, reason: "no-knowledge-pod", problems: [] };
-      return resolveAgainst(current, references, redact);
+      return resolveAgainst(current, references, redact, description);
     },
     unitCount: (): number => {
       const current = open();
@@ -168,7 +226,7 @@ export function traceRefusalData(
     requirementRefusal: resolution.reason,
     requirementProblems: resolution.problems.map((problem): CatalogJsonObject => ({
       ...(ref === undefined ? {} : { ref }),
-      reference: problem.reference.slice(0, 80),
+      reference: problem.reference.slice(0, JIRA_REQUIREMENT_REFERENCE_CHARS_MAX),
       reason: problem.reason,
       ...(problem.candidates === undefined
         ? {}
@@ -193,6 +251,7 @@ export interface TraceTally {
   tracedItems: number;
   refusedItems: number;
   problems: number;
+  acceptanceCriteriaMissing: number;
   labelsApplied: number;
   footersApplied: number;
   droppedLabels: number;
@@ -204,6 +263,7 @@ export function newTally(): TraceTally {
     tracedItems: 0,
     refusedItems: 0,
     problems: 0,
+    acceptanceCriteriaMissing: 0,
     labelsApplied: 0,
     footersApplied: 0,
     droppedLabels: 0,
@@ -226,6 +286,9 @@ export function tallyRefusal(
   tally.tracedItems += 1;
   tally.refusedItems += 1;
   tally.problems += resolution.problems.length;
+  tally.acceptanceCriteriaMissing += resolution.problems.filter(
+    (problem) => problem.reason === "acceptance-criteria-missing",
+  ).length;
   if (resolution.reason === "unavailable") tally.unavailable = true;
 }
 
@@ -239,7 +302,8 @@ export function logTrace(
     operation,
     tracedItemCount: tally.tracedItems,
     refusedItemCount: tally.refusedItems,
-    referenceProblemCount: tally.problems,
+    referenceProblemCount: tally.problems - tally.acceptanceCriteriaMissing,
+    acceptanceCriteriaMissingCount: tally.acceptanceCriteriaMissing,
     labelsAppliedCount: tally.labelsApplied,
     footerAppliedCount: tally.footersApplied,
     droppedLabelCount: tally.droppedLabels,

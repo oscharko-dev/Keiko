@@ -1019,8 +1019,10 @@ describe("ordinary Chat catalog read admission", () => {
     registerCurrentAuthority();
     const f = await catalogFixture(3, undefined, true);
 
-    // The eleven Jira reads plus knowledge.requirements.
-    expect(f.binder.offer().toolRefs).toHaveLength(12);
+    // The Jira reads and the canonical Knowledge read catalog share this offer.
+    expect(f.binder.offer().toolRefs).toHaveLength(
+      JIRA_MANAGED_READ_TOOLS.length + KNOWLEDGE_CHAT_TOOLS.length,
+    );
     const result = await dispatch(f, "knowledge", {}, "keiko.knowledge.requirements");
 
     // The Chat has no Knowledge Pod: the handler is entered and answers with a closed reason.

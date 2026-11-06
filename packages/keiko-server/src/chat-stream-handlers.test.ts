@@ -2326,7 +2326,10 @@ describe("desktop chat SSE streaming handler", () => {
       deps(streaming.model, { gatewayConfig: holder }),
     );
 
-    expect(outcome).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(outcome).toMatchObject({
+      status: 400,
+      body: { error: { code: "CONVERSATION_MODEL_NOT_READY" } },
+    });
     expect(streaming.calls.count).toBe(0);
     expect(sink.events).toContainEqual(
       expect.objectContaining({
@@ -2364,7 +2367,10 @@ describe("desktop chat SSE streaming handler", () => {
       deps(streamingModel("must not run").model, { gatewayConfig: holder }),
     );
 
-    expect(outcome).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(outcome).toMatchObject({
+      status: 400,
+      body: { error: { code: "CONVERSATION_MODEL_NOT_READY" } },
+    });
     expect(sink.events).toContainEqual(
       expect.objectContaining({
         op: "chat.regeneration.rejected",

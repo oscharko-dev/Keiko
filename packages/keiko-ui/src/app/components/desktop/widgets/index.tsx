@@ -505,7 +505,7 @@ function SettingsPanelSessionHost({
   initialTab,
 }: {
   readonly ctx: WindowRenderContext;
-  readonly initialTab?: "mcp" | undefined;
+  readonly initialTab?: "mcp" | "models" | undefined;
 }): ReactNode {
   const { activeProject } = useChatSessionContext();
   return (
@@ -522,7 +522,12 @@ function SettingsPanelSessionHost({
 }
 
 registerWindowRender("settings", (cfg, ctx) => (
-  <SettingsPanelSessionHost ctx={ctx} initialTab={cfg.initialTab === "mcp" ? "mcp" : undefined} />
+  <SettingsPanelSessionHost
+    ctx={ctx}
+    initialTab={
+      cfg.initialTab === "mcp" || cfg.initialTab === "models" ? cfg.initialTab : undefined
+    }
+  />
 ));
 registerWindowRender("workspaceTrust", () => <WorkspaceTrustPanel />);
 registerWindowRender("updates", () => <UpdateWindow />);

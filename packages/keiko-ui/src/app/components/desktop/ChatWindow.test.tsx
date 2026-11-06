@@ -637,6 +637,82 @@ describe("ChatWindow cancel button", () => {
     expect(messageForSelectedResponseVersion(message, 2).groundedAnswer).toBe(currentGrounding);
   });
 
+  it("starts the progress pipeline only after the server acknowledges the human turn", async () => {
+    const optimistic = makeMessage({
+      id: "local-voice-submitted",
+      content: "Read the selected Pod",
+    });
+    const session = makeSession({
+      activeChat: makeChat(),
+      sending: true,
+      sendStatus: "queued",
+      messages: [optimistic],
+    });
+    const { rerender } = render(
+      <ChatSessionProvider value={session}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(optimistic.turnState).toBeUndefined();
+    expect(screen.queryByRole("region", { name: "Progress" })).toBeNull();
+
+    rerender(
+      <ChatSessionProvider value={{ ...session, sendStatus: "contacting" }}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(screen.queryByRole("region", { name: "Progress" })).toBeNull();
+    expect(screen.getByLabelText("Keiko is responding")).toBeInTheDocument();
+    expect(screen.queryByText("Read requirements")).toBeNull();
+
+    rerender(
+      <ChatSessionProvider value={{ ...session, sendStatus: "awaiting-decision" }}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(screen.queryByRole("region", { name: "Progress" })).toBeNull();
+    expect(screen.queryByLabelText("Keiko is responding")).toBeNull();
+
+    const canonical = { ...optimistic, id: "canonical-submitted", turnState: "pending" as const };
+    rerender(
+      <ChatSessionProvider value={{ ...session, sendStatus: "contacting", messages: [canonical] }}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(screen.getAllByRole("region", { name: "Progress" })).toHaveLength(1);
+    const userBubble = screen.getByText(optimistic.content).closest("article");
+    expect(userBubble).not.toBeNull();
+    expect(screen.getByRole("region", { name: "Progress" }).closest("article")).toBe(userBubble);
+
+    rerender(
+      <ChatSessionProvider
+        value={{ ...session, sendStatus: "awaiting-decision", messages: [canonical] }}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(screen.getByRole("region", { name: "Progress" })).toHaveTextContent(
+      "Waiting for approval",
+    );
+    expect(document.querySelector('[data-state="active"]')).toBeNull();
+    expect(screen.queryByLabelText("Keiko is responding")).toBeNull();
+
+    rerender(
+      <ChatSessionProvider
+        value={{
+          ...session,
+          sending: false,
+          sendStatus: "completed",
+          messages: [{ ...canonical, turnState: "completed" }],
+        }}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    expect(screen.queryByRole("region", { name: "Progress" })).toBeNull();
+    await act(async () => {});
+  });
+
   it("keeps cancel reachable while regeneration is in flight", async () => {
     const cancelSend = vi.fn();
     const user = userEvent.setup();
@@ -2887,6 +2963,51 @@ function chatModelCapability(id: string): ModelCapability {
 }
 
 describe("ChatWindow conversation model dropdown (Issue #144)", () => {
+  it.each([
+    {
+      locale: "en",
+      notice:
+        "No conversation model is currently available. Check gateway and model status in Settings.",
+      sendLabel: "Send message",
+    },
+    {
+      locale: "de",
+      notice:
+        "Derzeit ist kein dialogfähiges Modell verfügbar. Prüfe den Gateway- und Modellstatus in den Einstellungen.",
+      sendLabel: "Nachricht senden",
+    },
+  ])(
+    "reports configured but unready models truthfully in $locale",
+    async ({ locale, notice, sendLabel }) => {
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      const session = makeSession({
+        activeChat: makeChat(),
+        configuredModelsAvailable: true,
+        modelCatalogStatus: "ready",
+        noEligibleModels: true,
+        selectedModel: undefined,
+        draft: "Keep this draft until the configured model is available.",
+      });
+      try {
+        render(
+          <I18nProvider>
+            <ChatSessionProvider value={session}>
+              <ChatWindow />
+            </ChatSessionProvider>
+          </I18nProvider>,
+        );
+
+        expect(await screen.findByText(notice)).toHaveAttribute("role", "alert");
+        const send = screen.getByRole("button", { name: sendLabel });
+        expect(send).toHaveAttribute("aria-disabled", "true");
+        expect(send).toHaveAttribute("aria-describedby", "cmp-no-model-alert");
+        expect(session.sendMessage).not.toHaveBeenCalled();
+      } finally {
+        window.localStorage.removeItem(I18N_STORAGE_KEY);
+      }
+    },
+  );
+
   it("renders every chat-eligible model id in the Model dropdown options", async () => {
     const user = userEvent.setup();
     // activeChat is required so the composer bar (containing the model select)

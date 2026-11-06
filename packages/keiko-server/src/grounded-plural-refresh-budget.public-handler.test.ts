@@ -82,7 +82,11 @@ function embeddingTransport(request: OpenAIEmbeddingRequest): Promise<OpenAIEmbe
   });
 }
 
-function configuredRuntime(refresh: boolean, maxInputTokens?: number): UiHandlerDeps {
+function configuredRuntime(
+  refresh: boolean,
+  maxInputTokens?: number,
+  retainCatalog = false,
+): UiHandlerDeps {
   const deps = buildUiHandlerDeps({
     configPath: join(stateDir, "gateway.json"),
     evidenceDir: join(stateDir, "evidence"),
@@ -126,8 +130,14 @@ function configuredRuntime(refresh: boolean, maxInputTokens?: number): UiHandler
     new Date().toISOString(),
     deps.gatewayConfig.generation(),
   );
-  // Only the embedding transport is scripted; lease, refresh governor and spend are production.
-  return { ...deps, localKnowledgeEmbeddingRequest: embeddingTransport };
+  // These cases own text-only synthesis/refresh budgets, not Knowledge tool admission.
+  // Preserve the production Gateway, durable spend, source stores, leases and refresh governor.
+  const { knowledgeChatCatalog, ...withoutCatalog } = deps;
+  expect(knowledgeChatCatalog).toBeDefined();
+  return {
+    ...(retainCatalog ? deps : withoutCatalog),
+    localKnowledgeEmbeddingRequest: embeddingTransport,
+  };
 }
 
 async function persistRepositoryPods(): Promise<void> {
@@ -191,13 +201,14 @@ async function actualRefreshTurn(
   hybrid = false,
   maxInputTokens?: number,
   expectedStatus = 200,
+  retainCatalog = false,
 ): Promise<{
   readonly answer: GroundedAnswer;
   readonly calls: readonly GatewayCallRequest[];
   readonly refreshInput: readonly number[];
   readonly originalInputMax: number;
 }> {
-  const deps = configuredRuntime(refresh, maxInputTokens);
+  const deps = configuredRuntime(refresh, maxInputTokens, retainCatalog);
   await persistRepositoryPods();
   deps.store.createProject(root, "Refresh budget");
   const chat = deps.store.createChat(root, "Refresh budget", CHAT);
@@ -297,6 +308,12 @@ async function connectReadyKnowledge(deps: UiHandlerDeps, chatId: string): Promi
 }
 
 describe("public configured plural semantic refresh and initial synthesis budget", () => {
+  it("requires tool capability for selected Knowledge tools before spending refresh or model grants", async () => {
+    const turn = await actualRefreshTurn(2, true, true, undefined, 400, true);
+    expect(turn.answer).toMatchObject({ error: { code: "CONVERSATION_UNAVAILABLE_MODEL" } });
+    expect(turn.calls).toHaveLength(0);
+    expect(turn.refreshInput).toHaveLength(0);
+  });
   it.each([false, true])(
     "refuses an exhausted initial input grant before dispatch (hybrid: %s)",
     async (hybrid) => {

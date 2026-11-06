@@ -11,9 +11,15 @@ import type {
   CatalogDigest,
   CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { catalogJsonBytes, validateToolResultEnvelope } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  catalogJsonBytes,
+  validateToolArguments,
+  validateToolResultEnvelope,
+} from "@oscharko-dev/keiko-tool-catalog";
 import { KEY_RANGE_ENTRY_CHARS } from "./jiraDraftKeyRanges.js";
 import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
+import { checkJiraDraft } from "@oscharko-dev/keiko-connectors";
+import { JIRA_DRAFT_STAGE_DECLARATION } from "./jiraDraftDescriptor.js";
 import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
 import { JIRA_REJECTED_GUIDANCE, jiraAttemptToolResult } from "./jiraMutationResult.js";
 
@@ -321,4 +327,76 @@ describe("the refusal detail of every single-issue mutation fits its descriptor 
     const result = jiraAttemptToolResult("rejected", refusedWith("x".repeat(200), "a".repeat(64)));
     expect(catalogJsonBytes(result.data)).toBeGreaterThan(4096);
   });
+});
+
+describe("staged drafts declare the item shape their handler accepts", () => {
+  const item = {
+    ref: "migration",
+    projectId: "10000",
+    issueTypeId: "10001",
+    fields: {
+      summary: "Synthetic migration",
+      description: "Synthetic description",
+      labels: ["synthetic"],
+      customfield_10010: { value: "Synthetic choice" },
+    },
+  };
+  const descriptors = [JIRA_DRAFT_STAGE_DECLARATION.descriptor, draftDescriptor()];
+
+  it("accepts the same complete item and dynamic Jira fields for staging and execution", () => {
+    expect(checkJiraDraft({ items: [item] }).ok).toBe(true);
+    for (const descriptor of descriptors)
+      expect(validateToolArguments({ items: [item] }, descriptor)).toEqual({ items: [item] });
+  });
+
+  it.each([
+    ["missing fields", { ref: item.ref, projectId: item.projectId, issueTypeId: item.issueTypeId }],
+    ["top-level summary", { ...item, summary: "Synthetic title" }],
+    ["top-level description and labels", { ...item, description: "Synthetic", labels: [] }],
+    ["missing summary", { ...item, fields: { description: "Synthetic" } }],
+  ])("rejects %s at the catalog boundary before handler work", (_kind, invalid) => {
+    expect(checkJiraDraft({ items: [invalid] }).ok).toBe(false);
+    for (const descriptor of descriptors)
+      expect(() => validateToolArguments({ items: [invalid] }, descriptor)).toThrow(
+        "invalid-shape",
+      );
+  });
+});
+
+// These existing tools have different effects even when the backlog has only a few items.
+it("describes staging as saving a Keiko draft without requesting Jira creation", () => {
+  const stage = JIRA_DRAFT_STAGE_DECLARATION;
+  expect(stage.risk).toBe("read");
+  expect(stage.descriptor.toolRef).toEqual({
+    canonicalId: "keiko.jira.draft.stage",
+    contractVersion: 1,
+  });
+  expect(stage.descriptor.description).toContain(
+    "Save a reviewable backlog draft in Keiko without creating Jira issues.",
+  );
+  expect(stage.descriptor.description).toContain(
+    "Supports small and large drafts in pages of 1 to",
+  );
+  expect(stage.descriptor.description).toContain("Omit draftId to start a new draft");
+  expect(stage.descriptor.description).toContain("returned draftId only to append");
+  expect(stage.descriptor.description).toContain(
+    "Only when the user requests creation in Jira and unresolvedRefCount is 0",
+  );
+});
+
+it("describes draft execution as Jira writes using inline items or the saved identity", () => {
+  const draft = JIRA_MUTATION_DECLARATIONS.find((entry) => entry.name === "jira.draft");
+  expect(draft?.risk).toBe("write");
+  expect(draft?.descriptor.toolRef).toEqual({
+    canonicalId: "keiko.jira.draft",
+    contractVersion: 3,
+  });
+  expect(draft?.descriptor.description).toMatch(/^Create related issues in Jira/u);
+  expect(draft?.descriptor.description).toContain(
+    "performs Jira writes under the current write authority and required human approval",
+  );
+  expect(draft?.descriptor.description).toContain(
+    "For a saved draft, pass only its draftId and draftDigest",
+  );
+  expect(draft?.descriptor.description).not.toContain("Propose a backlog");
 });

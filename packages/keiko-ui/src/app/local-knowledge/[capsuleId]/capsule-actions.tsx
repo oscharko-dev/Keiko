@@ -1619,7 +1619,7 @@ export function CapsuleActions({
     );
   }
 
-  const showIndexButton = sourceCount > 0 && lifecycleState !== "ready";
+  const showIndexButton = sourceCount > 0;
   const showReembedButton = sourceCount > 0;
   const showRebuildButton = sourceCount > 0;
   const reembedRecommended = sourceCount > 0 && !vectorCompatible;
@@ -1646,6 +1646,7 @@ export function CapsuleActions({
         </div>
       </div>
       <ConnectSourceForm
+        key={capsuleId}
         capsuleId={capsuleId}
         onConnected={onActionComplete}
         connectImpl={connectCapsuleSourceImpl}

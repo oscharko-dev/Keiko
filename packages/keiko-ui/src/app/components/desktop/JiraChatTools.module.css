@@ -1,8 +1,24 @@
+.cmpLayout {
+  container-type: inline-size;
+  margin-block: var(--space-5);
+  min-width: 0;
+}
+.cmpContent {
+  display: grid;
+  grid-template-columns: minmax(9rem, 11rem) minmax(0, 1fr);
+  gap: var(--space-5);
+  min-width: 0;
+}
 .cmpStack {
   display: grid;
+  align-content: start;
   gap: 8px;
-  margin-block: 12px;
   min-width: 0;
+}
+@container (max-width: 40rem) {
+  .cmpContent {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .cmpExchange {
   display: grid;

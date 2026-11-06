@@ -136,9 +136,11 @@ export interface RequirementTraceActivity {
   readonly operation: RequirementTraceOperation;
   /** Items that carried `requirementIds` (an item without them is not traced and not counted). */
   readonly tracedItemCount: number;
-  /** Items refused before any write because a reference was unknown, ambiguous or malformed. */
+  /** Items refused before any write by source reference or acceptance-criterion validation. */
   readonly refusedItemCount: number;
+  /** Unknown, ambiguous or malformed references, excluding missing source criteria. */
   readonly referenceProblemCount: number;
+  readonly acceptanceCriteriaMissingCount: number;
   readonly labelsAppliedCount: number;
   readonly footerAppliedCount: number;
   readonly droppedLabelCount: number;
@@ -163,6 +165,7 @@ const REQUIREMENT_TRACE_APPLIED_OPERATION = defineActivityLogOperation({
     tracedItemCount: COUNT,
     refusedItemCount: COUNT,
     referenceProblemCount: COUNT,
+    acceptanceCriteriaMissingCount: { ...COUNT, required: false },
     labelsAppliedCount: COUNT,
     footerAppliedCount: COUNT,
     droppedLabelCount: COUNT,

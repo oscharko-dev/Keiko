@@ -1,3 +1,15 @@
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
+import { logKnowledgeCoverage, knowledgeTurnCoverage } from "../chat-tool-knowledge-coverage.js";
+import { CHAT_CATALOG_TOOLS } from "./jiraChatCatalogConsumer.js";
 import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import { JiraChatToolTurn } from "./jiraChatToolTurn.js";
@@ -5,6 +17,7 @@ import type { ChatReadGrantEntry } from "./chatReadGrantState.js";
 import { findMessageById as readStoredMessage } from "../store/messages.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { handleDecideChatWriteApproval } from "./chatWriteApprovalRoutes.js";
+import { readJiraDraftRoute } from "./jiraDraftRoutes.js";
 import { handleSendDesktopChatStream } from "../chat-stream-handlers.js";
 import { handleUpdateChat } from "../store-handlers.js";
 import { deriveChatGroundingScopeIdentity } from "../store/chat-grounding-scope-identity.js";
@@ -18,6 +31,7 @@ import {
   parseGatewayConfig,
   toolCallingConfigurationFingerprint,
   TransportError,
+  GatewayError,
   type GatewayCallRequest,
   type GatewayStreamChunk,
   type NormalizedResponse,
@@ -45,13 +59,22 @@ import {
   SYNTHETIC_JIRA_BASE_URL,
   syntheticJira,
 } from "../../../../tests/support/jira-synthetic-draft-remote.js";
-import { multipartFileSize } from "../../../../tests/support/jira-managed-remote.js";
+import { field, multipartFileSize } from "../../../../tests/support/jira-managed-remote.js";
 import {
   omittedReportFindingKeys,
   reportCoverageMismatches,
   unsupportedIssueKeys,
 } from "../chat-tool-report-coverage.js";
 import { recordChatToolTurnCorrected } from "../chat-tool-turn-ending.js";
+import { conversationModelNotReadyResult } from "../conversation-readiness-admission.js";
+import { updateCapsuleState } from "@oscharko-dev/keiko-local-knowledge";
+import { openKnowledgeStoreForDeps } from "../local-knowledge-store-open.js";
+import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
+import type {
+  CatalogJsonObject,
+  CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { specification } from "../_requirementSupport.js";
 
 // Pass-through spies: the turn's completeness check and its log line run as in production unless a
 // test scripts the detection (the detection itself is proven in chat-tool-report-coverage.test.ts).
@@ -66,7 +89,15 @@ vi.mock("../chat-tool-report-coverage.js", async (importOriginal) => {
 });
 vi.mock("../chat-tool-turn-ending.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../chat-tool-turn-ending.js")>();
-  return { ...actual, recordChatToolTurnCorrected: vi.fn(actual.recordChatToolTurnCorrected) };
+  return {
+    ...actual,
+    recordChatToolTurnCorrected: vi.fn(actual.recordChatToolTurnCorrected),
+  };
+});
+
+vi.mock("../chat-tool-knowledge-coverage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../chat-tool-knowledge-coverage.js")>();
+  return { ...actual, logKnowledgeCoverage: vi.fn(actual.logKnowledgeCoverage) };
 });
 
 type ToolProof = boolean | "missing" | "stale" | "unsupported" | "mismatched";
@@ -160,7 +191,12 @@ function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
 // A backlog of three items: Story depends on Epic; Loose stands alone (#4178).
 const DRAFT_ARGUMENTS = {
   items: [
-    { ref: "epic", projectId: "10000", issueTypeId: "10001", fields: { summary: "Epic" } },
+    {
+      ref: "epic",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Epic" },
+    },
     {
       ref: "story",
       projectId: "10000",
@@ -168,13 +204,23 @@ const DRAFT_ARGUMENTS = {
       fields: { summary: "Story" },
       parent: { fieldId: "parent", ref: "epic" },
     },
-    { ref: "loose", projectId: "10000", issueTypeId: "10001", fields: { summary: "Loose" } },
+    {
+      ref: "loose",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Loose" },
+    },
   ],
 };
 // S09 of epic #4173: an epic, a task under it and two sub-tasks under that task, as ONE draft.
 const NESTED_DRAFT_ARGUMENTS = {
   items: [
-    { ref: "epic", projectId: "10000", issueTypeId: "10001", fields: { summary: "Epic" } },
+    {
+      ref: "epic",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Epic" },
+    },
     {
       ref: "task",
       projectId: "10000",
@@ -224,7 +270,10 @@ function toolArguments(
 ): Record<string, unknown> {
   if (draft) return typeof draft === "function" ? draft() : draftToSend;
   if (typeof mutation === "object")
-    return { issueKey: "KEIKO-1", source: { kind: "connected-file", path: mutation.attach } };
+    return {
+      issueKey: "KEIKO-1",
+      source: { kind: "connected-file", path: mutation.attach },
+    };
   return mutation ? { issueKey, body } : {};
 }
 /** `true` keeps requesting a tool; a number requests that many rounds, then answers. */
@@ -241,7 +290,10 @@ function syntheticModel(
 ): ModelPort {
   const respond = (request: GatewayCallRequest): NormalizedResponse => {
     calls.push(request);
-    const reservation = request.attemptAdmission?.({ promptTokens: 100, maxOutputTokens: 500 });
+    const reservation = request.attemptAdmission?.({
+      promptTokens: 100,
+      maxOutputTokens: 500,
+    });
     const base: NormalizedResponse = {
       modelId: MODEL,
       content: "No Jira projects are visible.",
@@ -315,7 +367,7 @@ function fixture(
   /** Grant ids the server accepted itself, in order; no human ever decides a read grant. */
   acceptedReadGrants: string[];
 } {
-  const root = mkdtempSync(join(tmpdir(), "keiko-jira-chat-turn-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-jira-chat-turn-")));
   const calls: GatewayCallRequest[] = [];
   const model = syntheticModel(calls, mutation, repeatTools, draft, script?.bodies);
   const deps = buildUiHandlerDeps({
@@ -363,7 +415,10 @@ function fixture(
           baseUrl: SYNTHETIC_JIRA_BASE_URL,
           authRef: "synthetic-ref",
           credentials: {
-            resolveForExecution: () => ({ scheme: "bearer-pat", apiToken: "synthetic-test-pat" }),
+            resolveForExecution: () => ({
+              scheme: "bearer-pat",
+              apiToken: "synthetic-test-pat",
+            }),
           },
           fetchImpl: jira.fetch,
         });
@@ -406,16 +461,19 @@ function fixture(
 }
 // #4175: a turn that reaches its deadline after settling tool calls answers from its transcript on
 // the buffered and the streamed path; the deadline admits no further model or tool work.
-function stallAfterFirstRound(f: ReturnType<typeof fixture>): void {
+function stallAfterFirstRound(f: ReturnType<typeof fixture>, onStalled?: () => void): void {
   const original = f.model.callStream;
   if (original === undefined) throw new Error("Missing stream port");
   let rounds = 0;
   const stalled = (signal: AbortSignal): AsyncIterable<GatewayStreamChunk> => ({
     async *[Symbol.asyncIterator](): AsyncIterator<GatewayStreamChunk> {
       await new Promise<never>((_resolve, reject) => {
-        signal.addEventListener("abort", () => {
+        const abort = (): void => {
           reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
-        });
+        };
+        if (signal.aborted) abort();
+        else signal.addEventListener("abort", abort, { once: true });
+        onStalled?.();
       });
       yield* [];
     },
@@ -437,10 +495,15 @@ it.each([false, true])(
   "delivers the transcript answer when the turn reaches its deadline (stream=%s)",
   async (stream) => {
     const f = fixture(false, undefined, true, true);
-    Object.assign(f.deps, { chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 1_500 } });
+    Object.assign(f.deps, {
+      chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 1_500 },
+    });
     stallAfterFirstRound(f);
     const response = mockResponse({ captureBody: true });
-    const ctx = { ...sendContext(f, `deadline-${String(stream)}`), res: response.res };
+    const ctx = {
+      ...sendContext(f, `deadline-${String(stream)}`),
+      res: response.res,
+    };
     const pending = stream
       ? handleSendDesktopChatStream(ctx, f.deps)
       : handleSendDesktopChat(ctx, f.deps);
@@ -457,6 +520,29 @@ it.each([false, true])(
   },
 );
 
+/** Drive the existing authority deadline without racing catalog, approval or remote latency. */
+function controlledTurnDeadline(runtimeMs: number): { readonly expire: () => void } {
+  let clock = Date.now();
+  const timeouts: AbortController[] = [];
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  vi.spyOn(Date, "now").mockImplementation(() => clock);
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+    if (milliseconds > runtimeMs) return timeout(milliseconds);
+    const controller = new AbortController();
+    timeouts.push(controller);
+    return controller.signal;
+  });
+  return {
+    expire: (): void => {
+      clock += runtimeMs;
+      for (const controller of timeouts)
+        controller.abort(
+          new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+        );
+    },
+  };
+}
+
 // #4175 acceptance: "A stopped or exhausted turn lists exactly the issue keys Jira shows as created."
 // A backlog draft runs, then the turn reaches its deadline before the model answers: the answer is
 // written from the transcript and names every key the synthetic Jira holds, and no other.
@@ -464,23 +550,175 @@ it.each([false, true])(
   "names exactly the keys Jira created when the turn reaches its deadline after a draft (stream=%s)",
   async (stream) => {
     const f = fixture(true, undefined, true, false, true);
-    Object.assign(f.deps, { chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 3_000 } });
-    stallAfterFirstRound(f);
+    const deadline = controlledTurnDeadline(3_000);
+    Object.assign(f.deps, {
+      chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 3_000 },
+    });
+    let enteredAnswer!: () => void;
+    const answering = new Promise<void>((resolve) => {
+      enteredAnswer = resolve;
+    });
+    stallAfterFirstRound(f, enteredAnswer);
     const response = mockResponse({ captureBody: true });
-    const ctx = { ...sendContext(f, `deadline-draft-${String(stream)}`), res: response.res };
+    const ctx = {
+      ...sendContext(f, `deadline-draft-${String(stream)}`),
+      res: response.res,
+    };
     const pending = stream
       ? handleSendDesktopChatStream(ctx, f.deps)
       : handleSendDesktopChat(ctx, f.deps);
     void pending.catch(() => undefined);
     await awaitReadGrantedForWrite(f);
     await decidePendingWrite(f, "approve");
+    await answering;
+    const exchange = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0];
+    expect(exchange?.mutationOutcome).toBe("succeeded");
+    expect(exchange?.result?.status).toBe("completed");
+    expect(f.writes()).toBe(DRAFT_ARGUMENTS.items.length);
+    const dispatched = f.requests();
+    deadline.expire();
     await pending;
+    expect(f.requests()).toBe(dispatched);
     const inJira = f.jira.issues.map((issue) => issue.key).sort();
     expect(inJira.length).toBeGreaterThan(0);
     const [, assistant] = f.deps.store.listMessages(f.chatId);
     expect(assistant?.content).toContain("this turn reached its time limit");
     const named = [...new Set(assistant?.content.match(/SYN-\d+/gu) ?? [])].sort();
     expect(named).toEqual(inJira);
+  },
+);
+
+type DraftDeadlinePhase = "response-unobserved" | "acknowledged" | "settled";
+function latestDraftExchange(f: ReturnType<typeof fixture>): ChatToolExchange | undefined {
+  return f.deps.store
+    .listMessages(f.chatId)
+    .filter((message) => message.role === "user")
+    .at(-1)?.toolTranscript?.exchanges[0];
+}
+function firstDraftJournal(
+  f: ReturnType<typeof fixture>,
+): ReturnType<NonNullable<UiHandlerDeps["store"]["chatToolMutations"]>["find"]> {
+  const user = f.deps.store.listMessages(f.chatId)[0];
+  const call = user?.toolTranscript?.exchanges[0]?.call;
+  if (user === undefined || call === undefined) return undefined;
+  const invocationId = sha256Hex(canonicalise({ messageId: user.id, callId: call.id }));
+  return f.deps.store.chatToolMutations?.find(
+    sha256Hex(canonicalise({ draft: invocationId, ref: "epic" })),
+  );
+}
+function isDraftCreateRequest(
+  input: Parameters<typeof fetch>[0],
+  init: Parameters<typeof fetch>[1],
+): boolean {
+  const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+  const url = input instanceof Request ? input.url : input;
+  return method === "POST" && new URL(url).pathname.endsWith("/issue");
+}
+function draftDeadlinePhaseMatches(
+  f: ReturnType<typeof fixture>,
+  phase: DraftDeadlinePhase,
+  input: Parameters<typeof fetch>[0],
+  init: Parameters<typeof fetch>[1],
+): boolean {
+  if (phase === "response-unobserved") return isDraftCreateRequest(input, init);
+  const journal = firstDraftJournal(f);
+  return phase === "acknowledged"
+    ? journal?.phase === "acknowledged"
+    : journal?.phase === "settled" && journal.outcome === "succeeded";
+}
+function holdDraftPhase(
+  f: ReturnType<typeof fixture>,
+  phase: DraftDeadlinePhase,
+): {
+  readonly entered: Promise<void>;
+  readonly release: () => void;
+  readonly restore: () => void;
+} {
+  const original = f.jira.fetch.getMockImplementation();
+  if (original === undefined) throw new TypeError("Missing Jira remote");
+  let entered!: () => void;
+  let release!: () => void;
+  const enteredPromise = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let holding = false;
+  f.jira.fetch.mockImplementation(async (input, init) => {
+    const matches = draftDeadlinePhaseMatches(f, phase, input, init);
+    if (holding || !matches) return original(input, init);
+    holding = true;
+    // An unobserved HTTP response is a real external effect, but proves no key to Keiko.
+    const response = phase === "response-unobserved" ? await original(input, init) : undefined;
+    entered();
+    await held;
+    return response ?? original(input, init);
+  });
+  return {
+    entered: enteredPromise,
+    release,
+    restore: (): void => {
+      f.jira.fetch.mockImplementation(original);
+    },
+  };
+}
+
+it.each(
+  (["response-unobserved", "acknowledged", "settled"] as const).flatMap((phase) =>
+    [false, true].map((stream) => ({ phase, stream })),
+  ),
+)(
+  "keeps observed draft keys across a controlled $phase deadline (stream=$stream)",
+  async ({ phase, stream }) => {
+    const f = fixture(true, undefined, true, false, true);
+    Object.assign(f.deps, { chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 3_000 } });
+    const deadline = controlledTurnDeadline(3_000);
+    stallAfterFirstRound(f);
+    const held = holdDraftPhase(f, phase);
+    const response = mockResponse({ captureBody: true });
+    const clientTurnId = `draft-${phase}-${String(stream)}`;
+    const ctx = { ...sendContext(f, clientTurnId), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await awaitReadGrantedForWrite(f);
+    await decidePendingWrite(f, "approve");
+    await held.entered;
+    expect(f.writes()).toBe(1);
+    expect(f.jira.issues.map((issue) => issue.key)).toEqual(["SYN-1"]);
+    expect(firstDraftJournal(f)?.phase).toBe(
+      phase === "response-unobserved" ? "dispatched" : phase,
+    );
+    const dispatched = f.requests();
+    try {
+      deadline.expire();
+      await pending;
+      const exchange = latestDraftExchange(f);
+      expect(exchange?.result).toMatchObject({ status: "timeout", data: null });
+      const assistant = f.deps.store.listMessages(f.chatId).at(-1);
+      const keys = [...new Set(assistant?.content.match(/SYN-\d+/gu) ?? [])].sort();
+      expect(keys).toEqual(phase === "response-unobserved" ? [] : ["SYN-1"]);
+      expect(f.requests()).toBe(dispatched);
+      expect(f.writes()).toBe(1);
+      if (stream) expect(response.body()).toContain("event: done");
+    } finally {
+      held.release();
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(f.requests()).toBe(dispatched);
+    expect(f.writes()).toBe(1);
+    expect(latestDraftExchange(f)?.result).toMatchObject({ status: "timeout", data: null });
+    held.restore();
+    // Retrying this exact delivered turn reuses its receipt, without another model/tool effect.
+    const calls = f.calls.length;
+    expect((await handleSendDesktopChat(sendContext(f, clientTurnId), f.deps)).status).toBe(200);
+    expect(f.requests()).toBe(dispatched);
+    expect(f.writes()).toBe(1);
+    expect(f.calls).toHaveLength(calls);
   },
 );
 
@@ -491,7 +729,10 @@ it.each([false, true])(
     const f = fixture(true, undefined, true, false, true);
     stallAfterFirstRound(f);
     const response = mockResponse({ captureBody: true });
-    const ctx = { ...sendContext(f, `mode-draft-${String(stream)}`), res: response.res };
+    const ctx = {
+      ...sendContext(f, `mode-draft-${String(stream)}`),
+      res: response.res,
+    };
     const pending = stream
       ? handleSendDesktopChatStream(ctx, f.deps)
       : handleSendDesktopChat(ctx, f.deps);
@@ -566,10 +807,18 @@ function syntheticReply(
 }
 /** Jira's attachment endpoints for the synthetic issue: the switch, the upload and the readback. */
 function attachmentBody(method: string, path: string, uploads: readonly number[]): string {
-  const stored = uploads.map((size) => ({ id: "10300", filename: "report.txt", size }));
+  const stored = uploads.map((size) => ({
+    id: "10300",
+    filename: "report.txt",
+    size,
+  }));
   if (path.endsWith("/attachment/meta")) return JSON.stringify({ enabled: true, uploadLimit: 1e6 });
   if (method === "POST") return JSON.stringify(stored);
-  return JSON.stringify({ id: "10001", key: "KEIKO-1", fields: { attachment: stored } });
+  return JSON.stringify({
+    id: "10001",
+    key: "KEIKO-1",
+    fields: { attachment: stored },
+  });
 }
 function send(
   f: ReturnType<typeof fixture>,
@@ -587,7 +836,12 @@ function sendBody(f: ReturnType<typeof fixture>, clientTurnId: string): Record<s
     modelId: MODEL,
     content: "List Jira projects",
     clientTurnId,
-    memory: { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} },
+    memory: {
+      enabled: false,
+      budgetTokens: 0,
+      mode: "governed-assist",
+      context: {},
+    },
   };
 }
 // The read grant the server established for a turn: recorded granted, never waiting for a person.
@@ -613,7 +867,7 @@ function expectUnchangedJiraOffer(calls: readonly GatewayCallRequest[]): void {
 function expectJiraDraftUnionOffered(calls: readonly GatewayCallRequest[]): void {
   const offered = calls[0]?.toolCatalog;
   if (offered?.kind !== "bound") throw new Error("Missing real Chat catalog offer");
-  expect(offered.projection.tools).toHaveLength(19);
+  expect(offered.projection.tools).toHaveLength(CHAT_CATALOG_TOOLS.length);
   expect(
     offered.projection.tools.find((tool) => tool.alias === "jira_draft")?.inputSchema.oneOf,
   ).toHaveLength(2);
@@ -809,8 +1063,7 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
           },
         },
       });
-      expect(JSON.stringify(result.body)).toContain("verified tool calling");
-      expect(JSON.stringify(result.body)).toContain("disconnect the Jira Pod");
+      expect(result).toMatchObject(conversationModelNotReadyResult("tool-calling"));
       expect(f.calls).toHaveLength(0);
       expect(f.requests()).toBe(0);
       expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("failed");
@@ -874,7 +1127,10 @@ describe("normal streamed Chat through the owned Jira catalog", () => {
 it("keeps the shared Jira rules out of every Jira tool description", async () => {
   const f = fixture();
   const managed = await f.deps.jiraChatCatalog?.get();
-  const descriptions = managed?.catalog.descriptors.map((entry) => entry.description) ?? [];
+  const descriptions =
+    managed?.catalog.descriptors
+      .filter((entry) => entry.toolRef.canonicalId.startsWith("keiko.jira."))
+      .map((entry) => entry.description) ?? [];
   expect(descriptions.length).toBeGreaterThan(10);
   for (const description of descriptions) {
     expect(description).not.toMatch(
@@ -919,7 +1175,10 @@ it.each([false, true])(
   async (stream) => {
     const f = fixture();
     const response = mockResponse({ captureBody: true });
-    const ctx = { ...sendContext(f, `steered-${String(stream)}`), res: response.res };
+    const ctx = {
+      ...sendContext(f, `steered-${String(stream)}`),
+      res: response.res,
+    };
     const pending = stream
       ? handleSendDesktopChatStream(ctx, f.deps)
       : handleSendDesktopChat(ctx, f.deps);
@@ -1035,7 +1294,10 @@ describe.each([false, true])(
       vi.mocked(omittedReportFindingKeys).mockReturnValueOnce(["RPT-50", "RPT-63"]);
       const f = fixture();
       const response = mockResponse({ captureBody: true });
-      const ctx = { ...sendContext(f, `report-omission-${String(stream)}`), res: response.res };
+      const ctx = {
+        ...sendContext(f, `report-omission-${String(stream)}`),
+        res: response.res,
+      };
       const pending = stream
         ? handleSendDesktopChatStream(ctx, f.deps)
         : handleSendDesktopChat(ctx, f.deps);
@@ -1221,13 +1483,19 @@ describe.each([false, true])(
       f.deps.store.updateChat(f.chatId, { toolMode: "autonomous-delivery" });
       failModelRound(f, failingRound);
       const response = mockResponse({ captureBody: true });
-      const ctx = { ...sendContext(f, `corrected-failure-${String(stream)}`), res: response.res };
+      const ctx = {
+        ...sendContext(f, `corrected-failure-${String(stream)}`),
+        res: response.res,
+      };
       const pending = stream
         ? handleSendDesktopChatStream(ctx, f.deps)
         : handleSendDesktopChat(ctx, f.deps);
       void pending.catch(() => undefined);
       await pending;
-      return { f, content: f.deps.store.listMessages(f.chatId)[1]?.content ?? "" };
+      return {
+        f,
+        content: f.deps.store.listMessages(f.chatId)[1]?.content ?? "",
+      };
     }
 
     it("reports the write the correction round performed before the provider failed", async () => {
@@ -1263,7 +1531,10 @@ describe.each([false, true])("a refused write inside one Chat turn (stream=%s)",
     });
     f.deps.store.updateChat(f.chatId, { toolMode: "autonomous-delivery" });
     const response = mockResponse({ captureBody: true });
-    const ctx = { ...sendContext(f, `correction-${String(stream)}`), res: response.res };
+    const ctx = {
+      ...sendContext(f, `correction-${String(stream)}`),
+      res: response.res,
+    };
     const pending = stream
       ? handleSendDesktopChatStream(ctx, f.deps)
       : handleSendDesktopChat(ctx, f.deps);
@@ -1280,7 +1551,10 @@ describe.each([false, true])("a refused write inside one Chat turn (stream=%s)",
   it("lets the model correct and retry after Jira's error document", async () => {
     const { f, body } = await runCorrection({
       status: 400,
-      bodyText: JSON.stringify({ errorMessages: ["Comment is invalid."], errors: {} }),
+      bodyText: JSON.stringify({
+        errorMessages: ["Comment is invalid."],
+        errors: {},
+      }),
     });
 
     expect(outcomes(f)).toEqual(["rejected", "succeeded"]);
@@ -1310,7 +1584,10 @@ describe.each([false, true])("a refused write inside one Chat turn (stream=%s)",
 
       expect(outcomes(f)[0]).toBe("unknown");
       const retry = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[1]?.result;
-      expect(retry?.data).toMatchObject({ outcome: "not-dispatched", reason: "conflict" });
+      expect(retry?.data).toMatchObject({
+        outcome: "not-dispatched",
+        reason: "conflict",
+      });
       expect(f.writes()).toBe(1);
       // Fail closed, but never a stall: the model is told, in fixed words, to stop and tell the user
       // in plain language what happened, and the turn settles with that final answer.
@@ -1328,10 +1605,15 @@ it.each([false, true])(
   "answers an exhausted turn with exactly the write Jira acknowledged (stream=%s, #4175)",
   async (stream) => {
     const f = fixture(true, undefined, true, true);
-    Object.assign(f.deps, { chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxToolCalls: 1 } });
+    Object.assign(f.deps, {
+      chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxToolCalls: 1 },
+    });
     f.deps.store.updateChat(f.chatId, { toolMode: "autonomous-delivery" });
     const response = mockResponse({ captureBody: true });
-    const ctx = { ...sendContext(f, `exhausted-write-${String(stream)}`), res: response.res };
+    const ctx = {
+      ...sendContext(f, `exhausted-write-${String(stream)}`),
+      res: response.res,
+    };
     const pending = stream
       ? handleSendDesktopChatStream(ctx, f.deps)
       : handleSendDesktopChat(ctx, f.deps);
@@ -1456,7 +1738,10 @@ it("executes only the selected backlog items and persists the deselection throug
   vi.spyOn(f.deps.store, "updateChatToolTranscript").mockImplementation(
     (id, change, correlationId) => {
       if (change.kind === "write-approval" && change.approval.kind === "jira-chat-write")
-        saved.push({ state: change.approval.state, excluded: change.approval.excludedItemRefs });
+        saved.push({
+          state: change.approval.state,
+          excluded: change.approval.excludedItemRefs,
+        });
       update(id, change, correlationId);
     },
   );
@@ -1550,7 +1835,10 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     expect(approvals).toEqual(["pending", "approved", "claimed"]);
     const exchange = firstToolExchange(f);
     expect(exchange.mutationOutcome).toBe("succeeded");
-    expect(exchange.approval).toMatchObject({ operation: "jira.draft", state: "claimed" });
+    expect(exchange.approval).toMatchObject({
+      operation: "jira.draft",
+      state: "claimed",
+    });
     expect(JSON.stringify(exchange.result?.data)).toContain('"createdCount":1200');
     expect(JSON.stringify(exchange.result?.data)).toContain('"compact":true');
   }, 180_000);
@@ -1564,7 +1852,9 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     await decidePendingWrite(f, "approve", left);
     expect((await pending).status).toBe(200);
     expect(f.jira.issues).toHaveLength(EPICS + STORIES - left.length);
-    expect(firstToolExchange(f).approval).toMatchObject({ excludedItemRefs: left });
+    expect(firstToolExchange(f).approval).toMatchObject({
+      excludedItemRefs: left,
+    });
     expect(JSON.stringify(firstToolExchange(f).result?.data)).toContain('"excludedCount":40');
   });
 
@@ -1573,7 +1863,12 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     const store = f.deps.jiraDraftStore;
     const draftId = typeof reference.draftId === "string" ? reference.draftId : "";
     store?.append(f.chatId, draftId, "fingerprint", [
-      { ref: "late", projectId: "10000", issueTypeId: "10001", fields: { summary: "Late" } },
+      {
+        ref: "late",
+        projectId: "10000",
+        issueTypeId: "10001",
+        fields: { summary: "Late" },
+      },
     ]);
     const pending = handleSendDesktopChat(sendContext(f, "stale-draft"), f.deps);
     void pending.catch(() => undefined);
@@ -1670,7 +1965,10 @@ it.each([
       .find((message) => message.role === "assistant");
     if (assistant === undefined) throw new Error("Missing mutation answer");
     const result = await handleRegenerateDesktopChat(
-      context({ ...sendBody(f, "regenerated-write"), assistantMessageId: assistant.id }),
+      context({
+        ...sendBody(f, "regenerated-write"),
+        assistantMessageId: assistant.id,
+      }),
       f.deps,
     );
     expect(result.status).toBe(200);
@@ -1981,7 +2279,12 @@ describe("attaching a connected file through the ordinary Chat turn (#4176)", ()
     connect = (): void => {
       f.deps.store.updateChat(f.chatId, {
         connectedScopes: [
-          { kind: "workspace-root", root: folder, relativePaths: [], connectedAtMs: 1 },
+          {
+            kind: "workspace-root",
+            root: folder,
+            relativePaths: [],
+            connectedAtMs: 1,
+          },
         ],
       });
     };
@@ -1997,13 +2300,20 @@ describe("attaching a connected file through the ordinary Chat turn (#4176)", ()
     const exchange = firstToolExchange(f);
     expect(exchange.approval).toMatchObject({
       operation: "jira.attach",
-      attachment: { name: "report.txt", sizeBytes: BODY.length, sha256: sha256Hex(BODY) },
+      attachment: {
+        name: "report.txt",
+        sizeBytes: BODY.length,
+        sha256: sha256Hex(BODY),
+      },
     });
     expect(JSON.stringify(exchange.call.arguments)).not.toContain(BODY);
     expect(f.uploads).toEqual([BODY.length]);
     expect(f.writes()).toBe(1);
     expect(exchange.mutationOutcome).toBe("succeeded");
-    expect(exchange.result?.data).toMatchObject({ outcome: "succeeded", attachmentId: "10300" });
+    expect(exchange.result?.data).toMatchObject({
+      outcome: "succeeded",
+      attachmentId: "10300",
+    });
   });
   it("sends nothing when the file changed after the human reviewed it", async () => {
     const f = attachFixture();
@@ -2048,4 +2358,842 @@ describe("attaching a connected file through the ordinary Chat turn (#4176)", ()
     expect(f.uploads).toEqual([]);
     expect(f.writes()).toBe(0);
   });
+});
+
+// The complete public Chat path must validate a required Epic Link before that Epic has a key.
+// Neither a mocked template gate nor an already-existing parent would exercise that boundary.
+describe("four-item Epic and Task template fullchain", () => {
+  const EPIC_TYPE = "10002";
+  const TASK_TYPE = "10003";
+  const EPIC_NAME = "customfield_17701";
+  const EPIC_LINK = "customfield_17702";
+  const EPIC_SECTIONS = [
+    "Objective",
+    "Scope",
+    "Requirements",
+    "Acceptance criteria",
+    "Dependencies",
+  ];
+  const TASK_SECTIONS = ["Context", "Implementation", "Acceptance criteria"];
+
+  function description(sections: readonly string[], ref: string): string {
+    return sections.map((section) => `h2. ${section}\n${ref}: verified ${section}.`).join("\n\n");
+  }
+  interface BacklogFixtureItem extends Record<string, unknown> {
+    readonly ref: string;
+    fields: Record<string, unknown>;
+  }
+  function backlog(): { items: BacklogFixtureItem[] } {
+    // Children intentionally precede their parents: production dependency sorting owns the order.
+    return {
+      items: [1, 2].flatMap((number) => {
+        const ref = String(number);
+        return [
+          {
+            ref: `task${ref}`,
+            projectId: "10000",
+            issueTypeId: TASK_TYPE,
+            fields: {
+              summary: `Task ${ref}`,
+              description: description(TASK_SECTIONS, ref),
+            },
+            parent: { fieldId: EPIC_LINK, ref: `epic${ref}` },
+          },
+          {
+            ref: `epic${ref}`,
+            projectId: "10000",
+            issueTypeId: EPIC_TYPE,
+            fields: {
+              summary: `Epic ${ref}`,
+              description: description(EPIC_SECTIONS, ref),
+              [EPIC_NAME]: `Epic name ${ref}`,
+            },
+          },
+        ];
+      }),
+    };
+  }
+  function saveTemplates(f: ReturnType<typeof fixture>): void {
+    for (const [name, sections, fields] of [
+      ["Epic", EPIC_SECTIONS, ["Description", "Epic Name"]],
+      ["Task", TASK_SECTIONS, ["Description", "Epic Link"]],
+    ] as const) {
+      const markdown = [
+        "---",
+        "keiko: jira-issue-template",
+        "version: 1",
+        "project: SYN",
+        `issueType: ${name}`,
+        "activateOn: [create]",
+        `requiredFields: [${fields.join(", ")}]`,
+        "---",
+        `# ${name} template`,
+        ...sections.map((section) => `## ${section}`),
+      ].join("\n");
+      f.deps.store.markdownSkills.import({
+        fileName: `${name.toLowerCase()}-fullchain.md`,
+        contentBase64: Buffer.from(markdown).toString("base64"),
+      });
+    }
+    // The fixture must not accidentally pass because either governing template was unreadable.
+    const saved = f.deps.store.markdownSkills.jiraTemplates();
+    expect(saved).toHaveLength(2);
+    expect(new Set(saved.map((entry) => entry.template?.issueType))).toEqual(
+      new Set(["Epic", "Task"]),
+    );
+    expect(
+      saved.find((entry) => entry.template?.issueType === "Epic")?.template?.requiredSections,
+    ).toEqual(EPIC_SECTIONS);
+    expect(
+      saved.find((entry) => entry.template?.issueType === "Task")?.template?.requiredSections,
+    ).toEqual(TASK_SECTIONS);
+  }
+  function typedJira(f: ReturnType<typeof fixture>): readonly string[] {
+    const original = f.jira.fetch.getMockImplementation();
+    if (original === undefined) throw new TypeError("Missing synthetic Jira transport");
+    const metadataReads: string[] = [];
+    const metadata = (typeId: string): readonly Record<string, unknown>[] => [
+      field("project", "project", true),
+      field("issuetype", "issuetype", true),
+      { ...field("summary", "string", true), name: "Summary" },
+      { ...field("description", "string"), name: "Description" },
+      {
+        ...field("labels", "array"),
+        operations: ["set", "add", "remove"],
+        schema: { type: "array", items: "string", system: "labels" },
+      },
+      typeId === EPIC_TYPE
+        ? {
+            ...field(EPIC_NAME, "string"),
+            name: "Epic Name",
+            schema: {
+              type: "string",
+              custom: "com.pyxis.greenhopper.jira:gh-epic-label",
+            },
+          }
+        : {
+            ...field(EPIC_LINK, "string"),
+            name: "Epic Link",
+            schema: {
+              type: "string",
+              custom: "com.pyxis.greenhopper.jira:gh-epic-link",
+            },
+          },
+    ];
+    f.jira.fetch.mockImplementation((input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if ((init?.method ?? "GET") === "GET") {
+        if (url.pathname.endsWith("/project/SYN"))
+          return Promise.resolve(Response.json({ id: "10000", key: "SYN" }));
+        for (const [typeId, name] of [
+          [EPIC_TYPE, "Epic"],
+          [TASK_TYPE, "Task"],
+        ] as const) {
+          if (url.pathname.endsWith(`/issuetype/${typeId}`))
+            return Promise.resolve(Response.json({ id: typeId, name }));
+          if (
+            url.pathname.endsWith(`/createmeta/10000/issuetypes/${typeId}`) ||
+            url.pathname.endsWith(`/createmeta/SYN/issuetypes/${typeId}`)
+          ) {
+            metadataReads.push(typeId);
+            const values = metadata(typeId);
+            return Promise.resolve(
+              Response.json({
+                values,
+                start: 0,
+                size: values.length,
+                last: true,
+                total: values.length,
+              }),
+            );
+          }
+        }
+      }
+      // Actual synthetic issue creation, confirmation and identity search are reused unchanged.
+      return original(input, init);
+    });
+    return metadataReads;
+  }
+  function latestExchange(f: ReturnType<typeof fixture>): ChatToolExchange | undefined {
+    return f.deps.store
+      .listMessages(f.chatId)
+      .filter((message) => message.role === "user")
+      .at(-1)
+      ?.toolTranscript?.exchanges.find((exchange) => exchange.call.name === "jira_draft");
+  }
+  async function pendingApproval(
+    f: ReturnType<typeof fixture>,
+  ): Promise<ChatToolWriteApprovalView> {
+    await vi.waitFor(
+      () => {
+        expect(latestExchange(f)?.approval?.state).toBe("pending");
+      },
+      { timeout: 5_000, interval: 10 },
+    );
+    const approval = latestExchange(f)?.approval;
+    if (approval === undefined) throw new TypeError("Missing exact batch approval");
+    return approval;
+  }
+  function sendBatch(
+    f: ReturnType<typeof fixture>,
+    turn: string,
+  ): ReturnType<typeof handleSendDesktopChat> {
+    return handleSendDesktopChat(
+      context({
+        ...sendBody(f, turn),
+        content:
+          "Create the reviewed two Epics and their two Tasks as one backlog draft, using the saved issue templates.",
+      }),
+      f.deps,
+    );
+  }
+  function stageBacklog(
+    f: ReturnType<typeof fixture>,
+    items: readonly BacklogFixtureItem[],
+  ): { readonly draftId: string; readonly draftDigest: string } {
+    const staged = f.deps.jiraDraftStore?.append(
+      f.chatId,
+      undefined,
+      "fullchain-fingerprint",
+      items,
+    );
+    if (staged?.ok !== true) throw new TypeError("Missing staged batch");
+    return { draftId: staged.draft.id, draftDigest: staged.draft.digest };
+  }
+  function backlogMissing(
+    missing: "Epic Name" | "Epic Link" | "Task section",
+  ): ReturnType<typeof backlog> {
+    const args = backlog();
+    const firstTask = args.items.find((item) => item.ref === "task1");
+    const firstEpic = args.items.find((item) => item.ref === "epic1");
+    if (firstTask === undefined || firstEpic === undefined)
+      throw new TypeError("Missing fixture item");
+    if (missing === "Epic Link") delete firstTask.parent;
+    else {
+      const target = missing === "Epic Name" ? firstEpic : firstTask;
+      if (missing === "Epic Name") Reflect.deleteProperty(target.fields, EPIC_NAME);
+      else target.fields.description = description(TASK_SECTIONS.slice(0, -1), "1");
+    }
+    return args;
+  }
+
+  function journeyExchanges(f: ReturnType<typeof fixture>): readonly ChatToolExchange[] {
+    return (
+      f.deps.store
+        .listMessages(f.chatId)
+        .filter((message) => message.role === "user")
+        .at(-1)?.toolTranscript?.exchanges ?? []
+    );
+  }
+  function journeyData(
+    f: ReturnType<typeof fixture>,
+    tool: string,
+    view?: string,
+  ): CatalogJsonObject {
+    const exchange = journeyExchanges(f)
+      .filter(
+        (entry) =>
+          entry.call.name === tool && (view === undefined || entry.call.arguments.view === view),
+      )
+      .at(-1);
+    if (exchange?.result?.status !== "completed")
+      throw new TypeError(`Missing completed ${tool} observation`);
+    return journeyObject(exchange.result.data);
+  }
+  function isJourneyObject(value: CatalogJsonValue | undefined): value is CatalogJsonObject {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  }
+  function journeyObject(value: CatalogJsonValue | undefined): CatalogJsonObject {
+    if (!isJourneyObject(value)) throw new TypeError("Missing journey object");
+    return value;
+  }
+  function journeyItems(data: CatalogJsonObject): readonly CatalogJsonObject[] {
+    if (!Array.isArray(data.items)) throw new TypeError("Missing journey items");
+    return data.items.map((item: CatalogJsonValue) => journeyObject(item));
+  }
+  function journeyString(value: CatalogJsonValue | undefined): string {
+    if (typeof value !== "string") throw new TypeError("Missing journey string");
+    return value;
+  }
+  function journeyDocument(f: ReturnType<typeof fixture>): CatalogJsonObject {
+    const document = journeyItems(journeyData(f, "knowledge_documents", "inventory"))[0];
+    if (document === undefined) throw new TypeError("Missing runtime document inventory");
+    return {
+      documentScope: journeyString(document.documentScope),
+      revisionDigest: journeyString(document.revisionDigest),
+    };
+  }
+  function journeyBacklog(f: ReturnType<typeof fixture>): Record<string, unknown> {
+    const units = journeyItems(journeyData(f, "knowledge_requirements"));
+    return {
+      items: backlog().items.map((item) => {
+        const unit = units[Number(item.ref.at(-1)) - 1];
+        if (unit === undefined) throw new TypeError("Missing original requirement unit");
+        const criteria = journeyItems({ items: unit.acceptanceCriteria ?? [] })
+          .map((criterion) => `* ${journeyString(criterion.text)}`)
+          .join("\n");
+        return {
+          ...item,
+          fields: {
+            ...item.fields,
+            description: `${String(item.fields.description)}\n\n${criteria}`,
+          },
+          requirementIds: [journeyString(unit.reference)],
+        };
+      }),
+    };
+  }
+  function journeyReference(f: ReturnType<typeof fixture>): CatalogJsonObject {
+    const staged = journeyData(f, "jira_draft_stage");
+    return {
+      draftId: journeyString(staged.draftId),
+      draftDigest: journeyString(staged.draftDigest),
+    };
+  }
+  interface JourneyStep {
+    readonly tool: string;
+    readonly args: Record<string, unknown>;
+  }
+  function journeyStep(f: ReturnType<typeof fixture>, step: number): JourneyStep | undefined {
+    switch (step) {
+      case 1:
+        return {
+          tool: "knowledge.documents",
+          args: { view: "read", ...journeyDocument(f) },
+        };
+      case 2:
+        return { tool: "knowledge.requirements", args: { view: "units" } };
+      case 3:
+        return { tool: "knowledge.review", args: journeyDocument(f) };
+      case 4:
+        return {
+          tool: "jira.create-fields",
+          args: { projectKey: "SYN", issueTypeId: EPIC_TYPE },
+        };
+      case 5:
+        return {
+          tool: "jira.create-fields",
+          args: { projectKey: "SYN", issueTypeId: TASK_TYPE },
+        };
+      case 6:
+        return { tool: "jira.draft-stage", args: journeyBacklog(f) };
+      case 7:
+        return { tool: "jira.draft", args: journeyReference(f) };
+      default:
+        return undefined;
+    }
+  }
+  async function journeyPod(f: ReturnType<typeof fixture>): Promise<void> {
+    const session = openKnowledgeStoreForDeps(f.deps);
+    const { store } = session;
+    try {
+      const pod = await seedCapsuleWithVectors(store, {
+        displayName: "Original requirements.md",
+        text: specification(2).text,
+      });
+      updateCapsuleState(store, pod.capsuleId, "ready");
+      const chat = f.deps.store.findChatById(f.chatId);
+      if (chat === undefined) throw new TypeError("Missing journey Chat");
+      const selected = await handleUpdateChat(
+        {
+          ...context({
+            localKnowledgeScopes: [{ kind: "capsule", capsuleId: pod.capsuleId, connectedAtMs: 1 }],
+            expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat),
+          }),
+          url: new URL(`http://127.0.0.1/api/chats?id=${encodeURIComponent(f.chatId)}`),
+        },
+        f.deps,
+      );
+      expect(selected.status).toBe(200);
+      expect(f.deps.store.findChatById(f.chatId)?.localKnowledgeScopes).toHaveLength(1);
+    } finally {
+      session.close();
+    }
+  }
+  function journeyModel(f: ReturnType<typeof fixture>): () => void {
+    const original = f.model.call;
+    let round = 0;
+    let repeated = false;
+    let stagedReference: CatalogJsonObject | undefined;
+    const call = async (
+      request: GatewayCallRequest,
+      signal: AbortSignal,
+    ): Promise<NormalizedResponse> => {
+      const base = await original(request, signal);
+      if (request.toolCatalog?.kind !== "bound") {
+        const review = { complete: true, findings: [] };
+        return {
+          ...base,
+          content: JSON.stringify(review),
+          structuredOutput: review,
+        };
+      }
+      round += 1;
+      const step = repeated ? repeatedJourneyStep(stagedReference, round) : journeyStep(f, round);
+      if (step === undefined)
+        return {
+          ...base,
+          toolCalls: [],
+          finishReason: "stop",
+          content: "The reviewed backlog is verified.",
+        };
+      const tool = request.toolCatalog.projection.tools.find(
+        (entry) => entry.toolRef.canonicalId === `keiko.${step.tool.replaceAll("-", ".")}`,
+      );
+      if (tool === undefined) throw new TypeError(`Missing offered ${step.tool}`);
+      const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
+      return {
+        ...base,
+        content: "",
+        finishReason: "tool_calls",
+        toolCalls: [
+          bridge.bind({
+            id: `journey-${String(round)}`,
+            name: tool.alias,
+            arguments: step.args,
+          }),
+        ],
+      };
+    };
+    Object.assign(f.deps, {
+      modelPortFactory: (): ModelPort => ({
+        call,
+        callStream: (
+          request: GatewayCallRequest,
+          signal: AbortSignal,
+        ): AsyncIterable<GatewayStreamChunk> => syntheticStream(call(request, signal)),
+      }),
+    });
+    return () => {
+      stagedReference = journeyReference(f);
+      repeated = true;
+      round = 0;
+    };
+  }
+  function repeatedJourneyStep(
+    reference: CatalogJsonObject | undefined,
+    round: number,
+  ): JourneyStep | undefined {
+    if (round !== 1) return undefined;
+    if (reference === undefined) throw new TypeError("Missing staged journey reference");
+    return { tool: "jira.draft", args: reference };
+  }
+
+  function expectCombinedCorrectionEvidence(correctionLogs: BufferedServerLogSink): void {
+    const corrected = correctionLogs.events.filter(
+      (event) => event.op === "chat.tool-turn.corrected",
+    );
+    expect(corrected.map((event) => event.extra?.correctionKind)).toEqual([
+      "unsupported-issue-key",
+      "knowledge-coverage",
+    ]);
+    expect(corrected[0]?.extra?.unsupportedKeyCount).toBe(1);
+    expect(corrected[1]?.extra?.pendingKnowledgePageCount).toBe(1);
+    for (const event of corrected) {
+      const line = expectActivityLogProof(
+        "chat.tool-turn.corrected.line",
+        formatActivityLogProofLine(event),
+      );
+      expect(JSON.stringify(line)).not.toContain("SYN-999");
+    }
+  }
+
+  it.each([false, true])(
+    "corrects pending Knowledge and an unsupported Jira key once, with truthful final coverage (second completeness claim: %s)",
+    async (secondClaim) => {
+      vi.mocked(recordChatToolTurnCorrected).mockClear();
+      vi.mocked(logKnowledgeCoverage).mockClear();
+      const f = fixture();
+      const correctionLogs = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink: correctionLogs, level: "info" }));
+      cleanups.push(() => {
+        resetServerLogger();
+        return Promise.resolve();
+      });
+      await journeyPod(f);
+      typedJira(f);
+      const original = f.model.call;
+      let round = 0;
+      const call = async (
+        request: GatewayCallRequest,
+        signal: AbortSignal,
+      ): Promise<NormalizedResponse> => {
+        const base = await original(request, signal);
+        if (request.toolCatalog?.kind !== "bound")
+          throw new TypeError("Missing bound journey catalog");
+        round += 1;
+        if (round <= 2) {
+          const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
+          return {
+            ...base,
+            content: "",
+            finishReason: "tool_calls",
+            toolCalls: [
+              bridge.bind({
+                id: `combined-${String(round)}`,
+                name: round === 1 ? "knowledge_requirements" : "jira_create_fields",
+                arguments:
+                  round === 1
+                    ? { view: "units", limit: 1 }
+                    : { projectKey: "SYN", issueTypeId: EPIC_TYPE },
+              }),
+            ],
+          };
+        }
+        if (round === 4) {
+          const correction = request.messages
+            .filter((message) => message.role === "system")
+            .at(-1)?.content;
+          expect(correction).toContain("unfinished Knowledge page chain(s)");
+          expect(correction).toContain("names 1 issue key(s)");
+          expect(correction).toContain("SYN-999");
+        }
+        return {
+          ...base,
+          toolCalls: [],
+          finishReason: "stop",
+          content:
+            round === 3
+              ? "All requirements are covered and SYN-999 was created."
+              : secondClaim
+                ? "All requirements are covered. No issue was created."
+                : "The requirements view is partial. No issue was created.",
+        };
+      };
+      Object.assign(f.deps, {
+        modelPortFactory: (): ModelPort => ({
+          call,
+          callStream: (
+            request: GatewayCallRequest,
+            signal: AbortSignal,
+          ): AsyncIterable<GatewayStreamChunk> => syntheticStream(call(request, signal)),
+        }),
+      });
+      expect((await sendBatch(f, "combined-knowledge-jira-correction")).status).toBe(200);
+      expect(round).toBe(4);
+      expect(journeyData(f, "knowledge_requirements").nextCursor).toEqual(expect.any(String));
+      expect(journeyExchanges(f).map((entry) => entry.call.name)).toEqual([
+        "knowledge_documents",
+        "knowledge_requirements",
+        "jira_create_fields",
+      ]);
+      expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(2);
+      expectCombinedCorrectionEvidence(correctionLogs);
+      expect(f.writes()).toBe(0);
+      expect(f.deps.store.listMessages(f.chatId).at(-1)?.content).toBe(
+        secondClaim
+          ? "All requirements are covered. No issue was created."
+          : "The requirements view is partial. No issue was created.",
+      );
+      expect(vi.mocked(logKnowledgeCoverage)).toHaveBeenCalledTimes(1);
+      expect(knowledgeTurnCoverage(journeyExchanges(f))?.pendingPageCount).toBe(1);
+      expect(vi.mocked(logKnowledgeCoverage).mock.calls[0]?.[1]?.pendingPageCount).toBe(1);
+    },
+  );
+
+  it("composes selected Knowledge reads, requirements, review, staged approval and replay without duplicate Jira writes", async () => {
+    const f = fixture(true, undefined, true, false, true);
+    await journeyPod(f);
+    saveTemplates(f);
+    typedJira(f);
+    const repeat = journeyModel(f);
+    const pending = sendBatch(f, "knowledge-jira-journey");
+    void pending.catch(() => undefined);
+    const approval = await pendingApproval(f);
+    expect(f.writes()).toBe(0);
+    const exchanges = journeyExchanges(f);
+    expect(exchanges.map((entry) => entry.call.name)).toEqual([
+      "knowledge_documents",
+      "knowledge_documents",
+      "knowledge_requirements",
+      "knowledge_review",
+      "jira_create_fields",
+      "jira_create_fields",
+      "jira_draft_stage",
+      "jira_draft",
+    ]);
+    expect(Object.keys(exchanges[0]?.call ?? {}).sort()).toEqual(["arguments", "id", "name"]);
+    const firstRequest = f.calls.find((request) => request.toolCatalog?.kind === "bound");
+    expect(firstRequest?.messages).toContainEqual(
+      expect.objectContaining({
+        role: "tool",
+        toolCallId: exchanges[0]?.call.id,
+      }),
+    );
+    expect(firstRequest?.messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(exchanges.slice(0, -1).every((entry) => entry.result?.status === "completed")).toBe(
+      true,
+    );
+    expect(exchanges.at(-1)?.result).toBeUndefined();
+    expect(approval.state).toBe("pending");
+    expect(journeyData(f, "knowledge_documents", "read")).toMatchObject({
+      outcome: "succeeded",
+      contentTrust: "untrusted-document-text",
+      coverage: { documentComplete: true },
+    });
+    expect(journeyItems(journeyData(f, "knowledge_requirements"))).toHaveLength(2);
+    expect(journeyData(f, "knowledge_review")).toMatchObject({
+      outcome: "succeeded",
+      coverage: { documentReviewComplete: true, reviewedWindows: 1 },
+    });
+    const reference = journeyReference(f);
+    const preview = readJiraDraftRoute(
+      {
+        ...context({}, { draftId: journeyString(reference.draftId) }),
+        url: new URL(
+          `http://127.0.0.1/api/atlassian-connectors/jira-drafts/${journeyString(reference.draftId)}?chatId=${f.chatId}&digest=${journeyString(reference.draftDigest)}`,
+        ),
+      },
+      f.deps,
+    );
+    expect(preview).toMatchObject({
+      status: 200,
+      body: { ...reference, itemCount: 4 },
+    });
+    expect(await postWriteDecision(f, approval, "approve")).toBe(200);
+    expect((await pending).status).toBe(200);
+    expect(f.writes()).toBe(4);
+    expect(latestExchange(f)?.mutationOutcome).toBe("succeeded");
+    for (const issue of f.jira.issues) {
+      const number = String(issue.fields.summary).at(-1);
+      expect(issue.fields.description).toContain(`Thema ${String(number)} ist verfügbar.`);
+      expect(issue.fields.description).toContain(
+        `Fehler zu Thema ${String(number)} werden gemeldet.`,
+      );
+      expect(issue.fields.description).toContain("Keiko traceability");
+    }
+    repeat();
+    const second = sendBatch(f, "knowledge-jira-reconcile");
+    void second.catch(() => undefined);
+    const secondApproval = await pendingApproval(f);
+    expect(f.writes()).toBe(4);
+    expect(await postWriteDecision(f, secondApproval, "approve")).toBe(200);
+    expect((await second).status).toBe(200);
+    expect(f.writes()).toBe(4);
+    expect(f.jira.issues).toHaveLength(4);
+    expect(latestExchange(f)).toMatchObject({
+      mutationOutcome: "not-dispatched",
+      result: {
+        status: "completed",
+        data: { existingCount: 4, createdCount: 0, failedCount: 0 },
+      },
+    });
+  });
+
+  it("approves the complete templated batch once and reconciles a later turn without duplicate parents or children", async () => {
+    const argumentsToStage = backlog();
+    const f = fixture(true, undefined, true, false, true);
+    const reference = stageBacklog(f, argumentsToStage.items);
+    draftToSend = reference;
+    saveTemplates(f);
+    const metadataReads = typedJira(f);
+    const pending = sendBatch(f, "fullchain-first");
+    void pending.catch(() => undefined);
+    await awaitReadGrantedForWrite(f);
+    const approval = await pendingApproval(f);
+    expect(f.writes()).toBe(0);
+    expect(f.jira.issues).toHaveLength(0);
+    expect(approval).toMatchObject({
+      kind: "jira-chat-write",
+      operation: "jira.draft",
+      state: "pending",
+    });
+    // This is the durable action preview the actual Chat approval component reads.
+    expect(latestExchange(f)?.call.arguments).toEqual(reference);
+    const preview = readJiraDraftRoute(
+      {
+        ...context({}, { draftId: reference.draftId }),
+        url: new URL(
+          `http://127.0.0.1/api/atlassian-connectors/jira-drafts/${reference.draftId}?chatId=${f.chatId}&digest=${reference.draftDigest}`,
+        ),
+      },
+      f.deps,
+    );
+    expect(preview).toMatchObject({
+      status: 200,
+      body: {
+        ...reference,
+        itemCount: 4,
+        items: argumentsToStage.items,
+      },
+    });
+    expect(latestExchange(f)?.result).toBeUndefined();
+    expect(acceptedReadGrant(f).grant.state).toBe("granted");
+    expect(await postWriteDecision(f, approval, "approve")).toBe(200);
+    expect((await pending).status).toBe(200);
+    expect(f.writes()).toBe(4);
+    expect(f.jira.issues).toHaveLength(4);
+    expect(latestExchange(f)).toMatchObject({
+      mutationOutcome: "succeeded",
+      approval: { approvalId: approval.approvalId, state: "claimed" },
+      result: {
+        status: "completed",
+        data: { createdCount: 4, failedCount: 0, pendingCount: 0 },
+      },
+    });
+    for (const number of [1, 2]) {
+      const ref = String(number);
+      const epic = f.jira.issues.find((issue) => issue.fields.summary === `Epic ${ref}`);
+      const task = f.jira.issues.find((issue) => issue.fields.summary === `Task ${ref}`);
+      expect(epic?.fields).toMatchObject({
+        issuetype: { id: EPIC_TYPE },
+        [EPIC_NAME]: `Epic name ${ref}`,
+        description: description(EPIC_SECTIONS, ref),
+      });
+      expect(task?.fields).toMatchObject({
+        issuetype: { id: TASK_TYPE },
+        [EPIC_LINK]: epic?.key,
+        description: description(TASK_SECTIONS, ref),
+      });
+      expect(task?.fields[EPIC_LINK]).not.toBe("DRAFT-1");
+    }
+    expect(new Set(metadataReads)).toEqual(new Set([EPIC_TYPE, TASK_TYPE]));
+    const writes = f.writes();
+    const second = sendBatch(f, "fullchain-reconcile");
+    void second.catch(() => undefined);
+    const secondApproval = await pendingApproval(f);
+    expect(secondApproval.approvalId).not.toBe(approval.approvalId);
+    expect(latestExchange(f)?.call.arguments).toEqual(reference);
+    expect(f.writes()).toBe(writes);
+    expect(await postWriteDecision(f, secondApproval, "approve")).toBe(200);
+    expect((await second).status).toBe(200);
+    expect(f.writes()).toBe(writes);
+    expect(f.jira.issues).toHaveLength(4);
+    expect(latestExchange(f)).toMatchObject({
+      mutationOutcome: "not-dispatched",
+      result: {
+        status: "completed",
+        data: { existingCount: 4, createdCount: 0, failedCount: 0 },
+      },
+    });
+  });
+
+  it.each(["Epic Name", "Epic Link", "Task section"] as const)(
+    "refuses the entire batch before approval when the saved template requires %s",
+    async (missing) => {
+      const args = backlogMissing(missing);
+      draftToSend = args;
+      const f = fixture(true, undefined, true, false, true);
+      saveTemplates(f);
+      typedJira(f);
+      const pending = sendBatch(f, `fullchain-invalid-${missing.replaceAll(" ", "-")}`);
+      void pending.catch(() => undefined);
+      await awaitReadGrantedForWrite(f);
+      expect((await pending).status).toBe(200);
+      expect(f.writes()).toBe(0);
+      expect(f.jira.issues).toHaveLength(0);
+      expect(latestExchange(f)?.approval).toBeUndefined();
+      const violations: unknown = expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: missing === "Task section" ? "section-missing" : "field-missing",
+          subject: missing === "Task section" ? "Acceptance criteria" : missing,
+          template: missing === "Epic Name" ? "SYN/Epic" : "SYN/Task",
+        }),
+      ]);
+      expect(latestExchange(f)?.result?.data).toMatchObject({
+        outcome: "rejected",
+        items: [
+          {
+            ref: missing === "Epic Name" ? "epic1" : "task1",
+            violations,
+          },
+        ],
+      });
+    },
+  );
+});
+
+function aliasCorrectionModel(badRounds: number, calls: GatewayCallRequest[]): ModelPort {
+  return {
+    call: async (request): Promise<NormalizedResponse> => {
+      await Promise.resolve();
+      calls.push(request);
+      const usage = {
+        requestId: `alias-${String(calls.length)}`,
+        promptTokens: 100,
+        completionTokens: 10,
+        latencyMs: 1,
+        costClass: "low" as const,
+      };
+      const admission = request.attemptAdmission?.({ promptTokens: 100, maxOutputTokens: 500 });
+      if (admission === undefined) throw new TypeError("Expected admitted alias correction call");
+      admission.settle(usage, true, "observed");
+      const base: NormalizedResponse = {
+        modelId: MODEL,
+        content: "No Jira projects are visible.",
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage,
+      };
+      if (calls.length > badRounds + 1) return base;
+      const bridge = createGatewayToolCatalogBridge(request, Date.now);
+      const name = calls.length <= badRounds ? "jira_project" : "jira_projects";
+      try {
+        return {
+          ...base,
+          content: "",
+          finishReason: "tool_calls",
+          toolCalls: [
+            bridge.bind({ id: `alias-call-${String(calls.length)}`, name, arguments: {} }),
+          ],
+        };
+      } catch (error) {
+        if (error instanceof GatewayError)
+          error.partialUsage = {
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+            streamedChars: 0,
+          };
+        throw error;
+      }
+    },
+  };
+}
+
+it("corrects one unoffered alias inside the actual desktop turn before any unauthorized Jira effect", async () => {
+  const f = fixture();
+  const calls: GatewayCallRequest[] = [];
+  const model = aliasCorrectionModel(1, calls);
+  const result = await handleSendDesktopChat(sendContext(f, "near-alias-correction"), {
+    ...f.deps,
+    modelPortFactory: () => model,
+  });
+  expect(result).toMatchObject({
+    status: 200,
+    body: { usage: { promptTokens: 300, completionTokens: 30 } },
+  });
+  expect(calls).toHaveLength(3);
+  expect(
+    calls[1]?.messages.some(
+      (message) =>
+        message.role === "system" &&
+        message.content.includes("Examples of valid names:") &&
+        message.content.includes("jira_projects"),
+    ),
+  ).toBe(true);
+  expect(f.requests()).toBe(1);
+  expect(f.writes()).toBe(0);
+  expect(
+    f.deps.store
+      .listMessages(f.chatId)
+      .some((message) => message.role === "user" && message.content === "List Jira projects"),
+  ).toBe(true);
+});
+
+it("stops after the second unoffered alias with a truthful nonretryable HTTP failure and no Jira effects", async () => {
+  const f = fixture();
+  const calls: GatewayCallRequest[] = [];
+  const model = aliasCorrectionModel(2, calls);
+  const result = await handleSendDesktopChat(sendContext(f, "repeated-near-alias"), {
+    ...f.deps,
+    modelPortFactory: () => model,
+  });
+  expect(result).toMatchObject({
+    status: 502,
+    body: { error: { code: "GATEWAY_MALFORMED_TOOL_CALL" } },
+  });
+  expect(calls).toHaveLength(2);
+  expect(f.requests()).toBe(0);
+  expect(f.writes()).toBe(0);
 });

@@ -266,6 +266,7 @@ export {
   embeddingIdentityHardeningStatus,
   embeddingSpaceFingerprintForVectors,
   l2NormalizeVector,
+  invalidateEmbeddingCapability,
   vectorL2Norm,
   verifyEmbeddingCapability,
   type EmbeddingCapabilityCheck,

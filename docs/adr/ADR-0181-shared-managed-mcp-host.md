@@ -54,6 +54,29 @@ Caller cancellation, host shutdown, request cancellation and the SDK handler sig
 are combined in the provider context and its final before-effect guard; settlement
 revokes that guard. A timed-out caller cannot leave a delayed provider authorized.
 
+Internal managed invocation duration follows the validated, captured tool descriptor, bounded
+by `TOOL_CATALOG_LIMITS.maxDurationMs` (the native timer ceiling, 2^31−1 ms). The host clamps
+defensively and passes explicit inactivity and total timeout bounds to the SDK. There is no
+additional fixed 30-second internal host ceiling or implicit SDK-default timeout. The external
+MCP client retains its separate 30-second invocation ceiling, passed through the same bound
+helper to both SDK timeout options. External read descriptors declare 60 seconds, and write
+descriptors add the approval TTL, but the existing external adapter ceiling may end either call
+earlier. Those declarations cannot widen it. Earlier caller cancellation and the enclosing task or authority deadline still end
+the invocation. Caller arguments and metadata cannot extend these bounds. Semantic Knowledge
+review reuses the gateway's normal buffered model-call bound; it adds no shorter inner
+model deadline. The active model's canonical context profile supplies its output reserve, still
+bounded by provider capacity, context fit and the enclosing caller and turn grants. Ordinary
+internal tools retain their own declared durations.
+
+Application-initiated corpus receipts use the same synthetic assistant tool call and tool-result
+pair as model-initiated observations. Pod metadata never gains a user role. Runtime provenance
+remains inside the active turn's explicit dispatch path; provider-controlled ids cannot assert it.
+Persisted calls retain only `id`, `name` and `arguments` for compatibility with the previous reader.
+Legacy `origin` metadata remains readable but is removed from public projections and every write.
+Rollback compatibility covers transcripts written by the corrected writer. Untouched local
+pre-release records containing `origin` are not rewritten by a read; they need a normal write
+through the current version before the previous build can read those records.
+
 Provider handler references are captured with the initial metadata and served from
 immutable host-owned bindings. A provider must return stable functions across
 registration queries. Replacing a handler while retaining its name/schema/digest is
@@ -99,6 +122,16 @@ all boundaries immediately before the effect. No synthetic Coding workspace is c
 for Chat. This wiring remains an explicit acceptance requirement beyond the protocol
 package itself.
 
+Knowledge document and requirement `nextCursor` values locate source pages; they are
+not invocation grants. They reuse the existing requirement-inventory cursor codec.
+Following one starts a new admitted catalog invocation, with current source selection,
+authority, cancellation and fresh budget checks. Re-reading a page consumes another
+invocation; the cursor checksum grants no permission. `CatalogContinuation` instead
+resumes one captured catalog request and binds its exact request digest, reservation,
+single-use state and short expiry. Using that reservation cursor as a document position
+would conflate two different lifecycles. Source-position cursors therefore remain data,
+while the existing catalog continuation and authority boundaries remain unchanged.
+
 ### D5 — Effect uncertainty and evidence
 
 The host never automatically repeats an invocation. Protocol or handler failure does
@@ -122,6 +155,17 @@ on the existing Chat exchange. The same projection reaches the live model contin
 reloaded history, compaction, and result card. Approval state reports the decision only and does
 not imply a remote effect. A failed UI decision request requires an explicit state refresh;
 it never causes an automatic mutation or approval POST retry.
+
+An interrupted Jira draft retains already parsed acknowledgement keys separately as bounded
+`draftProgress` on its existing parent Chat exchange. The server-private snapshot reuses the
+existing draft result projection and its counts/ranges, runs through the same credential/content
+floor and admitted result schema, and preserves an acknowledged but unread-back key as uncertain.
+The catalog's timeout/cancellation envelope and null data stay unchanged. Only this invocation's
+captured receipts are displayed in the deadline answer, live continuation, history and compaction;
+no recovery read or repeated write runs after expiry. The mutation journal and Activity Log keep
+no issue keys or provider bodies. This additive transcript field is readable by current readers;
+older builds with exact-key transcript validation cannot read affected rows without an explicit
+compatible migration, so rollback compatibility is not implied.
 
 When a Jira acknowledgement arrives after the Chat has already ended, message projection
 reads the existing durable turn journal and matches the original message, invocation,
@@ -311,6 +355,40 @@ The transcript retains one current read-grant view per source kind, with its leg
 single `readGrant` field projecting the latest update. Existing single-source transcripts
 and execution paths remain valid.
 
+**Knowledge-only Chat tools (owner correction 2026-11-05).** A Chat with attached Knowledge
+Pods has `knowledge.requirements`, `knowledge.documents` and `knowledge.review` through the same
+managed MCP host and catalog, including when no Jira Pod or external MCP server is selected. Its
+private authority subject is `knowledge-pods`, bound to the current actor, Chat and Knowledge
+selection digest, and carries only `knowledge.read`. It neither fabricates Jira credentials nor
+reuses or widens the `configured-mcp` subject. The current open Chat, principal, selection, mode,
+deployment ceiling, expiry and shared cumulative budget are checked before admission and effects;
+Knowledge lifecycle, containment and model-use policy remain provider-owned checks. Modifying
+tools are always denied under that subject. When external MCP servers are also selected, the
+existing two-source catalog and atomic accepted-turn registry retain both independent authorities
+and one budget. Semantic review receives the same server-private turn model meter through either
+binding, so its gateway work is charged to the original authority and remains cancellable. The
+application graph owns the lazy catalogs and closes their MCP hosts with the graph; a status read
+only derives the static tool definitions for context accounting.
+
+A selected Pod set grants access to that logical, server-owned set, like a selected folder, rather
+than freezing its member IDs into a second authority registry. Its identity participates in the
+selection digest; replacing that selected set invalidates the authority. Changing the membership
+of the same set does not by itself invalidate the retained authority. Every source operation
+resolves the current members through the existing scope resolver and reapplies containment,
+lifecycle and model-use policy. Source snapshots and continuation fingerprints include the resolved
+members: a membership change during an operation refuses its result as `source-changed`, and old
+source-page cursors cannot continue against the changed membership. This dynamic-set contract does
+not permit reads outside the currently resolved selection or transfer its authority to another set.
+Authority previews do not open another Knowledge database or retain a membership cache.
+
+Before synthesis, a turn with selected Knowledge Pods obtains one bounded metadata inventory page
+through the existing catalog offer, binder and dispatch path. It consumes the same authority and
+tool budget as a model-requested read; no extra synthesis allowance or semantic review is implicit.
+The persisted call carries `origin: "runtime"`, and the gateway receives its result as untrusted
+context before the actual human message, never as an invented model tool call. History selection
+and token accounting retain that observation. Counts, cursors and partial coverage remain explicit;
+metadata alone neither satisfies content-evidence admission nor suppresses uncited-content warnings.
+
 **Per-Chat and per-run connector selection (owner decision 2026-11-02).** The person picks, in the
 Chat composer's Connectors menu, which centrally configured MCP servers and which Jira Pod a Chat
 offers to its model; the Coding Workbench composer offers the same menu for a run (`mcpServers` and
@@ -337,7 +415,21 @@ ceiling and the original token grant. A long Jira turn therefore no longer fails
 earlier tool rounds spent the answer's grant. Jira results stay
 in the tool transcript and are attributed separately from connected-evidence citations.
 `chat.grounded-tool-round.completed` records that phase and remaining synthesis count
-without source content. Data-only preparation and synthesis keep their existing path.
+without source content. A nested semantic review also retains the enclosing caller admission and
+accepted turn meter. Only a fully observed, parsed review that passes the final source-revision,
+authority and result-bound checks can confirm its own factory-owned synthesis reservation as tool
+orchestration. Confirmation is bound to that exact reservation and response, including concurrent
+results; it cannot release another attempt or a generic caller's grant. Physical usage remains in
+the reported total and the accepted turn's cumulative budget. Invalid, stale, cancelled or
+unobserved reviews retain their synthesis token and unknown-output charge. A physically settled
+nested review releases only its own synthesis call slot, independently of parsed-result
+confirmation. The exact reservation's settlement owns that idempotent release, including failures
+and retries; cancellation of a caller's wait cannot release a newer or still-running attempt.
+The accepted turn's model-call, prompt and cost ceilings remain authoritative. A valid partial review can confirm its observed
+work without claiming complete source coverage. Data-only preparation and synthesis keep their
+existing path. Marker-only citation repair is explicitly classified on every grounded path,
+including Knowledge Pods, and uses the admitted model without re-entering the tool loop. An ended
+tool turn is refused at repair admission and cannot start another call through its own entry point.
 
 An empty connected-evidence pack still permits the already admitted Jira turn to run.
 When neither governed Memory context nor the existing own-assessment policy permits an
@@ -384,7 +476,6 @@ use the real SDK path. Architecture fixtures prove both the import isolation and
 contracts/security package boundary. Registered producer-line and analyzer proofs,
 production non-Coding binder coverage, Workbench regressions and the complete dependency,
 package and release gates are required before final acceptance.
-
 
 The ordinary Chat consumer retains one bounded invocation loop per accepted human
 turn, including context-window retries. Its gateway physical-attempt hook charges
@@ -466,7 +557,6 @@ Supervised workspace require the existing action approval; Full access may act w
 authority. The relay uses the already admitted loopback gateway route. This capability does not
 relax the coding process's network sandbox or the Full access restriction on direct external
 connections, including the existing native OAuth path.
-
 
 Ordinary Chat also consumes this Settings-owned catalog. Its consumer uses the existing
 accepted-turn authority and a configured-MCP subject (actor, Chat and configuration identity),

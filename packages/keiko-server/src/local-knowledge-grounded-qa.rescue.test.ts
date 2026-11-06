@@ -865,6 +865,7 @@ interface AskOptions {
   readonly groundedAnswers?: { readonly ownAssessment?: "allowed" | "disabled" };
   // Receives the system prompt of every answer-generation call.
   readonly systemPrompts?: string[];
+  readonly chatToolTurn?: UiHandlerDeps["chatToolTurn"];
   // What the model answers a citation repair with; absent repeats the first answer.
   readonly repair?: { readonly content: string; readonly finishReason: FinishReason };
 }
@@ -962,6 +963,7 @@ describe("weakly supported citations", () => {
       store: rescueStore,
       uiDbPath: join(rescueTmp, "keiko-ui.db"),
       localKnowledgeEmbeddingRequest: adapter.request,
+      ...(options.chatToolTurn === undefined ? {} : { chatToolTurn: options.chatToolTurn }),
     };
     const result = await handleLocalKnowledgeGroundedAsk(
       chat,
@@ -1178,6 +1180,55 @@ describe("weakly supported citations", () => {
   // S12 of epic #4173 (Gemma): the citation repair regenerates the whole answer with the output
   // grant that is left. Cut at that limit, it must not replace the complete first answer, and the
   // log says why the answer kept no citation.
+  it.each([false, true])(
+    "keeps Pod citation repair at the late admission boundary (ended: %s)",
+    async (endAtRepair) => {
+      const prompts: string[] = [];
+      const loops: Parameters<ModelPort["call"]>[0][] = [];
+      let ended = false;
+      const turn: NonNullable<UiHandlerDeps["chatToolTurn"]> = {
+        onTranscript: (): void => undefined,
+        hasUsableObservation: (): boolean => true,
+        meter: (model): ModelPort => model,
+        stream: (): never => {
+          throw new TypeError("Streaming was not requested");
+        },
+        call: (model, request, signal): ReturnType<ModelPort["call"]> => {
+          loops.push(request);
+          return model.call(request, signal);
+        },
+        signal: new AbortController().signal,
+        get deadlineAtMs(): number {
+          // Simulate the turn ending after repair planning, while the final grant is captured.
+          if (endAtRepair && prompts.length > 0) ended = true;
+          return Date.now() + 60_000;
+        },
+        answersAtDeadline: false,
+        answersAfterScopeChange: false,
+        get endedEarly(): boolean {
+          return ended;
+        },
+        settleRetryFailure: (): undefined => undefined,
+      };
+      const complete =
+        "The release checklist covers signing, notarization and upload, each step in order.";
+      const answer = await askWith(
+        complete,
+        `repair-late-${String(endAtRepair)}`,
+        undefined,
+        undefined,
+        {
+          systemPrompts: prompts,
+          chatToolTurn: turn,
+          repair: { content: `${complete} [1]`, finishReason: "stop" },
+        },
+      );
+      expect(answer.content).toContain(complete);
+      expect(prompts).toHaveLength(endAtRepair ? 1 : 2);
+      expect(loops).toHaveLength(1);
+    },
+  );
+
   it("keeps the complete answer when the citation repair is cut at its output limit", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));

@@ -1,6 +1,8 @@
 import {
   JIRA_FIELD_ID_PATTERN,
   readJiraDescriptionSections,
+  serializeJiraDescriptionHeadings,
+  readJiraMarkdownDescription,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 // Capability validation only: HTTP, authority, custody and audit remain with their existing owners.
 import type {
@@ -305,6 +307,8 @@ export type JiraFieldValidationResult =
       readonly ok: true;
       readonly fields: Readonly<Record<string, unknown>>;
       readonly update: Readonly<Record<string, readonly Record<string, string>[]>>;
+      /** Internal serialization evidence, never field content or a remote receipt. */
+      readonly descriptionConvertedHeadingCount?: number;
     }
   | {
       readonly ok: false;
@@ -321,7 +325,11 @@ export type JiraFieldValidationResult =
 
 /** A refusal may carry one fixed sentence that tells the model how to correct the value. */
 type ValueResult =
-  | { readonly ok: true; readonly value: unknown }
+  | {
+      readonly ok: true;
+      readonly value: unknown;
+      readonly descriptionConvertedHeadingCount?: number;
+    }
   | { readonly ok: false; readonly message?: string };
 const INVALID: ValueResult = { ok: false };
 function invalidWith(message: string): ValueResult {
@@ -424,11 +432,26 @@ function encodedDocumentStructure(value: string): boolean {
   const decoded = value.replaceAll(String.raw`\n`, "\n");
   return readJiraDescriptionSections(decoded).length > 0 || LIST_LINE.test(decoded);
 }
+function markdownDescriptionValue(field: JiraFieldMetadata, value: unknown): ValueResult {
+  const markdown = readJiraMarkdownDescription(value);
+  if (markdown === undefined || !validFieldText(field, markdown)) return INVALID;
+  const serialized = serializeJiraDescriptionHeadings(markdown);
+  if (!validFieldText(field, serialized.text)) return INVALID;
+  return {
+    ok: true,
+    value: serialized.text,
+    ...(serialized.convertedHeadingCount === 0
+      ? {}
+      : { descriptionConvertedHeadingCount: serialized.convertedHeadingCount }),
+  };
+}
 function textValue(
   field: JiraFieldMetadata,
   value: unknown,
   deployment: AtlassianConnectorDeployment,
 ): ValueResult {
+  if (deployment === "data-center" && field.id === "description" && typeof value !== "string")
+    return markdownDescriptionValue(field, value);
   if (typeof value !== "string" || !validFieldText(field, value)) return INVALID;
   if (deployment !== "cloud" || !field.richText) return { ok: true, value };
   const result = composePlainTextToAdf(value);
@@ -569,7 +592,12 @@ export function validateJiraFieldValue(
 
 type FieldFailure = Extract<JiraFieldValidationResult, { readonly ok: false }>;
 type SetResult =
-  { readonly ok: true; readonly fields: Readonly<Record<string, unknown>> } | FieldFailure;
+  | {
+      readonly ok: true;
+      readonly fields: Readonly<Record<string, unknown>>;
+      readonly descriptionConvertedHeadingCount?: number;
+    }
+  | FieldFailure;
 type UpdateResult =
   | {
       readonly ok: true;
@@ -580,12 +608,17 @@ function requiredEmpty(field: JiraFieldMetadata, value: unknown): boolean {
   if (!field.required) return false;
   return value === null || value === "" || (Array.isArray(value) && value.length === 0);
 }
-function isEncodedRichText(field: JiraFieldMetadata, value: unknown): boolean {
+function isEncodedRichText(
+  field: JiraFieldMetadata,
+  value: unknown,
+  deployment: AtlassianConnectorDeployment,
+): boolean {
+  let text: string | undefined;
+  if (typeof value === "string") text = value;
+  else if (deployment === "data-center" && field.id === "description")
+    text = readJiraMarkdownDescription(value);
   return (
-    field.kind === "text" &&
-    field.richText &&
-    typeof value === "string" &&
-    encodedDocumentStructure(value)
+    field.kind === "text" && field.richText && text !== undefined && encodedDocumentStructure(text)
   );
 }
 function setValue(
@@ -597,7 +630,7 @@ function setValue(
   if (field.kind === "unsupported") return { ok: false, reason: "unsupported-field" };
   if (!field.operations.includes("set")) return { ok: false, reason: "invalid-operation" };
   if (requiredEmpty(field, value)) return { ok: false, reason: "required-field" };
-  if (isEncodedRichText(field, value)) return invalidWith(ESCAPED_LINE_BREAKS);
+  if (isEncodedRichText(field, value, deployment)) return invalidWith(ESCAPED_LINE_BREAKS);
   return validateJiraFieldValue(field, value, deployment);
 }
 function validateSets(
@@ -606,6 +639,7 @@ function validateSets(
   deployment: AtlassianConnectorDeployment,
 ): SetResult {
   const fields: Record<string, unknown> = {};
+  let descriptionConvertedHeadingCount = 0;
   for (const [id, value] of Object.entries(input)) {
     if (!isJiraFieldId(id)) return { ok: false, reason: "invalid-field" };
     const result = setValue(byId.get(id), value, deployment);
@@ -617,8 +651,13 @@ function validateSets(
         ...(result.message === undefined ? {} : { message: result.message }),
       };
     fields[id] = result.value;
+    descriptionConvertedHeadingCount += result.descriptionConvertedHeadingCount ?? 0;
   }
-  return { ok: true, fields };
+  return {
+    ok: true,
+    fields,
+    ...(descriptionConvertedHeadingCount === 0 ? {} : { descriptionConvertedHeadingCount }),
+  };
 }
 /**
  * Jira sets the reporter of a new issue to the authenticated caller when the field is absent, even
@@ -705,5 +744,31 @@ export function validateJiraFieldChanges(
   if (missing !== undefined) return missing;
   const changesResult = validateUpdates(byId, sets.fields, requestedUpdates);
   if (!changesResult.ok) return changesResult;
-  return { ok: true, fields: sets.fields, update: changesResult.update };
+  return {
+    ok: true,
+    fields: sets.fields,
+    update: changesResult.update,
+    ...(sets.descriptionConvertedHeadingCount === undefined
+      ? {}
+      : { descriptionConvertedHeadingCount: sets.descriptionConvertedHeadingCount }),
+  };
+}
+
+/** Validate a submitted description before trace projection; final validation still judges all fields. */
+export function prepareJiraDescriptionFields(
+  fields: Readonly<Record<string, unknown>>,
+  metadata: readonly JiraFieldMetadata[],
+): JiraFieldValidationResult {
+  if (
+    fields.description === null ||
+    (typeof fields.description !== "object" && typeof fields.description !== "string")
+  )
+    return { ok: true, fields, update: {} };
+  const validated = validateJiraFieldChanges(
+    metadata,
+    { description: fields.description },
+    "edit",
+    "data-center",
+  );
+  return validated.ok ? { ...validated, fields: { ...fields, ...validated.fields } } : validated;
 }
