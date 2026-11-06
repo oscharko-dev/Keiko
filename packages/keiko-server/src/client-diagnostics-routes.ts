@@ -341,9 +341,10 @@ const CLIENT_MARKDOWN_LAYOUT_OPERATION = defineActivityLogOperation({
     listNumbering: {
       type: "string",
       dataClass: "closed-enum",
-      required: true,
+      required: false,
       values: ["source-start"],
     },
+    escapedPipeCount: { type: "integer", dataClass: "count", required: false },
     listStart: { type: "integer", dataClass: "count", required: false },
     listIndex: { type: "integer", dataClass: "count", required: false },
     depth: { type: "integer", dataClass: "count", required: false },
@@ -2023,13 +2024,18 @@ function logVoiceDialogueStage(
 function logMarkdownLayout(request: ClientDiagnosticIngestRequest, correlationId: string): boolean {
   if (request.kind !== "markdown-layout") return false;
   const extra: Record<string, unknown> = {
-    listNumbering: "source-start",
+    ...(request.markdownLayout?.listStart !== undefined || request.markdownLayout === undefined
+      ? { listNumbering: "source-start" }
+      : {}),
     ...(request.markdownLayout === undefined
       ? {}
       : {
           ...(request.markdownLayout.messageId === undefined
             ? {}
             : { messageId: request.markdownLayout.messageId }),
+          ...(request.markdownLayout.escapedPipeCount === undefined
+            ? {}
+            : { escapedPipeCount: request.markdownLayout.escapedPipeCount }),
           listStart: request.markdownLayout.listStart,
           listIndex: request.markdownLayout.listIndex,
           depth: request.markdownLayout.depth,

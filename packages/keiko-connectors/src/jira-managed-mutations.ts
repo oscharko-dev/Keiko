@@ -22,7 +22,11 @@ import {
   executeAtlassianWriteRequest,
   type AtlassianWriteHttpOutcome,
 } from "./atlassian-write-http.js";
-import { validateJiraFieldChanges } from "./jira-field-metadata.js";
+import {
+  validateJiraFieldChanges,
+  prepareJiraDescriptionFields,
+  type JiraFieldValidationResult,
+} from "./jira-field-metadata.js";
 import { completeJiraLinkedMutation } from "./jira-issue-link-writes.js";
 import {
   dispatchJiraAttachment,
@@ -88,6 +92,7 @@ type MutationValidation = { readonly ok: true } | Extract<JiraMutationAttempt, {
 interface MutationPolicy {
   readonly templates: JiraIssueTemplateSource | undefined;
   readonly check: boolean;
+  readonly descriptionConvertedHeadingCount?: number;
 }
 const CHECKED: JiraMutationAttempt = { ok: true, receipt: {} };
 const INVALID = { ok: false, reason: "field-validation" } as const;
@@ -128,6 +133,17 @@ function validationFailure(
   };
 }
 type Validated = Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: true }>;
+function withDescriptionFormatting(
+  attempt: JiraMutationAttempt,
+  count: number | undefined,
+): JiraMutationAttempt {
+  return count === undefined
+    ? attempt
+    : {
+        ...attempt,
+        descriptionConvertedHeadingCount: count,
+      };
+}
 /** Every requested link must read back from the issue; confirmation checks them all (#4176). */
 function withLinks(
   validated: Validated,
@@ -336,9 +352,11 @@ async function createIssue(
   if (!metadata.ok) return metadata;
   const twin = await draftTwin(request, { projectId, issueTypeId, fields, links }, metadata.fields);
   if (twin.kind === "repeat") return twin.attempt;
+  const prepared = createdFields(fields, metadata.fields, trace, twin);
+  if (!prepared.ok) return validationFailure(prepared);
   return createWithMetadata(
     request,
-    { projectId, issueTypeId, fields: createdFields(fields, metadata.fields, trace, twin), links },
+    { projectId, issueTypeId, fields: prepared.fields, links, ...descriptionMetric(prepared) },
     metadata.fields,
     policy,
   );
@@ -349,11 +367,23 @@ function createdFields(
   metadata: readonly JiraFieldMetadata[],
   trace: JiraTraceRequest | undefined,
   twin: Extract<DraftTwin, { kind: "new" }>,
-): Readonly<Record<string, unknown>> {
-  const traced = trace === undefined ? fields : traceCreateFields(fields, metadata, trace);
-  return twin.identity === undefined
-    ? traced
-    : withJiraDraftIdentity(traced, metadata, twin.identity);
+): JiraFieldValidationResult {
+  const prepared = prepareJiraDescriptionFields(fields, metadata);
+  if (!prepared.ok) return prepared;
+  const traced =
+    trace === undefined ? prepared.fields : traceCreateFields(prepared.fields, metadata, trace);
+  return {
+    ...prepared,
+    fields:
+      twin.identity === undefined ? traced : withJiraDraftIdentity(traced, metadata, twin.identity),
+  };
+}
+function descriptionMetric(
+  prepared: Validated,
+): Pick<CreateRequest, "descriptionConvertedHeadingCount"> {
+  return prepared.descriptionConvertedHeadingCount === undefined
+    ? {}
+    : { descriptionConvertedHeadingCount: prepared.descriptionConvertedHeadingCount };
 }
 const ISSUE_KEY_VALUE = /^[A-Z][A-Z0-9_]{0,63}-\d{1,12}$/u;
 /**
@@ -456,6 +486,7 @@ interface CreateRequest {
   readonly issueTypeId: string;
   readonly fields: Readonly<Record<string, unknown>>;
   readonly links: readonly JiraIssueLinkRequest[];
+  readonly descriptionConvertedHeadingCount?: number;
 }
 async function createWithMetadata(
   request: JiraMutationRequest,
@@ -488,8 +519,13 @@ async function createWithMetadata(
     fields: validated.fields,
     update: linkedUpdate(validated, plan),
   });
-  if (!response.ok) return dispatchFailure(response, metadata);
-  return confirmCreatedIssue(request, response, metadata, withLinks(validated, links), plan);
+  const attempt = response.ok
+    ? await confirmCreatedIssue(request, response, metadata, withLinks(validated, links), plan)
+    : dispatchFailure(response, metadata);
+  return withDescriptionFormatting(
+    attempt,
+    create.descriptionConvertedHeadingCount ?? validated.descriptionConvertedHeadingCount,
+  );
 }
 function confirmCreatedIssue(
   request: JiraMutationRequest,
@@ -651,9 +687,13 @@ async function fieldMutation(
   if (!onlyLinkCalls) {
     const body = { fields: validated.fields, update, ...target.body };
     const sent = await statusMutation(request, target.path, target.method, body, metadata.fields);
-    if (!sent.ok) return sent;
+    if (!sent.ok)
+      return withDescriptionFormatting(
+        sent,
+        validated.descriptionConvertedHeadingCount ?? policy.descriptionConvertedHeadingCount,
+      );
   }
-  return completeJiraLinkedMutation(
+  const attempt = await completeJiraLinkedMutation(
     request,
     {
       issueKey,
@@ -665,6 +705,10 @@ async function fieldMutation(
     },
     plan,
     onlyLinkCalls,
+  );
+  return withDescriptionFormatting(
+    attempt,
+    validated.descriptionConvertedHeadingCount ?? policy.descriptionConvertedHeadingCount,
   );
 }
 function editArgumentsRefusal(args: CatalogJsonObject): Refusal | undefined {
@@ -701,9 +745,23 @@ async function editIssue(
   const target = { purpose: "edit", issueKey } as const;
   if (trace === undefined || !metadata.ok)
     return fieldMutation(request, metadata, args, target, policy);
-  const traced = await traceEditArguments(request, issueKey, args, metadata.fields, trace);
+  const prepared = prepareJiraDescriptionFields(
+    fieldsInput(args.fields ?? {}) ?? {},
+    metadata.fields,
+  );
+  if (!prepared.ok) return validationFailure(prepared);
+  const traced = await traceEditArguments(
+    request,
+    issueKey,
+    { ...args, fields: prepared.fields as CatalogJsonObject },
+    metadata.fields,
+    trace,
+  );
   if (!traced.ok) return traced.attempt;
-  return fieldMutation(request, metadata, traced.args, target, policy);
+  return fieldMutation(request, metadata, traced.args, target, {
+    ...policy,
+    ...descriptionMetric(prepared),
+  });
 }
 async function transitionIssue(
   request: JiraMutationRequest,
@@ -1022,13 +1080,16 @@ export async function executeJiraDraftItem(
   );
   if (found.kind === "existing") return existingItemWithLinks(request, found.attempt, links);
   if (found.kind !== "absent") return found.attempt;
+  const prepared = draftItemCreateFields(item, fields, metadata.fields, trace);
+  if (!prepared.ok) return validationFailure(prepared);
   return createWithMetadata(
     request,
     {
       projectId: item.projectId,
       issueTypeId: item.issueTypeId,
-      fields: draftItemCreateFields(item, fields, metadata.fields, trace),
+      fields: prepared.fields,
       links,
+      ...descriptionMetric(prepared),
     },
     metadata.fields,
     { templates: connection.issueTemplates, check: false },
@@ -1040,9 +1101,14 @@ function draftItemCreateFields(
   fields: Readonly<Record<string, unknown>>,
   metadata: readonly JiraFieldMetadata[],
   trace: JiraTraceRequest | undefined,
-): Readonly<Record<string, unknown>> {
-  const identified = withJiraDraftIdentity(fields, metadata, jiraDraftIdentity(item));
-  return trace === undefined ? identified : traceCreateFields(identified, metadata, trace);
+): JiraFieldValidationResult {
+  const prepared = prepareJiraDescriptionFields(fields, metadata);
+  if (!prepared.ok) return prepared;
+  const identified = withJiraDraftIdentity(prepared.fields, metadata, jiraDraftIdentity(item));
+  return {
+    ...prepared,
+    fields: trace === undefined ? identified : traceCreateFields(identified, metadata, trace),
+  };
 }
 
 /** One draft item the field validation of its create refuses, in that validation's own words. */
@@ -1073,10 +1139,12 @@ function draftItemFieldFailure(
   const trace = item.requirementIds === undefined ? undefined : STAND_IN_TRACE;
   const input = draftItemInput(item, keys, trace);
   if (!input.ok) return undefined;
+  const prepared = draftItemCreateFields(item, input.fields, metadata, trace);
+  if (!prepared.ok) return validationFailure(prepared).detail;
   const validated = validateJiraFieldChanges(
     createContextFields(metadata),
     {
-      ...draftItemCreateFields(item, input.fields, metadata, trace),
+      ...prepared.fields,
       project: { id: item.projectId },
       issuetype: { id: item.issueTypeId },
     },

@@ -440,9 +440,9 @@ const DEFINITIONS: Readonly<
   },
   "jira.draft": {
     description:
-      "Propose a backlog of related issues (epics, stories, tasks, bugs, sub-tasks) as one draft the human approves once. Items name each other by ref and are created in dependency order; an item whose parent or linked item was not created is skipped (blockedBy), and an existing issue is reconciled, not created again. Use it whenever more than one issue is to be created, a parent and children to any depth. Send up to " +
+      "Create related issues in Jira (epics, stories, tasks, bugs, sub-tasks) from an inline backlog or a saved Keiko draft; this tool performs Jira writes under the current write authority and required human approval. Items name each other by ref and are created in dependency order; an item whose parent or linked item was not created is skipped (blockedBy), and an existing issue is reconciled, not created again. Use it whenever more than one issue is to be created, a parent and children to any depth. Send up to " +
       String(JIRA_DRAFT_PAGE_ITEMS_MAX) +
-      " items here; stage a larger draft of any size with jira.draft-stage, then pass its draftId and draftDigest here, so it is approved once. Never split one backlog into several approvals. Items left pending continue with the same draftId and draftDigest, nothing created twice.",
+      " items inline. For a saved draft, pass only its draftId and draftDigest from jira.draft-stage. jira.draft-stage saves drafts of any supported size in Keiko without Jira writes. Never split one backlog into several approvals. Items left pending continue with the same draftId and draftDigest, nothing created twice.",
     // The existing explicit JSON Schema dialect expresses the handler's two closed forms;
     // optional sibling properties would also advertise empty, partial and mixed arguments.
     input: compileExternalCatalogSchema({

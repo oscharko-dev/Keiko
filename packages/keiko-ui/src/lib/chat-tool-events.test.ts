@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type {
   ChatMessage,
+  ChatToolExchange,
   DesktopChatStreamWriteApprovalEvent,
   DesktopChatStreamReadConsentEvent,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  knowledgeTurnCoverage,
+  knowledgeCoverageIssues,
+} from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 import {
   applyChatReadConsent,
   applyChatToolExchange,
@@ -198,3 +203,38 @@ describe("a running turn's tool calls", () => {
     expect(applyChatToolExchange(terminal, started)).toBe(terminal);
   });
 });
+
+function knowledgeReadReceipt(): ChatToolExchange {
+  return {
+    call: { id: "knowledge-1", name: "knowledge_documents", arguments: { view: "read" } },
+    result: {
+      schemaVersion: 1,
+      invocationId: "knowledge-result",
+      projectionDigest: null,
+      toolRef: { canonicalId: "keiko.knowledge.documents", contractVersion: 1 },
+      status: "completed",
+      reason: "none",
+      effectStarted: false,
+      metrics: { inputBytes: 10, outputBytes: 10, resultCount: 0, durationMs: 1 },
+      page: { truncated: true, reason: "result-cap", cursor: null },
+      data: { outcome: "succeeded", view: "read", nextCursor: "next-page", items: [] },
+    },
+  };
+}
+
+it.each(["completed", "failed", "cancelled"] as const)(
+  "keeps identical coverage across streamed receipts, %s settlement and canonical reload",
+  (turnState) => {
+    const exchange = knowledgeReadReceipt();
+    const streamed = applyChatToolExchange(message, { messageId: "server-message", exchange });
+    const terminal: ChatMessage = { ...streamed, turnState };
+    const restored = JSON.parse(JSON.stringify(terminal)) as ChatMessage;
+    const coverage = knowledgeTurnCoverage(streamed.toolTranscript?.exchanges ?? []);
+    expect(knowledgeCoverageIssues(coverage)).toEqual([{ kind: "pending-reads", count: 1 }]);
+    expect(knowledgeTurnCoverage(restored.toolTranscript?.exchanges ?? [])).toEqual(coverage);
+    expect(restored.toolTranscript?.exchanges).toEqual([exchange]);
+    expect(applyChatToolExchange(restored, { messageId: "server-message", exchange })).toBe(
+      restored,
+    );
+  },
+);

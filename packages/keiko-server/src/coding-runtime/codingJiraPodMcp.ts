@@ -39,6 +39,7 @@ import {
 import {
   jiraIssueTemplateSource,
   recordJiraTemplateAttempt,
+  recordJiraTemplateMetadata,
 } from "../atlassian/jiraTemplateLog.js";
 import type { JiraPodAccessDeps, JiraLivePodCredential } from "../atlassian/jiraPodAccess.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -370,6 +371,8 @@ class CodingJiraPodService implements CodingJiraPods {
         beforeDispatch: () => this.admit(binding, context),
       }),
       issueTemplates: jiraIssueTemplateSource(deps.store),
+      templateMetadataActivity: (activity) =>
+        recordJiraTemplateMetadata(undefined, context.correlationId, activity),
     };
   }
 
@@ -393,6 +396,14 @@ class CodingJiraPodService implements CodingJiraPods {
     try {
       attempt = validJiraMutationAttempt(await execute(http), operation);
       recordJiraTemplateAttempt(context.correlationId, operation, attempt);
+      if (attempt.descriptionConvertedHeadingCount !== undefined)
+        recordCodingJiraPod(this.log, context.correlationId, {
+          action: "serialize-description",
+          outcome: "completed",
+          tool: operation,
+          risk: "write",
+          descriptionConvertedHeadingCount: attempt.descriptionConvertedHeadingCount,
+        });
     } catch (error) {
       recordCodingJiraPod(this.log, context.correlationId, {
         action: "call",

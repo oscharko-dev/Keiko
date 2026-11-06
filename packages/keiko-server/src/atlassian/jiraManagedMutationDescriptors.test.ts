@@ -362,3 +362,41 @@ describe("staged drafts declare the item shape their handler accepts", () => {
       );
   });
 });
+
+// These existing tools have different effects even when the backlog has only a few items.
+it("describes staging as saving a Keiko draft without requesting Jira creation", () => {
+  const stage = JIRA_DRAFT_STAGE_DECLARATION;
+  expect(stage.risk).toBe("read");
+  expect(stage.descriptor.toolRef).toEqual({
+    canonicalId: "keiko.jira.draft.stage",
+    contractVersion: 1,
+  });
+  expect(stage.descriptor.description).toContain(
+    "Save a reviewable backlog draft in Keiko without creating Jira issues.",
+  );
+  expect(stage.descriptor.description).toContain(
+    "Supports small and large drafts in pages of 1 to",
+  );
+  expect(stage.descriptor.description).toContain("Omit draftId to start a new draft");
+  expect(stage.descriptor.description).toContain("returned draftId only to append");
+  expect(stage.descriptor.description).toContain(
+    "Only when the user requests creation in Jira and unresolvedRefCount is 0",
+  );
+});
+
+it("describes draft execution as Jira writes using inline items or the saved identity", () => {
+  const draft = JIRA_MUTATION_DECLARATIONS.find((entry) => entry.name === "jira.draft");
+  expect(draft?.risk).toBe("write");
+  expect(draft?.descriptor.toolRef).toEqual({
+    canonicalId: "keiko.jira.draft",
+    contractVersion: 3,
+  });
+  expect(draft?.descriptor.description).toMatch(/^Create related issues in Jira/u);
+  expect(draft?.descriptor.description).toContain(
+    "performs Jira writes under the current write authority and required human approval",
+  );
+  expect(draft?.descriptor.description).toContain(
+    "For a saved draft, pass only its draftId and draftDigest",
+  );
+  expect(draft?.descriptor.description).not.toContain("Propose a backlog");
+});

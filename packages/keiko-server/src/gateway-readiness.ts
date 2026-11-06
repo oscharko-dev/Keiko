@@ -5,11 +5,11 @@ import {
   isConversationEligibleModel,
   listConfiguredCapabilities,
   requestGatewayReadinessChatCompletion,
-  requestOpenAIEmbedding,
+  verifyEmbeddingCapability,
   selectConfiguredModel,
   toolCallingConfigurationFingerprint,
-  vectorL2Norm,
   type GatewayConfig,
+  type EmbeddingCapabilityCheck,
   type ModelCapability,
   type ModelProviderConfig,
   type UsageMetadata,
@@ -72,6 +72,8 @@ import {
   reconcileGatewayToolCallingReadiness,
 } from "./gateway-setup.js";
 import { processServerLogSink } from "./process-log-sink.js";
+import { createEmbeddingAdapter } from "./local-knowledge-grounded-qa.js";
+import { normalizedEndpointFingerprint } from "./embedding-provider-identity.js";
 import { currentRedactionSecrets } from "./redaction-secrets.js";
 // #3557 review finding A: the one owning projection from a candidate model id to Activity Log
 // evidence — reused here so a readiness line never carries a value that would fail
@@ -851,20 +853,6 @@ function chooseEmbeddingProvider(config: GatewayConfig): ModelProviderConfig | u
   return config.providers.find((provider) => provider.modelId === modelId);
 }
 
-// Surfaces the HTTP status when the gateway answered: "(http-error 400)" points at the request
-// shape, "(transport)" at connectivity — collapsing the two once misdirected a whole
-// connectivity investigation.
-function embeddingFailureDetail(outcome: {
-  readonly kind: string;
-  readonly status?: number;
-}): string {
-  return outcome.status !== undefined ? `${outcome.kind} ${String(outcome.status)}` : outcome.kind;
-}
-
-function roundedNorm(value: number): number {
-  return Math.round(value * 10_000) / 10_000;
-}
-
 async function probeEmbedding(
   deps: UiHandlerDeps,
   config: GatewayConfig,
@@ -880,18 +868,66 @@ async function probeEmbedding(
   };
 }
 
-function embeddingVectorResult(vector: Float32Array, start: number): GatewayReadinessProbeResult {
-  const dimensions = vector.length;
-  const norm = roundedNorm(vectorL2Norm(vector));
-  const passed = dimensions > 0 && norm > 0;
+function embeddingCapabilityResult(
+  outcome: EmbeddingCapabilityCheck,
+  start: number,
+): GatewayReadinessProbeResult {
+  if (!outcome.ok)
+    return result(
+      "embedding",
+      outcome.reason === "unsupported-model" ? "unsupported" : "failed",
+      start,
+      `Embedding endpoint could not be verified (${outcome.safeMessage}).`,
+    );
   return result(
     "embedding",
-    passed ? "passed" : "failed",
+    "passed",
     start,
-    passed
-      ? `Configured retrieval embedding endpoint returned ${dimensions.toString()} dimensions with L2 norm ${norm.toFixed(4)} after Keiko normalization.`
-      : "Configured retrieval embedding endpoint returned an empty or zero-norm vector.",
+    `Configured retrieval embedding endpoint returned ${outcome.identity.vectorDimensions.toString()} dimensions with L2 norm 1.0000 after Keiko normalization.`,
   );
+}
+
+function reserveEmbeddingProbe(
+  deps: UiHandlerDeps,
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  correlationId: string,
+  automatic: boolean,
+): (checked?: EmbeddingCapabilityCheck) => void {
+  const reservation = reserveGatewayProbeSpend(
+    provider,
+    probeSpendContext(deps, config, provider, correlationId),
+  );
+  if (automatic)
+    logAutomaticReadinessStarted(
+      deps,
+      correlationId,
+      provider.modelId,
+      1,
+      {
+        embeddingProbeTimeoutMs: Math.max(provider.timeoutMs, GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS),
+      },
+      { backgroundAttempt: 1 },
+    );
+  return (checked) => {
+    const inconclusive =
+      checked === undefined || probeInconclusive(embeddingCapabilityResult(checked, Date.now()));
+    let passed = false;
+    try {
+      settleGatewayProbeSpend(reservation, undefined);
+      passed = checked?.ok === true;
+    } finally {
+      if (automatic)
+        logAutomaticReadinessOutcome(
+          deps,
+          correlationId,
+          provider.modelId,
+          passed ? "ready" : "failed",
+          1,
+          inconclusive ? 1 : 0,
+        );
+    }
+  };
 }
 
 async function probeConfiguredEmbedding(
@@ -899,42 +935,31 @@ async function probeConfiguredEmbedding(
   config: GatewayConfig,
   provider: ModelProviderConfig,
   correlationId: string,
+  reuse: "connection" | "refresh" = "refresh",
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
-  const spend = probeSpendContext(deps, config, provider, correlationId);
-  let reservation: ReturnType<typeof reserveGatewayProbeSpend>;
   try {
-    reservation = reserveGatewayProbeSpend(provider, spend);
-    const outcome = await requestOpenAIEmbedding({
-      endpoint: provider.baseUrl,
-      apiKey: provider.apiKey,
-      ...(provider.apiKeyHeaderName !== undefined
-        ? { apiKeyHeaderName: provider.apiKeyHeaderName }
-        : {}),
-      modelId: provider.modelId,
-      input: "Keiko embedding readiness probe",
-      ...(deps.gatewayReadinessFetch !== undefined
-        ? { fetchImpl: deps.gatewayReadinessFetch }
-        : {}),
-      ...(deps.gatewayReadinessSignal === undefined ? {} : { signal: deps.gatewayReadinessSignal }),
-      timeoutMs: provider.timeoutMs,
-      egress: config.egress,
-      // Every retry and failure line of this probe is recorded under its correlation.
-      log: deps.activityLog ?? processServerLogSink(),
-      logContext: { correlationId },
-    });
-    settleGatewayProbeSpend(reservation, undefined);
-    if (!outcome.ok) {
-      return result(
-        "embedding",
-        outcome.kind === "unsupported-model" ? "unsupported" : "failed",
-        start,
-        `Embedding endpoint could not be verified (${embeddingFailureDetail(outcome)}).`,
-      );
-    }
-    return embeddingVectorResult(outcome.value.vector, start);
+    const adapter = createEmbeddingAdapter(deps);
+    if ("status" in adapter)
+      return result("embedding", "failed", start, "Embedding is not configured.");
+    const outcome = await verifyEmbeddingCapability(
+      adapter,
+      {
+        modelId: provider.modelId,
+        provider: `openai-compatible:${normalizedEndpointFingerprint(provider.baseUrl)}`,
+        vectorMetric: "cosine",
+        includeSpaceFingerprint: true,
+        ...(deps.gatewayReadinessSignal === undefined
+          ? {}
+          : { signal: deps.gatewayReadinessSignal }),
+        timeoutMs: provider.timeoutMs,
+        logContext: { correlationId },
+      },
+      reuse,
+      () => reserveEmbeddingProbe(deps, config, provider, correlationId, reuse === "connection"),
+    );
+    return embeddingCapabilityResult(outcome, start);
   } catch (probeError) {
-    settleGatewayProbeSpend(reservation, undefined);
     return reportProbeFailure(
       deps,
       correlationId,
@@ -944,6 +969,28 @@ async function probeConfiguredEmbedding(
       probeError,
     );
   }
+}
+
+/** Warm each configured embedding connection once; passive browser reads only consume its proof. */
+export async function initializeConfiguredEmbeddingReadiness(
+  deps: UiHandlerDeps,
+  parentCorrelationId?: string,
+): Promise<void> {
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) return;
+  const modelIds = new Set(
+    listConfiguredCapabilities(config)
+      .filter((model) => model.kind === "embedding")
+      .map((model) => model.id),
+  );
+  const observed = withReadinessParentCorrelation(deps, parentCorrelationId);
+  await Promise.all(
+    config.providers
+      .filter((provider) => modelIds.has(provider.modelId))
+      .map((provider) =>
+        probeConfiguredEmbedding(observed, config, provider, newCorrelationId(), "connection"),
+      ),
+  );
 }
 
 // Maps one reranker selection onto its probe result. Extracted so `probeReranker` stays inside the

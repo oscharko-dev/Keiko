@@ -98,17 +98,31 @@ describe("summary rules", () => {
 describe("description sections", () => {
   const template = parsed([], "# T\n## Context\n## Acceptance criteria\n");
 
-  it("accepts Markdown and wiki headings with content, in any level", () => {
-    const description = "## Context\nWhy it matters\n\nh3. Acceptance Criteria:\n* works\n";
+  it("accepts native wiki headings with content, in any level", () => {
+    const description = "h2. Context\nWhy it matters\n\nh3. Acceptance Criteria:\n* works\n";
     expect(ids(template, subject({ description }))).toEqual([]);
   });
 
+  it("checks explicit Markdown using the same canonical text as the write and preview", () => {
+    const description = {
+      format: "markdown",
+      text: "## Context\nWhy\n\nAcceptance criteria\n---\n* works",
+    };
+    const before = JSON.stringify(description);
+    expect(ids(template, subject({ description }))).toEqual([]);
+    expect(JSON.stringify(description)).toBe(before);
+    const required = parsed(["requiredFields: [Description]"], "# T");
+    expect(ids(required, subject({ description: { format: "markdown", text: "  " } }))).toEqual([
+      "field-missing:Description",
+    ]);
+  });
+
   it("reports a missing section and an empty or placeholder section", () => {
-    expect(ids(template, subject({ description: "## Context\nWhy" }))).toEqual([
+    expect(ids(template, subject({ description: "h2. Context\nWhy" }))).toEqual([
       "section-missing:Acceptance criteria",
     ]);
     expect(
-      ids(template, subject({ description: "## Context\nTBD\n## Acceptance criteria\n\n  \n" })),
+      ids(template, subject({ description: "h2. Context\nTBD\nh2. Acceptance criteria\n\n  \n" })),
     ).toEqual(["section-empty:Context", "section-empty:Acceptance criteria"]);
   });
 
@@ -123,11 +137,11 @@ describe("description sections", () => {
   });
 
   it("does not take a heading from fenced code or a wiki code block", () => {
-    const fenced = "## Context\nWhy\n```\n## Acceptance criteria\nfake\n```\n";
+    const fenced = "h2. Context\nWhy\n```\nh2. Acceptance criteria\nfake\n```\n";
     expect(ids(template, subject({ description: fenced }))).toEqual([
       "section-missing:Acceptance criteria",
     ]);
-    const wiki = "## Context\nWhy\n{code}\nh2. Acceptance criteria\nfake\n{code}\n";
+    const wiki = "h2. Context\nWhy\n{code}\nh2. Acceptance criteria\nfake\n{code}\n";
     expect(ids(template, subject({ description: wiki }))).toEqual([
       "section-missing:Acceptance criteria",
     ]);
@@ -135,26 +149,32 @@ describe("description sections", () => {
 
   it("counts subsections as part of the section that holds them", () => {
     const description =
-      "## Context\n### Background\nWhy\n### Impact\nWho\n## Acceptance criteria\n* ok";
+      "h2. Context\nh3. Background\nWhy\nh3. Impact\nWho\nh2. Acceptance criteria\n* ok";
     expect(ids(template, subject({ description }))).toEqual([]);
   });
 
   it("still ends a section at the next heading of the same level", () => {
-    const description = "## Context\n## Acceptance criteria\n* ok";
+    const description = "h2. Context\nh2. Acceptance criteria\n* ok";
     expect(ids(template, subject({ description }))).toEqual(["section-empty:Context"]);
   });
 
-  it("reads setext headings on the issue and in the template alike", () => {
+  it("reads explicitly tagged setext Markdown with the template's required section", () => {
     const setext = parsed(
       [],
       "Context\n=======\nIgnored H1\n\nAcceptance criteria\n-------------------\n",
     );
     expect(setext.requiredSections).toEqual(["Acceptance criteria"]);
-    const description = "Acceptance criteria\n-------------------\n* ok\n";
+    const description = {
+      format: "markdown",
+      text: "Acceptance criteria\n-------------------\n* ok\n",
+    };
     expect(ids(setext, subject({ description }))).toEqual([]);
-    expect(ids(setext, subject({ description: "Acceptance criteria\n---\n" }))).toEqual([
-      "section-empty:Acceptance criteria",
-    ]);
+    expect(
+      ids(
+        setext,
+        subject({ description: { format: "markdown", text: "Acceptance criteria\n---\n" } }),
+      ),
+    ).toEqual(["section-empty:Acceptance criteria"]);
   });
 
   it("reads an adversarial 100k character description in bounded time", () => {
@@ -435,5 +455,32 @@ describe("validateJiraIssueTemplateAgainstInstance", () => {
   it("is clean for a template that matches the instance", () => {
     const clean = parsed(["requiredFields: [Story Points]", "parentField: Epic Link"], "# T");
     expect(validateJiraIssueTemplateAgainstInstance(clean, instance)).toEqual([]);
+  });
+});
+
+describe("native description rendering contract", () => {
+  const required = parsed([], "## Criteria\n## Source\n");
+
+  it("refuses Markdown section credit for a native Jira description without rewriting it", () => {
+    const description = "## Criteria\n# first\n## nested\n## Source\nReference";
+    const before = description;
+    expect(ids(required, subject({ description }))).toEqual([
+      "section-missing:Criteria",
+      "section-missing:Source",
+    ]);
+    expect(description).toBe(before);
+  });
+
+  it("accepts native wiki headings and explicit Markdown using the same section contract", () => {
+    const native = "h2. Criteria\n# first\n## nested\nh2. Source\nReference";
+    expect(ids(required, subject({ description: native }))).toEqual([]);
+    expect(
+      ids(
+        required,
+        subject({
+          description: { format: "markdown", text: "## Criteria\n* exact\n## Source\nReference" },
+        }),
+      ),
+    ).toEqual([]);
   });
 });

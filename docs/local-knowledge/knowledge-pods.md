@@ -260,6 +260,14 @@ review completed after its cached body is evicted. The model's review is not pro
 exhaustiveness, and an invalid, unavailable, truncated or unanchored review does not count as a
 completed window. Body-free Activity Log evidence records each inventory, search, read and review.
 
+Chat displays observed read gaps and incomplete requested reviews as a separate, localized result
+notice. Server and browser use the same pure projection of the existing durable tool receipts;
+streaming, cancellation, failed turns and reload retain those receipts. A complete document
+inventory does not request a semantic review, and the review denominator includes only documents
+explicitly requested for review. The application does not append an English coverage footer to the
+model's answer. As with existing grounded-answer notices, copying the answer copies its text;
+the result notice remains a separate part of the turn.
+
 A pod indexes the text of Word (`.docx`), Excel (`.xlsx`), CSV, PowerPoint (`.pptx`) and PDF
 files, with the source location a citation points at: the paragraph or sheet row, the slide
 (`Slide N: <title>`, including table rows, chart and SmartArt text, and speaker notes) or the page.

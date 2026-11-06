@@ -57,7 +57,7 @@ import {
 } from "../requirement-trace.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
-import { jiraIssueTemplateSource } from "./jiraTemplateLog.js";
+import { jiraIssueTemplateSource, recordJiraTemplateMetadata } from "./jiraTemplateLog.js";
 import { recordJiraReportActivity } from "./jiraReportActivity.js";
 import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
 import { draftRefusalData, readableChatDraft } from "./jiraChatDraftArguments.js";
@@ -354,6 +354,8 @@ function connection(
       correlationId: context.correlationId,
       review: () => attachmentReview(deps, current.envelope, context),
     }),
+    templateMetadataActivity: (activity) =>
+      recordJiraTemplateMetadata(deps.activityLog, context.correlationId, activity),
   };
 }
 

@@ -507,7 +507,7 @@ export const EN_MESSAGES = {
   "chat.error.capabilityUnavailable.message":
     "The selected model cannot currently run the required Chat capabilities.",
   "chat.error.capabilityUnavailable.remediation":
-    "Select a ready Chat model. For Jira access, run the tool-calling check in Settings > Models or disconnect the Jira Pod.",
+    "Choose an available Chat model that supports the required capabilities.",
   "chat.error.scopeChanged.title": "Connected sources changed",
   "chat.error.scopeChanged.message":
     "The connected sources changed in the meantime. The request was not run with an outdated source list.",

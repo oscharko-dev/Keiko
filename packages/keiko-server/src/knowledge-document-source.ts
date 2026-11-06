@@ -7,7 +7,12 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge";
 import type { UiHandlerDeps } from "./deps.js";
 import type { PageCursor } from "./requirement-inventory.js";
-import { chatKnowledgeScopes, scopeRefusal, type ScopeRefusal } from "./requirement-inventory.js";
+import {
+  chatKnowledgeScopes,
+  decodeCursor,
+  scopeRefusal,
+  type ScopeRefusal,
+} from "./requirement-inventory.js";
 
 export const KNOWLEDGE_DOCUMENTS_MAX = 10_000;
 export type KnowledgeDocument = QualityIntelligenceHandoff.ScopeDocumentInventoryEntry;
@@ -20,15 +25,7 @@ export function knowledgeDigest(value: string): string {
 
 /** New tools bind full digests and up to 10,000 document-sized search offsets. */
 export function decodeKnowledgeCursor(value: string): PageCursor | undefined {
-  const match = /^(\d{1,11})\.([0-9a-f]{64})$/u.exec(value);
-  const offset = Number(match?.[1]);
-  const fingerprint = match?.[2];
-  return Number.isSafeInteger(offset) &&
-    offset >= 0 &&
-    offset <= 40_000_010_000 &&
-    fingerprint !== undefined
-    ? { offset, fingerprint }
-    : undefined;
+  return decodeCursor(value, 64, 40_000_010_000);
 }
 
 export function knowledgeDocumentScope(document: Pick<KnowledgeDocument, "documentId">): string {

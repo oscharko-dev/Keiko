@@ -144,6 +144,26 @@ an already-known refusal neither waits on provider work nor persists a user turn
 the request correlation. A known refusal before the model port is invoked incurs no physical
 synthesis attempt or uncertain output reservation.
 
+Configured embedding connections likewise initialize their default profile's capability and
+embedding-space identity once at startup or connection replacement. A genuinely different stored
+embedding profile (dimensions parameter, instruction or normalization) obtains its own proof once
+on first active use; a default profile never grants another embedding space access. Retrieval
+consumes that same connection-owned proof;
+elapsed time, Chat creation, focus and reload never renew it. Metadata-only refinements retain the
+adapter and proof within the current configuration generation. Each pod still checks its own stored
+embedding identity and dimensions locally, and actual query responses retain the existing finite-vector,
+normalization, dimension and model validation. A hard credential, model, response or identity failure
+retires the positive proof without scheduling passive retries. A transient query transport failure,
+timeout, rate limit or HTTP 5xx still refuses that query but retains the already verified identity;
+the next actual query may dispatch normally without another capability or fingerprint probe.
+An unsuccessful initial capability check remains unavailable until explicit recovery. A caller's cancellation never records provider failure and
+cancels only that caller's wait on shared startup work. Explicit Settings model verification (whose
+standard probes include the selected retrieval embedding connection) renews its default proof and,
+after success, permits failed custom profiles to verify once on their next active use. Connection
+replacement and process restart also provide recovery. The existing correlated readiness lifecycle and embedding request operations record startup,
+explicit verification and failures without source bodies or credentials. No separate health store or
+periodic embedding check is introduced.
+
 A deliberate conversation-eligible human selection remains remembered and unsendable while
 unready, then restores on recovery; ready alternatives remain selectable. Automatically elected
 choices may fall back to ready alternatives. Actual removal or structural ineligibility permits

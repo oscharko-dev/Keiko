@@ -51,6 +51,8 @@ export interface SafeMarkdownNode {
   readonly start?: number;
   readonly href?: string;
   readonly align?: SafeMarkdownAlignment;
+  /** `table` only: actual table escapes consumed, for body-free settled layout evidence. */
+  readonly escapedPipeCount?: number;
   /** `math` only: true for display math (`$$…$$`, `\[…\]`), false for inline math. */
   readonly display?: boolean;
   /** `math` only: the verbatim source including its delimiters, for the plain-text fallback. */
@@ -448,11 +450,29 @@ function parseAlignment(cell: string): SafeMarkdownAlignment | undefined {
   return undefined;
 }
 
-function splitTableRow(line: string): string[] {
-  let s = line.trim();
-  if (s.startsWith("|")) s = s.slice(1);
-  if (s.endsWith("|")) s = s.slice(0, -1);
-  return s.split("|");
+function splitTableRow(line: string): { cells: string[]; escapedPipeCount: number } {
+  const row = line.trim();
+  const cells: string[] = [];
+  let start = 0;
+  let escaped = false;
+  let escapedPipeCount = 0;
+  for (let index = 0; index < row.length; index++) {
+    const character = row[index];
+    if (character === "|") {
+      if (escaped) escapedPipeCount++;
+      else {
+        cells.push(row.slice(start, index));
+        start = index + 1;
+      }
+    }
+    escaped = character === "\\" && !escaped;
+  }
+  cells.push(row.slice(start));
+  if (row.startsWith("|")) cells.shift();
+  if (cells.length > 1 && start === row.length) cells.pop();
+  // GFM example 200: this escape belongs to the table, even inside inline code. Keep every
+  // other backslash intact; source offsets are still owned by the original Markdown text.
+  return { cells: cells.map((cell) => cell.replaceAll("\\|", "|")), escapedPipeCount };
 }
 
 function isSeparatorRow(cells: string[]): boolean {
@@ -488,23 +508,31 @@ function parseTable(
   bodyLines: string[],
   math: boolean,
 ): SafeMarkdownNode {
-  const headerCells = splitTableRow(headerLine);
-  const sepCells = splitTableRow(separatorLine);
+  const header = splitTableRow(headerLine);
+  const body = bodyLines.map(splitTableRow);
+  const sepCells = splitTableRow(separatorLine).cells;
   const alignments = sepCells.map(parseAlignment);
 
-  const thNodes = headerCells.map((cell, ci) => makeThNode(cell, alignments[ci], math));
+  const thNodes = header.cells.map((cell, ci) => makeThNode(cell, alignments[ci], math));
   const theadNode: SafeMarkdownNode = {
     kind: "thead",
     children: [{ kind: "tr", children: thNodes }],
   };
 
-  const trNodes = bodyLines.map((line) => {
-    const cells = splitTableRow(line);
+  const trNodes = body.map(({ cells }) => {
     const tdNodes = cells.map((cell, ci) => makeTdNode(cell, alignments[ci], math));
     return { kind: "tr" as const, children: tdNodes };
   });
 
-  return { kind: "table", children: [theadNode, { kind: "tbody", children: trNodes }] };
+  const escapedPipeCount = body.reduce(
+    (count, row) => count + row.escapedPipeCount,
+    header.escapedPipeCount,
+  );
+  return {
+    kind: "table",
+    children: [theadNode, { kind: "tbody", children: trNodes }],
+    ...(escapedPipeCount > 0 ? { escapedPipeCount } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -743,7 +771,7 @@ function tryConsumeHeading(ctx: ParseContext, line: string, nodes: SafeMarkdownN
 function tryConsumeTable(ctx: ParseContext, line: string, nodes: SafeMarkdownNode[]): boolean {
   if (!isTableRow(line.trim())) return false;
   const nextLine = ctx.lines[ctx.i + 1] ?? "";
-  if (!isSeparatorRow(splitTableRow(nextLine))) return false;
+  if (!isSeparatorRow(splitTableRow(nextLine).cells)) return false;
   nodes.push(consumeTable(ctx, line));
   return true;
 }

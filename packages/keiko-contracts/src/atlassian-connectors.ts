@@ -1596,7 +1596,12 @@ export {
 export {
   JIRA_HEADING_LINE_CHARS_MAX,
   readJiraDescriptionSections,
+  serializeJiraDescriptionHeadings,
+  JIRA_DESCRIPTION_INPUT_SCHEMA,
+  readJiraMarkdownDescription,
+  projectJiraDescriptionInput,
   type JiraDescriptionSection,
+  type JiraDescriptionHeadingSerialization,
 } from "./jira-description-sections.js";
 export type { JiraTemplatePatternMatcher } from "./jira-template-pattern.js";
 export {

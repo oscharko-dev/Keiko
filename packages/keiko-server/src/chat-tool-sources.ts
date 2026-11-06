@@ -18,6 +18,7 @@ import type {
   ChatToolWriteApprovalView,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
+import type { JiraChatTurnReviewPorts } from "./atlassian/jiraChatToolTurn.js";
 import type {
   CatalogConsumer,
   CatalogConsumerPort,
@@ -238,6 +239,8 @@ interface AdmissionOptions {
   ) => Promise<void>;
   readonly reviewableWrite: (action: SourceAction) => boolean;
   readonly draftItemRefs?: (action: SourceAction) => readonly string[] | undefined;
+  /** Jira's review preparation stays with its source; external MCP approvals keep their own ports. */
+  readonly jiraReview?: JiraChatTurnReviewPorts;
 }
 function jointGuard(
   guard: ChatSourcesConsumer["guard"],
@@ -260,15 +263,15 @@ function sourceAdmissions(options: AdmissionOptions): {
   readonly jira: ReturnType<typeof createJiraChatCatalogAdmission>;
   readonly mcp: ReturnType<typeof createMcpChatCatalogAdmission>;
 } {
-  const jira = (
-    options.context().primaryKind === "knowledge"
-      ? createKnowledgeChatAdmission
-      : createJiraChatCatalogAdmission
-  )({
+  const primary = {
     ...options,
     now: Date.now,
     context: () => ({ ...options.context().jira, signal: options.context().signal }),
-  });
+  };
+  const jira =
+    options.context().primaryKind === "knowledge"
+      ? createKnowledgeChatAdmission(primary)
+      : createJiraChatCatalogAdmission({ ...primary, ...options.jiraReview });
   const mcp = createMcpChatCatalogAdmission({
     ...options,
     now: Date.now,

@@ -7,6 +7,7 @@
 // keyword or decides for the model when it needs a complete list.
 
 import { createHash } from "node:crypto";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 
 import type { UiHandlerDeps } from "./deps.js";
 import { currentContentRedactor } from "./content-redactor.js";
@@ -325,19 +326,40 @@ export interface PageCursor {
   readonly fingerprint: string;
 }
 
-const CURSOR_SHAPE = /^(\d{1,9})\.([0-9a-f]{16})$/u;
+const CURSOR_SHAPE = /^(\d{1,11})\.([0-9a-f]{16}|[0-9a-f]{64})\.([0-9a-f]{64})$/u;
 
 export function encodeCursor(cursor: PageCursor): string {
-  return `${String(cursor.offset)}.${cursor.fingerprint}`;
+  const checksum = sha256Hex(
+    canonicalise({
+      domain: "keiko.knowledge-cursor.v1",
+      offset: cursor.offset,
+      fingerprint: cursor.fingerprint,
+    }),
+  );
+  return `${String(cursor.offset)}.${cursor.fingerprint}.${checksum}`;
 }
 
-/** A cursor that does not have the exact shape of an issued one is not a cursor at all. */
-export function decodeCursor(value: string): PageCursor | undefined {
+/**
+ * Detect altered opaque cursor values; pre-checksum tokens must restart enumeration.
+ * This is error detection, not authentication; each reader still checks source, scope and authority.
+ */
+export function decodeCursor(
+  value: string,
+  fingerprintLength: 16 | 64 = 16,
+  maxOffset = 999_999_999,
+): PageCursor | undefined {
   const match = CURSOR_SHAPE.exec(value);
   const [, offset, fingerprint] = match ?? [];
-  return offset === undefined || fingerprint === undefined
-    ? undefined
-    : { offset: Number(offset), fingerprint };
+  const position = Number(offset);
+  if (
+    !Number.isSafeInteger(position) ||
+    position < 0 ||
+    position > maxOffset ||
+    fingerprint?.length !== fingerprintLength
+  )
+    return undefined;
+  const cursor = { offset: position, fingerprint };
+  return encodeCursor(cursor) === value ? cursor : undefined;
 }
 
 export interface PageWindow {

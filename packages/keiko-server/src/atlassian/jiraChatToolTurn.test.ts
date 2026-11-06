@@ -6,6 +6,7 @@ import type { ChatReadGrantEntry } from "./chatReadGrantState.js";
 import { findMessageById as readStoredMessage } from "../store/messages.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { handleDecideChatWriteApproval } from "./chatWriteApprovalRoutes.js";
+import { readJiraDraftRoute } from "./jiraDraftRoutes.js";
 import { handleSendDesktopChatStream } from "../chat-stream-handlers.js";
 import { handleUpdateChat } from "../store-handlers.js";
 import { deriveChatGroundingScopeIdentity } from "../store/chat-grounding-scope-identity.js";
@@ -46,7 +47,7 @@ import {
   SYNTHETIC_JIRA_BASE_URL,
   syntheticJira,
 } from "../../../../tests/support/jira-synthetic-draft-remote.js";
-import { multipartFileSize } from "../../../../tests/support/jira-managed-remote.js";
+import { field, multipartFileSize } from "../../../../tests/support/jira-managed-remote.js";
 import {
   omittedReportFindingKeys,
   reportCoverageMismatches,
@@ -2052,4 +2053,297 @@ describe("attaching a connected file through the ordinary Chat turn (#4176)", ()
     expect(f.uploads).toEqual([]);
     expect(f.writes()).toBe(0);
   });
+});
+
+// The complete public Chat path must validate a required Epic Link before that Epic has a key.
+// Neither a mocked template gate nor an already-existing parent would exercise that boundary.
+describe("four-item Epic and Task template fullchain", () => {
+  const EPIC_TYPE = "10002";
+  const TASK_TYPE = "10003";
+  const EPIC_NAME = "customfield_17701";
+  const EPIC_LINK = "customfield_17702";
+  const EPIC_SECTIONS = [
+    "Objective",
+    "Scope",
+    "Requirements",
+    "Acceptance criteria",
+    "Dependencies",
+  ];
+  const TASK_SECTIONS = ["Context", "Implementation", "Acceptance criteria"];
+
+  function description(sections: readonly string[], ref: string): string {
+    return sections.map((section) => `h2. ${section}\n${ref}: verified ${section}.`).join("\n\n");
+  }
+  function backlog(): Record<string, unknown> {
+    // Children intentionally precede their parents: production dependency sorting owns the order.
+    return {
+      items: [1, 2].flatMap((number) => {
+        const ref = String(number);
+        return [
+          {
+            ref: `task${ref}`,
+            projectId: "10000",
+            issueTypeId: TASK_TYPE,
+            fields: { summary: `Task ${ref}`, description: description(TASK_SECTIONS, ref) },
+            parent: { fieldId: EPIC_LINK, ref: `epic${ref}` },
+          },
+          {
+            ref: `epic${ref}`,
+            projectId: "10000",
+            issueTypeId: EPIC_TYPE,
+            fields: {
+              summary: `Epic ${ref}`,
+              description: description(EPIC_SECTIONS, ref),
+              [EPIC_NAME]: `Epic name ${ref}`,
+            },
+          },
+        ];
+      }),
+    };
+  }
+  function saveTemplates(f: ReturnType<typeof fixture>): void {
+    for (const [name, sections, fields] of [
+      ["Epic", EPIC_SECTIONS, ["Description", "Epic Name"]],
+      ["Task", TASK_SECTIONS, ["Description", "Epic Link"]],
+    ] as const) {
+      const markdown = [
+        "---",
+        "keiko: jira-issue-template",
+        "version: 1",
+        "project: SYN",
+        `issueType: ${name}`,
+        "activateOn: [create]",
+        `requiredFields: [${fields.join(", ")}]`,
+        "---",
+        `# ${name} template`,
+        ...sections.map((section) => `## ${section}`),
+      ].join("\n");
+      f.deps.store.markdownSkills.import({
+        fileName: `${name.toLowerCase()}-fullchain.md`,
+        contentBase64: Buffer.from(markdown).toString("base64"),
+      });
+    }
+    // The fixture must not accidentally pass because either governing template was unreadable.
+    const saved = f.deps.store.markdownSkills.jiraTemplates();
+    expect(saved).toHaveLength(2);
+    expect(new Set(saved.map((entry) => entry.template?.issueType))).toEqual(
+      new Set(["Epic", "Task"]),
+    );
+    expect(
+      saved.find((entry) => entry.template?.issueType === "Epic")?.template?.requiredSections,
+    ).toEqual(EPIC_SECTIONS);
+    expect(
+      saved.find((entry) => entry.template?.issueType === "Task")?.template?.requiredSections,
+    ).toEqual(TASK_SECTIONS);
+  }
+  function typedJira(f: ReturnType<typeof fixture>): readonly string[] {
+    const original = f.jira.fetch.getMockImplementation();
+    if (original === undefined) throw new TypeError("Missing synthetic Jira transport");
+    const metadataReads: string[] = [];
+    const metadata = (typeId: string): readonly Record<string, unknown>[] => [
+      field("project", "project", true),
+      field("issuetype", "issuetype", true),
+      { ...field("summary", "string", true), name: "Summary" },
+      { ...field("description", "string"), name: "Description" },
+      {
+        ...field("labels", "array"),
+        operations: ["set", "add", "remove"],
+        schema: { type: "array", items: "string", system: "labels" },
+      },
+      typeId === EPIC_TYPE
+        ? {
+            ...field(EPIC_NAME, "string"),
+            name: "Epic Name",
+            schema: { type: "string", custom: "com.pyxis.greenhopper.jira:gh-epic-label" },
+          }
+        : {
+            ...field(EPIC_LINK, "string"),
+            name: "Epic Link",
+            schema: { type: "string", custom: "com.pyxis.greenhopper.jira:gh-epic-link" },
+          },
+    ];
+    f.jira.fetch.mockImplementation((input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if ((init?.method ?? "GET") === "GET") {
+        for (const [typeId, name] of [
+          [EPIC_TYPE, "Epic"],
+          [TASK_TYPE, "Task"],
+        ] as const) {
+          if (url.pathname.endsWith(`/issuetype/${typeId}`))
+            return Promise.resolve(Response.json({ id: typeId, name }));
+          if (url.pathname.endsWith(`/createmeta/10000/issuetypes/${typeId}`)) {
+            metadataReads.push(typeId);
+            const values = metadata(typeId);
+            return Promise.resolve(
+              Response.json({ values, start: 0, size: 100, last: true, total: values.length }),
+            );
+          }
+        }
+      }
+      // Actual synthetic issue creation, confirmation and identity search are reused unchanged.
+      return original(input, init);
+    });
+    return metadataReads;
+  }
+  function latestExchange(f: ReturnType<typeof fixture>): ChatToolExchange | undefined {
+    return f.deps.store
+      .listMessages(f.chatId)
+      .filter((message) => message.role === "user")
+      .at(-1)
+      ?.toolTranscript?.exchanges.find((exchange) => exchange.call.name === "jira_draft");
+  }
+  async function pendingApproval(
+    f: ReturnType<typeof fixture>,
+  ): Promise<ChatToolWriteApprovalView> {
+    await vi.waitFor(() => expect(latestExchange(f)?.approval?.state).toBe("pending"));
+    const approval = latestExchange(f)?.approval;
+    if (approval === undefined) throw new TypeError("Missing exact batch approval");
+    return approval;
+  }
+  function sendBatch(
+    f: ReturnType<typeof fixture>,
+    turn: string,
+  ): ReturnType<typeof handleSendDesktopChat> {
+    return handleSendDesktopChat(
+      context({
+        ...sendBody(f, turn),
+        content:
+          "Create the reviewed two Epics and their two Tasks as one backlog draft, using the saved issue templates.",
+      }),
+      f.deps,
+    );
+  }
+
+  it("approves the complete templated batch once and reconciles a later turn without duplicate parents or children", async () => {
+    const argumentsToStage = backlog() as { items: Record<string, unknown>[] };
+    const f = fixture(true, undefined, true, false, true);
+    const staged = f.deps.jiraDraftStore?.append(
+      f.chatId,
+      undefined,
+      "fullchain-fingerprint",
+      argumentsToStage.items,
+    );
+    if (staged?.ok !== true) throw new TypeError("Missing staged batch");
+    const reference = { draftId: staged.draft.id, draftDigest: staged.draft.digest };
+    draftToSend = reference;
+    saveTemplates(f);
+    const metadataReads = typedJira(f);
+    const pending = sendBatch(f, "fullchain-first");
+    void pending.catch(() => undefined);
+    await awaitReadGrantedForWrite(f);
+    const approval = await pendingApproval(f);
+    expect(f.writes()).toBe(0);
+    expect(f.jira.issues).toHaveLength(0);
+    expect(approval).toMatchObject({
+      kind: "jira-chat-write",
+      operation: "jira.draft",
+      state: "pending",
+    });
+    // This is the durable action preview the actual Chat approval component reads.
+    expect(latestExchange(f)?.call.arguments).toEqual(reference);
+    const preview = readJiraDraftRoute(
+      {
+        ...context({}, { draftId: reference.draftId }),
+        url: new URL(
+          `http://127.0.0.1/api/atlassian-connectors/jira-drafts/${reference.draftId}?chatId=${f.chatId}&digest=${reference.draftDigest}`,
+        ),
+      },
+      f.deps,
+    );
+    expect(preview).toMatchObject({
+      status: 200,
+      body: {
+        ...reference,
+        itemCount: 4,
+        items: argumentsToStage.items,
+      },
+    });
+    expect(latestExchange(f)?.result).toBeUndefined();
+    expect(acceptedReadGrant(f).grant.state).toBe("granted");
+    expect(await postWriteDecision(f, approval, "approve")).toBe(200);
+    expect((await pending).status).toBe(200);
+    expect(f.writes()).toBe(4);
+    expect(f.jira.issues).toHaveLength(4);
+    expect(latestExchange(f)).toMatchObject({
+      mutationOutcome: "succeeded",
+      approval: { approvalId: approval.approvalId, state: "claimed" },
+      result: { status: "completed", data: { createdCount: 4, failedCount: 0, pendingCount: 0 } },
+    });
+    for (const number of [1, 2]) {
+      const ref = String(number);
+      const epic = f.jira.issues.find((issue) => issue.fields.summary === `Epic ${ref}`);
+      const task = f.jira.issues.find((issue) => issue.fields.summary === `Task ${ref}`);
+      expect(epic?.fields).toMatchObject({
+        issuetype: { id: EPIC_TYPE },
+        [EPIC_NAME]: `Epic name ${ref}`,
+        description: description(EPIC_SECTIONS, ref),
+      });
+      expect(task?.fields).toMatchObject({
+        issuetype: { id: TASK_TYPE },
+        [EPIC_LINK]: epic?.key,
+        description: description(TASK_SECTIONS, ref),
+      });
+      expect(task?.fields[EPIC_LINK]).not.toBe("DRAFT-1");
+    }
+    expect(new Set(metadataReads)).toEqual(new Set([EPIC_TYPE, TASK_TYPE]));
+    const writes = f.writes();
+    const second = sendBatch(f, "fullchain-reconcile");
+    void second.catch(() => undefined);
+    const secondApproval = await pendingApproval(f);
+    expect(secondApproval.approvalId).not.toBe(approval.approvalId);
+    expect(latestExchange(f)?.call.arguments).toEqual(reference);
+    expect(f.writes()).toBe(writes);
+    expect(await postWriteDecision(f, secondApproval, "approve")).toBe(200);
+    expect((await second).status).toBe(200);
+    expect(f.writes()).toBe(writes);
+    expect(f.jira.issues).toHaveLength(4);
+    expect(latestExchange(f)).toMatchObject({
+      mutationOutcome: "not-dispatched",
+      result: { status: "completed", data: { existingCount: 4, createdCount: 0, failedCount: 0 } },
+    });
+  });
+
+  it.each(["Epic Name", "Epic Link", "Task section"] as const)(
+    "refuses the entire batch before approval when the saved template requires %s",
+    async (missing) => {
+      const args = backlog() as { items: Record<string, unknown>[] };
+      const firstTask = args.items.find((item) => item.ref === "task1");
+      const firstEpic = args.items.find((item) => item.ref === "epic1");
+      if (firstTask === undefined || firstEpic === undefined)
+        throw new TypeError("Missing fixture item");
+      if (missing === "Epic Link") delete firstTask.parent;
+      else {
+        const target = missing === "Epic Name" ? firstEpic : firstTask;
+        const fields = target.fields as Record<string, unknown>;
+        if (missing === "Epic Name") delete fields[EPIC_NAME];
+        else fields.description = description(TASK_SECTIONS.slice(0, -1), "1");
+      }
+      draftToSend = args;
+      const f = fixture(true, undefined, true, false, true);
+      saveTemplates(f);
+      typedJira(f);
+      const pending = sendBatch(f, `fullchain-invalid-${missing.replaceAll(" ", "-")}`);
+      void pending.catch(() => undefined);
+      await awaitReadGrantedForWrite(f);
+      expect((await pending).status).toBe(200);
+      expect(f.writes()).toBe(0);
+      expect(f.jira.issues).toHaveLength(0);
+      expect(latestExchange(f)?.approval).toBeUndefined();
+      expect(latestExchange(f)?.result?.data).toMatchObject({
+        outcome: "rejected",
+        items: [
+          {
+            ref: missing === "Epic Name" ? "epic1" : "task1",
+            violations: expect.arrayContaining([
+              expect.objectContaining({
+                ruleId: missing === "Task section" ? "section-missing" : "field-missing",
+                subject: missing === "Task section" ? "Acceptance criteria" : missing,
+                template: missing === "Epic Name" ? "SYN/Epic" : "SYN/Task",
+              }),
+            ]),
+          },
+        ],
+      });
+    },
+  );
 });

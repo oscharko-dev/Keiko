@@ -168,3 +168,34 @@ export function jiraToolOutcomeHelp(state: WidgetMessageKey): WidgetMessageKey |
       return undefined;
   }
 }
+
+/** Only this versioned, source-checked managed receipt can identify a review-stage failure. */
+export function knowledgeReviewFailureNotice(
+  exchange: ChatToolExchange,
+): WidgetMessageKey | undefined {
+  const result = exchange.result;
+  if (
+    result?.toolRef?.canonicalId !== "keiko.knowledge.review" ||
+    result.toolRef.contractVersion !== 2 ||
+    result.status !== "failed" ||
+    result.reason !== "provider-reported-error"
+  )
+    return undefined;
+  const data = plainRecord(result.data);
+  if (
+    data?.outcome !== "failed" ||
+    data.sourceAvailable !== true ||
+    data.reason !== data.failureStage
+  )
+    return undefined;
+  switch (data.failureStage) {
+    case "model-output-invalid":
+      return "chat.review.invalidModelOutput";
+    case "model-port-unavailable":
+      return "chat.review.modelUnavailable";
+    case "budget-port-unavailable":
+      return "chat.review.budgetUnavailable";
+    default:
+      return undefined;
+  }
+}

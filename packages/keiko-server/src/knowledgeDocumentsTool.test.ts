@@ -1,6 +1,20 @@
+import { activityLogOperationSchema } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  KNOWLEDGE_REVIEW_FAILURE_STAGES,
+  KNOWLEDGE_REVIEW_VALIDATION_REASONS,
+} from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import {
+  createDefaultChatCapability,
+  parseGatewayConfig,
+  type GatewayCallRequest,
+  type NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
+import {
+  compileExternalCatalogSchema,
+  describeCatalogSchemaMismatch,
+} from "@oscharko-dev/keiko-tool-catalog";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { updateCapsuleDetails } from "@oscharko-dev/keiko-local-knowledge";
 import { sealedLocalPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
@@ -20,6 +34,7 @@ import {
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { decodeKnowledgeCursor, knowledgeDigest } from "./knowledge-document-source.js";
+import { encodeCursor } from "./requirement-inventory.js";
 import { GATEWAY_BUFFERED_BUDGET_FLOOR_MS } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { REVIEW_WINDOW_CHARS, parseSemanticReview } from "./knowledge-semantic-review.js";
 import { executeKnowledgeTool } from "./knowledge-tool-execution.js";
@@ -189,6 +204,12 @@ describe("managed scoped document access", () => {
     expect(items(second)[0]?.characterStart).toBeGreaterThan(
       Number(items(first).at(-1)?.characterStart),
     );
+    const altered = await call(f, "knowledge.documents", {
+      view: "search",
+      query: "needle",
+      cursor: (typeof first.nextCursor === "string" ? first.nextCursor : "").replace(/^\d+/u, "0"),
+    });
+    expect(altered).toMatchObject({ outcome: "failed", reason: "cursor-stale" });
     addDocuments(f, 252);
     const restart = await call(f, "knowledge.documents", { view: "search", query: "absent" });
     const parsed = decodeKnowledgeCursor(
@@ -198,7 +219,7 @@ describe("managed scoped document access", () => {
     const skipped = await call(f, "knowledge.documents", {
       view: "search",
       query: "absent",
-      cursor: `${String(251 * 4_000_001)}.${parsed?.fingerprint ?? ""}`,
+      cursor: encodeCursor({ offset: 251 * 4_000_001, fingerprint: parsed?.fingerprint ?? "" }),
     });
     expect(skipped).toMatchObject({
       outcome: "succeeded",
@@ -220,6 +241,13 @@ describe("managed scoped document access", () => {
   });
 
   it("records a real registered body-free read, refusal and analyzer timeline", async () => {
+    const registration = activityLogOperationSchema("knowledge.documents.operation");
+    expect(registration?.fields.reviewFailureStage?.values).toEqual(
+      KNOWLEDGE_REVIEW_FAILURE_STAGES,
+    );
+    expect(registration?.fields.reviewValidationReason?.values).toEqual(
+      KNOWLEDGE_REVIEW_VALIDATION_REASONS,
+    );
     const f = await fixture("Private source wording.");
     await call(f, "knowledge.documents", { view: "inventory" });
     await call(f, "knowledge.documents", {
@@ -329,6 +357,51 @@ describe("bounded semantic review through the model gateway port", () => {
     expect(generated).toHaveBeenCalledTimes(129);
   }, 30_000);
 
+  it.each(["model-port-unavailable", "budget-port-unavailable"] as const)(
+    "distinguishes %s from invalid model output while retaining an available source",
+    async (stage) => {
+      const f = await fixture();
+      const args = await documentArgs(f);
+      const generated = vi.fn(() => Promise.resolve(response({ complete: true, findings: [] })));
+      Object.assign(f.deps, {
+        modelPortFactory: () =>
+          stage === "model-port-unavailable" ? undefined : { call: generated },
+      });
+      const reviewContext = { ...context(f) };
+      if (stage === "budget-port-unavailable") delete reviewContext.meterModel;
+      const tool = createKnowledgeRequirementsProvider(f.deps)
+        .tools()
+        .find((candidate) => candidate.name === "knowledge.review");
+      if (tool === undefined) throw new TypeError("Missing synthetic review tool");
+      const result = (await tool.execute(args, reviewContext)).data;
+      expect(result).toMatchObject({
+        outcome: "failed",
+        reason: stage,
+        failureStage: stage,
+        sourceAvailable: true,
+      });
+      expect(result).not.toHaveProperty("validationReason");
+      expect(result).not.toHaveProperty("items");
+      expect(generated).not.toHaveBeenCalled();
+      const event = sink.events.find(
+        (event) =>
+          event.op === "knowledge.documents.operation" && event.extra?.reviewFailureStage === stage,
+      );
+      expect(event?.extra).toMatchObject({
+        operation: "review",
+        disposition: "refused",
+        returnedCount: 0,
+        cached: false,
+      });
+      expect(event?.extra?.reviewFinishReason).toBeUndefined();
+      expect(Number(event?.extra?.sourceChars)).toBeGreaterThan(0);
+      expectActivityLogProof(
+        "knowledge.documents.operation.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+    },
+  );
+
   it("rejects invented anchors, unavailable budget ports and cancelled calls without caching them", async () => {
     const f = await fixture();
     const generated = vi.fn(() =>
@@ -343,10 +416,35 @@ describe("bounded semantic review through the model gateway port", () => {
     const args = await documentArgs(f);
     expect(await call(f, "knowledge.review", args)).toMatchObject({
       outcome: "failed",
-      reason: "review-unavailable-or-invalid",
+      reason: "model-output-invalid",
+      failureStage: "model-output-invalid",
+      validationReason: "anchor-range",
+      sourceAvailable: true,
     });
     expect(await call(f, "knowledge.review", args)).toMatchObject({ outcome: "failed" });
     expect(generated).toHaveBeenCalledTimes(2);
+    const refused = sink.events.filter(
+      (event) =>
+        event.op === "knowledge.documents.operation" &&
+        event.extra?.reviewValidationReason === "anchor-range",
+    );
+    expect(refused).toHaveLength(2);
+    expect(refused[0]?.extra).toMatchObject({
+      operation: "review",
+      disposition: "refused",
+      returnedCount: 0,
+      cached: false,
+      reviewFailureStage: "model-output-invalid",
+      reviewFinishReason: "stop",
+      reviewFindingCount: 1,
+      reviewFindingIndex: 0,
+      reviewAnchorIndex: 0,
+    });
+    expectActivityLogProof(
+      "knowledge.documents.operation.line",
+      formatActivityLogProofLine(refused[0] ?? {}),
+    );
+    expect(JSON.stringify(refused)).not.toMatch(/Invented|doc-cap-documents/);
     const cancelled = new AbortController();
     cancelled.abort();
     expect(await call(f, "knowledge.review", args, { signal: cancelled.signal })).toMatchObject({
@@ -360,7 +458,7 @@ describe("bounded semantic review through the model gateway port", () => {
   });
 });
 
-it.each(["complete", "partial", "invalid", "stale", "cancelled"])(
+it.each(["complete", "partial", "invalid", "stale", "invalid-stale", "cancelled"])(
   "confirms only a parsed semantic result admitted against the final scope (%s)",
   async (kind) => {
     const f = await fixture();
@@ -369,7 +467,7 @@ it.each(["complete", "partial", "invalid", "stale", "cancelled"])(
     const confirm = vi.fn();
     const value = response({ complete: kind !== "partial", findings: [] });
     const generated = vi.fn(() => {
-      if (kind === "stale")
+      if (kind === "stale" || kind === "invalid-stale")
         f.withStore((store) =>
           store._internal.db
             .prepare("UPDATE document_texts SET normalized_text = ?")
@@ -377,7 +475,9 @@ it.each(["complete", "partial", "invalid", "stale", "cancelled"])(
         );
       if (kind === "cancelled") controller.abort();
       return Promise.resolve(
-        kind === "invalid" ? { ...value, finishReason: "length" as const } : value,
+        kind === "invalid" || kind === "invalid-stale"
+          ? { ...value, finishReason: "length" as const }
+          : value,
       );
     });
     Object.assign(f.deps, { modelPortFactory: () => ({ call: generated }) });
@@ -388,9 +488,29 @@ it.each(["complete", "partial", "invalid", "stale", "cancelled"])(
     if (kind === "complete" || kind === "partial") {
       expect(result.outcome).toBe("succeeded");
       expect(confirm).toHaveBeenCalledExactlyOnceWith(value);
+      if (kind === "partial") {
+        expect(items(result)).toHaveLength(0);
+        expect(result.nextStep).toBe(
+          "This window review is incomplete. Read its source and resolve the remaining questions.",
+        );
+        const partial = {
+          windowReviewComplete: false,
+          documentReviewComplete: false,
+          cached: false,
+        };
+        expect(result.coverage).toMatchObject({ ...partial, originalModified: false });
+        const repeated = await call(f, "knowledge.review", args);
+        expect(repeated.coverage).toMatchObject(partial);
+        expect(generated).toHaveBeenCalledTimes(2);
+      }
     } else {
       expect(result.outcome).toBe("failed");
       expect(confirm).not.toHaveBeenCalled();
+      if (kind === "invalid-stale") {
+        expect(result.reason).toBe("source-changed");
+        expect(result).not.toHaveProperty("sourceAvailable");
+        expect(result).not.toHaveProperty("failureStage");
+      }
     }
   },
 );
@@ -434,7 +554,28 @@ it("propagates malformed semantic JSON to the existing managed-tool diagnostic b
   const generated = vi.fn(() => Promise.resolve(malformed));
   Object.assign(f.deps, { diagnostics: { record }, modelPortFactory: () => ({ call: generated }) });
   const result = await call(f, "knowledge.review", args, { confirmModelOperation: confirm });
-  expect(result).toMatchObject({ outcome: "failed", reason: "unavailable" });
+  expect(result).toMatchObject({
+    outcome: "failed",
+    reason: "model-output-invalid",
+    failureStage: "model-output-invalid",
+    validationReason: "json-syntax",
+    sourceAvailable: true,
+  });
+  const refusal = sink.events.find(
+    (event) =>
+      event.op === "knowledge.documents.operation" &&
+      event.extra?.reviewValidationReason === "json-syntax",
+  );
+  expect(refusal?.extra).toMatchObject({
+    returnedCount: 0,
+    reviewFinishReason: "stop",
+    reviewOutputChars: malformed.content.length,
+  });
+  expectActivityLogProof(
+    "knowledge.documents.operation.line",
+    formatActivityLogProofLine(refusal ?? {}),
+  );
+  expect(JSON.stringify(sink.events)).not.toContain(malformed.content);
   expect(record).toHaveBeenCalledOnce();
   expect(JSON.stringify(record.mock.calls)).not.toContain(malformed.content);
   expect(confirm).not.toHaveBeenCalled();
@@ -541,4 +682,84 @@ it("retains an earlier caller cancellation while the review model has not settle
   expect(await work).toMatchObject({ outcome: "failed" });
   expect(confirm).not.toHaveBeenCalled();
   resolveModel(response({ complete: true, findings: [] }));
+});
+
+describe("actual semantic review request source-bound schema", () => {
+  it.each([true, false])(
+    "binds the actual one-anchor instruction and optional wire format (%s)",
+    async (supportsResponseFormat) => {
+      const f = await fixture("A short original source window with exactly one anchor.");
+      const modelId = f.deps.store.findChatById(f.chatId)?.selectedModel;
+      if (modelId === undefined) throw new TypeError("Missing review model fixture");
+      const requests: GatewayCallRequest[] = [];
+      Object.assign(f.deps, {
+        config: parseGatewayConfig({
+          providers: [
+            {
+              modelId,
+              baseUrl: "https://semantic-schema.example.invalid/v1",
+              apiKey: "synthetic-schema-key",
+            },
+          ],
+          capabilities: [
+            {
+              ...createDefaultChatCapability(modelId),
+              supportsResponseFormat,
+              maxOutputTokens: 4096,
+              contextWindow: 32768,
+            },
+          ],
+        }),
+        modelPortFactory: () => ({
+          call: (request: GatewayCallRequest) => {
+            requests.push(request);
+            return Promise.resolve(response({ complete: true, findings: [] }));
+          },
+        }),
+      });
+      const args = await documentArgs(f);
+      expect(await call(f, "knowledge.review", args)).toMatchObject({ outcome: "succeeded" });
+      expect(requests).toHaveLength(1);
+      const request = requests[0];
+      if (request === undefined) throw new TypeError("Review request was not captured");
+      const system = request.messages[0]?.content;
+      if (typeof system !== "string") throw new TypeError("Missing review instruction");
+      const schemaStart = system.indexOf(
+        "Return only JSON matching this schema, in the source's language: ",
+      );
+      const schemaEnd = system.indexOf(" Set complete false", schemaStart);
+      const prefix = "Return only JSON matching this schema, in the source's language: ";
+      expect(schemaStart).toBeGreaterThanOrEqual(0);
+      expect(schemaEnd).toBeGreaterThan(schemaStart);
+      const schema = JSON.parse(
+        system.slice(schemaStart + prefix.length, schemaEnd),
+      ) as CatalogJsonObject;
+      if (supportsResponseFormat)
+        expect(request.responseFormat).toMatchObject({ type: "json_schema", schema });
+      else expect(request.responseFormat).toBeUndefined();
+      const compiled = compileExternalCatalogSchema(schema);
+      const finding = {
+        kind: "obligation",
+        anchors: [0],
+        proposal: "A source-grounded proposal.",
+        question: "",
+      };
+      expect(
+        describeCatalogSchemaMismatch(compiled, { complete: true, findings: [finding] }),
+      ).toBeUndefined();
+      // Both shapes were accepted by the former static outbound schema and rejected by the parser.
+      expect(
+        describeCatalogSchemaMismatch(compiled, {
+          complete: true,
+          findings: [{ ...finding, kind: "conflict" }],
+        }),
+      ).toBeDefined();
+      expect(
+        describeCatalogSchemaMismatch(compiled, {
+          complete: true,
+          findings: [{ ...finding, anchors: [1] }],
+        }),
+      ).toBeDefined();
+    },
+  );
 });

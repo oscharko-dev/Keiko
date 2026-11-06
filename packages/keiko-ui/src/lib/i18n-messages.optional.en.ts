@@ -140,6 +140,24 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.review.tool": "Document review",
   "chat.review.details": "View review result",
   "chat.knowledge.partial": "Partial result. Some document information is not included.",
+  "chat.review.invalidModelOutput":
+    "The document was read, but the model's response was invalid. No review was completed.",
+  "chat.review.modelUnavailable":
+    "The document is available. No model is currently available for the review.",
+  "chat.review.budgetUnavailable":
+    "The document is available. The review could not start because its budget could not be checked.",
+  "chat.knowledgeCoverage.title": "Result with limitations",
+  "chat.knowledgeCoverage.pendingReads": "Unfinished reads: {count}.",
+  "chat.knowledgeCoverage.unavailableDocuments": "Unavailable or omitted documents: {count}.",
+  "chat.knowledgeCoverage.refusedScopes": "Unavailable selected knowledge sources: {count}.",
+  "chat.knowledgeCoverage.failedOperations": "Requests without usable results: {count}.",
+  "chat.knowledgeCoverage.omittedRequirements": "Requirements not read: {count}.",
+  "chat.knowledgeCoverage.truncatedRequirements":
+    "Requirements with shortened source fields: {count}.",
+  "chat.knowledgeCoverage.missingCriteria":
+    "Requirements without detected acceptance criteria in the source: {count}.",
+  "chat.knowledgeCoverage.requestedReviews":
+    "Documents fully reviewed: {completed} of {requested} requested.",
   "chat.processing.title": "Progress",
   "chat.processing.request": "Request received",
   "chat.processing.continuing": "Preparing next step",

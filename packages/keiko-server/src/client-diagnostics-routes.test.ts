@@ -790,6 +790,39 @@ describe("POST /api/diagnostics/client", () => {
     );
   });
 
+  it("persists body-free escaped table counts without claiming source list numbering", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private source quote must stay out of the log",
+          clientTs: CLIENT_TS,
+          kind: "markdown-layout",
+          correlationId: "message-1",
+          markdownLayout: { messageId: "msg_1", escapedPipeCount: 3 },
+        }),
+      ),
+    );
+    const lines: unknown[] = sink.lines().map((line): unknown => JSON.parse(line));
+    const events = lines.filter(
+      (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        "op" in event &&
+        event.op === "client.markdown.layout",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "client.markdown.layout",
+      correlationId: "message-1",
+      messageId: "msg_1",
+      escapedPipeCount: 3,
+    });
+    expect(events[0]).not.toHaveProperty("listNumbering");
+    expect(events[0]).not.toHaveProperty("listStart");
+    expect(sink.lines().join("\n")).not.toContain("private source quote");
+  });
+
   it("persists a closed module load failure without leaking the failing URL", async () => {
     const sink = captureServerLog();
     await handleClientDiagnosticIngest(

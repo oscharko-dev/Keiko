@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { readJiraDescriptionSections } from "./jira-description-sections.js";
+import {
+  readJiraDescriptionSections,
+  serializeJiraDescriptionHeadings,
+  projectJiraDescriptionInput,
+  readJiraMarkdownDescription,
+} from "./jira-description-sections.js";
 import { parseJiraIssueTemplate } from "./jira-issue-template.js";
 
 function summary(text: string): readonly string[] {
@@ -8,6 +13,127 @@ function summary(text: string): readonly string[] {
       `${String(section.level)}:${section.title}:${section.hasContent ? "full" : "empty"}`,
   );
 }
+
+describe("Data Center description heading serialization", () => {
+  it("never infers Markdown from a legacy string, including native wiki lists", () => {
+    for (const text of [
+      "# criterion one\n# criterion two",
+      "## nested criterion",
+      "h2. Section\n# criterion",
+      "## Markdown-looking heading\nBody",
+    ]) {
+      expect(projectJiraDescriptionInput(text)).toEqual({ text, convertedHeadingCount: 0 });
+    }
+    expect(projectJiraDescriptionInput({ format: "markdown", text: "## Heading\nBody" })).toEqual({
+      text: "h2. Heading\nBody",
+      convertedHeadingCount: 1,
+    });
+  });
+
+  it("accepts only the exact explicit data wrapper and refuses prototype or accessor tricks", () => {
+    const plain = { format: "markdown", text: "## Heading\nBody" };
+    expect(readJiraMarkdownDescription(plain)).toBe(plain.text);
+    const nullPrototype: unknown = Object.assign(Object.create(null) as object, plain);
+    expect(readJiraMarkdownDescription(nullPrototype)).toBe(plain.text);
+    let getterCalls = 0;
+    const accessor = {
+      get format(): string {
+        getterCalls++;
+        return "markdown";
+      },
+      text: plain.text,
+    };
+    for (const invalid of [
+      null,
+      [],
+      { ...plain, extra: true },
+      { format: "Markdown", text: plain.text },
+      { format: "markdown", text: 3 },
+      Object.assign(Object.create({ inherited: true }) as object, plain),
+      accessor,
+      { ...plain, [Symbol("extra")]: true },
+      { ...plain, text: "x".repeat(32769) },
+    ]) {
+      expect(readJiraMarkdownDescription(invalid)).toBeUndefined();
+    }
+    expect(getterCalls).toBe(0);
+  });
+
+  it("writes real wiki headings while retaining every criterion, source and footer byte", () => {
+    const source =
+      "## Requirement\nExact requirement.\n\n## Acceptance criteria\n* one\n* two\n* three\n* four\n* five\n\n## Source\n[Source|https://source.example.invalid]\n\nKeiko trace: unchanged.";
+    const expected =
+      "h2. Requirement\nExact requirement.\n\nh2. Acceptance criteria\n* one\n* two\n* three\n* four\n* five\n\nh2. Source\n[Source|https://source.example.invalid]\n\nKeiko trace: unchanged.";
+    const result = serializeJiraDescriptionHeadings(source);
+    expect(result).toEqual({ text: expected, convertedHeadingCount: 3 });
+    expect(summary(result.text)).toEqual(summary(source));
+    expect(serializeJiraDescriptionHeadings(result.text)).toEqual({
+      text: expected,
+      convertedHeadingCount: 0,
+    });
+  });
+
+  it("shares ATX and setext recognition and preserves surrounding line endings", () => {
+    const source = "# Title #\r\nBody\r\n\r\nSection\r\n---\r\nExact body\r\n\r\nDeep\n===\nTail";
+    expect(serializeJiraDescriptionHeadings(source)).toEqual({
+      text: "h1. Title\r\nBody\r\n\r\nh2. Section\r\nExact body\r\n\r\nh1. Deep\nTail",
+      convertedHeadingCount: 3,
+    });
+  });
+
+  it.each([
+    "```ts\n## code\n```",
+    "~~~~\n## code\n~~~~",
+    "{code:java}\n## code\n{code}",
+    "{noformat}\n## literal\n{noformat}",
+    "> ## Source quote",
+    "    ## indented code",
+    "\\## escaped heading",
+    "> Quoted source\n---",
+    "h2. Existing wiki\nExact body",
+  ])("preserves protected or already serialized text: %s", (protectedText) => {
+    const source = `${protectedText}\n\n## Actual section\nExact content`;
+    expect(serializeJiraDescriptionHeadings(source)).toEqual({
+      text: `${protectedText}\n\nh2. Actual section\nExact content`,
+      convertedHeadingCount: 1,
+    });
+  });
+
+  it("keeps unfinished code and over-bound input intact instead of partially rewriting them", () => {
+    for (const source of [
+      "```\n## Code to end",
+      "~~~\n## Code to end",
+      "{code}\n## Code to end",
+      "x".repeat((1 << 20) + 1) + "\n## Tail",
+    ]) {
+      expect(serializeJiraDescriptionHeadings(source)).toEqual({
+        text: source,
+        convertedHeadingCount: 0,
+      });
+    }
+  });
+
+  it.each([
+    "- criterion",
+    "* criterion",
+    "** nested criterion",
+    "+ criterion",
+    "1. criterion",
+    "1) criterion",
+    "\tcode",
+    " \tcode",
+    "    code",
+    "----",
+    "***",
+    "___",
+  ])("does not promote a list, rule or code line into setext: %s", (line) => {
+    const source = `${line}\n---\nExact body`;
+    expect(serializeJiraDescriptionHeadings(source)).toEqual({
+      text: source,
+      convertedHeadingCount: 0,
+    });
+  });
+});
 
 // A one-line macro or inline code opened a fence that nothing closed, so every heading after it
 // was read as code and a section the description really has looked missing.
@@ -104,5 +230,25 @@ describe("the template parser reads its body with the same reader", () => {
 
   it("ignores H1 and H3 headings, which are structure and not required sections", () => {
     expect(sections("# Title\n### Detail\n## Required\n")).toEqual(["Required"]);
+  });
+});
+
+describe("native Jira wiki section admission", () => {
+  it("does not credit Markdown-looking numbered lists or setext text as native headings", () => {
+    const native = "## Criteria\n* exact\nSource\n---\nReference";
+    expect(readJiraDescriptionSections(native, "jira-wiki")).toEqual([]);
+    expect(readJiraDescriptionSections(native).map((section) => section.title)).toEqual([
+      "Criteria",
+      "Source",
+    ]);
+  });
+
+  it("retains native heading content while lists, code and quotes stay content", () => {
+    const native =
+      "h2. Criteria\n# first\n## nested\n{code}\nh2. Fake\n{code}\n> h2. Quoted\nh2. Source\nReference";
+    expect(readJiraDescriptionSections(native, "jira-wiki")).toEqual([
+      { level: 2, title: "Criteria", hasContent: true },
+      { level: 2, title: "Source", hasContent: true },
+    ]);
   });
 });

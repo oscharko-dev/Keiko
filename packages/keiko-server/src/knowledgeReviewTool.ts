@@ -22,6 +22,12 @@ import type { RequirementsToolContext } from "./requirementsTool.js";
 import { KNOWLEDGE_REVIEW_TOOL } from "./requirementsToolName.js";
 import { KNOWLEDGE_RESULT_SCHEMA } from "./knowledgeDocumentsTool.js";
 import {
+  KNOWLEDGE_REVIEW_FAILURE_STAGES,
+  KNOWLEDGE_REVIEW_VALIDATION_REASONS,
+  type KnowledgeReviewFailureStage,
+  type KnowledgeReviewObservation,
+} from "./knowledge-document-activity.js";
+import {
   knowledgeDigest,
   decodeKnowledgeCursor,
   knowledgeDocumentRevision,
@@ -40,15 +46,25 @@ import {
 import {
   REVIEW_WINDOW_CHARS,
   REVIEW_FINDINGS_MAX,
-  SEMANTIC_REVIEW_FORMAT,
-  SEMANTIC_REVIEW_INSTRUCTION,
+  semanticReviewFormat,
+  semanticReviewInstruction,
   reviewAnchors,
   reviewPrompt,
-  parseSemanticReview,
+  parseSemanticReviewDetailed,
   renderSemanticFindings,
   type SemanticReview,
   type ReviewAnchor,
 } from "./knowledge-semantic-review.js";
+
+const KNOWLEDGE_REVIEW_RESULT_SCHEMA: CatalogJsonObject = {
+  ...KNOWLEDGE_RESULT_SCHEMA,
+  properties: {
+    ...(KNOWLEDGE_RESULT_SCHEMA.properties as CatalogJsonObject),
+    failureStage: { type: "string", enum: KNOWLEDGE_REVIEW_FAILURE_STAGES },
+    validationReason: { type: "string", enum: KNOWLEDGE_REVIEW_VALIDATION_REASONS },
+    sourceAvailable: { type: "boolean" },
+  },
+};
 
 const CACHE_WINDOWS_MAX = 128;
 const caches = new WeakMap<UiHandlerDeps, Map<string, SemanticReview>>();
@@ -172,18 +188,17 @@ function modelRequest(
     capability?.kind === "chat"
       ? deriveContextProfileFromCapability(capability)
       : DEFAULT_CONTEXT_PROFILE;
+  const format = semanticReviewFormat(input.anchors.length);
   const request: GatewayCallRequest = {
     modelId: input.modelId,
     messages: [
-      { role: "system", content: SEMANTIC_REVIEW_INSTRUCTION },
+      { role: "system", content: semanticReviewInstruction(format) },
       { role: "user", content: input.prompt },
     ],
     stream: false,
     maxOutputTokens: profile.reservedOutputTokens,
     temperature: 0,
-    ...(capability?.supportsResponseFormat === true
-      ? { responseFormat: SEMANTIC_REVIEW_FORMAT }
-      : {}),
+    ...(capability?.supportsResponseFormat === true ? { responseFormat: format } : {}),
     logContext: { correlationId: environment.context.correlationId },
   };
   return capability?.kind === "chat"
@@ -196,26 +211,54 @@ function modelRequest(
     : request;
 }
 
-interface GeneratedReview {
-  readonly review: SemanticReview;
-  readonly response: NormalizedResponse;
+type GeneratedReview =
+  | {
+      readonly ok: true;
+      readonly review: SemanticReview;
+      readonly response: NormalizedResponse;
+      readonly observation: KnowledgeReviewObservation;
+    }
+  | {
+      readonly ok: false;
+      readonly failureStage: KnowledgeReviewFailureStage;
+      readonly observation: KnowledgeReviewObservation;
+      readonly diagnosticError?: unknown;
+    };
+function unavailableReview(
+  stage: KnowledgeReviewFailureStage,
+  anchorCount: number,
+): GeneratedReview {
+  return {
+    ok: false,
+    failureStage: stage,
+    observation: { reviewFailureStage: stage, reviewAnchorCount: anchorCount },
+  };
 }
 
 async function generateReview(
   environment: KnowledgeToolEnvironment,
   input: ReviewInput,
-): Promise<GeneratedReview | undefined> {
+): Promise<GeneratedReview> {
   const { deps, context } = environment;
   const raw = deps.modelPortFactory(input.modelId);
-  if (raw === undefined || context.meterModel === undefined) return undefined;
+  if (raw === undefined) return unavailableReview("model-port-unavailable", input.anchors.length);
+  if (context.meterModel === undefined)
+    return unavailableReview("budget-port-unavailable", input.anchors.length);
   const model = context.meterModel(withChatContentPolicy(deps, raw));
   // The managed tool and accepted turn own cancellation; the gateway owns model timing.
   const response = await raceAbort(
     model.call(modelRequest(environment, input), context.signal),
     context.signal,
   );
-  const review = parseSemanticReview(response, input.anchors.length);
-  return review === undefined ? undefined : { review, response };
+  const parsed = parseSemanticReviewDetailed(response, input.anchors.length);
+  return parsed.ok
+    ? { ok: true, review: parsed.review, response, observation: parsed.observation }
+    : {
+        ok: false,
+        failureStage: "model-output-invalid",
+        observation: parsed.observation,
+        ...(parsed.syntaxError === undefined ? {} : { diagnosticError: parsed.syntaxError }),
+      };
 }
 
 function reviewCoverage(
@@ -270,7 +313,7 @@ function reviewResult(
       coverage: reviewCoverage(input, review, cached, environment),
       nextStep: review.complete
         ? "Keep original requirements and acceptance criteria unchanged. Label model findings as proposals; resolve their specific questions. Review every document window before claiming corpus review coverage."
-        : "This window exceeded the review finding bound. Read its source and resolve the remaining questions; the document review is incomplete.",
+        : "This window review is incomplete. Read its source and resolve the remaining questions.",
       ...(next
         ? {
             nextCursor: encodeCursor({
@@ -288,14 +331,38 @@ function admittedReviewResult(
   input: ReviewInput,
   review: SemanticReview,
   cached: boolean,
-  generated: GeneratedReview | undefined,
+  generated: Extract<GeneratedReview, { ok: true }> | undefined,
 ): KnowledgeToolRead {
   const result = reviewResult(input, review, cached, environment);
   if (generated === undefined) return result;
   return {
     ...result,
+    reviewObservation: generated.observation,
     confirmModelOperation: (): void =>
       environment.context.confirmModelOperation?.(generated.response),
+  };
+}
+
+function failedReview(
+  input: ReviewInput,
+  generated: Extract<GeneratedReview, { ok: false }>,
+): KnowledgeToolRead {
+  const { failureStage } = generated;
+  return {
+    data: {
+      outcome: "failed",
+      reason: failureStage,
+      failureStage,
+      sourceAvailable: true,
+      ...(generated.observation.reviewValidationReason === undefined
+        ? {}
+        : { validationReason: generated.observation.reviewValidationReason }),
+    },
+    sourceChars: (input.anchors.at(-1)?.characterEnd ?? input.start) - input.start,
+    reviewObservation: generated.observation,
+    ...(generated.diagnosticError === undefined
+      ? {}
+      : { diagnosticError: generated.diagnosticError }),
   };
 }
 
@@ -313,11 +380,12 @@ async function review(
   const key = `${input.fingerprint}|${String(input.start)}`;
   const hit = cache.get(key);
   const generated = hit === undefined ? await generateReview(environment, input) : undefined;
-  const result = hit ?? generated?.review;
-  if (result === undefined) return knowledgeToolFailure("review-unavailable-or-invalid");
   if (!reviewAuthorityCurrent(environment.context)) return knowledgeToolFailure("denied");
   const refreshed = inputFor(environment, args);
   if (refreshed?.fingerprint !== input.fingerprint) return knowledgeToolFailure("source-changed");
+  if (generated !== undefined && !generated.ok) return failedReview(input, generated);
+  const result = hit ?? generated?.review;
+  if (result === undefined) return knowledgeToolFailure("model-port-unavailable");
   remember(cache, key, result);
   if (result.complete) reviewedWindows(environment.deps, input.fingerprint, input.start);
   return admittedReviewResult(environment, input, result, hit !== undefined, generated);
@@ -327,14 +395,14 @@ export function createKnowledgeReviewTool<Context extends RequirementsToolContex
   deps: UiHandlerDeps,
 ): ManagedMcpTool<Context> {
   const descriptor = createToolDescriptor({
-    toolRef: createToolRef("keiko.knowledge.review", 1),
+    toolRef: createToolRef("keiko.knowledge.review", 2),
     description:
       "Semantically review one window of an attached document, after knowledge.documents inventory. Uses the selected model with the turn's existing budget. Pass documentScope, revisionDigest and returned nextCursor until all windows are reviewed. Reviews are cached per document revision/model/content policy. Returns source-anchored PROPOSALS for obligations, acceptance criteria, conflicts, omissions and targeted clarification questions; never changes original requirements. Review all documents for whole-Pod work; semantic review is not a proof of exhaustiveness.",
     inputSchema: object({ documentScope: text(8), revisionDigest: text(64), cursor: text(512) }, [
       "documentScope",
       "revisionDigest",
     ]),
-    resultSchema: KNOWLEDGE_RESULT_SCHEMA,
+    resultSchema: KNOWLEDGE_REVIEW_RESULT_SCHEMA,
     effects: ["connector-access"],
     actionMapping: [{ action: KNOWLEDGE_REVIEW_TOOL, effects: ["connector-access"] }],
     policyReferences: ["adr-0128.d4"],

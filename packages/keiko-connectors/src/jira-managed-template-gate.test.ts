@@ -14,7 +14,7 @@ import {
 import { field, LINKS_FIELD, response } from "../../../tests/support/jira-managed-remote.js";
 
 const SECTIONS = "## Context\n## Acceptance criteria\n";
-const FULL_DESCRIPTION = "## Context\nWhy\n## Acceptance criteria\n* works";
+const FULL_DESCRIPTION = "h2. Context\nWhy\nh2. Acceptance criteria\n* works";
 
 function named(id: string, type: string, name: string, required = false): Record<string, unknown> {
   return { ...field(id, type, required), name };

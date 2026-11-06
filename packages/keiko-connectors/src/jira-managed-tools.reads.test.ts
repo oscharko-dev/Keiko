@@ -433,7 +433,7 @@ it("points create fields at jira.draft for several issues, and only create field
   });
   expect(created.data.draft).toEqual({
     tool: "jira.draft",
-    use: "Put several new issues in one jira.draft, each with every field it needs, labels included: the human approves it once, while each jira.create or jira.edit asks again. Write a description as text, each section starting h2. Title; never JSON or HTML.",
+    use: "Put several new issues in one jira.draft, each with every field it needs, labels included: the human approves it once, while each jira.create or jira.edit asks again. Use the description field's inputSchema; native text uses h2. Title for section headings.",
   });
   const types = await fixture({
     ...REMOTE_PAGE,
@@ -447,6 +447,45 @@ it("points create fields at jira.draft for several issues, and only create field
   expect(refused.data).toMatchObject({ outcome: "failed" });
   expect(refused.data).not.toHaveProperty("draft");
 });
+it("advertises explicit Markdown provenance only for Data Center description input", async () => {
+  const values = [field("description", "string"), field("environment", "string")];
+  const created = await fixture({ ...REMOTE_PAGE, total: values.length, values }).run(
+    "jira.create-fields",
+    {
+      projectKey: "SYN",
+      issueTypeId: "1",
+    },
+  );
+  expect(created.data).toMatchObject({ outcome: "succeeded" });
+  expect(created.data.items).toEqual([
+    expect.objectContaining({
+      id: "description",
+      nativeFormat: "jira-wiki",
+      markdownSerialization: "headings-only",
+      inputSchema: {
+        oneOf: [
+          { type: "string", maxLength: 32768 },
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["format", "text"],
+            properties: {
+              format: { type: "string", enum: ["markdown"] },
+              text: { type: "string", maxLength: 32768 },
+            },
+          },
+        ],
+      },
+    }),
+    expect.not.objectContaining({ inputSchema: expect.anything() }),
+  ]);
+  const cloud = await fixture({ ...REMOTE_PAGE, values }, "cloud").run("jira.create-fields", {
+    projectKey: "SYN",
+    issueTypeId: "1",
+  });
+  expect(cloud.data).toMatchObject({ outcome: "failed", reason: "unsupported-deployment" });
+});
+
 it("retains transition metadata availability and safely omits malformed targets", async () => {
   const f = fixture({
     transitions: [

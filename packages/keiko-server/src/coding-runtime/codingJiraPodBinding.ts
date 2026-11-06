@@ -183,7 +183,7 @@ export function codingRunMcpServers(
 
 // ─── Activity Log ───────────────────────────────────────────────────────────────────────────────
 
-const JIRA_POD_ACTIONS = ["bind", "call"] as const;
+const JIRA_POD_ACTIONS = ["bind", "call", "serialize-description"] as const;
 const JIRA_POD_OUTCOMES = ["bound", "refused", "completed", "failed"] as const;
 const JIRA_POD_REASONS = [
   "unavailable",
@@ -251,6 +251,7 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
     linkRequestedCount: { type: "integer", dataClass: "count", required: false },
     linkCreatedCount: { type: "integer", dataClass: "count", required: false },
     linkFailedCount: { type: "integer", dataClass: "count", required: false },
+    descriptionConvertedHeadingCount: { type: "integer", dataClass: "count", required: false },
     durationMs: { type: "integer", dataClass: "duration", required: false },
     frames: {
       type: "string-array",
@@ -290,6 +291,7 @@ export interface CodingJiraPodLine extends ActivityActionLine<
   readonly linkRequestedCount?: number | undefined;
   readonly linkCreatedCount?: number | undefined;
   readonly linkFailedCount?: number | undefined;
+  readonly descriptionConvertedHeadingCount?: number | undefined;
 }
 
 /** Closed values and counts only: never a Pod id or name, a URL, an issue key or any text. */
@@ -316,6 +318,7 @@ export function recordCodingJiraPod(
           "linkRequestedCount",
           "linkCreatedCount",
           "linkFailedCount",
+          "descriptionConvertedHeadingCount",
           "durationMs",
         ] as const),
         ...activityErrorFields(line),

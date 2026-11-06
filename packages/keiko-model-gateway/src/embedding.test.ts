@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
 import {
   assertCompatibleEmbeddingIdentity,
   embeddingIdentityHardeningStatus,
   verifyEmbeddingCapability,
+  invalidateEmbeddingCapability,
   type EmbeddingProbeOptions,
   type OpenAIEmbeddingAdapter,
 } from "./embedding.js";
@@ -15,6 +16,7 @@ import {
   type OpenAIEmbeddingRequest,
 } from "./openai-embedding-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
+import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 
 const SECRET_API_KEY = ["sk-", "test-keiko-embedding-1234567890abcdef"].join("");
 const PROVIDER_ENDPOINT = "https://internal.example.invalid/v1";
@@ -1191,5 +1193,330 @@ describe("requestOpenAIEmbeddingBatch — branch coverage (#189 GRD-004)", () =>
       expect(server.kind).toBe("http-error");
       expect(server.status).toBe(500);
     }
+  });
+});
+
+describe("connection-owned embedding capability proof", () => {
+  const fingerprintProbe = { ...PROBE, includeSpaceFingerprint: true } as const;
+
+  it("joins startup and retrieval, then reuses the proof after more than ten minutes", async () => {
+    const { adapter, seen } = recordingAdapter(successOutcome(2));
+    const [startup, retrieval] = await Promise.all([
+      verifyEmbeddingCapability(adapter, fingerprintProbe, "connection"),
+      verifyEmbeddingCapability(
+        adapter,
+        { ...fingerprintProbe, expectedDimensions: 2 },
+        "connection",
+      ),
+    ]);
+    expect(startup.ok).toBe(true);
+    expect(retrieval.ok).toBe(true);
+    expect(seen).toHaveLength(4);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 11 * 60_000);
+    try {
+      expect((await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection")).ok).toBe(
+        true,
+      );
+      expect(seen).toHaveLength(4);
+      expect(
+        await verifyEmbeddingCapability(
+          adapter,
+          { ...fingerprintProbe, expectedDimensions: 3 },
+          "connection",
+        ),
+      ).toMatchObject({ ok: false, reason: "dimension-mismatch" });
+      expect(seen).toHaveLength(4);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("retains a failed observation until explicit verification recovers it", async () => {
+    let ready = false;
+    const seen: OpenAIEmbeddingRequest[] = [];
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: PROVIDER_ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      request: async (request) => {
+        seen.push(request);
+        return ready ? successOutcome(2) : { ok: false, kind: "transport" };
+      },
+    };
+    expect((await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection")).ok).toBe(
+      false,
+    );
+    ready = true;
+    expect((await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection")).ok).toBe(
+      false,
+    );
+    expect(seen).toHaveLength(1);
+    expect((await verifyEmbeddingCapability(adapter, fingerprintProbe, "refresh")).ok).toBe(true);
+    expect(seen).toHaveLength(5);
+    expect((await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection")).ok).toBe(
+      true,
+    );
+    expect(seen).toHaveLength(5);
+  });
+
+  it("invalidates only the failed model and never silently probes to recover", async () => {
+    const { adapter, seen } = recordingAdapter(successOutcome(2));
+    await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection");
+    invalidateEmbeddingCapability(adapter, PROBE.modelId);
+    expect(await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection")).toMatchObject({
+      ok: false,
+      reason: "unavailable",
+    });
+    expect(seen).toHaveLength(4);
+    expect((await verifyEmbeddingCapability(adapter, fingerprintProbe, "refresh")).ok).toBe(true);
+    expect(seen).toHaveLength(8);
+  });
+
+  it("cannot resurrect a proof invalidated while its startup request is pending", async () => {
+    let release: ((outcome: OpenAIEmbeddingOutcome) => void) | undefined;
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: PROVIDER_ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      request: () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    };
+    const completed = vi.fn();
+    const pending = verifyEmbeddingCapability(adapter, PROBE, "connection", () => completed);
+    await Promise.resolve();
+    invalidateEmbeddingCapability(adapter, PROBE.modelId);
+    expect(release).toBeDefined();
+    release?.(successOutcome(2));
+    expect(await pending).toMatchObject({ ok: false, reason: "unavailable" });
+    expect(completed).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: false, reason: "unavailable" }),
+    );
+    expect(await verifyEmbeddingCapability(adapter, PROBE, "connection")).toMatchObject({
+      ok: false,
+      reason: "unavailable",
+    });
+  });
+
+  it("does not share proofs across adapters or embedding instruction and dimension parameters", async () => {
+    const first = recordingAdapter(successOutcome(2));
+    const second = recordingAdapter(successOutcome(2));
+    await verifyEmbeddingCapability(first.adapter, fingerprintProbe, "connection");
+    await verifyEmbeddingCapability(second.adapter, fingerprintProbe, "connection");
+    await verifyEmbeddingCapability(
+      first.adapter,
+      { ...fingerprintProbe, dimensionsParam: 2 },
+      "connection",
+    );
+    await verifyEmbeddingCapability(
+      first.adapter,
+      { ...fingerprintProbe, instructionVersion: "changed-input-v2" },
+      "connection",
+    );
+    expect(first.seen).toHaveLength(12);
+    expect(second.seen).toHaveLength(4);
+  });
+
+  it.each([
+    new Float32Array(2),
+    Float32Array.from([Number.NaN, 1]),
+    Float32Array.from([Number.POSITIVE_INFINITY, 1]),
+  ])(
+    "rejects a zero or nonfinite primary vector before reporting a ready proof",
+    async (vector) => {
+      const adapter = adapterReturning({ ok: true, value: { vector, modelId: PROBE.modelId } });
+      expect(
+        await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection"),
+      ).toMatchObject({ ok: false, reason: "invalid-response" });
+      const batch = batchOutcome([2, 2, 2, 2]);
+      if (!batch.ok || batch.value[0] === undefined)
+        throw new TypeError("Missing primary fixture vector");
+      batch.value[0].vector.set(vector);
+      const batched: OpenAIEmbeddingAdapter = { ...adapter, requestBatch: async () => batch };
+      expect(
+        await verifyEmbeddingCapability(batched, fingerprintProbe, "connection"),
+      ).toMatchObject({ ok: false, reason: "invalid-response" });
+    },
+  );
+
+  it("does not poison a custom profile when its owning request is cancelled", async () => {
+    let cancel = false;
+    const seen: OpenAIEmbeddingRequest[] = [];
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: PROVIDER_ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      request: async (request) => {
+        seen.push(request);
+        return cancel ? { ok: false, kind: "cancelled" } : successOutcome(2);
+      },
+    };
+    await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection");
+    cancel = true;
+    const custom = { ...fingerprintProbe, dimensionsParam: 2 };
+    expect(await verifyEmbeddingCapability(adapter, custom, "connection")).toMatchObject({
+      ok: false,
+      reason: "cancelled",
+    });
+    cancel = false;
+    expect((await verifyEmbeddingCapability(adapter, custom, "connection")).ok).toBe(true);
+    expect(seen).toHaveLength(9);
+    expect((await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection")).ok).toBe(
+      true,
+    );
+    expect(seen).toHaveLength(9);
+  });
+
+  it("lets a joining human cancel without aborting the shared startup proof", async () => {
+    let release: ((value: OpenAIEmbeddingOutcome) => void) | undefined;
+    const request = vi.fn(
+      () =>
+        new Promise<OpenAIEmbeddingOutcome>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: PROVIDER_ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      request,
+    };
+    const startup = verifyEmbeddingCapability(adapter, PROBE, "connection");
+    await Promise.resolve();
+    const human = new AbortController();
+    const joined = verifyEmbeddingCapability(
+      adapter,
+      { ...PROBE, signal: human.signal },
+      "connection",
+    );
+    human.abort();
+    expect(await joined).toMatchObject({ ok: false, reason: "cancelled" });
+    release?.(successOutcome(2));
+    expect((await startup).ok).toBe(true);
+    expect((await verifyEmbeddingCapability(adapter, PROBE, "connection")).ok).toBe(true);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("allows explicit successful recheck to recover failed custom profiles without touching other models", async () => {
+    const seen: OpenAIEmbeddingRequest[] = [];
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: PROVIDER_ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      request: async (request) => {
+        seen.push(request);
+        return {
+          ok: true,
+          value: {
+            vector: Float32Array.from([3, 4]),
+            modelId: request.modelId,
+          },
+        };
+      },
+    };
+    const custom = { ...fingerprintProbe, dimensionsParam: 2 };
+    const otherModel = { ...fingerprintProbe, modelId: "other-embedding" };
+    await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection");
+    await verifyEmbeddingCapability(adapter, custom, "connection");
+    await verifyEmbeddingCapability(adapter, otherModel, "connection");
+    invalidateEmbeddingCapability(adapter, PROBE.modelId);
+    expect((await verifyEmbeddingCapability(adapter, custom, "connection")).ok).toBe(false);
+    expect(seen).toHaveLength(12);
+    expect((await verifyEmbeddingCapability(adapter, fingerprintProbe, "refresh")).ok).toBe(true);
+    expect((await verifyEmbeddingCapability(adapter, otherModel, "connection")).ok).toBe(true);
+    expect(seen).toHaveLength(16);
+    expect((await verifyEmbeddingCapability(adapter, custom, "connection")).ok).toBe(true);
+    expect(seen).toHaveLength(20);
+  });
+
+  it("reserves and settles only new physical probes, never joiners or cache reads", async () => {
+    const { adapter, seen } = recordingAdapter(successOutcome(2));
+    const settled = vi.fn();
+    const start = vi.fn(() => settled);
+    await Promise.all([
+      verifyEmbeddingCapability(adapter, PROBE, "connection", start),
+      verifyEmbeddingCapability(adapter, PROBE, "connection", start),
+    ]);
+    await verifyEmbeddingCapability(adapter, PROBE, "connection", start);
+    expect(start).toHaveBeenCalledOnce();
+    expect(settled).toHaveBeenCalledOnce();
+    expect(seen).toHaveLength(1);
+    await verifyEmbeddingCapability(adapter, PROBE, "refresh", start);
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(settled).toHaveBeenCalledTimes(2);
+    expect(seen).toHaveLength(2);
+  });
+
+  it("does not poison a fresh proof when its local probe budget refuses before HTTP", async () => {
+    const { adapter, seen } = recordingAdapter(successOutcome(2));
+    const refusal = new ConfigInvalidError("spend-budget-exceeded");
+    const settle = vi.fn();
+    let denied = true;
+    const start = vi.fn(() => {
+      if (denied) throw refusal;
+      return settle;
+    });
+    await expect(
+      verifyEmbeddingCapability(adapter, fingerprintProbe, "connection", start),
+    ).rejects.toBe(refusal);
+    expect(seen).toHaveLength(0);
+    expect(settle).not.toHaveBeenCalled();
+    denied = false;
+    expect(
+      (await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection", start)).ok,
+    ).toBe(true);
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(settle).toHaveBeenCalledOnce();
+    expect(seen).toHaveLength(4);
+  });
+
+  it("retains the prior positive proof when a refresh is refused before HTTP", async () => {
+    const { adapter, seen } = recordingAdapter(successOutcome(2));
+    const prior = await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection");
+    expect(prior.ok).toBe(true);
+    const refusal = new ConfigInvalidError("spend-budget-exceeded");
+    const start = vi.fn(() => {
+      throw refusal;
+    });
+    await expect(
+      verifyEmbeddingCapability(adapter, fingerprintProbe, "refresh", start),
+    ).rejects.toBe(refusal);
+    expect(start).toHaveBeenCalledOnce();
+    expect(seen).toHaveLength(4);
+    expect(await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection", start)).toEqual(
+      prior,
+    );
+    expect(start).toHaveBeenCalledOnce();
+    expect(seen).toHaveLength(4);
+  });
+
+  it("propagates the first unexpected adapter throw and retains a safe negative proof afterward", async () => {
+    const request = vi.fn(async (): Promise<OpenAIEmbeddingOutcome> => {
+      throw new TypeError("fixture-adapter-failure");
+    });
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: PROVIDER_ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      request,
+    };
+    await expect(verifyEmbeddingCapability(adapter, PROBE, "connection")).rejects.toThrow(
+      "fixture-adapter-failure",
+    );
+    expect(await verifyEmbeddingCapability(adapter, PROBE, "connection")).toMatchObject({
+      ok: false,
+      reason: "unavailable",
+    });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a malformed fingerprint vector even when the primary vector is valid", async () => {
+    const batch = batchOutcome([2, 2, 2, 2]);
+    if (!batch.ok || batch.value[1] === undefined)
+      throw new TypeError("Missing fingerprint fixture");
+    batch.value[1].vector.fill(Number.NaN);
+    const adapter: OpenAIEmbeddingAdapter = {
+      ...adapterReturning(successOutcome(2)),
+      requestBatch: async () => batch,
+    };
+    expect(await verifyEmbeddingCapability(adapter, fingerprintProbe, "connection")).toMatchObject({
+      ok: false,
+      reason: "invalid-response",
+    });
   });
 });

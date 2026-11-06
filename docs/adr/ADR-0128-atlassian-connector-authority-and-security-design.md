@@ -467,12 +467,27 @@ caller as reporter when the field is absent although create metadata lists it as
 default (lab S17, #4176). A supplied reporter is validated like any user; every other required
 field still blocks the create, and edit and transition are unaffected. Add/remove is
 limited to labels; replacement and additive changes cannot target the same field in one action.
-Cloud rich text uses the existing ADF composer; Data Center uses plain text, and user references
-respect each deployment's identity scheme. A rich-text value written to Jira without any real line break, with at
+Cloud rich text uses the existing ADF composer. Existing Data Center description strings remain
+byte-for-byte native Jira wiki text: `#` is also a valid wiki list marker, so strings cannot prove
+Markdown provenance. A new Markdown description uses only the strict explicit value
+`{ format: "markdown", text: "..." }`, advertised on the description field's create metadata.
+Only this Data Center description value serializes supported ATX and setext headings as native
+`hN.` wiki headings through the bounded canonical heading reader. It preserves code/fences,
+quoted source, acceptance criteria and source text; other fields and Cloud values keep their
+existing contracts. The same contracts-leaf projection supplies template validation and the human
+approval preview without changing submitted staged values, their digest or journal identity.
+The writer validates the explicit value before adding the existing trace footer, then validates the
+final serialized string against the existing field bounds. An actual mutation attempt carries only
+its positive converted-heading count internally. Chat records it on the existing `chat.tool-mutation`
+settled event, Coding on the existing `coding-runtime.jira-pod` action `serialize-description`;
+neither count claims remote success, and pure preflight or journal replay emits no such metric.
+The count never enters the model result or mutation receipt. User references respect each
+deployment's identity scheme.
+A rich-text value written to Jira without any real line break, with at
 least two escaped ones (the two characters `\n`) that would produce a heading or a list item at the
 start of a line, is refused with one fixed sentence for the model, on both deployments (lab S07,
 #4178): some models escape line breaks twice inside tool arguments, and Jira would store the escapes
-as visible text and collapse the document's sections into one line. Keiko never rewrites the value;
+as visible text and collapse the document's sections into one line. Keiko never decodes those escapes;
 one literal escape, escapes beside real line breaks, and escapes in prose (a description of the
 pattern `/\n\n/`) remain ordinary text and are accepted, and single-line text fields are unaffected.
 The rule judges what is written only: a stored description is projected by a read exactly as stored. Fresh metadata, authority and dispatch remain separate
@@ -1060,10 +1075,13 @@ the approval.
   `parentField` (an instance field) and `parentLink` (a link type), `optionalSections`. The
   level-2 headings of the template body (`## Title`, or a setext title underlined with `---`) are
   the required description sections, each of which must be present and carry content. One reader
-  (`jira-description-sections.ts`) takes headings from the template body and from an issue's
-  description alike: ATX, setext (three or more `=` or `-`) and Jira wiki (`h2.`) headings, none
-  inside fenced code (``` and ~~~ fences, `{code}` and `{noformat}`), none on a line over 512
-  characters, none matched by a backtracking expression. A deeper heading belongs to the enclosing
+  (`jira-description-sections.ts`) uses Markdown mode for template bodies and explicitly tagged
+  Markdown: ATX, setext (three or more `=` or `-`) and Jira wiki (`h2.`) headings. The projected
+  Data Center wire description is judged in native wiki mode: only `hN.` headings count, so a
+  native `#` numbered list or setext-looking text never satisfies a required section. Explicit
+  Markdown is serialized to native headings before this check; native strings remain unchanged.
+  Neither mode takes headings inside fenced code (``` and ~~~ fences, `{code}` and `{noformat}`),
+  on a line over 512 characters, or through a backtracking expression. A deeper heading belongs to the enclosing
   section, so a section made only of subsections has content; a section ends at the next heading of
   the same or a shallower level. Patterns use a closed regular-expression subset (literals,
   classes, `. ^ $ \b \B`, `\d \w \s` and their negations, escapes, alternation, groups, greedy
@@ -1108,6 +1126,15 @@ the approval.
   draft names up to 25 such items and `omittedRowCount`; an item that already exists is not refused,
   because a run only reconciles it. Only the create fields of each issue type the draft uses are read,
   whatever its size, and items are looked up only once they fail. A failed read decides nothing.
+- **Discovery before drafting.** `jira.create-fields` returns bounded facts for the current
+  library templates that govern CREATE for its canonical project and issue type, using the same
+  credential-bound identity reads and shared matcher as admission. Each complete returned rule set
+  carries its stored skill revision and digest, required fields and description sections, summary,
+  label and parent constraints. Entire remaining templates are omitted at the projection bound with
+  an explicit omitted count and incomplete state; unreadable templates remain unavailable. Field
+  pagination remains authoritative. These are rule facts, not another selected instruction skill;
+  the user's explicitly selected skill remains unchanged. Staging, pre-approval and dispatch still
+  re-read and enforce the current library independently of this advisory discovery result.
 - **Settings surface.** `GET /api/skills/jira-templates` lists templates; `POST
   /api/skills/jira-templates/validate` validates a template against the live instance through a
   Pod the caller owns (unknown project, issue type, field, ambiguous field name, link type or
@@ -1115,7 +1142,9 @@ the approval.
   of an existing project from its create metadata and the description headings most sampled issues
   share. Both read Jira with GET only and never write to Jira or the library; the lead edits and
   saves what is proposed through the skill routes.
-- **Evidence.** `jira.template.admission` (warn, stage `pre-approval` or `dispatch`) records the
+- **Evidence.** `jira.template.metadata` records only matched, returned, omitted and unreadable
+  template counts through the composing owner's existing Activity Log port; no template reference,
+  field name, section title or body enters it. `jira.template.admission` (warn, stage `pre-approval` or `dispatch`) records the
   operation, the violation count and the closed rule ids under the write's correlation id. It
   never records a field name, section title, label or value; `ruleIds` is a closed vocabulary and
   the registration is pinned to the contract's `JIRA_TEMPLATE_RULE_IDS` by a test.

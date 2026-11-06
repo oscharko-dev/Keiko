@@ -117,7 +117,7 @@ function item(ref: string, extra: Record<string, unknown> = {}): Record<string, 
     ref,
     projectId: "10000",
     issueTypeId: "10001",
-    fields: { summary: `Item ${ref}`, description: "## Acceptance criteria\n* works" },
+    fields: { summary: `Item ${ref}`, description: "h2. Acceptance criteria\n* works" },
     ...extra,
   };
 }
@@ -421,5 +421,93 @@ describe("resolving the draft a jira.draft call names (#4178)", () => {
       ok: false,
       reason: "draft-not-found",
     });
+  });
+});
+
+describe("staged descriptions before requirement trace", () => {
+  it("refuses an escaped description with requirement references without changing the saved draft", async () => {
+    const h = harness({ templates: [template()], unreadable: 0 });
+    const accepted = await h.stage(pageOf("kept"));
+    const draftId = text(accepted.data.draftId);
+    const before = h.deps.store.peek(draftId, "chat-1");
+    const remote = connection({ templates: [template()], unreadable: 0 });
+    const refused = await executeJiraDraftStageTool(
+      {
+        draftId,
+        items: [
+          item("encoded", {
+            requirementIds: ["REQ-1"],
+            fields: {
+              summary: "Encoded description",
+              description: String.raw`h2. Acceptance criteria\n* exact\nh2. Source\nReference`,
+            },
+          }) as CatalogJsonObject,
+        ],
+      },
+      CONTEXT,
+      remote,
+      h.deps,
+    );
+    expect(refused).toEqual({
+      isError: true,
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        ref: "encoded",
+        fieldId: "description",
+        validation: "invalid-field",
+        messages: [
+          "The text contains escaped line breaks (\\n) and no real line break; send real line breaks instead.",
+        ],
+      },
+    });
+    expect(h.deps.store.peek(draftId, "chat-1")).toEqual(before);
+    expect(h.activity.at(-1)).toMatchObject({
+      phase: "refused",
+      refusal: "invalid-fields",
+      pageItemCount: 1,
+      violationCount: 1,
+    });
+    expect(vi.mocked(remote.http).mock.calls.every(([request]) => request.method === "GET")).toBe(
+      true,
+    );
+  });
+});
+
+describe("native staged description rendering contract", () => {
+  it("refuses Markdown-looking native headings before staging but accepts explicit Markdown", async () => {
+    const h = harness({ templates: [template()], unreadable: 0 });
+    const description = "## Acceptance criteria\n* works";
+    const refused = await h.stage({
+      items: [item("native", { fields: { summary: "Native", description } }) as CatalogJsonObject],
+    });
+    expect(refused).toMatchObject({
+      isError: true,
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        ref: "native",
+        violations: [{ ruleId: "section-missing", subject: "Acceptance criteria" }],
+        guidance: expect.stringContaining("h2. Title"),
+      },
+    });
+    expect(h.deps.store.size()).toBe(0);
+    expect(h.activity.at(-1)).toMatchObject({
+      phase: "refused",
+      refusal: "template-violation",
+      violationCount: 1,
+    });
+    const explicit = { format: "markdown", text: description };
+    const accepted = await h.stage({
+      items: [
+        item("explicit", {
+          fields: { summary: "Explicit", description: explicit },
+        }) as CatalogJsonObject,
+      ],
+    });
+    expect(accepted.data).toMatchObject({ outcome: "succeeded", itemCount: 1 });
+    expect(
+      h.deps.store.peek(text(accepted.data.draftId), "chat-1")?.items[0]?.fields,
+    ).toMatchObject({ description: explicit });
   });
 });

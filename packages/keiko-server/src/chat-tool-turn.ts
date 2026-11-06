@@ -87,7 +87,6 @@ import { isGatewayAdmissionRefusal } from "./grounded-gateway-error-status.js";
 import {
   knowledgeTurnCoverage,
   knowledgeCoverageCorrection,
-  knowledgeCoverageNote,
   logKnowledgeCoverage,
 } from "./chat-tool-knowledge-coverage.js";
 
@@ -700,8 +699,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private knowledgeAnswer(answer: NormalizedResponse): NormalizedResponse {
     const coverage = knowledgeTurnCoverage(this.settledExchanges);
     logKnowledgeCoverage(this.options.correlationId, coverage);
-    const note = knowledgeCoverageNote(coverage);
-    return note.length === 0 ? answer : { ...answer, content: answer.content + note };
+    return answer;
   }
 
   /**
@@ -744,11 +742,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       exchanges,
       budget,
     });
+    logKnowledgeCoverage(correlationId, knowledgeTurnCoverage(exchanges));
     this.endedAnswer = {
       modelId,
-      content:
-        chatToolTurnPartialAnswer(exchanges, reason) +
-        knowledgeCoverageNote(knowledgeTurnCoverage(exchanges)),
+      content: chatToolTurnPartialAnswer(exchanges, reason),
       finishReason: "stop",
       toolCalls: [],
       structuredOutput: null,

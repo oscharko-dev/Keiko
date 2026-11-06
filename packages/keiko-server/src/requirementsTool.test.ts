@@ -204,6 +204,59 @@ describe("paging (#4179 review, defect 2)", () => {
     expect(forged.nextStep).toBe(REQUIREMENTS_CURSOR_STALE_NEXT_STEP);
     expect(REQUIREMENTS_CURSOR_STALE_NEXT_STEP.length).toBeLessThanOrEqual(400);
   });
+
+  it("refuses a fabricated offset while retaining the returned cursor fingerprint", async () => {
+    const f = await fixture([{ capsuleId: "cap-offset", text: specification(131).text }]);
+    const first = await call(f, { limit: 1 });
+    const cursor = first.nextCursor ?? "";
+    const fabricated = cursor.replace(/^\d+/u, "45");
+
+    const skipped = await call(f, { cursor: fabricated, limit: 50 });
+
+    expect(skipped).toMatchObject({
+      outcome: "failed",
+      reason: "cursor-stale",
+      nextStep: REQUIREMENTS_CURSOR_STALE_NEXT_STEP,
+    });
+    expect(skipped.items).toBeUndefined();
+    expect(sink.events.at(-1)?.extra).toMatchObject({ disposition: "cursor-stale" });
+  });
+
+  it("resumes every issued cursor with changing limits and reads all 131 units once", async () => {
+    const spec = specification(130);
+    const f = await fixture([
+      {
+        capsuleId: "cap-resume",
+        text: spec.text.replace(
+          "Schadenmeldungen werden heute telefonisch erfasst.",
+          "Das System muss alle Eingaben protokollieren.",
+        ),
+      },
+    ]);
+    const pages: Page[] = [];
+    let cursor: string | undefined;
+    do {
+      resetRequirementTurnCache();
+      const page = await call(
+        f,
+        { limit: pages.length % 2 === 0 ? 1 : 50, ...(cursor === undefined ? {} : { cursor }) },
+        `resume-${String(pages.length)}`,
+      );
+      expect(page.outcome).toBe("succeeded");
+      pages.push(page);
+      cursor = page.nextCursor;
+    } while (cursor !== undefined && pages.length < 131);
+
+    const units = pages.flatMap((page) => page.items ?? []);
+    expect(cursor).toBeUndefined();
+    expect(units).toHaveLength(131);
+    expect(new Set(units.map((unit) => unit.reference)).size).toBe(131);
+    expect(units.filter((unit) => unit.idOrigin === "explicit").map((unit) => unit.id)).toEqual(
+      spec.ids,
+    );
+    expect(units.filter((unit) => unit.idOrigin === "derived")).toHaveLength(1);
+    expect(pages[0]?.totals).toMatchObject({ detectedCount: 131, matchedCount: 131 });
+  });
 });
 
 describe("filters and views", () => {

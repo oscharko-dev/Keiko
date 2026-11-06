@@ -443,6 +443,7 @@
   "jira.attachment.source": "bff",
   "jira.field.admission": "bff",
   "jira.template.admission": "bff",
+  "jira.template.metadata": "bff",
   "knowledge.documents.operation": "memory-knowledge",
   "knowledge.log.sink-failed": "memory-knowledge",
   "knowledge.requirement-trace.applied": "memory-knowledge",

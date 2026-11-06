@@ -260,24 +260,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLifecycleOperations: {
       start: [],
       state: ["jira.template.admission", "skills.library.operation", "skills.workflow.attached"],
-      end: [],
+      end: ["jira.template.metadata"],
       failure: [],
       loss: [],
     },
     requiredCausalOperations: [
       "jira.template.admission",
+      "jira.template.metadata",
       "skills.library.operation",
       "skills.workflow.attached",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "jira.template.admission",
+      "jira.template.metadata",
       "skills.library.operation",
       "skills.workflow.attached",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "jira.template.admission",
+      "jira.template.metadata",
       "skills.library.operation",
       "skills.workflow.attached",
     ],

@@ -13,6 +13,8 @@ import {
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import {
   captureConversationReadinessAdmission,
+  conversationModelNotReadyResult,
+  mappedConversationReadinessError,
   ConversationModelNotReadyError,
   type ConversationReadinessAdmission,
   withConversationReadinessAdmission,
@@ -403,4 +405,18 @@ describe("configuration-bound readiness without request-time model probes", () =
     expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_READINESS_RESPONSE_BODY");
     expect(port.bufferedCalls).toBe(2);
   });
+});
+
+it("keeps the shared tool-calling refusal clear for every connected tool without prescribing repeated checks", () => {
+  const error = new ConversationModelNotReadyError("tool-calling");
+  const expected =
+    "The selected model cannot use the connected tools. Choose a model with tool calling.";
+  expect(error.message).toBe(expected);
+  const result = conversationModelNotReadyResult("tool-calling");
+  expect(result).toEqual({
+    status: 400,
+    body: { error: { code: "CONVERSATION_UNAVAILABLE_MODEL", message: expected } },
+  });
+  expect(mappedConversationReadinessError(error)).toEqual(result);
+  expect(error.message).not.toMatch(/Jira|Settings|check|disconnect/iu);
 });

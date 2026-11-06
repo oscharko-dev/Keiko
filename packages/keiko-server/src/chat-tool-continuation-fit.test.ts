@@ -34,6 +34,93 @@ const EXCHANGES: readonly ChatToolExchange[] = [
 ];
 const CONTINUATION = continuationOf(EXCHANGES);
 
+function reviewExchange(
+  data: Record<string, unknown> = {},
+  receipt: Record<string, unknown> = {},
+): ChatToolExchange {
+  return exchange(40, {
+    status: "failed",
+    reason: "provider-reported-error",
+    toolRef: { canonicalId: "keiko.knowledge.review", contractVersion: 2 },
+    data: {
+      outcome: "failed",
+      reason: "model-output-invalid",
+      failureStage: "model-output-invalid",
+      validationReason: "anchor-range",
+      sourceAvailable: true,
+      privateBody: BULK,
+      ...data,
+    },
+    ...receipt,
+  });
+}
+function forcedReviewCompaction(review: ChatToolExchange): {
+  readonly compacted: Record<string, unknown>;
+  readonly last: GatewayMessage | undefined;
+} {
+  const newest = EXCHANGES.at(-1);
+  if (newest === undefined) throw new TypeError("Missing newest exchange");
+  const exchanges = [review, newest];
+  const continuation = continuationOf(exchanges);
+  const fitted = fitToolContinuation(continuation, exchanges, 0);
+  expect(fitted.elidedCount).toBe(1);
+  expect(fitted.messages.at(-1)).toEqual(continuation.at(-1));
+  return {
+    compacted: JSON.parse(fitted.messages[1]?.content ?? "") as Record<string, unknown>,
+    last: fitted.messages.at(-1),
+  };
+}
+
+describe("review-v2 failure compaction", () => {
+  it.each(["model-output-invalid", "model-port-unavailable", "budget-port-unavailable"] as const)(
+    "retains only the source-checked closed %s facts through actual forced compaction",
+    (stage) => {
+      const review = reviewExchange({
+        reason: stage,
+        failureStage: stage,
+        ...(stage === "model-output-invalid" ? {} : { validationReason: undefined }),
+      });
+      const before = JSON.stringify(review);
+      const { compacted } = forcedReviewCompaction(review);
+      expect(compacted).toEqual({
+        elided: true,
+        status: "failed",
+        reason: "provider-reported-error",
+        failureStage: stage,
+        sourceAvailable: true,
+        ...(stage === "model-output-invalid" ? { validationReason: "anchor-range" } : {}),
+      });
+      expect(JSON.stringify(compacted)).not.toContain("Synthetic requirement text");
+      expect(JSON.stringify(review)).toBe(before);
+    },
+  );
+
+  it.each([
+    [{}, { toolRef: { canonicalId: "external.tool", contractVersion: 2 } }],
+    [{}, { toolRef: { canonicalId: "keiko.knowledge.documents", contractVersion: 2 } }],
+    [{}, { toolRef: { canonicalId: "keiko.knowledge.review", contractVersion: 1 } }],
+    [{}, { status: "completed" }],
+    [{}, { reason: "handler-failed" }],
+    [{ outcome: "succeeded" }, {}],
+    [{ reason: "unavailable" }, {}],
+    [{ sourceAvailable: false }, {}],
+    [{ sourceAvailable: "true" }, {}],
+    [{ sourceAvailable: undefined }, {}],
+    [{ reason: "private-stage", failureStage: "private-stage" }, {}],
+    [{ validationReason: "PRIVATE_MODEL_TEXT" }, {}],
+    [{ validationReason: { private: BULK } }, {}],
+  ] as const)(
+    "does not carry source-availability or diagnosis from an untrusted or legacy receipt: %s",
+    (data, receipt) => {
+      const { compacted } = forcedReviewCompaction(reviewExchange(data, receipt));
+      expect(compacted).not.toHaveProperty("failureStage");
+      expect(compacted).not.toHaveProperty("validationReason");
+      expect(compacted).not.toHaveProperty("sourceAvailable");
+      expect(JSON.stringify(compacted)).not.toContain("PRIVATE_MODEL_TEXT");
+    },
+  );
+});
+
 describe("fitToolContinuation", () => {
   it("leaves a continuation that fits unchanged", () => {
     const fitted = fitToolContinuation(CONTINUATION, EXCHANGES, Number.MAX_SAFE_INTEGER);
@@ -246,4 +333,103 @@ describe("fitToolRoundOutput", () => {
     const over = { ...request, maxOutputTokens: 2048 };
     expect(fitToolRoundOutput(over, profile, tools, limits)).toBe(over);
   });
+});
+
+const STAGED_REFERENCE = {
+  draftId: "b0e5678a-2974-4a6b-a56c-9e74fc989a85",
+  draftDigest: "a".repeat(64),
+};
+function stageExchange(
+  data: Record<string, unknown> = {},
+  receipt: Record<string, unknown> = {},
+): ChatToolExchange {
+  const staged = exchange(60, {
+    status: "completed",
+    toolRef: { canonicalId: "keiko.jira.draft.stage", contractVersion: 1 },
+    data: {
+      outcome: "succeeded",
+      ...STAGED_REFERENCE,
+      newDraft: true,
+      itemCount: 2,
+      pageCount: 1,
+      unresolvedRefCount: 0,
+      unresolvedRefs: [],
+      privateBody: BULK,
+      ...data,
+    },
+    ...receipt,
+  });
+  return { ...staged, call: { ...staged.call, name: "jira_draft_stage" } };
+}
+function forcedStageCompaction(stage: ChatToolExchange): Record<string, unknown> {
+  const newest = EXCHANGES.at(-1);
+  if (newest === undefined) throw new TypeError("Missing newest exchange");
+  const exchanges = [stage, newest];
+  const original = continuationOf(exchanges);
+  const fitted = fitToolContinuation(original, exchanges, 0);
+  expect(fitted.elidedCount).toBe(1);
+  expect(fitted.messages.at(-1)).toEqual(original.at(-1));
+  return JSON.parse(fitted.messages[1]?.content ?? "") as Record<string, unknown>;
+}
+describe("stored Jira stage receipt compaction", () => {
+  it("retains exact stored ID, digest and counts after real forced compaction without claiming a mutation", () => {
+    const stage = stageExchange();
+    const before = JSON.stringify(stage);
+    expect(forcedStageCompaction(stage)).toEqual({
+      elided: true,
+      status: "completed",
+      ...STAGED_REFERENCE,
+      itemCount: 2,
+      pageCount: 1,
+      unresolvedRefCount: 0,
+      unresolvedRefs: [],
+    });
+    expect(JSON.stringify(stage)).toBe(before);
+  });
+  it("retains the bounded unresolved references and their truthful total for the next append", () => {
+    const unresolvedRefs = Array.from({ length: 32 }, (_, index) => `task${String(index)}`);
+    const compacted = forcedStageCompaction(
+      stageExchange({ itemCount: 100, pageCount: 2, unresolvedRefCount: 35, unresolvedRefs }),
+    );
+    expect(compacted).toMatchObject({
+      ...STAGED_REFERENCE,
+      itemCount: 100,
+      pageCount: 2,
+      unresolvedRefCount: 35,
+      unresolvedRefs,
+    });
+    expect(compacted).not.toHaveProperty("items");
+    expect(compacted).not.toHaveProperty("mutationOutcome");
+    expect(JSON.stringify(compacted)).not.toContain("Synthetic requirement text");
+  });
+  it.each([
+    [{}, { toolRef: { canonicalId: "external.tool", contractVersion: 1 } }],
+    [{}, { toolRef: { canonicalId: "keiko.jira.draft.stage", contractVersion: 2 } }],
+    [{}, { toolRef: { canonicalId: "keiko.jira.draft", contractVersion: 3 } }],
+    [{}, { status: "failed" }],
+    [{ outcome: "rejected" }, {}],
+    [{ draftId: "private body" }, {}],
+    [{ draftId: STAGED_REFERENCE.draftId + "\n" }, {}],
+    [{ draftDigest: "A".repeat(64) }, {}],
+    [{ itemCount: -1 }, {}],
+    [{ itemCount: Number.NaN }, {}],
+    [{ itemCount: 1.5 }, {}],
+    [{ itemCount: 16 * 1024 * 1024 + 1 }, {}],
+    [{ itemCount: 51, pageCount: 1 }, {}],
+    [{ pageCount: 0 }, {}],
+    [{ pageCount: 3 }, {}],
+    [{ unresolvedRefCount: 1 }, {}],
+    [{ unresolvedRefCount: 1, unresolvedRefs: ["private text with spaces"] }, {}],
+    [{ unresolvedRefCount: 1, unresolvedRefs: ["task\n"] }, {}],
+    [{ unresolvedRefCount: 2, unresolvedRefs: ["task", "task"] }, {}],
+  ] as const)(
+    "rejects forged stage identity, status, references or count facts: %s",
+    (data, receipt) => {
+      const compacted = forcedStageCompaction(stageExchange(data, receipt));
+      expect(compacted).not.toHaveProperty("draftId");
+      expect(compacted).not.toHaveProperty("draftDigest");
+      expect(compacted).not.toHaveProperty("unresolvedRefs");
+      expect(compacted).not.toHaveProperty("itemCount");
+    },
+  );
 });

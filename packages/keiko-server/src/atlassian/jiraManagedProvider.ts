@@ -33,6 +33,7 @@ import {
 } from "./jiraManagedMutationDescriptors.js";
 import { JIRA_DRAFT_STAGE_DECLARATION } from "./jiraDraftDescriptor.js";
 import { JIRA_REPORT_DECLARATION } from "./jiraReportDescriptor.js";
+import { JIRA_APPLICABLE_TEMPLATES_SCHEMA } from "./jiraTemplateMetadataSchema.js";
 
 const PAGE_NUMBER = { type: "integer", minimum: 0, maximum: 1000000 };
 const REFERENCE = object({
@@ -56,6 +57,9 @@ const FIELD = object(
     },
     allowedValues: { type: "array", maxItems: 500, items: REFERENCE },
     schemaType: text(129),
+    inputSchema: { ...object({}), additionalProperties: true },
+    nativeFormat: { type: "string", enum: ["jira-wiki"] },
+    markdownSerialization: { type: "string", enum: ["headings-only"] },
   },
   ["id", "name", "required", "hasDefaultValue", "kind", "richText", "operations"],
 );
@@ -134,7 +138,7 @@ const DEFINITIONS: Readonly<
   },
   "jira.create-fields": {
     description:
-      "Read current create fields for a project and issue type. Unsupported fields cannot be written. All pages are needed to identify required fields.",
+      "Read current create fields and applicable stored CREATE template rules for a project and issue type. Unsupported fields cannot be written. All field pages are needed to identify required fields. Keep every applicable template's required sections and rules; omitted templates mean incomplete rule metadata.",
     arguments: {
       projectKey: text(128),
       issueTypeId: { type: "string", pattern: "^[0-9]{1,32}$", maxLength: 32 },
@@ -224,7 +228,7 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   const descriptor = createToolDescriptor({
     toolRef: createToolRef(
       `keiko.${name.replaceAll("-", ".")}`,
-      name === "jira.issue" || name === "jira.search" ? 3 : 2,
+      name === "jira.issue" || name === "jira.search" || name === "jira.create-fields" ? 3 : 2,
     ),
     description: definition.description,
     inputSchema: object(
@@ -244,6 +248,9 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
         messages: JIRA_FAILURE_MESSAGES_SCHEMA,
         browseUrl: text(4096),
         draft: object({ tool: text(16), use: text(256) }, ["tool", "use"]),
+        ...(name === "jira.create-fields"
+          ? { applicableTemplates: JIRA_APPLICABLE_TEMPLATES_SCHEMA }
+          : {}),
         items: { type: "array", maxItems: 100, items: definition.item },
         startAt: PAGE_NUMBER,
         total: PAGE_NUMBER,

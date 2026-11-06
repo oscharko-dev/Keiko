@@ -145,6 +145,25 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.review.tool": "Dokumentenbewertung",
   "chat.review.details": "Bewertungsergebnis ansehen",
   "chat.knowledge.partial": "Teilergebnis. Nicht alle Dokumentinformationen sind enthalten.",
+  "chat.review.invalidModelOutput":
+    "Das Dokument wurde gelesen, aber die Modellantwort war ungültig. Die Prüfung wurde nicht abgeschlossen.",
+  "chat.review.modelUnavailable":
+    "Das Dokument ist verfügbar. Für die Prüfung ist derzeit kein Modell verfügbar.",
+  "chat.review.budgetUnavailable":
+    "Das Dokument ist verfügbar. Das Budget für die Prüfung konnte nicht geprüft werden.",
+  "chat.knowledgeCoverage.title": "Ergebnis mit Einschränkungen",
+  "chat.knowledgeCoverage.pendingReads": "Offene Lesevorgänge: {count}.",
+  "chat.knowledgeCoverage.unavailableDocuments":
+    "Nicht verfügbare oder ausgelassene Dokumente: {count}.",
+  "chat.knowledgeCoverage.refusedScopes": "Nicht verfügbare ausgewählte Wissensquellen: {count}.",
+  "chat.knowledgeCoverage.failedOperations": "Abfragen ohne verwertbares Ergebnis: {count}.",
+  "chat.knowledgeCoverage.omittedRequirements": "Nicht eingelesene Anforderungen: {count}.",
+  "chat.knowledgeCoverage.truncatedRequirements":
+    "Anforderungen mit gekürzten Quellfeldern: {count}.",
+  "chat.knowledgeCoverage.missingCriteria":
+    "Anforderungen ohne erkannte Akzeptanzkriterien in der Quelle: {count}.",
+  "chat.knowledgeCoverage.requestedReviews":
+    "Vollständig geprüfte Dokumente: {completed} von {requested} angefragten.",
   "chat.processing.title": "Fortschritt",
   "chat.processing.request": "Anfrage empfangen",
   "chat.processing.continuing": "Nächsten Schritt vorbereiten",

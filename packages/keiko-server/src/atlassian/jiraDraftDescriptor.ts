@@ -16,10 +16,11 @@ import {
 } from "./jiraManagedMutationDescriptors.js";
 
 const DESCRIPTION =
-  "Write a backlog draft larger than jira.draft takes in pages of up to " +
+  "Save a reviewable backlog draft in Keiko without creating Jira issues. Supports small and large drafts in pages of 1 to " +
   String(JIRA_DRAFT_PAGE_ITEMS_MAX) +
-  " items in the jira.draft item form; pass the returned draftId to append. A page that breaks an issue template is refused whole with the violations to correct. " +
-  "When unresolvedRefCount is 0, call jira.draft with only draftId and the last draftDigest: the human approves the whole draft once. Changes nothing in Jira.";
+  " items in the jira.draft item form. Omit draftId to start a new draft; supply the returned draftId only to append to that draft. " +
+  "A page that breaks an issue template is refused whole with the violations to correct. The result returns draftId and draftDigest for review. " +
+  "Only when the user requests creation in Jira and unresolvedRefCount is 0, call jira.draft with only draftId and the last draftDigest; that tool performs Jira writes under the current write authority and required human approval.";
 
 export const JIRA_DRAFT_STAGE_DECLARATION: ManagedMcpToolDeclaration = Object.freeze({
   name: "jira.draft-stage",

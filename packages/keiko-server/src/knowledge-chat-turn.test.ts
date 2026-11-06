@@ -54,7 +54,12 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 const MODEL = "knowledge-only-model";
-function configure(deps: UiHandlerDeps, maxOutputTokens = 1024, contextWindow = 4096): void {
+function configure(
+  deps: UiHandlerDeps,
+  maxOutputTokens = 1024,
+  contextWindow = 4096,
+  toolCalling = true,
+): void {
   const provider = {
     modelId: MODEL,
     baseUrl: "https://model.example.invalid/v1",
@@ -71,13 +76,17 @@ function configure(deps: UiHandlerDeps, maxOutputTokens = 1024, contextWindow = 
           ...createDefaultChatCapability(MODEL),
           maxOutputTokens,
           contextWindow,
-          toolCalling: true,
-          toolCallingVerification: {
-            status: "verified",
-            checkedAt: new Date().toISOString(),
-            probe: "gateway-tool-calling-v1",
-            configurationFingerprint: toolCallingConfigurationFingerprint(provider),
-          },
+          toolCalling,
+          ...(toolCalling
+            ? {
+                toolCallingVerification: {
+                  status: "verified",
+                  checkedAt: new Date().toISOString(),
+                  probe: "gateway-tool-calling-v1",
+                  configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+                },
+              }
+            : {}),
         },
       ],
     }),
@@ -170,6 +179,41 @@ function assertRuntimeContext(
   ).toBe(original);
 }
 
+it("refuses connected Knowledge-only tools with an accurate service-neutral message when tool calling is unavailable", async () => {
+  const { pod, deps } = await fixture();
+  configure(deps, 1024, 4096, false);
+  const chat = deps.store.findChatById(pod.chatId);
+  expect(chat?.jiraPodBinding).toBeUndefined();
+  expect(chat?.localKnowledgeScopes).toHaveLength(1);
+  const accepted = deps.store.admitChatTurn("knowledge-no-tools", {
+    chatId: pod.chatId,
+    role: "user",
+    content: "Read the attached document",
+    timestamp: Date.now(),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+  if (accepted.kind !== "admitted") throw new TypeError("Expected accepted human turn");
+  const factory = vi.fn(() => undefined);
+  Object.assign(deps, { modelPortFactory: factory });
+  const refused = createChatToolTurn(
+    deps,
+    MODEL,
+    accepted.userMessage,
+    new AbortController().signal,
+    "knowledge-no-tool-calling",
+  );
+  await expect(refused).rejects.toBeInstanceOf(ConversationModelNotReadyError);
+  await expect(refused).rejects.toMatchObject({
+    requiredCapability: "tool-calling",
+    message: "The selected model cannot use the connected tools. Choose a model with tool calling.",
+  });
+  expect(factory).not.toHaveBeenCalled();
+});
+
 it.each([
   { tool: "knowledge.requirements", args: {} },
   { tool: "knowledge.documents", args: { view: "inventory" } },
@@ -214,7 +258,7 @@ it.each([
     humanMessage,
     accepted.userMessage.content,
   );
-  expect(response.content).toContain("Observed");
+  expect(response.content).toBe("Observed the Knowledge Pod documents.");
   expect(calls).toHaveLength(2);
   const transcript = deps.store.findMessageById(accepted.userMessage.id)?.toolTranscript;
   expect(transcript?.exchanges[0]?.result?.status).toBe("completed");

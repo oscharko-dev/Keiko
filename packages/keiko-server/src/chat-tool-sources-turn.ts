@@ -27,7 +27,12 @@ import {
   reserveCurrentJiraChatAuthority,
 } from "./atlassian/jiraChatAuthority.js";
 import { prepareAcceptedMcpChatAuthority } from "./mcp/mcpChatAuthority.js";
-import { observeJiraChatMutation, type JiraChatTurnOptions } from "./atlassian/jiraChatToolTurn.js";
+import {
+  createJiraChatTurnReviewPorts,
+  observeJiraChatMutation,
+  type JiraChatTurnOptions,
+} from "./atlassian/jiraChatToolTurn.js";
+import { openTraceSession } from "./requirement-trace.js";
 import {
   observeMcpChatMutation,
   mcpChatTurnContext,
@@ -115,6 +120,15 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
             context: () => context,
             tools: mcp.managed.tools,
             ...this.consentPorts(),
+            ...(primary.kind === "jira"
+              ? {
+                  jiraReview: createJiraChatTurnReviewPorts(primary.options, {
+                    writeExchange: (actionId) => this.writeExchange(actionId),
+                    reviewableWrite: (action) => this.reviewableWrite(action),
+                    readAllowed: () => !context.signal.aborted && currentChatSources(deps, context),
+                  }),
+                }
+              : {}),
           }),
         }),
     });
@@ -244,5 +258,18 @@ function acceptedPrimary(
       options: { ...common, managed, authority: { ...authority, envelope } },
     };
   requireDispatch(isJiraEnvelope(envelope), "denied", "authority-invalid");
-  return { kind: "jira", options: { ...common, managed, authority: { ...authority, envelope } } };
+  return {
+    kind: "jira",
+    options: {
+      ...common,
+      managed,
+      authority: { ...authority, envelope },
+      openTrace: (context) =>
+        openTraceSession(common.deps, {
+          chatId: context.chatId,
+          userMessageId: context.userMessageId,
+          correlationId: context.correlationId,
+        }),
+    },
+  };
 }

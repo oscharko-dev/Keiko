@@ -10,6 +10,7 @@ import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-en
 import { knowledgeCoverageReceipt } from "./chat-tool-knowledge-coverage.js";
 import {
   chatToolDraftReceipts,
+  chatToolStagedDraftReceipt,
   chatToolIssueKey,
   chatToolRequirementReceipts,
 } from "./chat-tool-receipts.js";
@@ -33,6 +34,7 @@ function receiptsOf(exchange: ChatToolExchange): object {
   const requirements = chatToolRequirementReceipts(data);
   return {
     ...knowledgeCoverageReceipt(exchange),
+    ...chatToolStagedDraftReceipt(exchange),
     ...(issueKey === undefined ? {} : { issueKey }),
     ...(items === undefined ? {} : { items }),
     ...(requirements === undefined ? {} : { requirements }),

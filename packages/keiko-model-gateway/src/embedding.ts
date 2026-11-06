@@ -222,7 +222,7 @@ function cosineOfNormalized(a: Float32Array, b: Float32Array): number {
 export function embeddingSpaceFingerprintForVectors(
   vectors: readonly Float32Array[],
 ): string | undefined {
-  if (vectors.length === 0 || vectors.some((vector) => vector.length === 0)) {
+  if (vectors.length === 0 || vectors.some((vector) => !validProbeVector(vector))) {
     return undefined;
   }
   const normalized = vectors.map(l2NormalizeVector);
@@ -301,13 +301,18 @@ function fingerprintFromBatch(
     : { ok: true, fingerprint };
 }
 
+function validProbeVector(vector: Float32Array): boolean {
+  const norm = vectorL2Norm(vector);
+  return vector.length > 0 && Number.isFinite(norm) && norm > 0;
+}
+
 function capabilityFromBatch(
   options: EmbeddingProbeOptions,
   outcome: OpenAIEmbeddingBatchOutcome,
 ): EmbeddingCapabilityCheck {
   if (!outcome.ok) return fail(reasonFromAdapter(outcome.kind), outcome.status);
   const primary = outcome.value[0];
-  if (primary === undefined || primary.vector.length === 0) return fail("invalid-response");
+  if (primary === undefined || !validProbeVector(primary.vector)) return fail("invalid-response");
   const detected = primary.vector.length;
   if (options.expectedDimensions !== undefined && options.expectedDimensions !== detected) {
     return fail("dimension-mismatch");
@@ -369,7 +374,205 @@ function buildIdentity(
   };
 }
 
+// Connection-owned verification replaces the retrieval-only ten-minute preflight cache. A
+// stable adapter belongs to one accepted gateway configuration; changing the connection replaces
+// the adapter. Startup, explicit Settings verification and retrieval share this same proof.
+interface EmbeddingCapabilityEntry {
+  readonly modelId: string;
+  readonly promise: Promise<EmbeddingCapabilityCheck>;
+  state: "pending" | "ready" | "failed";
+}
+const EMBEDDING_CAPABILITY_CACHES = new WeakMap<
+  OpenAIEmbeddingAdapter,
+  Map<string, EmbeddingCapabilityEntry>
+>();
+const EMBEDDING_CAPABILITY_CACHE_MAX = 64;
+
+function capabilityCacheKey(options: EmbeddingProbeOptions): string {
+  return JSON.stringify([
+    options.provider,
+    options.modelId,
+    options.vectorMetric,
+    options.dimensionsParam ?? null,
+    options.normalization ?? EMBEDDING_NORMALIZATION,
+    options.instructionVersion ?? EMBEDDING_INSTRUCTION_VERSION,
+    options.includeSpaceFingerprint === true,
+  ]);
+}
+
+function capabilityCacheFor(
+  adapter: OpenAIEmbeddingAdapter,
+): Map<string, EmbeddingCapabilityEntry> {
+  let cache = EMBEDDING_CAPABILITY_CACHES.get(adapter);
+  if (cache === undefined) {
+    cache = new Map();
+    EMBEDDING_CAPABILITY_CACHES.set(adapter, cache);
+  }
+  return cache;
+}
+
+/** A real request failure invalidates its connection's proof without starting a passive re-probe. */
+export function invalidateEmbeddingCapability(
+  adapter: OpenAIEmbeddingAdapter,
+  modelId: string,
+): void {
+  const cache = EMBEDDING_CAPABILITY_CACHES.get(adapter);
+  if (cache === undefined) return;
+  for (const [key, entry] of cache) {
+    if (entry.modelId === modelId)
+      cache.set(key, {
+        modelId,
+        promise: Promise.resolve(fail("unavailable")),
+        state: "failed",
+      });
+  }
+}
+
+function dimensionChecked(
+  checked: EmbeddingCapabilityCheck,
+  expectedDimensions: number | undefined,
+): EmbeddingCapabilityCheck {
+  return checked.ok &&
+    expectedDimensions !== undefined &&
+    expectedDimensions !== checked.identity.vectorDimensions
+    ? fail("dimension-mismatch")
+    : checked;
+}
+
+async function awaitCapabilityProof(
+  promise: Promise<EmbeddingCapabilityCheck>,
+  signal: AbortSignal | undefined,
+): Promise<EmbeddingCapabilityCheck> {
+  if (signal === undefined) return promise;
+  if (signal.aborted) return fail("cancelled");
+  let onAbort: (() => void) | undefined;
+  const cancelled = new Promise<EmbeddingCapabilityCheck>((resolve) => {
+    onAbort = () => resolve(fail("cancelled"));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([promise, cancelled]);
+  } finally {
+    if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+function clearFailedModelProofs(
+  cache: Map<string, EmbeddingCapabilityEntry>,
+  modelId: string,
+): void {
+  for (const [key, entry] of cache)
+    if (entry.modelId === modelId && entry.state === "failed") cache.delete(key);
+}
+
+function settleCapabilityProof(
+  cache: Map<string, EmbeddingCapabilityEntry>,
+  key: string,
+  entry: EmbeddingCapabilityEntry,
+  checked: EmbeddingCapabilityCheck,
+  refresh: boolean,
+): EmbeddingCapabilityCheck {
+  entry.state = checked.ok ? "ready" : "failed";
+  if (cache.get(key) !== entry) return checked.ok ? fail("unavailable") : checked;
+  // Cancellation is the caller's decision, never evidence that a provider is unavailable.
+  if (!checked.ok && checked.reason === "cancelled") cache.delete(key);
+  else if (checked.ok && refresh) clearFailedModelProofs(cache, entry.modelId);
+  return checked;
+}
+
+async function runCapabilityProbe(
+  adapter: OpenAIEmbeddingAdapter,
+  options: EmbeddingProbeOptions,
+  onProbeStart: (() => (checked?: EmbeddingCapabilityCheck) => void) | undefined,
+  admit?: (checked: EmbeddingCapabilityCheck) => EmbeddingCapabilityCheck,
+): Promise<EmbeddingCapabilityCheck> {
+  // Budget/admission reservations belong to physical work, never a cached read or joiner.
+  const settle = onProbeStart?.();
+  let checked: EmbeddingCapabilityCheck | undefined;
+  try {
+    checked = await verifyEmbeddingCapabilityUncached(adapter, options);
+    checked = admit?.(checked) ?? checked;
+    return checked;
+  } finally {
+    settle?.(checked);
+  }
+}
+
+/** A refused local start observes no provider; keep the earlier proof, if there was one. */
+function rememberCapabilityFailure(
+  cache: Map<string, EmbeddingCapabilityEntry>,
+  key: string,
+  entry: EmbeddingCapabilityEntry,
+  previous: EmbeddingCapabilityEntry | undefined,
+  startRefused: boolean,
+): void {
+  entry.state = "failed";
+  if (cache.get(key) !== entry) return;
+  if (startRefused) {
+    if (previous === undefined) cache.delete(key);
+    else cache.set(key, previous);
+    return;
+  }
+  cache.set(key, {
+    modelId: entry.modelId,
+    state: "failed",
+    promise: Promise.resolve(fail("unavailable")),
+  });
+}
+
+/** Explicit verification renews a settled proof; concurrent startup/read requests join one probe. */
 export async function verifyEmbeddingCapability(
+  adapter: OpenAIEmbeddingAdapter,
+  options: EmbeddingProbeOptions,
+  reuse?: "connection" | "refresh",
+  onProbeStart?: () => (checked?: EmbeddingCapabilityCheck) => void,
+): Promise<EmbeddingCapabilityCheck> {
+  if (reuse === undefined) return runCapabilityProbe(adapter, options, onProbeStart);
+  if (options.signal?.aborted === true) return fail("cancelled");
+  const cache = capabilityCacheFor(adapter);
+  const key = capabilityCacheKey(options);
+  const cached = cache.get(key);
+  if (cached !== undefined && (reuse === "connection" || cached.state === "pending"))
+    return dimensionChecked(
+      await awaitCapabilityProof(cached.promise, options.signal),
+      options.expectedDimensions,
+    );
+  // Every pod checks its stored dimension locally against the shared actual observation.
+  const { expectedDimensions, ...probeOptions } = options;
+  if (cache.size >= EMBEDDING_CAPABILITY_CACHE_MAX && !cache.has(key)) cache.clear();
+  let startRefused = false;
+  const start =
+    onProbeStart === undefined
+      ? undefined
+      : () => {
+          try {
+            return onProbeStart();
+          } catch (error) {
+            startRefused = true;
+            throw error;
+          }
+        };
+  const entry: EmbeddingCapabilityEntry = {
+    modelId: options.modelId,
+    state: "pending",
+    promise: Promise.resolve()
+      .then(() =>
+        runCapabilityProbe(adapter, probeOptions, start, (checked) =>
+          settleCapabilityProof(cache, key, entry, checked, reuse === "refresh"),
+        ),
+      )
+      .catch((error: unknown) => {
+        rememberCapabilityFailure(cache, key, entry, cached, startRefused);
+        throw error;
+      }),
+  };
+  cache.set(key, entry);
+  const checked = await awaitCapabilityProof(entry.promise, options.signal);
+  if (!checked.ok && checked.reason === "cancelled" && cache.get(key) === entry) cache.delete(key);
+  return dimensionChecked(checked, expectedDimensions);
+}
+
+async function verifyEmbeddingCapabilityUncached(
   adapter: OpenAIEmbeddingAdapter,
   options: EmbeddingProbeOptions,
 ): Promise<EmbeddingCapabilityCheck> {
@@ -385,7 +588,7 @@ export async function verifyEmbeddingCapability(
   }
 
   const detected = outcome.value.vector.length;
-  if (detected === 0) {
+  if (!validProbeVector(outcome.value.vector)) {
     return fail("invalid-response");
   }
   if (options.expectedDimensions !== undefined && options.expectedDimensions !== detected) {

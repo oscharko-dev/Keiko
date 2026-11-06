@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { canonicalise as sharedCanonicalise } from "@oscharko-dev/keiko-contracts/runtime/canonical-json";
 import { canonicalise, sha256Base64, sha256Hex } from "./hashing.js";
 
 describe("canonicalise", () => {
+  it("preserves the Security API as the exact browser-safe Contracts function", () => {
+    expect(canonicalise).toBe(sharedCanonicalise);
+    const value = { z: [undefined, { b: "ü", a: 1 }], "2": true, "10": null, omitted: undefined };
+    expect(canonicalise(value)).toBe('{"10":null,"2":true,"z":[null,{"a":1,"b":"ü"}]}');
+  });
+
   it("sorts object keys recursively", () => {
     expect(canonicalise({ b: 1, a: 2 })).toBe(`{"a":2,"b":1}`);
     expect(canonicalise({ outer: { z: 1, a: 2 } })).toBe(`{"outer":{"a":2,"z":1}}`);

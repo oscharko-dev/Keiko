@@ -28,6 +28,8 @@ import type {
 import { embeddingIdentityKey as identityKey } from "@oscharko-dev/keiko-contracts/runtime/vector-index-port";
 import {
   assertCompatibleEmbeddingIdentity,
+  invalidateEmbeddingCapability,
+  vectorL2Norm,
   l2NormalizeVector,
   verifyEmbeddingCapability,
   type OpenAIEmbeddingAdapter,
@@ -658,38 +660,17 @@ function queryEmbeddingCacheKey(identity: EmbeddingModelIdentity, query: string)
 // reconfigured gateway endpoint), so cache entries must never travel between adapters. Callers
 // that construct a fresh adapter per request simply get no cross-request reuse; the BFF holds
 // one adapter per live gateway config, so a config change rotates the adapter and drops every
-// cache scoped to it. `embedQueryFor` re-validates the response identity on every MISS, and the
-// preflight cache stores only STRUCTURAL outcomes ("ok" / "incompatible") under a TTL —
-// transient failures ("failed") are never cached, so a flaky adapter cannot poison later
-// requests.
+// cache scoped to it. `embedQueryFor` re-validates the response identity on every MISS, and
+// the gateway verifier retains the connection's capability proof until explicit verification or
+// connection replacement. Actual query responses are still validated on every cache miss.
 const QUERY_EMBEDDING_CACHES = new WeakMap<OpenAIEmbeddingAdapter, Map<string, EmbeddedQuery>>();
 const QUERY_EMBEDDING_LRU_MAX = 256;
-
-interface PreflightTtlEntry {
-  readonly result: "ok" | "incompatible";
-  readonly expiresAt: number;
-}
-
-const IDENTITY_PREFLIGHT_CACHES = new WeakMap<
-  OpenAIEmbeddingAdapter,
-  Map<string, PreflightTtlEntry>
->();
-const IDENTITY_PREFLIGHT_TTL_MS = 10 * 60 * 1000;
-const IDENTITY_PREFLIGHT_TTL_CACHE_MAX = 64;
 
 function queryEmbeddingCacheFor(adapter: OpenAIEmbeddingAdapter): Map<string, EmbeddedQuery> {
   const existing = QUERY_EMBEDDING_CACHES.get(adapter);
   if (existing !== undefined) return existing;
   const created = new Map<string, EmbeddedQuery>();
   QUERY_EMBEDDING_CACHES.set(adapter, created);
-  return created;
-}
-
-function preflightTtlCacheFor(adapter: OpenAIEmbeddingAdapter): Map<string, PreflightTtlEntry> {
-  const existing = IDENTITY_PREFLIGHT_CACHES.get(adapter);
-  if (existing !== undefined) return existing;
-  const created = new Map<string, PreflightTtlEntry>();
-  IDENTITY_PREFLIGHT_CACHES.set(adapter, created);
   return created;
 }
 
@@ -756,6 +737,14 @@ async function embedQueryFor(
       `embedding adapter returned ${outcome.kind}`,
     );
   }
+  const norm = vectorL2Norm(outcome.value.vector);
+  if (!Number.isFinite(norm) || norm <= 0) {
+    invalidateEmbeddingCapability(adapter, identity.modelId);
+    return new RetrievalError(
+      "EMBEDDING_ADAPTER_FAILED",
+      "embedding adapter returned an invalid vector",
+    );
+  }
   const current = queryOutcomeIdentity(
     identity,
     outcome.value.vector.length,
@@ -764,6 +753,7 @@ async function embedQueryFor(
   );
   const compatibility = assertCompatibleEmbeddingIdentity(identity, current);
   if (!compatibility.ok) {
+    invalidateEmbeddingCapability(adapter, identity.modelId);
     return new RetrievalError(
       "INCOMPATIBLE_EMBEDDING_IDENTITY",
       "embedding model identity changed — existing capsule vectors require re-indexing",
@@ -1824,9 +1814,8 @@ function hasHardenedEmbeddingSpace(identity: EmbeddingModelIdentity): boolean {
   );
 }
 
-// Request-local `inFlight` dedupes concurrent probes (the prefetch fires per variant); the
-// module-level TTL cache carries STRUCTURAL outcomes across requests. "failed" is transient and
-// is only held for the current request via the shared in-flight promise.
+// Request-local promises coalesce pods/variants; the gateway verifier owns the connection's
+// startup proof. Retrieval never renews it on a timer or turns a failed proof into a probe storm.
 function ensureIdentityPreflight(
   adapter: OpenAIEmbeddingAdapter,
   identity: EmbeddingModelIdentity,
@@ -1836,25 +1825,9 @@ function ensureIdentityPreflight(
 ): Promise<IdentityPreflightResult> {
   if (!hasHardenedEmbeddingSpace(identity)) return Promise.resolve("incompatible");
   const key = identityKey(identity);
-  const ttlCache = preflightTtlCacheFor(adapter);
-  const ttlCached = ttlCache.get(key);
-  if (ttlCached !== undefined && ttlCached.expiresAt > Date.now()) {
-    return Promise.resolve(ttlCached.result);
-  }
   const pending = inFlight.get(key);
   if (pending !== undefined) return pending;
-  const started = runIdentityPreflight(adapter, identity, signal, logContext).then((result) => {
-    if (result !== "failed") {
-      if (ttlCache.size >= IDENTITY_PREFLIGHT_TTL_CACHE_MAX) {
-        ttlCache.clear();
-      }
-      ttlCache.set(key, {
-        result,
-        expiresAt: Date.now() + IDENTITY_PREFLIGHT_TTL_MS,
-      });
-    }
-    return result;
-  });
+  const started = runIdentityPreflight(adapter, identity, signal, logContext);
   inFlight.set(key, started);
   return started;
 }
@@ -1865,22 +1838,26 @@ async function runIdentityPreflight(
   signal: AbortSignal | undefined,
   logContext: ModelGatewayLogContext | undefined,
 ): Promise<IdentityPreflightResult> {
-  const checked = await verifyEmbeddingCapability(adapter, {
-    modelId: identity.modelId,
-    provider: identity.provider,
-    vectorMetric: identity.vectorMetric,
-    expectedDimensions: identity.vectorDimensions,
-    ...(identity.dimensionsParam !== undefined
-      ? { dimensionsParam: identity.dimensionsParam }
-      : {}),
-    ...(identity.normalization !== undefined ? { normalization: identity.normalization } : {}),
-    ...(identity.instructionVersion !== undefined
-      ? { instructionVersion: identity.instructionVersion }
-      : {}),
-    includeSpaceFingerprint: true,
-    ...(logContext !== undefined ? { logContext } : {}),
-    ...(signal !== undefined ? { signal } : {}),
-  });
+  const checked = await verifyEmbeddingCapability(
+    adapter,
+    {
+      modelId: identity.modelId,
+      provider: identity.provider,
+      vectorMetric: identity.vectorMetric,
+      expectedDimensions: identity.vectorDimensions,
+      ...(identity.dimensionsParam !== undefined
+        ? { dimensionsParam: identity.dimensionsParam }
+        : {}),
+      ...(identity.normalization !== undefined ? { normalization: identity.normalization } : {}),
+      ...(identity.instructionVersion !== undefined
+        ? { instructionVersion: identity.instructionVersion }
+        : {}),
+      includeSpaceFingerprint: true,
+      ...(logContext !== undefined ? { logContext } : {}),
+      ...(signal !== undefined ? { signal } : {}),
+    },
+    "connection",
+  );
   if (!checked.ok) {
     return checked.reason === "dimension-mismatch" ? "incompatible" : "failed";
   }

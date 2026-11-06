@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { knowledgeTurnCoverage as sharedKnowledgeTurnCoverage } from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   knowledgeTurnCoverage,
   knowledgeCoverageCorrection,
-  knowledgeCoverageNote,
+  knowledgeCoverageIssues,
   knowledgeCoverageReceipt,
 } from "./chat-tool-knowledge-coverage.js";
 
@@ -35,6 +36,11 @@ function requiredCoverage(
 }
 
 describe("Knowledge completion uses observed page chains", () => {
+  it("uses the same receipt projection as browser consumers", () => {
+    expect(knowledgeTurnCoverage).toBe(sharedKnowledgeTurnCoverage);
+    expect(knowledgeCoverageIssues(undefined)).toEqual([]);
+  });
+
   it("preserves first-page incompleteness and source acceptance-criterion gaps in the final answer", () => {
     const coverage = requiredCoverage([exchange(units(["doc:REQ-1", "doc:REQ-2"], "next"))]);
     expect(coverage).toMatchObject({
@@ -47,10 +53,11 @@ describe("Knowledge completion uses observed page chains", () => {
       unavailableDocumentCount: 1,
     });
     expect(knowledgeCoverageCorrection(coverage)).toContain("same selection");
-    expect(knowledgeCoverageNote(coverage)).toContain("Unfinished Knowledge page chains: 1");
-    expect(knowledgeCoverageNote(coverage)).toContain(
-      "without detected source acceptance criteria: 2",
-    );
+    expect(knowledgeCoverageIssues(coverage)).toEqual([
+      { kind: "pending-reads", count: 1 },
+      { kind: "unavailable-documents", count: 1 },
+      { kind: "missing-criteria", count: 2 },
+    ]);
   });
 
   it("does not equate reaching the last page with having read a continuous chain", () => {
@@ -134,7 +141,7 @@ it("keeps complete metadata inventories and complete targeted reviews free of ir
     {},
     "keiko.knowledge.documents",
   );
-  expect(knowledgeCoverageNote(requiredCoverage([inventory]))).toBe("");
+  expect(knowledgeCoverageIssues(requiredCoverage([inventory]))).toEqual([]);
   const review = exchange(
     {
       outcome: "succeeded",
@@ -156,7 +163,7 @@ it("keeps complete metadata inventories and complete targeted reviews free of ir
     requestedReviewDocumentCount: 1,
     reviewedDocumentCount: 1,
   });
-  expect(knowledgeCoverageNote(complete)).toBe("");
+  expect(knowledgeCoverageIssues(complete)).toEqual([]);
   const incomplete = exchange(
     {
       outcome: "succeeded",
@@ -172,26 +179,27 @@ it("keeps complete metadata inventories and complete targeted reviews free of ir
     { documentScope: "doc-a" },
     "keiko.knowledge.review",
   );
-  expect(knowledgeCoverageNote(requiredCoverage([inventory, incomplete]))).toContain("0/1");
-  expect(knowledgeCoverageNote(requiredCoverage([inventory, incomplete]))).not.toContain("0/9");
+  expect(knowledgeCoverageIssues(requiredCoverage([inventory, incomplete]))).toEqual([
+    { kind: "requested-reviews", completed: 0, requested: 1 },
+  ]);
 });
 
 it.each([
   [
     { outcome: "succeeded", view: "inventory", nextCursor: "next", totals: {} },
-    "Unfinished Knowledge page chains: 1",
+    { kind: "pending-reads", count: 1 },
   ],
   [
     { outcome: "succeeded", view: "inventory", totals: { documentsOmitted: 2 } },
-    "Unavailable or omitted documents: 2",
+    { kind: "unavailable-documents", count: 2 },
   ],
   [
     { outcome: "succeeded", view: "inventory", totals: { refusals: ["policy-denied"] } },
-    "Unavailable selected Knowledge scopes: 1",
+    { kind: "refused-scopes", count: 1 },
   ],
   [
     { outcome: "failed", reason: "policy-denied" },
-    "Knowledge operations without usable results: 1",
+    { kind: "failed-operations", count: 1 },
   ],
   [
     {
@@ -199,11 +207,11 @@ it.each([
       view: "read",
       items: [{ documentScope: "doc-a", sourceUnavailable: true }],
     },
-    "Unavailable or omitted documents: 1",
+    { kind: "unavailable-documents", count: 1 },
   ],
   [
     { outcome: "succeeded", view: "units", totals: { unitsOmitted: 2 } },
-    "Requirements omitted by read bounds: 2",
+    { kind: "omitted-requirements", count: 2 },
   ],
   [
     {
@@ -211,10 +219,12 @@ it.each([
       view: "units",
       items: [{ reference: "ref-a", criteriaTruncated: true }],
     },
-    "Requirement items with truncated source fields: 1",
+    { kind: "truncated-requirements", count: 1 },
   ],
-])("retains observed gaps without inventing a corpus review task: %s", (data, note) => {
+])("retains observed gaps without inventing a corpus review task: %s", (data, issue) => {
   const coverage = requiredCoverage([exchange(data)]);
-  expect(knowledgeCoverageNote(coverage)).toContain(note);
-  expect(knowledgeCoverageNote(coverage)).not.toContain("reviews completed");
+  expect(knowledgeCoverageIssues(coverage)).toContainEqual(issue);
+  expect(
+    knowledgeCoverageIssues(coverage).some((entry) => entry.kind === "requested-reviews"),
+  ).toBe(false);
 });

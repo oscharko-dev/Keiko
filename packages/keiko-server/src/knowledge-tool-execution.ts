@@ -13,6 +13,7 @@ import {
 import {
   logKnowledgeDocumentOperation,
   type KnowledgeDocumentActivity,
+  type KnowledgeReviewObservation,
 } from "./knowledge-document-activity.js";
 import type { RequirementsToolContext } from "./requirementsTool.js";
 
@@ -28,6 +29,9 @@ export interface KnowledgeToolRead {
   readonly data: CatalogJsonObject;
   readonly sourceChars?: number;
   readonly cached?: boolean;
+  readonly reviewObservation?: KnowledgeReviewObservation;
+  /** Kept inside the owner until its existing redacted diagnostic boundary; never tool data. */
+  readonly diagnosticError?: unknown;
   /** A parsed model result becomes orchestration only after the final source/result guards. */
   readonly confirmModelOperation?: () => void;
 }
@@ -55,6 +59,7 @@ function logRead(
     sourceChars: read.sourceChars ?? 0,
     cached: read.cached ?? false,
     hasNextPage: typeof read.data.nextCursor === "string",
+    ...read.reviewObservation,
   });
 }
 
@@ -120,6 +125,11 @@ export async function executeKnowledgeTool(
   } finally {
     session?.close();
   }
+  if (result.diagnosticError !== undefined)
+    emitServerDiagnostic(
+      deps.diagnostics,
+      knowledgeToolDiagnostic(context, result.diagnosticError),
+    );
   logRead(context, operation, result, documentCount);
   return {
     data: result.data,

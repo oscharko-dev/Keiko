@@ -1,5 +1,5 @@
-import { afterEach, expect, it, vi } from "vitest";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,6 +13,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
+import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ExternalMcpConnection } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import type {
@@ -30,6 +31,12 @@ import { handleDecideChatWriteApproval } from "./atlassian/chatWriteApprovalRout
 import { installMcpChatCatalogRuntime } from "./mcp/mcpChatCatalogRuntime.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { conversationForGateway } from "./conversation-gateway.js";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
+import { createGatewayAtlassianHttpBodyPort } from "./atlassian/httpPort.js";
+import {
+  syntheticJira,
+  SYNTHETIC_JIRA_BASE_URL,
+} from "../../../tests/support/jira-synthetic-draft-remote.js";
 
 const MODEL = "synthetic-combined-chat";
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
@@ -40,6 +47,10 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 interface Options {
+  readonly jiraAction?: {
+    readonly canonicalId: "keiko.jira.draft" | "keiko.jira.attach";
+    readonly arguments: () => Record<string, unknown>;
+  };
   readonly reasoningHistory?: "required-with-tools" | undefined;
   readonly write?: boolean;
   readonly repeat?: boolean;
@@ -132,7 +143,8 @@ function model(calls: GatewayCallRequest[], options: Options): ModelPort {
       const jira = request.toolCatalog.projection.tools.find(
         (entry) =>
           entry.toolRef.canonicalId ===
-          (options.write === true ? "keiko.jira.comment" : "keiko.jira.projects"),
+          (options.jiraAction?.canonicalId ??
+            (options.write === true ? "keiko.jira.comment" : "keiko.jira.projects")),
       );
       const mcp = request.toolCatalog.projection.tools.find((entry) =>
         entry.alias.includes(options.write === true ? "create_note" : "get_status"),
@@ -149,11 +161,13 @@ function model(calls: GatewayCallRequest[], options: Options): ModelPort {
             id: `call-${String(calls.length)}-${String(index)}`,
             name: (external ? mcp : jira).alias,
             arguments:
-              options.write === true
-                ? external
-                  ? { text: "Synthetic combined note" }
-                  : { issueKey: "KEIKO-1", body: "Synthetic combined comment" }
-                : {},
+              !external && options.jiraAction !== undefined
+                ? options.jiraAction.arguments()
+                : options.write === true
+                  ? external
+                    ? { text: "Synthetic combined note" }
+                    : { issueKey: "KEIKO-1", body: "Synthetic combined comment" }
+                  : {},
           });
         }),
       });
@@ -575,4 +589,349 @@ it("preserves complete parallel assistant exchanges through real Gateway and rel
   expect(JSON.stringify(f.deps.store.listMessages(f.chatId))).not.toContain(
     "Inspect both configured sources.",
   );
+});
+
+// The public combined source path must retain Jira's existing review owners (#4173/4176/4178).
+// No test imports another test module, and the external MCP fixture remains the same real binder.
+describe("combined Jira review admission parity", () => {
+  function jiraExchange(f: Fixture): ChatToolExchange | undefined {
+    return f.deps.store
+      .listMessages(f.chatId)[0]
+      ?.toolTranscript?.exchanges.find(
+        (exchange) => exchange.call.name === "jira_draft" || exchange.call.name === "jira_attach",
+      );
+  }
+  async function observedJiraExchange(f: Fixture): Promise<ChatToolExchange> {
+    await vi.waitFor(() => {
+      const exchange = jiraExchange(f);
+      expect(exchange?.approval ?? exchange?.result).toBeDefined();
+    });
+    const exchange = jiraExchange(f);
+    if (exchange === undefined) throw new TypeError("Missing observed Jira exchange");
+    return exchange;
+  }
+  async function settlePendingJira(f: Fixture, pending: ReturnType<typeof send>): Promise<void> {
+    let terminal = false;
+    void pending.then(
+      () => {
+        terminal = true;
+      },
+      () => {
+        terminal = true;
+      },
+    );
+    // A broken guard may publish an approval after a held metadata request resumes. Observe that
+    // transition too, rather than sampling once and hanging on an unapproved human decision.
+    await vi.waitFor(
+      () => {
+        expect(terminal || jiraExchange(f)?.approval?.state === "pending").toBe(true);
+      },
+      { timeout: 5_000, interval: 10 },
+    );
+    const approval = jiraExchange(f)?.approval;
+    if (approval?.state === "pending")
+      await handleDecideChatWriteApproval(
+        context(
+          { decision: "reject", actionDigest: approval.actionDigest },
+          {
+            approvalId: approval.approvalId,
+          },
+        ),
+        f.deps,
+      );
+    await vi.waitFor(() => expect(terminal).toBe(true), { timeout: 5_000, interval: 10 });
+    await pending.catch(() => undefined);
+  }
+  function useDraftRemote(f: Fixture): ReturnType<typeof syntheticJira> {
+    const jira = syntheticJira();
+    const credentials = f.deps.atlassianConnectorCredentials;
+    if (credentials === undefined) throw new TypeError("Missing credential owner");
+    vi.mocked(credentials.httpBodyPortFactory).mockImplementation(
+      (_metadata, correlationId, lifecycle) =>
+        createGatewayAtlassianHttpBodyPort({
+          ...lifecycle,
+          correlationId,
+          baseUrl: SYNTHETIC_JIRA_BASE_URL,
+          authRef: "synthetic-ref",
+          credentials: {
+            resolveForExecution: () => ({ scheme: "bearer-pat", apiToken: "synthetic-test-pat" }),
+          },
+          fetchImpl: jira.fetch,
+        }),
+    );
+    return jira;
+  }
+  it("refuses an invalid saved template before any combined-path Jira write approval", async () => {
+    const f = fixture({
+      jiraAction: {
+        canonicalId: "keiko.jira.draft",
+        arguments: () => ({
+          items: [
+            {
+              ref: "story",
+              projectId: "10000",
+              issueTypeId: "10001",
+              fields: { summary: "Reviewed Story", description: "## Context\nKnown context." },
+            },
+          ],
+        }),
+      },
+    });
+    const jira = useDraftRemote(f);
+    const markdown = [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      "issueType: Story",
+      "activateOn: [create]",
+      "requiredFields: [Description]",
+      "---",
+      "# Story template",
+      "## Context",
+      "## Acceptance criteria",
+    ].join("\n");
+    f.deps.store.markdownSkills.import({
+      fileName: "combined-story-template.md",
+      contentBase64: Buffer.from(markdown).toString("base64"),
+    });
+    expect(f.deps.store.markdownSkills.jiraTemplates()).toHaveLength(1);
+    const pending = send(f);
+    void pending.catch(() => undefined);
+    try {
+      const exchange = await observedJiraExchange(f);
+      expect(exchange.approval).toBeUndefined();
+      expect(exchange.result?.data).toMatchObject({
+        outcome: "rejected",
+        items: [
+          {
+            ref: "story",
+            violations: expect.arrayContaining([
+              expect.objectContaining({
+                ruleId: "section-missing",
+                subject: "Acceptance criteria",
+                template: "SYN/Story",
+              }),
+            ]),
+          },
+        ],
+      });
+      expect((await pending).status).toBe(200);
+      expect(jira.posts()).toEqual([]);
+      expect(f.effects).toEqual(["mcp-read"]);
+    } finally {
+      await settlePendingJira(f, pending);
+    }
+  });
+  it("presents the connected file's name, size and digest in a combined-path Jira attachment approval", async () => {
+    const body = "Synthetic reviewed attachment.";
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), "keiko-combined-attachment-")));
+    cleanup.push(() => {
+      rmSync(folder, { recursive: true, force: true });
+      return Promise.resolve();
+    });
+    mkdirSync(join(folder, "docs"));
+    writeFileSync(join(folder, "docs", "report.txt"), body);
+    let connect = (): void => undefined;
+    const f = fixture({
+      jiraAction: {
+        canonicalId: "keiko.jira.attach",
+        arguments: () => {
+          connect();
+          return {
+            issueKey: "KEIKO-1",
+            source: { kind: "connected-file", path: "docs/report.txt" },
+          };
+        },
+      },
+    });
+    connect = (): void => {
+      f.deps.store.updateChat(f.chatId, {
+        connectedScopes: [
+          { kind: "workspace-root", root: folder, relativePaths: [], connectedAtMs: 1 },
+        ],
+      });
+    };
+    const credentials = f.deps.atlassianConnectorCredentials;
+    if (credentials === undefined) throw new TypeError("Missing credential owner");
+    vi.mocked(credentials.httpBodyPortFactory).mockImplementation(
+      (_metadata, _correlation, lifecycle) => (request) => {
+        if (lifecycle?.beforeDispatch?.(request) !== true)
+          throw new TypeError("Expected actual attachment read admission");
+        if (request.method !== "GET") throw new TypeError("Rejected preview must never upload");
+        const response = JSON.stringify(
+          new URL(request.url).pathname.endsWith("/attachment/meta")
+            ? { enabled: true, uploadLimit: 1e6 }
+            : { id: "10001", key: "KEIKO-1", fields: { attachment: [] } },
+        );
+        lifecycle.onResponse?.(request, 200);
+        return Promise.resolve({
+          kind: "response",
+          status: 200,
+          bodyText: response,
+          bodyBytes: Buffer.byteLength(response),
+          truncated: false,
+        });
+      },
+    );
+    const pending = send(f);
+    void pending.catch(() => undefined);
+    try {
+      const exchange = await observedJiraExchange(f);
+      expect(exchange.approval).toMatchObject({
+        kind: "jira-chat-write",
+        operation: "jira.attach",
+        state: "pending",
+        attachment: {
+          name: "report.txt",
+          sizeBytes: Buffer.byteLength(body),
+          sha256: sha256Hex(body),
+        },
+      });
+      expect(exchange.result).toBeUndefined();
+      expect(JSON.stringify(exchange.call.arguments)).not.toContain(body);
+      expect(f.effects).toEqual(["mcp-read"]);
+    } finally {
+      await settlePendingJira(f, pending);
+    }
+    expect(jiraExchange(f)?.approval?.state).toBe("rejected");
+  });
+  it("refuses the held attachment metadata read after the configured MCP source generation is revoked", async () => {
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), "keiko-combined-revoked-attachment-")));
+    cleanup.push(() => {
+      rmSync(folder, { recursive: true, force: true });
+      return Promise.resolve();
+    });
+    mkdirSync(join(folder, "docs"));
+    writeFileSync(join(folder, "docs", "report.txt"), "Synthetic attachment.");
+    let connect = (): void => undefined;
+    const f = fixture({
+      jiraAction: {
+        canonicalId: "keiko.jira.attach",
+        arguments: () => {
+          connect();
+          return {
+            issueKey: "KEIKO-1",
+            source: { kind: "connected-file", path: "docs/report.txt" },
+          };
+        },
+      },
+    });
+    connect = (): void => {
+      f.deps.store.updateChat(f.chatId, {
+        connectedScopes: [
+          { kind: "workspace-root", root: folder, relativePaths: [], connectedAtMs: 1 },
+        ],
+      });
+    };
+    const credentials = f.deps.atlassianConnectorCredentials;
+    const settings = f.deps.mcpSettings;
+    if (credentials === undefined || settings === undefined)
+      throw new TypeError("Missing source owners");
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let limitRequested = false;
+    let dispatched = 0;
+    const admissions: boolean[] = [];
+    vi.mocked(credentials.httpBodyPortFactory).mockImplementation(
+      (_metadata, _correlation, lifecycle) => async (request) => {
+        if (request.method !== "GET") throw new TypeError("Revoked source must never upload");
+        limitRequested = true;
+        await held;
+        const admitted = lifecycle?.beforeDispatch?.(request) === true;
+        admissions.push(admitted);
+        if (!admitted) return { kind: "network-error" };
+        dispatched++;
+        const response = JSON.stringify({ enabled: true, uploadLimit: 1e6 });
+        lifecycle.onResponse?.(request, 200);
+        return {
+          kind: "response",
+          status: 200,
+          bodyText: response,
+          bodyBytes: Buffer.byteLength(response),
+          truncated: false,
+        };
+      },
+    );
+    const pending = send(f);
+    void pending.catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(limitRequested).toBe(true));
+      expect(jiraExchange(f)?.approval).toBeUndefined();
+      const snapshot = settings.read(CORRELATION);
+      settings.update(
+        { expectedRevision: snapshot.revision, servers: [], secrets: {} },
+        CORRELATION,
+      );
+      release();
+      await settlePendingJira(f, pending);
+      expect(admissions).toEqual([false]);
+      expect(dispatched).toBe(0);
+      expect(jiraExchange(f)?.approval).toBeUndefined();
+      expect(f.effects).toEqual(["mcp-read"]);
+    } finally {
+      release();
+      await settlePendingJira(f, pending);
+    }
+  });
+  it("retains stored draft refs and applies the human's dependent-item deselection on the combined path", async () => {
+    let reference: Record<string, unknown> = {};
+    const f = fixture({
+      jiraAction: { canonicalId: "keiko.jira.draft", arguments: () => reference },
+    });
+    const jira = useDraftRemote(f);
+    const staged = f.deps.jiraDraftStore?.append(f.chatId, undefined, "combined-fingerprint", [
+      { ref: "epic", projectId: "10000", issueTypeId: "10001", fields: { summary: "Epic" } },
+      {
+        ref: "child",
+        projectId: "10000",
+        issueTypeId: "10001",
+        fields: { summary: "Child" },
+        parent: { fieldId: "parent", ref: "epic" },
+      },
+      { ref: "loose", projectId: "10000", issueTypeId: "10001", fields: { summary: "Loose" } },
+    ]);
+    if (staged?.ok !== true) throw new TypeError("Expected an actual stored draft");
+    reference = { draftId: staged.draft.id, draftDigest: staged.draft.digest };
+    const pending = send(f);
+    void pending.catch(() => undefined);
+    try {
+      const exchange = await observedJiraExchange(f);
+      const approval = exchange.approval;
+      expect(approval).toMatchObject({
+        kind: "jira-chat-write",
+        operation: "jira.draft",
+        state: "pending",
+      });
+      if (approval === undefined) throw new TypeError("Missing draft approval");
+      expect(exchange.call.arguments).toEqual(reference);
+      expect(
+        f.deps.atlassianActionApprovalRegistry?.getChatWriteApproval(approval.approvalId),
+      ).toMatchObject({ draftItemRefs: ["epic", "child", "loose"] });
+      expect(jira.posts()).toEqual([]);
+      const decision = await handleDecideChatWriteApproval(
+        context(
+          { decision: "approve", actionDigest: approval.actionDigest, excludedItemRefs: ["epic"] },
+          {
+            approvalId: approval.approvalId,
+          },
+        ),
+        f.deps,
+      );
+      expect(decision.status).toBe(200);
+      expect((await pending).status).toBe(200);
+      expect(jira.posts().map((post) => post.fields)).toMatchObject([{ summary: "Loose" }]);
+      expect(jira.issues).toHaveLength(1);
+      expect(jiraExchange(f)).toMatchObject({
+        mutationOutcome: "succeeded",
+        approval: { state: "claimed", excludedItemRefs: ["epic"] },
+        result: { status: "completed", data: { excludedCount: 2, createdCount: 1 } },
+      });
+      expect(f.effects).toEqual(["mcp-read"]);
+    } finally {
+      await settlePendingJira(f, pending);
+    }
+  });
 });

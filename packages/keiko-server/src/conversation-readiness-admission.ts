@@ -21,7 +21,7 @@ export interface ConversationReadinessAdmission {
 
 type RequiredConversationCapability = "conversation" | "tool-calling";
 const TOOL_CALLING_REQUIRED_MESSAGE =
-  "Jira access requires a model with verified tool calling. Run the tool-calling check in Settings > Models, choose a verified model, or disconnect the Jira Pod.";
+  "The selected model cannot use the connected tools. Choose a model with tool calling.";
 const CONVERSATION_REQUIRED_MESSAGE =
   "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.";
 

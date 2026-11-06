@@ -380,9 +380,10 @@ export function isClientErrorEvidence(value: unknown): value is ClientErrorEvide
 
 export interface ClientMarkdownLayout {
   readonly messageId?: string | undefined;
-  readonly listStart: number;
-  readonly listIndex: number;
-  readonly depth: number;
+  readonly listStart?: number | undefined;
+  readonly listIndex?: number | undefined;
+  readonly depth?: number | undefined;
+  readonly escapedPipeCount?: number | undefined;
 }
 
 function isClientMessageId(value: unknown): value is string {
@@ -392,10 +393,21 @@ function isClientMessageId(value: unknown): value is string {
 export function isClientMarkdownLayout(value: unknown): value is ClientMarkdownLayout {
   if (!isRecord(value)) return false;
   if (!isOptional(value.messageId, isClientMessageId)) return false;
-  return [value.listStart, value.listIndex, value.depth].every(
-    (item) =>
-      typeof item === "number" && Number.isSafeInteger(item) && item >= 0 && item <= 999_999_999,
-  );
+  const coordinates = [value.listStart, value.listIndex, value.depth];
+  const hasCoordinates = coordinates.some((item) => item !== undefined);
+  if (
+    hasCoordinates &&
+    !coordinates.every((item) => isBoundedNonNegativeInteger(item, 999_999_999))
+  )
+    return false;
+  if (
+    !isOptional(
+      value.escapedPipeCount,
+      (count) => isBoundedNonNegativeInteger(count, 999_999_999) && count > 0,
+    )
+  )
+    return false;
+  return hasCoordinates || value.escapedPipeCount !== undefined;
 }
 
 export const CLIENT_COMPOSER_ACTIVITIES = [

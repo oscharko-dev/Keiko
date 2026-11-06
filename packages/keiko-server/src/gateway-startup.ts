@@ -11,6 +11,7 @@ import {
 import {
   cancellableConversationProbeDeps,
   initializeConfiguredConversationReadiness,
+  initializeConfiguredEmbeddingReadiness,
   initializeLiteLlmCodingReadiness,
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
   withReadinessParentCorrelation,
@@ -75,6 +76,13 @@ class GatewayStartupChecks {
     this.initializeGeneration(generation);
     this.startedGeneration = generation;
     this.initializeConversationReadiness(observedDeps, correlationId, parentCorrelationId);
+    this.track(
+      initializeConfiguredEmbeddingReadiness(
+        cancellableConversationProbeDeps(observedDeps, this.controller.signal),
+        parentCorrelationId ?? correlationId,
+      ),
+      correlationId,
+    );
     this.track(
       this.run(observedDeps, correlationId, parentCorrelationId, generation),
       correlationId,

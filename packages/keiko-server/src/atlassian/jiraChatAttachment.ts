@@ -376,9 +376,13 @@ export async function jiraChatAttachmentLimit(
     readonly authorityReference: EditorAgentGovernedAuthorityReference;
     readonly signal: AbortSignal;
     readonly correlationId: string;
+    /** Every source of a combined turn still admits this metadata read. */
+    readonly readAllowed?: () => boolean;
   },
 ): Promise<number | undefined> {
   const { chatId, authorityReference, signal, correlationId } = options;
+  const allowed = (): boolean =>
+    !signal.aborted && (options.readAllowed === undefined || options.readAllowed() === true);
   const current = resolveCurrentJiraChatAuthority(
     deps,
     chatId,
@@ -387,9 +391,9 @@ export async function jiraChatAttachmentLimit(
     correlationId,
   );
   const credentials = deps.atlassianConnectorCredentials;
-  if (!current.ok || credentials === undefined || signal.aborted) return undefined;
+  if (!current.ok || credentials === undefined || !allowed()) return undefined;
   const http = credentials.httpBodyPortFactory(current.credential, correlationId, {
-    beforeDispatch: (request) => request.method === "GET" && !signal.aborted,
+    beforeDispatch: (request) => request.method === "GET" && allowed(),
   });
   const limit = await readJiraAttachmentLimit(
     { baseUrl: current.credential.baseUrl, deployment: current.credential.deployment, http },
@@ -397,10 +401,10 @@ export async function jiraChatAttachmentLimit(
       invocationId: "attachment-limit",
       correlationId,
       signal,
-      beforeEffect: () => !signal.aborted,
+      beforeEffect: allowed,
     },
   );
-  return limit.ok ? limit.maxBytes : undefined;
+  return allowed() && limit.ok ? limit.maxBytes : undefined;
 }
 
 /**
