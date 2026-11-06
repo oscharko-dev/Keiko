@@ -763,7 +763,7 @@ const SPEECH_PARTICIPLES = new Set(["gesagt", "erzählt", "gemeint", "behauptet"
 const SPEECH_AUXILIARIES = new Set(["hat", "haben", "hatte", "hatten"]);
 // Told by someone unnamed: "I was told …", "Mir wurde gesagt, …".
 const PASSIVE_SPEECH_RE =
-  /(?:^|[^\p{L}])(?:am|is|are|was|were|been|wird|werde|wurde|wurden)\s+(?:\p{L}+\s+)?(?:told|said|gesagt|erzählt)(?!\p{L})/iu;
+  /(?:^|[^\p{L}])(?:i\s+am|is|are|was|were|been|wird|werde|wurde|wurden)\s+(?:\p{L}+\s+)?(?:told|said|gesagt|erzählt)(?!\p{L})/iu;
 // The first words of each later clause, an aside in brackets included.
 // Each later clause up to the next mark, an aside in brackets included.
 const CLAUSE_HEAD_RE = /[,;:–—(-]\s*(\p{L}+)[^,;:–—()]*/gu;
@@ -771,6 +771,9 @@ const CLAUSE_HEAD_RE = /[,;:–—(-]\s*(\p{L}+)[^,;:–—()]*/gu;
 // es mir sagte", "…, wenn man sagt, was zu tun ist".
 const RELATIVE_LEAD_RE =
   /^(?:which|that|who|whom|whose|where|because|since|when|whenever|if|der|die|das|den|dem|welche[rsmn]?|weil|da|wo|denn|obwohl|wenn|falls|sobald)$/iu;
+// A demonstrative may open an attribution as well as a relative clause: "…, das sagt mein Chef",
+// "…, that's what my boss says"; the clause still needs another person by the verb.
+const DEMONSTRATIVE_LEAD_RE = /^(?:das|dies|that|this)$/iu;
 // How far before a verb its speaker may stand: "Anna also says", "My boss always says".
 const SPEAKER_REACH = 3;
 
@@ -945,9 +948,11 @@ function isReported(opening: string, rest: string): boolean {
   // Being told is never the person's own statement, wherever the passive stands: "I am told I …".
   if (PASSIVE_SPEECH_RE.test(opening) || PASSIVE_SPEECH_RE.test(rest)) return true;
   if (namesSource(opening) || speaksInOpening(splitWords(opening))) return true;
-  return [...rest.matchAll(CLAUSE_HEAD_RE)].some(
-    (head) => !RELATIVE_LEAD_RE.test(head[1] ?? "") && speaksInClause(head[0]),
-  );
+  return [...rest.matchAll(CLAUSE_HEAD_RE)].some((head) => {
+    const lead = head[1] ?? "";
+    if (RELATIVE_LEAD_RE.test(lead) && !DEMONSTRATIVE_LEAD_RE.test(lead)) return false;
+    return speaksInClause(head[0]);
+  });
 }
 
 function namesSource(text: string): boolean {
@@ -961,9 +966,16 @@ function splitWords(text: string): readonly string[] {
 function speaksInOpening(words: readonly string[]): boolean {
   return words.some(
     (word, at) =>
-      (SPEECH_VERBS.has(word) && !SELF_SPEAKERS.has(words[at - 1]?.toLowerCase() ?? "")) ||
+      (SPEECH_VERBS.has(word) && !spokenBySelf(words, at)) ||
       (SPEECH_PARTICIPLES.has(word) && saidInPerfect(words, at)),
   );
+}
+
+// "I tell", "I always tell": the person's own subject stands right before the verb or one word
+// earlier, with no one else between.
+function spokenBySelf(words: readonly string[], at: number): boolean {
+  if (SELF_SPEAKERS.has(words[at - 1]?.toLowerCase() ?? "")) return true;
+  return SELF_SPEAKERS.has(words[at - 2]?.toLowerCase() ?? "") && !isOtherPerson(words, at - 1);
 }
 
 function speaksInClause(clause: string): boolean {
@@ -982,7 +994,7 @@ function saidInPerfect(words: readonly string[], at: number): boolean {
   const aux = [1, 2, 3, 4]
     .map((back) => at - back)
     .find((index) => SPEECH_AUXILIARIES.has(words[index]?.toLowerCase() ?? ""));
-  if (aux === undefined) return false;
+  if (aux === undefined || SELF_SPEAKERS.has(words[aux - 1]?.toLowerCase() ?? "")) return false;
   const around = [aux - 1, ...Array.from({ length: at - aux - 1 }, (_, step) => aux + 1 + step)];
   return around.some((index) => isOtherPerson(words, index));
 }

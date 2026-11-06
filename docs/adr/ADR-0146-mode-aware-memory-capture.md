@@ -244,15 +244,17 @@ D2 lets a fact through.
   attribution ("I use vim, which says nothing" stands, "weil Anna es mir sagte" is a third party's).
   The words before the claim run up to its subject ("ich", "I", "wir", "we"); there the person
   cannot be the speaker, so any speech verb is attribution unless "ich" or "I" stands right before
-  it ("Anna also says I …", "My colleague says I …" are dropped, "Wie ich sagte, …" stands). In a
-  later clause up to the next mark, a speech verb is attribution when another person (a name, a
-  pronoun, or a noun after an article or possessive) stands up to three words before it, or right
-  after it while the person is not the one speaking, so "I use Vim, I told Anna" and "claims
-  processing" stand; a relative clause, reason or condition ("…, wenn man sagt, …") is no
-  attribution. A condition is read only up to the first word about the person ("Es hilft mir, wenn
-  ich …" stands). Being told ("I am told …", "Mir wurde gesagt, …", "Das hat mir mein Chef gesagt")
-  is never the person's own statement; markers such as "laut Anna",
-  "angeblich" or "according to" count wherever they frame the claim. The clause is not a question, request,
+  it or one word earlier ("Anna also says I …", "My colleague says I …" are dropped, "Wie ich sagte,
+  …" and "I always tell my colleagues that I …" stand). In a later clause up to the next mark, a
+  speech verb is attribution when another person (a name, a pronoun, or a noun after an article or
+  possessive) stands up to three words before it, or right after it while the person is not the one
+  speaking, so "I use Vim, I told Anna" and "claims processing" stand; a relative clause, reason or
+  condition ("…, wenn man sagt, …") is no attribution, but a demonstrative opens one ("Ich bin zu
+  langsam, das sagt mein Chef" is dropped). The person's own perfect stands ("Wir haben unserem
+  Kunden gesagt, dass ich …"). A condition is read only up to the first word about the person ("Es
+  hilft mir, wenn ich …" stands). Being told ("I am told …", "Mir wurde gesagt, …", "Das hat mir
+  mein Chef gesagt") is never the person's own statement; markers such as "laut Anna", "angeblich"
+  or "according to" count wherever they frame the claim. The clause is not a question, request,
   quotation, hypothesis, irony, hedge ("Ich glaube, …"), denial or past statement. Tense and
   pronouns are judged on the claim itself, not on its reason or condition, so "Ich nutze Tabellen,
   weil sie übersichtlich sind" stands; a decision, switch or migration made in the past holds now.
