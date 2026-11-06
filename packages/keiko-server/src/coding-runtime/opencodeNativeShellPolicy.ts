@@ -253,161 +253,51 @@ interface ToolSpec {
 
 const set = (...values: readonly string[]): ReadonlySet<string> => new Set(values);
 const NO_OPTIONS: ReadonlySet<string> = set();
+// A long option table written as one whitespace-separated list, each short spelling beside its
+// long one: `words("-q --quiet")` is `set("-q", "--quiet")`.
+const words = (list: string): ReadonlySet<string> =>
+  set(...list.split(/\s+/u).filter((word) => word.length > 0));
 
 const MAVEN: ToolSpec = {
-  valueOptions: set(
-    "-pl",
-    "--projects",
-    "-f",
-    "--file",
-    "-T",
-    "--threads",
-    "-P",
-    "--activate-profiles",
-    "-s",
-    "--settings",
-    "-gs",
-    "--global-settings",
-    "-t",
-    "--toolchains",
-    "-rf",
-    "--resume-from",
-    "-b",
-    "--builder",
-    "-l",
-    "--log-file",
-    "-D",
-    "--define",
-  ),
-  pathOptions: set(
-    "-f",
-    "--file",
-    "-s",
-    "--settings",
-    "-gs",
-    "--global-settings",
-    "-t",
-    "--toolchains",
-    "-l",
-    "--log-file",
-  ),
+  valueOptions: words(`
+    -pl --projects  -f --file  -T --threads  -P --activate-profiles  -s --settings
+    -gs --global-settings  -t --toolchains  -rf --resume-from  -b --builder  -l --log-file
+    -D --define
+  `),
+  pathOptions: words(`
+    -f --file  -s --settings  -gs --global-settings  -t --toolchains  -l --log-file
+  `),
   denied: NO_OPTIONS,
-  flags: set(
-    "-am",
-    "--also-make",
-    "-amd",
-    "--also-make-dependents",
-    "-o",
-    "--offline",
-    "-B",
-    "--batch-mode",
-    "-q",
-    "--quiet",
-    "-e",
-    "--errors",
-    "-X",
-    "--debug",
-    "-U",
-    "--update-snapshots",
-    "-N",
-    "--non-recursive",
-    "-ff",
-    "--fail-fast",
-    "-fae",
-    "--fail-at-end",
-    "-fn",
-    "--fail-never",
-    "-nsu",
-    "--no-snapshot-updates",
-    "-npu",
-    "--no-plugin-updates",
-    "-ntp",
-    "--no-transfer-progress",
-    "-C",
-    "--strict-checksums",
-    "-c",
-    "--lax-checksums",
-    "-V",
-    "--show-version",
-    "-v",
-    "--version",
-    "-h",
-    "--help",
-  ),
+  flags: words(`
+    -am --also-make  -amd --also-make-dependents  -o --offline  -B --batch-mode  -q --quiet
+    -e --errors  -X --debug  -U --update-snapshots  -N --non-recursive  -ff --fail-fast
+    -fae --fail-at-end  -fn --fail-never  -nsu --no-snapshot-updates
+    -npu --no-plugin-updates  -ntp --no-transfer-progress  -C --strict-checksums
+    -c --lax-checksums  -V --show-version  -v --version  -h --help
+  `),
   closed: true,
   deniedPropertyPrefixes: ["exec."],
   separatorRefused: true,
 };
 
 const GRADLE: ToolSpec = {
-  valueOptions: set(
-    "-p",
-    "--project-dir",
-    "-b",
-    "--build-file",
-    "-c",
-    "--settings-file",
-    "-x",
-    "--exclude-task",
-    "--tests",
-    "-g",
-    "--gradle-user-home",
-    "--include-build",
-    "--project-cache-dir",
-    "--max-workers",
-    "--console",
-    "--warning-mode",
-    "-D",
-    "-P",
-  ),
-  pathOptions: set(
-    "-p",
-    "--project-dir",
-    "-b",
-    "--build-file",
-    "-c",
-    "--settings-file",
-    "-g",
-    "--gradle-user-home",
-    "--include-build",
-    "--project-cache-dir",
-  ),
+  valueOptions: words(`
+    -p --project-dir  -b --build-file  -c --settings-file  -x --exclude-task  --tests
+    -g --gradle-user-home  --include-build  --project-cache-dir  --max-workers  --console
+    --warning-mode  -D  -P
+  `),
+  pathOptions: words(`
+    -p --project-dir  -b --build-file  -c --settings-file  -g --gradle-user-home
+    --include-build  --project-cache-dir
+  `),
   denied: NO_OPTIONS,
-  flags: set(
-    "--offline",
-    "--info",
-    "-i",
-    "--debug",
-    "-d",
-    "--quiet",
-    "-q",
-    "--warn",
-    "-w",
-    "--stacktrace",
-    "-s",
-    "--full-stacktrace",
-    "-S",
-    "--no-daemon",
-    "--daemon",
-    "--parallel",
-    "--no-parallel",
-    "--continue",
-    "--rerun-tasks",
-    "--refresh-dependencies",
-    "--build-cache",
-    "--no-build-cache",
-    "--configuration-cache",
-    "--no-configuration-cache",
-    "--dry-run",
-    "-m",
-    "--task-graph",
-    "--version",
-    "-v",
-    "--help",
-    "-h",
-    "--watch-fs",
-    "--no-watch-fs",
-  ),
+  flags: words(`
+    --offline  --info -i  --debug -d  --quiet -q  --warn -w  --stacktrace -s
+    --full-stacktrace -S  --no-daemon  --daemon  --parallel  --no-parallel  --continue
+    --rerun-tasks  --refresh-dependencies  --build-cache  --no-build-cache
+    --configuration-cache  --no-configuration-cache  --dry-run -m  --task-graph
+    --version -v  --help -h  --watch-fs  --no-watch-fs
+  `),
   closed: true,
 };
 

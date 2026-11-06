@@ -233,6 +233,9 @@ const REASONS = [
 ] as const;
 type RelayReason = (typeof REASONS)[number];
 
+// An optional body-free count, the shape most of these fields share.
+const OPTIONAL_COUNT = { type: "integer", dataClass: "count", required: false } as const;
+
 const MCP_RELAY_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -250,18 +253,18 @@ const MCP_RELAY_OPERATION = defineActivityLogOperation({
     outcome: { type: "string", dataClass: "closed-enum", required: true, values: [...OUTCOMES] },
     reason: { type: "string", dataClass: "closed-enum", required: false, values: [...REASONS] },
     method: { type: "string", dataClass: "closed-enum", required: false, values: [...METHODS] },
-    status: { type: "integer", dataClass: "count", required: false },
+    status: OPTIONAL_COUNT,
     // Servers relayed for a run, and servers left out because their credential could not be had.
-    relayedServerCount: { type: "integer", dataClass: "count", required: false },
-    refusedServerCount: { type: "integer", dataClass: "count", required: false },
-    requestBytes: { type: "integer", dataClass: "count", required: false },
-    responseBytes: { type: "integer", dataClass: "count", required: false },
+    relayedServerCount: OPTIONAL_COUNT,
+    refusedServerCount: OPTIONAL_COUNT,
+    requestBytes: OPTIONAL_COUNT,
+    responseBytes: OPTIONAL_COUNT,
     // Credential occurrences the relay replaced in the server's response before the run read it.
-    redactedCount: { type: "integer", dataClass: "count", required: false },
-    durationMs: { type: "integer", dataClass: "count", required: false },
+    redactedCount: OPTIONAL_COUNT,
+    durationMs: OPTIONAL_COUNT,
     // Consecutive failures behind a recycle or a backoff, and how long the next attempt must wait.
-    failureCount: { type: "integer", dataClass: "count", required: false },
-    backoffMs: { type: "integer", dataClass: "count", required: false },
+    failureCount: OPTIONAL_COUNT,
+    backoffMs: OPTIONAL_COUNT,
     frames: {
       type: "string-array",
       dataClass: "opaque-id",

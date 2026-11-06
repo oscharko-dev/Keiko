@@ -33,8 +33,8 @@ export interface PropertyOptions<T> {
   readonly shrink?: (input: T) => Iterable<T>;
 }
 
-export const DEFAULT_PROPERTY_SEED = 0x4271;
-export const DEFAULT_PROPERTY_RUNS = 200;
+const DEFAULT_PROPERTY_SEED = 0x4271;
+const DEFAULT_PROPERTY_RUNS = 200;
 const MAX_SHRINK_STEPS = 2_000;
 
 /** The code points of `text`, one string each: an alphabet for `SeededRandom.string`. */
@@ -108,7 +108,7 @@ function failure<T>(
 }
 
 /** Greedy shrinking: take the first smaller candidate that still fails, until none does. */
-export function shrinkFailure<T>(
+function shrinkFailure<T>(
   property: (input: T) => void,
   input: T,
   error: unknown,
