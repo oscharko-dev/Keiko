@@ -553,7 +553,10 @@ system that exists, never beside it:
   Marker repair requests at most 32 unique-prose insertion annotations instead of regenerating
   the answer. The existing repair owner constructs the candidate locally, then applies the
   unchanged verbatim-content, code, assessment, sent-range and cumulative-budget guards.
-  Literal marker-only responses remain subject to those same guards.
+  Literal marker-only responses remain subject to those same guards. Citation repair uses the same
+  admitted, turn-metered model port without a tool catalog or tool loop. Unexpected tool-call
+  output is refused and charged; current readiness, authority, cancellation and cumulative
+  synthesis/spend grants remain binding. Existing answer-details evidence records the disposition.
   Symbol discovery batches the existing bounded excerpt ranges per source and observation wave.
   Each definition retains current-source, call/parent and range certificates; no persistent source
   cache, read grant, synthesis attempt or source authority is added by batching.
@@ -1163,29 +1166,27 @@ failure budget) with the required `projectOpenAttemptCount`. Closed values and c
 text or paths.
 
 `gateway.conversation.admission` records the closed decision before a conversation model call,
-with admitted and current configuration generations and the request correlation. A fresh probe
-and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal
-responses cannot establish that continuation. A turn call whose admission merely expired is checked
-once more like a new request and proceeds only on a fresh positive observation (a second admission
-line records that decision). Refusals distinguish model or
-generation replacement, absent observations, failed probes, invalid timestamps and expiry without
-recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
-attempt or uncertain output reservation; actual interrupted provider calls retain conservative
-accounting. A chat probe that only times out or meets a transient overload status keeps and renews
-a same-generation positive observation (`gateway.readiness.busy-retained`, a `provider-busy` warning
-diagnostic), so a busy single-slot model stays selectable (#4115). An accepted coding-sidecar answer
-that finished serving renews that same-generation success too (`readinessRenewal` on
-`coding-sidecar.gateway.outcome`; #3907). Each chat model is checked once per connection
-at startup; nothing renews or recovers a model on a timer. A conversation request, a
-coding run start, a Workbench model choice (`check=1`), opening the Workbench or a model list, or a page load checks a model that is not
-ready now; only an observed failure waits out the 30 s not-ready cooldown. Other Workbench reads
-never start a check. While a coding run is live, a background proof of a model nobody chose gives way
-and leaves no verdict (`gateway.readiness.automatic.withheld`, closed `reason` `live-run`), so a
-gateway serving one model at a time keeps the run's model loaded; the next read after the run proves it. The Workbench profile describes the model chosen in its picker (`modelId`):
-`model-verification-pending` only while a check of that model runs, an expired or unknown answer
-usable with `verification: "unverified"`, and its `verification` is that model's own observation,
-not the gateway-wide state (customer 1.3.4). The Workbench's tool-calling probe that the gateway never answered is no verdict (`tool-calling-unverified`) and is retried only when someone asks: startup, a page load or a `check=1` read when the Workbench opens or a model is chosen; a stale proof runs again once. See
-[ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+with admitted and current configuration generations and the request correlation. A successful startup
+observation remains usable for the same configuration generation; its age is diagnostic only
+(`allowed-fresh` or `allowed-cached`). Conversation requests, page loads, model-list reads and
+Workbench choices never initiate another readiness probe. Configuration replacement invalidates the
+observation; a failed or missing result requires explicit verification in Settings > Models.
+A definitive authentication or missing-model failure on a real model call withdraws that exact
+current observation (`provider-rejected`); a late failure cannot overwrite a replacement generation
+or a newer verification. Rate limits, timeouts and transient provider errors do not erase a proved
+capability. Refusals distinguish model or generation replacement, absent observations, failed probes
+and invalid timestamps without recording model names, requests or answers. An uninvoked model port
+consumes no physical synthesis attempt or uncertain output reservation; actual interrupted provider
+calls retain conservative accounting.
+
+Each chat model is checked once per connection at startup. Nothing renews or recovers a model on a
+timer or passive read. Explicit Settings verification may retry an unsuccessful check. Startup-owned
+work can be observed with a bounded, cancellable metadata wait; disconnecting a browser does not
+cancel shared discovery or start another provider call. The Workbench profile describes the model
+chosen in its picker (`modelId`) and its own observed verification, rather than the gateway-wide
+state. `model-verification-pending` means that a configuration-owned check of that model is already
+running; `tool-calling-unverified` records an unknown tool capability without dispatching a probe.
+See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and

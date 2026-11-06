@@ -180,6 +180,8 @@ function checkActiveInventoryProbe(row, root, errors) {
   const migration = PINS.inventoryMigrations[row.id];
   if (!migration) {
     checkProbe(row, root, errors);
+    for (const source of PINS.retainedInventoryProbes[row.id] ?? [])
+      checkProbe({ ...source, id: `${row.id} (${source.path})` }, root, errors);
     return;
   }
   if (existsSync(join(root, row.path))) errors.push(`inventory ${row.id}: retired source restored`);

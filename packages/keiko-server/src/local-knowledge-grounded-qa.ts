@@ -6,7 +6,9 @@ import {
   findCapability,
   findConfiguredCapability,
   requestOpenAIEmbedding,
+  invalidateEmbeddingCapability,
   type GatewayConfig,
+  type ModelProviderConfig,
   type NormalizedResponse,
   type OpenAIEmbeddingAdapter,
   type OpenAIEmbeddingOutcome,
@@ -15,7 +17,10 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { createGroundedSynthesisCallBudget } from "./grounded-answer.js";
-import { callPluralGroundedSynthesis } from "./grounded-plural-synthesis.js";
+import {
+  callPluralGroundedSynthesis,
+  type GroundedSynthesisPurpose,
+} from "./grounded-plural-synthesis.js";
 import { currentContentRedactor, withChatContentPolicy } from "./content-redactor.js";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
@@ -97,6 +102,7 @@ import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safet
 import { redact } from "@oscharko-dev/keiko-security";
 import {
   type UiHandlerDeps,
+  type RuntimeGatewayConfig,
   currentContextProfileForModel,
   currentGatewayConfig,
   currentGroundingLimits,
@@ -147,7 +153,6 @@ import {
   withConversationReadinessAdmission,
   type ConversationReadinessAdmission,
 } from "./conversation-readiness-admission.js";
-import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 import { requirementCoverage } from "./requirement-coverage-note.js";
 
 export const DEFAULT_REFERENCE_BUDGET = DEFAULT_GROUNDING_LIMITS.referenceBudget;
@@ -254,45 +259,113 @@ function isConfiguredEmbeddingModel(config: GatewayConfig, modelId: string): boo
   return findConfiguredCapability(config, modelId)?.kind === "embedding";
 }
 
-// ONE adapter per live GatewayConfig object (the deps holder returns the same config reference
-// until setup replaces it). The retrieval layer scopes its cross-request query-embedding and
-// identity-preflight caches PER ADAPTER INSTANCE, so reusing the adapter is what lets repeated
-// asks skip redundant embedding/preflight network calls — and replacing the gateway config
-// naturally rotates the adapter, dropping every cache scoped to it. Availability is checked
-// live per request (equivalent to the former precomputed per-capsule unavailable set: both
-// reduce to `provider === undefined || !isConfiguredEmbeddingModel(config, modelId)`), so the
-// adapter is independent of the selected capsules.
-const EMBEDDING_ADAPTERS_BY_CONFIG = new WeakMap<GatewayConfig, OpenAIEmbeddingAdapter>();
+// A transient query outage says nothing new about an already verified embedding space.
+// First-probe failures are still cached by verifyEmbeddingCapability itself.
+const TRANSIENT_EMBEDDING_QUERY_FAILURES = new Set([
+  "cancelled",
+  "timeout",
+  "transport",
+  "rate-limited",
+]);
+function embeddingFailureRetiresProof(
+  outcome: Extract<OpenAIEmbeddingOutcome, { readonly ok: false }>,
+): boolean {
+  if (TRANSIENT_EMBEDDING_QUERY_FAILURES.has(outcome.kind)) return false;
+  return (
+    outcome.kind !== "http-error" ||
+    outcome.status === undefined ||
+    outcome.status < 500 ||
+    outcome.status >= 600
+  );
+}
+
+// One adapter per accepted connection generation. Metadata-only refinements keep the generation
+// and its proof; replacing credentials, endpoints or inventory advances it and drops both caches.
+const EMBEDDING_ADAPTERS_BY_CONFIG = new WeakMap<
+  RuntimeGatewayConfig | GatewayConfig,
+  { readonly generation: number; readonly adapter: OpenAIEmbeddingAdapter }
+>();
+
+function embeddingProviderAtGeneration(
+  deps: UiHandlerDeps,
+  generation: number,
+  request: OpenAIEmbeddingRequest,
+): ModelProviderConfig | undefined {
+  const activeConfig = currentGatewayConfig(deps);
+  const provider = activeConfig?.providers.find((entry) => entry.modelId === request.modelId);
+  if (
+    provider === undefined ||
+    activeConfig === undefined ||
+    (deps.gatewayConfig?.generation() ?? 0) !== generation ||
+    !isConfiguredEmbeddingModel(activeConfig, provider.modelId)
+  ) {
+    return undefined;
+  }
+  return provider;
+}
+
+function embeddingRequestForProvider(
+  deps: UiHandlerDeps,
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  request: OpenAIEmbeddingRequest,
+  log: OpenAIEmbeddingRequest["log"],
+): OpenAIEmbeddingRequest {
+  return {
+    log,
+    ...(deps.gatewayReadinessFetch === undefined ? {} : { fetchImpl: deps.gatewayReadinessFetch }),
+    timeoutMs: provider.timeoutMs,
+    ...request,
+    endpoint: provider.baseUrl,
+    apiKey: provider.apiKey,
+    ...(provider.apiKeyHeaderName !== undefined
+      ? { apiKeyHeaderName: provider.apiKeyHeaderName }
+      : {}),
+    ...((provider.egress ?? config.egress) === undefined
+      ? {}
+      : { egress: provider.egress ?? config.egress }),
+  };
+}
 
 export function createEmbeddingAdapter(deps: UiHandlerDeps): OpenAIEmbeddingAdapter | RouteResult {
   const config = currentGatewayConfig(deps);
   if (config === undefined) {
-    return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
+    return {
+      status: 400,
+      body: errorBody("NO_MODEL", "No model provider is configured."),
+    };
   }
-  const cached = EMBEDDING_ADAPTERS_BY_CONFIG.get(config);
-  if (cached !== undefined) return cached;
+  const owner = deps.gatewayConfig ?? config;
+  const generation = deps.gatewayConfig?.generation() ?? 0;
+  const cached = EMBEDDING_ADAPTERS_BY_CONFIG.get(owner);
+  if (cached?.generation === generation) return cached.adapter;
   const log = processServerLogSink();
   const adapter: OpenAIEmbeddingAdapter = {
     endpoint: "local-knowledge",
     apiKey: "local-knowledge",
     request: async (request): Promise<OpenAIEmbeddingOutcome> => {
-      const provider = config.providers.find((entry) => entry.modelId === request.modelId);
-      if (provider === undefined || !isConfiguredEmbeddingModel(config, provider.modelId)) {
+      const provider = embeddingProviderAtGeneration(deps, generation, request);
+      if (provider === undefined) {
         return { ok: false, kind: "unsupported-model" };
       }
-      return requestEmbeddingImpl(deps)({
-        log,
-        ...request,
-        endpoint: provider.baseUrl,
-        apiKey: provider.apiKey,
-        ...(provider.apiKeyHeaderName !== undefined
-          ? { apiKeyHeaderName: provider.apiKeyHeaderName }
-          : {}),
-        ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
-      });
+      const outcome = await requestEmbeddingImpl(deps)(
+        embeddingRequestForProvider(deps, config, provider, request, log),
+      );
+      const finalConfig = currentGatewayConfig(deps);
+      if (
+        (deps.gatewayConfig?.generation() ?? 0) !== generation ||
+        finalConfig === undefined ||
+        !isConfiguredEmbeddingModel(finalConfig, request.modelId)
+      ) {
+        invalidateEmbeddingCapability(adapter, request.modelId);
+        return { ok: false, kind: "unsupported-model" };
+      }
+      if (!outcome.ok && embeddingFailureRetiresProof(outcome))
+        invalidateEmbeddingCapability(adapter, request.modelId);
+      return outcome;
     },
   };
-  EMBEDDING_ADAPTERS_BY_CONFIG.set(config, adapter);
+  EMBEDDING_ADAPTERS_BY_CONFIG.set(owner, { generation, adapter });
   return adapter;
 }
 
@@ -961,6 +1034,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       input.signal ?? new AbortController().signal,
       profile,
       retryFollows,
+      input.citationRepair === true ? "citation-repair" : "answer",
     );
   }
 
@@ -978,12 +1052,14 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     signal: AbortSignal,
     profile: ContextProfile | undefined,
     retryFollows: (error: unknown) => boolean,
+    purpose: GroundedSynthesisPurpose,
   ): Promise<NormalizedResponse> {
     const toolTurn = this.context.deps.chatToolTurn;
     if (toolTurn === undefined) return this.model.call(request, signal);
     const limits = profile ?? DEFAULT_CONTEXT_PROFILE;
     const outputTokensMax = limits.reservedOutputTokens;
     return callPluralGroundedSynthesis({
+      purpose,
       retryFollows,
       model: this.model,
       deps: this.context.deps,
@@ -1648,7 +1724,6 @@ function resolveModel(
     modelId,
     readinessAdmission,
     deps,
-    (id, correlationId) => awaitInitializedConversationReadiness(deps, id, correlationId),
   );
 }
 
@@ -2833,7 +2908,7 @@ async function persistScopedGroundedAnswer(
   );
   const finalAnswer = withToolResultsAsSource(
     withScopedPromptContext(entailed, persistedInput.promptContext),
-    deps.store,
+    deps.chatToolTurn,
   );
   attachGroundedAnswerWithPreviewCitations(
     deps,

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c7160801f2c6cd65029ad01e481d65f8862c5ffcbb9d01afbccb29df80fad760"
+    "catalogDigest": "6f94612c42a29f216c37f6a07dbed1a19ce3209ac734b0048ffacb01ab7518e3"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 645,
-    "proofCount": 667,
-    "resolvedProofCount": 667,
+    "operationCount": 648,
+    "proofCount": 670,
+    "resolvedProofCount": 670,
     "failureClassCount": 391,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -142,6 +142,7 @@
         "jira.attachment.source",
         "jira.field.admission",
         "jira.template.admission",
+        "jira.template.metadata",
         "pr-description.chat.turn.admitted",
         "pr-description.chat.turn.denied",
         "project.workspace.reconnect",
@@ -241,6 +242,7 @@
         "embedding.scalar-ladder.item-completed",
         "embedding.scalar-ladder.item-failed",
         "gateway.catalog.automatic.completed",
+        "gateway.catalog.metadata.wait",
         "gateway.chat.completed",
         "gateway.chat.failed",
         "gateway.chat.started",
@@ -556,6 +558,7 @@
         "indexing.source.started",
         "indexing.start.accepted",
         "indexing.start.refused",
+        "knowledge.documents.operation",
         "knowledge.log.sink-failed",
         "knowledge.requirement-trace.applied",
         "knowledge.requirements.read",
@@ -1389,6 +1392,7 @@
       "packages/keiko-server/src/atlassian/chatWriteApprovalState.test.ts"
     ],
     "chat.tool-mutation.emitted-line": [
+      "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts",
       "packages/keiko-server/src/store/chatToolMutations.test.ts"
     ],
     "chat.tool-mutation.projected.line": [
@@ -1400,7 +1404,10 @@
     "chat.tool-turn.context-fitted.line": [
       "packages/keiko-server/src/chat-tool-turn-ending.test.ts"
     ],
-    "chat.tool-turn.corrected.line": ["packages/keiko-server/src/chat-tool-turn-ending.test.ts"],
+    "chat.tool-turn.corrected.line": [
+      "packages/keiko-server/src/atlassian/jiraChatToolTurn.test.ts",
+      "packages/keiko-server/src/chat-tool-turn-ending.test.ts"
+    ],
     "chat.tool-turn.ended.line": ["packages/keiko-server/src/chat-tool-turn-ending.test.ts"],
     "chat.turn.started.shape": ["packages/keiko-server/src/chat-activity.test.ts"],
     "cli.audit.completed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
@@ -2114,6 +2121,9 @@
     "gateway.catalog.automatic.completed.line": [
       "packages/keiko-server/src/gateway-startup-catalog.test.ts"
     ],
+    "gateway.catalog.metadata.wait.line": [
+      "packages/keiko-server/src/gateway-startup-catalog.test.ts"
+    ],
     "gateway.chat.completed.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],
@@ -2561,6 +2571,12 @@
     ],
     "jira.template.admission.line": [
       "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts"
+    ],
+    "jira.template.metadata.line": [
+      "packages/keiko-server/src/atlassian/jiraCreateTemplateMetadata.test.ts"
+    ],
+    "knowledge.documents.operation.line": [
+      "packages/keiko-server/src/knowledgeDocumentsTool.test.ts"
     ],
     "knowledge.log.sink-failed.body-free": [
       "packages/keiko-local-knowledge/src/knowledge-log.test.ts"

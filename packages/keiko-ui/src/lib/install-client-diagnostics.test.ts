@@ -343,6 +343,35 @@ describe("fanOutClientDiagnostic", () => {
 // #3532: every report the page could not deliver is counted, and the counts ride the next report
 // that does reach the server, so the Activity Log records how much of a storm never arrived.
 describe("fanOutClientDiagnostic delivery-loss accounting", () => {
+  it.each([
+    [404, "NOT_FOUND"],
+    [401, "UNAUTHORIZED"],
+    [403, "DENIED"],
+    [403, "FORBIDDEN"],
+  ] as const)(
+    "does not recursively report or repair a refused diagnostic POST: %s %s",
+    async (status, code) => {
+      const fetchMock = vi.fn().mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: { code, message: "Refused." },
+            }),
+            { status },
+          ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      setClientDiagnosticWriter(fanOutClientDiagnostic);
+      reportClientDiagnostic("A bounded failure.", { correlationId: "ui_diagnostic-refusal-0001" });
+      await vi.waitFor(() => expect(clientDiagnosticPostFailureCount()).toBeGreaterThan(0));
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledWith("/api/diagnostics/client", expect.any(Object));
+      expect(clientDiagnosticPostFailureCount()).toBe(1);
+      expect(takeClientDiagnosticLoss()).toEqual({ postsFailed: 1 });
+    },
+  );
+
   it("carries the counted loss on the next delivered report and clears it", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
     vi.stubGlobal("fetch", fetchMock);

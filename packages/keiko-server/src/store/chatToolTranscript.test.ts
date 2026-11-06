@@ -1,5 +1,9 @@
+import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatToolMutationIntent } from "./chatToolMutationTypes.js";
-import { validateToolResultEnvelope } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  validateToolResultEnvelope,
+  type ToolResultValidationBinding,
+} from "@oscharko-dev/keiko-tool-catalog";
 import type { JiraChatToolWriteApprovalView as ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +15,7 @@ import {
   chatToolExchangeReservation,
 } from "./chatToolTranscript.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { JIRA_MUTATION_DECLARATIONS } from "../atlassian/jiraManagedMutationDescriptors.js";
 import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 import { runMigrations } from "./schema.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
@@ -78,7 +83,54 @@ function result(): ToolResultEnvelope {
     metrics: { inputBytes: 0, outputBytes: 0, resultCount: 0, durationMs: 0 },
   };
 }
+function persistedCall(store: UiStore, id: string): ChatToolExchange["call"] | undefined {
+  return store.findMessageById(id)?.toolTranscript?.exchanges[0]?.call;
+}
 describe("ordinary Chat structured tool transcript", () => {
+  it("keeps runtime calls rollback-compatible and rejects unknown call origins", () => {
+    const { store, db, id } = fixture();
+    store.updateChatToolTranscript(
+      id,
+      { kind: "started", call: { ...call, origin: "runtime" } },
+      "runtime-origin-proof",
+    );
+    expect(persistedCall(store, id)).toEqual(call);
+    const row = db.prepare("SELECT tool_transcript_json FROM chat_messages WHERE id = ?").get(id);
+    if (typeof row?.tool_transcript_json !== "string")
+      throw new TypeError("Missing stored transcript");
+    const stored = JSON.parse(row.tool_transcript_json) as {
+      exchanges: { call: typeof call & { origin?: "runtime" } }[];
+    };
+    const storedCall = stored.exchanges[0]?.call;
+    expect(Object.keys(storedCall ?? {}).sort()).toEqual(["arguments", "id", "name"]);
+    if (storedCall === undefined) throw new TypeError("Missing stored call");
+    storedCall.origin = "runtime";
+    db.prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?").run(
+      JSON.stringify(stored),
+      id,
+    );
+    expect(persistedCall(store, id)).toEqual(call);
+    const untouched = db
+      .prepare("SELECT tool_transcript_json FROM chat_messages WHERE id = ?")
+      .get(id);
+    expect(untouched?.tool_transcript_json).toBe(JSON.stringify(stored));
+    store.updateChatToolTranscript(id, { kind: "started", call }, "runtime-origin-proof");
+    const rewritten = db
+      .prepare("SELECT tool_transcript_json FROM chat_messages WHERE id = ?")
+      .get(id);
+    expect(rewritten?.tool_transcript_json).toBe(row.tool_transcript_json);
+    expect(() => {
+      store.updateChatToolTranscript(
+        id,
+        {
+          kind: "started",
+          call: { ...call, id: "invalid-origin", origin: "external" as "runtime" },
+        },
+        "runtime-origin-proof",
+      );
+    }).toThrow();
+  });
+
   it("persists identity/result pairs, redacts bodies and never changes the user text", () => {
     const { store, id } = fixture();
     store.updateChatToolTranscript(
@@ -797,5 +849,142 @@ describe("transcript byte reservation (#4175)", () => {
     );
     expect(fitting).toBeGreaterThan(0);
     expect(fitting).toBeLessThan(CHAT_TOOL_TURN_BUDGET.maxToolCalls);
+  });
+});
+
+function interruptedDraftReceipt(): {
+  result: ToolResultEnvelope;
+  binding: ToolResultValidationBinding;
+} {
+  const descriptor = JIRA_MUTATION_DECLARATIONS.find(
+    (tool) => tool.name === "jira.draft",
+  )?.descriptor;
+  if (descriptor === undefined) throw new TypeError("Missing draft descriptor");
+  const terminal = validateToolResultEnvelope({
+    ...result(),
+    status: "timeout",
+    reason: "deadline-exceeded",
+    effectStarted: true,
+    toolRef: descriptor.toolRef,
+    projectionDigest: "c".repeat(64),
+  });
+  if (terminal.projectionDigest === null) throw new TypeError("Missing fixture digest");
+  const binding = { descriptor, projectionDigest: terminal.projectionDigest };
+  return { result: validateToolResultEnvelope(terminal, binding), binding };
+}
+const DRAFT_PROGRESS = {
+  outcome: "unknown",
+  items: [{ ref: "epic", state: "uncertain", issueKey: "SYN-1", messages: ["private-token"] }],
+};
+describe("interrupted draft receipt retention", () => {
+  it("retains the bound acknowledgement through the credential floor without changing timeout or audit privacy", () => {
+    const f = fixture();
+    startDraft(f);
+    const terminal = interruptedDraftReceipt();
+    const update = {
+      kind: "settled" as const,
+      callId: draftCall.id,
+      ...terminal,
+      mutationOutcome: "succeeded-unconfirmed" as const,
+      draftProgress: DRAFT_PROGRESS,
+    };
+    f.store.updateChatToolTranscript(f.id, update, "draft-receipt-proof");
+    const saved = f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0];
+    expect(saved).toMatchObject({
+      result: { status: "timeout", data: null },
+      mutationOutcome: "succeeded-unconfirmed",
+      draftProgress: {
+        outcome: "unknown",
+        items: [{ ref: "epic", state: "uncertain", issueKey: "SYN-1", messages: ["[REDACTED]"] }],
+      },
+    });
+    expect(f.logs.lines().join("\n")).not.toMatch(/SYN-1|private-token/);
+    expect(
+      f.logs.events.filter((event) => event.op === "chat.tool-transcript.updated").at(-1),
+    ).toMatchObject({ extra: { draftReceiptCount: 1 } });
+    // A duplicate settlement is allowed; it cannot replace known keys or drop the receipt.
+    f.store.updateChatToolTranscript(f.id, update, "draft-receipt-duplicate");
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          ...update,
+          draftProgress: {
+            ...DRAFT_PROGRESS,
+            items: [{ ref: "epic", state: "created", issueKey: "SYN-2" }],
+          },
+        },
+        "draft-receipt-conflict",
+      );
+    }).toThrow("identity conflict");
+    const { draftProgress: _progress, ...withoutProgress } = update;
+    expect(() => {
+      f.store.updateChatToolTranscript(f.id, withoutProgress, "draft-receipt-drop");
+    }).toThrow();
+  });
+  it("refuses draft progress attached to a different stored tool call", () => {
+    const f = fixture();
+    f.store.updateChatToolTranscript(f.id, { kind: "started", call }, "foreign-call-started");
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        {
+          kind: "settled",
+          callId: call.id,
+          ...interruptedDraftReceipt(),
+          mutationOutcome: "succeeded-unconfirmed",
+          draftProgress: DRAFT_PROGRESS,
+        },
+        "foreign-call-receipt",
+      );
+    }).toThrow();
+    const saved = f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0];
+    expect(saved?.call).toEqual(call);
+    expect(saved?.result).toBeUndefined();
+    expect(saved?.draftProgress).toBeUndefined();
+  });
+  it.each([
+    "wrong-tool",
+    "missing-binding",
+    "no-effect",
+    "not-dispatched",
+    "bad-schema",
+    "oversized",
+  ] as const)("refuses %s receipt data instead of broadening a catalog result", (kind) => {
+    const f = fixture();
+    startDraft(f);
+    const terminal = interruptedDraftReceipt();
+    const candidate = {
+      kind: "settled" as const,
+      callId: draftCall.id,
+      ...terminal,
+      mutationOutcome: "succeeded-unconfirmed" as const,
+      draftProgress: DRAFT_PROGRESS,
+    };
+    const bad: unknown =
+      kind === "wrong-tool"
+        ? {
+            ...candidate,
+            result: {
+              ...terminal.result,
+              toolRef: { canonicalId: "keiko.jira.comment", contractVersion: 3 },
+            },
+          }
+        : kind === "missing-binding"
+          ? { ...candidate, binding: undefined }
+          : kind === "no-effect"
+            ? { ...candidate, result: { ...terminal.result, effectStarted: false } }
+            : kind === "not-dispatched"
+              ? { ...candidate, mutationOutcome: "not-dispatched" }
+              : kind === "bad-schema"
+                ? { ...candidate, draftProgress: { outcome: "invented" } }
+                : {
+                    ...candidate,
+                    draftProgress: { outcome: "unknown", guidance: "x".repeat(300000) },
+                  };
+    expect(() => {
+      f.store.updateChatToolTranscript(f.id, bad as typeof candidate, "draft-receipt-refusal");
+    }).toThrow();
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.result).toBeUndefined();
   });
 });

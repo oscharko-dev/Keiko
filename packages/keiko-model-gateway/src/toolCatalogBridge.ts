@@ -48,7 +48,7 @@ const TOOL_CATALOG_REJECTED_OPERATION = defineActivityLogOperation({
   op: "gateway.tool-catalog.rejected",
   category: "gateway",
   owner: "keiko-model-gateway",
-  emitter: "toolCatalogBridge.reject",
+  emitter: "toolCatalogBridge.recordAndReject",
   fields: {
     phase: {
       type: "string",
@@ -228,6 +228,7 @@ function toolCatalogEnvelope(
 }
 
 export class GatewayToolCatalogError extends MalformedToolCallError {
+  readonly #aliasCorrection: string | undefined;
   readonly status = "invalid";
   override readonly retryable: boolean;
   constructor(
@@ -235,14 +236,16 @@ export class GatewayToolCatalogError extends MalformedToolCallError {
     cause?: unknown,
     retryable = false,
     readonly repair?: GatewayToolCallRepair | undefined,
+    aliasCorrection?: string,
   ) {
     super(`catalog tool request ${reason}`);
+    this.#aliasCorrection = aliasCorrection;
     this.retryable = retryable;
     if (cause !== undefined) this.cause = cause;
   }
   /** The body-free correction the model receives for this rejection; undefined when none applies. */
   correction(): string | undefined {
-    return toolSchemaCorrectionMessage(this.repair);
+    return this.#aliasCorrection ?? toolSchemaCorrectionMessage(this.repair);
   }
 }
 
@@ -506,20 +509,26 @@ function shapeDetails(shape: CatalogSchemaMismatch | undefined): CatalogRejectio
   };
 }
 
-function retryableResponseRejection(phase: "projection" | "response", cause: unknown): boolean {
+function retryableResponseRejection(
+  phase: "projection" | "response",
+  cause: unknown,
+  repair: GatewayToolCallRepair | undefined,
+): boolean {
   return (
     phase === "response" &&
     cause instanceof ToolCatalogError &&
-    (cause.reason === "invalid-shape" || cause.reason === "invalid-identity")
+    cause.reason === "invalid-shape" &&
+    repair !== undefined
   );
 }
 
-function reject(
+function recordAndReject(
   log: ModelGatewayLogSink,
   phase: "projection" | "response",
   cause: unknown,
   details: CatalogRejectionDetails = {},
   repair?: GatewayToolCallRepair,
+  aliasCorrection?: string,
 ): never {
   const reason = phase === "projection" ? "projection-mismatch" : "invalid-arguments";
   const error =
@@ -528,8 +537,9 @@ function reject(
       : new GatewayToolCatalogError(
           reason,
           cause,
-          retryableResponseRejection(phase, cause),
+          retryableResponseRejection(phase, cause, repair),
           repair,
+          aliasCorrection,
         );
   log.write(
     activityLogEvent(
@@ -554,6 +564,50 @@ function schemaRepair(
     offeredAlias: projected.alias,
     ...(cause.shape === undefined ? {} : { shape: cause.shape }),
   });
+}
+
+const ALIAS_CORRECTION_PREFIX =
+  "The previous call named a tool that is not offered and executed nothing. Use a native tool from the current advertised list. Examples of valid names: ";
+const ALIAS_CORRECTION_BYTES_MAX = 8192;
+const ALIAS_CORRECTION_NAMES_MAX = 128;
+const CORRECTION_UTF8 = new TextEncoder();
+
+function unofferedAliasCorrection(
+  normalizer: ToolInvocationNormalizer | undefined,
+  call: NormalizedToolCall | undefined,
+  cause: unknown,
+  now: () => number,
+  log: ModelGatewayLogSink,
+): string | undefined {
+  if (
+    normalizer === undefined ||
+    call === undefined ||
+    isCodeModeProjection(normalizer) ||
+    !(cause instanceof ToolCatalogError) ||
+    cause.reason !== "invalid-identity"
+  )
+    return undefined;
+  try {
+    const tools = normalizer.tools(now());
+    if (tools.some((tool) => tool.alias === call.name)) return undefined;
+    return offeredAliasExamples(tools);
+  } catch (error_) {
+    // A binding that expired between the rejected call and correction is still a hard refusal.
+    return recordAndReject(log, "response", error_, rejectionDetails(normalizer, call, error_));
+  }
+}
+
+function offeredAliasExamples(tools: readonly { readonly alias: string }[]): string | undefined {
+  const names: string[] = [];
+  let bytes = CORRECTION_UTF8.encode(ALIAS_CORRECTION_PREFIX).byteLength;
+  for (const tool of tools) {
+    const added = CORRECTION_UTF8.encode(tool.alias).byteLength + (names.length === 0 ? 0 : 2);
+    if (names.length >= ALIAS_CORRECTION_NAMES_MAX || bytes + added > ALIAS_CORRECTION_BYTES_MAX)
+      break;
+    names.push(tool.alias);
+    bytes += added;
+  }
+  return names.length === 0 ? undefined : ALIAS_CORRECTION_PREFIX + names.join(", ");
 }
 
 function rejectionDetails(
@@ -600,6 +654,22 @@ function bindNativeCall(
   return call;
 }
 
+function bindNativeExtensionCall(
+  normalizer: ToolInvocationNormalizer,
+  call: NormalizedToolCall,
+  now: () => number,
+  log: ModelGatewayLogSink,
+): NormalizedToolCall {
+  normalizer.tools(now());
+  log.write(
+    activityLogEvent(TOOL_CATALOG_NATIVE_PASSTHROUGH_OPERATION, toolCatalogEnvelope(log, "info"), {
+      projectionDigest: normalizer.binding.projection.projectionDigest,
+      toolCount: 1,
+    }),
+  );
+  return call;
+}
+
 function bindCall(
   normalizer: ToolInvocationNormalizer | undefined,
   input: NormalizedToolCall,
@@ -613,20 +683,8 @@ function bindCall(
     captured = call;
     if (native !== undefined) return bindNativeCall(native, call, now, log);
     requireBridge(normalizer !== undefined, "unoffered-tool");
-    if (isNativeExtensionAlias(normalizer, call.name)) {
-      normalizer.tools(now());
-      log.write(
-        activityLogEvent(
-          TOOL_CATALOG_NATIVE_PASSTHROUGH_OPERATION,
-          toolCatalogEnvelope(log, "info"),
-          {
-            projectionDigest: normalizer.binding.projection.projectionDigest,
-            toolCount: 1,
-          },
-        ),
-      );
-      return call;
-    }
+    if (isNativeExtensionAlias(normalizer, call.name))
+      return bindNativeExtensionCall(normalizer, call, now, log);
     requireBridge(!isCodeModeProjection(normalizer), "unoffered-tool");
     const invocation = normalizer.bindAlias(call.name, call.arguments, now());
     log.write(
@@ -641,12 +699,13 @@ function bindCall(
       invocation,
     });
   } catch (cause) {
-    return reject(
+    return recordAndReject(
       log,
       "response",
       cause,
       rejectionDetails(normalizer, input, cause),
       captured === undefined ? undefined : schemaRepair(normalizer, captured, cause),
+      unofferedAliasCorrection(normalizer, captured, cause, now, log),
     );
   }
 }
@@ -699,7 +758,7 @@ function bindCalls(
       "invalid-arguments",
     );
   } catch (cause) {
-    return reject(log, "response", cause);
+    return recordAndReject(log, "response", cause);
   }
   return Object.freeze(entries.map((call) => bindCall(normalizer, call, now, log, native)));
 }
@@ -738,7 +797,7 @@ function assertNativeTransport(
     offeredAlias,
     transport: "assistant-text" as const,
   });
-  reject(
+  recordAndReject(
     log,
     "response",
     new GatewayToolCatalogError("invalid-arguments", undefined, true, repair),
@@ -824,6 +883,6 @@ export function createGatewayToolCatalogBridge(
   try {
     return prepare(request, now, log, recordProjection);
   } catch (cause) {
-    return reject(log, "projection", cause);
+    return recordAndReject(log, "projection", cause);
   }
 }

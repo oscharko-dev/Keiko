@@ -20,7 +20,9 @@ import {
 } from "./chat-tool-runtime.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
 import {
+  assertCitationRepairTurnActive,
   callGroundedSynthesisModel,
+  type GroundedSynthesisPurpose,
   requiresObservedToolResult,
 } from "./grounded-plural-synthesis.js";
 import {
@@ -1687,6 +1689,7 @@ function groundedPromptBuilder(options?: GroundedGatewayPromptOptions): Grounded
 }
 
 interface GroundedGatewayAnswerContext {
+  readonly purpose?: GroundedSynthesisPurpose | undefined;
   readonly userMessageId: string | undefined;
   readonly assistantReferences: NonNullable<OrchestratorInput["assistantReferents"]>;
   readonly synthesis: GroundedSynthesisCallBudget;
@@ -1731,7 +1734,7 @@ function createGatewayAnswerer(
     answer: (question, pack, options) => gatewayGroundedAnswer(ctx, question, pack, options ?? {}),
     repair: (question, pack, original, options) =>
       gatewayGroundedAnswer(
-        ctx,
+        { ...ctx, purpose: "citation-repair" },
         `${question}\n\n${buildCitationRepairPrompt(original)}`,
         pack,
         options,
@@ -1907,6 +1910,7 @@ async function dispatchGroundedSynthesis(
   remaining: GroundedAnswerOptions,
 ): Promise<NormalizedResponse> {
   assertGroundedGatewayDispatchActive(ctx, original);
+  assertCitationRepairTurnActive(ctx.purpose, ctx.deps.chatToolTurn);
   logGroundedPromptSelection(
     ctx.correlationId,
     sent,
@@ -1937,6 +1941,7 @@ async function dispatchGroundedSynthesis(
       tracker,
       ctx.deps.chatToolTurn,
       requiresObservedToolResult(ctx.deps, sent.sentReferenceCount),
+      { purpose: ctx.purpose },
     );
     ctx.synthesis.recordCompleted();
     tracker.settleFallback(promptTokens, response.usage);
@@ -2007,7 +2012,6 @@ function resolveGroundedAnswerModel(
     modelId,
     readinessAdmission,
     deps,
-    (id, correlationId) => awaitInitializedConversationReadiness(deps, id, correlationId),
   );
 }
 
@@ -2630,7 +2634,7 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
         ? { promptContext: output.promptContext }
         : {}),
     },
-    deps.store,
+    deps.chatToolTurn,
   );
   deps.store.attachGroundedAnswer(assistantMessage.id, answer);
   if (sourceEvidenceAvailable) {
@@ -2787,7 +2791,6 @@ function resolveMultiSourceSeam(
     modelId,
     readinessAdmission,
     deps,
-    (id, correlationId) => awaitInitializedConversationReadiness(deps, id, correlationId),
   );
   return {
     retriever: defaultRetriever(signal, deps, correlationId),
@@ -3080,17 +3083,24 @@ async function dispatchPreparedGroundedAsk(
   return dispatchHybridAsk(preparedWithCanonicalFolders, deps, skippedFolders, hybrid);
 }
 
-function admitGroundedUser(
+function groundedSkillSelectionRefusal(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
-): PreparedGroundedAsk | RouteResult {
-  if (prepared.userMessage !== undefined) return prepared;
-  const skillRefusal = markdownSkillSelectionRefusal(
+): RouteResult | undefined {
+  return markdownSkillSelectionRefusal(
     deps,
     prepared.chat.id,
     prepared.input.expectedSkillSelectionRevision,
     prepared.correlationId,
   );
+}
+
+function admitGroundedUser(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): PreparedGroundedAsk | RouteResult {
+  if (prepared.userMessage !== undefined) return prepared;
+  const skillRefusal = groundedSkillSelectionRefusal(prepared, deps);
   if (skillRefusal !== undefined) return skillRefusal;
   const messageCountBeforeTurn = deps.store.countMessages(prepared.chat.id);
   const newUserMessage = {
@@ -3499,6 +3509,8 @@ async function executeGroundedAskInTurn(
   multiSource?: MultiSourceSeam,
   hybrid?: HybridSeam,
 ): Promise<RouteResult> {
+  const skillRefusal = groundedSkillSelectionRefusal(prepared, deps);
+  if (skillRefusal !== undefined) return skillRefusal;
   const modelAdmitted = await admitGroundedModel(
     prepared,
     deps,

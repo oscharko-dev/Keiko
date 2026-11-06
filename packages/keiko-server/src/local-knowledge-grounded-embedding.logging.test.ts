@@ -17,8 +17,17 @@ import {
   createDefaultChatCapability,
   createDefaultEmbeddingCapability,
   parseGatewayConfig,
+  toolCallingConfigurationFingerprint,
+  verifyEmbeddingCapability,
+  type GatewayConfig,
 } from "@oscharko-dev/keiko-model-gateway";
-import { buildRedactor, type UiHandlerDeps } from "./deps.js";
+import {
+  buildRedactor,
+  buildUiHandlerDeps,
+  type UiHandlerDeps,
+  type RuntimeGatewayConfig,
+} from "./deps.js";
+import { installKnowledgeChatCatalogRuntime } from "./knowledge-chat-catalog.js";
 import { createEmbeddingAdapter } from "./local-knowledge-grounded-qa.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { mockRequest, mockResponse } from "./_support.js";
@@ -28,16 +37,18 @@ import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+
 const MODEL = "pod-embedding-log-chat";
 const EMBEDDING_MODEL = "text-embedding-3-small";
 const QUESTION = "alpha validation policy";
-const cleanups: (() => void)[] = [];
+const cleanups: (() => void | Promise<void>)[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   resetServerLogger();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
-  for (const cleanup of cleanups.splice(0)) cleanup();
+  for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
 function model(): ModelPort {
@@ -62,6 +73,75 @@ function model(): ModelPort {
   };
 }
 
+function fixtureConfig(): GatewayConfig {
+  const providers = [MODEL, EMBEDDING_MODEL].map((modelId) => ({
+    modelId,
+    baseUrl: "https://pod-embedding.example.invalid/v1",
+    apiKey: "fixture-secret",
+    timeoutMs: 1000,
+    maxRetries: 0,
+    retryBaseDelayMs: 1,
+  }));
+  const provider = providers[0];
+  if (provider === undefined) throw new TypeError("Missing chat provider fixture");
+  return parseGatewayConfig({
+    providers,
+    capabilities: [
+      {
+        ...createDefaultChatCapability(MODEL),
+        contextWindow: 32768,
+        maxOutputTokens: 1024,
+        toolCalling: true,
+        toolCallingVerification: {
+          status: "verified",
+          checkedAt: new Date().toISOString(),
+          probe: "gateway-tool-calling-v1",
+          configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+        },
+      },
+      createDefaultEmbeddingCapability(EMBEDDING_MODEL),
+    ],
+    groundedAnswers: { ownAssessment: "disabled" },
+  });
+}
+
+// Use the existing observation-owned runtime fixture shape without launching unrelated startup work.
+function readyGateway(config: GatewayConfig): RuntimeGatewayConfig {
+  let current = config;
+  let generation = 0;
+  const observations = new Map<string, ReturnType<RuntimeGatewayConfig["verifiedCapability"]>>();
+  const holder: RuntimeGatewayConfig = {
+    storagePath: "synthetic-gateway.json",
+    current: () => current,
+    present: () => true,
+    set(next): void {
+      if (next === undefined) throw new TypeError("Fixture config must stay configured");
+      current = next;
+      generation += 1;
+      observations.clear();
+    },
+    generation: () => generation,
+    verification: () => UNVERIFIED_GATEWAY,
+    recordVerification: () => undefined,
+    verifiedCapability: (modelId) => observations.get(modelId),
+    recordVerifiedCapability(modelId, fields, checkedAt, observedGeneration): void {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return;
+      observations.set(modelId, {
+        modelId,
+        generation,
+        checkedAt,
+        fields: { ...fields },
+      });
+    },
+    clearVerifiedCapability(modelId, observedGeneration): boolean {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return false;
+      return observations.delete(modelId);
+    },
+  };
+  holder.recordVerifiedCapability(MODEL, { conversationReady: true }, new Date().toISOString());
+  return holder;
+}
+
 async function fixture(hybrid = false): Promise<{
   readonly deps: UiHandlerDeps;
   readonly chatIds: readonly [string, string];
@@ -71,34 +151,36 @@ async function fixture(hybrid = false): Promise<{
   mkdirSync(root);
   writeFileSync(join(root, "validation.ts"), "export const alphaValidationPolicy = true;\n");
   vi.stubEnv("KEIKO_STATE_DIR", join(directory, "state"));
-  const config = parseGatewayConfig({
-    providers: [MODEL, EMBEDDING_MODEL].map((modelId) => ({
-      modelId,
-      baseUrl: "https://pod-embedding.example.invalid/v1",
-      apiKey: "fixture-secret",
-      maxRetries: 0,
-    })),
-    capabilities: [
-      { ...createDefaultChatCapability(MODEL), contextWindow: 32768, maxOutputTokens: 1024 },
-      createDefaultEmbeddingCapability(EMBEDDING_MODEL),
-    ],
-    groundedAnswers: { ownAssessment: "disabled" },
-  });
+  const config = fixtureConfig();
   const store = createInMemoryUiStore();
   store.createProject(root, "Embedding logging");
   const chats = [store.createChat(root, "Alpha", MODEL), store.createChat(root, "Beta", MODEL)];
-  const deps: UiHandlerDeps = {
-    config,
-    configPresent: true,
-    env: {},
-    store,
-    uiDbPath: join(directory, "state/ui.db"),
-    redactor: buildRedactor({}, config),
-    registry: createRunRegistry(),
-    evidenceStore: createInMemoryEvidenceStore(),
-    modelPortFactory: model,
-  };
-  cleanups.push(() => {
+  const base = buildUiHandlerDeps({
+    configPath: undefined,
+    evidenceDir: join(directory, "evidence"),
+    uiDbPath: join(directory, "state/runtime-ui.db"),
+    env: { KEIKO_STATE_DIR: join(directory, "state") },
+  });
+  const deps = installKnowledgeChatCatalogRuntime(
+    Object.assign(base, {
+      config,
+      gatewayConfig: readyGateway(config),
+      configPresent: true,
+      env: {},
+      store,
+      uiDbPath: join(directory, "state/ui.db"),
+      redactor: buildRedactor({}, config),
+      registry: createRunRegistry(),
+      evidenceStore: createInMemoryEvidenceStore(),
+      modelPortFactory: model,
+    }),
+    {
+      primary: createBufferedServerLogSink(),
+      diagnostics: { record: () => undefined },
+    },
+  );
+  cleanups.push(async () => {
+    await deps.dispose?.();
     store.close();
     rmSync(directory, { recursive: true, force: true });
   });
@@ -119,7 +201,9 @@ async function connectPods(
   folderRoot: string | undefined,
 ): Promise<void> {
   const store = openKnowledgeStore({
-    dbPath: resolveKnowledgeStorePath({ runtimeStateDir: join(deps.uiDbPath ?? "", "..") }),
+    dbPath: resolveKnowledgeStorePath({
+      runtimeStateDir: join(deps.uiDbPath ?? "", ".."),
+    }),
   });
   try {
     const pod = await seedCapsuleWithVectors(store, {
@@ -133,7 +217,12 @@ async function connectPods(
           ? {}
           : {
               connectedScopes: [
-                { kind: "workspace-root", root: folderRoot, relativePaths: [], connectedAtMs: 1 },
+                {
+                  kind: "workspace-root",
+                  root: folderRoot,
+                  relativePaths: [],
+                  connectedAtMs: 1,
+                },
               ],
             }),
       });
@@ -220,14 +309,21 @@ describe("default grounded pod embedding activity", () => {
         ask(deps, chatIds[1], "pod-embedding-beta"),
       ]);
       expect(answers.map((answer) => answer.status)).toEqual([200, 200]);
-      expect(dispatches).toBe(10);
+      expect(dispatches).toBe(6);
       const events = sink.events.filter((event) => event.op === "embedding.request.dispatch");
       expect(events).toHaveLength(dispatches);
-      for (const correlationId of ["pod-embedding-alpha", "pod-embedding-beta"])
-        expect(events.filter((event) => event.correlationId === correlationId)).toHaveLength(5);
+      // Both turns share one connection-owned four-input preflight. Each retains its own query.
+      expect(
+        ["pod-embedding-alpha", "pod-embedding-beta"]
+          .map(
+            (correlationId) =>
+              events.filter((event) => event.correlationId === correlationId).length,
+          )
+          .sort((a, b) => a - b),
+      ).toEqual([1, 5]);
       expect(createEmbeddingAdapter(deps)).toBe(adapter);
       expect((await ask(deps, chatIds[0], "pod-embedding-warm")).status).toBe(200);
-      expect(dispatches).toBe(10);
+      expect(dispatches).toBe(6);
       expect(
         sink.events.filter(
           (event) => event.correlationId === "pod-embedding-warm" && event.category === "embedding",
@@ -239,7 +335,7 @@ describe("default grounded pod embedding activity", () => {
     },
   );
 
-  it("records a native preflight failure and retries it with a new request context", async () => {
+  it("records a native preflight failure and requires explicit recovery with a new request context", async () => {
     const { deps, chatIds } = await fixture();
     const sink = capture();
     let failing = true;
@@ -260,6 +356,31 @@ describe("default grounded pod embedding activity", () => {
       status: 503,
     });
     failing = false;
+    const beforeRecovery = sink.events.filter(
+      (event) => event.op === "embedding.request.dispatch",
+    ).length;
+    expect((await ask(deps, chatIds[0], "pod-embedding-still-unavailable")).status).toBe(200);
+    expect(sink.events.filter((event) => event.op === "embedding.request.dispatch")).toHaveLength(
+      beforeRecovery,
+    );
+    const adapter = createEmbeddingAdapter(deps);
+    if ("status" in adapter) throw new TypeError("Missing embedding adapter");
+    expect(
+      await verifyEmbeddingCapability(
+        adapter,
+        {
+          provider: "openai",
+          modelId: EMBEDDING_MODEL,
+          vectorMetric: "cosine",
+          expectedDimensions: 1536,
+          normalization: "l2",
+          instructionVersion: "keiko-embedding-input-v1",
+          includeSpaceFingerprint: true,
+          logContext: { correlationId: "pod-embedding-recovered" },
+        },
+        "refresh",
+      ),
+    ).toMatchObject({ ok: true });
     expect((await ask(deps, chatIds[0], "pod-embedding-recovered")).status).toBe(200);
     expect(
       sink.events.filter(
@@ -270,17 +391,27 @@ describe("default grounded pod embedding activity", () => {
     ).toHaveLength(5);
   });
 
-  it("records caller cancellation without poisoning the shared adapter cache", async () => {
+  it("keeps caller cancellation local while a second caller completes the shared probe", async () => {
     const { deps, chatIds } = await fixture(true);
     const sink = capture();
     let started: (() => void) | undefined;
+    let release: (() => void) | undefined;
+    let physicalSignal: AbortSignal | null | undefined;
+    let dispatches = 0;
     const dispatched = new Promise<void>((resolve) => {
       started = resolve;
     });
     vi.stubGlobal("fetch", (_url: unknown, init: RequestInit | undefined): Promise<Response> => {
+      dispatches += 1;
+      const input = dispatchedInput(init);
+      if (dispatches > 1) return Promise.resolve(embeddingResponse(input));
+      physicalSignal = init?.signal;
       started?.();
-      return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener(
+      return new Promise<Response>((resolve, reject) => {
+        release = (): void => {
+          resolve(embeddingResponse(input));
+        };
+        physicalSignal?.addEventListener(
           "abort",
           () => {
             reject(new DOMException("Fixture request aborted", "AbortError"));
@@ -289,31 +420,40 @@ describe("default grounded pod embedding activity", () => {
         );
       });
     });
+    const adapter = createEmbeddingAdapter(deps);
     const pending = startAsk(deps, chatIds[0], "pod-embedding-cancelled");
     await dispatched;
     pending.response.res.emit("close");
     expect((await pending.promise).status).toBe(499);
-    await vi.waitFor(() => {
-      expect(sink.events.find((event) => event.op === "embedding.request.failed")).toMatchObject({
-        correlationId: "pod-embedding-cancelled",
-        errorKind: "cancelled",
-      });
-    });
-    expect(sink.events.find((event) => event.op === "http.gateway.fetch.failed")).toMatchObject({
-      correlationId: "pod-embedding-cancelled",
-      errorKind: "cancelled",
-    });
-    vi.stubGlobal("fetch", (_url: unknown, init: RequestInit | undefined): Promise<Response> => {
-      const input = dispatchedInput(init);
-      return Promise.resolve(embeddingResponse(input));
-    });
-    expect((await ask(deps, chatIds[1], "pod-embedding-after-cancel")).status).toBe(200);
+    // Cancelling a person's wait must not cancel the connection-owned physical preflight.
+    expect(physicalSignal).toBeDefined();
+    expect(physicalSignal?.aborted).toBe(false);
+    expect(dispatches).toBe(1);
+    const joined = ask(deps, chatIds[1], "pod-embedding-after-cancel");
+    release?.();
+    expect((await joined).status).toBe(200);
+    expect(dispatches).toBe(5);
+    expect(createEmbeddingAdapter(deps)).toBe(adapter);
+    expect(sink.events.filter((event) => event.op === "embedding.request.dispatch")).toHaveLength(
+      5,
+    );
+    expect(sink.events.filter((event) => event.op === "embedding.request.failed")).toHaveLength(0);
+    expect(sink.events.filter((event) => event.op === "http.gateway.fetch.failed")).toHaveLength(0);
     expect(
       sink.events.filter(
         (event) =>
           event.op === "embedding.request.dispatch" &&
           event.correlationId === "pod-embedding-after-cancel",
       ),
-    ).toHaveLength(5);
+    ).toHaveLength(1);
+    expect((await ask(deps, chatIds[0], "pod-embedding-warm-after-cancel")).status).toBe(200);
+    expect(dispatches).toBe(5);
+    expect(
+      sink.events.filter(
+        (event) =>
+          event.correlationId === "pod-embedding-warm-after-cancel" &&
+          event.category === "embedding",
+      ),
+    ).toHaveLength(0);
   });
 });

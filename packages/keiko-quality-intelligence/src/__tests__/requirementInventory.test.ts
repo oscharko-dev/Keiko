@@ -5,6 +5,7 @@ import {
   deriveRequirementInventory,
   derivedRequirementId,
   documentScopeOf,
+  documentScopesOf,
   requirementContentDigest,
   type RequirementInventoryEntry,
   type RequirementInventoryInput,
@@ -1679,4 +1680,38 @@ describe("a single identifier line in flat text (#4235)", () => {
   it("still rejects it without any requirement context", () => {
     expect(ids(["FOO-1 Einzelnes Wort", "Text ohne Pflicht."])).toEqual([]);
   });
+});
+
+describe("colliding document identities", () => {
+  const keys = ["00000000-0000-4000-8000-00000001bbfc", "00000000-0000-4000-8000-00000001eacf"];
+  it("extends only colliding prefixes without changing requirement identities or digests", () => {
+    const scopes = documentScopesOf([...keys, KEY]);
+    expect(keys.map(documentScopeOf)).toEqual(["46980558", "46980558"]);
+    expect(scopes.get(KEY)).toBe(documentScopeOf(KEY));
+    expect(scopes.get(keys[0] ?? "")).toBe("4698055848705ae7");
+    expect(scopes.get(keys[1] ?? "")).toBe("46980558d62a4967");
+    for (const documentKey of keys) {
+      const input = {
+        text: "Das Portal muss Anmeldungen innerhalb von 10 Minuten bearbeiten.",
+        documentKey,
+      };
+      const old = deriveRequirementInventory(input);
+      const widened = deriveRequirementInventory({
+        ...input,
+        documentScope: scopes.get(documentKey) ?? "",
+      });
+      expect(widened.entries.map(({ documentScope: _scope, ...entry }) => entry)).toEqual(
+        old.entries.map(({ documentScope: _scope, ...entry }) => entry),
+      );
+      expect(widened.entries[0]?.documentScope).toBe(scopes.get(documentKey));
+    }
+  });
+  it.each(["46980558x", "0000000000000000", "4698055848705"])(
+    "refuses a foreign or invalid scope override %s",
+    (documentScope) => {
+      expect(() =>
+        deriveRequirementInventory({ text: "Text", documentKey: keys[0] ?? "", documentScope }),
+      ).toThrow(TypeError);
+    },
+  );
 });

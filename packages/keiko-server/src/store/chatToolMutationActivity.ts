@@ -7,6 +7,7 @@ import {
 import type { ServerLogSink } from "../observability/index.js";
 import type {
   ChatToolMutationLinkCounts,
+  ChatToolMutationMetrics,
   ChatToolMutationLocalRefusal,
   ChatToolMutationRecord,
 } from "./chatToolMutationTypes.js";
@@ -94,6 +95,7 @@ const MUTATION_STATE = defineActivityLogOperation({
     linkRequestedCount: { type: "integer", dataClass: "count", required: false },
     linkCreatedCount: { type: "integer", dataClass: "count", required: false },
     linkFailedCount: { type: "integer", dataClass: "count", required: false },
+    descriptionConvertedHeadingCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -129,12 +131,26 @@ function remoteRejection(
     ? { rejection: "jira-error-document" }
     : {};
 }
+function serializationMetrics(
+  event: string,
+  metrics: ChatToolMutationMetrics | undefined,
+): ChatToolMutationMetrics {
+  const count = metrics?.descriptionConvertedHeadingCount;
+  return event === "settled" &&
+    typeof count === "number" &&
+    Number.isInteger(count) &&
+    count > 0 &&
+    count <= 32768
+    ? { descriptionConvertedHeadingCount: count }
+    : {};
+}
 export function recordChatToolMutation(
   log: ServerLogSink,
   record: ChatToolMutationRecord,
   event: "prepared" | "replayed" | "dispatched" | "response" | "settled",
   links?: ChatToolMutationLinkCounts,
   refusal?: ChatToolMutationLocalRefusal,
+  metrics?: ChatToolMutationMetrics,
 ): void {
   try {
     log.write(
@@ -153,6 +169,7 @@ export function recordChatToolMutation(
           outcome: record.outcome ?? "none",
           ...remoteRejection(event, record),
           ...localRefusal(record, refusal),
+          ...serializationMetrics(event, metrics),
           ...(links === undefined
             ? {}
             : {

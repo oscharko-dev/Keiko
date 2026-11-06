@@ -27,6 +27,7 @@ import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { ManagedMcpError } from "./definitions.js";
 import { recordManagedMcp } from "./activity.js";
+import { mcpRequestTimeouts } from "./request-timeouts.js";
 import { installExternalMetadataAdmission } from "./external-metadata.js";
 import {
   ownedStdioLaunch,
@@ -303,8 +304,7 @@ class ExternalClient implements ExternalMcpConnection {
             // Pin the admitted definition: SDK HEADER_MISMATCH recovery must never replay effects.
             toolDefinition: tool,
             signal,
-            timeout: TIMEOUT_MS,
-            maxTotalTimeout: TIMEOUT_MS,
+            ...mcpRequestTimeouts(TIMEOUT_MS),
           },
         ),
       );

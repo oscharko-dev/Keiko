@@ -11,6 +11,7 @@ import {
 import {
   cancellableConversationProbeDeps,
   initializeConfiguredConversationReadiness,
+  initializeConfiguredEmbeddingReadiness,
   initializeLiteLlmCodingReadiness,
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
   withReadinessParentCorrelation,
@@ -21,7 +22,7 @@ import {
   type CatalogBackgroundAttempt,
 } from "./gateway-startup-activity.js";
 
-// A finite initialization burst; an explicit reload or a new configuration starts another burst.
+// A finite initialization burst; only a new configuration starts another startup burst.
 const MAX_STARTUP_ATTEMPTS = 3;
 const MAX_STARTUP_RETRY_DELAY_MS = 300_001;
 const STARTUP_RETRY_DELAY_MS = WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1;
@@ -29,6 +30,7 @@ const STARTUP_RETRY_DELAY_MS = WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1;
 export function createGatewayStartupChecks(deps: UiHandlerDeps): {
   readonly start: (correlationId?: string) => void;
   readonly refresh: (correlationId?: string) => void;
+  readonly catalogSettled: () => Promise<void>;
   readonly stop: () => Promise<void>;
 } {
   const checks = new GatewayStartupChecks(deps);
@@ -39,6 +41,7 @@ export function createGatewayStartupChecks(deps: UiHandlerDeps): {
     refresh: (correlationId): void => {
       checks.refresh(correlationId);
     },
+    catalogSettled: (): Promise<void> => checks.catalogSettled(),
     stop: (): Promise<void> => checks.stop(),
   };
 }
@@ -47,7 +50,7 @@ class GatewayStartupChecks {
   private readonly controller = new AbortController();
   private readonly discovered = new Set<CatalogDiscoveryState>();
   private readonly tasks = new Set<Promise<void>>();
-  private readonly refreshingGenerations = new Set<number>();
+  private catalogRead: Promise<void> = Promise.resolve();
   private retry: ReturnType<typeof setTimeout> | undefined;
   private startedGeneration = -1;
   private retryAttempt = 0;
@@ -59,9 +62,8 @@ class GatewayStartupChecks {
     deps: UiHandlerDeps,
     correlationId: string,
     parentCorrelationId: string | undefined,
-    recheck = false,
   ): void {
-    initializeConfiguredConversationReadiness(deps, parentCorrelationId ?? correlationId, recheck);
+    initializeConfiguredConversationReadiness(deps, parentCorrelationId ?? correlationId);
   }
 
   public start(parentCorrelationId?: string): void {
@@ -75,41 +77,34 @@ class GatewayStartupChecks {
     this.startedGeneration = generation;
     this.initializeConversationReadiness(observedDeps, correlationId, parentCorrelationId);
     this.track(
+      initializeConfiguredEmbeddingReadiness(
+        cancellableConversationProbeDeps(observedDeps, this.controller.signal),
+        parentCorrelationId ?? correlationId,
+      ),
+      correlationId,
+    );
+    this.track(
       this.run(observedDeps, correlationId, parentCorrelationId, generation),
       correlationId,
     );
   }
 
   public refresh(parentCorrelationId?: string): void {
+    // Browser reads consume configuration-owned startup discovery. Only a new configuration or
+    // an explicit Settings operation may contact the provider again after startup settles.
     const holder = this.deps.gatewayConfig;
     if (this.controller.signal.aborted || holder?.current() === undefined) return;
-    const generation = holder.generation();
-    if (this.refreshingGenerations.has(generation)) return;
-    this.initializeGeneration(generation);
-    if (this.retry === undefined) this.retryAttempt = 0;
-    this.refreshingGenerations.add(generation);
-    // A browser reload renews completed discovery; an in-flight query or retry backoff is shared.
-    for (const discovery of this.discovered) {
-      if (discovery.retryAt === Infinity) this.discovered.delete(discovery);
+    if (this.startedGeneration !== holder.generation()) {
+      this.start(parentCorrelationId);
+      return;
     }
-    const correlationId = newCorrelationId();
     const deps = withReadinessParentCorrelation(this.deps, parentCorrelationId);
-    // A page load is the person asking again: models that are not ready now are checked again.
-    this.initializeConversationReadiness(deps, correlationId, parentCorrelationId, true);
-    const task = this.catalog(deps, correlationId)
-      .finally(() => {
-        this.refreshingGenerations.delete(generation);
-      })
-      .then((retryCatalog) =>
-        this.finishInitialization(
-          deps,
-          correlationId,
-          parentCorrelationId,
-          retryCatalog,
-          generation,
-        ),
-      );
-    this.track(task, correlationId);
+    const correlationId = newCorrelationId();
+    for (const state of this.discovered)
+      logCatalogCacheDecision(deps, state.provider, state, correlationId, {
+        backgroundAttempt: this.retryAttempt + 1,
+        configurationGeneration: this.retryGeneration,
+      });
   }
 
   private initializeGeneration(generation: number): void {
@@ -150,13 +145,28 @@ class GatewayStartupChecks {
     await Promise.allSettled(this.tasks);
   }
 
+  public async catalogSettled(): Promise<void> {
+    // Join only discovery that startup already owns. Configuration replacement may queue a new
+    // generation while this read waits; never cache its predecessor's catalog in the browser.
+    let pending: Promise<void>;
+    do {
+      pending = this.catalogRead;
+      await /* NOSONAR typescript:S9382 -- observe replacement after the current catalog settles. */ pending;
+    } while (pending !== this.catalogRead);
+  }
+
   private async run(
     deps: UiHandlerDeps,
     correlationId: string,
     parentCorrelationId: string | undefined,
     generation: number,
   ): Promise<void> {
-    const retryCatalog = await this.catalog(deps, correlationId);
+    const catalog = this.catalog(deps, correlationId);
+    this.catalogRead = catalog.then(
+      () => undefined,
+      () => undefined,
+    );
+    const retryCatalog = await catalog;
     await this.finishInitialization(
       deps,
       correlationId,
@@ -193,8 +203,8 @@ class GatewayStartupChecks {
         correlationId,
       );
     if (!this.currentGeneration(generation)) return;
-    // Only an unreachable catalog is retried on a timer; a model that did not answer is checked
-    // again when someone asks (a page load, the Workbench opening, a model chosen; customer 1.3.4).
+    // Only catalog discovery is retried on a timer. Basic-chat readiness retains its startup
+    // result until explicit Settings verification or connection replacement.
     if (retryCatalog) {
       this.scheduleRetry(deps, correlationId, parentCorrelationId, generation);
     } else {

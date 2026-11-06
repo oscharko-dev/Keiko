@@ -1,3 +1,8 @@
+import { resolveCurrentKnowledgeChatAuthority } from "./knowledge-chat-authority.js";
+import {
+  createKnowledgeChatAdmission,
+  knowledgeChatConsumerPort,
+} from "./knowledge-chat-consumer.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { createKeikoToolCatalog, compileToolProjection } from "@oscharko-dev/keiko-tool-catalog";
 import {
@@ -13,6 +18,7 @@ import type {
   ChatToolWriteApprovalView,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
+import type { JiraChatTurnReviewPorts } from "./atlassian/jiraChatToolTurn.js";
 import type {
   CatalogConsumer,
   CatalogConsumerPort,
@@ -38,9 +44,16 @@ import {
   type McpChatCatalogContext,
 } from "./mcp/mcpChatCatalogConsumer.js";
 import { resolveCurrentMcpChatAuthority } from "./mcp/mcpChatAuthority.js";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { McpChatCatalog } from "./mcp/mcpChatCatalogRuntime.js";
 
 export interface ChatSourcesContext extends ToolConsumerContext {
+  readonly primaryKind?: "jira" | "knowledge";
+  readonly meterModel?: (model: ModelPort) => ModelPort;
+  readonly knowledgeReviewModelId?: () => string | undefined;
+  readonly confirmModelOperation?: (response: NormalizedResponse) => void;
+  readonly retainDraftProgress?: JiraChatCatalogContext["retainDraftProgress"];
   readonly jira: JiraChatCatalogContext;
   readonly mcp: McpChatCatalogContext;
 }
@@ -67,7 +80,10 @@ function captureSourceAction(value: CatalogJsonValue): SourceAction | undefined 
 export const chatSourcesConsumerPort: CatalogConsumerPort<ChatSourcesConsumer> = {
   scope: (context) => ({
     kind: "chat-tools",
-    jira: jiraChatCatalogConsumerPort.scope(context.jira),
+    jira: (context.primaryKind === "knowledge"
+      ? knowledgeChatConsumerPort
+      : jiraChatCatalogConsumerPort
+    ).scope(context.jira),
     mcp: mcpChatCatalogConsumerPort.scope(context.mcp),
   }),
   staleReason: "consumer-stale",
@@ -85,9 +101,27 @@ function invocationFields(
   context: CatalogHandlerContext<ChatSourcesConsumer>,
 ): Pick<
   CatalogHandlerContext<ChatSourcesConsumer>,
-  "invocationId" | "signal" | "beforeEffect" | "pageSequence" | "createCursor"
+  | "invocationId"
+  | "signal"
+  | "beforeEffect"
+  | "pageSequence"
+  | "createCursor"
+  | "meterModel"
+  | "knowledgeReviewModelId"
+  | "confirmModelOperation"
+  | "retainDraftProgress"
 > {
   return {
+    ...(context.meterModel === undefined ? {} : { meterModel: context.meterModel }),
+    ...(context.retainDraftProgress === undefined
+      ? {}
+      : { retainDraftProgress: context.retainDraftProgress }),
+    ...(context.knowledgeReviewModelId === undefined
+      ? {}
+      : { knowledgeReviewModelId: context.knowledgeReviewModelId }),
+    ...(context.confirmModelOperation === undefined
+      ? {}
+      : { confirmModelOperation: context.confirmModelOperation }),
     invocationId: context.invocationId,
     signal: context.signal,
     beforeEffect: context.beforeEffect,
@@ -181,7 +215,9 @@ export function currentChatSources(deps: UiHandlerDeps, context: ChatSourcesCont
   const now = new Date().toISOString();
   return (
     !context.signal.aborted &&
-    resolveCurrentJiraChatAuthority(
+    (context.primaryKind === "knowledge"
+      ? resolveCurrentKnowledgeChatAuthority
+      : resolveCurrentJiraChatAuthority)(
       deps,
       context.jira.chatId,
       context.jira.authorityReference,
@@ -208,6 +244,8 @@ interface AdmissionOptions {
   ) => Promise<void>;
   readonly reviewableWrite: (action: SourceAction) => boolean;
   readonly draftItemRefs?: (action: SourceAction) => readonly string[] | undefined;
+  /** Jira's review preparation stays with its source; external MCP approvals keep their own ports. */
+  readonly jiraReview?: JiraChatTurnReviewPorts;
 }
 function jointGuard(
   guard: ChatSourcesConsumer["guard"],
@@ -230,11 +268,18 @@ function sourceAdmissions(options: AdmissionOptions): {
   readonly jira: ReturnType<typeof createJiraChatCatalogAdmission>;
   readonly mcp: ReturnType<typeof createMcpChatCatalogAdmission>;
 } {
-  const jira = createJiraChatCatalogAdmission({
+  const primary = {
     ...options,
     now: Date.now,
-    context: () => ({ ...options.context().jira, signal: options.context().signal }),
-  });
+    context: (): JiraChatCatalogContext => ({
+      ...options.context().jira,
+      signal: options.context().signal,
+    }),
+  };
+  const jira =
+    options.context().primaryKind === "knowledge"
+      ? createKnowledgeChatAdmission(primary)
+      : createJiraChatCatalogAdmission({ ...primary, ...options.jiraReview });
   const mcp = createMcpChatCatalogAdmission({
     ...options,
     now: Date.now,

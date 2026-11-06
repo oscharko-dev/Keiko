@@ -287,6 +287,21 @@ export const GOVERNED_TOOL_CONTRACT_PINS = {
       ],
     },
   },
+  // Surviving owners keep their historical row; shared producers and compatibility exports
+  // remain independently probed without treating the retained owner as a deleted source.
+  retainedInventoryProbes: {
+    "digest-primitives": [
+      {
+        path: "packages/keiko-security/src/hashing.ts",
+        probe:
+          'export { canonicalise } from "@oscharko-dev/keiko-contracts/runtime/canonical-json";',
+      },
+      {
+        path: "packages/keiko-contracts/src/canonical-json.ts",
+        probe: "export function canonicalise(",
+      },
+    ],
+  },
   inventory: [
     {
       id: "generic-gateway",
@@ -305,7 +320,7 @@ export const GOVERNED_TOOL_CONTRACT_PINS = {
     {
       id: "digest-primitives",
       path: "packages/keiko-security/src/hashing.ts",
-      probe: "function canonicalise",
+      probe: "export function sha256Hex(",
       ownerIssue: 3406,
       disposition: "retain owner",
     },

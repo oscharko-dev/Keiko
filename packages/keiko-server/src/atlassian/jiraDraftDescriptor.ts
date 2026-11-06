@@ -1,32 +1,29 @@
 import {
-  JIRA_DRAFT_ID_PATTERN,
   JIRA_DRAFT_PAGE_ITEMS_MAX,
   JIRA_FIELD_VALIDATION_FAILURES,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  compileExternalCatalogSchema,
+  createToolDescriptor,
+  createToolRef,
+} from "@oscharko-dev/keiko-tool-catalog";
 import { object, text } from "./jiraManagedSchemas.js";
 import {
+  JIRA_DRAFT_ITEM_SCHEMA,
+  JIRA_DRAFT_ID_SCHEMA,
   JIRA_FAILURE_MESSAGES_SCHEMA,
   JIRA_VIOLATIONS_SCHEMA,
+  REQUIREMENT_PROBLEMS,
+  REQUIREMENT_REFUSAL,
 } from "./jiraManagedMutationDescriptors.js";
 
 const DESCRIPTION =
-  "Write a backlog draft larger than jira.draft takes in pages of up to " +
+  "Save a reviewable backlog draft in Keiko without creating Jira issues. Supports small and large drafts in pages of 1 to " +
   String(JIRA_DRAFT_PAGE_ITEMS_MAX) +
-  " items in the jira.draft item form; pass the returned draftId to append. A page that breaks an issue template is refused whole with the violations to correct. " +
-  "When unresolvedRefCount is 0, call jira.draft with only draftId and the last draftDigest: the human approves the whole draft once. Changes nothing in Jira.";
-
-// The item form is jira.draft's, declared there once: repeating it here would spend the model's
-// context on every turn. The tool checks every item against that form and names the first item
-// that does not match it.
-const STAGED_ITEM = {
-  type: "object",
-  description: "One item in the jira.draft item form, requirementIds included.",
-  properties: {},
-  required: [],
-  additionalProperties: true,
-};
+  " items in the jira.draft item form. Omit draftId to start a new draft; supply the returned draftId only to append to that draft. " +
+  "A page that breaks an issue template is refused whole with the violations to correct. The result returns draftId and draftDigest for review. " +
+  "Only when the user requests creation in Jira and unresolvedRefCount is 0, call jira.draft with only draftId and the last draftDigest; that tool performs Jira writes under the current write authority and required human approval.";
 
 export const JIRA_DRAFT_STAGE_DECLARATION: ManagedMcpToolDeclaration = Object.freeze({
   name: "jira.draft-stage",
@@ -34,22 +31,26 @@ export const JIRA_DRAFT_STAGE_DECLARATION: ManagedMcpToolDeclaration = Object.fr
   descriptor: createToolDescriptor({
     toolRef: createToolRef("keiko.jira.draft.stage", 1),
     description: DESCRIPTION,
-    inputSchema: object(
-      {
-        draftId: { ...text(36), pattern: JIRA_DRAFT_ID_PATTERN },
-        items: {
-          type: "array",
-          minItems: 1,
-          maxItems: JIRA_DRAFT_PAGE_ITEMS_MAX,
-          items: STAGED_ITEM,
+    inputSchema: compileExternalCatalogSchema(
+      object(
+        {
+          draftId: JIRA_DRAFT_ID_SCHEMA,
+          items: {
+            type: "array",
+            minItems: 1,
+            maxItems: JIRA_DRAFT_PAGE_ITEMS_MAX,
+            items: JIRA_DRAFT_ITEM_SCHEMA,
+          },
         },
-      },
-      ["items"],
+        ["items"],
+      ),
     ),
     resultSchema: object(
       {
         outcome: { type: "string", enum: ["succeeded", "failed", "rejected"] },
         reason: text(64),
+        requirementRefusal: REQUIREMENT_REFUSAL,
+        requirementProblems: REQUIREMENT_PROBLEMS,
         draftId: text(64),
         draftDigest: text(64),
         newDraft: { type: "boolean" },

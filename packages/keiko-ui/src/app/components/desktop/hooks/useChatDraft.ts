@@ -83,7 +83,8 @@ export function usePrivateDraft(
   const redemptions = useCodingAppSessionRedemptions();
   const key = chatId ?? "";
   const entry = controller.entry(key);
-  const hasUnsavedChanges = dirty(entry);
+  // The notice describes local content; an unknown saved base still retains its CAS intent.
+  const hasUnsavedChanges = dirty(entry) && (entry.text !== "" || entry.base !== undefined);
   const setText = useCallback(
     (text: string): void => controller.setText(key, text),
     [controller, key],

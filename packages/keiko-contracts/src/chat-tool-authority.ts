@@ -41,7 +41,18 @@ export interface McpChatToolAuthoritySubject {
   readonly bindingGeneration?: never;
   readonly authenticationGeneration?: never;
 }
-export type ChatToolAuthoritySubject = JiraChatToolAuthoritySubject | McpChatToolAuthoritySubject;
+/** Local Knowledge selection is separate from external MCP configuration and Jira credentials. */
+export interface KnowledgeChatToolAuthoritySubject {
+  readonly kind: "knowledge-pods";
+  readonly actorDigest: string;
+  readonly chatId: string;
+  readonly configurationDigest: string;
+  readonly podId?: never;
+  readonly bindingGeneration?: never;
+  readonly authenticationGeneration?: never;
+}
+export type ChatToolAuthoritySubject =
+  JiraChatToolAuthoritySubject | McpChatToolAuthoritySubject | KnowledgeChatToolAuthoritySubject;
 
 /** Ordinary Chat authority has no repository, branch, Editor session or Coding runtime. */
 export interface ChatToolAuthorityEnvelope {
@@ -52,8 +63,11 @@ export interface ChatToolAuthorityEnvelope {
   readonly requestedMode: CodingWorkbenchMode;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly effectiveMode: CodingWorkbenchMode;
-  readonly actionClasses: readonly ["connector-access", "network-egress"];
-  readonly connectorScopes: readonly ("issue-tracker.read" | "issue-tracker.write" | "mcp.tools")[];
+  readonly actionClasses:
+    readonly ["connector-access"] | readonly ["connector-access", "network-egress"];
+  readonly connectorScopes: readonly (
+    "issue-tracker.read" | "issue-tracker.write" | "mcp.tools" | "knowledge.read"
+  )[];
   readonly budget: CodingWorkbenchBudget & { readonly maxPatchBytes: 0 };
   readonly expiresAt: string;
   /** Digest of server-validated human acceptance; never a model-supplied approval. */
@@ -110,10 +124,16 @@ export function validateChatToolAuthoritySubject(
 ): CodingWorkbenchValidationResult<ChatToolAuthoritySubject> {
   if (!isRecord(value)) return invalid("chatAuthority.subject must be an object");
   const errors: string[] = [];
-  validateKeys(value, value.kind === "configured-mcp" ? MCP_SUBJECT_KEYS : SUBJECT_KEYS, errors);
+  validateKeys(
+    value,
+    value.kind === "configured-mcp" || value.kind === "knowledge-pods"
+      ? MCP_SUBJECT_KEYS
+      : SUBJECT_KEYS,
+    errors,
+  );
   validateDigest(value.actorDigest, "chatAuthority.subject.actorDigest", errors);
   validateSafeId(value.chatId, "chatAuthority.subject.chatId", errors, 128);
-  if (value.kind === "configured-mcp") {
+  if (value.kind === "configured-mcp" || value.kind === "knowledge-pods") {
     validateDigest(value.configurationDigest, "chatAuthority.subject.configurationDigest", errors);
     return result(value, errors);
   }
@@ -138,19 +158,25 @@ function validateModes(value: Record<string, unknown>, errors: string[]): void {
 }
 
 function scopesFor(subject: unknown): ReadonlySet<string> {
+  if (isRecord(subject) && subject.kind === "knowledge-pods") return new Set(["knowledge.read"]);
   return isRecord(subject) && subject.kind === "configured-mcp"
     ? new Set(["mcp.tools"])
     : CONNECTOR_SCOPES;
 }
+function validActionClasses(subject: unknown, actions: unknown): boolean {
+  if (!Array.isArray(actions)) return false;
+  const expected =
+    isRecord(subject) && subject.kind === "knowledge-pods"
+      ? ["connector-access"]
+      : ["connector-access", "network-egress"];
+  return (
+    actions.length === expected.length &&
+    expected.every((action, index) => actions[index] === action)
+  );
+}
 function validateCapabilities(value: Record<string, unknown>, errors: string[]): void {
-  if (
-    !Array.isArray(value.actionClasses) ||
-    value.actionClasses.length !== 2 ||
-    value.actionClasses[0] !== "connector-access" ||
-    value.actionClasses[1] !== "network-egress"
-  ) {
-    errors.push("chatAuthority.actionClasses must contain only connector and network access");
-  }
+  if (!validActionClasses(value.subject, value.actionClasses))
+    errors.push("chatAuthority.actionClasses must match its local or connected subject");
   const scopes: unknown = value.connectorScopes;
   const allowed = scopesFor(value.subject);
   if (
@@ -214,7 +240,7 @@ interface ChatToolReadGrantFacts {
   readonly schemaVersion: "1";
   readonly kind: "jira-chat-read-grant" | "mcp-chat-read-grant";
   readonly grantId: string;
-  readonly subject: ChatToolAuthoritySubject;
+  readonly subject: JiraChatToolAuthoritySubject | McpChatToolAuthoritySubject;
   /** Consent covers model transmission and retention in this conversation, not writes or import. */
   readonly disclosureVersion: ReadDisclosureVersion;
   readonly requestedAt: number;
@@ -288,6 +314,12 @@ function readGrantFamily(subject: unknown): { kind: string; disclosure: ReadDisc
     ? { kind: "mcp-chat-read-grant", disclosure: MCP_CHAT_READ_DISCLOSURE_VERSION }
     : { kind: "jira-chat-read-grant", disclosure: CHAT_TOOL_READ_DISCLOSURE_VERSION };
 }
+function validateReadGrantSubject(value: unknown, errors: string[]): void {
+  if (isRecord(value) && value.kind === "knowledge-pods")
+    errors.push("chatReadGrant.subject is invalid");
+  const subject = validateChatToolAuthoritySubject(value);
+  if (!subject.ok) errors.push(...subject.errors);
+}
 /** Structural validation does not establish consent or extend its lifetime. */
 export function validateChatToolReadGrant(
   value: unknown,
@@ -296,13 +328,12 @@ export function validateChatToolReadGrant(
   const errors: string[] = [];
   validateKeys(value, READ_GRANT_KEYS, errors, "chatReadGrant");
   const family = readGrantFamily(value.subject);
+  validateReadGrantSubject(value.subject, errors);
   if (value.schemaVersion !== "1" || value.kind !== family.kind)
     errors.push("chatReadGrant kind or schemaVersion is invalid");
   validateSafeId(value.grantId, "chatReadGrant.grantId", errors, 128);
   if (value.disclosureVersion !== family.disclosure)
     errors.push("chatReadGrant.disclosureVersion is invalid");
-  const subject = validateChatToolAuthoritySubject(value.subject);
-  if (!subject.ok) errors.push(...subject.errors);
   if (
     !positiveCount(value.requestedAt) ||
     !positiveCount(value.expiresAt) ||

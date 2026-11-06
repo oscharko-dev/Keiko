@@ -1862,24 +1862,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-model-gateway/src/toolCatalogBridge.ts",
-      "owner": "bindCall",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-model-gateway/src/toolCatalogBridge.ts",
-      "owner": "bindCalls",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-model-gateway/src/toolCatalogBridge.ts",
-      "owner": "createGatewayToolCatalogBridge",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-quality-intelligence/src/generation/parseGeneratedCandidates.ts",
       "owner": "parseJsonSliceAt",
       "kind": "unregistered-catch",

@@ -5,6 +5,7 @@ import {
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { processServerLogSink } from "./process-log-sink.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 
 const AUTOMATIC_CATALOG_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -131,6 +132,45 @@ export function logAutomaticCatalog(
       AUTOMATIC_CATALOG_OPERATION,
       { correlationId, ...(errorKind === undefined ? {} : { errorKind }) },
       fields,
+    ),
+  );
+}
+
+const METADATA_WAIT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.catalog.metadata.wait",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-startup-activity.logStartupMetadataWait",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["settled", "timeout", "aborted", "failed"],
+    },
+    elapsedMs: { type: "integer", dataClass: "duration", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-setup-metadata"],
+  proofIds: ["gateway.catalog.metadata.wait.line"],
+  releaseImpact: "patch",
+});
+
+export function logStartupMetadataWait(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  outcome: "settled" | "timeout" | "aborted" | "failed",
+  elapsedMs: number,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      METADATA_WAIT_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      { outcome, elapsedMs },
     ),
   );
 }

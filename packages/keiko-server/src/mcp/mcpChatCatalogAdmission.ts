@@ -1,3 +1,4 @@
+import { chatCapabilityMatches } from "../chat-tool-authority.js";
 import { createChatToolAuthorityPort, reserveChatToolInvocation } from "../chat-tool-approvals.js";
 import type {
   ChatToolReadGrantView,
@@ -164,8 +165,7 @@ function validAction(
 ): boolean {
   const context = options.context();
   return (
-    capability === context.authority &&
-    capability === context.authorityReference.envelopeDigest &&
+    chatCapabilityMatches(context, capability) &&
     options.tools.some(
       (tool) =>
         tool.name === action.name &&

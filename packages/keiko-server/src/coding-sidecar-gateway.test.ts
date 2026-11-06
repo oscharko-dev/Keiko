@@ -5,6 +5,7 @@ import {
   type BufferedServerLogSink,
 } from "../../../tests/support/buffered-server-log.js";
 import {
+  initializeConfiguredConversationReadiness,
   initializeLiteLlmCodingReadiness,
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
@@ -61,7 +62,7 @@ import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contra
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   buildRedactor,
-  CONVERSATION_READINESS_MAX_AGE_MS,
+  CONVERSATION_READINESS_CACHED_AFTER_MS,
   currentConversationReadinessObservation,
   type UiHandlerDeps,
 } from "./deps.js";
@@ -2117,9 +2118,8 @@ describe("coding-sidecar gateway", () => {
     );
   });
 
-  // #3907 AC3: nothing renews the chat model's readiness in the background, so without this an
-  // expired success left the Workbench reading "still checking this model" after every long run.
-  it("renews the model's expired chat readiness from an accepted answer, and nothing else", async () => {
+  // #3907 AC3: serving answers update the observation time without changing its cached result.
+  it("records a serving observation only for an accepted answer without repairing failures", async () => {
     const sink = captureServerLog("info");
     const answer = (deps: UiHandlerDeps): Promise<unknown> =>
       handleCodingSidecarGatewayChatCompletions(
@@ -2149,7 +2149,9 @@ describe("coding-sidecar gateway", () => {
             finishReason,
           }),
       );
-    const expired = new Date(Date.now() - CONVERSATION_READINESS_MAX_AGE_MS - 60_000).toISOString();
+    const expired = new Date(
+      Date.now() - CONVERSATION_READINESS_CACHED_AFTER_MS - 60_000,
+    ).toISOString();
     const withObservation = (
       runId: string,
       conversationReady: boolean,
@@ -2175,13 +2177,17 @@ describe("coding-sidecar gateway", () => {
       )?.extra?.readinessRenewal;
 
     const expiredSuccess = withObservation("run-renews", true);
-    expect(
-      currentConversationReadinessObservation(expiredSuccess.deps, "azure-coding-model"),
-    ).toBeUndefined();
+    expect(currentConversationReadinessObservation(expiredSuccess.deps, "azure-coding-model")).toBe(
+      true,
+    );
     expect(await answer(expiredSuccess.deps)).toBe(STREAMING);
     expect(currentConversationReadinessObservation(expiredSuccess.deps, "azure-coding-model")).toBe(
       true,
     );
+    expect(
+      expiredSuccess.holder.verifiedCapability("azure-coding-model")?.conversationCheckedAt,
+    ).not.toBe(expired);
+    expect(expiredSuccess.holder.verifiedCapability("azure-coding-model")?.checkedAt).toBe(expired);
     expect(renewal("run-renews")).toBe("renewed");
     expectActivityLogProof(
       "coding-sidecar.gateway.outcome.line",
@@ -2197,14 +2203,14 @@ describe("coding-sidecar gateway", () => {
     const failed = withObservation("run-failed-proof", false);
     await answer(failed.deps);
     expect(currentConversationReadinessObservation(failed.deps, "azure-coding-model")).toBe(false);
+    expect(failed.holder.verifiedCapability("azure-coding-model")?.checkedAt).toBe(expired);
     expect(renewal("run-failed-proof")).toBe("not-renewable");
 
     // A filtered answer reached the runtime but does not prove the model served the turn.
     const filtered = withObservation("run-filtered", true, "content_filter");
     await answer(filtered.deps);
-    expect(
-      currentConversationReadinessObservation(filtered.deps, "azure-coding-model"),
-    ).toBeUndefined();
+    expect(currentConversationReadinessObservation(filtered.deps, "azure-coding-model")).toBe(true);
+    expect(filtered.holder.verifiedCapability("azure-coding-model")?.checkedAt).toBe(expired);
     expect(renewal("run-filtered")).toBe("not-renewable");
 
     // Without a success to renew, an answer establishes nothing.
@@ -4111,11 +4117,8 @@ describe("coding-sidecar gateway", () => {
     });
   });
 
-  // #3907 AC3: an expired success read as `model-verification-pending` while nothing checked the
-  // model, so the Workbench polled a promise no probe kept. Customer 1.3.4 moved the check to the
-  // human's actions: a passive re-read never claims a check and never starts one, and a read for a
-  // model just chosen in the picker (`check=1`) starts the one on-demand check.
-  it("checks an expired model only when the picker asks, and never claims a check nobody runs", async () => {
+  // An idle model retains its startup readiness on passive reads and picker selections.
+  it("reuses cached startup readiness on passive reads and picker selections", async () => {
     const context = (query: string): RouteContext => ({
       req: mockRequest({ method: "GET", url: `/api/coding-sidecar/gateway/profile${query}` }),
       res: mockResponse().res,
@@ -4128,7 +4131,7 @@ describe("coding-sidecar gateway", () => {
     holder.recordVerifiedCapability(
       "azure-coding-model",
       { conversationReady: true },
-      new Date(Date.now() - CONVERSATION_READINESS_MAX_AGE_MS - 60_000).toISOString(),
+      new Date(Date.now() - CONVERSATION_READINESS_CACHED_AFTER_MS - 60_000).toISOString(),
       holder.generation(),
     );
     const fetch = vi.fn(() =>
@@ -4147,20 +4150,20 @@ describe("coding-sidecar gateway", () => {
       expect(passive.body).toMatchObject({
         status: "available",
         modelAlias: "azure-coding-model",
-        verification: "unverified",
+        verification: "verified",
       });
 
       const chosen = await handleCodingSidecarGatewayProfile(context("?check=1"), deps);
-      expect(fetch).toHaveBeenCalledOnce();
+      expect(fetch).not.toHaveBeenCalled();
       expect(chosen.body).toMatchObject({
         status: "available",
         modelAlias: "azure-coding-model",
         verification: "verified",
       });
 
-      // A fresh success adds nothing, even when the picker asks again.
+      // Repeated selections add no provider readiness request.
       await handleCodingSidecarGatewayProfile(context("?check=1"), deps);
-      expect(fetch).toHaveBeenCalledOnce();
+      expect(fetch).not.toHaveBeenCalled();
     } finally {
       await stopConfiguredConversationReadiness(deps);
     }
@@ -4174,10 +4177,10 @@ describe("coding-sidecar gateway", () => {
     resetCodingWorkbenchContextWindowProbesForTests();
     try {
       const context = {
-        req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+        req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile?check=1" }),
         res: mockResponse().res,
         params: {},
-        url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+        url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile?check=1"),
         correlationId: undefined,
       } satisfies RouteContext;
       const config = configValue(
@@ -4204,6 +4207,14 @@ describe("coding-sidecar gateway", () => {
           }),
       };
       const read = handleCodingSidecarGatewayProfile(context, deps);
+      const passive = await handleCodingSidecarGatewayProfile(
+        { ...context, url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile") },
+        deps,
+      );
+      expect(passive.body).toEqual({
+        status: "unavailable",
+        reason: "model-verification-pending",
+      });
       await vi.advanceTimersByTimeAsync(PROFILE_PROBE_WAIT_MS);
       const result = await read;
       expect(result.body).toEqual({
@@ -4273,10 +4284,10 @@ describe("coding-sidecar gateway", () => {
       };
       const read = handleCodingSidecarGatewayProfile(
         {
-          req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+          req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile?check=1" }),
           res: mockResponse().res,
           params: {},
-          url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+          url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile?check=1"),
           correlationId: undefined,
         },
         deps,
@@ -4300,10 +4311,10 @@ describe("coding-sidecar gateway", () => {
     resetCodingWorkbenchContextWindowProbesForTests();
     try {
       const context = {
-        req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+        req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile?check=1" }),
         res: mockResponse().res,
         params: {},
-        url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+        url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile?check=1"),
         correlationId: undefined,
       } satisfies RouteContext;
       const aged = capability({
@@ -10069,7 +10080,7 @@ describe("inactive Code Mode run-bound compaction", () => {
   });
 });
 
-describe("fresh chat serving for new coding tasks", () => {
+describe("configuration-bound chat serving for new coding tasks", () => {
   afterEach(() => {
     vi.useRealTimers();
     resetServerLogger();
@@ -10165,7 +10176,7 @@ describe("fresh chat serving for new coding tasks", () => {
     }
   });
 
-  it("keeps the actual F73 gateway request serving after only chat freshness expires", async () => {
+  it("keeps the actual F73 gateway request and new-task admission after a long idle", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const model = capability();
     const featureProof = model.toolCallingVerification;
@@ -10223,7 +10234,7 @@ describe("fresh chat serving for new coding tasks", () => {
       const before = await request();
       assertRouteResult(before);
       expect(before.status).toBe(200);
-      vi.setSystemTime(issuedAtMs + CONVERSATION_READINESS_MAX_AGE_MS);
+      vi.setSystemTime(issuedAtMs + CONVERSATION_READINESS_CACHED_AFTER_MS);
       expect(liveHolder.verifiedCapability("azure-coding-model")).toMatchObject({
         checkedAt: observation.checkedAt,
         conversationCheckedAt: observation.checkedAt,
@@ -10231,9 +10242,9 @@ describe("fresh chat serving for new coding tasks", () => {
         fields: { toolCalling: true, conversationReady: true },
       });
       expect(holder.current()).toBe(config);
-      expect(() =>
-        admitCodingRunModel(config, "azure-coding-model", undefined, liveHolder),
-      ).toThrow(expect.objectContaining({ reason: "model-verification-pending" }) as Error);
+      expect(admitCodingRunModel(config, "azure-coding-model", undefined, liveHolder)).toEqual({
+        profileId: "azure-coding-model",
+      });
       const after = await request();
       assertRouteResult(after);
       expect(after.status).toBe(200);
@@ -10243,11 +10254,10 @@ describe("fresh chat serving for new coding tasks", () => {
     }
   });
 
-  // An unobserved model is never admitted and never claimed verified. Customer 1.3.4: the passive
-  // source no longer says "still checking" when no check runs (the Workbench then waited for a check
-  // nobody started); it names the model as usable but unverified, and the start checks it first.
-  it("keeps unobserved new-task admission strict and lets the start check the model", async () => {
+  // Missing startup evidence never authorizes a run or starts a hidden provider check.
+  it("keeps unobserved new-task admission strict without request-time probes", async () => {
     const deps = servingDeps();
+    const fetch = vi.fn(() => Promise.resolve(Response.json({})));
     try {
       expect(() => liveAdmission(deps)).toThrow(
         expect.objectContaining({ reason: "model-verification-pending" }) as Error,
@@ -10258,36 +10268,33 @@ describe("fresh chat serving for new coding tasks", () => {
         modelAlias: "azure-coding-model",
         verification: "unverified",
       });
-
-      const fetch = vi.fn(() =>
-        Promise.resolve(
-          Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
-        ),
+      await awaitCodingRunModelReadiness(
+        { ...deps, gatewayReadinessFetch: fetch },
+        "azure-coding-model",
+        "serving-start-0001",
       );
-      const checking = { ...deps, gatewayReadinessFetch: fetch };
-      await awaitCodingRunModelReadiness(checking, "azure-coding-model", "serving-start-0001");
-      expect(fetch).toHaveBeenCalledOnce();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(() => liveAdmission(deps)).toThrow(
+        expect.objectContaining({ reason: "model-verification-pending" }) as Error,
+      );
+      // Explicit Settings verification supplies the same generation-bound observation.
+      await observeChat(deps, true);
       expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
-
-      // A ready model adds nothing to a later start.
-      await awaitCodingRunModelReadiness(checking, undefined, "serving-start-0002");
-      expect(fetch).toHaveBeenCalledOnce();
     } finally {
       await stopConfiguredConversationReadiness(deps);
       deps.store.close();
     }
   });
 
-  // Auditor blocker (customer 1.3.4): a start after five idle minutes was refused as "still
-  // checking" and started no check. The start now checks the expired model and is admitted.
-  it("admits a start after an idle while by checking the expired model first", async () => {
+  // Startup success remains usable after an idle period without a new provider request.
+  it("admits a start after a long idle from cached startup readiness", async () => {
     const deps = servingDeps();
     const holder = deps.gatewayConfig;
     if (holder === undefined) throw new Error("missing serving fixture");
     holder.recordVerifiedCapability(
       "azure-coding-model",
       { toolCalling: true, conversationReady: true },
-      new Date(Date.now() - CONVERSATION_READINESS_MAX_AGE_MS - 60_000).toISOString(),
+      new Date(Date.now() - CONVERSATION_READINESS_CACHED_AFTER_MS - 60_000).toISOString(),
       holder.generation(),
     );
     const fetch = vi.fn(() =>
@@ -10297,11 +10304,9 @@ describe("fresh chat serving for new coding tasks", () => {
     );
     const checking = { ...deps, gatewayReadinessFetch: fetch };
     try {
-      expect(() => liveAdmission(deps)).toThrow(
-        expect.objectContaining({ reason: "model-verification-pending" }) as Error,
-      );
+      expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
       await awaitCodingRunModelReadiness(checking, "azure-coding-model", "serving-idle-start");
-      expect(fetch).toHaveBeenCalledOnce();
+      expect(fetch).not.toHaveBeenCalled();
       expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
     } finally {
       await stopConfiguredConversationReadiness(deps);
@@ -10322,6 +10327,7 @@ describe("fresh chat serving for new coding tasks", () => {
     );
     const checking = { ...deps, gatewayReadinessFetch: fetch };
     try {
+      initializeConfiguredConversationReadiness(checking, "serving-f3-startup");
       const check = awaitCodingRunModelReadiness(checking, "azure-coding-model", "serving-f3");
       await vi.waitFor(() => {
         expect(fetch).toHaveBeenCalledOnce();
@@ -10419,7 +10425,7 @@ describe("fresh chat serving for new coding tasks", () => {
     },
   );
 
-  it("admits a freshly checked explicit configured alias and expires it at the exact boundary", async () => {
+  it("retains a checked explicit configured alias at and beyond the old expiry boundary", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-10-08T12:00:00.000Z"));
     const deps = servingDeps();
@@ -10427,13 +10433,15 @@ describe("fresh chat serving for new coding tasks", () => {
       await observeChat(deps, true);
       expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
       vi.setSystemTime(
-        Date.parse("2026-10-08T12:00:00.000Z") + CONVERSATION_READINESS_MAX_AGE_MS - 1,
+        Date.parse("2026-10-08T12:00:00.000Z") + CONVERSATION_READINESS_CACHED_AFTER_MS - 1,
       );
       expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
-      vi.setSystemTime(Date.parse("2026-10-08T12:00:00.000Z") + CONVERSATION_READINESS_MAX_AGE_MS);
-      expect(() => liveAdmission(deps)).toThrow(
-        expect.objectContaining({ reason: "model-verification-pending" }) as Error,
+      vi.setSystemTime(
+        Date.parse("2026-10-08T12:00:00.000Z") + CONVERSATION_READINESS_CACHED_AFTER_MS,
       );
+      expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
+      vi.setSystemTime(Date.parse("2026-10-08T12:00:00.000Z") + 86_400_000);
+      expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
     } finally {
       deps.store.close();
     }

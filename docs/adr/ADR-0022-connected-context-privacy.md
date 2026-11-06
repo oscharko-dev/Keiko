@@ -292,6 +292,11 @@ Ambiguous anchors, duplicate coordinates, extra schema fields and unsupported ra
 closed. Existing literal marker-only responses remain compatible under those guards. This
 changes neither the turn's physical-attempt ceiling nor its remaining input/output/time grants;
 existing answer-details and reconciliation events record the actual disposition without bodies.
+Single-source, multi-source and hybrid marker repair use an explicit tool-free purpose through
+the same admitted, turn-metered model port. Repair advertises no catalog and never enters the
+tool loop or dispatches a returned call. Unexpected tool-call output is refused with its observed
+usage retained. Current readiness/configuration generation, authority, cancellation, prompt/output
+bounds and physical-attempt/spend admission remain binding.
 When that budget requires shrinking a located excerpt, a complete matching line that fits the
 remaining UTF-8 byte grant takes priority over an unrelated leading prefix. Adjacent complete
 lines may fill the remaining grant. The fitted excerpt retains its physical source offsets and

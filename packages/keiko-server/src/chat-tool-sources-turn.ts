@@ -1,3 +1,9 @@
+import {
+  isKnowledgeChatAuthorityEnvelope,
+  prepareAcceptedKnowledgeChatAuthority,
+  reserveCurrentKnowledgeChatAuthority,
+} from "./knowledge-chat-authority.js";
+import type { KnowledgeChatTurnOptions } from "./knowledge-chat-turn.js";
 import { reserveChatToolPrompt } from "./chat-tool-approvals.js";
 import { JIRA_TOOL_GUIDANCE } from "./atlassian/jiraToolGuidance.js";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
@@ -16,11 +22,17 @@ import { correlationIdOrUnknown } from "./correlation.js";
 import { logConversationAdmission } from "./conversation-readiness-log.js";
 import { ConversationModelNotReadyError } from "./conversation-readiness-admission.js";
 import {
+  isJiraEnvelope,
   prepareAcceptedJiraChatAuthority,
   reserveCurrentJiraChatAuthority,
 } from "./atlassian/jiraChatAuthority.js";
 import { prepareAcceptedMcpChatAuthority } from "./mcp/mcpChatAuthority.js";
-import { observeJiraChatMutation, type JiraChatTurnOptions } from "./atlassian/jiraChatToolTurn.js";
+import {
+  createJiraChatTurnReviewPorts,
+  observeJiraChatMutation,
+  type JiraChatTurnOptions,
+} from "./atlassian/jiraChatToolTurn.js";
+import { openTraceSession } from "./requirement-trace.js";
 import {
   observeMcpChatMutation,
   mcpChatTurnContext,
@@ -38,17 +50,22 @@ import {
   type ChatSourcesContext,
 } from "./chat-tool-sources.js";
 
+type Primary =
+  | { readonly kind: "jira"; readonly options: JiraChatTurnOptions }
+  | { readonly kind: "knowledge"; readonly options: KnowledgeChatTurnOptions };
 interface Options {
   readonly deps: UiHandlerDeps;
   readonly message: ChatMessage;
-  readonly jira: JiraChatTurnOptions;
+  readonly primary: Primary;
   readonly mcp: McpChatTurnOptions;
   readonly correlationId: string;
   readonly signal: AbortSignal;
 }
 function sourceContext(options: Options): ChatSourcesContext {
   const {
-    jira: { authority },
+    primary: {
+      options: { authority },
+    },
     message,
     signal,
     correlationId,
@@ -67,6 +84,7 @@ function sourceContext(options: Options): ChatSourcesContext {
   const mcp = mcpChatTurnContext(options.mcp);
   return {
     runId: jira.runId,
+    primaryKind: options.primary.kind,
     correlationId,
     authority: chatSourcesAuthorityDigest({ jira, mcp }),
     authorityExpiresAt: jira.authorityExpiresAt,
@@ -80,16 +98,16 @@ function sourceContext(options: Options): ChatSourcesContext {
 /** One binder, harness and model loop; source adapters keep their existing consent and effect owners. */
 class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
   constructor(private readonly sourceOptions: Options) {
-    const { deps, message, correlationId, jira, mcp } = sourceOptions;
-    const managed = combineChatCatalogs(jira.managed, mcp.managed);
+    const { deps, message, correlationId, primary, mcp } = sourceOptions;
+    const managed = combineChatCatalogs(primary.options.managed, mcp.managed);
     super({
       deps,
       message,
       correlationId,
       managed,
       context: sourceContext(sourceOptions),
-      budget: jira.authority.envelope.budget,
-      guidance: JIRA_TOOL_GUIDANCE,
+      budget: primary.options.authority.envelope.budget,
+      ...(primary.kind === "jira" ? { guidance: JIRA_TOOL_GUIDANCE } : {}),
       bind: (context, budgetPort) =>
         bindChatToolCatalog<ChatSourcesConsumer>({
           deps,
@@ -102,6 +120,15 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
             context: () => context,
             tools: mcp.managed.tools,
             ...this.consentPorts(),
+            ...(primary.kind === "jira"
+              ? {
+                  jiraReview: createJiraChatTurnReviewPorts(primary.options, {
+                    writeExchange: (actionId) => this.writeExchange(actionId),
+                    reviewableWrite: (action) => this.reviewableWrite(action),
+                    readAllowed: () => !context.signal.aborted && currentChatSources(deps, context),
+                  }),
+                }
+              : {}),
           }),
         }),
     });
@@ -109,7 +136,13 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
   protected override reserveAuthorityPrompt(promptTokens: number): boolean {
     return (
       currentChatSources(this.sourceOptions.deps, this.context) &&
-      reserveChatToolPrompt(this.sourceOptions.jira, reserveCurrentJiraChatAuthority, promptTokens)
+      reserveChatToolPrompt(
+        this.sourceOptions.primary.options,
+        this.sourceOptions.primary.kind === "knowledge"
+          ? reserveCurrentKnowledgeChatAuthority
+          : reserveCurrentJiraChatAuthority,
+        promptTokens,
+      )
     );
   }
   protected override observedMutation(
@@ -118,8 +151,9 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
     result: ToolResultEnvelope,
   ): ChatToolExchange["mutationOutcome"] {
     return (
-      observeJiraChatMutation(this.sourceOptions.jira, call, identity, result) ??
-      observeMcpChatMutation(this.sourceOptions.mcp, call, identity, result)
+      (this.sourceOptions.primary.kind === "jira"
+        ? observeJiraChatMutation(this.sourceOptions.primary.options, call, identity, result)
+        : undefined) ?? observeMcpChatMutation(this.sourceOptions.mcp, call, identity, result)
     );
   }
 }
@@ -128,7 +162,17 @@ function acceptedSources(
   deps: UiHandlerDeps,
   message: ChatMessage,
   correlationId: string,
-): Pick<JiraChatTurnOptions, "authority"> & {
+  primaryKind: "jira" | "knowledge",
+): {
+  readonly primary: {
+    readonly authority: {
+      readonly ok: true;
+      readonly envelope:
+        | JiraChatTurnOptions["authority"]["envelope"]
+        | KnowledgeChatTurnOptions["authority"]["envelope"];
+      readonly reference: JiraChatTurnOptions["authority"]["reference"];
+    };
+  };
   readonly mcpAuthority: McpChatTurnOptions["authority"];
 } {
   const turn = {
@@ -138,7 +182,10 @@ function acceptedSources(
     nowMs: Date.now(),
     correlationId,
   };
-  const jira = prepareAcceptedJiraChatAuthority(deps, turn);
+  const jira =
+    primaryKind === "knowledge"
+      ? prepareAcceptedKnowledgeChatAuthority(deps, turn)
+      : prepareAcceptedJiraChatAuthority(deps, turn);
   const mcp = prepareAcceptedMcpChatAuthority(deps, turn);
   requireDispatch(jira.ok && mcp.ok, "denied", "authority-invalid");
   const registered = deps.agentAuthorityRegistry?.registerChatSources(
@@ -155,7 +202,7 @@ function acceptedSources(
     "authority-invalid",
   );
   return {
-    authority: { ok: true, envelope: jira.envelope, reference: jiraReference },
+    primary: { authority: { ok: true, envelope: jira.envelope, reference: jiraReference } },
     mcpAuthority: { ok: true, envelope: mcp.envelope, reference: mcpReference },
   };
 }
@@ -167,6 +214,7 @@ export async function createChatSourcesToolTurn(
   signal: AbortSignal,
   correlationId: string | undefined,
   mcp: McpChatCatalog,
+  primaryKind: "jira" | "knowledge" = "jira",
 ): Promise<ChatToolTurnPort> {
   const correlation = correlationIdOrUnknown(correlationId);
   if (!chatModelSupportsTools(deps, modelId)) {
@@ -174,9 +222,14 @@ export async function createChatSourcesToolTurn(
     logConversationAdmission("observation-unavailable", correlation, generation, generation);
     throw new ConversationModelNotReadyError("tool-calling");
   }
-  const jira = await deps.jiraChatCatalog?.get();
+  const jira = await (
+    primaryKind === "knowledge" ? deps.knowledgeChatCatalog : deps.jiraChatCatalog
+  )?.get();
   requireDispatch(jira !== undefined, "denied", "authority-invalid");
-  const { authority, mcpAuthority } = acceptedSources(deps, message, correlation);
+  const {
+    primary: { authority },
+    mcpAuthority,
+  } = acceptedSources(deps, message, correlation, primaryKind);
   requireDispatch(
     mcpAuthority.envelope.subject.configurationDigest === mcp.configurationDigest,
     "denied",
@@ -188,7 +241,35 @@ export async function createChatSourcesToolTurn(
   const common = { deps, message, signal: sharedSignal, correlationId: correlation };
   return new ChatSourcesToolTurn({
     ...common,
-    jira: { ...common, authority, managed: jira },
+    primary: acceptedPrimary(common, jira, authority),
     mcp: { ...common, authority: mcpAuthority, managed: mcp },
   });
+}
+
+function acceptedPrimary(
+  common: Pick<KnowledgeChatTurnOptions, "deps" | "message" | "signal" | "correlationId">,
+  managed: KnowledgeChatTurnOptions["managed"],
+  authority: ReturnType<typeof acceptedSources>["primary"]["authority"],
+): Primary {
+  const envelope = authority.envelope;
+  if (isKnowledgeChatAuthorityEnvelope(envelope))
+    return {
+      kind: "knowledge",
+      options: { ...common, managed, authority: { ...authority, envelope } },
+    };
+  requireDispatch(isJiraEnvelope(envelope), "denied", "authority-invalid");
+  return {
+    kind: "jira",
+    options: {
+      ...common,
+      managed,
+      authority: { ...authority, envelope },
+      openTrace: (context) =>
+        openTraceSession(common.deps, {
+          chatId: context.chatId,
+          userMessageId: context.userMessageId,
+          correlationId: context.correlationId,
+        }),
+    },
+  };
 }

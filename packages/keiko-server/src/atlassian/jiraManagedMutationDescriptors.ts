@@ -10,6 +10,7 @@ import {
   JIRA_FIELD_VALIDATION_FAILURES,
   JIRA_MUTATION_DETAIL_LIMITS,
   JIRA_MUTATION_OPERATIONS,
+  JIRA_REQUIREMENT_REFERENCE_CHARS_MAX,
   JIRA_MUTATION_RESULT_STATES,
   JIRA_TEMPLATE_RULE_IDS,
   JIRA_TEMPLATE_VIOLATIONS_MAX,
@@ -32,27 +33,37 @@ import {
 import { KEY_RANGE_ENTRY_CHARS } from "./jiraDraftKeyRanges.js";
 import { jiraMutationToolId } from "./jiraMutationToolId.js";
 
+/** Conjunction preserves the native lowercase UUID grammar within the safe schema dialect. */
+export const JIRA_DRAFT_ID_SCHEMA = { ...text(36), format: "uuid", pattern: "^[0-9a-f-]{36}$" };
+
 const ISSUE_KEY = { ...text(128), minLength: 1 };
-const REQUIREMENT_IDS = { type: "array", maxItems: JIRA_REQUIREMENT_IDS_MAX, items: text(80) };
+const REQUIREMENT_IDS = {
+  type: "array",
+  maxItems: JIRA_REQUIREMENT_IDS_MAX,
+  items: text(JIRA_REQUIREMENT_REFERENCE_CHARS_MAX),
+};
 const TRACE_RESULT = object({
   labelsApplied: { type: "boolean" },
   footerApplied: { type: "boolean" },
   droppedLabels: { type: "array", maxItems: 16, items: text(255) },
 });
-const REQUIREMENT_PROBLEMS = {
+export const REQUIREMENT_PROBLEMS = {
   type: "array",
   maxItems: 32,
   items: object(
     {
       ref: text(32),
-      reference: text(80),
-      reason: { type: "string", enum: ["malformed", "unknown", "ambiguous"] },
+      reference: text(JIRA_REQUIREMENT_REFERENCE_CHARS_MAX),
+      reason: {
+        type: "string",
+        enum: ["malformed", "unknown", "ambiguous", "acceptance-criteria-missing"],
+      },
       candidates: { type: "array", maxItems: 8, items: text(120) },
     },
     ["reference", "reason"],
   ),
 };
-const REQUIREMENT_REFUSAL = {
+export const REQUIREMENT_REFUSAL = {
   type: "string",
   enum: ["no-knowledge-pod", "unavailable", "references", "untraced"],
 };
@@ -62,8 +73,7 @@ const ISSUE_TYPE_ID = { ...NUMERIC_ID, description: "Numeric id from the issue-t
 const FIELDS = {
   ...object({}),
   additionalProperties: true,
-  description:
-    "Field IDs and values validated against current Jira metadata; omitted fields stay unchanged, null clears only when permitted. An issue field takes an issue key, a user its user name, a choice its id or exact value, an opaque field a plain JSON value shaped by its schemaType. A refused write returns the field and Jira's error.",
+  description: "Jira field IDs and typed values; follow shared Jira field guidance.",
 };
 const UPDATES = {
   type: "array",
@@ -128,13 +138,15 @@ const DRAFT_LINKS = {
     ["type", "direction"],
   ),
 };
-const JIRA_DRAFT_ITEM_SCHEMA = object(
+export const JIRA_DRAFT_ITEM_SCHEMA = object(
   {
     ref: DRAFT_REF,
     projectId: PROJECT_ID,
     issueTypeId: ISSUE_TYPE_ID,
     fields: {
       ...FIELDS,
+      properties: { summary: { type: "string", minLength: 1 } },
+      required: ["summary"],
       description:
         "Create fields as for jira.create; summary is required. Omit the field the parent relation writes.",
     },
@@ -438,9 +450,9 @@ const DEFINITIONS: Readonly<
   },
   "jira.draft": {
     description:
-      "Propose a backlog of related issues (epics, stories, tasks, bugs, sub-tasks) as one draft the human approves once. Items name each other by ref and are created in dependency order; an item whose parent or linked item was not created is skipped (blockedBy), and an existing issue is reconciled, not created again. Use it whenever more than one issue is to be created, a parent and children to any depth. Send up to " +
+      "Create related issues in Jira (epics, stories, tasks, bugs, sub-tasks) from an inline backlog or a saved Keiko draft; this tool performs Jira writes under the current write authority and required human approval. Items name each other by ref and are created in dependency order; an item whose parent or linked item was not created is skipped (blockedBy), and an existing issue is reconciled, not created again. Use it whenever more than one issue is to be created, a parent and children to any depth. Send up to " +
       String(JIRA_DRAFT_PAGE_ITEMS_MAX) +
-      " items here; stage a larger draft of any size with jira.draft-stage, then pass its draftId and draftDigest here, so it is approved once. Never split one backlog into several approvals. Items left pending continue with the same draftId and draftDigest, nothing created twice.",
+      " items inline. For a saved draft, pass only its draftId and draftDigest from jira.draft-stage. jira.draft-stage saves drafts of any supported size in Keiko without Jira writes. Never split one backlog into several approvals. Items left pending continue with the same draftId and draftDigest, nothing created twice.",
     // The existing explicit JSON Schema dialect expresses the handler's two closed forms;
     // optional sibling properties would also advertise empty, partial and mixed arguments.
     input: compileExternalCatalogSchema({
@@ -459,7 +471,7 @@ const DEFINITIONS: Readonly<
         ),
         object(
           {
-            draftId: { ...text(36), format: "uuid", pattern: "^[0-9a-f-]{36}$" },
+            draftId: JIRA_DRAFT_ID_SCHEMA,
             draftDigest: { ...text(64), pattern: JIRA_DRAFT_DIGEST_PATTERN },
           },
           ["draftId", "draftDigest"],
