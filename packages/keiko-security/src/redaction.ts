@@ -430,6 +430,8 @@ function redactIdentifiedPatterns(
       preserveSourceLineBreaks,
     ),
   )
+    // Runs on the whole projection, so a header a YAML or JSON region left alone is still masked.
+    .replace(AUTHORIZATION_HEADER_PATTERN, (_match, prefix: string) => `${prefix}${REDACTED}`)
     .replace(GERMAN_IBAN_PATTERN, REDACTED)
     .replace(INTERNATIONAL_GERMAN_PHONE_PATTERN, REDACTED)
     .replace(DOMESTIC_GERMAN_PHONE_PATTERN, REDACTED);
@@ -619,10 +621,21 @@ export function deepRedactStrings(
   return value;
 }
 
+// A structured key (JSON, YAML, source property) is sensitive by the same grammar the flat text
+// path applies: a secret label that starts at a word boundary and ends the key, so
+// `openai_api_key`, `my_password` and `GITHUB_TOKEN` count while `max_tokens` and `mypassword` do not.
+const SENSITIVE_KEY_SUFFIX = new RegExp(
+  String.raw`(?<![A-Za-z0-9])(?:${SECRET_KEY_NAMES}|x-api-key|api[_-]?key)[*_]*$`,
+  "iu",
+);
+
 function sensitiveSourceName(name: string): boolean {
   const last = name.slice(name.lastIndexOf(".") + 1);
   return (
-    isCredentialKeyName(name) || isCredentialKeyName(last) || /^(?:x-)?api[_-]?key$/iu.test(last)
+    isCredentialKeyName(name) ||
+    isCredentialKeyName(last) ||
+    /^(?:x-)?api[_-]?key$/iu.test(last) ||
+    SENSITIVE_KEY_SUFFIX.test(name)
   );
 }
 

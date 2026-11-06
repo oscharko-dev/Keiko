@@ -64,13 +64,28 @@ function isDeniedUncached(relPath: string): boolean {
     if (lower === EXAMPLE_ENV) {
       continue;
     }
+    const spellings = windowsAliasSpelling(lower);
     for (const matcher of PRECOMPILED_DENY_MATCHERS) {
-      if (matcher.regex.test(lower)) {
+      if (matcher.regex.test(lower) || (spellings !== lower && matcher.regex.test(spellings))) {
         return true;
       }
     }
   }
   return false;
+}
+
+// Windows resolves a segment with trailing dots or spaces, or an alternate-data-stream suffix
+// (`name:stream`), to the plain name. The alias is checked IN ADDITION to the literal segment, so
+// the check only ever denies more; the `.env.example` exception stays an exact, literal match.
+const WINDOWS_TRAILING_ALIAS: ReadonlySet<string> = new Set([".", " "]);
+
+function windowsAliasSpelling(segment: string): string {
+  const stream = segment.indexOf(":");
+  let end = stream > 0 ? stream : segment.length;
+  while (end > 1 && WINDOWS_TRAILING_ALIAS.has(segment.charAt(end - 1))) {
+    end -= 1;
+  }
+  return segment.slice(0, end);
 }
 
 // The one owner-approved exception to the tool-state entry `.claude` (#3903, owner decision of

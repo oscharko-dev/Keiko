@@ -1544,6 +1544,16 @@ contracts, and conversation-history compaction summaries keep the default projec
 Workbench agent's answers follow ADR-0003 D7 independently of this switch. Already masked historic chat text
 cannot be recovered: re-read sources and generate a new answer.
 
+The default (strict) projection is a superset of that floor (#4271, found by seeded property
+tests): every `Authorization` header value is masked on the whole projection, also one without a
+Bearer/Basic scheme inside a JSON or YAML region, and a structured key (JSON, YAML, source
+property) is sensitive by the same label grammar as flat text: a secret label that starts at a word
+boundary and ends the key, so `openai_api_key`, `my_password` and `GITHUB_TOKEN` count and
+`max_tokens` or `mypassword` do not. Known limit: source inference re-parses the remainder at each
+line that only looks like source, so text with many such lines costs quadratic time under the strict
+projection; a work or time bound cannot separate that input from real documents without masking
+their tails, so it remains open in #4271 for an incremental classifier.
+
 The wire boundary is asserted by `grounded-qa.redaction.test.ts`: an attacker-controlled
 pack with secret-shaped strings (`sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, `Bearer …`, PEM
 blocks) in every string field flows through `runAsk`, and the test asserts:
