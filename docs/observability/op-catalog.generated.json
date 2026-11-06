@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e2ca59d2bda396043d6a3b995df310b942e9f1fb9ecdcbea0812e17f23451a9f",
+    "catalogDigest": "fc76e24bdab75b666a53188f8735bac3476dc179eba0e8d86f7ecda49242f9ca",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -12311,7 +12311,7 @@
         "proofIds": ["coding-runtime.read-only-child.completed.emitted-line"],
         "registrationSite": "packages/keiko-server/src/coding-runtime/readOnlyChildOrchestrator.ts:141",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/readOnlyChildOrchestrator.ts:711"
+          "packages/keiko-server/src/coding-runtime/readOnlyChildOrchestrator.ts:721"
         ]
       },
       {
@@ -12397,7 +12397,7 @@
         "proofIds": ["coding-runtime.read-only-child.runner-failed.emitted-line"],
         "registrationSite": "packages/keiko-server/src/coding-runtime/readOnlyChildOrchestrator.ts:165",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/readOnlyChildOrchestrator.ts:750"
+          "packages/keiko-server/src/coding-runtime/readOnlyChildOrchestrator.ts:760"
         ]
       },
       {
