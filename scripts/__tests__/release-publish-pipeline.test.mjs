@@ -68,6 +68,10 @@ import {
   PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
   PORTABLE_EVALUATION_TARGET_NAMES,
 } from "../lib/portable-evaluation-manifest.mjs";
+import {
+  approvedOpenCodeVersion,
+  codingRuntimeReleasesForPublishTest,
+} from "./support/coding-runtime-releases-fixture.mjs";
 
 const APPROVED_SIDECAR = JSON.parse(readFileSync("portable-runtime-approvals.json", "utf8"))
   .sidecarRuntimes[0];
@@ -90,12 +94,7 @@ const RELEASE_IMPACT_CATALOG = JSON.parse(
   readFileSync(join(REPO_ROOT, "release-impact.catalog.json"), "utf8"),
 );
 const RELEASE_VERSION = ROOT_MANIFEST.version;
-const CODING_RUNTIME_RELEASES = JSON.parse(
-  readFileSync(join(REPO_ROOT, "docs", "release", "coding-runtime-npm-packages.json"), "utf8"),
-);
-const APPROVED_OPENCODE_VERSION = JSON.parse(
-  readFileSync(join(REPO_ROOT, "portable-runtime-approvals.json"), "utf8"),
-).sidecarRuntimes.find((runtime) => runtime.name === "opencode-compatible").upstream.version;
+const APPROVED_OPENCODE_VERSION = approvedOpenCodeVersion();
 const EVALUATION_DOWNLOAD_NAMES = [
   ...PORTABLE_TARGETS.filter((target) =>
     PORTABLE_EVALUATION_TARGET_NAMES.includes(target.platformTarget),
@@ -1087,21 +1086,6 @@ function releaseImpactCatalogForPublishTest() {
         : entry,
     ),
   };
-}
-
-// The reviewed runtime pins as they stand once the runtime packages the root manifest selects
-// carry `opencodeVersion`: by default the OpenCode this checkout approves, so the orchestrator's
-// runtime-selection gate passes and every other scenario reaches what it tests.
-function codingRuntimeReleasesForPublishTest(opencodeVersion = APPROVED_OPENCODE_VERSION) {
-  const releases = { ...CODING_RUNTIME_RELEASES.releases };
-  for (const [name, version] of Object.entries(ROOT_MANIFEST.optionalDependencies ?? {})) {
-    if (!name.startsWith("@oscharko-dev/keiko-coding-runtime-")) continue;
-    const release = releases[version] ?? {};
-    releases[version] = Object.fromEntries(
-      Object.entries(release).map(([target, entry]) => [target, { ...entry, opencodeVersion }]),
-    );
-  }
-  return { ...CODING_RUNTIME_RELEASES, releases };
 }
 
 // Run the real scripts/release-publish.mjs with stub npm/gh/git prepended to PATH.

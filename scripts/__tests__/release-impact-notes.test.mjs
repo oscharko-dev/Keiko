@@ -8,6 +8,7 @@ import {
   renderReleaseImpactNotes,
   renderReleaseImpactNotesFromRoot,
 } from "../release-impact-notes.mjs";
+import { codingRuntimeReleasesEnvForPublishTest } from "./support/coding-runtime-releases-fixture.mjs";
 
 function currentRepoVersion() {
   return JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")).version;
@@ -89,10 +90,14 @@ function indexOfNeedle(text, needle) {
   return index;
 }
 
+// These proofs are about the notes a plan-only run prints. The runtime-selection gate (#4271) has
+// its own refusal scenario in release-publish-pipeline.test.mjs, so the run here sees the reviewed
+// runtime pins carrying the OpenCode this checkout approves.
 function releasePublish(args) {
   return spawnSync(process.execPath, ["scripts/release-publish.mjs", ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
+    env: { ...process.env, ...codingRuntimeReleasesEnvForPublishTest() },
   });
 }
 
