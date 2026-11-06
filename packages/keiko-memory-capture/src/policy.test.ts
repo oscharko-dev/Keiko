@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import {
+  LINEAR_RATIO_MAX,
+  measureScaling,
+  scalingRatio,
+} from "../../../tests/support/property-testing.js";
 import { applyPolicy, classifySensitivity } from "./policy.js";
 
 describe("classifySensitivity", () => {
@@ -10,6 +15,31 @@ describe("classifySensitivity", () => {
   it("returns confidential when the body contains an email address", () => {
     expect(classifySensitivity("contact alice@example.com for review")).toBe("confidential");
   });
+
+  it("takes an address only where its local part starts at a word boundary", () => {
+    expect(classifySensitivity("write to a-b@example.com")).toBe("confidential");
+    expect(classifySensitivity("write to .x@example.com")).toBe("confidential");
+    expect(classifySensitivity("an @example.com handle")).toBe("public");
+    expect(classifySensitivity("a stray -@example.com")).toBe("public");
+    expect(classifySensitivity("alice@example")).toBe("public");
+  });
+
+  // "1.1.1." and "z.B.z.B." once cost quadratic time: the address pattern read the rest of the
+  // text from every position before it found no "@".
+  it.each(["1.", "z.B.", "a.", "x.x@"])(
+    "classifies a long run of %j in linear time",
+    { timeout: 60_000 },
+    (piece) => {
+      const scaling = measureScaling({
+        build: (size) => piece.repeat(Math.ceil(size / piece.length)),
+        run: (text) => classifySensitivity(text),
+        size: 1_000,
+        maximumSize: 1_000,
+      });
+      expect(scaling.measurable, JSON.stringify(scaling)).toBe(true);
+      expect(scalingRatio(scaling), JSON.stringify(scaling)).toBeLessThan(LINEAR_RATIO_MAX);
+    },
+  );
 
   it("returns confidential when the body contains a phone-shape number", () => {
     expect(classifySensitivity("call +1-555-123-4567")).toBe("confidential");
