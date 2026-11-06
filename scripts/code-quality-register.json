@@ -16052,6 +16052,7 @@
     },
     "packages/keiko-ui/src/app/components/desktop/widgets/WindowChunkFallback.test.tsx": {
       "anti-slop/no-module-mocking": 1,
+      "anti-slop/no-runtime-typeof": 1,
       "anti-slop/require-safety-comment-for-type-assertion": 1
     },
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/AgentRunWidget.test.tsx": {

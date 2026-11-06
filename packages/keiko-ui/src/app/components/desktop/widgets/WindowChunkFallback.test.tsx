@@ -136,15 +136,7 @@ describe("createWindowChunkFallback", () => {
 describe("window chunk recovery callback boundaries", () => {
   it("uses the public factory default reload only after the human activates recovery", () => {
     const reload = vi.fn();
-    const browser = window;
-    vi.stubGlobal(
-      "window",
-      new Proxy(browser, {
-        get(target, key): unknown {
-          return key === "location" ? { reload } : Reflect.get(target, key);
-        },
-      }),
-    );
+    vi.stubGlobal("location", { ...window.location, reload });
     vi.useFakeTimers();
     try {
       const Fallback = createWindowChunkFallback("window chunk");
