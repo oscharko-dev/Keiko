@@ -15,7 +15,7 @@ import {
   type ManagedMcpMutationInvocation,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { boundedDescription, ManagedMcpError } from "./definitions.js";
+import { boundedDescription, ManagedMcpError, noEffectError } from "./definitions.js";
 
 interface RelayEndpoint {
   readonly fetch: (request: Request, context: ManagedMcpInvocationContext) => Promise<Response>;
@@ -129,6 +129,23 @@ async function settleFailedCall(
   }
 }
 
+/**
+ * Where the durable record becomes dispatched. A connection with its own transport gate records it
+ * there, so a failure before the frame left stays provably effect-free. Any other connection could
+ * reach the server without consulting a gate, so its record is dispatched before the call starts:
+ * an effect must never exist without a dispatched record behind it.
+ */
+function dispatchAdmission(
+  connection: ExternalMcpConnection,
+  permit: ManagedMcpMutationInvocation | undefined,
+): { readonly beforeDispatch?: () => boolean } {
+  const dispatch = permit?.dispatch;
+  if (dispatch === undefined) return {};
+  if (connection.dispatchGate === true) return { beforeDispatch: (): boolean => dispatch() };
+  if (!dispatch()) throw noEffectError("not-admitted");
+  return {};
+}
+
 async function invokeRelayTool(input: RelayCall): Promise<CallToolResult> {
   const { context } = input;
   assertCurrent(context, input.active, input.signal);
@@ -139,9 +156,7 @@ async function invokeRelayTool(input: RelayCall): Promise<CallToolResult> {
       ...context,
       signal,
       invocationId: permit?.invocationId ?? context.invocationId,
-      ...(permit?.dispatch === undefined
-        ? {}
-        : { beforeDispatch: (): boolean => permit.dispatch?.() === true }),
+      ...dispatchAdmission(input.connection, permit),
     });
     if (!isCallToolResult(result) || (input.mutation && result.isError === true))
       throw new ManagedMcpError("protocol-error");

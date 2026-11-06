@@ -588,8 +588,12 @@ points; they refine D5 and the section above, they do not widen any authority.
   The durable record becomes `dispatched` at that gate (`ManagedMcpMutationInvocation.dispatch`),
   not at admission, and a failure before it settles the record `not-dispatched` (`release`). A
   permit without `dispatch` keeps the old behaviour: its record was already dispatched, so the relay
-  never claims "no effect" for it. The post-send pin (lost response, provider error, malformed
-  result) is unchanged: the run is revoked.
+  never claims "no effect" for it. Deferral needs a connection that owns such a gate and says so
+  (`ExternalMcpConnection.dispatchGate`, set by `ExternalClient` and forwarded by the configured
+  connection wrapper). For any other connection, such as the Coding Jira Pod host connection, the
+  relay dispatches the record before the call starts and refuses the call when dispatch is refused,
+  so an effect can never exist without a dispatched record behind it. The post-send pin (lost
+  response, provider error, malformed result) is unchanged: the run is revoked.
 - **`tools/list_changed` retires, it does not cancel.** The consumer-visible `signal` aborts at once
   and no further call is dispatched, but a call whose frame already left keeps its transport until it
   settles (bounded by its own hard cap); the connection then closes and the next consumer reconnects

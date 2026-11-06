@@ -24,7 +24,11 @@ interface Fixture {
   readonly revoke: () => void;
   readonly recover: Mock<() => void>;
 }
-function fixture(risk: "read" | "write" = "read", instructions?: string): Fixture {
+function fixture(
+  risk: "read" | "write" = "read",
+  instructions?: string,
+  dispatchGate: boolean = true,
+): Fixture {
   let allowed = true;
   const recover = vi.fn(() => {
     allowed = false;
@@ -49,6 +53,7 @@ function fixture(risk: "read" | "write" = "read", instructions?: string): Fixtur
   const connection: ExternalMcpConnection = {
     signal: new AbortController().signal,
     ...(instructions === undefined ? {} : { instructions }),
+    ...(dispatchGate ? { dispatchGate: true } : {}),
     tools: [
       { name: "echo", inputSchema },
       { name: "unadmitted", inputSchema },
@@ -329,6 +334,32 @@ it("treats a write that failed before its frame left as effect-free: no run revo
   expect(permit.dispatch).not.toHaveBeenCalled();
   expect(f.call.mock.calls[0]?.[2].beforeDispatch?.()).toBe(true);
   expect(permit.dispatch).toHaveBeenCalledOnce();
+});
+it("dispatches the record before calling a connection that has no transport gate", async () => {
+  // A connection without its own gate could reach the server without consulting one: the record
+  // must be dispatched before the call starts, or an effect could exist with no record behind it.
+  const f = fixture("write", undefined, false);
+  const permit = permitFixture(f);
+  f.call.mockImplementation((_name, _args, context) => {
+    expect(permit.dispatch).toHaveBeenCalledOnce();
+    expect(context.beforeDispatch).toBeUndefined();
+    return Promise.reject(new ManagedMcpError("closed", undefined, "possible"));
+  });
+  await writeText(f, permit.context);
+  expect(f.call).toHaveBeenCalledOnce();
+  expect(permit.fail).toHaveBeenCalledOnce();
+  expect(permit.release).not.toHaveBeenCalled();
+});
+it("never calls a connection without a transport gate when the record refuses dispatch", async () => {
+  const f = fixture("write", undefined, false);
+  const permit = permitFixture(f);
+  permit.dispatch.mockReturnValue(false);
+  const text = await writeText(f, permit.context);
+  expect(f.call).not.toHaveBeenCalled();
+  expect(permit.release).toHaveBeenCalledOnce();
+  expect(permit.fail).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+  expect(text).toContain("Nothing was changed");
 });
 it("still revokes the run when the frame may have left", async () => {
   const f = fixture("write");

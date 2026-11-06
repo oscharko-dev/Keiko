@@ -203,6 +203,8 @@ async function abortable<T>(wait: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 class ExternalClient implements ExternalMcpConnection {
+  /** `#installDispatchGate` consults `beforeDispatch` before a `tools/call` frame leaves. */
+  readonly dispatchGate = true as const;
   readonly #contexts = new AsyncLocalStorage<ManagedMcpInvocationContext>();
   readonly #client = new Client(
     { name: "keiko", version: "1" },

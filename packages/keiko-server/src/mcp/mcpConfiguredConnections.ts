@@ -298,6 +298,8 @@ function guardedConnection(
   return {
     signal: connection.signal,
     tools: connection.tools,
+    // The wrapper forwards the caller's context unchanged, so the inner gate stays the gate.
+    ...(connection.dispatchGate === true ? { dispatchGate: true } : {}),
     close: () => connection.close(),
     call: async (name, args, context): Promise<CatalogJsonObject> => {
       const credentials = new Set(secrets);

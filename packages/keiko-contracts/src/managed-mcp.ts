@@ -133,6 +133,13 @@ export interface ExternalMcpConnection {
   /** Server-owned guidance for the relayed server; an external server's own text never fills it. */
   readonly instructions?: string;
   readonly tools: readonly ExternalMcpTool[];
+  /**
+   * The connection calls `context.beforeDispatch` exactly once at the gate that releases the
+   * `tools/call` frame, before anything can reach the server. Only such a connection lets a
+   * durable mutation record become dispatched at that gate; for every other connection the relay
+   * records the dispatch before the call starts, so an effect can never outrun its record.
+   */
+  readonly dispatchGate?: true | undefined;
   readonly call: (
     name: string,
     argumentsValue: CatalogJsonObject,
