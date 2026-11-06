@@ -771,9 +771,28 @@ const CLAUSE_HEAD_RE = /[,;:–—(-]\s*(\p{L}+)[^,;:–—()]*/gu;
 // es mir sagte", "…, wenn man sagt, was zu tun ist".
 const RELATIVE_LEAD_RE =
   /^(?:which|that|who|whom|whose|where|because|since|when|whenever|if|der|die|das|den|dem|welche[rsmn]?|weil|da|wo|denn|obwohl|wenn|falls|sobald)$/iu;
-// A demonstrative may open an attribution as well as a relative clause: "…, das sagt mein Chef",
-// "…, that's what my boss says"; the clause still needs another person by the verb.
-const DEMONSTRATIVE_LEAD_RE = /^(?:das|dies|that|this)$/iu;
+// A demonstrative opens an attribution only when it is the subject of a speech verb right after
+// it: "…, das sagt mein Chef", "…, das hat Anna gesagt", "…, that's what my boss says". A relative
+// "das" puts its verb at the end ("ein Tool, das Fehler erklärt") and stays a relative clause.
+const DEMONSTRATIVE_SPEECH_RE =
+  /^[,;:–—(-]\s*(?:(?:das|dies)\s+(?:sagt|sagte|sagen|sagten|meint|meinte|meinten|behauptet|behauptete|hat|haben|hatte|hatten)|(?:that|this)(?:['’]s|\s+is|\s+was)\s+what)(?!\p{L})/iu;
+// Words that may stand between the person's own subject and their speech verb: "I always tell".
+const SELF_SPEECH_ADVERBS = new Set([
+  "immer",
+  "oft",
+  "auch",
+  "nie",
+  "schon",
+  "gern",
+  "always",
+  "often",
+  "also",
+  "never",
+  "usually",
+  "really",
+  "sometimes",
+  "just",
+]);
 // How far before a verb its speaker may stand: "Anna also says", "My boss always says".
 const SPEAKER_REACH = 3;
 
@@ -950,7 +969,7 @@ function isReported(opening: string, rest: string): boolean {
   if (namesSource(opening) || speaksInOpening(splitWords(opening))) return true;
   return [...rest.matchAll(CLAUSE_HEAD_RE)].some((head) => {
     const lead = head[1] ?? "";
-    if (RELATIVE_LEAD_RE.test(lead) && !DEMONSTRATIVE_LEAD_RE.test(lead)) return false;
+    if (RELATIVE_LEAD_RE.test(lead) && !DEMONSTRATIVE_SPEECH_RE.test(head[0])) return false;
     return speaksInClause(head[0]);
   });
 }
@@ -971,11 +990,12 @@ function speaksInOpening(words: readonly string[]): boolean {
   );
 }
 
-// "I tell", "I always tell": the person's own subject stands right before the verb or one word
-// earlier, with no one else between.
+// "I tell", "I always tell": the person's own subject stands right before the verb, or one adverb
+// stands between them.
 function spokenBySelf(words: readonly string[], at: number): boolean {
   if (SELF_SPEAKERS.has(words[at - 1]?.toLowerCase() ?? "")) return true;
-  return SELF_SPEAKERS.has(words[at - 2]?.toLowerCase() ?? "") && !isOtherPerson(words, at - 1);
+  const between = words[at - 1]?.toLowerCase() ?? "";
+  return SELF_SPEECH_ADVERBS.has(between) && SELF_SPEAKERS.has(words[at - 2]?.toLowerCase() ?? "");
 }
 
 function speaksInClause(clause: string): boolean {
