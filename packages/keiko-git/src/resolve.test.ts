@@ -58,6 +58,24 @@ describe("resolveGitMembership", () => {
     expect(resolution.membership.prefix).toBe("");
   });
 
+  it("treats a folder whose configuration names another work tree as no repository (#4271)", async () => {
+    const elsewhere = join(base, "elsewhere");
+    mkdirSync(elsewhere);
+    git(repo, ["config", "core.worktree", elsewhere]);
+    const resolution = await resolveGitMembership(repo, defaultGitProcessRunner, TIMEOUT);
+    expect(resolution.ok).toBe(false);
+    if (resolution.ok) return;
+    expect(classifyGitFailure(resolution.result)).toBe("not-a-repository");
+  });
+
+  it("keeps a linked worktree a repository", async () => {
+    git(repo, ["commit", "-q", "--allow-empty", "-m", "seed"]);
+    const linked = join(base, "linked");
+    git(repo, ["worktree", "add", "-q", linked]);
+    const resolution = await resolveGitMembership(linked, defaultGitProcessRunner, TIMEOUT);
+    expect(resolution.ok).toBe(true);
+  });
+
   it("resolves a nested subdirectory to the owning repository with its prefix", async () => {
     const nested = join(repo, "packages", "sub");
     mkdirSync(nested, { recursive: true });

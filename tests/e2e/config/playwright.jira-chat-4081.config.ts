@@ -42,7 +42,11 @@ export default defineConfig({
       url: `http://127.0.0.1:${String(port)}`,
       reuseExistingServer: false,
       timeout: 240_000,
-      env: { KEIKO_E2E_JIRA_STATE: directory, KEIKO_E2E_UI_PORT: String(port) },
+      env: {
+        KEIKO_OS_KEYCHAIN: "off",
+        KEIKO_E2E_JIRA_STATE: directory,
+        KEIKO_E2E_UI_PORT: String(port),
+      },
     },
     {
       cwd: root,

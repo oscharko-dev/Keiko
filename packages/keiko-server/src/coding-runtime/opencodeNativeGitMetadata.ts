@@ -25,6 +25,42 @@ export interface NativeGitMetadataResolution {
   readonly binding: WorkspaceRootAccess["kind"] | "unresolved";
   /** The proven common Git directory, for the kernel profile only. Never logged. */
   readonly readRoots: readonly string[];
+  /** The Git metadata the run's tree may not write, for the kernel profile only. Never logged. */
+  readonly protectedWriteRoots: readonly string[];
+}
+
+/**
+ * What decides which programs and which files Keiko's own Git runs and reads. Keiko runs Git outside
+ * the sandbox on the run's workspace, so a filter driver or `core.worktree` a shell child wrote here
+ * would execute or read with Keiko's authority (#4271 audit, reproduced). Ordinary repository work
+ * (refs, objects, the index, hooks, which Keiko's Git never runs) stays writable, and Keiko's own
+ * delivery tools change this configuration from outside the sandbox.
+ */
+const REPOSITORY_PROTECTED_METADATA = [
+  "config",
+  "config.worktree",
+  "commondir",
+  "gitdir",
+  "worktrees",
+  "modules",
+  "objects/info/alternates",
+] as const;
+
+/**
+ * Inside a repository the named metadata is protected, and the rule's intermediate directories keep
+ * `.git` itself from being swapped. Any other workspace has no `.git` directory of its own to work
+ * in: a `.git` file could point Keiko's Git at a configuration the run wrote, and a new `.git`
+ * directory at the workspace root would become that configuration. A repository in a subfolder is
+ * the run's own; Keiko's Git only reaches it when a person opens that folder.
+ */
+function protectedGitMetadata(
+  workspaceRoot: string,
+  layout: NativeGitMetadataLayout,
+): readonly string[] {
+  const git = join(workspaceRoot, ".git");
+  return layout === "repository"
+    ? REPOSITORY_PROTECTED_METADATA.map((path) => join(git, path))
+    : [git];
 }
 
 const GIT_METADATA_RESOLVED_OPERATION = defineActivityLogOperation({
@@ -68,17 +104,26 @@ export function resolveNativeGitMetadata(
   access: WorkspaceRootAccess | undefined,
 ): NativeGitMetadataResolution {
   const binding = access?.kind ?? "unresolved";
+  const resolved = (
+    layout: NativeGitMetadataLayout,
+    readRoots: readonly string[] = [],
+  ): NativeGitMetadataResolution => ({
+    layout,
+    binding,
+    readRoots,
+    protectedWriteRoots: protectedGitMetadata(workspaceRoot, layout),
+  });
   const entry = lstatSync(join(workspaceRoot, ".git"), { throwIfNoEntry: false });
-  if (entry === undefined) return { layout: "none", binding, readRoots: [] };
-  if (entry.isDirectory()) return { layout: "repository", binding, readRoots: [] };
-  if (!entry.isFile()) return { layout: "unproven", binding, readRoots: [] };
+  if (entry === undefined) return resolved("none");
+  if (entry.isDirectory()) return resolved("repository");
+  if (!entry.isFile()) return resolved("unproven");
   // A managed task proves against the repository it was bound from; any other linked worktree
   // proves against the repository its own pointer names, which the proof then checks back.
   const repositoryRoot = access?.kind === "managed-task" ? access.repositoryRoot : workspaceRoot;
   const proof = inspectManagedGitdirIdentity(workspaceRoot, repositoryRoot);
   return proof === undefined
-    ? { layout: "unproven", binding, readRoots: [] }
-    : { layout: "linked-worktree", binding, readRoots: [proof.commonDirectory] };
+    ? resolved("unproven")
+    : resolved("linked-worktree", [proof.commonDirectory]);
 }
 
 export function recordNativeGitMetadataResolution(

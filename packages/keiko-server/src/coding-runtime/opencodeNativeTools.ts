@@ -39,8 +39,8 @@ export const OPENCODE_NATIVE_TOOL_CONTRACT_MAX_TOTAL_BYTES =
   GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS.maxTotalBytes;
 
 /**
- * Captured from `ctx.tool.list()` of a plugin loaded by `opencode serve` 2.1.4 (commit 68bc26b7);
- * `opencodeNativeTools.opencode-2.1.4.fixture.json` is the same capture, and the owning test pins
+ * Captured from `ctx.tool.list()` of a plugin loaded by the pinned `opencode serve`;
+ * `opencodeNativeTools.opencode-<version>.fixture.json` is the same capture, and the owning test pins
  * both to each other so neither can drift from the producer unnoticed.
  */
 export const OPENCODE_NATIVE_TOOL_DEFINITIONS: readonly OpenCodeNativeToolDefinition[] =
@@ -114,19 +114,26 @@ export function isOpenCodeNativeToolName(value: unknown): value is string {
 }
 
 /**
- * True when a tool part's own state records a failed Code Mode program (#3897). OpenCode 2.1.4
- * catches a JavaScript exception thrown inside the `execute` program, including one raised by a
- * nested `tools.opencode.*` call the program did not catch, and returns a COMPLETED part whose
- * `state.metadata.error` is `true`: the part's status says only that the tool returned. The
- * producer's explicit flag is the whole predicate. Only the boolean `true` of a completed `execute`
- * part qualifies, so no output text is scanned and no body is read; the thrown message stays in the
- * part and never reaches the timeline or the Activity Log. The history projection
- * (`opencodeV2History.ts`) and the event-part projection (`opencodeSafeActivity.ts`) both call
- * this, so the two cannot disagree on a tool's outcome.
+ * True when a completed tool part's own metadata says its work failed. The status of a part says
+ * only that the tool returned, and two producers return a failure that way:
+ * - A Code Mode `execute` whose JavaScript threw (#3897) carries the boolean `metadata.error`.
+ * - A `shell` command that exited non-zero (#3901), ran out of its timeout (`metadata.timeout`) or
+ *   was killed by a signal (`metadata.signal`, with no exit status at all; #4271) carries those.
+ * A command moved to the background reports none of them and has not failed. No output text is
+ * scanned and no body is read. The history projection (`opencodeV2History.ts`) and the event-part
+ * projection (`opencodeSafeActivity.ts`) both call this, so the two cannot disagree on an outcome.
  */
-export function isOpenCodeCodeModeExecutionFailure(tool: unknown, state: unknown): boolean {
-  if (tool !== "execute" || !isPlainRecord(state) || state.status !== "completed") return false;
-  return isPlainRecord(state.metadata) && state.metadata.error === true;
+export function isOpenCodeToolExecutionFailure(tool: unknown, state: unknown): boolean {
+  if (!isPlainRecord(state) || state.status !== "completed") return false;
+  if (!isPlainRecord(state.metadata)) return false;
+  if (tool === "execute") return state.metadata.error === true;
+  return tool === "shell" && isFailedShellResult(state.metadata);
+}
+
+function isFailedShellResult(metadata: Readonly<Record<string, unknown>>): boolean {
+  if (metadata.timeout === true || typeof metadata.signal === "string") return true;
+  // A malformed exit status speaks for nothing, as it does for the run's evidence.
+  return Number.isInteger(metadata.exit) && metadata.exit !== 0;
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

@@ -99,6 +99,8 @@ counts; it never records source, credentials or parser diagnostics containing so
 Chat draft recovery reuses the private UiStore and authenticated chat-bound revision checks.
 The `chat.draft.operation` Activity Log records lifecycle and status without draft text;
 concurrent stale writes must preserve the local draft and require explicit conflict resolution.
+The Coding Workbench composer reuses the same store and revision checks per Workbench window
+(`surface: "coding-workbench"`); never add a second draft store for another composer.
 
 An unchanged privacy-elided Files connection may reuse its conversation-bound canonical
 acknowledgement only when the persisted fingerprint and visible scope both match. Restore the
@@ -162,7 +164,7 @@ truncated.". Counts only — never a message, path or run name.
 `client.coding-workbench.interaction` records, at info and on the routine budget, what the human
 did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
 progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom
-agent's name), a jump to a pending decision, a repository bound for trust (its two body-free ids)
+agent's name), a start the human gave up before it had a run (`start-cancelled`), a jump to a pending decision, a repository bound for trust (its two body-free ids)
 and a changeset received for review (`fileCount`). These were warn/unknown `client.diagnostic`
 notes before and buried the rare real browser failures. `gateway.setup.target.accepted` records,
 at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
@@ -175,7 +177,10 @@ request the Coding Workbench gave up on at its own client-side deadline (#4109):
 `question-reject`) and `deadlineMs`, under the failed request's correlation id; a mutation that
 Stop preempted is not a timeout and is not reported. The deadlines come from measurements: 10 s for
 status and snapshot reads, 15 s for Stop, 180 s for start (a cold start is unmeasured) and 60 s for
-every other, unmeasured, mutation. Stop is never queued behind another mutation: it ends the client
+every other, unmeasured, mutation. A start that hit its deadline re-reads the run, because the
+server may have started it; when the client hung up before a run existed, the server creates none
+and records `coding-runtime.operation.refused` with the route-level reason `start-abandoned`, a
+reason never stored or sent as a failure code. Stop is never queued behind another mutation: it ends the client
 wait of the one in flight (no alert, no failure) and drops those still waiting, and stays enabled
 while another mutation is pending. Closed values and one duration only.
 

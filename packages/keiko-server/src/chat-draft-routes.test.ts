@@ -1,7 +1,12 @@
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleReadChatDraft, handleSaveChatDraft } from "./chat-draft-routes.js";
+import {
+  handleReadChatDraft,
+  handleReadCodingWorkbenchDraft,
+  handleSaveChatDraft,
+  handleSaveCodingWorkbenchDraft,
+} from "./chat-draft-routes.js";
 import { API_ROUTES, type RouteContext } from "./routes.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { UiStore } from "./store/types.js";
@@ -164,5 +169,62 @@ describe("private chat draft routes", () => {
     expect(JSON.stringify(events)).not.toContain(TEXT);
     expect(JSON.stringify(events)).not.toContain(chatId);
     expect(JSON.stringify(events)).not.toContain("private database detail");
+  });
+});
+
+describe("private Coding Workbench draft routes", () => {
+  const WINDOW_ID = "coding-workbench-mabc12";
+
+  it("mounts authenticated reads and writes and restores the composer text after a reload", async () => {
+    const { deps, cookie } = fixture();
+    expect(API_ROUTES.some((route) => route.handler === handleReadCodingWorkbenchDraft)).toBe(true);
+    expect(API_ROUTES.some((route) => route.handler === handleSaveCodingWorkbenchDraft)).toBe(true);
+    const saved = await handleSaveCodingWorkbenchDraft(
+      context(cookie, WINDOW_ID, { text: TEXT, expectedRevision: 0 }),
+      deps,
+    );
+    expect(saved).toMatchObject({
+      status: 200,
+      body: { text: TEXT, revision: 1 },
+      headers: { "Cache-Control": "no-store" },
+    });
+    expect((await handleReadCodingWorkbenchDraft(context(cookie, WINDOW_ID), deps)).body).toEqual(
+      saved.body,
+    );
+    expect(
+      (
+        await handleSaveCodingWorkbenchDraft(
+          context(cookie, WINDOW_ID, { text: "stale", expectedRevision: 0 }),
+          deps,
+        )
+      ).status,
+    ).toBe(409);
+    expect((await handleReadCodingWorkbenchDraft(context(cookie, "chat-x"), deps)).status).toBe(
+      404,
+    );
+  });
+
+  it("refuses an unpaired session before reading and records the surface body-free", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const { deps, cookie } = fixture();
+    const read = vi.spyOn(deps.store, "readCodingWorkbenchDraft");
+    expect((await handleReadCodingWorkbenchDraft(context("", WINDOW_ID), deps)).status).toBe(404);
+    expect(read).not.toHaveBeenCalled();
+    await handleSaveCodingWorkbenchDraft(
+      context(cookie, WINDOW_ID, { text: TEXT, expectedRevision: 0 }),
+      deps,
+    );
+    const events = sink.events.filter((entry) => entry.op === "chat.draft.operation");
+    expect(events.map((entry) => [entry.extra?.surface, entry.extra?.phase])).toEqual([
+      ["coding-workbench", "started"],
+      ["coding-workbench", "rejected"],
+      ["coding-workbench", "started"],
+      ["coding-workbench", "completed"],
+    ]);
+    for (const event of events)
+      expectActivityLogProof("chat.draft.operation.lifecycle", formatActivityLogProofLine(event));
+    expect(JSON.stringify(events)).not.toContain(TEXT);
+    expect(JSON.stringify(events)).not.toContain(WINDOW_ID);
   });
 });

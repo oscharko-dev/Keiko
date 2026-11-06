@@ -10,9 +10,14 @@ import {
   NPM_LANE_RUNTIME_APPROVALS,
 } from "./npmLaneRuntimeApprovals.js";
 import {
-  SECURE_WORKSPACE_TEXT_READ_LEGACY_MAX_BYTES,
-  SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
-} from "./secureWorkspaceTextReadProtocol.js";
+  OPENCODE_PINNED_VERSION,
+  OPENCODE_RUNTIME_VERSION_PINS,
+} from "./opencodeRuntimeVersions.js";
+import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
+
+/** The helper source of the retired 1.1.3 packages, which no table may approve again. */
+const RETIRED_HELPER_SOURCE_TREE_SHA256 =
+  "97a7a11c6dc2e1512b976c846141e0459d26094097a77b822dc7b895ad3bb4aa";
 
 // The npm lane's trust anchor is compiled into the server because an npm installation carries
 // neither the approvals catalog nor the helper source. That copy must never drift from the
@@ -75,18 +80,18 @@ describe("npm-lane runtime approvals", () => {
   });
 
   it.each(Object.entries(NPM_LANE_RUNTIME_APPROVALS))(
-    "%s keeps the previously approved helper's narrower capability and source identity",
+    "%s approves the current and the published previous runtime and no other",
     (target, approval) => {
       const previous =
         NPM_LANE_PREVIOUS_RUNTIME_APPROVALS[target as keyof typeof NPM_LANE_RUNTIME_APPROVALS];
-      expect(approval.helperMaxBytes).toBe(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES);
-      expect(previous.helperMaxBytes).toBe(SECURE_WORKSPACE_TEXT_READ_LEGACY_MAX_BYTES);
-      expect(previous.helperSourceCommit).toBe("98b77857ecb39e936269f875f8ade3688870629f");
-      expect(previous.helperSourceTreeSha256).toBe(
-        "97a7a11c6dc2e1512b976c846141e0459d26094097a77b822dc7b895ad3bb4aa",
-      );
-      expect(previous.helperSha256).not.toBe(approval.helperSha256);
-      expect(previous.helperSourceTreeSha256).not.toBe(approval.helperSourceTreeSha256);
+      expect(approval.upstreamVersion).toBe(OPENCODE_PINNED_VERSION);
+      expect(previous.upstreamVersion).toBe(OPENCODE_RUNTIME_VERSION_PINS[1]?.version);
+      expect(previous.executableTreeSha256).not.toBe(approval.executableTreeSha256);
+      expect(previous.protocolSchemaSha256).not.toBe(approval.protocolSchemaSha256);
+      expect(previous.helperMaxBytes).toBe(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES);
+      for (const entry of [approval, previous]) {
+        expect(entry.helperSourceTreeSha256).not.toBe(RETIRED_HELPER_SOURCE_TREE_SHA256);
+      }
     },
   );
 });

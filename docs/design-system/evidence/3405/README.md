@@ -304,3 +304,15 @@ producer ran with `KEIKO_WRITE_TRACKED_EVIDENCE=1` on macOS and rewrote all 17 d
 `npm run check:update-ui-evidence` passes against this worktree. The update window itself did not
 change, and this is macOS rendering, so the 14 PNGs differ in bytes from earlier captures. A Linux
 regeneration remains preferable if byte-comparable captures are wanted.
+
+## Keychain-free harness — 2026-11-05 (#4271)
+
+The producer's Playwright configuration is a declared harness input, and #4271 added
+`KEIKO_OS_KEYCHAIN: "off"` to its web server so the updater journey never reaches a real login
+keychain. The complete original nine-case producer ran with `KEIKO_WRITE_TRACKED_EVIDENCE=1` on
+source head `f98c0a4d7` in the Linux arm64 gates container, using Node 24.18.0, npm 11.16.0,
+Playwright 1.64.1 and Chromium build 1248. All nine cases passed in 2.1 minutes, including the
+real-BFF outage case. All 14 PNGs differ in bytes from the preceding macOS set because this is Linux
+rendering; their dimensions are unchanged and they were visually inspected. The three JSON records
+bind the current sources and harness inputs, and `npm run check:update-ui-evidence` passes. The
+update window itself did not change.

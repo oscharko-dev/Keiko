@@ -146,6 +146,7 @@ export interface TaskComposerActions {
       ) => void)
     | undefined;
   readonly onStop: () => void;
+  readonly onCancelStart: () => void;
 }
 
 /** What a prompt carries beside its text and command: its `@` files and its mentions. */
@@ -177,6 +178,8 @@ interface TaskStartSectionProps {
    */
   readonly stopPending: boolean;
   readonly startBusy: boolean;
+  /** A start is on its way and has no run yet, so it can still be given up. */
+  readonly startCancellable: boolean;
   readonly startBlockedReason: string | null;
   /** Retained so `ProjectMemoryToggle` can be re-mounted (currently hidden per owner directive)
    * without a signature change; the composer's context row is not rendered at all right now. */
@@ -1145,6 +1148,20 @@ function PausedControls({ input, controller, t }: ComposerViewProps): ReactNode 
 }
 
 function StartControl({ input, controller, t }: ComposerViewProps): ReactNode {
+  if (input.startCancellable) {
+    return (
+      <button
+        className="cmp-send cmp-send-cancel cmp-tip-end"
+        type="button"
+        data-on="true"
+        data-tip={t("codingWorkbench.controls.stop")}
+        aria-label={t("codingWorkbench.controls.stop")}
+        onClick={input.actions.onCancelStart}
+      >
+        <StopIcon size={16} />
+      </button>
+    );
+  }
   const label = input.startBusy
     ? t("codingWorkbench.task.starting")
     : t("codingWorkbench.task.start");

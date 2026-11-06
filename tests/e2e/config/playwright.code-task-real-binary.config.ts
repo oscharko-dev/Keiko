@@ -60,6 +60,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 600_000,
     env: {
+      KEIKO_OS_KEYCHAIN: "off",
       KEIKO_E2E_STATE_DIR: stateDir,
       KEIKO_E2E_UI_PORT: String(publicPort),
       ...(process.env.KEIKO_2483_GATEWAY_OBSERVATION_PATH === undefined

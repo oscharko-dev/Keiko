@@ -8,6 +8,7 @@ import {
   ProviderEmptyAnswerError,
   ProviderError,
   ProviderOutputExhaustedError,
+  TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   activityLogErrorKind,
@@ -313,6 +314,15 @@ describe("activityLogErrorKind", () => {
     { code: "GATEWAY_MALFORMED_TOOL_CALL", name: "ProviderError" },
   ])("classifies malformed tool calls as validation failures by stable code", (error) => {
     expect(activityLogErrorKind(error)).toBe("validation-failed");
+  });
+  // #4271 L1.4: a provider that could not be reached is a reachability outcome, not a Keiko
+  // defect; the taxonomy code alone (no ECONN* substring) identifies it.
+  it.each([
+    ["a transport failure", new TransportError("transport failure")],
+    ["an unreachable proxy", { code: "GATEWAY_PROXY_UNREACHABLE" }],
+    ["a failed proxy egress", { code: "GATEWAY_PROXY_EGRESS_FAILED" }],
+  ])("classifies %s as unavailable, never internal", (_label, error) => {
+    expect(activityLogErrorKind(error)).toBe("unavailable");
   });
   it("keeps the generic classification for a real provider fault", () => {
     expect(activityLogErrorKind(new ProviderError("provider failed", 500))).toBe("internal");

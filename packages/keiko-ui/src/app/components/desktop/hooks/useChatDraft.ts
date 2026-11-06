@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useReducer } from "react";
+import type { PrivateDraftSurface } from "@/lib/chat-draft-api";
 import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
 import { ChatDraftController, type DraftPhase } from "./chat-draft-controller";
 import { dirty } from "./chat-draft-state";
@@ -22,7 +23,10 @@ interface ChatDraftState {
   readonly controller: ChatDraftController;
 }
 
-function useDraftController(onReplace: (() => void) | undefined): ChatDraftController {
+function useDraftController(
+  onReplace: (() => void) | undefined,
+  surface: PrivateDraftSurface,
+): ChatDraftController {
   const replacement = useRef(onReplace);
   replacement.current = onReplace;
   const [, update] = useReducer((revision: number): number => revision + 1, 0);
@@ -33,6 +37,7 @@ function useDraftController(onReplace: (() => void) | undefined): ChatDraftContr
       if (mounted.current) update();
     },
     () => replacement.current?.(),
+    surface,
   );
   const controller = controllerRef.current;
   useEffect(() => {
@@ -45,17 +50,10 @@ function useDraftController(onReplace: (() => void) | undefined): ChatDraftContr
   return controller;
 }
 
-export function useChatDraft(chatId: string | undefined, onReplace?: () => void): ChatDraftState {
-  const controller = useDraftController(onReplace);
-  const redemptions = useCodingAppSessionRedemptions();
-  const key = chatId ?? "";
-  const entry = controller.entry(key);
-  // The notice describes local content; an unknown saved base still retains its CAS intent.
-  const hasUnsavedChanges = dirty(entry) && (entry.text !== "" || entry.base !== undefined);
-  const setText = useCallback(
-    (text: string): void => controller.setText(key, text),
-    [controller, key],
-  );
+function useDraftRecovery(
+  controller: ChatDraftController,
+  chatId: string | undefined,
+): Pick<ChatDraftPersistence, "retry" | "keepLocal" | "restoreSaved"> {
   const retry = useCallback(async (): Promise<void> => {
     if (chatId !== undefined) await controller.refresh(chatId);
   }, [chatId, controller]);
@@ -65,6 +63,33 @@ export function useChatDraft(chatId: string | undefined, onReplace?: () => void)
   const restoreSaved = useCallback(async (): Promise<void> => {
     if (chatId !== undefined) await controller.restoreSaved(chatId);
   }, [chatId, controller]);
+  return { retry, keepLocal, restoreSaved };
+}
+
+export function useChatDraft(chatId: string | undefined, onReplace?: () => void): ChatDraftState {
+  return usePrivateDraft(chatId, "chat", onReplace);
+}
+
+/**
+ * One owner's private, revision-checked draft (ADR-0114 D1): a chat's unsent message, or a Coding
+ * Workbench window's unsent task or follow-up text, so a reload restores what was typed.
+ */
+export function usePrivateDraft(
+  chatId: string | undefined,
+  surface: PrivateDraftSurface,
+  onReplace?: () => void,
+): ChatDraftState {
+  const controller = useDraftController(onReplace, surface);
+  const redemptions = useCodingAppSessionRedemptions();
+  const key = chatId ?? "";
+  const entry = controller.entry(key);
+  // The notice describes local content; an unknown saved base still retains its CAS intent.
+  const hasUnsavedChanges = dirty(entry) && (entry.text !== "" || entry.base !== undefined);
+  const setText = useCallback(
+    (text: string): void => controller.setText(key, text),
+    [controller, key],
+  );
+  const { retry, keepLocal, restoreSaved } = useDraftRecovery(controller, chatId);
   useEffect(() => {
     void retry();
     window.addEventListener("focus", retry);

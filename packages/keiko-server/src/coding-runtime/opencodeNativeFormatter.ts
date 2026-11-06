@@ -14,7 +14,7 @@ export type OpenCodeNativeFormatterDisposition =
   (typeof OPENCODE_NATIVE_FORMATTER_DISPOSITIONS)[number];
 
 /**
- * The pinned 2.1.4 producer runs a built-in formatter (prettier, biome, gofmt, ...) after its own
+ * The pinned producer runs a built-in formatter (prettier, biome, gofmt, ...) after its own
  * `edit`, `write` and `patch` tools, as a plain child process of the runtime, and consults no
  * permission for it: the policy hook sees the edit, never the formatter. The tool it starts is a
  * host binary found on the launcher's PATH, a package resolved through the producer's own package

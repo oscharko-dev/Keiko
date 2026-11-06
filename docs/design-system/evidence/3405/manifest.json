@@ -1,7 +1,7 @@
 {
   "issue": 3405,
   "epic": 3403,
-  "generatedAt": "2026-11-05T19:39:13.883Z",
+  "generatedAt": "2026-11-05T22:21:50.150Z",
   "command": "npm run test:e2e:update-ui-1696",
   "requiredCiCommand": "npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage",
   "artifacts": [
@@ -109,23 +109,23 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/api.ts",
-      "sha256": "0edacdfdd412494aa5cae0c8c0e1696591c7de6f4ef45b123468c13b12d6958e"
+      "sha256": "31aecc46bbb800db4b81ccdff556f5c3b53eddd8778ceab5e299bf42dbc89749"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.de.ts",
-      "sha256": "5c2c128c9ffa8f0f2206825240298c4b858f428fad97ea16881fcfe4e7309ae4"
+      "sha256": "cd9faf03b0f4362368cf53815b1c69eaa31167df1e64483438afad1b75b201c0"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.en.ts",
-      "sha256": "609761032c0423367f41dd11654a2868892e2af2fc75ea7e5606f308fa389c4d"
+      "sha256": "b1fe01084dd77cdfb125ea75351a802a73dec2fb745d4312c15f504c5a3e038f"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
-      "sha256": "43fd7c4116c571888976223aa6c6c4765a0dd9b9b72dbd98d398c18eb42bb466"
+      "sha256": "436adc941a72284c51f6a7c7d70f135ac966f57dae03c80709c66a300ab48417"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
-      "sha256": "062d4d8ebbcbac68e6f7394101508f77bacc94e0a9b1248f90a605d7e22b7bcd"
+      "sha256": "b520446e7828e8ade9367bc54cf22aabc5d57d8d95485fe7c8b108159700b03f"
     },
     {
       "path": "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
@@ -133,7 +133,7 @@
     }
   ],
   "harnessProvenanceSha256": {
-    "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "1c2114f8a47145d76c1319fa23ccf67d250d5383d2e17c8a5111c0104c9a8a18",
+    "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "da27cc7608262e1da586363dca36d91509925b8aa8181241bfe708c6282846aa",
     "tests/e2e/fixtures/keiko.e2e.config.json": "9ccdb592af0021033cb26f4868ff263badff5dcc4d716bb4a2fbac54c6dd69f6",
     "tests/e2e/support/evidence.ts": "54712c17afcf8c47de426c02c9983c5837fbd2e665f5beccc112d7ec312414fd",
     "tests/e2e/support/update-bff-outage-3405.mjs": "097ca94239ff03ab06c2c8ec341c59ca61ee0138cf6bb9b66d9241b08e24204f",

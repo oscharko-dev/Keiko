@@ -6064,6 +6064,75 @@ describe("handleGatewaySetup", () => {
     }
   });
 
+  // #4271 L3: a LiteLLM gateway is read twice (the /model/info metadata, then the /models listing
+  // merged with it). Only the merged listing is the discovery result, so each alias is recorded once.
+  it.each([
+    { name: "listing merged with /model/info", extra: {} },
+    {
+      name: "explicit deployment names read from /model/info alone",
+      extra: { deploymentNames: ["alias-once"] },
+    },
+  ])("records each alias intersection once per discovery: $name", async ({ extra }) => {
+    const uiDir = await tempDir("keiko-gw-ui-alias-once-");
+    const evidenceDir = await tempDir("keiko-gw-ev-alias-once-");
+    const originalFetch = globalThis.fetch;
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const json = (body: unknown): Promise<Response> =>
+      Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    globalThis.fetch = (url): Promise<Response> => {
+      const href = fetchInputUrl(url);
+      const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
+      if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
+      if (href.endsWith("/model/info")) {
+        return json({
+          data: [
+            { model_name: "alias-once", model_info: { mode: "chat", max_input_tokens: 131_072 } },
+          ],
+        });
+      }
+      if (href.endsWith("/models")) return json({ data: [{ id: "alias-once" }] });
+      return json({
+        choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 3, completion_tokens: 1 },
+      });
+    };
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx(
+          {
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey: "example-secret-token",
+            ...extra,
+          },
+          "corr-alias-once",
+        ),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      const lines = sink.events.filter(
+        (entry) => entry.op === "gateway.discovery.alias-intersection",
+      );
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ correlationId: "corr-alias-once" });
+    } finally {
+      resetServerLogger();
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
   it.each([false, true])(
     "rejects explicit non-chat alias capabilities, reversed=%s",
     (reversed) => {

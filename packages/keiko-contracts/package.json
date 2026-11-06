@@ -847,6 +847,10 @@
       "types": "./dist/deep-freeze.d.ts",
       "import": "./dist/deep-freeze.js"
     },
+    "./runtime/opencode-runtime-pins": {
+      "types": "./dist/opencode-runtime-pins.d.ts",
+      "import": "./dist/opencode-runtime-pins.js"
+    },
     "./runtime/governed-tool-catalog": {
       "types": "./dist/governed-tool-catalog.d.ts",
       "import": "./dist/governed-tool-catalog.js"

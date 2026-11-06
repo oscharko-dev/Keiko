@@ -20,6 +20,8 @@ import {
 import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 import { createDefaultChatCapability, parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
+import { runGatewayReadiness } from "./gateway-readiness.js";
+import { chatModelSupportsTools } from "./chat-tool-turn.js";
 import { buildCspHeader } from "./csp.js";
 import { createNodeUiStore } from "./store/index.js";
 import {
@@ -62,6 +64,8 @@ afterEach(async () => {
 interface ProviderState {
   reply: ReplyKind;
   readonly evidence: string[];
+  readonly offeredTools: string[][];
+  readinessToolProbes: number;
 }
 interface Fixture {
   readonly deps: UiHandlerDeps;
@@ -129,14 +133,49 @@ function replyFor(prompt: string, state: ProviderState): string {
   return folderReply(prompt, state.reply);
 }
 
+function providerReadinessReply(res: ServerResponse): void {
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(
+    JSON.stringify({
+      model: MODEL,
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: "OK",
+            tool_calls: [
+              {
+                id: "structured-readiness-proof",
+                type: "function",
+                function: { name: "report_readiness", arguments: '{"status":"ok"}' },
+              },
+            ],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+    }),
+  );
+}
+
 function providerReply(body: string, res: ServerResponse, state: ProviderState): void {
   const request = JSON.parse(body) as {
     readonly messages: readonly { readonly role: string; readonly content: string }[];
+    readonly tools?: readonly { readonly function: { readonly name: string } }[];
   };
+  const toolNames = request.tools?.map((tool) => tool.function.name) ?? [];
+  if (toolNames.includes("report_readiness")) {
+    state.readinessToolProbes += 1;
+    providerReadinessReply(res);
+    return;
+  }
   const prompt =
     request.messages.filter((message) => message.role === "user").at(-1)?.content ?? "";
   const synthesized = prompt.includes("Connected sources:");
-  if (synthesized) state.evidence.push(prompt.slice(prompt.indexOf("Connected sources:")));
+  if (synthesized) {
+    state.evidence.push(prompt.slice(prompt.indexOf("Connected sources:")));
+    state.offeredTools.push(toolNames);
+  }
   const content = synthesized ? replyFor(state.evidence.at(-1) ?? "", state) : "Explain that.";
   res.writeHead(200, { "content-type": "application/json" });
   res.end(
@@ -150,7 +189,12 @@ function providerReply(body: string, res: ServerResponse, state: ProviderState):
 }
 
 async function provider(): Promise<{ readonly baseUrl: string; readonly state: ProviderState }> {
-  const state: ProviderState = { reply: "path", evidence: [] };
+  const state: ProviderState = {
+    reply: "path",
+    evidence: [],
+    offeredTools: [],
+    readinessToolProbes: 0,
+  };
   const server = createServer((req, res): void => {
     let body = "";
     req.setEncoding("utf8");
@@ -240,6 +284,23 @@ async function fixture(twoRoots = false): Promise<Fixture> {
       ],
     });
   await connectPod(active.deps, active.chatId);
+  // Keep this mounted public RAG fixture catalog-enabled: earn the model's tool proof through
+  // the canonical bounded readiness request before any human Chat turn.
+  const readiness = await runGatewayReadiness(
+    { modelId: MODEL, options: { probes: ["tool_calling"] } },
+    { ...active.deps, gatewayReadinessSignal: AbortSignal.timeout(5_000) },
+    "structured-referent-startup",
+  );
+  expect(readiness).toMatchObject({
+    overallStatus: "ready",
+    probes: [
+      { name: "chat", status: "passed" },
+      { name: "tool_calling", status: "passed" },
+    ],
+  });
+  expect(upstream.state.readinessToolProbes).toBe(1);
+  expect(chatModelSupportsTools(active.deps, MODEL)).toBe(true);
+  expect(active.deps.knowledgeChatCatalog).toBeDefined();
   const started = await startUiTestServer({
     staticRoot: directory,
     csp: buildCspHeader([]),
@@ -284,7 +345,36 @@ async function ask(setup: Fixture, content: string): Promise<HybridGroundedAnswe
   });
   const answer = result as HybridGroundedAnswer;
   expect(answer.groundingKind).toBe("hybrid");
+  assertCatalogInventoryOnly(setup);
   return answer;
+}
+
+function assertCatalogInventoryOnly(setup: Fixture): void {
+  const catalog = setup.deps.knowledgeChatCatalog;
+  if (catalog === undefined) throw new TypeError("Missing actual Knowledge tool catalog");
+  const expectedTools = catalog.toolDefinitions().map((tool) => tool.name);
+  expect(expectedTools.length).toBeGreaterThan(0);
+  expect(setup.provider.offeredTools.length).toBeGreaterThan(0);
+  for (const offered of setup.provider.offeredTools) expect(offered).toEqual(expectedTools);
+  expect(setup.provider.readinessToolProbes).toBe(1);
+  const users = setup.deps.store
+    .listMessages(setup.chatId)
+    .filter((message) => message.role === "user");
+  for (const message of users) {
+    const exchanges = message.toolTranscript?.exchanges;
+    // The real tool turn prepares one source-membership receipt, without model-requested tools.
+    expect(exchanges).toHaveLength(1);
+    expect(exchanges?.[0]).toMatchObject({
+      call: { origin: "runtime", arguments: { view: "inventory" } },
+      result: {
+        status: "completed",
+        toolRef: { canonicalId: "keiko.knowledge.documents" },
+        data: { outcome: "succeeded", view: "inventory" },
+      },
+    });
+    expect(exchanges?.[0]?.call.arguments).toEqual({ view: "inventory" });
+    expect(exchanges?.[0]?.mutationOutcome).toBeUndefined();
+  }
 }
 
 async function numericHistory(

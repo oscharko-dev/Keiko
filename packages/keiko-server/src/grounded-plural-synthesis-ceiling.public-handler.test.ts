@@ -116,7 +116,7 @@ function configuredRuntime(hybrid: boolean): {
   readonly deps: UiHandlerDeps;
   readonly chatId: string;
 } {
-  const deps = buildUiHandlerDeps({
+  const owner = buildUiHandlerDeps({
     configPath: join(stateDir, "gateway.json"),
     evidenceDir: join(stateDir, "evidence"),
     uiDbPath: join(stateDir, "ui.db"),
@@ -125,7 +125,12 @@ function configuredRuntime(hybrid: boolean): {
       [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.db"),
     },
   });
-  disposals.push(deps);
+  disposals.push(owner);
+  // These tests own physical synthesis and spend accounting, without a tool-turn catalog.
+  // Keep the real Gateway, durable spend ledger, source stores and owning disposal.
+  const { knowledgeChatCatalog, ...deps } = owner;
+  expect(knowledgeChatCatalog).toBeDefined();
+  expect(deps).not.toHaveProperty("knowledgeChatCatalog");
   deps.gatewayConfig?.set(
     parseGatewayConfig({
       providers: [
@@ -154,6 +159,9 @@ function configuredRuntime(hybrid: boolean): {
     new Date().toISOString(),
     deps.gatewayConfig.generation(),
   );
+  expect(
+    deps.gatewayConfig?.current()?.capabilities?.find((model) => model.id === MODEL),
+  ).toMatchObject({ toolCalling: false });
   deps.store.createProject(root, "Plural synthesis ceiling");
   const chat = deps.store.createChat(root, "Plural synthesis ceiling", MODEL);
   deps.store.updateChat(chat.id, {
@@ -212,7 +220,9 @@ async function scriptedTurn(
       const body = typeof init?.body === "string" ? init.body : "";
       if (!body.includes("Feature()"))
         return Promise.resolve(providerResponse("No matching evidence."));
-      calls.push(JSON.parse(body) as { readonly messages: GatewayCallRequest["messages"] });
+      const request = JSON.parse(body) as { readonly messages: GatewayCallRequest["messages"] };
+      expect(request).not.toHaveProperty("tools");
+      calls.push(request);
       const cited = hybrid
         ? "Feature returns true [1]."
         : "Feature returns true [source:1|src/Feature.ts:1].";

@@ -2871,6 +2871,7 @@ function emitGatewayStreamFailureDiagnostic(
   error: unknown,
   runId: string,
   turnFailureRecorded: boolean,
+  chunkCount: number,
 ): void {
   if (turnFailureRecorded && isModelAnswerFailure(error)) return;
   emitServerDiagnostic(
@@ -2880,7 +2881,12 @@ function emitGatewayStreamFailureDiagnostic(
       operation: CODING_SIDECAR_GATEWAY_ROUTE,
       source: "coding-sidecar-gateway.stream",
       error,
-      summary: "The coding sidecar gateway stream failed mid-response.",
+      // A provider that failed on its first pull delivered nothing: "mid-response" would claim
+      // output that never existed, and sends an operator looking for a partial answer.
+      summary:
+        chunkCount === 0
+          ? "The coding sidecar gateway stream failed before the first response chunk."
+          : "The coding sidecar gateway stream failed mid-response.",
       redact: (message) => String(deps.redactor(message)),
     }),
   );
@@ -3953,6 +3959,7 @@ async function pumpGatewayStreamWithCancellation(
         error,
         session.runId,
         turnFailureRecorded,
+        session.metrics.chunkCount,
       );
     }
     settleGatewayStreamError(session, error, runtimeRetry, outputRepairOf(error));
@@ -3976,6 +3983,9 @@ interface GatewayStreamSession {
   readonly iterator: AsyncIterator<GatewayStreamChunk>;
   readonly promptTokenReservation: PromptTokenReservation;
   readonly metrics: {
+    // Provider chunks pulled so far (answer, reasoning or terminal), so a failure can say whether
+    // anything had been delivered when it happened.
+    chunkCount: number;
     completionTokens: number;
     promptTokens: number;
     outputBytes: number;
@@ -4006,6 +4016,7 @@ function createGatewayStreamSession(
     iterator,
     promptTokenReservation,
     metrics: {
+      chunkCount: 0,
       completionTokens: 0,
       promptTokens: 0,
       outputBytes: 0,
@@ -4106,6 +4117,7 @@ async function pumpGatewayStream(session: GatewayStreamSession): Promise<void> {
     }
     if (next.done) break;
     const chunk = next.value;
+    session.metrics.chunkCount += 1;
     if (chunk.type !== "done") {
       if (await streamGatewayText(session, chunk)) continue;
       return;
@@ -4979,6 +4991,13 @@ function readinessProbeUnanswered(
     : isAnyCodingWorkbenchProbeUnanswered(config);
 }
 
+// A verification that is still running is a state the Workbench re-reads, not a shortfall, so it is
+// recorded at info. Every settled shortfall (context window, tool calling, conversation not ready)
+// stays a warning.
+function readinessShortfallLevel(reason: CodingWorkbenchReadinessShortfall): "info" | "warn" {
+  return reason === "model-verification-pending" ? "info" : "warn";
+}
+
 function logReadinessShortfall(
   ctx: RouteContext,
   result: CodingWorkbenchSidecarGatewayResult,
@@ -4987,7 +5006,7 @@ function logReadinessShortfall(
   storedReason?:
     "model-context-window-insufficient" | "no-tool-calling" | "tool-calling-unverified",
 ): void {
-  getServerLogger().warn(
+  getServerLogger()[readinessShortfallLevel(reason)](
     activityLogEvent(
       CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION,
       {

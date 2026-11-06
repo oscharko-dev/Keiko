@@ -51,7 +51,11 @@ import {
   currentGatewayConfig,
 } from "./deps.js";
 import { newCorrelationId } from "./correlation.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticRecord,
+} from "./diagnostics-log.js";
 import type { RerankSelection } from "./grounded-rerank-facade.js";
 import { requestRerankerProbe, rerankerProbePassed } from "./gateway-reranker-probe.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -344,6 +348,25 @@ const GATEWAY_READINESS_AUTOMATIC_JOINED_OPERATION = defineActivityLogOperation(
   releaseImpact: "patch",
 });
 
+const GATEWAY_READINESS_AUTOMATIC_WITHHELD_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.automatic.withheld",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logAutomaticReadinessWithheld",
+  fields: {
+    ...GATEWAY_READINESS_MODEL_ID_FIELDS,
+    reason: { type: "string", dataClass: "closed-enum", required: true, values: ["live-run"] },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.automatic.withheld.line"],
+  releaseImpact: "patch",
+});
+
 /** Who started a non-automatic readiness check: the settings dialog. */
 type GatewayReadinessTrigger = "settings";
 
@@ -592,6 +615,20 @@ function logAutomaticReadinessCompleted(
 
 function inconclusiveProbeCount(report: GatewayReadinessReport): number {
   return report.probes.filter(probeInconclusive).length;
+}
+
+function logAutomaticReadinessWithheld(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId: string,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_AUTOMATIC_WITHHELD_OPERATION,
+      { correlationId },
+      { ...modelIdEvidence(modelId), reason: "live-run" },
+    ),
+  );
 }
 
 function logAutomaticReadinessJoined(
@@ -1197,11 +1234,24 @@ function reportProbeFailure(
     redact: (message): string => String(deps.redactor(message)),
   });
   // #4115: a probe that outwaited a busy provider is a warning, not a gateway error.
-  emitServerDiagnostic(
-    deps.diagnostics,
-    busySignal(warning) === undefined ? record : { ...record, diagnosticOutcome: "provider-busy" },
-  );
+  emitServerDiagnostic(deps.diagnostics, probeFailureRecord(deps, record, warning));
   return result(name, "failed", start, evidence, warning);
+}
+
+// A probe the server itself cancelled (shutdown, a replaced configuration) ended because Keiko
+// stopped it, not because the gateway failed: the readiness signal is already aborted and the
+// failure is an abort. That is a closed warning outcome, never an error that opens an incident.
+function probeFailureRecord(
+  deps: UiHandlerDeps,
+  record: ServerDiagnosticRecord,
+  warning: string,
+): ServerDiagnosticRecord {
+  if (deps.gatewayReadinessSignal?.aborted === true && record.errorClass === "AbortError") {
+    return { ...record, diagnosticOutcome: "request-cancelled" };
+  }
+  return busySignal(warning) === undefined
+    ? record
+    : { ...record, diagnosticOutcome: "provider-busy" };
 }
 
 // #4115: an overload status turns the probe away like a timeout outwaits it, so it carries the same
@@ -2356,6 +2406,7 @@ interface WorkbenchProbeEntry {
   readonly perform: () => Promise<void>;
   readonly holder: UiHandlerDeps["gatewayConfig"];
   readonly cancelQueued: () => void;
+  readonly withhold: () => boolean;
   prioritized: boolean;
   running: boolean;
   at: number;
@@ -2633,10 +2684,26 @@ function enqueueWorkbenchProbe(
     known.prioritized ||= prioritized;
     return known.promise;
   }
-  const entry = createWorkbenchProbeEntry(deps, target, correlationId, trigger, prioritized);
+  const entry = createWorkbenchProbeEntry(deps, target, correlationId, trigger, prioritized, key);
   workbenchProbes.set(key, entry);
   startWorkbenchProbeQueue();
   return entry.promise;
+}
+
+// A live run needs the gateway, which may serve one model at a time. A proof of a model nobody chose
+// gives way and leaves no verdict, so the next read after the run proves it.
+function withholdForLiveRun(
+  deps: UiHandlerDeps,
+  entry: WorkbenchProbeEntry,
+  key: string,
+  modelId: string,
+  correlationId: string,
+): boolean {
+  if (entry.prioritized || deps.codingRuntimeOrchestrator?.hasLiveRun() !== true) return false;
+  workbenchProbes.delete(key);
+  entry.cancelQueued();
+  logAutomaticReadinessWithheld(deps, modelId, correlationId);
+  return true;
 }
 
 function createWorkbenchProbeEntry(
@@ -2645,6 +2712,7 @@ function createWorkbenchProbeEntry(
   correlationId: string,
   trigger: WorkbenchProbeTrigger,
   prioritized: boolean,
+  key: string,
 ): WorkbenchProbeEntry {
   let finish: () => void = (): void => undefined;
   const promise = new Promise<void>((resolve) => {
@@ -2658,6 +2726,7 @@ function createWorkbenchProbeEntry(
       entry.settled = true;
       finish();
     },
+    withhold: (): boolean => withholdForLiveRun(deps, entry, key, target.modelId, correlationId),
     perform: async (): Promise<void> => {
       const controlled =
         deps.gatewayConfig === undefined
@@ -2732,6 +2801,10 @@ function performNextWorkbenchProbe(resolve: () => void, reject: (error: unknown)
   const entry = nextWorkbenchProbe();
   if (entry === undefined) {
     resolve();
+    return;
+  }
+  if (entry.withhold()) {
+    performNextWorkbenchProbe(resolve, reject);
     return;
   }
   entry.running = true;

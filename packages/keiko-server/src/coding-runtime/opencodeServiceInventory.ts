@@ -456,7 +456,7 @@ function flatten<D>(
 }
 
 /**
- * Every 2.1.4 HTTP operation Keiko does not admit, by `operationId`. Admitted operations are not
+ * Every pinned HTTP operation Keiko does not admit, by `operationId`. Admitted operations are not
  * listed: `openCodeServiceDisposition` derives them from the pinned protocol surface, so this table
  * cannot restate (and drift from) it.
  */
@@ -529,26 +529,61 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten<
     3901,
     ["T13"],
     [
-      "server.experimental.persistentPty.read",
-      "server.experimental.persistentPty.list",
-      "server.experimental.persistentPty.create",
-      "server.experimental.persistentPty.shutdown",
-      "server.experimental.persistentPty.handoff",
-      "server.experimental.persistentPty.get",
-      "server.experimental.persistentPty.update",
-      "server.experimental.persistentPty.remove",
-      "server.experimental.persistentPty.snapshot",
-      "server.experimental.persistentPty.connectToken",
-      "persistentPty.connect",
+      "experimental.persistentPty.read",
+      "experimental.persistentPty.list",
+      "experimental.persistentPty.create",
+      "experimental.persistentPty.shutdown",
+      "experimental.persistentPty.handoff",
+      "experimental.persistentPty.get",
+      "experimental.persistentPty.update",
+      "experimental.persistentPty.remove",
+      "experimental.persistentPty.snapshot",
+      "experimental.persistentPty.connectToken",
+      "experimental.persistentPty.connect",
     ],
   ),
   refused("experimental-unadmitted", 3899, ["S18"], ["experimental.session.stats"]),
-  refused("experimental-unadmitted", 3908, ["S01"], ["experimental.session.wait", "session.log"]),
+  refused(
+    "experimental-unadmitted",
+    3908,
+    ["S01"],
+    ["experimental.session.wait", "experimental.session.log"],
+  ),
   refused(
     "experimental-unadmitted",
     3908,
     [],
-    ["experimental.generate.text", "experimental.migration.v1.status"],
+    [
+      "experimental.generate.text",
+      "experimental.generate.textLegacy",
+      "experimental.generate.decisions",
+      "experimental.generate.image",
+      "experimental.migration.v1.status",
+      "experimental.usage.limits",
+    ],
+  ),
+  // #4271: the 2.2.x artifact, schedule and media surfaces stay closed until each has an owner and
+  // a proof; their plugins are withheld (`OPENCODE_WITHHELD_BUILT_IN_PLUGINS`).
+  refused(
+    "experimental-unadmitted",
+    4271,
+    [],
+    [
+      "experimental.artifacts.create",
+      "experimental.artifacts.delete",
+      "experimental.artifacts.get",
+      "experimental.artifacts.list",
+      "experimental.artifacts.providers",
+      "experimental.artifacts.update",
+      "experimental.artifacts.view",
+      "experimental.media.get",
+      "experimental.schedule.create",
+      "experimental.schedule.delete",
+      "experimental.schedule.get",
+      "experimental.schedule.list",
+      "experimental.schedule.pause",
+      "experimental.schedule.resume",
+    ],
   ),
   refused(
     "experimental-unadmitted",
@@ -591,7 +626,12 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten<
     ],
   ),
   refused("keiko-owns-authority", 3901, ["T11"], ["session.environment"]),
-  refused("keiko-owns-authority", 3900, ["T06"], ["experimental.fs.write"]),
+  refused(
+    "keiko-owns-authority",
+    3900,
+    ["T06"],
+    ["experimental.fs.write", "experimental.fs.watch", "experimental.fs.unwatch"],
+  ),
   refused(
     "keiko-owns-credentials",
     3905,
@@ -615,14 +655,9 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten<
     ],
   ),
   refused("leaves-machine", 3905, ["S11"], ["experimental.integration.wellknown.add"]),
-  refused("leaves-machine", 3903, ["C05"], ["plugin.check", "plugin.update"]),
+  refused("leaves-machine", 3903, ["C05"], ["plugin.check", "plugin.update", "plugin.gui"]),
   refused("leaves-machine", 3903, ["T15"], ["websearch.providers", "websearch.query"]),
-  refused(
-    "leaves-machine",
-    3899,
-    [],
-    ["experimental.voice.models", "experimental.voice.session", "experimental.voice.instructions"],
-  ),
+  refused("leaves-machine", 3899, [], ["experimental.voice.models", "experimental.voice.session"]),
   refused("not-yet-implemented", 3903, ["C01"], ["agent.get"]),
   refused("not-yet-implemented", 3903, ["T17"], ["experimental.session.skill"]),
   refused(
@@ -671,7 +706,7 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten<
 ]);
 
 /**
- * Every 2.1.4 CLI leaf command (`opencode --help`, walked recursively), by command path. `serve` is
+ * Every pinned CLI leaf command (`opencode --help`, walked recursively), by command path. `serve` is
  * the one surface Keiko starts; the rest are reached, if at all, through Keiko's own operations.
  */
 export const OPENCODE_CLI_DISPOSITIONS = flatten<OpenCodeServiceDispositionEntry["disposition"]>([
@@ -745,7 +780,7 @@ export const OPENCODE_CLI_DISPOSITIONS = flatten<OpenCodeServiceDispositionEntry
 ]);
 
 /**
- * Every setting path of the 2.1.4 configuration schema, by name. `keiko-set` is exactly what the
+ * Every setting path of the pinned configuration schema, by name. `keiko-set` is exactly what the
  * native profile composes (the inventory test derives it from `createFixedOpenCodeV2Config` and the
  * MCP admission, so this table cannot claim a setting the runtime is not given). A refused setting
  * keeps the producer's own default: the runtime loads no configuration layer that could set it
@@ -771,6 +806,19 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
   ),
   keikoSet(["S09"], ["tool_output", "tool_output.max_bytes"]),
   keikoSet(["T19"], ["experimental", "experimental.todo"]),
+  // #4271: Keiko alone bounds the runtime's lifetime, so a quiet hour unloads nothing under a run.
+  keikoSet(["S01"], ["experimental.location_idle_timeout"]),
+  // #4271: stated closed, so a changed producer default cannot open one; the plugins are withheld.
+  keikoSet(
+    ["C05"],
+    [
+      "experimental.artifacts",
+      "experimental.image_generate",
+      "experimental.media_blob",
+      "experimental.schedules",
+      "plugins",
+    ],
+  ),
   keikoSet(
     ["C04"],
     [
@@ -987,7 +1035,7 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
       "media.image.max_width",
     ],
   ),
-  refused("keiko-owns-authority", 3903, ["C05"], ["plugins", "plugins.options", "plugins.package"]),
+  refused("keiko-owns-authority", 3903, ["C05"], ["plugins.options", "plugins.package"]),
   // #3900 AC5: Keiko writes the operator's accepted external roots as local references; a
   // repository reference (and its branch) would leave the machine, and no layer hides one.
   keikoSet(
@@ -1007,7 +1055,6 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
   refused("leaves-machine", 3900, ["T15"], ["websearch", "websearch.provider"]),
   refused("keiko-owns-workspace-binding", 3902, ["S17"], ["worktree", "worktree.directory"]),
   refused("experimental-unadmitted", 3904, ["S08"], ["experimental.background_compaction"]),
-  refused("experimental-unadmitted", 3899, ["S01"], ["experimental.location_idle_timeout"]),
   refused("experimental-unadmitted", 3901, ["S16"], ["experimental.portable_shell_scanner"]),
   refused("experimental-unadmitted", 3903, ["T16"], ["experimental.subagent_depth"]),
   refused(
@@ -1053,7 +1100,19 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
     [
       "providers.*.body",
       "providers.*.canonical",
+      "experimental.image_generate.model",
+      "experimental.image_generate.model.model",
+      "experimental.image_generate.model.providerID",
+      "experimental.image_generate.model.variant",
+      "timezone",
       "providers.*.compatibility",
+      "providers.*.compatibility.mediaInput",
+      "providers.*.models.*.compatibility.mediaInput",
+      "providers.*.models.*.settings.cache",
+      "providers.*.models.*.settings.cache.ttl",
+      "providers.*.models.*.type",
+      "providers.*.settings.cache",
+      "providers.*.settings.cache.ttl",
       "providers.*.compatibility.cacheFormat",
       "providers.*.compatibility.maxTokensField",
       "providers.*.compatibility.requireAssistantAfterTool",
@@ -1100,11 +1159,12 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
 ]);
 
 /**
- * Every built-in plugin of the pinned 2.1.4 producer, by id. Every provider plugin but the one that
+ * Every built-in plugin of the pinned producer, by id. Every provider plugin but the one that
  * loads the gateway binding's own SDK package (`opencode.provider.dynamic`) serves a provider the
- * gateway-only provider policy refuses (`OPENCODE_GATEWAY_PROVIDER_POLICIES`). The workspace's
- * Claude-compatible skill directories are not read by the runtime under the launch profile; Keiko
- * admits those skills itself as sanitized copies (`codingRuntimeRepositoryItems.ts`).
+ * gateway-only provider policy refuses (`OPENCODE_GATEWAY_PROVIDER_POLICIES`). The runtime reads no
+ * Claude-compatible skill directory under the launch profile: that plugin is withheld
+ * (`OPENCODE_WITHHELD_BUILT_IN_PLUGINS`), and Keiko admits a workspace's skills itself as sanitized
+ * copies (`codingRuntimeRepositoryItems.ts`).
  */
 export const OPENCODE_PLUGIN_DISPOSITIONS = flatten<OpenCodePluginDisposition>([
   nativePlugin(["S01"], ["opencode.tool.input.repair"]),
@@ -1165,6 +1225,16 @@ export const OPENCODE_PLUGIN_DISPOSITIONS = flatten<OpenCodePluginDisposition>([
   ),
   refused("keiko-owns-configuration", 3903, ["T17", "C06"], ["opencode.config.compatibility"]),
   refused("host-surface", 3899, ["T21", "T22"], ["opencode.browser"]),
+  // #4271: withheld at the source (`OPENCODE_WITHHELD_BUILT_IN_PLUGINS`). `/goal` keeps a run going
+  // on its own for up to 50 rounds, so it waits for its own step with proof.
+  refused("not-yet-implemented", 4271, ["C02"], ["opencode.goal"]),
+  refused(
+    "experimental-unadmitted",
+    4271,
+    ["C05"],
+    ["opencode.tool.artifact", "opencode.tool.image-generate", "opencode.tool.schedule"],
+  ),
+  refused("keiko-owns-configuration", 4271, ["S11"], ["opencode.provider.claude-agent"]),
   refused(
     "leaves-machine",
     3905,
@@ -1194,7 +1264,6 @@ export const OPENCODE_PLUGIN_DISPOSITIONS = flatten<OpenCodePluginDisposition>([
       "opencode.provider.chatgpt",
       "opencode.provider.cloudflare.ai.gateway",
       "opencode.provider.cloudflare.workers.ai",
-      "opencode.provider.cohere",
       "opencode.provider.databricks",
       "opencode.provider.digitalocean",
       "opencode.provider.github.copilot",
@@ -1210,11 +1279,9 @@ export const OPENCODE_PLUGIN_DISPOSITIONS = flatten<OpenCodePluginDisposition>([
       "opencode.provider.openai",
       "opencode.provider.openai-context-caps",
       "opencode.provider.openrouter",
-      "opencode.provider.perplexity",
       "opencode.provider.poe",
       "opencode.provider.sap.ai.core",
       "opencode.provider.snowflake.cortex",
-      "opencode.provider.vercel",
       "opencode.provider.vllm",
       "opencode.provider.xai",
       "opencode.provider.zenmux",

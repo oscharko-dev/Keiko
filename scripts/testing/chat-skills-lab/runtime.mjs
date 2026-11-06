@@ -271,6 +271,7 @@ async function runtimeEnvironment(dir, port, provider, contextWindow) {
     project,
     env: {
       ...process.env,
+      KEIKO_OS_KEYCHAIN: "off",
       KEIKO_STATE_DIR: join(dir, "state"),
       KEIKO_UI_DATA_DIR: join(dir, "ui"),
       KEIKO_MEMORY_DIR: join(dir, "memory"),

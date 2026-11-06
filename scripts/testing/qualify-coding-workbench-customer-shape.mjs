@@ -129,6 +129,7 @@ function lifecycle(project, stateDir, port, configPath, pairingSecret) {
   const args = ["--host", "127.0.0.1", "--port", String(port), "--state-dir", stateDir];
   const env = {
     ...process.env,
+    KEIKO_OS_KEYCHAIN: "off",
     KEIKO_CONFIG_FILE: configPath,
     KEIKO_DEFAULT_API_KEY: CUSTOMER_SHAPE_API_KEY,
     KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET: pairingSecret,

@@ -9,6 +9,7 @@ import {
   initializeLiteLlmCodingReadiness,
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
+import { OPENCODE_PINNED_VERSION } from "./coding-runtime/opencodeRuntimeVersions.js";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -374,7 +375,7 @@ function authenticatedContext(body: unknown, origin?: string): RouteContext {
 const PINNED_MODEL_VISIBLE_TOOLS = JSON.parse(
   readFileSync(
     new URL(
-      "./coding-runtime/opencodeToolSchemas.opencode-2.1.4-direct-advertised.fixture.json",
+      `./coding-runtime/opencodeToolSchemas.opencode-${OPENCODE_PINNED_VERSION}-direct-advertised.fixture.json`,
       import.meta.url,
     ),
     "utf8",
@@ -3698,6 +3699,56 @@ describe("coding-sidecar gateway", () => {
     });
   });
 
+  // #4271 L2.5: the summary must say how far the stream got. A provider that failed on the first
+  // pull delivered no chunk, so "mid-response" would claim output that never existed.
+  it.each([
+    {
+      label: "before the first provider chunk",
+      chunks: [] as readonly GatewayStreamChunk[],
+      summary: "The coding sidecar gateway stream failed before the first response chunk.",
+    },
+    {
+      label: "after a provider chunk was delivered",
+      chunks: [{ type: "delta", token: "partial" }] as readonly GatewayStreamChunk[],
+      summary: "The coding sidecar gateway stream failed mid-response.",
+    },
+  ])("names a stream that failed $label accurately", async ({ chunks, summary }) => {
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const failing = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield* chunks;
+      throw new TransportError("connection reset");
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "fail" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream-progress" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          failing(),
+      ),
+      diagnostics,
+    } as unknown as UiHandlerDeps;
+
+    await handleCodingSidecarGatewayChatCompletions(context, deps);
+
+    const streamRecords = diagnostics.record.mock.calls
+      .map(([entry]) => entry)
+      .filter((entry) => entry.source === "coding-sidecar-gateway.stream");
+    expect(streamRecords).toHaveLength(1);
+    expect(streamRecords[0]?.message).toBe(summary);
+  });
+
   // 2026-10-28 stability blocker: the producer pulls the provider no faster than the runtime reads.
   // A reader that is behind pauses the iterator instead of being killed; only a reader that drains
   // nothing within the shared stalled-reader bound loses the stream, and that teardown cancels the
@@ -6746,6 +6797,7 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
         probeMode: "passive",
       });
       expect(JSON.stringify(line)).not.toContain("apiKey");
+      expect(sink.events[0]?.level).toBe("warn");
     },
   );
 
@@ -10403,7 +10455,9 @@ describe("pending readiness original cause evidence", () => {
     "retains the actual stored tool shortfall while pending: %s",
     async (declared) => {
       vi.useFakeTimers({ toFake: ["setTimeout"] });
-      const sink = captureServerLog("warn");
+      // #4271 L3: a verification that is still running is a state, recorded at info, so the capture
+      // threshold is info; every settled shortfall elsewhere in this file stays asserted at warn.
+      const sink = captureServerLog("info");
       const { toolCallingVerification: _verification, ...unverified } = capability();
       const config = configValue(provider({ tokenCounter: "litellm" }), {
         ...unverified,
@@ -10439,6 +10493,7 @@ describe("pending readiness original cause evidence", () => {
         const event = sink.events.find(
           (entry) => entry.op === "coding-sidecar.gateway.readiness-insufficient",
         );
+        expect(event?.level).toBe("info");
         expect(event?.extra).toMatchObject({
           reason: "model-verification-pending",
           storedReason: declared ? "tool-calling-unverified" : "no-tool-calling",

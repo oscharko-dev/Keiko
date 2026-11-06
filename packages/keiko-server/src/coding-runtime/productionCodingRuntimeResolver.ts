@@ -679,10 +679,30 @@ function launchPreparation(
   if (prepareModel === undefined) return preparation?.prepare;
   return async (request): Promise<void> => {
     if (request.runtimePreference !== "codex-subscription") {
-      await prepareModel(request.modelId, request.correlationId);
+      await untilAbandoned(prepareModel(request.modelId, request.correlationId), request.abandoned);
     }
+    if (request.abandoned?.aborted === true) return;
     await preparation?.prepare(request);
   };
+}
+
+// The model check belongs to the readiness queue and other requests may share it, so giving up the
+// wait leaves the check running. Only the start stops waiting, which frees the lane for the next.
+function untilAbandoned(work: Promise<void>, abandoned: AbortSignal | undefined): Promise<void> {
+  if (abandoned === undefined) return work;
+  return Promise.race([
+    work,
+    new Promise<void>((resolve) => {
+      if (abandoned.aborted) resolve();
+      abandoned.addEventListener(
+        "abort",
+        () => {
+          resolve();
+        },
+        { once: true },
+      );
+    }),
+  ]);
 }
 
 function launchContext(

@@ -351,7 +351,12 @@ const ACTIVITY_LOG_ERROR_KIND_RULES: readonly Readonly<{
   },
   { pattern: /authority/u, result: "authority-denied" },
   { pattern: /conflict/u, result: "conflict" },
-  { pattern: /unavailable|econn/u, result: "unavailable" },
+  // The gateway taxonomy's reachability codes carry no ECONN*/unavailable substring, yet each says
+  // the provider (or the proxy in front of it) could not be reached: an outage, not a Keiko fault.
+  {
+    pattern: /unavailable|econn|^gateway_(?:transport|proxy_unreachable|proxy_egress_failed)$/u,
+    result: "unavailable",
+  },
 ];
 
 export function activityLogErrorKind(error: unknown): ActivityLogErrorKind {

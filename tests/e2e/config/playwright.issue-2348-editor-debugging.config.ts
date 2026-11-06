@@ -46,6 +46,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 240_000,
     env: {
+      KEIKO_OS_KEYCHAIN: "off",
       KEIKO_DAP_OPERATOR_PROVISIONING_JSON: provisioning,
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
       KEIKO_STATE_DIR: stateDir,
