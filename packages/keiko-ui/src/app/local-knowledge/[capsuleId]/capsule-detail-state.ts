@@ -33,7 +33,7 @@ export function useCapsuleDetail(
   const load = useCallback(
     async (opts: { readonly quiet?: boolean } = {}): Promise<void> => {
       const scope = activeScope.current;
-      if (scope === null || scope.capsuleId !== capsuleId) return;
+      if (scope?.capsuleId !== capsuleId) return;
       if (capsuleId === "") {
         setData(null);
         setLoadError("No Knowledge Pod selected.");

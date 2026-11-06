@@ -591,9 +591,9 @@ function unofferedAliasCorrection(
     const tools = normalizer.tools(now());
     if (tools.some((tool) => tool.alias === call.name)) return undefined;
     return offeredAliasExamples(tools);
-  } catch (failure) {
+  } catch (error_) {
     // A binding that expired between the rejected call and correction is still a hard refusal.
-    return recordAndReject(log, "response", failure, rejectionDetails(normalizer, call, failure));
+    return recordAndReject(log, "response", error_, rejectionDetails(normalizer, call, error_));
   }
 }
 
