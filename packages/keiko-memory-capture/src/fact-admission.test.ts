@@ -830,6 +830,15 @@ describe("material the person passes on", () => {
     ["Betreff: Ich bin ab Montag im Urlaub.", "Ich bin ab Montag im Urlaub"],
     ["Hier der Entwurf:\n- Punkt 1\nIch nutze Vim.", "Ich nutze Vim"],
     ["Übersetze: Ich wohne in Köln. Ich arbeite bei Foo.", "Ich arbeite bei Foo"],
+    ["Betreff: Urlaub\nIch bin im Urlaub.", "Ich bin im Urlaub"],
+    [
+      "Von: Anna <a@b.de>\nBetreff: Plan\n\nIch bin ab Montag im Urlaub.",
+      "Ich bin ab Montag im Urlaub",
+    ],
+    ["Fwd: Plan\nHallo Oli,\nich wohne in Köln.", "ich wohne in Köln"],
+    ["From: Anna\nSubject: Plan\n\nI use Vim every day.", "I use Vim every day"],
+    ["Übersetze ins Englische: Hallo,\nich wohne in Köln.", "ich wohne in Köln"],
+    ["Hier die Mail: Hallo Anna\nIch wohne in Köln.\nGruß", "Ich wohne in Köln"],
   ])("keeps pasted, forwarded or task material out: %s", (text, evidence) => {
     expect(reasonOf(text, evidence)).toBe("quoted");
   });

@@ -174,20 +174,26 @@ export function isMemoryForgetReference(target: string): boolean {
 // what to forget.
 const NAMED_THING_RE =
   /^(?:den|die|das|der|dem|des|ein\p{L}*|mein\p{L}*|dein\p{L}*|unser\p{L}*|the|a|an|my|your|our)\s/iu;
-const CONTINUATION_RE = /(?:,|\s(?:und|and|dann|then))\s+(\p{L}+)/gu;
+const CONTINUATION_RE = /,|\s(?:und|and|dann|then)(?!\p{L})/gu;
+const CONJUNCTIONS = new Set(["und", "and", "dann", "then"]);
 const TASK_VERBS = new Set(
   (
     "nimm nehmt nutze nutz benutze benutz verwende verwend schreib schreibe mach mache ersetze " +
     "ersetz ändere änder probier probiere wechsle wechsel use take write make replace change try " +
-    "switch pick"
+    "switch pick nehmen schau schaue arbeite look go"
   ).split(" "),
 );
 
 function asksForTask(target: string): boolean {
   if (!NAMED_THING_RE.test(target)) return false;
-  return [...target.matchAll(CONTINUATION_RE)].some(([, word = ""]) =>
-    TASK_VERBS.has(word.toLowerCase()),
-  );
+  return [...target.matchAll(CONTINUATION_RE)].some((match) => {
+    const words = target
+      .slice(match.index + match[0].length)
+      .trim()
+      .split(/\s+/u, 4);
+    const first = words.find((word) => !CONJUNCTIONS.has(word.toLowerCase())) ?? "";
+    return TASK_VERBS.has(first.toLowerCase().replace(/\P{L}+$/u, ""));
+  });
 }
 
 function forgetTargetOf(text: string): string | null {

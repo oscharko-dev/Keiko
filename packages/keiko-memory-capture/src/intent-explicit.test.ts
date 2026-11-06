@@ -451,6 +451,13 @@ describe("explicit German forget and remember statements (#4211)", () => {
     "Vergiss den Bericht, schreib den neuen.",
     "Forget the old API, use the new one.",
     "Vergiss die erste Version und nimm die zweite.",
+    "Forget my address, then write me a poem",
+    "Vergiss den Bericht, und nimm Notizen",
+    "Vergiss die Notiz, dann nimm die andere",
+    "Forget the old API, and use the new one",
+    "Vergiss die alte Nummer und dann nimm die neue",
+    "Vergiss meine Adresse, nehmen wir die neue",
+    "Forget the report and look at the new one",
   ])("does not treat %j as a forget", (text) => {
     const { targets, resolver } = captured();
     expect(tryExtractForget(text, ctx(), { resolver })).toBeNull();

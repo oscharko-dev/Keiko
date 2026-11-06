@@ -265,10 +265,10 @@ D2 lets a fact through.
   The clause is not a question, request, quotation, hypothesis, irony, hedge ("Ich glaube, …"),
   denial or past statement, and not material the person passes on: a line quoted with ">", or
   anything after a lead-in that names pasted material ("Hier die Mail von Anna:"), a mail header
-  ("Fwd:") or work on a text ("Übersetze:"), to the end of its line, or through the rest of the
-  message when the lead-in ends its line. Tense and pronouns are judged on the claim itself, not on
-  its reason or condition, so "Ich nutze Tabellen, weil sie übersichtlich sind" stands; a decision,
-  switch or migration made in the past holds now.
+  ("Fwd:") or work on a text ("Übersetze:"), through the rest of the message; only a named material
+  followed by a single value on its line ("Meine Mail: a@b.de") covers that line alone. Tense and
+  pronouns are judged on the claim itself, not on its reason or condition, so "Ich nutze Tabellen,
+  weil sie übersichtlich sind" stands; a decision, switch or migration made in the past holds now.
   The fact is about the person: labelled `self`, with a first-person word, and naming no one else:
   a titled person, a relation behind a possessive or genitive, a family word, a role a determiner
   points at ("dem Kunden", but not "mit Kunden" or "die Kunden-Tickets"), a partner, another
