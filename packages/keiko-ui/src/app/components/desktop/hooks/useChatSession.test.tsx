@@ -503,6 +503,84 @@ describe("useChatSession bootstrap", () => {
     await waitFor(() => expect(vi.mocked(fetchModels).mock.calls.at(-1)?.[1]).toBe(true));
   });
 
+  // Lab request storm: a Workbench open fires several catalog refresh requests within a few
+  // milliseconds (window effect, runtime refresh, source refresh). Every subscriber receives the
+  // result of the read in flight, so each extra request only re-cleared the picker and repeated the
+  // catalog GET and the shared bootstrap.
+  describe("catalog refresh requests that arrive while a read is in flight", () => {
+    function holdCatalogReads(): { readonly settle: () => void } {
+      let settleRead: () => void = () => undefined;
+      vi.mocked(fetchModels).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            settleRead = (): void => {
+              resolve({ models: [] });
+            };
+          }),
+      );
+      return {
+        settle: (): void => {
+          settleRead();
+        },
+      };
+    }
+
+    it("joins an equal request instead of reading the catalog again", async () => {
+      const held = holdCatalogReads();
+      const { result } = renderHook(() => useGatewayModelCatalogSettled());
+      const before = vi.mocked(fetchModels).mock.calls.length;
+      act(() => {
+        requestGatewayModelCatalogRefresh({ check: true });
+        requestGatewayModelCatalogRefresh({ check: true });
+        requestGatewayModelCatalogRefresh();
+      });
+      expect(vi.mocked(fetchModels).mock.calls.length - before).toBe(1);
+      await act(async () => {
+        held.settle();
+      });
+      expect(result.current).toBe(true);
+    });
+
+    it("still reads again when a person's check follows a plain reread", () => {
+      holdCatalogReads();
+      renderHook(() => useGatewayModelCatalogSettled());
+      const before = vi.mocked(fetchModels).mock.calls.length;
+      act(() => {
+        requestGatewayModelCatalogRefresh();
+        requestGatewayModelCatalogRefresh({ check: true });
+      });
+      const calls = vi.mocked(fetchModels).mock.calls.slice(before);
+      expect(calls.map((call) => call[1])).toEqual([false, true]);
+    });
+
+    it("always restarts on a configuration change, because the read in flight predates it", () => {
+      holdCatalogReads();
+      renderHook(() => useGatewayModelCatalogSettled());
+      const before = vi.mocked(fetchModels).mock.calls.length;
+      act(() => {
+        requestGatewayModelCatalogRefresh();
+        notifyGatewayConfigUpdated();
+      });
+      expect(vi.mocked(fetchModels).mock.calls.length - before).toBe(2);
+    });
+
+    it("accepts a new request once the read has settled", async () => {
+      const held = holdCatalogReads();
+      renderHook(() => useGatewayModelCatalogSettled());
+      const before = vi.mocked(fetchModels).mock.calls.length;
+      act(() => {
+        requestGatewayModelCatalogRefresh();
+      });
+      await act(async () => {
+        held.settle();
+      });
+      act(() => {
+        requestGatewayModelCatalogRefresh();
+      });
+      expect(vi.mocked(fetchModels).mock.calls.length - before).toBe(2);
+    });
+  });
+
   it("restores a non-default model selection once the refreshed catalog confirms it", async () => {
     const catalog = [model({ id: "chat-live" }), model({ id: "chat-alt" })];
     vi.mocked(fetchModels).mockResolvedValue({ models: catalog });

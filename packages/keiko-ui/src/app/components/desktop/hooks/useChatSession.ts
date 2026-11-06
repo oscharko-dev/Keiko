@@ -1969,10 +1969,31 @@ function publishGatewayModelRefresh(result: GatewayModelRefreshResult): void {
 
 // A person's own step (the Workbench or a model picker opened) also checks again the models that
 // are not ready; every other refresh only rereads the catalog (customer 1.3.4).
+//
+// A catalog refresh REQUEST (a window or picker opening) that arrives while an equal-or-stronger
+// request is already reading the catalog joins it: every subscriber receives that read's result,
+// so a second read would only re-clear the picker and repeat the GETs. A configuration or readiness
+// change always restarts the read, because the one in flight predates it.
+let foregroundRefreshInflight: { readonly generation: number; readonly check: boolean } | undefined;
+
+function joinsForegroundRefresh(event: Event | undefined, check: boolean): boolean {
+  const inflight = foregroundRefreshInflight;
+  if (inflight === undefined || event?.type !== GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT) {
+    return false;
+  }
+  return inflight.generation === gatewayModelRefreshGeneration && (inflight.check || !check);
+}
+
+function settleForegroundRefresh(generation: number): void {
+  if (foregroundRefreshInflight?.generation === generation) foregroundRefreshInflight = undefined;
+}
+
 function refreshGatewayModels(event?: Event): void {
   const check = event !== undefined && gatewayModelCatalogCheckRequested(event);
+  if (joinsForegroundRefresh(event, check)) return;
   const generation = gatewayModelRefreshGeneration + 1;
   gatewayModelRefreshGeneration = generation;
+  foregroundRefreshInflight = { generation, check };
   invalidateSharedBootstrap();
   resetModelRequestCache();
   // A gateway change makes the prior catalog untrustworthy immediately. Keep the picker empty
@@ -1983,6 +2004,7 @@ function refreshGatewayModels(event?: Event): void {
   const startedAt = performance.now();
   void fetchModels(correlationId, check).then(
     ({ models }): void => {
+      settleForegroundRefresh(generation);
       if (generation === gatewayModelRefreshGeneration) {
         recordCatalogAdoption(
           models,
@@ -2000,6 +2022,7 @@ function refreshGatewayModels(event?: Event): void {
       }
     },
     (error_: unknown): void => {
+      settleForegroundRefresh(generation);
       if (generation === gatewayModelRefreshGeneration) {
         publishGatewayModelRefresh({ kind: "failure", message: errorMessage(error_) });
       }
