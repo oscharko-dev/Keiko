@@ -1,3 +1,13 @@
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { logKnowledgeCoverage, knowledgeTurnCoverage } from "../chat-tool-knowledge-coverage.js";
 import { CHAT_CATALOG_TOOLS } from "./jiraChatCatalogConsumer.js";
 import { DatabaseSync } from "node:sqlite";
@@ -2593,12 +2603,37 @@ describe("four-item Epic and Task template fullchain", () => {
     return { tool: "jira.draft", args: reference };
   }
 
+  function expectCombinedCorrectionEvidence(correctionLogs: BufferedServerLogSink): void {
+    const corrected = correctionLogs.events.filter(
+      (event) => event.op === "chat.tool-turn.corrected",
+    );
+    expect(corrected.map((event) => event.extra?.correctionKind)).toEqual([
+      "unsupported-issue-key",
+      "knowledge-coverage",
+    ]);
+    expect(corrected[0]?.extra?.unsupportedKeyCount).toBe(1);
+    expect(corrected[1]?.extra?.pendingKnowledgePageCount).toBe(1);
+    for (const event of corrected) {
+      const line = expectActivityLogProof(
+        "chat.tool-turn.corrected.line",
+        formatActivityLogProofLine(event),
+      );
+      expect(JSON.stringify(line)).not.toContain("SYN-999");
+    }
+  }
+
   it.each([false, true])(
     "corrects pending Knowledge and an unsupported Jira key once, with truthful final coverage (second completeness claim: %s)",
     async (secondClaim) => {
       vi.mocked(recordChatToolTurnCorrected).mockClear();
       vi.mocked(logKnowledgeCoverage).mockClear();
       const f = fixture();
+      const correctionLogs = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink: correctionLogs, level: "info" }));
+      cleanups.push(() => {
+        resetServerLogger();
+        return Promise.resolve();
+      });
       await journeyPod(f);
       typedJira(f);
       const original = f.model.call;
@@ -2666,7 +2701,8 @@ describe("four-item Epic and Task template fullchain", () => {
         "knowledge_requirements",
         "jira_create_fields",
       ]);
-      expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(2);
+      expectCombinedCorrectionEvidence(correctionLogs);
       expect(f.writes()).toBe(0);
       expect(f.deps.store.listMessages(f.chatId).at(-1)?.content).toBe(
         secondClaim

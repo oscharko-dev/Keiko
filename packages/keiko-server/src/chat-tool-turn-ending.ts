@@ -394,7 +394,8 @@ const CORRECTED = defineActivityLogOperation({
  * out findings the turn's report pages list (`report-omission`, with their count; never the keys),
  * an answer that gave requirements other issues than the report's requirement pages state
  * (`report-coverage`, with the requirement count; never the ids or keys), or an answer that named issue keys no tool result showed (`unsupported-issue-key`, with their
- * count; never the keys).
+ * count; never the keys), or unfinished Knowledge pages (`knowledge-coverage`, with the pending
+ * page count). A combined correction emits one line per kind for the same admitted model round.
  */
 export function recordChatToolTurnCorrected(
   log: ServerLogSink,

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "106b6885a0cb6ca5d4e0f32cf46b27468fcff3314922b9dc3c96f56306a47a6a"
+    "catalogDigest": "e841612ce8aff54ccebb015280f3bdc3d9a5a0620d1e8e1c783174f1399181d4"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1396,7 +1396,10 @@
     "chat.tool-turn.context-fitted.line": [
       "packages/keiko-server/src/chat-tool-turn-ending.test.ts"
     ],
-    "chat.tool-turn.corrected.line": ["packages/keiko-server/src/chat-tool-turn-ending.test.ts"],
+    "chat.tool-turn.corrected.line": [
+      "packages/keiko-server/src/atlassian/jiraChatToolTurn.test.ts",
+      "packages/keiko-server/src/chat-tool-turn-ending.test.ts"
+    ],
     "chat.tool-turn.ended.line": ["packages/keiko-server/src/chat-tool-turn-ending.test.ts"],
     "chat.turn.started.shape": ["packages/keiko-server/src/chat-activity.test.ts"],
     "cli.audit.completed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],

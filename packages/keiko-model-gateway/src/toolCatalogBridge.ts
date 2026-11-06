@@ -48,7 +48,7 @@ const TOOL_CATALOG_REJECTED_OPERATION = defineActivityLogOperation({
   op: "gateway.tool-catalog.rejected",
   category: "gateway",
   owner: "keiko-model-gateway",
-  emitter: "toolCatalogBridge.reject",
+  emitter: "toolCatalogBridge.recordAndReject",
   fields: {
     phase: {
       type: "string",
@@ -522,7 +522,7 @@ function retryableResponseRejection(
   );
 }
 
-function reject(
+function recordAndReject(
   log: ModelGatewayLogSink,
   phase: "projection" | "response",
   cause: unknown,
@@ -577,6 +577,7 @@ function unofferedAliasCorrection(
   call: NormalizedToolCall | undefined,
   cause: unknown,
   now: () => number,
+  log: ModelGatewayLogSink,
 ): string | undefined {
   if (
     normalizer === undefined ||
@@ -590,9 +591,9 @@ function unofferedAliasCorrection(
     const tools = normalizer.tools(now());
     if (tools.some((tool) => tool.alias === call.name)) return undefined;
     return offeredAliasExamples(tools);
-  } catch {
-    // Expired or inconsistent binding metadata is not a model spelling mistake.
-    return undefined;
+  } catch (failure) {
+    // A binding that expired between the rejected call and correction is still a hard refusal.
+    return recordAndReject(log, "response", failure, rejectionDetails(normalizer, call, failure));
   }
 }
 
@@ -698,13 +699,13 @@ function bindCall(
       invocation,
     });
   } catch (cause) {
-    return reject(
+    return recordAndReject(
       log,
       "response",
       cause,
       rejectionDetails(normalizer, input, cause),
       captured === undefined ? undefined : schemaRepair(normalizer, captured, cause),
-      unofferedAliasCorrection(normalizer, captured, cause, now),
+      unofferedAliasCorrection(normalizer, captured, cause, now, log),
     );
   }
 }
@@ -757,7 +758,7 @@ function bindCalls(
       "invalid-arguments",
     );
   } catch (cause) {
-    return reject(log, "response", cause);
+    return recordAndReject(log, "response", cause);
   }
   return Object.freeze(entries.map((call) => bindCall(normalizer, call, now, log, native)));
 }
@@ -796,7 +797,7 @@ function assertNativeTransport(
     offeredAlias,
     transport: "assistant-text" as const,
   });
-  reject(
+  recordAndReject(
     log,
     "response",
     new GatewayToolCatalogError("invalid-arguments", undefined, true, repair),
@@ -882,6 +883,6 @@ export function createGatewayToolCatalogBridge(
   try {
     return prepare(request, now, log, recordProjection);
   } catch (cause) {
-    return reject(log, "projection", cause);
+    return recordAndReject(log, "projection", cause);
   }
 }

@@ -1744,11 +1744,11 @@ function assertOriginalMutationRetryGrant(
 }
 
 // Size the original cumulative grant around the complete provider prompts, including tool schemas.
-// Current schema metadata makes the write continuation exceed the former 8192 allowance; the
-// dedicated negative below retains that boundary and its committed receipt. These positive cases
-// reach the overflow itself; physical-cost assertions derive from the owning gateway counter.
-// Only the confirmed write leaves this grant.
+// Keep the owner's original 8192 caller allowance: shared Jira instructions must fit this
+// complete prompt. Physical-cost assertions derive from the owning gateway counter; only the
+// confirmed write leaves this grant.
 it.each([
+  { grant: 8192, calls: 2 },
   { grant: 10000, calls: 2 },
   { grant: 12000, calls: 2 },
   { grant: 17000, calls: 3 },
@@ -1784,39 +1784,11 @@ it.each([
   },
 );
 
-it("keeps a caller's exhausted 8192 continuation grant refused after retaining its one committed write", async () => {
-  const f = runtime(true);
-  const grant = 8192;
-  boundCallerSynthesisInput(grant);
-  const requests = provider(["write", "overflow", "answer"]);
-  const body = {
-    chatId: f.chatId,
-    projectPath: f.root,
-    content: "Explain src/Feature.ts and add the Jira comment.",
-    modelId: MODEL,
-    clientTurnId: "mixed-continuation-caller-refused",
-  };
-  const result = await handleSendDesktopChat(context(body), f.deps);
-  expect(result).toMatchObject({
-    status: 403,
-    body: { error: { code: "GATEWAY_ATTEMPT_ADMISSION_DENIED" } },
-  });
-  expect(requests).toHaveLength(1);
-  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
-  const costs = physicallyDispatchedPromptCosts(f.deps, requests);
-  expect(costs).toHaveLength(1);
-  expect(costs[0]).toBeLessThanOrEqual(grant);
-  const pendingPrompt = gatewayPromptAdmissions(f.deps).at(-1)?.promptTokens;
-  expect(pendingPrompt).toBeGreaterThan(grant);
-  const messages = f.deps.store.listMessages(f.chatId);
-  expect(messages[0]?.toolTranscript?.exchanges[0]?.mutationOutcome).toBe("succeeded");
-});
-
 it.each(["cancel", "scope"] as const)(
   "keeps a %s interruption before the adopted retry's preflight terminal",
   async (kind) => {
     const f = runtime(true);
-    boundCallerSynthesisInput(10000);
+    boundCallerSynthesisInput(8192);
     beforeAdoptedGroundedRetry(async () => {
       if (kind === "scope") await changeOwnedMode(f, f.chatId);
       else interruptChatGenerations(f.deps, f.chatId);

@@ -87,7 +87,11 @@ export const KNOWLEDGE_RESULT_SCHEMA = object(
       documentsVisited: COUNT_SCHEMA,
       documentReadable: FLAG_SCHEMA,
       searchComplete: FLAG_SCHEMA,
-      unavailableDocumentScopes: { type: "array", maxItems: SEARCH_DOCUMENTS_MAX, items: text(8) },
+      unavailableDocumentScopes: {
+        type: "array",
+        maxItems: SEARCH_DOCUMENTS_MAX,
+        items: REQUIREMENT_DOCUMENT_SCOPE_SCHEMA,
+      },
     }),
     items: { type: "array", maxItems: PAGE_DOCUMENTS, items: DOCUMENT_ITEM_SCHEMA },
     nextCursor: text(512),

@@ -1058,19 +1058,20 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.uncorrectedExchangeCount = this.transcriptExchangeCount();
     this.continuation.push({ role: "assistant", content: answer.content });
     this.correction = { role: "system", content: correction.content };
-    recordChatToolTurnCorrected(processServerLogSink(), {
-      correlationId: this.options.correlationId,
-      messageId: this.options.message.id,
-      settledExchangeCount: this.settledExchanges.length,
-      ...correction.log,
-    });
+    for (const log of correction.logs)
+      recordChatToolTurnCorrected(processServerLogSink(), {
+        correlationId: this.options.correlationId,
+        messageId: this.options.message.id,
+        settledExchangeCount: this.settledExchanges.length,
+        ...log,
+      });
     return true;
   }
 
   private answerCorrection(
     answer: NormalizedResponse,
     request: GatewayCallRequest,
-  ): { readonly content: string; readonly log: AnswerCorrectionLog } | undefined {
+  ): { readonly content: string; readonly logs: readonly AnswerCorrectionLog[] } | undefined {
     const corrections: { readonly content: string; readonly log: AnswerCorrectionLog }[] = [];
     const omitted = omittedReportFindingKeys(this.settledExchanges, answer.content);
     if (omitted.length > 0)
@@ -1101,10 +1102,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
           pendingKnowledgePageCount: coverage.pendingPageCount,
         },
       });
-    const first = corrections[0];
-    return first === undefined
+    return corrections.length === 0
       ? undefined
-      : { content: corrections.map((entry) => entry.content).join("\n\n"), log: first.log };
+      : {
+          content: corrections.map((entry) => entry.content).join("\n\n"),
+          logs: corrections.map((entry) => entry.log),
+        };
   }
 
   /**

@@ -1,4 +1,8 @@
-import { deriveRequirementInventory } from "@oscharko-dev/keiko-quality-intelligence";
+import {
+  deriveRequirementInventory,
+  REQUIREMENT_DOCUMENT_SCOPE_LENGTH,
+  REQUIREMENT_DOCUMENT_SCOPE_MAX_LENGTH,
+} from "@oscharko-dev/keiko-quality-intelligence";
 import { activityLogOperationSchema } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   KNOWLEDGE_REVIEW_FAILURE_STAGES,
@@ -51,6 +55,7 @@ import {
   KNOWLEDGE_TOOL_PAYLOAD_BYTES_MAX,
 } from "./knowledge-tool-execution.js";
 import { buildRedactor } from "./deps.js";
+import { KNOWLEDGE_RESULT_SCHEMA } from "./knowledgeDocumentsTool.js";
 
 vi.mock("@oscharko-dev/keiko-quality-intelligence", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@oscharko-dev/keiko-quality-intelligence")>();
@@ -172,6 +177,41 @@ function addDocuments(f: PodFixture, count: number): void {
   });
 }
 
+describe("managed unavailable document scope result schema", () => {
+  const schema = compileExternalCatalogSchema(KNOWLEDGE_RESULT_SCHEMA);
+  const scopeWidths = Array.from(
+    { length: REQUIREMENT_DOCUMENT_SCOPE_MAX_LENGTH / REQUIREMENT_DOCUMENT_SCOPE_LENGTH },
+    (_, index) => (index + 1) * REQUIREMENT_DOCUMENT_SCOPE_LENGTH,
+  );
+
+  it.each(scopeWidths)("accepts a canonical %i-character unavailable scope", (width) => {
+    expect(
+      describeCatalogSchemaMismatch(schema, {
+        outcome: "succeeded",
+        coverage: { unavailableDocumentScopes: ["a".repeat(width)] },
+      }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    null,
+    123,
+    "",
+    ...scopeWidths.flatMap((width) => ["a".repeat(width - 1), "a".repeat(width + 1)]),
+    "A".repeat(REQUIREMENT_DOCUMENT_SCOPE_LENGTH),
+    "g".repeat(REQUIREMENT_DOCUMENT_SCOPE_LENGTH),
+    `${"a".repeat(REQUIREMENT_DOCUMENT_SCOPE_LENGTH)}\n`,
+    ` ${"a".repeat(REQUIREMENT_DOCUMENT_SCOPE_LENGTH)}`,
+  ])("refuses a noncanonical unavailable scope: %j", (scope) => {
+    expect(
+      describeCatalogSchemaMismatch(schema, {
+        outcome: "succeeded",
+        coverage: { unavailableDocumentScopes: [scope] },
+      }),
+    ).toBeDefined();
+  });
+});
+
 describe("managed scoped document access", () => {
   it("resolves current Pod-set membership per read and refuses results settled after membership changes", async () => {
     const f = await podFixture(
@@ -281,6 +321,36 @@ describe("managed scoped document access", () => {
       ).toMatchObject({ outcome: "failed" });
     }
     expect(generated).toHaveBeenCalledTimes(2);
+    const unreadableId = collisionIds[0];
+    if (unreadableId === undefined) throw new Error("Expected a colliding document.");
+    const unreadableName = `${unreadableId}.md`;
+    const unreadableScope = items(inventory).find(
+      (item) => item.documentName === unreadableName,
+    )?.documentScope;
+    expect(unreadableScope).toHaveLength(2 * REQUIREMENT_DOCUMENT_SCOPE_LENGTH);
+    f.withStore((store) =>
+      store._internal.db
+        .prepare("UPDATE documents SET status = 'unsupported' WHERE id = ?")
+        .run(unreadableId),
+    );
+    const search = await call(f, "knowledge.documents", {
+      view: "search",
+      query: "Schadenmeldungen",
+    });
+    expect(search).toMatchObject({
+      outcome: "succeeded",
+      totals: { documentsNotExtracted: 1 },
+      coverage: {
+        documentsVisited: 3,
+        atEnd: true,
+        searchComplete: false,
+        documentReadable: false,
+        unavailableDocumentScopes: [unreadableScope],
+      },
+    });
+    expect(items(search)).toHaveLength(2);
+    expect(items(search).every((item) => item.documentScope !== unreadableScope)).toBe(true);
+    expect(search.nextCursor).toBeUndefined();
   });
 
   it("pages the whole metadata inventory beyond the requirement-reader limit and keeps failed formats visible", async () => {

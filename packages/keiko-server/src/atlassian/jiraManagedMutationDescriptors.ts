@@ -73,8 +73,7 @@ const ISSUE_TYPE_ID = { ...NUMERIC_ID, description: "Numeric id from the issue-t
 const FIELDS = {
   ...object({}),
   additionalProperties: true,
-  description:
-    "Field IDs and values validated against current Jira metadata; omitted fields stay unchanged, null clears only when permitted. An issue field takes an issue key, a user its user name, a choice its id or exact value, an opaque field a plain JSON value shaped by its schemaType. A refused write returns the field and Jira's error.",
+  description: "Jira field IDs and typed values; follow shared Jira field guidance.",
 };
 const UPDATES = {
   type: "array",

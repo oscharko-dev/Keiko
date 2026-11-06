@@ -296,7 +296,10 @@ describe("trace results and evidence", () => {
     tallyRefusal(tally, {
       ok: false,
       reason: "references",
-      problems: [{ reference: "LH-9", reason: "unknown" }],
+      problems: [
+        { reference: "LH-9", reason: "unknown" },
+        { reference: "1234abcd:LH-1/AC1", reason: "acceptance-criteria-missing" },
+      ],
     });
 
     logTrace("req-trace-0002", "draft", tally);
@@ -313,12 +316,14 @@ describe("trace results and evidence", () => {
       tracedItemCount: 3,
       refusedItemCount: 1,
       referenceProblemCount: 1,
+      acceptanceCriteriaMissingCount: 1,
       labelsAppliedCount: 1,
       footerAppliedCount: 2,
       droppedLabelCount: 1,
       unavailable: false,
     });
-    expect(JSON.stringify(line)).not.toContain("LH-9");
+    expect(tally.problems).toBe(2);
+    expect(JSON.stringify(line)).not.toMatch(/LH-9|1234abcd|LH-1|AC1/u);
   });
 
   it("writes nothing when no item named a requirement", () => {

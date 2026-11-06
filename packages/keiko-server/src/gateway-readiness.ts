@@ -259,10 +259,9 @@ const GATEWAY_READINESS_BUSY_RETAINED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-// Every readiness check a person starts in the settings dialog. The Coding Workbench's automatic
-// run and the on-demand probe a conversation entry point runs keep the automatic operations
-// (`gateway.readiness.automatic.*`). Only the automatic run used to leave a line, so a check run
-// from the settings dialog left no evidence at all (#3557).
+// Readiness checks explicitly started in Settings use these operations. Configuration-owned
+// startup chat checks and the Workbench's separate capability checks retain the automatic
+// operations (`gateway.readiness.automatic.*`); conversation entry points start no probes.
 const GATEWAY_READINESS_STARTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -324,9 +323,9 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-// A conversation request that finds an on-demand probe already running for its model awaits that
-// probe instead of starting its own. Its own timeline still links to the evidence that decided its
-// outcome: this line, under its own correlation id, with the probe's as its parent (#3557, #3559).
+// A conversation request may join a configuration-owned startup check already running for its
+// model, without starting or retrying a probe. Its timeline links to that check's evidence through
+// the existing parent correlation (#3557, #3559).
 const GATEWAY_READINESS_AUTOMATIC_JOINED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -736,8 +735,8 @@ function retrievalProbeEvidence(report: GatewayReadinessReport): {
 }
 
 // One run's start line: the Coding Workbench's automatic run keeps its own operation, and a run
-// without a trigger is recorded by its caller (the on-demand probe logs the automatic operations
-// around it, so nothing here may log it twice).
+// without a trigger is recorded by its configuration-owned initialization caller through the
+// automatic operations, so nothing here may log it twice.
 function logReadinessRunStarted(
   deps: UiHandlerDeps,
   run: ReadinessRunEvidence,
@@ -757,7 +756,8 @@ function logReadinessRunStarted(
   logReadinessStarted(deps, run.correlationId, run.trigger, modelId, names.length, timeouts);
 }
 
-// The on-demand probe (one chat probe on the configured timeout) records its own start line.
+// The legacy-named initialization helper records one configuration-owned startup chat check.
+// Interactive requests never invoke it to start another check.
 function logOnDemandProbeStarted(
   deps: UiHandlerDeps,
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
@@ -2157,11 +2157,10 @@ function retainBusyConversationReadiness(
 }
 
 /**
- * #3907 AC3: a model answer a coding run accepted renews the model's same-generation basic-chat
- * success, as an answered busy probe does (#4115): the answer is stronger evidence than the probe
- * the run would otherwise need, and a probe queued between the run's turns would only compete with
- * them. It never establishes readiness, never repairs a failed observation and never crosses a
- * configuration change: the answer must come from the configuration the holder still serves.
+ * #3907 AC3: an accepted coding answer updates the serving timestamp of an already-positive,
+ * same-generation observation. It preserves checkedAt and never establishes readiness, repairs a
+ * failed observation or crosses a configuration change. Elapsed age alone does not expire basic
+ * readiness; this is serving evidence, not a TTL extension or permission to start another probe.
  */
 export function renewConversationReadinessFromAnswer(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
@@ -3315,9 +3314,9 @@ async function runOnDemandReadinessProbe(
     );
   logOnDemandProbeStarted(deps, holder, modelId, probeCorrelationId, backgroundAttempt);
   await observeOnDemandProbe(deps, modelId, probeCorrelationId);
-  // A failed report CLEARS the capability entry; without a current-generation observation
-  // every subsequent chat attempt would probe the provider again. Persist an explicit
-  // not-ready so retries hit the guard instead of the wire (the settings probe replaces it).
+  // A failed startup report may clear the capability entry. Persist an explicit current-generation
+  // not-ready observation so later admission remains an honest refusal without a request-time
+  // retry; explicit Settings verification can replace it.
   if (
     holder.generation() === generation &&
     holder.verifiedCapability(modelId)?.generation !== generation

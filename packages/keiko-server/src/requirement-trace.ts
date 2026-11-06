@@ -251,6 +251,7 @@ export interface TraceTally {
   tracedItems: number;
   refusedItems: number;
   problems: number;
+  acceptanceCriteriaMissing: number;
   labelsApplied: number;
   footersApplied: number;
   droppedLabels: number;
@@ -262,6 +263,7 @@ export function newTally(): TraceTally {
     tracedItems: 0,
     refusedItems: 0,
     problems: 0,
+    acceptanceCriteriaMissing: 0,
     labelsApplied: 0,
     footersApplied: 0,
     droppedLabels: 0,
@@ -284,6 +286,9 @@ export function tallyRefusal(
   tally.tracedItems += 1;
   tally.refusedItems += 1;
   tally.problems += resolution.problems.length;
+  tally.acceptanceCriteriaMissing += resolution.problems.filter(
+    (problem) => problem.reason === "acceptance-criteria-missing",
+  ).length;
   if (resolution.reason === "unavailable") tally.unavailable = true;
 }
 
@@ -297,7 +302,8 @@ export function logTrace(
     operation,
     tracedItemCount: tally.tracedItems,
     refusedItemCount: tally.refusedItems,
-    referenceProblemCount: tally.problems,
+    referenceProblemCount: tally.problems - tally.acceptanceCriteriaMissing,
+    acceptanceCriteriaMissingCount: tally.acceptanceCriteriaMissing,
     labelsAppliedCount: tally.labelsApplied,
     footerAppliedCount: tally.footersApplied,
     droppedLabelCount: tally.droppedLabels,

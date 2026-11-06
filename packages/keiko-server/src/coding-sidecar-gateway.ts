@@ -869,8 +869,9 @@ const CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION = defineActivityLogOperation({
       values: ["client-disconnect", "route-deadline", "backpressure-killed", "run-stopped"],
     },
     ...OUTPUT_REPAIR_FIELDS,
-    // #3907 AC3: on an accepted answer, whether it renewed the model's same-generation chat
-    // readiness; `not-renewable` when there was no success to renew or the configuration changed.
+    // Legacy field name (#3907 AC3): an accepted answer updates same-generation serving evidence
+    // while preserving the readiness check timestamp. It extends no TTL and starts no probe;
+    // `not-renewable` means no eligible positive observation or a replaced configuration.
     readinessRenewal: {
       type: "string",
       dataClass: "closed-enum",
@@ -3781,7 +3782,7 @@ type RecordBufferedOutcome = (
 // The outcome line of a buffered turn: the answer's counts, the reasoning it carried to the
 // runtime (#3878) or withheld, and — from the settled answer — the gateway's steered repair (#3873).
 // The finish reasons that prove the model served the turn (ADR-0171): an error, a cancellation or a
-// content filter never renews readiness, even when its answer reached the runtime.
+// content filter never updates the serving observation, even when its answer reached the runtime.
 const SERVING_FINISH_REASONS: ReadonlySet<NormalizedResponse["finishReason"]> = new Set<
   NormalizedResponse["finishReason"]
 >(["stop", "tool_calls", "length"]);

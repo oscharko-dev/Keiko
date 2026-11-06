@@ -788,14 +788,14 @@ export function pickChatModelId(models: readonly ModelCapability[]): string | un
 }
 
 // Usable = conversation-eligible and not OBSERVED unready. Only an explicit false blocks; the
-// server's on-demand probe is the honest authority for unknown models.
+// server admits from its stored startup or explicit Settings observation; no request-time probe.
 function isUsableConversationModel(model: ModelCapability): boolean {
   return isConversationEligibleModel(model) && model.conversationReady !== false;
 }
 
 // Create-chat inputs preserve WHO chose the model (review finding on #3220): an AUTOMATIC
 // election (bootstrap default, fallback after a stale selection) is sent WITHOUT a modelId so
-// the server's bounded readiness walk can route around a failing preferred model, while a
+// the server can elect from stored readiness when the preferred model is unavailable, while a
 // user-selected or persisted model stays an explicit request the server validates as such.
 function createChatInput(
   modelId: string,
@@ -2422,8 +2422,8 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   };
   // Issue #144: source of truth is the helper, not an inline kind check. Pin
   // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown. Models the server
-  // never probed (tri-state: conversationReady ABSENT) stay usable — the on-demand probe at
-  // create/send decides honestly; only an observed `false` filters out.
+  // not yet observed (tri-state: conversationReady ABSENT) stay visible. Create/send admits only
+  // from stored startup or explicit Settings results; only an observed `false` filters the picker.
   const chatModels = modelPayload.models.filter(isUsableConversationModel);
   const defaultModel = pickChatModelId(chatModels);
 

@@ -97,10 +97,13 @@ records the inconclusive-probe count without request or response bodies.
 The Coding Workbench's tool-calling and long-context probes follow the same rule (customer 1.3.4).
 A probe the gateway never answered is no verdict: it gets no six-hour cooldown, does not count as
 pending once it settled, and the profile reports `tool-calling-unverified`, never
-`no-tool-calling`. Neither a passive profile read nor a timer retries it; startup, a page load and
-a profile read that asks (`check=1`, sent when the Workbench opens or a model is chosen) retry it
-after a one-minute quiet. A proof that succeeded while the configuration changed under it is
-stale and runs again once, at once. The startup timer retries only an unreachable catalog.
+`no-tool-calling`. Configuration startup initializes these separate capability checks. A Workbench
+profile that explicitly asks (`check=1`, sent when the Workbench opens or a model is chosen) may
+request or join tool-calling and long-context verification after the existing one-minute quiet.
+Passive profile reads, ordinary page loads and timers never retry them. A proof completed against
+a replaced configuration stays stale; current-connection initialization or an explicit check can
+verify the replacement. None of these paths starts another basic-chat readiness probe. The startup
+timer retries only an unreachable catalog.
 A busy provider is no verdict on a model already proved ready (#4115, 2026-10-28). When the chat
 probe only times out or receives a transient overload status, a same-generation positive basic-chat
 observation is kept with its fields and renewed at the probe's time, so a single-slot local model that
@@ -109,14 +112,15 @@ it. The gateway verification state is left unchanged, the probe diagnostic is a 
 instead of an error, and `gateway.readiness.busy-retained` records the closed busy signal and model
 digest. An unreachable provider, a model never proved ready and a replaced configuration keep the
 ordinary not-ready recording.
-A coding run's accepted answer is serving evidence for its model (#3907 AC3, 2026-10-30). The coding
-sidecar route renews a same-generation positive basic-chat observation at the answer's completion
-when the answer finished with `stop`, `tool_calls` or `length` and came from the configuration the
-holder still serves. It never establishes readiness, repairs a failed observation or crosses a
-replaced configuration. A long run retains its basic-chat admission without a competing readiness probe; completion
-still records its serving observation time.
-`coding-sidecar.gateway.outcome` records `readinessRenewal` (`renewed`, `not-renewable`) on accepted
-answers. The Workbench profile describes the model chosen in its picker (`modelId` query; an id
+A coding run's accepted answer is serving evidence for its model (#3907 AC3, 2026-10-30). When it
+finished with `stop`, `tool_calls` or `length` under the configuration the holder still serves, the
+sidecar updates the serving timestamp of an already-positive same-generation observation while
+preserving its original readiness `checkedAt`. It never establishes readiness, repairs a failed
+observation or crosses a replaced configuration. Elapsed age alone does not invalidate basic-chat
+readiness, so this observation is not a TTL extension and starts no competing probe.
+The legacy `coding-sidecar.gateway.outcome.readinessRenewal` field remains for log compatibility:
+`renewed` means serving evidence was updated; `not-renewable` means the accepted answer could not
+update an eligible positive observation. The Workbench profile describes the model chosen in its picker (`modelId` query; an id
 the gateway does not configure falls back to the elected default). Choosing a model reads it with
 `check=1`, sent when the Workbench opens and on selection changes: this may explicitly request the
 separate tool-calling/context capability verification and join a running startup chat check, but

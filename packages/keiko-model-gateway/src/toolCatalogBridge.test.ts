@@ -1716,3 +1716,35 @@ it("offers bounded name guidance for an unknown native alias without authorizing
   expect(new TextEncoder().encode(correction).byteLength).toBeLessThanOrEqual(8192);
   expect(JSON.stringify(rejected)).not.toContain("Examples of valid names");
 });
+
+it("logs an offer that expires while preparing unknown-alias correction as a hard refusal", () => {
+  const events: ModelGatewayLogEvent[] = [];
+  let correcting = false;
+  let reads = 0;
+  const offered = advertisement();
+  const expiresAt = Date.parse(offered.offered.expiresAt);
+  const now = (): number => (correcting && reads++ > 0 ? expiresAt : NOW);
+  const bridge = createGatewayToolCatalogBridge({ ...request(), toolCatalog: offered }, now, {
+    write: (event): void => {
+      events.push(event);
+    },
+  });
+  correcting = true;
+  let failure: unknown;
+  try {
+    bridge.bind({ id: "expired-near-alias", name: "read_fil", arguments: {} });
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(GatewayToolCatalogError);
+  if (!(failure instanceof GatewayToolCatalogError)) throw new TypeError("Expected hard refusal");
+  expect(failure.retryable).toBe(false);
+  expect(failure.correction()).toBeUndefined();
+  const rejected = events.filter((event) => event.op === "gateway.tool-catalog.rejected");
+  expect(rejected).toHaveLength(1);
+  expect(rejected[0]?.extra).toMatchObject({ catalogReason: "expired-compatibility" });
+  expectActivityLogProof(
+    "gateway.tool-catalog.rejected.emitted-line",
+    formatActivityLogProofLine(rejected[0] ?? {}),
+  );
+});
