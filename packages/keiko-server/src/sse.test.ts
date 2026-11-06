@@ -1,11 +1,26 @@
+import {
+  createEmittingSseResponseObservation,
+  createSseResponseObservation,
+  createSseResponseEventMethods,
+} from "../../../tests/support/sse-subscription-observations.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EventEmitter } from "node:events";
-import { SSE_HEADERS, startSseHeartbeat, writeReadyMessage } from "./sse.js";
+import { EventEmitter, getEventListeners } from "node:events";
+import { IncomingMessage, ServerResponse } from "node:http";
+import { Socket } from "node:net";
+import {
+  openPlainNamespacedSseStream,
+  SSE_HEARTBEAT_INTERVAL_MS,
+  attachSseSubscription,
+  SSE_HEADERS,
+  startSseHeartbeat,
+  writeReadyMessage,
+  writeNamespacedSseEvent,
+} from "./sse.js";
 import { SSE_STALLED_READER_TIMEOUT_MS } from "./sse-write.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 
@@ -194,5 +209,739 @@ describe("bare ready-frame write pin (#3452 audit finding sse.ts:108)", () => {
     expect(offenders, `bare res.write(readyMessage()) found in:\n${offenders.join("\n")}`).toEqual(
       [],
     );
+  });
+});
+
+describe("attachSseSubscription lifecycle", () => {
+  afterEach(() => {
+    resetServerLogger();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it.each(["abort-first", "close-first"] as const)(
+    "preserves acquisition/ready/listener order and unsubscribes once for %s",
+    (order) => {
+      const request = new IncomingMessage(new Socket());
+      const res = new ServerResponse(request);
+      const controller = new AbortController();
+      const trace: string[] = [];
+      let forwardedStop: (() => void) | undefined;
+      const write = vi.spyOn(res, "write").mockImplementation(() => {
+        trace.push("ready");
+        expect(getEventListeners(controller.signal, "abort")).toHaveLength(1);
+        expect(res.listenerCount("close")).toBe(1);
+        return true;
+      });
+      try {
+        attachSseSubscription(res, controller, function (this: undefined, stop): () => void {
+          expect(this).toBeUndefined();
+          expect(write).not.toHaveBeenCalled();
+          expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+          forwardedStop = stop;
+          trace.push("subscribe");
+          return function (this: undefined): void {
+            expect(this).toBeUndefined();
+            trace.push("unsubscribe");
+            forwardedStop?.();
+          };
+        });
+        expect(trace).toEqual(["subscribe", "ready"]);
+        expect(write).toHaveBeenCalledExactlyOnceWith("event: ready\ndata: {}\n\n");
+        expect(res.listenerCount("close")).toBe(2);
+        if (order === "abort-first") controller.abort();
+        res.emit("close");
+        controller.abort();
+        res.emit("close");
+        expect(trace).toEqual(["subscribe", "ready", "unsubscribe"]);
+        expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      } finally {
+        res.emit("close");
+        request.destroy();
+      }
+    },
+  );
+
+  it("propagates a subscription factory failure before writing ready", () => {
+    const request = new IncomingMessage(new Socket());
+    const res = new ServerResponse(request);
+    const controller = new AbortController();
+    const failure = new TypeError("subscription acquisition refused");
+    const write = vi.spyOn(res, "write");
+    try {
+      let observed: unknown;
+      try {
+        attachSseSubscription(res, controller, (): never => {
+          throw failure;
+        });
+      } catch (error: unknown) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(write).not.toHaveBeenCalled();
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      expect(res.listenerCount("close")).toBe(0);
+    } finally {
+      request.destroy();
+    }
+  });
+
+  it("sets the stop flag before a bare unsubscribe throws and never retries it", () => {
+    const request = new IncomingMessage(new Socket());
+    const res = new ServerResponse(request);
+    const failure = new TypeError("subscription release refused");
+    let forwardedStop: (() => void) | undefined;
+    let calls = 0;
+    vi.spyOn(res, "write").mockReturnValue(true);
+    try {
+      attachSseSubscription(res, new AbortController(), (stop) => {
+        forwardedStop = stop;
+        return function (this: undefined): never {
+          expect(this).toBeUndefined();
+          calls += 1;
+          throw failure;
+        };
+      });
+      expect(forwardedStop).toBeTypeOf("function");
+      let observed: unknown;
+      try {
+        forwardedStop?.();
+      } catch (error: unknown) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(() => forwardedStop?.()).not.toThrow();
+      expect(() => res.emit("close")).not.toThrow();
+      expect(calls).toBe(1);
+    } finally {
+      res.emit("close");
+      request.destroy();
+    }
+  });
+
+  it("uses canonical ready backpressure and records the correlated terminal loss evidence", () => {
+    vi.useFakeTimers();
+    const request = new IncomingMessage(new Socket());
+    const res = new ServerResponse(request);
+    const controller = new AbortController();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const trace: string[] = [];
+    const write = vi.spyOn(res, "write").mockReturnValue(false);
+    const destroy = vi.spyOn(res, "destroy");
+    try {
+      attachSseSubscription(
+        res,
+        controller,
+        () => (): void => {
+          expect(res.destroyed).toBe(false);
+          trace.push("unsubscribe");
+        },
+        (signal) => {
+          expect(res.destroyed).toBe(false);
+          expect(signal).toEqual({ accepted: false, frameBytes: 23 });
+          trace.push("observer");
+        },
+        "subscription-ready-stall",
+      );
+      expect(write).toHaveBeenCalledExactlyOnceWith("event: ready\ndata: {}\n\n");
+      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(trace).toEqual([]);
+      expect(controller.signal.aborted).toBe(false);
+      expect(destroy).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(trace).toEqual(["observer", "unsubscribe"]);
+      expect(controller.signal.aborted).toBe(true);
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(res.destroyed).toBe(true);
+      res.emit("close");
+      res.emit("close");
+      expect(trace).toEqual(["observer", "unsubscribe"]);
+      expect(sink.events).toHaveLength(1);
+      expect(sink.events[0]).toMatchObject({
+        op: "sse.stream.closed",
+        correlationId: "subscription-ready-stall",
+        extra: {
+          frameCount: 1,
+          bytesStreamed: 23,
+          drainWaitCount: 1,
+          reason: "backpressure-killed",
+        },
+      });
+    } finally {
+      res.emit("close");
+      request.destroy();
+    }
+  });
+});
+
+describe("writeNamespacedSseEvent", () => {
+  afterEach(() => {
+    resetServerLogger();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["command", 'id: 7\nevent: command:observed\ndata: {"safe":true}\n\n'],
+    ["verification", 'id: 7\nevent: verification:observed\ndata: {"safe":true}\n\n'],
+    ["container", 'id: 7\nevent: container:observed\ndata: {"safe":true}\n\n'],
+    ["terminal", 'id: 7\nevent: terminal:observed\ndata: {"safe":true}\n\n'],
+    ["browser", 'id: 7\nevent: browser:observed\ndata: {"safe":true}\n\n'],
+  ] as const)(
+    "writes the exact %s frame through canonical stream accounting",
+    (namespace, frame): void => {
+      const request = new IncomingMessage(new Socket());
+      const res = new ServerResponse(request);
+      const controller = new AbortController();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const write = vi.spyOn(res, "write").mockReturnValue(true);
+      const event = { kind: "observed" };
+      const redactor = vi.fn((value: unknown): unknown => {
+        expect(value).toBe(event);
+        return { safe: true };
+      });
+      try {
+        writeNamespacedSseEvent(res, event, 7, namespace, redactor, controller);
+        expect(write).toHaveBeenCalledExactlyOnceWith(frame);
+        expect(redactor).toHaveBeenCalledTimes(1);
+        expect(redactor.mock.calls[0]).toHaveLength(1);
+        expect(redactor.mock.calls[0]?.[0]).toBe(event);
+        expect(controller.signal.aborted).toBe(false);
+        res.emit("close");
+        expect(sink.events).toHaveLength(1);
+        expect(sink.events[0]).toMatchObject({
+          op: "sse.stream.closed",
+          extra: { frameCount: 1, reason: "client-disconnected" },
+        });
+      } finally {
+        res.emit("close");
+        request.destroy();
+      }
+    },
+  );
+
+  it("redacts the original event before kind and reuses its cache across responses", (): void => {
+    const firstRequest = new IncomingMessage(new Socket());
+    const secondRequest = new IncomingMessage(new Socket());
+    const first = new ServerResponse(firstRequest);
+    const second = new ServerResponse(secondRequest);
+    const trace: string[] = [];
+    const event = {
+      get kind(): string {
+        trace.push("kind");
+        return "observed";
+      },
+    };
+    const redactor = vi.fn((value: unknown): unknown => {
+      expect(value).toBe(event);
+      trace.push("redact");
+      return { safe: true };
+    });
+    const firstWrite = vi.spyOn(first, "write").mockImplementation(() => {
+      trace.push("first-write");
+      return true;
+    });
+    const secondWrite = vi.spyOn(second, "write").mockImplementation(() => {
+      trace.push("second-write");
+      return true;
+    });
+    try {
+      writeNamespacedSseEvent(first, event, 7, "command", redactor, new AbortController());
+      expect(trace).toEqual(["redact", "kind", "first-write"]);
+      writeNamespacedSseEvent(second, event, 8, "command", redactor, new AbortController());
+      expect(trace).toEqual(["redact", "kind", "first-write", "kind", "second-write"]);
+      expect(firstWrite).toHaveBeenCalledExactlyOnceWith(
+        'id: 7\nevent: command:observed\ndata: {"safe":true}\n\n',
+      );
+      expect(secondWrite).toHaveBeenCalledExactlyOnceWith(
+        'id: 8\nevent: command:observed\ndata: {"safe":true}\n\n',
+      );
+      expect(redactor).toHaveBeenCalledTimes(1);
+      expect(redactor.mock.calls[0]).toHaveLength(1);
+      expect(redactor.mock.calls[0]?.[0]).toBe(event);
+    } finally {
+      first.emit("close");
+      second.emit("close");
+      firstRequest.destroy();
+      secondRequest.destroy();
+    }
+  });
+
+  it("propagates the exact kind getter failure after redaction without writing", (): void => {
+    const request = new IncomingMessage(new Socket());
+    const res = new ServerResponse(request);
+    const controller = new AbortController();
+    const failure = new TypeError("namespaced event kind refused");
+    const trace: string[] = [];
+    const event = {
+      get kind(): string {
+        trace.push("kind");
+        throw failure;
+      },
+    };
+    const redactor = vi.fn((value: unknown): unknown => {
+      expect(value).toBe(event);
+      trace.push("redact");
+      return { safe: true };
+    });
+    const write = vi.spyOn(res, "write");
+    try {
+      let observed: unknown;
+      try {
+        writeNamespacedSseEvent(res, event, 7, "browser", redactor, controller);
+      } catch (error: unknown) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["redact", "kind"]);
+      expect(redactor).toHaveBeenCalledTimes(1);
+      expect(redactor.mock.calls[0]).toHaveLength(1);
+      expect(redactor.mock.calls[0]?.[0]).toBe(event);
+      expect(write).not.toHaveBeenCalled();
+      expect(res.listenerCount("close")).toBe(0);
+      expect(controller.signal.aborted).toBe(false);
+    } finally {
+      request.destroy();
+    }
+  });
+});
+
+describe("openPlainNamespacedSseStream", () => {
+  afterEach(() => {
+    resetServerLogger();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("sets headers and a plain heartbeat before a failing acquisition", (): void => {
+    const request = new IncomingMessage(new Socket());
+    const res = new ServerResponse(request);
+    const failure = new TypeError("plain stream subscription refused");
+    const writeHead = vi.spyOn(res, "writeHead");
+    const timer = vi.spyOn(globalThis, "setInterval");
+    const write = vi.spyOn(res, "write").mockReturnValue(true);
+    const subscribe = vi.fn(function (this: undefined): never {
+      expect(this).toBeUndefined();
+      expect(writeHead).toHaveBeenCalledExactlyOnceWith(200, SSE_HEADERS);
+      expect(timer).toHaveBeenCalledExactlyOnceWith(
+        expect.any(Function),
+        SSE_HEARTBEAT_INTERVAL_MS,
+      );
+      const [headerOrder] = writeHead.mock.invocationCallOrder;
+      const [timerOrder] = timer.mock.invocationCallOrder;
+      if (headerOrder === undefined || timerOrder === undefined) {
+        throw new TypeError("plain stream setup observations missing");
+      }
+      expect(headerOrder).toBeLessThan(timerOrder);
+      expect(res.listenerCount("close")).toBe(1);
+      expect(write).not.toHaveBeenCalled();
+      throw failure;
+    });
+    try {
+      let observed: unknown;
+      try {
+        openPlainNamespacedSseStream(res, "command", (value): unknown => value, subscribe);
+      } catch (error: unknown) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(subscribe).toHaveBeenCalledOnce();
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      res.emit("close");
+      request.destroy();
+    }
+  });
+
+  it("keeps a stalled heartbeat unwired and releases only on close", (): void => {
+    vi.useFakeTimers();
+    const request = new IncomingMessage(new Socket());
+    const res = new ServerResponse(request);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const trace: string[] = [];
+    const release = vi.fn((): void => {
+      trace.push(res.destroyed ? "release-after-destroy" : "release-before-destroy");
+    });
+    const observer = vi.fn((): void => undefined);
+    const write = vi.spyOn(res, "write").mockReturnValueOnce(true).mockReturnValue(false);
+    const destroy = vi.spyOn(res, "destroy");
+    try {
+      openPlainNamespacedSseStream(
+        res,
+        "container",
+        (value): unknown => value,
+        () => release,
+        observer,
+        "plain-heartbeat-stall",
+      );
+      expect(write).toHaveBeenCalledExactlyOnceWith("event: ready\ndata: {}\n\n");
+      vi.advanceTimersByTime(SSE_HEARTBEAT_INTERVAL_MS);
+      expect(write).toHaveBeenNthCalledWith(2, ": keep-alive\n\n");
+      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(destroy).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(res.destroyed).toBe(true);
+      expect(observer).not.toHaveBeenCalled();
+      expect(release).not.toHaveBeenCalled();
+      res.emit("close");
+      res.emit("close");
+      expect(trace).toEqual(["release-after-destroy"]);
+      expect(release).toHaveBeenCalledOnce();
+      expect(sink.events).toHaveLength(1);
+      expect(sink.events[0]).toMatchObject({
+        op: "sse.stream.closed",
+        correlationId: "plain-heartbeat-stall",
+        extra: { drainWaitCount: 1, reason: "backpressure-killed" },
+      });
+    } finally {
+      res.emit("close");
+      request.destroy();
+    }
+  });
+});
+
+describe("SSE response observation fixtures", (): void => {
+  it("keeps fresh mutable observations and the two exact response shapes", (): void => {
+    const plain = createSseResponseObservation();
+    const emitting = createEmittingSseResponseObservation();
+    expect(plain).not.toBe(emitting);
+    expect(plain.res).not.toBe(emitting.res);
+    expect(plain.writes).not.toBe(emitting.writes);
+    expect(plain.destroyCount).toBe(0);
+    expect(plain.destroyed).toBe(false);
+    expect(plain.ended).toBe(false);
+    expect(plain.writeReturns).toBe(true);
+    plain.destroyed = true;
+    plain.ended = true;
+    expect(plain.res.destroyed).toBe(true);
+    expect(plain.res.writableEnded).toBe(true);
+    expect(emitting.res.destroyed).toBe(false);
+    expect(emitting.res.writableEnded).toBe(false);
+    expect(Object.isFrozen(plain)).toBe(false);
+    expect(Object.isFrozen(plain.res)).toBe(false);
+  });
+
+  it("preserves the two exact plain response shapes and own-property order", (): void => {
+    const plain = createSseResponseObservation();
+    const emitting = createEmittingSseResponseObservation();
+    expect(Object.keys(plain)).toEqual([
+      "res",
+      "writes",
+      "destroyCount",
+      "destroyed",
+      "ended",
+      "writeReturns",
+      "emitClose",
+      "emitDrain",
+    ]);
+    expect(Object.keys(plain.res)).toEqual([
+      "destroyed",
+      "writableEnded",
+      "writeHead",
+      "write",
+      "end",
+      "destroy",
+      "on",
+      "once",
+      "off",
+    ]);
+    expect(Object.keys(emitting.res)).toEqual([
+      "destroyed",
+      "writableEnded",
+      "writeHead",
+      "write",
+      "end",
+      "destroy",
+      "on",
+      "once",
+      "off",
+      "emit",
+    ]);
+    expect(Object.hasOwn(plain.res, "emit")).toBe(false);
+    expect(Object.hasOwn(emitting.res, "emit")).toBe(true);
+    expect(Object.getPrototypeOf(plain.res)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(emitting.res)).toBe(Object.prototype);
+  });
+
+  it("captures every write with live acceptance and keeps end separate from close", (): void => {
+    for (const fake of [createSseResponseObservation(), createEmittingSseResponseObservation()]) {
+      const close = vi.fn();
+      const finish = vi.fn();
+      fake.res.on("close", close);
+      fake.res.on("finish", finish);
+      expect(fake.res.writeHead(200)).toBe(fake.res);
+      expect(fake.res.write("first")).toBe(true);
+      fake.writeReturns = false;
+      expect(fake.res.write("queued")).toBe(false);
+      expect(fake.res.end()).toBe(fake.res);
+      expect(fake.ended).toBe(true);
+      expect(fake.res.writableEnded).toBe(true);
+      expect(fake.destroyed).toBe(false);
+      expect(fake.destroyCount).toBe(0);
+      expect(close).not.toHaveBeenCalled();
+      expect(finish).not.toHaveBeenCalled();
+      expect(fake.res.write("after-end")).toBe(false);
+      fake.res.destroy();
+      fake.writeReturns = true;
+      expect(fake.res.write("after-destroy")).toBe(true);
+      expect(fake.writes).toEqual(["first", "queued", "after-end", "after-destroy"]);
+      expect(finish).not.toHaveBeenCalled();
+    }
+  });
+
+  it("forwards listener registration and synchronous dispatch through one private emitter", (): void => {
+    for (const fake of [createSseResponseObservation(), createEmittingSseResponseObservation()]) {
+      const trace: string[] = [];
+      const receivers: unknown[] = [];
+      const removed = vi.fn();
+      const emitDrain = vi.fn(fake.emitDrain);
+      function onDrain(this: unknown): void {
+        receivers.push(this);
+        trace.push("on");
+      }
+      function onceDrain(this: unknown): void {
+        receivers.push(this);
+        trace.push("once");
+      }
+      expect(fake.res.on("drain", onDrain)).toBe(fake.res);
+      expect(fake.res.once("drain", onceDrain)).toBe(fake.res);
+      expect(fake.res.on("drain", removed)).toBe(fake.res);
+      expect(fake.res.off("drain", removed)).toBe(fake.res);
+      trace.push("before");
+      emitDrain();
+      expect(emitDrain).toHaveLastReturnedWith(undefined);
+      trace.push("after");
+      emitDrain();
+      expect(emitDrain).toHaveLastReturnedWith(undefined);
+      expect(trace).toEqual(["before", "on", "once", "after", "on"]);
+      expect(removed).not.toHaveBeenCalled();
+      expect(receivers).toHaveLength(3);
+      expect(receivers[0]).toBeInstanceOf(EventEmitter);
+      expect(receivers[0]).not.toBe(fake.res);
+      expect(receivers[1]).toBe(receivers[0]);
+      expect(receivers[2]).toBe(receivers[0]);
+      expect(fake.res.off("drain", onDrain)).toBe(fake.res);
+      fake.emitDrain();
+      expect(trace).toEqual(["before", "on", "once", "after", "on"]);
+    }
+  });
+
+  it("counts and closes synchronously on every destroy without hiding repeated calls", (): void => {
+    for (const fake of [createSseResponseObservation(), createEmittingSseResponseObservation()]) {
+      const observations: unknown[] = [];
+      const emitClose = vi.fn(fake.emitClose);
+      fake.res.on("close", (): void => {
+        observations.push([fake.destroyCount, fake.destroyed, fake.res.destroyed, fake.ended]);
+      });
+      expect(fake.res.destroy()).toBeUndefined();
+      expect(observations).toEqual([[1, true, true, false]]);
+      expect(fake.res.destroy()).toBeUndefined();
+      expect(observations).toEqual([
+        [1, true, true, false],
+        [2, true, true, false],
+      ]);
+      expect(fake.destroyCount).toBe(2);
+      emitClose();
+      expect(emitClose).toHaveLastReturnedWith(undefined);
+      expect(observations).toEqual([
+        [1, true, true, false],
+        [2, true, true, false],
+        [2, true, true, false],
+      ]);
+      expect(fake.res.writableEnded).toBe(false);
+    }
+  });
+
+  it("retains the emitting method descriptor and forwards only its one event argument", (): void => {
+    const fake = createEmittingSseResponseObservation();
+    const descriptor = Object.getOwnPropertyDescriptor(fake.res, "emit");
+    const emit: unknown = descriptor?.value;
+    expect(typeof emit).toBe("function");
+    if (typeof emit !== "function") {
+      throw new TypeError("Missing fixture emit method");
+    }
+    expect(descriptor).toEqual({
+      value: emit,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+    expect(emit.name).toBe("emit");
+    expect(emit).toHaveLength(1);
+    expect(Object.hasOwn(emit, "prototype")).toBe(false);
+    expect((): unknown => Reflect.construct(emit, [])).toThrow(TypeError);
+    expect(fake.res.emit("probe")).toBe(false);
+    const listener = vi.fn();
+    fake.res.on("probe", listener);
+    expect(fake.res.emit("probe", "not-forwarded")).toBe(true);
+    expect(listener).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  it("keeps live enumerable accessors and writable own response methods", (): void => {
+    const functionMatcher: unknown = expect.any(Function);
+    for (const fake of [createSseResponseObservation(), createEmittingSseResponseObservation()]) {
+      expect(Object.getOwnPropertyDescriptor(fake.res, "destroyed")).toMatchObject({
+        get: functionMatcher,
+        set: undefined,
+        enumerable: true,
+        configurable: true,
+      });
+      expect(Object.getOwnPropertyDescriptor(fake.res, "writableEnded")).toMatchObject({
+        get: functionMatcher,
+        set: undefined,
+        enumerable: true,
+        configurable: true,
+      });
+      expect(Object.getOwnPropertyDescriptor(fake.res, "write")).toMatchObject({
+        value: functionMatcher,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+      fake.destroyed = true;
+      fake.ended = true;
+      expect(fake.res.destroyed).toBe(true);
+      expect(fake.res.writableEnded).toBe(true);
+      fake.destroyed = false;
+      fake.ended = false;
+      expect(fake.res.destroyed).toBe(false);
+      expect(fake.res.writableEnded).toBe(false);
+    }
+  });
+});
+
+describe("SSE response event methods", (): void => {
+  const eventMethods: readonly ("on" | "once" | "off")[] = ["on", "once", "off"];
+
+  it("accesses the response lazily after native listener forwarding", (): void => {
+    const emitter = new EventEmitter();
+    const first = createSseResponseObservation();
+    const second = createSseResponseObservation();
+    const trace: string[] = [];
+    emitter.on("newListener", (event: string | symbol): void => {
+      trace.push(`new:${String(event)}`);
+    });
+    let current = first.res;
+    const response = vi.fn((): ServerResponse => {
+      trace.push(`response:${String(emitter.listenerCount("probe"))}`);
+      return current;
+    });
+    const methods = createSseResponseEventMethods(emitter, response);
+    const listener = (): void => undefined;
+    expect(response).not.toHaveBeenCalled();
+    expect(trace).toEqual([]);
+    expect(methods.on("probe", listener)).toBe(first.res);
+    current = second.res;
+    expect(methods.once("probe", listener)).toBe(second.res);
+    expect(methods.off("probe", listener)).toBe(second.res);
+    expect(trace).toEqual(["new:probe", "response:1", "new:probe", "response:2", "response:1"]);
+    expect(response).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(eventMethods)(
+    "uses the live native %s method and propagates its thrown identity before response access",
+    (method): void => {
+      const emitter = new EventEmitter();
+      const fake = createSseResponseObservation();
+      const response = vi.fn((): ServerResponse => fake.res);
+      const methods = createSseResponseEventMethods(emitter, response);
+      const failure = new TypeError("native response event call refused");
+      const listener = (): void => undefined;
+      const forwarded = vi.spyOn(emitter, method).mockImplementation(function (
+        this: EventEmitter,
+      ): never {
+        expect(this).toBe(emitter);
+        throw failure;
+      });
+      try {
+        let observed: unknown;
+        try {
+          methods[method]("probe", listener);
+        } catch (error: unknown) {
+          observed = error;
+        }
+        expect(observed).toBe(failure);
+        expect(forwarded).toHaveBeenCalledExactlyOnceWith("probe", listener);
+        expect(response).not.toHaveBeenCalled();
+      } finally {
+        forwarded.mockRestore();
+      }
+    },
+  );
+
+  it.each(eventMethods)(
+    "propagates a live %s lookup failure without accessing the response",
+    (method): void => {
+      const emitter = new EventEmitter();
+      const fake = createSseResponseObservation();
+      const response = vi.fn((): ServerResponse => fake.res);
+      const methods = createSseResponseEventMethods(emitter, response);
+      const failure = new TypeError("native response event lookup refused");
+      let lookups = 0;
+      Object.defineProperty(emitter, method, {
+        configurable: true,
+        get(): never {
+          lookups += 1;
+          throw failure;
+        },
+      });
+      let observed: unknown;
+      try {
+        methods[method]("probe", (): void => undefined);
+      } catch (error: unknown) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(lookups).toBe(1);
+      expect(response).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(eventMethods)(
+    "creates a fresh own normal %s method with its original descriptor",
+    (method): void => {
+      const emitter = new EventEmitter();
+      const fake = createSseResponseObservation();
+      const response = vi.fn((): ServerResponse => fake.res);
+      const first = createSseResponseEventMethods(emitter, response);
+      const second = createSseResponseEventMethods(emitter, response);
+      expect(first).not.toBe(second);
+      expect(Object.keys(first)).toEqual(["on", "once", "off"]);
+      expect(Object.getPrototypeOf(first)).toBe(Object.prototype);
+      const descriptor = Object.getOwnPropertyDescriptor(first, method);
+      const value: unknown = descriptor?.value;
+      const other: unknown = Object.getOwnPropertyDescriptor(second, method)?.value;
+      expect(typeof value).toBe("function");
+      if (typeof value !== "function") {
+        throw new TypeError("Missing fixture response event method");
+      }
+      expect(other).not.toBe(value);
+      expect(descriptor).toEqual({
+        value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+      expect(value.name).toBe(method);
+      expect(value).toHaveLength(2);
+      expect(Object.hasOwn(value, "prototype")).toBe(false);
+      expect((): unknown => Reflect.construct(value, [])).toThrow(TypeError);
+      expect(response).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps existing response methods bound to their original local response", (): void => {
+    const fake = createSseResponseObservation();
+    const original = fake.res;
+    const replacement = createSseResponseObservation();
+    fake.res = replacement.res;
+    const listener = (): void => undefined;
+    expect(original.on("probe", listener)).toBe(original);
+    expect(original.once("probe", listener)).toBe(original);
+    expect(original.off("probe", listener)).toBe(original);
+    expect(fake.res).toBe(replacement.res);
   });
 });

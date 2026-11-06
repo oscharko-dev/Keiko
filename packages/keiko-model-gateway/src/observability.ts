@@ -385,3 +385,72 @@ export function logEndpointHost(url: string | URL | undefined): string | undefin
     return undefined;
   }
 }
+
+/** The shared Speech endpoint privacy projection, evaluated at each original field position. */
+export function logEndpointDigest(endpoint: string): string {
+  return sha256Hex(logEndpointHost(endpoint) ?? "invalid-endpoint");
+}
+
+interface SpeechCompletionStatus {
+  readonly ok: boolean;
+}
+
+type SpeechCompletionLevel = "info" | "warn";
+
+/** The four exact envelope shapes: correlation and error kind are present only when known. */
+type SpeechCompletionLogEnvelope =
+  | { readonly level: SpeechCompletionLevel }
+  | { readonly level: SpeechCompletionLevel; readonly correlationId: string }
+  | { readonly level: SpeechCompletionLevel; readonly errorKind: ActivityLogErrorKind }
+  | {
+      readonly level: SpeechCompletionLevel;
+      readonly correlationId: string;
+      readonly errorKind: ActivityLogErrorKind;
+    };
+
+/** Keep severity, optional correlation and the caller's finite classification lookup in order. */
+export function speechCompletionLogEnvelope<FailureKind extends string>(
+  outcome: SpeechCompletionStatus,
+  correlationId: string | undefined,
+  failureKind: FailureKind | undefined,
+  errorKinds: Readonly<Record<FailureKind, ActivityLogErrorKind>>,
+): SpeechCompletionLogEnvelope {
+  const level = outcome.ok ? "info" : "warn";
+  if (failureKind === undefined) {
+    return correlationId === undefined ? { level } : { level, correlationId };
+  }
+  const errorKind = errorKinds[failureKind];
+  return correlationId === undefined ? { level, errorKind } : { level, correlationId, errorKind };
+}
+
+interface SpeechCompletionRequestFields {
+  readonly endpoint: string;
+  readonly modelId: string;
+}
+
+interface SpeechCompletionBaseLogFields {
+  readonly endpointDigest: string;
+  readonly modelId: string;
+  readonly outcome: "succeeded" | "failed";
+  readonly timeoutMs: number;
+}
+
+/** The two exact field shapes: failureKind is present only for a failed request. */
+type SpeechCompletionLogFields<FailureKind extends string> =
+  | SpeechCompletionBaseLogFields
+  | (SpeechCompletionBaseLogFields & { readonly failureKind: FailureKind });
+
+/** Project the common Speech completion fields in their original request-observation order. */
+export function speechCompletionLogFields<FailureKind extends string>(
+  request: SpeechCompletionRequestFields,
+  outcome: SpeechCompletionStatus,
+  failureKind: FailureKind | undefined,
+  timeoutMs: number,
+): SpeechCompletionLogFields<FailureKind> {
+  const endpointDigest = logEndpointDigest(request.endpoint);
+  const modelId = logModelId(request.modelId);
+  const result = outcome.ok ? "succeeded" : "failed";
+  return failureKind === undefined
+    ? { endpointDigest, modelId, outcome: result, timeoutMs }
+    : { endpointDigest, modelId, outcome: result, failureKind, timeoutMs };
+}

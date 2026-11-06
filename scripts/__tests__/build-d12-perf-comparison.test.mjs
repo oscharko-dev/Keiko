@@ -1157,6 +1157,7 @@ describe("D12 performance comparison builder", () => {
     roots.push(root);
     writeFileSync(join(root, "package-lock.json"), "{}\n", "utf8");
     execFileSync("git", ["init", "--quiet"], { cwd: root });
+    execFileSync("git", ["config", "--local", "commit.gpgsign", "false"], { cwd: root });
     execFileSync("git", ["add", "package-lock.json"], { cwd: root });
     execFileSync(
       "git",

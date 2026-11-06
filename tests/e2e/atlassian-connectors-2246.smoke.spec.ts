@@ -5,7 +5,8 @@
 // with the grounded-ask-citing-connector-content and write→approve legs. Tagged @smoke so the
 // browser quality gate exercises it; the typed API token is entered but never asserted back out.
 
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, type Page, type Route } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 
 // ─── Connector fixtures ────────────────────────────────────────────────────────
 const CONNECTOR = {
@@ -320,7 +321,7 @@ async function installGroundedStubs(page: Page): Promise<void> {
     }
     const body = groundedStubBody(path, method, grounded);
     if (body === undefined) {
-      await route.continue();
+      await route.fallback();
       return;
     }
     await route.fulfill({

@@ -34,6 +34,7 @@ describe("production workspace HEAD reader", () => {
     const root = mkdtempSync(join(temporaryRoot, "keiko-runtime-head-"));
     roots.push(root);
     git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "--local", "commit.gpgsign", "false"]);
     git(root, ["config", "user.email", "runtime@keiko.example"]);
     git(root, ["config", "user.name", "Keiko Runtime"]);
     writeFileSync(join(root, "file.txt"), "bounded");
@@ -48,6 +49,7 @@ describe("production workspace HEAD reader", () => {
     const root = mkdtempSync(join(temporaryRoot, "keiko-runtime-head-swap-"));
     roots.push(root);
     git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "--local", "commit.gpgsign", "false"]);
     git(root, ["config", "user.email", "runtime@keiko.example"]);
     git(root, ["config", "user.name", "Keiko Runtime"]);
     writeFileSync(join(root, "file.txt"), "bounded");

@@ -8,7 +8,8 @@
 //
 // Tagged @smoke so every engine in the required browser lanes proves the recovery.
 
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { openChatComposer } from "./support/chat-composer.js";
 
 test("window chunk @smoke — a chunk request that never answers offers a reload that recovers the window", async ({

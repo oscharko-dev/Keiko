@@ -1,4 +1,5 @@
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { installLiveCodingWorkbenchRuntime } from "./support/coding-workbench-live-runtime.js";
 
 test("governed-assist authority is server-capped rather than fixture-projected @smoke", async ({

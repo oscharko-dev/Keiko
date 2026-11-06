@@ -3,20 +3,23 @@
 // SSE framing mirrors /api/browser/*/events.
 
 import type { ServerResponse, IncomingMessage } from "node:http";
-import { sseBackpressureReporter, writeSseFrame, type SseBackpressureSignal } from "./sse-write.js";
+import { sseBackpressureReporter, type SseBackpressureSignal } from "./sse-write.js";
 import { TerminalToolError } from "./terminal-errors.js";
 import {
   buildTerminalPolicySummary,
   listDirectories,
-  type TerminalEventEnvelope,
   type TerminalExecutionInput,
   type TerminalExecutionManager,
 } from "./terminal.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { requiresConfiguredManagedWorkspaceAuthority } from "./task-workspace/workspace-root-access.js";
 import { recordWorkspaceRootDenied } from "./workspace-root-denial-log.js";
-import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "./sse.js";
-import { redactedEventJson } from "./sse-frame-cache.js";
+import {
+  SSE_HEADERS,
+  attachSseSubscription,
+  startSseHeartbeat,
+  writeNamespacedSseEvent,
+} from "./sse.js";
 import {
   errorBody,
   STREAMING,
@@ -275,9 +278,8 @@ export function handleTerminalEvents(ctx: RouteContext, deps: UiHandlerDeps): Ha
   return STREAMING;
 }
 
-// Exported for unit testing the backpressure path. `onBackpressure` is optional and defaults to
-// undefined in production (no behavior change); it is emitted exactly once when a frame is rejected
-// because the client is not draining, before the socket is destroyed.
+// Exported for unit testing stalled-reader handling. The optional observer runs once after the
+// canonical no-drain deadline, before the controller aborts and the socket is destroyed.
 export function openTerminalSseStream(
   res: ServerResponse,
   manager: TerminalExecutionManager,
@@ -302,39 +304,19 @@ export function openTerminalSseStream(
     ...(correlationId === undefined ? {} : { correlationId }),
   });
   let seq = 0;
-  const unsubscribe = manager.subscribe((event) => {
-    seq += 1;
-    writeTerminalEvent(res, event, seq, redactor, controller, onBackpressure);
-  });
-  let unsubscribed = false;
-  const stop = (): void => {
-    if (unsubscribed) return;
-    unsubscribed = true;
-    unsubscribe();
-  };
-  controller.signal.addEventListener("abort", stop, { once: true });
-  // The ready frame goes through the same protective path: a client that is already not draining
-  // must abort and unsubscribe here too, rather than leaving the subscription live until some
-  // later event happens to trip writeSseFrame.
-  writeSseFrame(res, readyMessage(), controller, onBackpressure, correlationId);
-  res.on("close", () => {
-    stop();
-  });
-}
-
-function writeTerminalEvent(
-  res: ServerResponse,
-  event: TerminalEventEnvelope,
-  seq: number,
-  redactor: UiHandlerDeps["redactor"],
-  controller: AbortController,
-  onBackpressure?: (signal: SseBackpressureSignal) => void,
-): void {
-  // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
-  // the per-connection `id:` cursor differs between them.
-  const data = redactedEventJson(redactor, event);
-  const frame = `id: ${String(seq)}\nevent: terminal:${event.kind}\ndata: ${data}\n\n`;
-  writeSseFrame(res, frame, controller, onBackpressure);
+  attachSseSubscription(
+    res,
+    controller,
+    () =>
+      manager.subscribe((event) => {
+        seq += 1;
+        // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
+        // the per-connection `id:` cursor differs between them.
+        writeNamespacedSseEvent(res, event, seq, "terminal", redactor, controller, onBackpressure);
+      }),
+    onBackpressure,
+    correlationId,
+  );
 }
 
 // Re-export for the unused-import lint: callers can map a terminal error code → HTTP status if

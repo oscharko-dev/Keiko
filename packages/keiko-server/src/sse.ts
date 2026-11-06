@@ -5,7 +5,7 @@
 // (newlines are escaped as `\n`), so a single `data:` line is always valid — no regex, no manual
 // escaping. A synthetic `ready` message is sent after the buffered replay.
 
-import type { ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { StreamEvent } from "./sink.js";
 import type { Redactor } from "./deps.js";
 import { redactedEventJson } from "./sse-frame-cache.js";
@@ -88,10 +88,131 @@ export function frameMessageEvent(event: StreamEvent, redactor: Redactor): strin
   return `id: ${String(event.seq)}\ndata: ${data}\n\n`;
 }
 
+// Frames the five domain event streams with their own namespace while preserving the original
+// event/redactor cache keys. Redact first: reading kind before serialization changes getter order.
+export function writeNamespacedSseEvent(
+  res: ServerResponse,
+  event: { readonly kind: string },
+  seq: number,
+  namespace: "command" | "verification" | "container" | "terminal" | "browser",
+  redactor: Redactor,
+  controller: AbortController,
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
+): void {
+  const data = redactedEventJson(redactor, event);
+  const frame = `id: ${String(seq)}\nevent: ${namespace}:${event.kind}\ndata: ${data}\n\n`;
+  writeSseFrame(res, frame, controller, onBackpressure);
+}
+
+// These three streams share a plain heartbeat. Keep it before controller creation and defer the
+// native subscription factory until attachSseSubscription acquires the listener.
+export function openPlainNamespacedSseStream(
+  res: ServerResponse,
+  namespace: "command" | "verification" | "container",
+  redactor: Redactor,
+  subscribe: (listener: (event: { readonly kind: string }) => void) => () => void,
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
+  correlationId?: string,
+): void {
+  res.writeHead(200, SSE_HEADERS);
+  startSseHeartbeat(res);
+  const controller = new AbortController();
+  let seq = 0;
+  attachSseSubscription(
+    res,
+    controller,
+    () =>
+      subscribe((event) => {
+        seq += 1;
+        writeNamespacedSseEvent(res, event, seq, namespace, redactor, controller, onBackpressure);
+      }),
+    onBackpressure,
+    correlationId,
+  );
+}
+
+/** The runner subscription a plain namespaced stream reads its events from. */
+export interface PlainNamespacedSubscriber {
+  subscribe(listener: (event: { readonly kind: string }) => void): () => void;
+}
+
+/** Opens one runner's plain namespaced stream on `res`, with an optional stalled-reader observer. */
+export type PlainNamespacedStreamOpener = (
+  res: ServerResponse,
+  manager: PlainNamespacedSubscriber,
+  redactor: Redactor,
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
+  correlationId?: string,
+) => void;
+
+// GEN-PERF-FANOUT-001: the stream redacts and serializes each event once across all subscribers;
+// only the per-connection `id:` cursor differs between them. Production passes no observer; unit
+// tests pass one, which runs once after the canonical no-drain deadline, before the controller
+// aborts and the socket is destroyed.
+export function plainNamespacedStreamOpener(
+  namespace: "command" | "verification" | "container",
+): PlainNamespacedStreamOpener {
+  return (res, manager, redactor, onBackpressure, correlationId): void => {
+    openPlainNamespacedSseStream(
+      res,
+      namespace,
+      redactor,
+      (listener) => manager.subscribe(listener),
+      onBackpressure,
+      correlationId,
+    );
+  };
+}
+
+/**
+ * Opens a runner's plain namespaced stream on a route's response and ends the response when the
+ * request closes.
+ */
+export function openPlainNamespacedRouteStream(
+  ctx: {
+    readonly req: IncomingMessage;
+    readonly res: ServerResponse;
+    readonly correlationId?: string | undefined;
+  },
+  open: PlainNamespacedStreamOpener,
+  manager: PlainNamespacedSubscriber,
+  redactor: Redactor,
+): void {
+  open(ctx.res, manager, redactor, undefined, ctx.correlationId);
+  ctx.req.on("close", () => {
+    ctx.res.end();
+  });
+}
+
 // The synthetic message sent once the buffered replay completes, signalling the client that it is
 // now live. Carries no data payload.
 export function readyMessage(): string {
   return `event: ready\ndata: {}\n\n`;
+}
+
+// The subscription factory must return before events fire, matching the manager ports. The
+// forwarding closure lets its event callback retain the same stop operation used by abort/close.
+export function attachSseSubscription(
+  res: ServerResponse,
+  controller: AbortController,
+  subscribe: (stop: () => void) => () => void,
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
+  correlationId?: string,
+): void {
+  const unsubscribe = subscribe(() => {
+    stop();
+  });
+  let unsubscribed = false;
+  const stop = (): void => {
+    if (unsubscribed) return;
+    unsubscribed = true;
+    unsubscribe();
+  };
+  controller.signal.addEventListener("abort", stop, { once: true });
+  writeSseFrame(res, readyMessage(), controller, onBackpressure, correlationId);
+  res.on("close", () => {
+    stop();
+  });
 }
 
 // #3452 audit finding sse.ts:108: several openers write the ready frame with a bare `res.write`,
