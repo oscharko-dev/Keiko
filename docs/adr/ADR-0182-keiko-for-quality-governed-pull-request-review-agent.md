@@ -464,7 +464,7 @@ pull request #3066, fixed by Issue #4132 from the recorded baseline
 Definitions and labeling rules are in `docs/qa/review-agent-measurement.md`.
 
 The offline gate runs through the root-level evaluation composition `tests/review-quality/`
-(`npm run review:quality-gate`), because the server may not import `keiko-evaluations` and
+(`node scripts/testing/review-quality/run.mjs`), because the server may not import `keiko-evaluations` and
 `keiko-evaluations` may not import the server. It starts the real server composition the way the
 dev BFF does (`buildUiHandlerDeps` and `createUiServer` on loopback, with the operator's gateway
 configuration) and supplies the evaluation family's replay and seed ports, which run one review at

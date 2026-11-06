@@ -1,7 +1,7 @@
 // The offline review gate (Issue #4138, ADR-0182 D9): replays the development sample, the holdout
 // or the seed sets through the real review pipeline and writes body-free evidence. Usage:
 //
-//   npm run review:quality-gate -- --set development|holdout|seeds [--variant ...] ...
+//   node scripts/testing/review-quality/run.mjs --set development|holdout|seeds [--variant ...] ...
 //
 // The evaluation family owns the holdout discipline, the scoring and the verdicts; this composition
 // only supplies the review ports, the evaluation repository and the evidence. It runs one review at
