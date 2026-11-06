@@ -236,7 +236,10 @@ D2 lets a fact through.
   decided as a team to release …") opens at the start of that clause, at most as far back as a span
   may be long, and every check reads that whole clause, never the fragment; the end is not moved, so
   "Ich mag Tabellen" out of "Ich mag Tabellen nicht" stays dropped. A mark with no space after it
-  sits inside a word ("Home-Office") and opens no clause. The clause is not a question, request,
+  sits inside a word ("Home-Office") and opens no clause; a bracket opens an aside, so "Anna mag
+  Kaffee" in "Ich mag Tee (aber Anna mag Kaffee)" is never the person's clause. The words up to the
+  person's own subject are read like the words before the clause, so "Anna says I like tables" and
+  "Stell dir vor ich nutze Excel" are dropped with or without a comma. The clause is not a question, request,
   quotation, hypothesis, irony, hedge ("Ich glaube, …"), denial or past statement. Tense and
   pronouns are judged on the claim itself, not on its reason or condition, so "Ich nutze Tabellen,
   weil sie übersichtlich sind" stands; a decision, switch or migration made in the past holds now.

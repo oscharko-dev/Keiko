@@ -451,6 +451,26 @@ describe("a span copied without the first words of its clause", () => {
     expect(reasonOf("Wenn ich Tabellen mag, sage ich es.", "Tabellen mag")).toBe("hypothetical");
   });
 
+  it.each<[string, string, string, FactDropReason]>([
+    ["Anna says I like tables.", "I like tables", "I like tables", "negated-context"],
+    ["Anna says I like tables.", "Anna says I like tables", "I like tables", "negated-context"],
+    ["Anna sagt ich bevorzuge Tabellen.", "ich bevorzuge Tabellen", "", "negated-context"],
+    ["Anna told me I prefer tables.", "I prefer tables", "", "negated-context"],
+    ["Stell dir vor ich nutze Excel.", "ich nutze Excel", "", "hypothetical"],
+    ["Hypothetically I use Excel.", "I use Excel", "", "hypothetical"],
+  ])(
+    "reads the words up to the person's subject without a comma: %s",
+    (text, evidence, body, reason) => {
+      expect(reasonOf(text, evidence, body === "" ? evidence : body)).toBe(reason);
+    },
+  );
+
+  it("keeps an aside in brackets out of the person's clause", () => {
+    const text = "Ich mag Tee (aber Anna mag Kaffee).";
+    expect(admit(text, "Anna mag Kaffee", "Ich mag Kaffee").admitted).toBe(false);
+    expect(admit(text, "mag Kaffee", "Ich mag Kaffee").admitted).toBe(false);
+  });
+
   it("does not move the end", () => {
     expect(reasonOf("Ich mag Tabellen nicht.", "mag Tabellen")).toBe("not-clause-boundary");
   });
@@ -460,11 +480,16 @@ describe("a span copied without the first words of its clause", () => {
     expect(reasonOf(text, "Tabellen")).toBe("evidence-too-long");
   });
 
-  it("stays linear when the clause opens far back", () => {
+  it("reaches back exactly as far as a span may be long", () => {
+    const sentence = (fill: number): string => `Ich ${"x".repeat(fill)} mag Tabellen.`;
+    const fillFor = (length: number): number => length - "Ich  mag Tabellen".length;
+    expect(reasonOf(sentence(fillFor(400)), "mag Tabellen")).not.toBe("evidence-too-long");
+    expect(reasonOf(sentence(fillFor(401)), "mag Tabellen")).toBe("evidence-too-long");
+  });
+
+  it("stops looking back at the span limit on a long message", () => {
     const text = `${"ich ".repeat(50_000)}mag Tabellen.`;
-    const started = performance.now();
-    expect(admit(text, "mag Tabellen").admitted).toBe(false);
-    expect(performance.now() - started).toBeLessThan(2000);
+    expect(reasonOf(text, "mag Tabellen")).toBe("evidence-too-long");
   });
 });
 

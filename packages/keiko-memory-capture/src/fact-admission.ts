@@ -65,13 +65,15 @@ export type FactAdmission =
 
 const EVIDENCE_MAX_CHARS = 400;
 const CLAUSE_PUNCTUATION = new Set([",", ";", ":", ".", "!", "?", "…", ")", "-", "–", "—"]);
+// A bracket opens an aside: "Ich mag Tee (aber Anna mag Kaffee)".
+const BRACKET_OPENERS = new Set(["(", "["]);
 const QUOTE_OPENERS = new Set(["„", "«", "‚"]);
 const QUOTE_CLOSERS = new Set(["”", "»"]);
 const QUOTE_TOGGLES = new Set(['"', "“"]);
 const SENTENCE_END_RE = /[.!?…\n]/u;
 const INNER_SENTENCE_RE = /[.!?…]\s+\p{Lu}/u;
 const SUBORDINATE_LEAD_RE = /(?:^|[^\p{L}])(?:dass|that)\s*$/iu;
-const CLAUSE_LEAD_RE = /(?:^|[\s,;:–—-])(?:dass|that|und|and|aber|but|doch|denn)\s*$/iu;
+const CLAUSE_LEAD_RE = /(?:^|[\s,;:([–—-])(?:dass|that|und|and|aber|but|doch|denn)\s*$/iu;
 const CLAUSE_SPLIT_RE = /[,;:–—]/u;
 // The longest clause lead ("dass", "that") and the mark before it.
 const CLAUSE_LEAD_REACH = 6;
@@ -766,11 +768,23 @@ function contextDropReason(
 ): FactDropReason | null {
   const speechAct = speechActDropReason(evidence, sentence);
   if (speechAct !== null) return speechAct;
-  if (isHypothetical(evidence, prefix)) return "hypothetical";
+  const opening = `${prefix}${openingToSubject(evidence)}`;
+  if (isHypothetical(evidence, opening)) return "hypothetical";
   if (IRONY_RE.test(sentence) || IRONIC_OPENING_RE.test(sentence)) return "ironic";
   if (UNCERTAIN_RE.test(sentence)) return "uncertain";
   if (isPast(evidence)) return "past-statement";
-  return isDeniedByPrefix(prefix) ? "negated-context" : null;
+  const denied = isDeniedByPrefix(prefix) || REPORTED_SPEECH_RE.test(opening);
+  return denied ? "negated-context" : null;
+}
+
+// The words up to the person's own subject frame the claim like the words before it: "Anna says I
+// like tables", "Stell dir vor, ich ...". A claim without a subject has no such opening.
+function openingToSubject(evidence: string): string {
+  const ends = [FIRST_PERSON_RE, WE_RE].flatMap((pattern) => {
+    const match = pattern.exec(evidence);
+    return match === null ? [] : [match.index + match[0].length];
+  });
+  return ends.length === 0 ? "" : evidence.slice(0, Math.min(...ends));
 }
 
 // "Wir", "Anna und ich", "Today Anna and I": a statement for more than the person.
@@ -955,7 +969,7 @@ function clauseStart(text: string, { copied, end, sentenceFrom }: CopiedSpan): n
 function opensWord(text: string, at: number): boolean {
   const before = text.charAt(at - 1);
   if (/\s/u.test(text.charAt(at))) return false;
-  return /\s/u.test(before) || isQuote(before);
+  return /\s/u.test(before) || isQuote(before) || BRACKET_OPENERS.has(before);
 }
 
 // A clause opens at its sentence's start, after a mark or quote, or after a lead such as "dass".
@@ -965,7 +979,7 @@ function opensClause(text: string, at: number, sentenceFrom: number): boolean {
   while (gap > sentenceFrom && /\s/u.test(text.charAt(gap - 1))) gap -= 1;
   if (gap === sentenceFrom) return true;
   const last = text.charAt(gap - 1);
-  if (CLAUSE_PUNCTUATION.has(last) || isQuote(last)) return true;
+  if (CLAUSE_PUNCTUATION.has(last) || BRACKET_OPENERS.has(last) || isQuote(last)) return true;
   return CLAUSE_LEAD_RE.test(text.slice(Math.max(sentenceFrom, gap - CLAUSE_LEAD_REACH), at));
 }
 
