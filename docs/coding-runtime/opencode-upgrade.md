@@ -138,4 +138,7 @@ Rolling back means reverting the bump commits. The previous pin, its fixtures an
 
 The owner's release steps then follow: publishing the npm runtime packages, attesting both portable
 variants, and updating the npm-lane approvals. They happen only after the exact head passes its
-security, license, platform and package checks (#3898).
+security, license, platform and package checks (#3898). Until the root package selects runtime
+packages built from the new pin, `release:publish` refuses a product release: each reviewed entry in
+`docs/release/coding-runtime-npm-packages.json` records the OpenCode it carries (`opencodeVersion`),
+and a selected package must carry the version `portable-runtime-approvals.json` approves (#4271).

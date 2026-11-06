@@ -90,6 +90,12 @@ const RELEASE_IMPACT_CATALOG = JSON.parse(
   readFileSync(join(REPO_ROOT, "release-impact.catalog.json"), "utf8"),
 );
 const RELEASE_VERSION = ROOT_MANIFEST.version;
+const CODING_RUNTIME_RELEASES = JSON.parse(
+  readFileSync(join(REPO_ROOT, "docs", "release", "coding-runtime-npm-packages.json"), "utf8"),
+);
+const APPROVED_OPENCODE_VERSION = JSON.parse(
+  readFileSync(join(REPO_ROOT, "portable-runtime-approvals.json"), "utf8"),
+).sidecarRuntimes.find((runtime) => runtime.name === "opencode-compatible").upstream.version;
 const EVALUATION_DOWNLOAD_NAMES = [
   ...PORTABLE_TARGETS.filter((target) =>
     PORTABLE_EVALUATION_TARGET_NAMES.includes(target.platformTarget),
@@ -1083,6 +1089,21 @@ function releaseImpactCatalogForPublishTest() {
   };
 }
 
+// The reviewed runtime pins as they stand once the runtime packages the root manifest selects
+// carry `opencodeVersion`: by default the OpenCode this checkout approves, so the orchestrator's
+// runtime-selection gate passes and every other scenario reaches what it tests.
+function codingRuntimeReleasesForPublishTest(opencodeVersion = APPROVED_OPENCODE_VERSION) {
+  const releases = { ...CODING_RUNTIME_RELEASES.releases };
+  for (const [name, version] of Object.entries(ROOT_MANIFEST.optionalDependencies ?? {})) {
+    if (!name.startsWith("@oscharko-dev/keiko-coding-runtime-")) continue;
+    const release = releases[version] ?? {};
+    releases[version] = Object.fromEntries(
+      Object.entries(release).map(([target, entry]) => [target, { ...entry, opencodeVersion }]),
+    );
+  }
+  return { ...CODING_RUNTIME_RELEASES, releases };
+}
+
 // Run the real scripts/release-publish.mjs with stub npm/gh/git prepended to PATH.
 // `npmBody` is the stub-`npm` behaviour under test; `initState` seeds the publish state.
 // Returns the exit status, stdout/stderr, and the ordered list of intercepted calls.
@@ -1093,6 +1114,7 @@ function runPublish({
   portableFixtureOptions = {},
   qualificationEnv = {},
   extraArgs = [],
+  codingRuntimeReleases = codingRuntimeReleasesForPublishTest(),
 }) {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const binDir = mkdtempSync(join(tmpdir(), "keiko-release-publish-stub-"));
@@ -1103,6 +1125,8 @@ function runPublish({
   writeFileSync(logFile, "", "utf8");
   writeFileSync(stateFile, JSON.stringify(initState), "utf8");
   writeFileSync(catalogFile, JSON.stringify(releaseImpactCatalogForPublishTest()), "utf8");
+  const runtimeReleasesFile = join(binDir, "coding-runtime-npm-packages.json");
+  writeFileSync(runtimeReleasesFile, JSON.stringify(codingRuntimeReleases), "utf8");
 
   makeStub(binDir, "npm", npmBody, logFile, stateFile);
   makeStub(binDir, "gh", ghStubBody(), logFile, stateFile);
@@ -1123,6 +1147,7 @@ function runPublish({
     KEIKO_PORTABLE_ASSETS_TAG: `v${RELEASE_VERSION}`,
     KEIKO_PORTABLE_ASSETS_WORKFLOW_PATH: ".github/workflows/portable-assets.yml",
     KEIKO_RELEASE_IMPACT_CATALOG_PATH: catalogFile,
+    KEIKO_CODING_RUNTIME_RELEASES_PATH: runtimeReleasesFile,
     KEIKO_RELEASE_OWNER_GITHUB_LOGINS: "release-owner",
     // This suite's stub npm/gh/git answer only the questions the pre-existing orchestrator asks;
     // the deployment-record and alignment-gate logic added for issue #3252 is covered directly
@@ -1277,6 +1302,23 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       // evaluation lane could then no longer create that tag — it refuses a non-draft release.
       expect(lastRun.calls.some((l) => l.startsWith('gh ["release","create"'))).toBe(false);
       expect(lastRun.calls.some((l) => l.startsWith('gh ["release","edit"'))).toBe(false);
+    });
+
+    it("refuses a release whose selected npm coding runtime carries an older OpenCode", () => {
+      // #4271: dev approved OpenCode 2.2.5 while the root manifest still selected the 1.1.4
+      // runtime packages, which carry 2.1.4. A release cut there would have installed the old
+      // engine for every npm user without a word. The gate refuses before npm is asked anything.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false, tagged: true },
+        codingRuntimeReleases: codingRuntimeReleasesForPublishTest("0.0.1"),
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(
+        `carries OpenCode 0.0.1, but this release approves ${APPROVED_OPENCODE_VERSION}`,
+      );
+      expect(lastRun.calls.some((l) => l.startsWith("npm "))).toBe(false);
     });
 
     it("previews a stable latest plan without the workflow-only qualification environment", () => {
