@@ -2,6 +2,13 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { GatewayCallRequest, GatewayStreamChunk } from "@oscharko-dev/keiko-model-gateway";
 
 import {
+  ConversationModelNotReadyError,
+  TOOL_CALLING_REQUIRED_MESSAGE,
+  CONVERSATION_REQUIRED_MESSAGE,
+  type RequiredConversationCapability,
+} from "./conversation-readiness-error.js";
+
+import {
   CONVERSATION_READINESS_MAX_AGE_MS,
   conversationReadinessAgeMs,
   currentConversationReady,
@@ -14,28 +21,11 @@ import {
 } from "./conversation-readiness-log.js";
 import { errorBody, type RouteResult } from "./routes.js";
 
+export { ConversationModelNotReadyError };
+
 export interface ConversationReadinessAdmission {
   readonly modelId: string;
   readonly gatewayConfigGeneration?: number | undefined;
-}
-
-type RequiredConversationCapability = "conversation" | "tool-calling";
-const TOOL_CALLING_REQUIRED_MESSAGE =
-  "The selected model cannot use the connected tools. Choose a model with tool calling.";
-const CONVERSATION_REQUIRED_MESSAGE =
-  "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.";
-
-export class ConversationModelNotReadyError extends Error {
-  public constructor(
-    public readonly requiredCapability: RequiredConversationCapability = "conversation",
-  ) {
-    super(
-      requiredCapability === "tool-calling"
-        ? TOOL_CALLING_REQUIRED_MESSAGE
-        : CONVERSATION_REQUIRED_MESSAGE,
-    );
-    this.name = "ConversationModelNotReadyError";
-  }
 }
 
 export function conversationModelNotReadyResult(

@@ -14,7 +14,7 @@ import {
   ProviderError,
   type GatewayCallRequest,
 } from "@oscharko-dev/keiko-model-gateway";
-import { ConversationModelNotReadyError } from "./conversation-readiness-admission.js";
+import { ConversationModelNotReadyError } from "./conversation-readiness-error.js";
 
 type ModelAttemptReservation = NonNullable<
   ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>

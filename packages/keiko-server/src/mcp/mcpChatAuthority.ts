@@ -1,3 +1,7 @@
+import {
+  isAcceptedChatToolTurn,
+  reserveResolvedChatToolAuthority,
+} from "../chat-tool-authority.js";
 import { mcpChatConfigurationDigest, selectedMcpServers } from "./mcpChatSelection.js";
 import { randomUUID } from "node:crypto";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -75,29 +79,6 @@ function currentSubject(
   };
 }
 
-function validTurnLifetime(deps: McpChatAuthorityDeps, turn: AcceptedJiraChatTurn): boolean {
-  const deadline = turn.startedAtMs + chatToolTurnBudget(deps).maxRuntimeMs;
-  return (
-    Number.isSafeInteger(turn.startedAtMs) &&
-    Number.isSafeInteger(turn.nowMs) &&
-    Number.isFinite(new Date(deadline).getTime()) &&
-    turn.startedAtMs >= 0 &&
-    turn.nowMs >= turn.startedAtMs &&
-    turn.nowMs < deadline
-  );
-}
-function acceptedTurn(deps: McpChatAuthorityDeps, turn: AcceptedJiraChatTurn): boolean {
-  const message = deps.store.findMessageById(turn.userMessageId);
-  return (
-    validTurnLifetime(deps, turn) &&
-    message?.role === "user" &&
-    message.chatId === turn.chatId &&
-    message.timestamp === turn.startedAtMs &&
-    (message.turnState === undefined || message.turnState === "pending") &&
-    deps.store.listMessages(turn.chatId, 1).at(-1)?.id === message.id
-  );
-}
-
 function envelopeFor(
   deps: McpChatAuthorityDeps,
   turn: AcceptedJiraChatTurn,
@@ -140,7 +121,7 @@ export function prepareAcceptedMcpChatAuthority(
   if (
     subject === undefined ||
     deps.agentAuthorityRegistry === undefined ||
-    !acceptedTurn(deps, turn)
+    !isAcceptedChatToolTurn(deps, turn)
   )
     return recordChatAuthorityResult(
       "register",
@@ -232,16 +213,7 @@ export function reserveCurrentMcpChatAuthority(
   correlationId: string,
 ): CurrentMcpChatAuthority {
   const current = resolveCurrentMcpChatAuthority(deps, chatId, reference, nowIso, correlationId);
-  if (!current.ok) return current;
-  const reserved = deps.agentAuthorityRegistry?.reserveForChat(
-    reference,
-    current.envelope.subject,
-    current.envelope.deploymentCeiling,
-    usage,
-    nowIso,
-    correlationId,
-  );
-  return reserved?.ok === true ? current : (reserved ?? INVALID);
+  return reserveResolvedChatToolAuthority(deps, current, reference, usage, nowIso, correlationId);
 }
 
 /** A granted disclosure can outlive its originating turn, but never its actor/configuration or TTL. */

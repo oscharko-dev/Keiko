@@ -19,10 +19,10 @@ import {
   type JiraPodAccessDeps,
 } from "../atlassian/jiraPodAccess.js";
 import {
-  activityErrorFields,
+  activityActionFields,
   activityStateLevel,
-  definedActivityFields,
   type ActivityActionLine,
+  type ActivityCountFields,
 } from "../activity-line-fields.js";
 
 /**
@@ -280,19 +280,36 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
-export interface CodingJiraPodLine extends ActivityActionLine<
-  (typeof JIRA_POD_ACTIONS)[number],
-  (typeof JIRA_POD_OUTCOMES)[number],
-  (typeof JIRA_POD_REASONS)[number]
-> {
-  readonly tool?: CodingJiraTool | undefined;
+export interface CodingJiraPodLine
+  extends
+    ActivityActionLine<
+      (typeof JIRA_POD_ACTIONS)[number],
+      (typeof JIRA_POD_OUTCOMES)[number],
+      (typeof JIRA_POD_REASONS)[number]
+    >,
+    ActivityCountFields<
+      | "toolCount"
+      | "linkRequestedCount"
+      | "linkCreatedCount"
+      | "linkFailedCount"
+      | "descriptionConvertedHeadingCount"
+    > {
+  readonly tool?:
+    (typeof JIRA_MANAGED_READ_TOOLS)[number] | (typeof CODING_JIRA_MUTATIONS)[number] | undefined;
   readonly risk?: McpToolRisk | undefined;
-  readonly toolCount?: number | undefined;
-  readonly linkRequestedCount?: number | undefined;
-  readonly linkCreatedCount?: number | undefined;
-  readonly linkFailedCount?: number | undefined;
-  readonly descriptionConvertedHeadingCount?: number | undefined;
 }
+
+const CODING_JIRA_POD_LINE_FIELDS = [
+  "reason",
+  "tool",
+  "risk",
+  "toolCount",
+  "linkRequestedCount",
+  "linkCreatedCount",
+  "linkFailedCount",
+  "descriptionConvertedHeadingCount",
+  "durationMs",
+] as const;
 
 /** Closed values and counts only: never a Pod id or name, a URL, an issue key or any text. */
 export function recordCodingJiraPod(
@@ -307,22 +324,7 @@ export function recordCodingJiraPod(
         correlationId,
         ...activityStateLevel(line.outcome),
       },
-      {
-        action: line.action,
-        outcome: line.outcome,
-        ...definedActivityFields(line, [
-          "reason",
-          "tool",
-          "risk",
-          "toolCount",
-          "linkRequestedCount",
-          "linkCreatedCount",
-          "linkFailedCount",
-          "descriptionConvertedHeadingCount",
-          "durationMs",
-        ] as const),
-        ...activityErrorFields(line),
-      },
+      activityActionFields(line, CODING_JIRA_POD_LINE_FIELDS),
     ),
   );
 }

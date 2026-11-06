@@ -135,8 +135,10 @@ function callToolResult(data: CatalogJsonObject, isError: boolean): CatalogJsonO
   };
 }
 
-function toolOf(name: string): CodingJiraTool | undefined {
-  return Object.hasOwn(CODING_JIRA_TOOL_RISKS, name) ? (name as CodingJiraTool) : undefined;
+function toolOf(name: string): CodingJiraPodLine["tool"] {
+  return Object.hasOwn(CODING_JIRA_TOOL_RISKS, name)
+    ? (name as NonNullable<CodingJiraPodLine["tool"]>)
+    : undefined;
 }
 
 type CallLine = Pick<CodingJiraPodLine, "action" | "tool" | "risk">;
@@ -388,6 +390,8 @@ class CodingJiraPodService implements CodingJiraPods {
     context: ManagedMcpInvocationContext,
     execute: (http: AtlassianHttpBodyPort) => Promise<JiraMutationAttempt>,
   ): Promise<ManagedMcpToolResult> {
+    const tool = toolOf(operation);
+    if (tool === undefined) throw NOT_ADMITTED();
     const credential = this.current(binding);
     const factory = this.#deps?.atlassianConnectorCredentials?.httpBodyPortFactory;
     if (credential === undefined || factory === undefined) throw NOT_ADMITTED();
@@ -401,7 +405,7 @@ class CodingJiraPodService implements CodingJiraPods {
         recordCodingJiraPod(this.log, context.correlationId, {
           action: "serialize-description",
           outcome: "completed",
-          tool: operation,
+          tool,
           risk: "write",
           descriptionConvertedHeadingCount: attempt.descriptionConvertedHeadingCount,
         });
@@ -410,7 +414,7 @@ class CodingJiraPodService implements CodingJiraPods {
         action: "call",
         outcome: "failed",
         reason: "internal",
-        tool: operation,
+        tool,
         risk: "write",
         error,
       });

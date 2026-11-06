@@ -1,3 +1,4 @@
+import { isAcceptedChatToolTurn, reserveResolvedChatToolAuthority } from "./chat-tool-authority.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   CHAT_TOOL_DEFAULT_MODE,
@@ -67,28 +68,7 @@ function currentSubject(
     configurationDigest: sha256Hex(canonicalise(scopes)),
   };
 }
-function validLifetime(deps: KnowledgeChatAuthorityDeps, turn: AcceptedJiraChatTurn): boolean {
-  const deadline = turn.startedAtMs + chatToolTurnBudget(deps).maxRuntimeMs;
-  return (
-    Number.isSafeInteger(turn.startedAtMs) &&
-    Number.isSafeInteger(turn.nowMs) &&
-    Number.isFinite(new Date(deadline).getTime()) &&
-    turn.startedAtMs >= 0 &&
-    turn.nowMs >= turn.startedAtMs &&
-    turn.nowMs < deadline
-  );
-}
-function acceptedTurn(deps: KnowledgeChatAuthorityDeps, turn: AcceptedJiraChatTurn): boolean {
-  const message = deps.store.findMessageById(turn.userMessageId);
-  return (
-    validLifetime(deps, turn) &&
-    message?.role === "user" &&
-    message.chatId === turn.chatId &&
-    message.timestamp === turn.startedAtMs &&
-    (message.turnState === undefined || message.turnState === "pending") &&
-    deps.store.listMessages(turn.chatId, 1).at(-1)?.id === message.id
-  );
-}
+
 export function prepareAcceptedKnowledgeChatAuthority(
   deps: KnowledgeChatAuthorityDeps,
   turn: AcceptedJiraChatTurn,
@@ -97,7 +77,7 @@ export function prepareAcceptedKnowledgeChatAuthority(
   if (
     subject === undefined ||
     deps.agentAuthorityRegistry === undefined ||
-    !acceptedTurn(deps, turn)
+    !isAcceptedChatToolTurn(deps, turn)
   )
     return recordChatAuthorityResult(
       "register",
@@ -220,14 +200,5 @@ export function reserveCurrentKnowledgeChatAuthority(
     nowIso,
     correlationId,
   );
-  if (!current.ok) return current;
-  const reserved = deps.agentAuthorityRegistry?.reserveForChat(
-    reference,
-    current.envelope.subject,
-    current.envelope.deploymentCeiling,
-    usage,
-    nowIso,
-    correlationId,
-  );
-  return reserved?.ok === true ? current : (reserved ?? INVALID);
+  return reserveResolvedChatToolAuthority(deps, current, reference, usage, nowIso, correlationId);
 }

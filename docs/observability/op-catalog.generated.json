@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "095bcd24ee1b57409cb178dd6db6f0daf7ecafcdf7b356866ef7c5eae22f041f",
+    "catalogDigest": "d8b7ff895e694a92bddf89a2b1b5afb601753c8ef12678793b8f11ba9329c7f0",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -10732,7 +10732,7 @@
         "proofIds": ["coding-runtime.jira-pod.emitted-line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:198",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:304"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:321"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -11167,7 +11167,7 @@
         "proofIds": ["coding-runtime.mcp-relay.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:204",
-        "emitterSites": ["packages/keiko-server/src/mcp/mcpCredentialRelay.ts:275"]
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpCredentialRelay.ts:287"]
       },
       {
         "contractKind": "activity-log-operation",

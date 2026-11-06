@@ -8,6 +8,7 @@ import {
 import type { UiHandlerDeps } from "./deps.js";
 import {
   chatKnowledgeScopes,
+  documentScopeFallback,
   decodeCursor,
   scopeRefusal,
   type PageCursor,
@@ -29,7 +30,7 @@ export function decodeKnowledgeCursor(value: string): PageCursor | undefined {
 }
 
 export function knowledgeDocumentScope(document: Pick<KnowledgeDocument, "documentId">): string {
-  return knowledgeDigest(`keiko-document|${String(document.documentId)}`).slice(0, 8);
+  return documentScopeFallback(document);
 }
 
 export function knowledgeDocumentRevision(document: KnowledgeDocument): string {

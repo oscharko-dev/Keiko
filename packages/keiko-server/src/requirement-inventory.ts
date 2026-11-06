@@ -162,7 +162,9 @@ function readDocument(
   });
 }
 
-function documentScopeFallback(document: QualityIntelligenceHandoff.ScopeDocument): string {
+export function documentScopeFallback(
+  document: Pick<QualityIntelligenceHandoff.ScopeDocument, "documentId">,
+): string {
   return createHash("sha256")
     .update(`keiko-document|${String(document.documentId)}`)
     .digest("hex")
