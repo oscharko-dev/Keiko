@@ -306,8 +306,10 @@ export function hasInheritedEnumerableProperty(record: Record<string, unknown>):
 // off Record<string, unknown> already behaved before this change -- callers narrow it exactly as
 // they narrowed `value.someField` before.
 // The single implementation lives in contract-validation-primitives.ts, so small consumers such as
-// jira-tool-execution.ts can read own fields without importing this module.
-export { ownField };
+// jira-tool-execution.ts can read own fields without importing this module. The re-export names
+// its source module so the emitted declaration keeps the producer resolvable for the
+// raw-own-property-reader responsibility record.
+export { ownField } from "./contract-validation-primitives.js";
 
 function knownFactFieldsAreValid(
   errors: string[],
