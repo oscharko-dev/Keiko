@@ -207,6 +207,17 @@ const POSSESSIVE_ONLY_RELATION_WORDS = [
   "eltern",
   "kinder(?:n)?",
   "parents",
+  "patient(?:en|innen|in)?",
+  "sch(?:ü|ue)ler(?:in|innen|n)?",
+  "student(?:en|in|innen)?",
+  "nutzer(?:in|innen|n)?",
+  "teammitglied(?:er|ern)?",
+  "mitarbeitende[n]?",
+  "patients?",
+  "students?",
+  "pupils?",
+  "users?",
+  "staff",
   "children",
   "kids",
 ];
@@ -830,9 +841,9 @@ function spanDropReason(evidence: string, text: string): FactDropReason | null {
 }
 
 // "Sie beginnen immer mit einer Zusammenfassung" after "… meine Berichte": the claim's subject is the
-// person's own thing only when the person named exactly that thing as theirs just before. The
-// model's statement may name which of their things the pronoun stands for; it is not required to.
-const LEADING_THING_PRONOUN_RE = /^(?:Sie|Es|Diese|They|It|These)\s+/u;
+// person's own thing only when the model's statement names it and the person named exactly that
+// thing as theirs just before. "Diese" and "These" open a noun phrase and stand for nothing.
+const LEADING_THING_PRONOUN_RE = /^(?:Sie|Es|They|It)\s+/u;
 const OWN_THING_GLOBAL_RE = /(?:^|[^\p{L}])(mein(?:e|em|en|er|es)?|my)\s+(\p{L}+)/giu;
 const LEADING_WORDS_RE = /^(?:(?:mein(?:e|em|en|er|es)?|my|die|der|das|the)\s+)?(\p{L}+)/iu;
 // The subject form of the possessive the person used: "für meine Berichte" → "Meine Berichte".
@@ -861,18 +872,12 @@ function ownThings(earlier: string): ReadonlyMap<string, OwnThing> {
   return things;
 }
 
+// The model must name which of the person's things the pronoun stands for: a pronoun alone may
+// mean anyone, so a kept pronoun never resolves. The noun is taken from the person's own words.
 function referent(body: string, earlier: string): string | null {
-  const things = ownThings(earlier);
   const named = LEADING_WORDS_RE.exec(body.normalize("NFC").trim())?.[1];
-  if (named === undefined) return null;
-  const thing = things.get(named.toLowerCase());
-  if (thing !== undefined) return `${thing.possessive} ${named}`;
-  // A statement that kept the pronoun names no thing; one the person called theirs is what it means.
-  const [only] = things.values();
-  const keptPronoun = LEADING_THING_PRONOUN_RE.test(`${named} `);
-  return keptPronoun && things.size === 1 && only !== undefined
-    ? `${only.possessive} ${only.noun}`
-    : null;
+  const thing = named === undefined ? undefined : ownThings(earlier).get(named.toLowerCase());
+  return thing === undefined ? null : `${thing.possessive} ${thing.noun}`;
 }
 
 function resolvedClaim(body: string, evidence: string, context: AdmissionContext): string {
@@ -915,10 +920,15 @@ export function admitProposedFact(
 }
 
 // A clause taken from inside a sentence opens the stored fact: "…, ich bin Oliver" → "Ich bin Oliver".
+// A span may end at a comma or dash; the stored fact does not: "Ich mag Tabellen," → "Ich mag Tabellen".
+function withoutTrailingMarks(claim: string): string {
+  return claim.replace(/[\s,;:\-–—]+$/u, "");
+}
+
 function sentenceCase(claim: string): string {
   const first = claim.charAt(0);
-  return first === first.toLocaleLowerCase() && first !== first.toLocaleUpperCase()
-    ? first.toLocaleUpperCase() + claim.slice(1)
+  return first === first.toLowerCase() && first !== first.toUpperCase()
+    ? first.toUpperCase() + claim.slice(1)
     : claim;
 }
 
@@ -941,7 +951,7 @@ function admittedClaim(
   return {
     admitted: true,
     sentence,
-    claim: opensSentence ? claim : sentenceCase(claim),
+    claim: opensSentence ? withoutTrailingMarks(claim) : sentenceCase(withoutTrailingMarks(claim)),
     subject,
     subjectless,
     confidence: derivedConfidence(fact.body, claim, subjectless),

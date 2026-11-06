@@ -370,9 +370,8 @@ function admitItem(
     turn.drop("unknown-type");
     return null;
   }
-  const proposed = item.body.trim();
-  const max = turn.policy.maxBodyChars ?? MEMORY_BODY_MAX_CHARS_DEFAULT;
-  if (proposed.length === 0 || proposed.length > max) {
+  // The statement only shows which fact the span carries; its length does not matter.
+  if (item.body.trim().length === 0) {
     turn.drop("not-entailed");
     return null;
   }
@@ -389,8 +388,8 @@ function admitItem(
   }
   // The model's statement only proves the fact; the person's own words are what is learned.
   const body = admission.claim.trim();
-  if (body.length > max) {
-    turn.drop("not-entailed");
+  if (body.length > (turn.policy.maxBodyChars ?? MEMORY_BODY_MAX_CHARS_DEFAULT)) {
+    turn.drop("evidence-too-long");
     return null;
   }
   if (isDeniedContent(item, turn.policy)) {
@@ -493,14 +492,15 @@ function outcomeForItem(item: RawSalienceItem, turn: LearningTurn): SalienceOutc
   return learnedCandidate(fact, { kind: decision.kind }, turn);
 }
 
-function bodyOf(outcome: SalienceOutcome): string | null {
-  return outcome.kind === "candidate" ? outcome.proposal.body : null;
+// Repeats are told apart by the person's words they rest on, before any pronoun is resolved.
+function evidenceOf(outcome: SalienceOutcome): string | null {
+  return outcome.kind === "candidate" ? (outcome.proposal.provenance.evidenceSpan ?? null) : null;
 }
 
 function isRepeatInTurn(item: RawSalienceItem, accepted: readonly SalienceOutcome[]): boolean {
   return accepted.some((outcome) => {
-    const body = bodyOf(outcome);
-    return body !== null && statesSameFact(body, item.evidence);
+    const evidence = evidenceOf(outcome);
+    return evidence !== null && statesSameFact(evidence, item.evidence);
   });
 }
 

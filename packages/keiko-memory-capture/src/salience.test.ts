@@ -373,6 +373,50 @@ describe("extractSalientMemories", () => {
     expect(bodies(outcomes)).toEqual(["Ich bevorzuge Tabellen"]);
   });
 
+  it("stores a resolved pronoun once when the model repeats the fact", async () => {
+    const said = "Sie beginnen immer mit einer Zusammenfassung.";
+    const evidence = said.slice(0, -1);
+    const outcomes = await learn(
+      said,
+      [
+        fact("Meine Berichte beginnen immer mit einer Zusammenfassung", evidence),
+        fact("Berichte beginnen mit einer Zusammenfassung", evidence),
+      ],
+      { previousUserText: "Ich habe eine neue Regel fuer meine Berichte." },
+    );
+    expect(bodies(outcomes)).toEqual(["Meine Berichte beginnen immer mit einer Zusammenfassung"]);
+  });
+
+  it("stores a span ending at a comma without the comma", async () => {
+    const outcomes = await learn("Ich mag Tabellen, Listen eher nicht.", [
+      fact("Mag Tabellen", "Ich mag Tabellen,"),
+    ]);
+    expect(bodies(outcomes)).toEqual(["Ich mag Tabellen"]);
+  });
+
+  it("drops a fact whose own words exceed the body limit, not one whose statement is long", async () => {
+    const said = "Ich bevorzuge Tabellen.";
+    const long = `Bevorzugt Tabellen ${"sehr ".repeat(40)}`;
+    const { deps, diagnostics } = harness(reply(fact(long, "Ich bevorzuge Tabellen")));
+    const kept = await extractSalientMemories(input(said, { policy: { maxBodyChars: 30 } }), deps);
+    expect(bodies(kept)).toEqual(["Ich bevorzuge Tabellen"]);
+    expect(diagnostics).not.toContainEqual(
+      expect.objectContaining({ kind: "dropped-model-items" }),
+    );
+
+    const tooLong = harness(reply(fact("Bevorzugt Tabellen", "Ich bevorzuge Tabellen")));
+    const dropped = await extractSalientMemories(
+      input(said, { policy: { maxBodyChars: 10 } }),
+      tooLong.deps,
+    );
+    expect(dropped).toEqual([]);
+    expect(tooLong.diagnostics).toContainEqual({
+      kind: "dropped-model-items",
+      reason: "evidence-too-long",
+      count: 1,
+    });
+  });
+
   it("keeps to few facts per turn", async () => {
     const text = "Ich nutze Vim. Ich nutze Slack. Ich nutze Jira. Ich nutze Excel.";
     const outcomes = await learn(text, [

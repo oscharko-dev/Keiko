@@ -481,13 +481,12 @@ describe("a pronoun for the person's own thing", () => {
     ).toBe(false);
   });
 
-  it.each([
-    ["names the thing without the possessive", "Berichte beginnen immer mit einer Zusammenfassung"],
-    ["keeps the pronoun", "Sie beginnen immer mit einer Zusammenfassung in drei Saetzen"],
-  ])("resolves it when the model's statement %s", (_, proposed) => {
-    const admission = admitProposedFact({ body: proposed, evidence, about: "self" }, text, {
-      previousUserText: "Ich habe eine neue Regel fuer meine Berichte.",
-    });
+  it("resolves it when the model's statement names the thing without the possessive", () => {
+    const admission = admitProposedFact(
+      { body: "Berichte beginnen immer mit einer Zusammenfassung", evidence, about: "self" },
+      text,
+      { previousUserText: "Ich habe eine neue Regel fuer meine Berichte." },
+    );
     expect(admission).toMatchObject({
       admitted: true,
       claim: `Meine Berichte ${evidence.slice(4)}`,
@@ -496,21 +495,60 @@ describe("a pronoun for the person's own thing", () => {
 
   it.each([
     [
-      "names another thing",
-      "Notizen beginnen immer mit einer Zusammenfassung",
+      "Es braucht neue Reifen.",
+      "Mein Auto braucht neue Reifen",
+      "Ich fahre mit meinem Auto.",
+      "Mein Auto braucht neue Reifen",
+    ],
+    ["It runs offline.", "My server runs offline", "I set up my server.", "My server runs offline"],
+  ])(
+    "takes the possessive and noun from the person's words: %s",
+    (said, body, previousUserText, claim) => {
+      expect(
+        admitProposedFact({ body, evidence: said.slice(0, -1), about: "self" }, said, {
+          previousUserText,
+        }),
+      ).toMatchObject({ admitted: true, claim });
+    },
+  );
+
+  it.each([
+    [
+      "the model kept the pronoun",
+      "Sie beginnen immer mit einer Zusammenfassung",
       "fuer meine Berichte",
     ],
     [
-      "keeps the pronoun while the person named two things",
-      "Sie beginnen immer mit einer Zusammenfassung",
-      "fuer meine Berichte und meine Notizen",
+      "the model named another thing",
+      "Notizen beginnen immer mit einer Zusammenfassung",
+      "fuer meine Berichte",
     ],
-  ])("drops it when the model's statement %s", (_, proposed, named) => {
+  ])("drops it when %s", (_, proposed, named) => {
     const admission = admitProposedFact({ body: proposed, evidence, about: "self" }, text, {
       previousUserText: `Ich habe eine neue Regel ${named}.`,
     });
     expect(admission.admitted).toBe(false);
   });
+
+  it.each([
+    [
+      "Sie wohnt in Berlin.",
+      "Sie wohnt in Berlin",
+      "Danke, ich schicke meinen Bericht heute noch.",
+    ],
+    ["Sie sind alle über 80.", "Meine Patienten sind alle über 80", "Das sind meine Patienten."],
+    ["They are all in year nine.", "My students are all in year nine", "I graded my students."],
+    ["Diese Regel gilt immer.", "Meine Berichte Regel gilt immer", "Das ist für meine Berichte."],
+  ])(
+    "never makes a pronoun or a person the person's own thing: %s",
+    (said, body, previousUserText) => {
+      expect(
+        admitProposedFact({ body, evidence: said.slice(0, -1), about: "self" }, said, {
+          previousUserText,
+        }).admitted,
+      ).toBe(false);
+    },
+  );
 
   it.each([
     [

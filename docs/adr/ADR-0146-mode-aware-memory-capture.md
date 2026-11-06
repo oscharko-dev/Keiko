@@ -225,8 +225,8 @@ D2 lets a fact through.
 - **Form.** A learned memory is the person's own words for one fact: the admitted span, never the
   model's statement, which only shows which fact the span carries. A paraphrase loses the words a
   later question uses, and a measured lab run fell below the answer-accuracy baseline when Keiko
-  stored it. A span from inside a sentence starts with a capital letter, and a resolved leading
-  pronoun is replaced by what it stood for. Provenance keeps the exact
+  stored it. A span from inside a sentence starts with a capital letter, a trailing comma or dash is
+  dropped, and a resolved leading pronoun is replaced by what it stood for. Provenance keeps the exact
   span of the person's message it rests on (`evidenceSpan`, sealed at rest like the body) and the
   person's turns it came from (`sourceMessageIds`). A decision keeps its reason in the key-value
   payload, and a stated end in the future closes validity; both are parsed from the words, never
@@ -247,9 +247,11 @@ D2 lets a fact through.
   scope, never outside a project, and compared only with that scope's facts, so it never confirms or
   replaces a private one; "X und ich" and "Wir und X" name a person and are dropped. A person named
   by their relation (Vermieterin, landlord, Eltern, Oma, "meine Leute") is a third party. A leading pronoun ("Sie beginnen immer mit einer Zusammenfassung") counts as the person's
-  own thing only when the person's previous message in the same chat named it as theirs ("meine
-  Berichte") and the model's statement names that thing or keeps the pronoun while the previous
-  message named exactly one; a statement naming another thing is dropped; that message reaches the learner as
+  own thing only when the model's statement names that thing and the person's previous message in
+  the same chat named it as theirs ("meine Berichte"); possessive and noun come from the person's
+  words. A kept pronoun or another thing leaves the pronoun unresolved, and the pronoun check drops
+  it; "Diese" and "These" open a noun phrase and are no pronoun. People behind a possessive include
+  plural roles ("meine Patienten", "my students"); that message reaches the learner as
   context, never as a source, and a person's pronoun stays a third party. Two limits are
   accepted: a bare first name outside these forms cannot be told from a German noun, and an English
   role behind a determiner ("the customer database") is treated as a person, because privacy
