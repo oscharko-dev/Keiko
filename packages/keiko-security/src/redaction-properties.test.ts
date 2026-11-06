@@ -90,6 +90,24 @@ function authorizationHeader(random: SeededRandom): Secret {
   return { text: `${name}${gap}${scheme}${value}`, value, strictOnly: false };
 }
 
+/**
+ * A header value holding a character that ends a token in source: the floor masks the whole value,
+ * so strict redaction must too, at least in plain text (#4271 audit).
+ */
+function structuredAuthorizationHeader(random: SeededRandom): Secret {
+  const value =
+    random.string(ALNUM, 4, 12) +
+    random.pick(["$", "(", ")", "[", "]", "{", "}", "<", ">", "`"]) +
+    random.string(ALNUM, 2, 16);
+  const scheme = random.pick(["Bearer ", "Basic ", "Token ", ""]);
+  const gap = random.pick([": ", ":", "="]);
+  return {
+    text: `${random.pick(["Authorization", "authorization"])}${gap}${scheme}${value}`,
+    value,
+    strictOnly: false,
+  };
+}
+
 function encodedBearer(random: SeededRandom): Secret {
   // An encoded-looking value carries a digit, so the scheme word alone does not make it prose.
   const value = random.string([...ALNUM, ".", "-", "+", "/", "="], 8, 40) + random.pick(DIGIT);
@@ -134,6 +152,7 @@ const SECRET_MAKERS: readonly ((random: SeededRandom) => Secret)[] = [
   privateKey,
   urlCredential,
   authorizationHeader,
+  structuredAuthorizationHeader,
   encodedBearer,
   keyedValue,
 ];

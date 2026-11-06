@@ -1553,6 +1553,10 @@ The default (strict) projection is a superset of that floor (#4271, found by see
 tests): an `Authorization` header value is masked on the whole projection, also one without a
 Bearer/Basic scheme inside a JSON or YAML region; that pass takes one whole token and never a
 scheme word, a template literal, a call or an interpolation, so preserved source keeps its syntax.
+Plain text masks a header value as wholly as the floor does, and `Authorization` and
+`Proxy-Authorization` are sensitive structured keys: their value is masked whole, also when it holds
+`$`, `(`, `[`, `{` or a backtick, and only a leading `Bearer`, `Basic` or `Token` scheme word stays
+readable.
 A structured key (JSON, YAML, source property) is sensitive by the same label grammar as flat text:
 a secret label that starts at a word or camelCase boundary and ends the key, so `openai_api_key`,
 `my_password`, `GITHUB_TOKEN` and `sessionToken` count and `max_tokens`, `mypassword` or

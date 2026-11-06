@@ -410,6 +410,11 @@ function contextualValueSpans(input: string, preserve: boolean): readonly Redact
 
 function redactPlain(input: string, secrets: readonly string[], preserve: boolean): string {
   const contextual = redactPrivateKeyBlocks(redactLiteralSpans(input, secrets, preserve), preserve)
+    // Plain text holds no syntax to keep, so a header value is masked as wholly as the credential
+    // floor masks it: strict redaction never shows what the floor hides (#4271).
+    .replace(AUTHORIZATION_HEADER_PATTERN, (span, prefix: string) =>
+      redactedSourceSpan(span, `${prefix}${REDACTED}`, preserve),
+    )
     .replace(BEARER_PATTERN, (span) => redactedSourceSpan(span, `Bearer ${REDACTED}`, preserve))
     .replace(BASIC_AUTH_PATTERN, (span) => redactedSourceSpan(span, `Basic ${REDACTED}`, preserve));
   return redactIdentifiedPatterns(
@@ -644,6 +649,7 @@ function sensitiveSourceName(name: string): boolean {
     isCredentialKeyName(name) ||
     isCredentialKeyName(last) ||
     /^(?:x-)?api[_-]?key$/iu.test(last) ||
+    /^(?:proxy-)?authorization$/iu.test(last) ||
     SENSITIVE_KEY_SUFFIX.test(name.replaceAll(/(?<=[a-z0-9])(?=[A-Z])/gu, "_"))
   );
 }

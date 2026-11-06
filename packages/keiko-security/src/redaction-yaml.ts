@@ -420,13 +420,20 @@ function yamlScalarSpans(
   for (const [node, sensitive] of nodes) {
     if (!yamlApi().isScalar(node)) continue;
     const value = String(node.value);
-    const safe =
-      sensitive || (!keys.has(node) && knownYamlValue(node, values, ports))
+    const safe = sensitive
+      ? sensitivePlaceholder(value)
+      : !keys.has(node) && knownYamlValue(node, values, ports)
         ? REDACTION_PLACEHOLDER
         : ports.redactPlain(value);
     if (safe !== value) spans.push(scalarSpan(text, node, safe, plain));
   }
   return spans;
+}
+
+/** A sensitive value is masked whole; only a leading authorization scheme word is public. */
+function sensitivePlaceholder(value: string): string {
+  const scheme = /^(?:Bearer|Basic|Token)[ \t]+(?=\S)/iu.exec(value)?.[0];
+  return scheme === undefined ? REDACTION_PLACEHOLDER : `${scheme}${REDACTION_PLACEHOLDER}`;
 }
 
 function recordPrivateYamlValues(nodes: ReadonlyMap<Node, boolean>, ports: ProjectionPorts): void {

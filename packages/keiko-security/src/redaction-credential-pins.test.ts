@@ -76,3 +76,34 @@ describe("an Authorization key inside source keeps the source's syntax", () => {
     },
   );
 });
+
+describe("an Authorization value holding a source-structural character (#4271 audit)", () => {
+  // The floor masks the whole value; strict redaction once left the part after `$`, `(`, `[` or `{`
+  // readable because the line is a YAML mapping and only the token-safe header pass saw it.
+  const STRUCTURED = ["Rsx$yubaZhrl1", "Rsx(yuba)Zhrl1", "Rsx[yuba]Zhrl1", "Rsx{yuba}Zhrl1"];
+  const tail = (value: string): string => value.slice(4);
+
+  it.each(STRUCTURED)("masks it whole in a header line and keeps the scheme: %s", (value) => {
+    for (const text of [`Authorization: ${value}`, `Authorization: Bearer ${value}`]) {
+      expect(redactContent(text, "preserve")).not.toContain(tail(value));
+      expect(redact(text)).not.toContain(tail(value));
+    }
+    expect(redact(`Authorization: Bearer ${value}`)).toBe("Authorization: Bearer [REDACTED]");
+  });
+
+  it.each(STRUCTURED)("masks it whole as a structured value: %s", (value) => {
+    for (const text of [
+      `{"Authorization": "Bearer ${value}", "a": 1}`,
+      `y: 1\nproxy-authorization: Token ${value}`,
+      `curl -H 'Authorization: ${value}' https://example.test`,
+    ]) {
+      expect(redact(text)).not.toContain(tail(value));
+    }
+  });
+
+  it.each(STRUCTURED)("keeps valid TypeScript around it: %s", (value) => {
+    const output = redact(`const headers = { Authorization: "Bearer ${value}" };\nexport {};`);
+    expect(isTypeScriptSource(output)).toBe(true);
+    expect(output).not.toContain(tail(value));
+  });
+});

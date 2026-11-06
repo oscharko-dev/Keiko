@@ -154,6 +154,13 @@ describe("isDenied fixed pins (#4271)", () => {
     },
   );
 
+  it("allows the example env file only where no denied name is above it", () => {
+    expect(isDenied(ENV_EXAMPLE_BASENAME)).toBe(false);
+    expect(isDenied(`src/${ENV_EXAMPLE_BASENAME}`)).toBe(false);
+    expect(isDenied(`.ssh/${ENV_EXAMPLE_BASENAME}`)).toBe(true);
+    expect(isDenied(`.env/${ENV_EXAMPLE_BASENAME}`)).toBe(true);
+  });
+
   it("keeps allowing ordinary names that merely resemble them", () => {
     for (const path of ["env", "ssh.txt", "a.pe", "keys/readme", "id_rsa_notes", "x. y"]) {
       expect(isDenied(path)).toBe(false);
@@ -166,9 +173,8 @@ describe("isDenied properties (#4271)", () => {
     checkProperty(
       deniedSpelling,
       (path) => {
-        // The one documented exception is the exact example file name, in any case.
-        if (path.toLowerCase().includes(ENV_EXAMPLE_BASENAME) && !path.includes(".env.example/"))
-          return;
+        // Every spelling keeps a denied name as one of its segments. The one documented exception,
+        // the exact example file, only ever appears below that name here, so it never excuses one.
         expect(isDenied(path)).toBe(true);
       },
       // No shrink: a shorter string no longer spells a denied name, so every candidate would

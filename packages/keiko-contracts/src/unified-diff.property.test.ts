@@ -151,7 +151,7 @@ describe("parseUnifiedDiff on generated patches", () => {
     checkProperty(
       patch,
       ({ files, text }) => {
-        expect(parseUnifiedDiff(text).files).toEqual(files.map(expected));
+        expect(parseUnifiedDiff(text).files).toEqual(files.map((file) => expected(file)));
       },
       { runs: 400 },
     );
