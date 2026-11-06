@@ -130,7 +130,7 @@ const REVIEW_RUN_RUNTIME_STOPPED = defineActivityLogOperation({
  * Why the authority probe found no review authority (#4138): the workspace authority's closed
  * refusal, an absent active workspace or principal, or a failure outside that vocabulary.
  */
-export const REVIEW_AUTHORITY_REFUSALS = [
+const REVIEW_AUTHORITY_REFUSALS = [
   "no-active-workspace",
   "no-principal",
   "active-workspace",

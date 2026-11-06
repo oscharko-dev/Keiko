@@ -153,7 +153,7 @@ interface ReviewRuntimeAuthorityFacts {
 }
 
 /** The authority a run would be minted with, or the closed reason there is none (#4138). */
-export type ReviewRuntimeAuthorityProbe =
+type ReviewRuntimeAuthorityProbe =
   | { readonly ok: true; readonly facts: ReviewRuntimeAuthorityFacts }
   | { readonly ok: false; readonly refusal: ReviewAuthorityRefusal };
 
