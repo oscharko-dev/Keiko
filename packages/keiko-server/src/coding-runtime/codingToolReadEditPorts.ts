@@ -1284,7 +1284,11 @@ function completedRead(
 ):
   | { readonly status: "completed"; readonly read: CodingToolReadResult }
   | { readonly status: "failed"; readonly reasonCode?: string } {
-  const window = readWindow(text, request.startLine, request.maxLines);
+  const requested = readWindow(text, request.startLine, request.maxLines);
+  // A window past the byte bound is cut to its largest whole-line prefix and reports where the next
+  // read starts, exactly like a window cut by `maxLines`; only a first line that alone exceeds the
+  // bound has no prefix to return and stays a closed `too-large` refusal.
+  const window = fitWindowToByteBound(requested, request.startLine ?? 1);
   const byteCount = Buffer.byteLength(window.text, "utf8");
   if (byteCount > MAX_READ_BYTES) {
     recordReadFailure(
@@ -1432,6 +1436,25 @@ export function readWindow(
   const first = (startLine ?? 1) - 1;
   if (first >= totalLines) return { text: "", totalLines };
   return slicedWindow({ lines, trailingNewline, totalLines, first, maxLines });
+}
+
+function fitWindowToByteBound(window: ReadWindowResult, firstLine: number): ReadWindowResult {
+  if (Buffer.byteLength(window.text, "utf8") <= MAX_READ_BYTES) return window;
+  const lines = window.text.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  let bytes = 0;
+  let kept = 0;
+  for (const line of lines) {
+    bytes += Buffer.byteLength(line, "utf8") + 1;
+    if (bytes > MAX_READ_BYTES) break;
+    kept += 1;
+  }
+  if (kept === 0) return window;
+  return {
+    text: `${lines.slice(0, kept).join("\n")}\n`,
+    totalLines: window.totalLines,
+    nextStartLine: firstLine + kept,
+  };
 }
 
 interface ReadWindowResult {

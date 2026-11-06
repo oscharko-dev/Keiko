@@ -1,3 +1,4 @@
+import { CodingToolReplayFilter } from "./codingToolReplayFilter.js";
 import {
   captureToolInvocationReceipt,
   type ToolInvocationReceipt,
@@ -91,6 +92,10 @@ export interface CodingToolInvocationRegistry {
 
 export interface CodingToolInvocationRegistryOptions {
   readonly now?: (() => number) | undefined;
+  /** Body-free notice that settled, expired identities of a run moved to its replay filter. */
+  readonly onIdentitiesEvicted?:
+    | ((event: { readonly evictedCount: number; readonly filteredCount: number }) => void)
+    | undefined;
 }
 
 interface Entry {
@@ -128,10 +133,14 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
   private readonly tombstones = new Map<string, Tombstone>();
   private readonly actionIndex = new Map<string, string>();
   private readonly idempotencyIndex = new Map<string, string>();
+  private readonly evicted = new Map<string, CodingToolReplayFilter>();
   private totalBytes = 0;
   private disposed = false;
 
-  public constructor(private readonly now: () => number) {}
+  public constructor(
+    private readonly now: () => number,
+    private readonly onEvicted?: CodingToolInvocationRegistryOptions["onIdentitiesEvicted"],
+  ) {}
 
   public stage(request: CodingToolInvocationStage): CodingToolInvocationStageResult {
     this.expire();
@@ -150,7 +159,11 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
     const key = identity(request);
     if (this.claimed.has(key)) return { kind: "replayed" };
     const entry = this.entries.get(key);
-    if (entry === undefined) return { kind: this.tombstones.get(key)?.kind ?? "missing" };
+    if (entry === undefined) {
+      const tombstone = this.tombstones.get(key);
+      if (tombstone !== undefined) return { kind: tombstone.kind };
+      return { kind: this.wasEvicted(request.runId, key) ? "replayed" : "missing" };
+    }
     this.removeLive(key, entry, false);
     this.remember(key, entry.digest, entry.expiresAt);
     this.claimed.set(key, {
@@ -244,7 +257,8 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
     const key = identity(request);
     if (this.entries.has(key) || this.claimed.has(key)) return { kind: "in-flight" };
     const tombstone = this.tombstones.get(key);
-    if (tombstone === undefined) return { kind: "missing" };
+    if (tombstone === undefined)
+      return this.wasEvicted(request.runId, key) ? { kind: "terminal" } : { kind: "missing" };
     return tombstone.receipt === undefined
       ? { kind: "terminal" }
       : { kind: "terminal", receipt: tombstone.receipt };
@@ -265,6 +279,7 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
       count += 1;
     }
     this.clearRunIdentities(runId);
+    this.evicted.delete(runId);
     return count;
   }
 
@@ -274,6 +289,7 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
     for (const [key, entry] of this.entries) this.dropLive(key, entry);
     for (const [key, entry] of this.claimed) this.dropClaimed(key, entry);
     this.tombstones.clear();
+    this.evicted.clear();
     this.actionIndex.clear();
     this.idempotencyIndex.clear();
   }
@@ -284,7 +300,8 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
     idempotencyKey: string,
   ): Readonly<Record<string, never>> | undefined {
     this.expire();
-    return this.tombstones.has(identity({ runId, actionId, idempotencyKey })) ? {} : undefined;
+    const key = identity({ runId, actionId, idempotencyKey });
+    return this.tombstones.has(key) || this.wasEvicted(runId, key) ? {} : undefined;
   }
 
   private collision(
@@ -294,7 +311,7 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
     const actionOwner = this.actionIndex.get(actionIdentity(request));
     const keyOwner = this.idempotencyIndex.get(idempotencyIdentity(request));
     const ownership = collisionOwnership(actionOwner, keyOwner, key);
-    if (ownership === "none") return undefined;
+    if (ownership === "none") return this.evictedCollision(request, key);
     if (ownership === "conflict") return { kind: "conflict" };
     const live = this.entries.get(key);
     if (live !== undefined) {
@@ -304,7 +321,49 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
     return { kind: digest === request.digest ? "replayed" : "conflict" };
   }
 
+  // An identity evicted after it settled and expired is still never executed again: the run's
+  // replay filter has no false negatives, so the exact identity is `replayed` and a reuse of only
+  // its action id or idempotency key is a `conflict`, as when the index still held it.
+  private evictedCollision(
+    request: CodingToolInvocationStage,
+    key: string,
+  ): CodingToolInvocationStageResult | undefined {
+    const filter = this.evicted.get(request.runId);
+    if (filter === undefined) return undefined;
+    if (filter.has(key)) return { kind: "replayed" };
+    const reused = filter.has(actionIdentity(request)) || filter.has(idempotencyIdentity(request));
+    return reused ? { kind: "conflict" } : undefined;
+  }
+
+  private wasEvicted(runId: string, key: string): boolean {
+    return this.evicted.get(runId)?.has(key) === true;
+  }
+
+  // Frees identity capacity by moving settled, expired identities of the run into its replay
+  // filter; live and claimed identities are never touched and keep counting against capacity.
+  private evictSettled(runId: string): void {
+    const filter = this.evicted.get(runId) ?? new CodingToolReplayFilter();
+    let evictedCount = 0;
+    for (const [key, tombstone] of this.tombstones) {
+      if (!keyForRun(key, runId) || tombstone.expiresAt > this.now()) continue;
+      if (this.entries.has(key) || this.claimed.has(key)) continue;
+      const [, actionId = "", idempotencyKey = ""] = key.split("\u0000");
+      const parts = { runId, actionId, idempotencyKey };
+      filter.add(key);
+      filter.add(actionIdentity(parts));
+      filter.add(idempotencyIdentity(parts));
+      this.actionIndex.delete(actionIdentity(parts));
+      this.idempotencyIndex.delete(idempotencyIdentity(parts));
+      this.tombstones.delete(key);
+      evictedCount += 1;
+    }
+    if (evictedCount === 0) return;
+    this.evicted.set(runId, filter);
+    this.onEvicted?.({ evictedCount, filteredCount: Math.floor(filter.size / 3) });
+  }
+
   private hasCapacity(request: CodingToolInvocationStage): boolean {
+    if (this.runIdentityCount(request.runId) >= MAX_IDENTITIES) this.evictSettled(request.runId);
     return (
       this.runEntryCount(request.runId) < CODING_TOOL_INVOCATION_MAX_LIVE_PER_RUN &&
       this.runIdentityCount(request.runId) < MAX_IDENTITIES &&
@@ -508,5 +567,5 @@ function keyForRun(key: string, runId: string): boolean {
 export function createCodingToolInvocationRegistry(
   options: CodingToolInvocationRegistryOptions = {},
 ): CodingToolInvocationRegistry {
-  return new InvocationRegistry(options.now ?? Date.now);
+  return new InvocationRegistry(options.now ?? Date.now, options.onIdentitiesEvicted);
 }

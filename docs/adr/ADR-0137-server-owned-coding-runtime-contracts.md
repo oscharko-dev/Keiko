@@ -114,9 +114,11 @@ bounded whole-file read admits ordinary large repository instructions and retain
 digest for edit preconditions. The native helper allocates only the observed file size plus one
 growth-detection byte; it still checks final file and directory identity and rejects concurrent
 changes. Model-facing read windows remain capped at 64 KiB, and the initial-turn block of the mapped
-profiles remains capped at 16 KiB and 800 lines; the native copy is not (below). An oversized requested model window returns the existing
-`workspace-read-too-large` refusal and a body-free failed-read event so the model can request a
-smaller line window. Files above 1 MiB remain refused; neither a tool argument nor this loader can
+profiles remains capped at 16 KiB and 800 lines; the native copy is not (below). A requested model window past that 64 KiB bound is cut to its largest
+whole-line prefix and reports `nextStartLine` like a window cut by `maxLines`, so "startLine 1,
+maxLines 5000" always answers; only a window whose first line alone exceeds the bound returns the
+existing `workspace-read-too-large` refusal (with model-facing guidance to search instead) and a
+body-free failed-read event. Files above 1 MiB remain refused; neither a tool argument nor this loader can
 override the pinned helper ceiling.
 
 On the native profile the same read reaches the model through the producer's own
@@ -2827,3 +2829,12 @@ check and the runtime's own use of the file is closed by the kernel sandbox, not
 model-facing message of an authority refusal names the cause (`patch-too-large` asks the model to
 split the edit; budget, expiry, revocation, an unauthorized class and a drifted binding each have
 their own sentence) instead of one catch-all, and the logged `authorityReason` is unchanged.
+
+**Invocation identity capacity (audit 2026-11-06).** The governed invocation registry holds at most
+2,048 identities per run. A settled or expired identity keeps its replay protection after it is
+evicted: when a run reaches the bound, identities that settled and whose life elapsed move into a
+fixed-size per-run replay filter (no false negatives), so a replay of an evicted call is still
+refused `replayed`, a reuse of only its action id or idempotency key is a `conflict`, and a false
+positive can only refuse a brand-new identity. Live and claimed identities always keep counting
+against the bound, and a run that is revoked drops its filter. A long run therefore no longer turns
+`busy` for good after its 2,048th governed edit.

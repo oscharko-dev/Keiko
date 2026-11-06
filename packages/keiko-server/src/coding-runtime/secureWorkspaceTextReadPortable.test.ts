@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createPortableSecureWorkspaceReadVerifier,
+  PORTABLE_SECURE_WORKSPACE_READ_VERDICT_TTL_MS,
   resolvePortableSecureWorkspaceReadBinding,
   type PortableSecureWorkspaceReadMetadata,
   type PortableSecureWorkspaceReadPlatformInspection,
@@ -595,5 +596,135 @@ describe("portable secure workspace-read point-of-use proof", () => {
     await expect(
       createPortableSecureWorkspaceReadVerifier(binding(), noSignature).verify(binding().artifact),
     ).resolves.toBe(false);
+  });
+});
+
+// Audit 2026-11-06 finding 7: every governed read re-ran the sealed-tree proof, a full SHA-256 and
+// the platform signature check. A verdict is now trusted only for the exact helper identity it
+// proved, for a bounded time; everything else takes the complete proof again.
+describe("portable secure workspace-read verdict reuse", () => {
+  function cachingDeps(
+    clock: { now: number },
+    identity: { current: PortableSecureWorkspaceReadMetadata },
+  ) {
+    const deps = verifierDeps({
+      statIdentity: vi.fn(async () => identity.current),
+      openReadSameIdentity: vi.fn(async () => ({
+        bytes: Buffer.from(BYTES),
+        before: identity.current,
+        after: identity.current,
+      })),
+    });
+    const outcomes: string[] = [];
+    return {
+      ...deps,
+      now: () => clock.now,
+      onVerification: (outcome: string): void => {
+        outcomes.push(outcome);
+      },
+      outcomes,
+    };
+  }
+
+  it("verifies the signature once for 100 sequential reads of an unchanged helper", async () => {
+    const deps = cachingDeps({ now: 0 }, { current: metadata() });
+    const verifier = createPortableSecureWorkspaceReadVerifier(binding(), deps);
+    for (let index = 0; index < 100; index += 1) {
+      await expect(verifier.verify(binding().artifact)).resolves.toBe(true);
+    }
+    expect(deps.platform.verifySignature).toHaveBeenCalledOnce();
+    expect(deps.platform.openReadSameIdentity).toHaveBeenCalledOnce();
+    expect(deps.proveImmutableResourceTree).toHaveBeenCalledOnce();
+    expect(deps.outcomes.filter((outcome) => outcome === "verified-cached")).toHaveLength(99);
+  });
+
+  it.each([
+    ["replaced inode", { identity: "device:other" }],
+    ["rewritten content", { modifiedNs: "200" }],
+    ["changed ctime", { changedNs: "999" }],
+  ])(
+    "verifies completely again when the helper was %s, and accepts it only if it still passes",
+    async (_label, change) => {
+      const identity = { current: metadata() };
+      const deps = cachingDeps({ now: 0 }, identity);
+      const verifier = createPortableSecureWorkspaceReadVerifier(binding(), deps);
+      await expect(verifier.verify(binding().artifact)).resolves.toBe(true);
+      identity.current = metadata(change);
+      await expect(verifier.verify(binding().artifact)).resolves.toBe(true);
+      expect(deps.platform.openReadSameIdentity).toHaveBeenCalledTimes(2);
+      vi.mocked(deps.platform.verifySignature).mockResolvedValueOnce(false);
+      identity.current = metadata({ ...change, changedNs: "1000" });
+      await expect(verifier.verify(binding().artifact)).resolves.toBe(false);
+    },
+  );
+
+  it.each([
+    ["resized", { size: BYTES.byteLength + 1 }],
+    ["hard linked", { linkCount: 2 }],
+    ["no longer a regular file", { regularFile: false }],
+  ])("refuses a helper that was %s", async (_label, change) => {
+    const identity = { current: metadata() };
+    const deps = cachingDeps({ now: 0 }, identity);
+    const verifier = createPortableSecureWorkspaceReadVerifier(binding(), deps);
+    await expect(verifier.verify(binding().artifact)).resolves.toBe(true);
+    identity.current = metadata(change);
+    await expect(verifier.verify(binding().artifact)).resolves.toBe(false);
+    expect(deps.platform.openReadSameIdentity).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-verifies a replaced helper whose new bytes still pass, then caches the new identity", async () => {
+    const identity = { current: metadata() };
+    const deps = cachingDeps({ now: 0 }, identity);
+    const verifier = createPortableSecureWorkspaceReadVerifier(binding(), deps);
+    await verifier.verify(binding().artifact);
+    identity.current = metadata({ identity: "device:replacement" });
+    await expect(verifier.verify(binding().artifact)).resolves.toBe(true);
+    await verifier.verify(binding().artifact);
+    expect(deps.platform.verifySignature).toHaveBeenCalledTimes(2);
+  });
+
+  it("verifies completely again once the verdict life has elapsed", async () => {
+    const clock = { now: 0 };
+    const deps = cachingDeps(clock, { current: metadata() });
+    const verifier = createPortableSecureWorkspaceReadVerifier(binding(), deps);
+    await verifier.verify(binding().artifact);
+    clock.now = PORTABLE_SECURE_WORKSPACE_READ_VERDICT_TTL_MS;
+    await verifier.verify(binding().artifact);
+    expect(deps.platform.verifySignature).toHaveBeenCalledTimes(2);
+  });
+
+  it("never serves a cached verdict over a symbolic-link path and clears it on a refusal", async () => {
+    const deps = cachingDeps({ now: 0 }, { current: metadata() });
+    const verifier = createPortableSecureWorkspaceReadVerifier(binding(), deps);
+    await verifier.verify(binding().artifact);
+    vi.mocked(deps.platform.inspectPath).mockResolvedValue([
+      { symbolicLink: true, reparsePoint: false, safeType: true },
+    ]);
+    await expect(verifier.verify(binding().artifact)).resolves.toBe(false);
+    vi.mocked(deps.platform.inspectPath).mockResolvedValue(
+      Array.from({ length: 4 }, () => ({
+        symbolicLink: false,
+        reparsePoint: false,
+        safeType: true,
+      })),
+    );
+    vi.mocked(deps.platform.verifySignature).mockResolvedValueOnce(false);
+    await expect(verifier.verify(binding().artifact)).resolves.toBe(false);
+    await expect(verifier.verify(binding().artifact)).resolves.toBe(true);
+    expect(deps.platform.verifySignature).toHaveBeenCalledTimes(3);
+  });
+
+  it("never caches without a stat and never trusts a different artifact", async () => {
+    const plain = verifierDeps();
+    const verifier = createPortableSecureWorkspaceReadVerifier(binding(), plain);
+    await verifier.verify(binding().artifact);
+    await verifier.verify(binding().artifact);
+    expect(plain.platform.verifySignature).toHaveBeenCalledTimes(2);
+    const deps = cachingDeps({ now: 0 }, { current: metadata() });
+    const cached = createPortableSecureWorkspaceReadVerifier(binding(), deps);
+    await cached.verify(binding().artifact);
+    await expect(cached.verify({ ...binding().artifact, sha256: "0".repeat(64) })).resolves.toBe(
+      false,
+    );
   });
 });

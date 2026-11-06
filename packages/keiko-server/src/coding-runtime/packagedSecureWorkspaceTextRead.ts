@@ -82,6 +82,9 @@ function evaluationInspection(
   inspection: PortableSecureWorkspaceReadPlatformInspection,
 ): PortableSecureWorkspaceReadPlatformInspection {
   return Object.freeze({
+    ...(inspection.statIdentity === undefined
+      ? {}
+      : { statIdentity: (executable: string) => inspection.statIdentity!(executable) }),
     inspectPath: (resourceRoot: string, executable: string) =>
       inspection.inspectPath(resourceRoot, executable),
     openReadSameIdentity: (executable: string, maximumBytes: number) =>

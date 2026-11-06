@@ -1806,6 +1806,8 @@ describe("CodingToolFacade", () => {
       status: "failed",
       reasonCode,
       evidence: [{ kind: "governed-delegate", code: reasonCode }],
+      // Audit 2026-11-06 finding 6: every closed read refusal tells the model its next step.
+      guidance: expect.stringMatching(/\S{3,}/u),
     });
   });
 

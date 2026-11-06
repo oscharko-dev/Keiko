@@ -1358,12 +1358,76 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     expect(event?.extra).toMatchObject({ state: "completed", startLine: 3_001, maxLines: 2 });
   });
 
-  it("refuses an oversized model window without returning source text", async () => {
+  // Finding 6 of the 2026-11-06 audit: the prompt tells the model "startLine 1 with maxLines 5000
+  // reads a small file whole", and a window past the byte bound used to be refused instead of cut.
+  it("cuts an oversized window to its largest whole-line prefix and reports where to resume", async () => {
+    const text = "Repository convention.\n".repeat(3_000);
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: true, text }) },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+    });
+    const result = await ports.repositoryRead.execute(
+      {
+        action: "read",
+        actionId: "read-wide",
+        idempotencyKey: "read-wide",
+        relativePath: "AGENTS.md",
+        startLine: 1,
+        maxLines: 5_000,
+      },
+      undefined,
+      { check: (): true => true },
+    );
+    const lineBytes = Buffer.byteLength("Repository convention.\n", "utf8");
+    const keptLines = Math.floor(65_536 / lineBytes);
+    expect(result).toEqual({
+      status: "completed",
+      read: {
+        text: "Repository convention.\n".repeat(keptLines),
+        byteCount: keptLines * lineBytes,
+        digest: secureWorkspaceTextDigest(text),
+        totalLines: 3_000,
+        nextStartLine: keptLines + 1,
+      },
+    });
+  });
+
+  it("resumes an oversized read from a later line with the right nextStartLine", async () => {
+    const lines = Array.from({ length: 2_000 }, (_, index) => `${String(index)}:${"y".repeat(60)}`);
+    const text = `${lines.join("\n")}\n`;
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: true, text }) },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+    });
+    const result = await ports.repositoryRead.execute(
+      {
+        action: "read",
+        actionId: "read-resume",
+        idempotencyKey: "read-resume",
+        relativePath: "AGENTS.md",
+        startLine: 101,
+        maxLines: 5_000,
+      },
+      undefined,
+      { check: (): true => true },
+    );
+    if (result.status !== "completed") throw new Error("expected a completed read");
+    const kept = result.read.text.split("\n").length - 1;
+    expect(result.read.byteCount).toBeLessThanOrEqual(65_536);
+    expect(result.read.text).toBe(`${lines.slice(100, 100 + kept).join("\n")}\n`);
+    expect(result.read.nextStartLine).toBe(101 + kept);
+    expect(
+      Buffer.byteLength(`${lines.slice(100, 100 + kept + 1).join("\n")}\n`, "utf8"),
+    ).toBeGreaterThan(65_536);
+  });
+
+  it("refuses a window whose first line alone is oversized without returning source text", async () => {
     const events: ServerLogEvent[] = [];
     const ports = createCodingToolReadEditPorts({
       secureWorkspaceTextRead: {
-        readText: () =>
-          Promise.resolve({ ok: true, text: "Repository convention.\n".repeat(4_000) }),
+        readText: () => Promise.resolve({ ok: true, text: `${"x".repeat(70_000)}\nsecond line\n` }),
       },
       editorAgentClient: { action: vi.fn() },
       resolveEditorActionContext: vi.fn(),

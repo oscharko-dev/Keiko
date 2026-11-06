@@ -825,6 +825,18 @@ const REPOSITORY_REQUIRED_GUIDANCE =
   "This workspace is a plain folder, not a Git repository, so Git tools (status, diff, stage, commit, sync, push, pull request) are unavailable here. Keep working with file edits, commands and verification, and report the result; do not try to initialize a repository or run Git another way.";
 
 const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  // A window past the read byte bound is cut to whole lines with nextStartLine, so a read refused as
+  // too large has a first line that alone exceeds the bound (audit 2026-11-06, finding 6).
+  read: {
+    "workspace-read-too-large":
+      "The first line of this window alone is larger than the read limit, so this file cannot be returned as text by this tool. Locate the part you need with keiko_repository_search (literal or regex mode) instead of retrying the same read, or report the file as unreadable.",
+    "workspace-read-not-text":
+      "This file is not readable text (binary or not valid UTF-8). Do not retry it; continue with other files or report it.",
+    "workspace-read-not-found":
+      "No such file in the allowed workspace. Check the path with keiko_workspace_discover before reading again.",
+    "workspace-read-denied":
+      "This path is outside what the run may read. Do not retry it or route around the denial.",
+  },
   verification: {
     WORKSPACE_TRUST_REQUIRED:
       "Package scripts in this workspace may not run yet: either the repository's scripts were never allowed, or this run changed package.json and the operator has to allow the rewritten scripts. Only the operator can allow them, in the Coding Workbench header. Report this blocker, do not retry verification until it has been allowed, and never run the scripts another way.",
