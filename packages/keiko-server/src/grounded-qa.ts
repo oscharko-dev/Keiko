@@ -2352,8 +2352,13 @@ function groundedTurnIdentityContent(
   });
 }
 
+// No fallback to the prompt text: after compaction that is the model's summary, and memory must
+// never learn or recall from it.
 function groundedSpokenContent(prepared: PreparedGroundedAsk): string {
-  return prepared.spokenContent ?? prepared.input.content;
+  if (prepared.spokenContent === undefined) {
+    throw new Error("Grounded spoken content was not frozen before memory use.");
+  }
+  return prepared.spokenContent;
 }
 
 function frozenGroundedTurnIdentity(prepared: PreparedGroundedAsk): string {

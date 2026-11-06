@@ -31,6 +31,8 @@ const MODEL = "memory-learning-fixture";
 const OWN_WORDS = "Ich arbeite für Tabellen immer mit Numbers.";
 const SUMMARY = "Zusammenfassung des Modells: Ich nutze Excel für alle Tabellen.";
 const MEMORY = "Numbers ist das Programm der Person.";
+// Unrelated to the question: recall must choose by the person's words, not hand over everything.
+const UNRELATED = "Der Hund der Person heißt Bello.";
 // The person's words stand in the middle, where the compacted prompt keeps no original fragment.
 const FILLER = "Bitte prüfe den Ordner gründlich und vollständig. ".repeat(300);
 const CONTENT = `${FILLER}${OWN_WORDS} ${FILLER}Welche Dateien beschreiben den Ordner?`;
@@ -79,14 +81,14 @@ function scriptedModel(calls: GatewayCallRequest[]): ModelPort {
   };
 }
 
-function seedMemory(vault: MemoryVaultStore): void {
+function seedMemory(vault: MemoryVaultStore, id: string, body: string): void {
   const now = Date.now();
   vault.insertMemory({
-    id: "memory-numbers" as MemoryId,
+    id: id as MemoryId,
     schemaVersion: "1",
     scope: { kind: "user", userId: "local-operator" as MemoryUserId },
     type: "preference",
-    body: MEMORY,
+    body,
     provenance: {
       sourceKind: "explicit-user-instruction",
       capturedAt: now,
@@ -117,7 +119,8 @@ function fixture(calls: GatewayCallRequest[]): {
     store.close();
     rmSync(root, { recursive: true, force: true });
   });
-  seedMemory(vault);
+  seedMemory(vault, "memory-numbers", MEMORY);
+  seedMemory(vault, "memory-dog", UNRELATED);
   store.createProject(root, "Grounded memory learning");
   const chat = store.createChat(root, "Grounded memory learning", MODEL);
   const workspaceRoot = join(root, "folder");
@@ -204,4 +207,11 @@ it("recalls memory for the person's own words when a long grounded prompt was co
   );
   const prompt = `${texts(answering, "system")}\n${texts(answering, "user")}`;
   expect(prompt).toContain(MEMORY);
+  expect(prompt).not.toContain(UNRELATED);
+  // The answer itself still reads the compacted prompt, never the person's original long text.
+  expect(texts(answering, "user")).toContain(SUMMARY);
+  expect(prompt).not.toContain(OWN_WORDS);
+  expect(JSON.stringify((result.body as { readonly memory?: unknown }).memory)).toContain(
+    "memory-numbers",
+  );
 });
