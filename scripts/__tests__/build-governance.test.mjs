@@ -1,9 +1,10 @@
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { PRODUCT_TOKEN_OUTPUT } from "../../packages/keiko-ui/design-tokens.mjs";
 import { planCleanTargets } from "../clean.mjs";
 import { collectWorkspacePackages } from "../workspace-graph.mjs";
 
@@ -104,9 +105,20 @@ describe("planCleanTargets", () => {
       if (pkg.name === "@oscharko-dev/keiko-ui") {
         expect(cleanTargets).toContain(join(pkg.dir, ".next"));
         expect(cleanTargets).toContain(join(pkg.dir, "out"));
+        expect(cleanTargets).toContain(join(pkg.dir, "dist"));
         continue;
       }
       expect(cleanTargets).toContain(join(pkg.dir, "dist"));
     }
+  });
+
+  it("removes the UI's compiled product-token stylesheet", async () => {
+    const cleanTargets = await planCleanTargets(REPO_ROOT);
+    const tokenOutput = resolve(REPO_ROOT, PRODUCT_TOKEN_OUTPUT);
+
+    expect(
+      cleanTargets.some((target) => tokenOutput.startsWith(`${target}${sep}`)),
+      "D12 refuses a clean checkout that keeps generated UI output (#3918)",
+    ).toBe(true);
   });
 });
