@@ -438,6 +438,8 @@ jobs:
       - run: npm run lint
         env:
           NODE_OPTIONS: --max-old-space-size=12288
+      - name: Linux native compiler version (#3991)
+        run: cc --version
       - run: npm run check:native:linux
       - name: Anti-slop code-quality ratchet (#4145)
         # Runs after `npm run typecheck` (which builds packages): the engine imports the compiled

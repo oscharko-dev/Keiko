@@ -79,8 +79,10 @@ describe("historical Effect controls and current native qualification contract (
       rmSync(root, { recursive: true, force: true });
     }
   }, 60_000);
+});
 
-  it("makes actual qualification mandatory in the required Core quality job", () => {
+describe("Linux native compiler, analyzer and protocol gate (#3991)", () => {
+  it("runs unconditionally in the required Core quality job", () => {
     const workflow = parse(
       readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8"),
     );
