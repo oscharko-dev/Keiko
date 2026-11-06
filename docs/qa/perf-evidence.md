@@ -644,6 +644,39 @@ The cold-start ceiling rose by 18 %. The measured p95 rose by 7 % over the 1.3.2
 unchanged 1.3.2 commit itself rose by 10 % on the same host. The next ordinary re-measurement on this
 reference uses `--recalibrate` and its shrink-only ratchet again.
 
+**Reference re-established, 2026-11-06 (owner decision, epic #3914, #3918).** The #3918 ruler
+changes move four measurement inputs: `coding-runtime-performance-harness.mjs` answers the real
+startup readiness probe from a fixture-owned loopback provider and awaits admission readiness before
+timing, the functional test support forwards its diagnostics, `check-perf-evidence.mjs` detects
+direct execution with `isMainModule`, and the D12 toolchain lists that helper. The previous
+reference, the 16-core, 128 GiB Mac, is not available to this delivery. On 2026-11-01 the owner
+selected this 18-core, 64 GiB Mac as the replacement reference. On this host, dev's own code already
+measured about 2744 ms cold start, so it cannot meet the previous budget. The environment differs in
+host, kernel (27.2.0 instead of 27.0.0), cores, memory, CPU model digest and secure-read helper
+digest (`1c758e0c…` to `2511ac88…`, built for this host). Node 24.18.0 / npm 11.16.0 (the pinned
+toolchain), Apple Git 2.54.0 and OpenCode 2.1.4 with the same payload digest are unchanged.
+
+The step 2 procedure ran at `370252fe6` in one quiet window, with Docker and the review lab stopped:
+a fresh `npm ci`, `build:packages`, `dev:coding-runtime:stage`, `--calibrate`, an independent
+measurement and `--enforce-source-freshness`, which passed. Each run completed two warmups and thirty
+retained samples. No sample was removed, no run was repeated, and no ceiling was edited by hand.
+
+| Metric                | Previous ceiling (2026-10-31) | Committed ceiling | Previous measured p95 | Measured p95 |
+| --------------------- | ----------------------------- | ----------------- | --------------------- | ------------ |
+| `coldStartMs`         | 1907.0                        | 3671.5            | 1678.8                | 2767.7       |
+| `readinessMs`         | 3.26                          | 3.31              | 1.72                  | 1.82         |
+| `sseFirstByteMs`      | 4.48                          | 3.80              | 2.03                  | 2.30         |
+| `boundedThroughputMs` | 160.0                         | 198.3             | 128.7                 | 167.2        |
+
+The cold-start calibration ranges from 2719.3 to 3195.4 ms with p95 2870.8 ms. Its largest sample,
+3195.4 ms, is the only one above 2871 ms, and the policy (`maximum + (maximum - minimum)`) turns it
+into the 3671.5 ms ceiling. The independent measurement ranges from 2719.0 to 2783.3 ms. The
+cold-start rise is the host: dev's unchanged code measured about 2744 ms here (NATIVE-PERF-005,
+run 3113), and the measured p95 is 1.6 times the previous p95. Bounded throughput's measured p95
+rises by 30 %, measured with the same workload on the new host. These are measurements of a different machine, not a controlled comparison with
+the previous reference, and they do not establish a code regression or improvement. The next
+ordinary re-measurement on this reference uses `--recalibrate` and its shrink-only ratchet again.
+
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set
 `KEIKO_PERF_EVIDENCE_BASE_REF` to the PR/merge-group base for diff-owned toolchain freshness, as for
