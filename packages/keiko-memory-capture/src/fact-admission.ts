@@ -1000,10 +1000,73 @@ function isRetraction(text: string): boolean {
 const RESTRICTION_RE = /^(?:außer|ausser|except|unless|es\s+sei\s+denn)(?![\p{L}\p{N}])/iu;
 const CONTRAST_RESTRICTION_RE =
   /^(?:nur|only)\s+(?:wenn|falls|bei|am|im|in|auf|if|when|at|in|on|for)(?![\p{L}\p{N}])/iu;
-// A change the person is making or about to make. A habitual "I switch between tabs" changes nothing,
-// so a plain "switch" or "wechsle" needs a time ahead: "aber ich wechsle bald zu Numbers".
-const CHANGE_AHEAD_RE =
-  /^(?:(?:ich|i|i['’]m|i['’]ll|i\s+am|i\s+will)\s+)?(?:\p{L}+\s+){0,2}?(?:quit|quitting|stopping|switching|aufhören|umsteigen|höre\s+(?:\p{L}+\s+){0,2}?auf|(?:switch|wechsle|wechseln)\s+(?:\p{L}+\s+){0,3}?(?:bald|demnächst|morgen|nächste\p{L}*|soon|tomorrow|next))(?![\p{L}\p{N}])/iu;
+const CHANGE_SUBJECTS = new Set(["ich", "i", "i'm", "i’m", "i'll", "i’ll"]);
+const CHANGE_VERBS = new Set([
+  "quit",
+  "quitting",
+  "stopping",
+  "switching",
+  "aufhören",
+  "umsteigen",
+]);
+const SWITCH_VERBS = new Set(["switch", "wechsle", "wechseln"]);
+const TIME_AHEAD = new Set(["bald", "demnächst", "morgen", "soon", "tomorrow", "next"]);
+// The last word of a phrase may carry a mark: "aufhören." or "tomorrow,".
+const FINAL_WORD_RE = /^(\p{L}+)(?:[^\p{L}\p{N}]\S*)?$/u;
+const WORDS_BEFORE_CHANGE = 2;
+const WORDS_BEFORE_AUF = 2;
+const WORDS_BEFORE_TIME = 3;
+
+function finalWord(token: string | undefined): string {
+  return FINAL_WORD_RE.exec(token ?? "")?.[1] ?? "";
+}
+
+// The first word at or after `from`, past at most `reach` plain words, that satisfies `ends`.
+function endsWithin(
+  tokens: readonly string[],
+  from: number,
+  reach: number,
+  ends: (word: string) => boolean,
+): boolean {
+  for (let at = from; at <= from + reach && at < tokens.length; at += 1) {
+    if (ends(finalWord(tokens[at]))) return true;
+    if (!ONLY_LETTERS_RE.test(tokens[at] ?? "")) return false;
+  }
+  return false;
+}
+
+function isTimeAhead(word: string): boolean {
+  return TIME_AHEAD.has(word) || word.startsWith("nächste");
+}
+
+function changesAt(tokens: readonly string[], at: number): boolean {
+  const token = tokens[at] ?? "";
+  if (CHANGE_VERBS.has(finalWord(token))) return true;
+  if (token === "höre") return endsWithin(tokens, at + 1, WORDS_BEFORE_AUF, (w) => w === "auf");
+  return SWITCH_VERBS.has(token) && endsWithin(tokens, at + 1, WORDS_BEFORE_TIME, isTimeAhead);
+}
+
+function subjectEnds(tokens: readonly string[]): readonly number[] {
+  const [first = "", second = ""] = tokens;
+  const ends = [0];
+  if (CHANGE_SUBJECTS.has(first)) ends.push(1);
+  if (first === "i" && (second === "am" || second === "will")) ends.push(2);
+  return ends;
+}
+
+// A change the person is making or about to make: "ich höre bald auf", "I'm quitting tomorrow". A
+// habitual "I switch between tabs" changes nothing, so a plain "switch" or "wechsle" needs a time
+// ahead: "aber ich wechsle bald zu Numbers".
+function announcesChange(rest: string): boolean {
+  const tokens = rest.toLowerCase().split(/\s+/u);
+  return subjectEnds(tokens).some((from) => {
+    for (let at = from; at <= from + WORDS_BEFORE_CHANGE && at < tokens.length; at += 1) {
+      if (changesAt(tokens, at)) return true;
+      if (!ONLY_LETTERS_RE.test(tokens[at] ?? "")) return false;
+    }
+    return false;
+  });
+}
 
 function tailDropReason(tail: string): FactDropReason | null {
   const clause = tail.replace(TAIL_START_RE, "");
@@ -1016,7 +1079,7 @@ function tailDropReason(tail: string): FactDropReason | null {
 
 function contrastDropReason(rest: string): FactDropReason | null {
   if (CONTRAST_RESTRICTION_RE.test(rest) || RESTRICTION_RE.test(rest)) return "hypothetical";
-  return CHANGE_AHEAD_RE.test(rest) ? "negated-context" : null;
+  return announcesChange(rest) ? "negated-context" : null;
 }
 
 // "Anna und ich nutzen Vim" with a span that opens at "ich": the clause opens after "und", but its
