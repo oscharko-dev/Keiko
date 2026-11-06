@@ -403,6 +403,31 @@ function resolveBodySuppressionKey(db: DatabaseSync, cipher: MemoryContentCipher
   return key;
 }
 
+function isSecretboxOpenFailure(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as { readonly code?: unknown }).code === "SECRETBOX_OPEN_FAILED"
+  );
+}
+
+// The vault's sealed suppression key is the first value every open decrypts, so a key that does
+// not match the stored vault (a keychain entry that changed or is withheld, a state directory
+// moved to another device) fails here. That is a classified, recoverable state of the stored data,
+// not a defect: the database is closed untouched — never re-keyed, overwritten or quarantined — so
+// the original key opens it again, and the caller can run without memory instead of crashing.
+function openBodySuppressionKey(db: DatabaseSync, cipher: MemoryContentCipher): Buffer {
+  try {
+    return resolveBodySuppressionKey(db, cipher);
+  } catch (error) {
+    if (!isSecretboxOpenFailure(error)) throw error;
+    db.close();
+    throw new MemoryStorageError(
+      "vault-unreadable",
+      "The memory vault cannot be opened with the available key.",
+    );
+  }
+}
+
 interface ResolvedCipherWithSource {
   readonly cipher: MemoryContentCipher;
   // `undefined` for a test-injected cipher/vaultKey, where no key-resolution tier ran at all —
@@ -1311,7 +1336,7 @@ export function createMemoryVault(options?: CreateMemoryVaultOptions): MemoryVau
   // without the activity log ever reporting the open as having succeeded. Emitting right after
   // `openMemoryDatabase` (as this line used to) reported a successful open even when either
   // operation below then threw and the vault never actually became usable.
-  const bodySuppressionKey = resolveBodySuppressionKey(db, cipher);
+  const bodySuppressionKey = openBodySuppressionKey(db, cipher);
   hardenVaultSidecars(dbPath);
   emitVaultOpened(options?.logSink, keySource, elapsedMs());
   return buildStore(db, resolveOptions(options, cipher, dbPath, bodySuppressionKey));

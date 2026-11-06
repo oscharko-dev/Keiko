@@ -731,6 +731,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "The coding sidecar gateway stream failed mid-response.",
   "The coding sidecar gateway stream failed before the first response chunk.",
   "Audit or evidence persistence failed.",
+  "The memory vault could not be opened with the available key.",
   "Private context checkpoint persistence failed.",
   "Debug production service composition failed.",
   "Managed task-workspace boundary materialization failed.",

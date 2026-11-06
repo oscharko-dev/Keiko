@@ -25,6 +25,7 @@ A new leaf primitive provides AES-256-GCM authenticated encryption with two enve
 - A fresh random 12-byte nonce per call (GCM-safe size, well clear of the birthday bound for local single-DB write volume).
 - `isSealed(value)` (prefix check `kv1.`) so reads can detect legacy plaintext.
 - Decryption failures (tampered ciphertext, wrong key, malformed envelope) funnel through a typed `SecretboxError` — never silent corruption. "Wrong key" and "tampered" are intentionally indistinguishable (no oracle).
+- A stored vault the resolved key cannot open is classified as `MemoryStorageError` code `vault-unreadable` at open time. This happens when the keychain entry changed or is withheld so a fresh keyfile key was resolved, or when the state directory moved to another device. The database is closed untouched: never re-keyed, overwritten or quarantined, so the original key opens it again. The local server then starts without memory instead of crash-looping. Memory routes answer 503 `MEMORY_UNAVAILABLE`, Chat runs without memory, and one redacted `server.composition` diagnostic (`memory-vault.open`) records the state. Every other open failure still fails composition closed (2026-11-06, #4271).
 
 ### Content-vs-metadata split
 
