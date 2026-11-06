@@ -190,9 +190,12 @@ it("learns from the person's own words when a long grounded prompt was compacted
   expect(result.status, JSON.stringify(result.body)).toBe(200);
   expect(calls.some((request) => systemOf(request) === PROMPT_COMPACTION_SYSTEM)).toBe(true);
   await vi.waitFor(() => {
-    expect(calls.some(isSalienceCall)).toBe(true);
+    expect(calls.some((call) => isSalienceCall(call))).toBe(true);
   });
-  const learner = texts(calls.filter(isSalienceCall), "user");
+  const learner = texts(
+    calls.filter((call) => isSalienceCall(call)),
+    "user",
+  );
   expect(learner).toContain(OWN_WORDS);
   expect(learner).not.toContain(SUMMARY);
 });

@@ -156,7 +156,7 @@ const JAVA_PARSER_WORKER_RETIRED_OPERATION = defineActivityLogOperation({
 // load the grammar answers at once instead of leaving the caller to its startup deadline. A tree
 // too deep or too large to pass back answers as a depth refusal instead of leaving the caller to
 // its deadline.
-const WORKER_SOURCE = String.raw`
+const WORKER_SOURCE = `
 const { parentPort, workerData } = process.getBuiltinModule("node:worker_threads");
 const port = workerData.port;
 const signal = new Int32Array(workerData.signal);

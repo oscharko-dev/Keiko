@@ -466,9 +466,9 @@ const LONE_SURROGATE_RE = /[\ud800-\udfff]/u;
 
 function loneSurrogateIn(value: unknown): boolean {
   if (typeof value === "string") return LONE_SURROGATE_RE.test(value);
-  if (Array.isArray(value)) return value.some(loneSurrogateIn);
+  if (Array.isArray(value)) return value.some((item) => loneSurrogateIn(item));
   if (typeof value === "object" && value !== null)
-    return Object.values(value).some(loneSurrogateIn);
+    return Object.values(value).some((item) => loneSurrogateIn(item));
   return false;
 }
 
