@@ -193,6 +193,8 @@ packages/*/src/**/*.d.ts.map
 /only-for-internal-use/
 /Only for Internal Use/
 ui/
+# The lab fixture's npm workspace package is named `ui` on purpose (#4271).
+!tests/fixtures/coding-workbench-lab/polyglot-mono/web/ui/
 tests/memory-eval/scorecard.json
 
 # Mutation-testing workspaces and reports are generated locally and in CI.
