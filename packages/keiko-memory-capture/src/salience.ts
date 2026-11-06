@@ -310,11 +310,10 @@ function effectiveContext(input: SalienceInput, deps: SalienceDeps): CaptureCont
   };
 }
 
-function isDeniedContent(item: RawSalienceItem, policy: CapturePolicyOptions): boolean {
-  return (
-    memoryTextCaptureRejectionReason(item.body, policy) !== null ||
-    memoryTextCaptureRejectionReason(item.evidence, policy) !== null
-  );
+// The model's statement, the person's words it rests on and the stored body are each checked: the
+// body can carry words from the person's clause or previous message that neither of the others has.
+function isDeniedContent(texts: readonly string[], policy: CapturePolicyOptions): boolean {
+  return texts.some((text) => memoryTextCaptureRejectionReason(text, policy) !== null);
 }
 
 function decisionPayload(
@@ -356,6 +355,8 @@ interface AdmittedFact {
   readonly item: RawSalienceItem;
   readonly type: MemoryType;
   readonly body: string;
+  // The person's verbatim words the fact rests on, as admission settled them.
+  readonly evidence: string;
   readonly sentence: string;
   readonly subject: "self" | "team";
   readonly confidence: number;
@@ -392,7 +393,7 @@ function admitItem(
     turn.drop("evidence-too-long");
     return null;
   }
-  if (isDeniedContent(item, turn.policy)) {
+  if (isDeniedContent([item.body, admission.evidence, body], turn.policy)) {
     turn.drop("denied-content");
     return null;
   }
@@ -400,6 +401,7 @@ function admitItem(
     item,
     type,
     body,
+    evidence: admission.evidence,
     sentence: admission.sentence,
     subject: admission.subject,
     confidence: admission.confidence,
@@ -425,7 +427,7 @@ function learnedCandidate(
   const scopeKind = fact.subject === "team" ? "project" : "user";
   const scope = inferScopeFromContext(turn.context, { scopeKind });
   if (scope === null) return null;
-  const decision = applyPolicy(fact.item.evidence, {
+  const decision = applyPolicy(fact.evidence, {
     ...(turn.policy.defaultSensitivity !== undefined && {
       defaultSensitivity: turn.policy.defaultSensitivity,
     }),
@@ -441,7 +443,7 @@ function learnedCandidate(
       sensitivity: decision.sensitivity,
       sourceKind: "system-default",
       captureRationale: SALIENCE_RATIONALE,
-      evidenceSpan: fact.item.evidence.trim(),
+      evidenceSpan: fact.evidence.trim(),
       ...(turn.input.sourceMessageIds === undefined
         ? {}
         : { sourceMessageIds: turn.input.sourceMessageIds }),
@@ -458,14 +460,18 @@ function learnedCandidate(
   };
 }
 
-function outcomeForItem(item: RawSalienceItem, turn: LearningTurn): SalienceOutcome | null {
+function outcomeForItem(
+  item: RawSalienceItem,
+  turn: LearningTurn,
+  accepted: readonly SalienceOutcome[],
+): SalienceOutcome | null {
   const fact = admitItem(item, turn);
-  if (fact === null) return null;
+  if (fact === null || isRepeatInTurn(fact.evidence, accepted)) return null;
   const related = relatedFact(item, turn.shown);
   const comparable = related !== undefined && comparableFact(fact, related);
   const decision = decideFactRelation({
     body: fact.body,
-    evidence: item.evidence,
+    evidence: fact.evidence,
     label: comparable ? item.relation : "new",
     ...(comparable ? { related } : {}),
     known: turn.known.filter((known) => comparableFact(fact, known)),
@@ -497,10 +503,10 @@ function evidenceOf(outcome: SalienceOutcome): string | null {
   return outcome.kind === "candidate" ? (outcome.proposal.provenance.evidenceSpan ?? null) : null;
 }
 
-function isRepeatInTurn(item: RawSalienceItem, accepted: readonly SalienceOutcome[]): boolean {
+function isRepeatInTurn(evidence: string, accepted: readonly SalienceOutcome[]): boolean {
   return accepted.some((outcome) => {
-    const evidence = evidenceOf(outcome);
-    return evidence !== null && statesSameFact(evidence, item.evidence);
+    const earlier = evidenceOf(outcome);
+    return earlier !== null && statesSameFact(earlier, evidence);
   });
 }
 
@@ -511,8 +517,7 @@ function collectOutcomes(
   const accepted: SalienceOutcome[] = [];
   for (const item of items) {
     if (accepted.length >= MAX_CANDIDATES) break;
-    if (isRepeatInTurn(item, accepted)) continue;
-    const outcome = outcomeForItem(item, turn);
+    const outcome = outcomeForItem(item, turn, accepted);
     if (outcome !== null) accepted.push(outcome);
   }
   return accepted;

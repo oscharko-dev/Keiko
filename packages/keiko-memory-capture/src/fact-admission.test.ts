@@ -56,7 +56,6 @@ describe("admitProposedFact", () => {
       "not-clause-boundary",
     ],
     ["half a clause", "Ich mag Tabellen nicht.", "Ich mag Tabellen", "not-clause-boundary"],
-    ["a start inside a clause", "Heute mag ich Tabellen.", "ich Tabellen", "not-clause-boundary"],
     ["a question", "Ich mag Tabellen, oder?", "Ich mag Tabellen", "question"],
     ["a quote", 'Er schrieb: "Ich mag Tabellen" in die Mail.', "Ich mag Tabellen", "quoted"],
     ["a German quote", "Der Satz „Ich mag Tabellen“ steht dort.", "Ich mag Tabellen", "quoted"],
@@ -373,6 +372,98 @@ describe("admitProposedFact", () => {
     expect(admit(text, "Ich nutze Excel").admitted).toBe(true);
     expect(reasonNamesOtherPerson(text)).toBe(true);
     expect(reasonNamesOtherPerson(`${" ".repeat(50_000)}weil`)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+});
+
+describe("a span copied without the first words of its clause", () => {
+  function claimOf(text: string, evidence: string, body = evidence, about = "self"): string | null {
+    const admission = admit(text, evidence, body, about);
+    return admission.admitted ? admission.claim : null;
+  }
+
+  function evidenceOf(text: string, evidence: string, about = "self"): string | null {
+    const admission = admit(text, evidence, evidence, about);
+    return admission.admitted ? admission.evidence : null;
+  }
+
+  const team =
+    "We decided as a team to release only on Tuesdays, because support is fully staffed then.";
+
+  it.each([
+    ["the subject left out", "decided as a team to release only on Tuesdays"],
+    ["only the verb phrase", "release only on Tuesdays"],
+    ["a cut inside the first word", "ecided as a team to release only on Tuesdays"],
+  ])("stores the whole clause, never the fragment: %s", (_label, evidence) => {
+    expect(claimOf(team, evidence, "The team decided to release only on Tuesdays", "team")).toBe(
+      "We decided as a team to release only on Tuesdays",
+    );
+    expect(evidenceOf(team, evidence, "team")).toBe(
+      "We decided as a team to release only on Tuesdays",
+    );
+  });
+
+  it("opens the clause, not the sentence", () => {
+    expect(
+      claimOf(
+        "Frau Ostrander nutzt Excel, ich führe meine Zahlen im Wiki.",
+        "meine Zahlen im Wiki",
+      ),
+    ).toBe("Ich führe meine Zahlen im Wiki");
+    expect(claimOf("Heute mag ich Tabellen.", "ich Tabellen")).toBe("Heute mag ich Tabellen");
+    expect(claimOf("Mein Home-Office nutze ich montags.", "Office nutze ich montags")).toBe(
+      "Mein Home-Office nutze ich montags",
+    );
+  });
+
+  it.each<[string, string, string, string, FactDropReason]>([
+    [
+      "another person opening it",
+      "Mein Kollege mag Tabellen.",
+      "mag Tabellen",
+      "self",
+      "third-party",
+    ],
+    ["no first person in it", "Er mag Tabellen.", "mag Tabellen", "self", "no-first-person"],
+    [
+      "a team clause without a team",
+      "We release only on Tuesdays.",
+      "release only on Tuesdays",
+      "team",
+      "not-self",
+    ],
+    ["a reason that is not the team's", team, "support is fully staffed then", "team", "not-self"],
+  ])("judges the words it gains: %s", (_label, text, evidence, about, reason) => {
+    expect(reasonOf(text, evidence, evidence, about)).toBe(reason);
+  });
+
+  it("drops a model statement the whole clause inverts", () => {
+    expect(reasonOf("Ich mag keine Tabellen.", "Tabellen", "Ich mag Tabellen")).toBe(
+      "polarity-changed",
+    );
+  });
+
+  it("still reads the words before the clause", () => {
+    expect(reasonOf("Es stimmt nicht, dass ich Tabellen mag.", "Tabellen mag")).toBe(
+      "negated-context",
+    );
+    expect(reasonOf("Er sagte, ich mag Tabellen.", "mag Tabellen")).toBe("negated-context");
+    expect(reasonOf("Wenn ich Tabellen mag, sage ich es.", "Tabellen mag")).toBe("hypothetical");
+  });
+
+  it("does not move the end", () => {
+    expect(reasonOf("Ich mag Tabellen nicht.", "mag Tabellen")).toBe("not-clause-boundary");
+  });
+
+  it("does not reach further back than a span may be long", () => {
+    const text = `Ich mag ${"sehr ".repeat(100)}Tabellen.`;
+    expect(reasonOf(text, "Tabellen")).toBe("evidence-too-long");
+  });
+
+  it("stays linear when the clause opens far back", () => {
+    const text = `${"ich ".repeat(50_000)}mag Tabellen.`;
+    const started = performance.now();
+    expect(admit(text, "mag Tabellen").admitted).toBe(false);
     expect(performance.now() - started).toBeLessThan(2000);
   });
 });

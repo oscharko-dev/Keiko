@@ -231,7 +231,12 @@ D2 lets a fact through.
   person's turns it came from (`sourceMessageIds`). A decision keeps its reason in the key-value
   payload, and a stated end in the future closes validity; both are parsed from the words, never
   taken from the model. A stated end that has passed means the fact is over, so nothing is stored.
-- **Admission.** The span appears verbatim at clause boundaries and is not a question, request,
+- **Admission.** The span appears verbatim in the person's message and ends at a clause boundary.
+  A span that leaves out the first words of its clause ("decided as a team to release …" out of "We
+  decided as a team to release …") opens at the start of that clause, at most as far back as a span
+  may be long, and every check reads that whole clause, never the fragment; the end is not moved, so
+  "Ich mag Tabellen" out of "Ich mag Tabellen nicht" stays dropped. A mark with no space after it
+  sits inside a word ("Home-Office") and opens no clause. The clause is not a question, request,
   quotation, hypothesis, irony, hedge ("Ich glaube, …"), denial or past statement. Tense and
   pronouns are judged on the claim itself, not on its reason or condition, so "Ich nutze Tabellen,
   weil sie übersichtlich sind" stands; a decision, switch or migration made in the past holds now.

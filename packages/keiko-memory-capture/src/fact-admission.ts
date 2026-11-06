@@ -49,6 +49,8 @@ export type FactAdmission =
   | {
       readonly admitted: true;
       readonly sentence: string;
+      // The person's verbatim words the fact rests on: the model's span, opened at its clause.
+      readonly evidence: string;
       // The person's own words for the fact, a leading pronoun replaced by what it stood for in
       // the previous message: what is stored, so no paraphrase replaces what they said.
       readonly claim: string;
@@ -71,6 +73,8 @@ const INNER_SENTENCE_RE = /[.!?…]\s+\p{Lu}/u;
 const SUBORDINATE_LEAD_RE = /(?:^|[^\p{L}])(?:dass|that)\s*$/iu;
 const CLAUSE_LEAD_RE = /(?:^|[\s,;:–—-])(?:dass|that|und|and|aber|but|doch|denn)\s*$/iu;
 const CLAUSE_SPLIT_RE = /[,;:–—]/u;
+// The longest clause lead ("dass", "that") and the mark before it.
+const CLAUSE_LEAD_REACH = 6;
 // A claim can end where a joined clause begins: "... a local queue because ...".
 const CLAUSE_FOLLOWER_RE =
   /^(?:weil|denn|da|wenn|und|aber|bis|because|since|when|and|but|until|till|through)(?![\p{L}\p{N}])/iu;
@@ -619,14 +623,6 @@ function sentenceAround(text: string, start: number, end: number): { from: numbe
   return { from, to: Math.min(text.length, to + 1) };
 }
 
-function startsAtClause(text: string, start: number, sentenceFrom: number): boolean {
-  if (start === sentenceFrom) return true;
-  const before = text.slice(sentenceFrom, start);
-  const last = before.trimEnd().at(-1);
-  if (last === undefined || CLAUSE_PUNCTUATION.has(last) || isQuote(last)) return true;
-  return CLAUSE_LEAD_RE.test(before);
-}
-
 function endsAtClause(text: string, end: number): boolean {
   const last = text.charAt(end - 1);
   if (CLAUSE_PUNCTUATION.has(last)) return true;
@@ -902,21 +898,75 @@ export function admitProposedFact(
   const evidence = fact.evidence.normalize("NFC").trim();
   const spanReason = spanDropReason(evidence, userText);
   if (spanReason !== null) return dropped(spanReason);
-  const start = userText.indexOf(evidence);
-  const end = start + evidence.length;
-  const { from, to } = sentenceAround(userText, start, end);
-  if (!startsAtClause(userText, start, from) || !endsAtClause(userText, end)) {
-    return dropped("not-clause-boundary");
-  }
+  const span = clauseSpan(userText, evidence);
+  if (typeof span === "string") return dropped(span);
+  const { start, from, words } = span;
   if (isInsideQuotes(userText.slice(0, start))) return dropped("quoted");
-  const sentence = userText.slice(from, to);
-  if (looksLikePersonalIdentifier(evidence) || looksLikePersonalIdentifier(fact.body)) {
+  const sentence = userText.slice(from, span.to);
+  if (looksLikePersonalIdentifier(words) || looksLikePersonalIdentifier(fact.body)) {
     return dropped("personal-identifier");
   }
-  const reason = contextDropReason(evidence, sentence, userText.slice(from, start));
+  const reason = contextDropReason(words, sentence, userText.slice(from, start));
   if (reason !== null) return dropped(reason);
-  const claim = resolvedClaim(fact.body, evidence, context);
-  return admittedClaim(fact, { claim, opensSentence: start === from }, sentence);
+  const claim = resolvedClaim(fact.body, words, context);
+  return admittedClaim(fact, { claim, evidence: words, opensSentence: start === from }, sentence);
+}
+
+interface ClauseSpan {
+  // Where the person's words open, after widening to their clause.
+  readonly start: number;
+  readonly from: number;
+  readonly to: number;
+  readonly words: string;
+}
+
+// Models often copy a clause without its first words: "decided as a team to release …" out of
+// "We decided as a team to release …". The words are the person's either way, so the span opens at
+// the start of its clause and every check reads that whole clause, never the fragment. Its end is
+// not moved: a span that stops before "nicht" stays dropped.
+function clauseSpan(text: string, evidence: string): ClauseSpan | FactDropReason {
+  const copied = text.indexOf(evidence);
+  const end = copied + evidence.length;
+  const { from, to } = sentenceAround(text, copied, end);
+  if (!endsAtClause(text, end)) return "not-clause-boundary";
+  const start = clauseStart(text, { copied, end, sentenceFrom: from });
+  return start === null ? "evidence-too-long" : { start, from, to, words: text.slice(start, end) };
+}
+
+interface CopiedSpan {
+  readonly copied: number;
+  readonly end: number;
+  readonly sentenceFrom: number;
+}
+
+// Looks back no further than a span may reach, so a long message stays linear.
+function clauseStart(text: string, { copied, end, sentenceFrom }: CopiedSpan): number | null {
+  const limit = Math.max(sentenceFrom, end - EVIDENCE_MAX_CHARS);
+  for (let at = copied; at >= limit && at > sentenceFrom; at -= 1) {
+    if (opensWord(text, at) && opensClause(text, at, sentenceFrom)) return at;
+  }
+  if (limit > sentenceFrom) return null;
+  let at = sentenceFrom;
+  while (at < copied && /\s/u.test(text.charAt(at))) at += 1;
+  return at;
+}
+
+// A mark with no space after it sits inside a word ("Home-Office"), so no word opens there.
+function opensWord(text: string, at: number): boolean {
+  const before = text.charAt(at - 1);
+  if (/\s/u.test(text.charAt(at))) return false;
+  return /\s/u.test(before) || isQuote(before);
+}
+
+// A clause opens at its sentence's start, after a mark or quote, or after a lead such as "dass".
+// Only the few characters a lead can occupy are read.
+function opensClause(text: string, at: number, sentenceFrom: number): boolean {
+  let gap = at;
+  while (gap > sentenceFrom && /\s/u.test(text.charAt(gap - 1))) gap -= 1;
+  if (gap === sentenceFrom) return true;
+  const last = text.charAt(gap - 1);
+  if (CLAUSE_PUNCTUATION.has(last) || isQuote(last)) return true;
+  return CLAUSE_LEAD_RE.test(text.slice(Math.max(sentenceFrom, gap - CLAUSE_LEAD_REACH), at));
 }
 
 // A span may end at a comma or dash; the stored fact does not: "Ich mag Tabellen," → "Ich mag Tabellen".
@@ -943,13 +993,14 @@ function sentenceCase(claim: string): string {
 
 interface ClaimWords {
   readonly claim: string;
+  readonly evidence: string;
   // The clause opens its sentence; one from inside it is stored with a capital first letter.
   readonly opensSentence: boolean;
 }
 
 function admittedClaim(
   fact: ProposedFact,
-  { claim, opensSentence }: ClaimWords,
+  { claim, evidence, opensSentence }: ClaimWords,
   sentence: string,
 ): FactAdmission {
   const reason =
@@ -960,6 +1011,7 @@ function admittedClaim(
   return {
     admitted: true,
     sentence,
+    evidence,
     claim: opensSentence ? withoutTrailingMarks(claim) : sentenceCase(withoutTrailingMarks(claim)),
     subject,
     subjectless,

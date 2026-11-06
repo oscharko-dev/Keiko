@@ -555,6 +555,31 @@ describe("a team's fact and a pronoun from the previous message", () => {
     expect(learned).toMatchObject({ kind: "confirmation", memoryId: "team-fact" });
   });
 
+  it("learns the whole clause when the model copies it without its first words", async () => {
+    const said =
+      "We decided as a team to release only on Tuesdays, because support is fully staffed then.";
+    const outcomes = await learn(said, [
+      fact("The team releases only on Tuesdays", "release only on Tuesdays", {
+        about: "team",
+        type: "decision",
+      }),
+      fact(
+        "The team decided to release only on Tuesdays",
+        "decided as a team to release only on Tuesdays",
+        {
+          about: "team",
+          type: "decision",
+        },
+      ),
+    ]);
+    const [learned, ...rest] = candidates(outcomes);
+    expect(rest).toEqual([]);
+    expect(learned?.proposal.body).toBe("We decided as a team to release only on Tuesdays");
+    expect(learned?.proposal.provenance.evidenceSpan).toBe(
+      "We decided as a team to release only on Tuesdays",
+    );
+  });
+
   it("learns no team decision outside a project", async () => {
     const { projectId: _projectId, ...withoutProject } = baseContext();
     const outcomes = await learn(
