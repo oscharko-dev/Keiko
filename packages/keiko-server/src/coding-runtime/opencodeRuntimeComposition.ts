@@ -34,7 +34,11 @@ import {
   nativeBuildCacheReadRoots,
   nativeBuildWrapperReadRoots,
 } from "@oscharko-dev/keiko-sandbox";
-import { nativeBuildCacheAdmitted, prepareNativeBuildSettings } from "./nativeBuildSettings.js";
+import {
+  nativeBuildCacheAdmitted,
+  prepareNativeBuildSettings,
+  type NativeBuildSettingsResult,
+} from "./nativeBuildSettings.js";
 import { DatabaseSync } from "node:sqlite";
 import type {
   CodingWorkbenchRuntimeEvent,
@@ -2040,10 +2044,12 @@ function preparedRunEnvironment(
   profileEnv: Readonly<Record<string, string>>,
   runRoot: string,
 ): Readonly<Record<string, string>> {
+  const settings = admitNativeBuildSettings(input, request, runRoot);
   return preparedEnvironment(
-    { ...profileEnv, ...admitNativeBuildSettings(input, request, runRoot) },
+    { ...profileEnv, ...settings.env },
     request.env,
     runRoot,
+    settings.javaProperties,
   );
 }
 
@@ -2056,8 +2062,8 @@ function admitNativeBuildSettings(
   input: OpenCodeRuntimeCompositionInput,
   request: OpenCodeLifecyclePrepareRequest,
   runRoot: string,
-): Readonly<Record<string, string>> {
-  if (input.toolProfile !== "native") return {};
+): Pick<NativeBuildSettingsResult, "env" | "javaProperties"> {
+  if (input.toolProfile !== "native") return { env: {}, javaProperties: {} };
   const realHome = input.buildSettingsHome ?? homedir();
   const mode = request.env.KEIKO_CODING_MODE;
   const offline = nativeBuildCacheAdmitted(mode);
@@ -2069,7 +2075,7 @@ function admitNativeBuildSettings(
     readOnlyMavenRepository: offline ? nativeBuildCacheReadRoots(realHome)[0] : undefined,
     readOnlyMavenWrapperDists: offline ? nativeBuildWrapperReadRoots(realHome)[0] : undefined,
     activityLog: input.activityLog,
-  }).env;
+  });
 }
 
 /** The run's launch profile, with the MCP servers the operator's registry admits for it. */
@@ -2214,14 +2220,21 @@ function preparedEnvironment(
   profile: Readonly<Record<string, string>>,
   inherited: Readonly<Record<string, string>>,
   runRoot: string,
+  javaProperties: Readonly<Record<string, string>> = {},
 ): Readonly<Record<string, string>> {
-  const temporary = join(runRoot, "tmp");
-  // These are JVM environment-option quotes, not a shell command; retain literal path characters.
-  const javaTemporary = "'-Djava.io.tmpdir=" + temporary.replaceAll("'", "'\"'\"'") + "'";
+  const properties = { "java.io.tmpdir": join(runRoot, "tmp"), ...javaProperties };
+  const options = Object.entries(properties).map(([name, value]) =>
+    javaSystemProperty(name, value),
+  );
   return {
     ...profile,
-    JAVA_TOOL_OPTIONS: [inherited.JAVA_TOOL_OPTIONS, javaTemporary].filter(Boolean).join(" "),
+    JAVA_TOOL_OPTIONS: [inherited.JAVA_TOOL_OPTIONS, ...options].filter(Boolean).join(" "),
   };
+}
+
+/** One JVM `-D` option; these are JVM environment-option quotes, not a shell command. */
+function javaSystemProperty(name: string, value: string): string {
+  return "'-D" + name + "=" + value.replaceAll("'", "'\"'\"'") + "'";
 }
 
 /** The prepared launch: the profile's environment plus the run's two capabilities. */

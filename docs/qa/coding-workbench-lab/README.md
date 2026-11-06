@@ -361,7 +361,7 @@ pause-delete` and checks that no wake starts. The standalone lane needs a long-r
 The `polyglot-mono` baseline is a nested monorepo: a Maven multi-module build (`core`, `api`), an
 npm workspace (`web/shared`, `web/ui`) and a standalone Maven project (`services/legacy`). T37 and
 T38 run the build tools in Supervised workspace, where the run has no network: Maven resolves from
-the user's read-only `~/.m2/repository` with sanitized mirror settings and `./mvnw` from the
+the user's read-only `~/.m2/repository`, chained behind the run's own repository, with sanitized mirror settings and `./mvnw` from the
 read-only `~/.m2/wrapper/dists` (warm both once with `./mvnw -B verify` in a host copy), npm from the copy's
 installed tree (run `npm install` once in the copy first). T39 runs the Maven wrapper in Full
 access, where the network is admitted and the run resolves into its own private cache. T40 is a

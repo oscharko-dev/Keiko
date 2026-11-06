@@ -2321,9 +2321,15 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   token or `//host/:` keys, written to a user-config file whose name is not `.npmrc` and bound with
   `NPM_CONFIG_USERCONFIG` (the kernel denies the name `.npmrc` anywhere, so a sanitized `.npmrc` could
   never be read, and the real file stays denied); `~/.gradle/gradle.properties` keeps proxy and daemon
-  keys only. Below Full access the sanitized Maven settings run `offline` against the user's
-  `~/.m2/repository` opened as one READ-ONLY root (`nativeBuildCacheReadRoots`), so a warm cache builds
-  without a network and a run can never poison the user's cache. The Maven wrapper's installed
+  keys only. Java takes `user.home` from the account database and ignores `HOME`, so the private
+  home reaches every JVM of the run as `-Duser.home` in `JAVA_TOOL_OPTIONS` and Gradle through
+  `GRADLE_USER_HOME`; without them Maven and Gradle read the real `~/.m2` and `~/.gradle` and never
+  see the sanitized copies. Maven's `localRepository` is always the run's own writable repository,
+  because Maven writes into its local repository even offline. Below Full access the sanitized
+  Maven settings run `offline`, with the user's `~/.m2/repository` opened as one READ-ONLY root
+  (`nativeBuildCacheReadRoots`) and chained behind the run's repository as its tail
+  (`-Dmaven.repo.local.tail`, Maven 3.9 and later), so a warm cache builds without a network and a
+  run can never poison the user's cache. The Maven wrapper's installed
   distributions (`~/.m2/wrapper/dists`) open the same way (`nativeBuildWrapperReadRoots`) and are
   linked into the private home, so `./mvnw` runs the distribution a standalone shell runs instead of
   trying a download without a network; the Gradle wrapper is not admitted, because it takes a lock

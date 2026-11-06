@@ -188,13 +188,46 @@ describe("prepareNativeBuildSettings (#4271)", () => {
       stateRoot,
       activityLog: sink().sink,
     });
-    expect(result.env).toEqual({});
+    const home = join(stateRoot, "home");
+    expect(result.env).toEqual({ GRADLE_USER_HOME: join(home, ".gradle") });
+    // Java ignores HOME: the private home reaches every JVM as user.home, and nothing is chained.
+    expect(result.javaProperties).toEqual({ "user.home": home });
     expect(result.mavenSettings).toBe("absent");
-    expect(readFileSync(join(stateRoot, "home", ".m2", "settings.xml"), "utf8")).toContain(
-      "<offline>false</offline>",
+    const settings = readFileSync(join(home, ".m2", "settings.xml"), "utf8");
+    expect(settings).toContain("<offline>false</offline>");
+    expect(settings).toContain(
+      `<localRepository>${join(home, ".m2", "repository")}</localRepository>`,
     );
     expect(nativeBuildCacheAdmitted("autonomous-delivery")).toBe(false);
     expect(nativeBuildCacheAdmitted("governed-assist")).toBe(true);
+  });
+
+  it("chains the user's read-only Maven cache behind the run's writable repository below Full access", () => {
+    const { realHome, stateRoot } = fixture();
+    const cache = join(realHome, ".m2", "repository");
+    const log = sink();
+    const result = prepareNativeBuildSettings({
+      runId: "run-0006",
+      mode: "supervised-coding",
+      realHome,
+      stateRoot,
+      readOnlyMavenRepository: cache,
+      activityLog: log.sink,
+    });
+    const home = join(stateRoot, "home");
+    // #4271 lab T37: Maven writes into its local repository even offline, so the read-only cache
+    // can only be the chain's tail; the run's own repository is the one Maven writes.
+    const settings = readFileSync(join(home, ".m2", "settings.xml"), "utf8");
+    expect(settings).toContain(
+      `<localRepository>${join(home, ".m2", "repository")}</localRepository>`,
+    );
+    expect(settings).not.toContain(`<localRepository>${cache}</localRepository>`);
+    expect(result.javaProperties).toEqual({
+      "user.home": home,
+      "maven.repo.local.tail": cache,
+      "maven.repo.local.tail.ignoreAvailability": "true",
+    });
+    expect(log.events[0]?.extra).toMatchObject({ mavenCache: "read-only" });
   });
 
   it("links the Maven wrapper's read-only distributions into the private home below Full access", () => {

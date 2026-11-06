@@ -4442,7 +4442,7 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
   // home, never a credential, and records the admission body-free. The mapped profiles carry none.
   it("admits sanitized build settings into a native run's private home and not a mapped one", async () => {
     const realHome = tempDir("keiko-build-settings-home-");
-    mkdirSync(join(realHome, ".m2"), { recursive: true });
+    mkdirSync(join(realHome, ".m2", "repository"), { recursive: true });
     writeFileSync(
       join(realHome, ".m2", "settings.xml"),
       "<settings><servers><server><id>c</id><password>PLANTED-SECRET</password></server></servers>" +
@@ -4468,6 +4468,15 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       );
       expect(settings).toContain("https://nexus.corp/m");
       expect(JSON.stringify([settings, fixture.preparation.env])).not.toContain("PLANTED");
+      // Java ignores HOME: every JVM of the run gets the private user.home, Gradle its private
+      // user home, and Maven the user's read-only cache only as the tail of its own repository.
+      const home = join(dirname(dirname(userConfig)), "home");
+      const javaOptions = fixture.preparation.env.JAVA_TOOL_OPTIONS ?? "";
+      expect(javaOptions).toContain(`'-Duser.home=${home}'`);
+      expect(javaOptions).toContain(
+        `'-Dmaven.repo.local.tail=${realpathSync(join(realHome, ".m2", "repository"))}'`,
+      );
+      expect(fixture.preparation.env.GRADLE_USER_HOME).toBe(join(home, ".gradle"));
       const admitted = activityLog.events.filter(
         (event) => event.op === "coding-runtime.native-build-settings.admitted",
       );
@@ -4488,6 +4497,8 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     });
     try {
       expect(mapped.preparation.env).not.toHaveProperty("NPM_CONFIG_USERCONFIG");
+      expect(mapped.preparation.env).not.toHaveProperty("GRADLE_USER_HOME");
+      expect(mapped.preparation.env.JAVA_TOOL_OPTIONS).not.toContain("user.home");
       expect(
         activityLog.events.filter(
           (event) => event.op === "coding-runtime.native-build-settings.admitted",

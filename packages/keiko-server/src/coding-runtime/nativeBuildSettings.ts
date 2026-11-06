@@ -329,6 +329,12 @@ export interface NativeBuildSettingsInput {
 
 export interface NativeBuildSettingsResult {
   readonly env: Readonly<Record<string, string>>;
+  /**
+   * The JVM system properties every Java process of the run receives (`JAVA_TOOL_OPTIONS`). Java
+   * takes `user.home` from the account database and ignores `HOME`, so without them Maven and Gradle
+   * would read the user's real `~/.m2` and `~/.gradle` instead of the run's sanitized settings.
+   */
+  readonly javaProperties: Readonly<Record<string, string>>;
   readonly mavenSettings: FileDisposition;
   readonly npmConfig: FileDisposition;
   readonly gradleProperties: FileDisposition;
@@ -395,13 +401,15 @@ function writePrivate(path: string, content: string): void {
  * that points the toolchains at them. Maven's settings live at `<home>/.m2/settings.xml` (a name no
  * credential deny covers); npm's user config lives under a name that is not `.npmrc` and is bound
  * with `NPM_CONFIG_USERCONFIG`, because the kernel denies the name `.npmrc` anywhere. Below Full
- * access the sanitized Maven settings run offline against the user's read-only cache.
+ * access the sanitized Maven settings run offline, with the user's read-only cache chained behind
+ * the run's own repository. Java ignores `HOME`, so `javaProperties` carries the private `user.home`
+ * and `GRADLE_USER_HOME` points Gradle at the private home.
  */
 export function prepareNativeBuildSettings(
   input: NativeBuildSettingsInput,
 ): NativeBuildSettingsResult {
   const home = join(input.stateRoot, "home");
-  const run = mavenRunBinding(input);
+  const run = mavenRunBinding(input, home);
   const maven = admit(
     readSettingsFile(join(input.realHome, ".m2", "settings.xml"), input.runId),
     (text) => {
@@ -422,7 +430,11 @@ export function prepareNativeBuildSettings(
   writeAdmitted(userConfig, npm);
   linkMavenWrapperDists(home, input);
   const result: NativeBuildSettingsResult = {
-    env: npm.value === undefined ? {} : { NPM_CONFIG_USERCONFIG: userConfig },
+    env: {
+      GRADLE_USER_HOME: join(home, ".gradle"),
+      ...(npm.value === undefined ? {} : { NPM_CONFIG_USERCONFIG: userConfig }),
+    },
+    javaProperties: javaProperties(home, input),
     mavenSettings: maven.disposition,
     npmConfig: npm.disposition,
     gradleProperties: gradle.disposition,
@@ -432,11 +444,28 @@ export function prepareNativeBuildSettings(
   return result;
 }
 
-function mavenRunBinding(input: NativeBuildSettingsInput): MavenRunBinding {
-  const offline = nativeBuildCacheAdmitted(input.mode);
-  return offline && input.readOnlyMavenRepository !== undefined
-    ? { offline, localRepository: input.readOnlyMavenRepository }
-    : { offline };
+/** Maven writes into its local repository even offline: the run's own, never the user's cache. */
+function mavenRunBinding(input: NativeBuildSettingsInput, home: string): MavenRunBinding {
+  return {
+    offline: nativeBuildCacheAdmitted(input.mode),
+    localRepository: join(home, ".m2", "repository"),
+  };
+}
+
+/**
+ * Below Full access the user's read-only Maven cache is chained behind the run's writable
+ * repository (Maven 3.9+ `maven.repo.local.tail`): artifacts resolve from it, and everything Maven
+ * writes lands in the run's own repository.
+ */
+function javaProperties(home: string, input: NativeBuildSettingsInput): Record<string, string> {
+  const tail =
+    nativeBuildCacheAdmitted(input.mode) && input.readOnlyMavenRepository !== undefined
+      ? {
+          "maven.repo.local.tail": input.readOnlyMavenRepository,
+          "maven.repo.local.tail.ignoreAvailability": "true",
+        }
+      : {};
+  return { "user.home": home, ...tail };
 }
 
 /**
