@@ -5,6 +5,7 @@ import { realpathSync, statSync } from "node:fs";
 
 import { gitEnv, GIT_BASE_ARGS, resolveGitExecutable } from "@oscharko-dev/keiko-git";
 import {
+  LOCAL_CHECKOUT_WORKSPACE_ID_PREFIX,
   TASK_WORKSPACE_SCHEMA_VERSION,
   type WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
@@ -45,7 +46,7 @@ import type {
 
 export type LocalCheckoutEvidenceDeps = WorkspaceSelectionEvidenceDeps;
 
-const LOCAL_PREFIX = "local:";
+const LOCAL_PREFIX = LOCAL_CHECKOUT_WORKSPACE_ID_PREFIX;
 const GIT_TIMEOUT_MS = 5_000;
 const GIT_OBJECT_TIMEOUT_MS = 60_000;
 const GIT_OBJECT_BUFFER_BYTES = 128 * 1024 * 1024;
