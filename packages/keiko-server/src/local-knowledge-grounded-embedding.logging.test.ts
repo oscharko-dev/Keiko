@@ -391,17 +391,27 @@ describe("default grounded pod embedding activity", () => {
     ).toHaveLength(5);
   });
 
-  it("records caller cancellation without poisoning the shared adapter cache", async () => {
+  it("keeps caller cancellation local while a second caller completes the shared probe", async () => {
     const { deps, chatIds } = await fixture(true);
     const sink = capture();
     let started: (() => void) | undefined;
+    let release: (() => void) | undefined;
+    let physicalSignal: AbortSignal | null | undefined;
+    let dispatches = 0;
     const dispatched = new Promise<void>((resolve) => {
       started = resolve;
     });
     vi.stubGlobal("fetch", (_url: unknown, init: RequestInit | undefined): Promise<Response> => {
+      dispatches += 1;
+      const input = dispatchedInput(init);
+      if (dispatches > 1) return Promise.resolve(embeddingResponse(input));
+      physicalSignal = init?.signal;
       started?.();
-      return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener(
+      return new Promise<Response>((resolve, reject) => {
+        release = (): void => {
+          resolve(embeddingResponse(input));
+        };
+        physicalSignal?.addEventListener(
           "abort",
           () => {
             reject(new DOMException("Fixture request aborted", "AbortError"));
@@ -410,31 +420,40 @@ describe("default grounded pod embedding activity", () => {
         );
       });
     });
+    const adapter = createEmbeddingAdapter(deps);
     const pending = startAsk(deps, chatIds[0], "pod-embedding-cancelled");
     await dispatched;
     pending.response.res.emit("close");
     expect((await pending.promise).status).toBe(499);
-    await vi.waitFor(() => {
-      expect(sink.events.find((event) => event.op === "embedding.request.failed")).toMatchObject({
-        correlationId: "pod-embedding-cancelled",
-        errorKind: "cancelled",
-      });
-    });
-    expect(sink.events.find((event) => event.op === "http.gateway.fetch.failed")).toMatchObject({
-      correlationId: "pod-embedding-cancelled",
-      errorKind: "cancelled",
-    });
-    vi.stubGlobal("fetch", (_url: unknown, init: RequestInit | undefined): Promise<Response> => {
-      const input = dispatchedInput(init);
-      return Promise.resolve(embeddingResponse(input));
-    });
-    expect((await ask(deps, chatIds[1], "pod-embedding-after-cancel")).status).toBe(200);
+    // Cancelling a person's wait must not cancel the connection-owned physical preflight.
+    expect(physicalSignal).toBeDefined();
+    expect(physicalSignal?.aborted).toBe(false);
+    expect(dispatches).toBe(1);
+    const joined = ask(deps, chatIds[1], "pod-embedding-after-cancel");
+    release?.();
+    expect((await joined).status).toBe(200);
+    expect(dispatches).toBe(5);
+    expect(createEmbeddingAdapter(deps)).toBe(adapter);
+    expect(sink.events.filter((event) => event.op === "embedding.request.dispatch")).toHaveLength(
+      5,
+    );
+    expect(sink.events.filter((event) => event.op === "embedding.request.failed")).toHaveLength(0);
+    expect(sink.events.filter((event) => event.op === "http.gateway.fetch.failed")).toHaveLength(0);
     expect(
       sink.events.filter(
         (event) =>
           event.op === "embedding.request.dispatch" &&
           event.correlationId === "pod-embedding-after-cancel",
       ),
-    ).toHaveLength(5);
+    ).toHaveLength(1);
+    expect((await ask(deps, chatIds[0], "pod-embedding-warm-after-cancel")).status).toBe(200);
+    expect(dispatches).toBe(5);
+    expect(
+      sink.events.filter(
+        (event) =>
+          event.correlationId === "pod-embedding-warm-after-cancel" &&
+          event.category === "embedding",
+      ),
+    ).toHaveLength(0);
   });
 });

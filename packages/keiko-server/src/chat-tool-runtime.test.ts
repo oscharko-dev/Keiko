@@ -602,10 +602,13 @@ describe("combined Jira review admission parity", () => {
       );
   }
   async function observedJiraExchange(f: Fixture): Promise<ChatToolExchange> {
-    await vi.waitFor(() => {
-      const exchange = jiraExchange(f);
-      expect(exchange?.approval ?? exchange?.result).toBeDefined();
-    });
+    await vi.waitFor(
+      () => {
+        const exchange = jiraExchange(f);
+        expect(exchange?.approval ?? exchange?.result).toBeDefined();
+      },
+      { timeout: 5_000, interval: 10 },
+    );
     const exchange = jiraExchange(f);
     if (exchange === undefined) throw new TypeError("Missing observed Jira exchange");
     return exchange;

@@ -279,11 +279,24 @@ describe("Knowledge-only Chat authority subject", () => {
         chatId: "knowledge-chat",
         configurationDigest: "c".repeat(64),
       },
+      actionClasses: ["connector-access"],
       connectorScopes: ["knowledge.read"],
     };
   }
   it("accepts exactly the selection digest and read-only scope", () => {
-    expect(validateChatToolAuthorityEnvelope(knowledgeEnvelope()).ok).toBe(true);
+    const value = knowledgeEnvelope();
+    expect(validateChatToolAuthorityEnvelope(value)).toEqual({ ok: true, value });
+  });
+  it.each([
+    [],
+    ["network-egress"],
+    ["connector-access", "network-egress"],
+    ["connector-access", "file-edit"],
+    ["connector-access", "connector-access"],
+  ])("refuses widened or missing action classes %j", (...actionClasses) => {
+    expect(validateChatToolAuthorityEnvelope({ ...knowledgeEnvelope(), actionClasses }).ok).toBe(
+      false,
+    );
   });
   it.each(["mcp.tools", "issue-tracker.read", "issue-tracker.write", "knowledge.write"])(
     "refuses widened %s scope",

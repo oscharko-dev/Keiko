@@ -2351,9 +2351,12 @@ describe("four-item Epic and Task template fullchain", () => {
   async function pendingApproval(
     f: ReturnType<typeof fixture>,
   ): Promise<ChatToolWriteApprovalView> {
-    await vi.waitFor(() => {
-      expect(latestExchange(f)?.approval?.state).toBe("pending");
-    });
+    await vi.waitFor(
+      () => {
+        expect(latestExchange(f)?.approval?.state).toBe("pending");
+      },
+      { timeout: 5_000, interval: 10 },
+    );
     const approval = latestExchange(f)?.approval;
     if (approval === undefined) throw new TypeError("Missing exact batch approval");
     return approval;

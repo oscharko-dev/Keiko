@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { JIRA_DRAFT_PAGE_ITEMS_MAX } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_DRAFT_PAGE_ITEMS_MAX,
+  JIRA_REQUIREMENT_REFERENCE_CHARS_MAX,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { JIRA_REQUIREMENT_IDS_MAX } from "@oscharko-dev/keiko-connectors";
 import { JIRA_DRAFT_STAGE_DECLARATION } from "./jiraDraftDescriptor.js";
 
@@ -29,7 +32,7 @@ it("offers typed, bounded staged items including requirement traces and required
             requirementIds: {
               type: "array",
               maxItems: JIRA_REQUIREMENT_IDS_MAX,
-              items: { type: "string", maxLength: 80 },
+              items: { type: "string", maxLength: JIRA_REQUIREMENT_REFERENCE_CHARS_MAX },
             },
           },
         },

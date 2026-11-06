@@ -3782,6 +3782,8 @@
     "coding-tool-read-edit-ports.edit",
     "coding-tool-read-edit-ports.read",
     "coding-workbench.issue.preview",
+    "coding.jira-pod",
+    "coding.jira-pod.audit",
     "coding.runtime.discover",
     "coding.runtime.discovery",
     "command-line-tools",

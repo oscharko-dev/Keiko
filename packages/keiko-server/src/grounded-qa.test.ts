@@ -2487,7 +2487,7 @@ describe("handleGroundedAsk", () => {
         status: 400,
         body: {
           error: {
-            code: "BAD_REQUEST",
+            code: "CONVERSATION_MODEL_NOT_READY",
             message:
               "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
           },
@@ -2563,7 +2563,7 @@ describe("handleGroundedAsk", () => {
         status: 400,
         body: {
           error: {
-            code: "BAD_REQUEST",
+            code: "CONVERSATION_MODEL_NOT_READY",
             message:
               "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
           },
