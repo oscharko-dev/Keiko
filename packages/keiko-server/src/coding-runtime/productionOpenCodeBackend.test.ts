@@ -62,6 +62,7 @@ import {
   windowsFilesystemGrants,
   windowsWorkspaceCapability,
 } from "./productionOpenCodeBackend.js";
+import type { OpenCodeRipgrepResolution } from "./opencodeRipgrepLaunch.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import type {
   ProductionOpenCodeBackendInput,
@@ -85,6 +86,23 @@ import { plantDirectoryRedirect, WINDOWS_HOST } from "../../../../tests/support/
 // `runtime-gateway-policy-invalid` before anything under test runs; those cases run on POSIX hosts.
 const itWithPosixNativeRoots = it.skipIf(WINDOWS_HOST);
 
+const UNVERIFIED_RIPGREP: OpenCodeRipgrepResolution = {
+  outcome: "unverified",
+  targetKey: "win32-x64",
+  layout: "none",
+  reason: "missing",
+};
+
+function verifiedRipgrep(directory: string): OpenCodeRipgrepResolution {
+  return {
+    outcome: "verified",
+    targetKey: "win32-x64",
+    layout: "provisioned",
+    version: "15.1.0",
+    digestSource: "pinned",
+    directory,
+  };
+}
 describe("production OpenCode backend composition", () => {
   it("captures the trusted registry profile once without changing the default runtime", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-profile-capture-"));
@@ -638,7 +656,8 @@ describe("production OpenCode backend composition", () => {
         resolveWorkspaceRootAccess: (): WorkspaceRootAccess =>
           ({ kind: "managed-task" }) as unknown as WorkspaceRootAccess,
       };
-      const grants = windowsFilesystemGrants(portable, backendInput(root, portable), managed);
+      const input = { ...backendInput(root, portable), ripgrep: UNVERIFIED_RIPGREP };
+      const grants = windowsFilesystemGrants(portable, input, managed);
       const capability = windowsWorkspaceCapability(run.context.workspaceRoot);
 
       expect(capability).toMatch(/^keiko\.workspace\.[a-f0-9]{32}$/u);
@@ -650,7 +669,36 @@ describe("production OpenCode backend composition", () => {
         capability,
       });
       expect(grants.filter((grant) => grant.access === "modify")).toHaveLength(1);
-      expect(windowsFilesystemGrants(portable, backendInput(root, portable), run)).toHaveLength(2);
+      expect(windowsFilesystemGrants(portable, input, run)).toHaveLength(2);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  // #4068: the verified ripgrep directory is the only entry on the runtime's PATH. A checkout keeps
+  // it in its own `.ripgrep`, outside the runtime root, so the tree must be able to run it there;
+  // one inside the runtime root is already covered by that root's grant.
+  it("grants the tree read access to a verified ripgrep outside its runtime root", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-windows-ripgrep-grants-"));
+    try {
+      const portable = windowsDevLaneRuntime(root);
+      const run = runInput(root);
+      const runtimeRoot = join(portable.installRoot, portable.sidecar.payloadRootPath);
+      const outside = join(root, ".ripgrep", "15.1.0", "win32-x64");
+      const grants = windowsFilesystemGrants(
+        portable,
+        { ...backendInput(root, portable), ripgrep: verifiedRipgrep(outside) },
+        run,
+      );
+
+      expect(grants).toContainEqual({ path: outside, access: "read", principal: "tree" });
+      expect(
+        windowsFilesystemGrants(
+          portable,
+          { ...backendInput(root, portable), ripgrep: verifiedRipgrep(join(runtimeRoot, "rg")) },
+          run,
+        ),
+      ).toHaveLength(2);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

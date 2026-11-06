@@ -83,6 +83,7 @@ if (
     join(root, "native/runtime-supervisor/windows/gateway_request.test.c"),
     join(root, "native/runtime-supervisor/windows/gateway_identity.test.c"),
     join(root, "native/runtime-supervisor/windows/gateway_socket.test.c"),
+    join(root, "native/runtime-supervisor/windows/gateway_inbound.c"),
     join(root, "native/runtime-supervisor/windows/gateway_inbound.test.c"),
     join(root, "native/runtime-supervisor/windows/gateway_diagnostics.test.c"),
     join(root, "native/runtime-supervisor/windows/gateway_firewall.test.c"),

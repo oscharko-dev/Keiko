@@ -87,6 +87,7 @@ import {
 import { exactWorkspaceRead, type SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { createDevLaneRuntimeProcessBackend } from "./devLaneRuntimeProcessBackend.js";
 import { createNativeRuntimeProcessBackend } from "./nativeRuntimeProcessBackend.js";
+import { pathIsContained } from "./nativeRuntimeProcessPaths.js";
 import type { WindowsFilesystemGrant } from "./nativeRuntimeProcessProtocol.js";
 import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
 import type { McpCredentialRelay } from "../mcp/mcpCredentialRelay.js";
@@ -1521,17 +1522,21 @@ function gatewayFilesystem(
  */
 export function windowsFilesystemGrants(
   portable: ResolvedPortableOpenCodeRuntime,
-  input: Pick<ProductionOpenCodeBackendInput, "runtimeStateRoot">,
+  input: Pick<LaunchInput, "runtimeStateRoot" | "ripgrep">,
   run: ProductionRuntimeBackendInput,
 ): readonly WindowsFilesystemGrant[] {
+  const runtimeRoot = join(portable.installRoot, portable.sidecar.payloadRootPath);
   const grants: WindowsFilesystemGrant[] = [
-    {
-      path: join(portable.installRoot, portable.sidecar.payloadRootPath),
-      access: "read",
-      principal: "tree",
-    },
+    { path: runtimeRoot, access: "read", principal: "tree" },
     { path: nativePrivateStateRoot(input, run), access: "modify", principal: "tree" },
   ];
+  // The verified ripgrep directory is the only entry on the runtime's PATH. A checkout keeps it
+  // in its own `.ripgrep`, outside the runtime root, where the tree could not run it (#4068).
+  if (
+    input.ripgrep.outcome === "verified" &&
+    !pathIsContained(runtimeRoot, input.ripgrep.directory)
+  )
+    grants.push({ path: input.ripgrep.directory, access: "read", principal: "tree" });
   if (run.resolveWorkspaceRootAccess()?.kind === "managed-task") {
     grants.push({
       path: run.context.workspaceRoot,

@@ -1,8 +1,9 @@
 # Proposal: a runnable Coding Workbench on Windows
 
 Issue [#4068](https://github.com/oscharko-dev/Keiko/issues/4068). Status: **draft for owner
-decision**, 2026-11-06. A1 and B1 are implemented for review; C–E remain proposals. D1 is next:
-the confined runtime now starts, and the host's first request to it fails.
+decision**, 2026-11-06. A1, B1 and D1 are implemented for review; C and E remain proposals. The
+first confined Workbench run on Windows succeeded on 2026-11-06, with the run's state on the system
+volume ([record](../qa/opencode-windows-qualification.md)).
 
 ## Goal
 
@@ -106,6 +107,13 @@ reports `gateway-service-unqualified`.
   - OpenCode's existing per-run server password stays the authentication.
   - Every other inbound and outbound destination stays denied.
   - Verification item 2 settles whether the D18 exemption already lifts the receive side.
+- **As implemented (2026-11-06, ADR-0043 D18).** It differs from the plan above in three points:
+  - The port is not pinned. OpenCode chooses it inside the tree; the permit matches the package,
+    TCP, the loopback flag and `127.0.0.1`.
+  - The permit is a soft permit at the maximum weight inside Windows' application-isolation
+    sublayer, so a block in another sublayer still wins.
+  - Windows Firewall also needs a per-tree rule, and the tree needs the `privateNetworkClientServer`
+    capability. The broker removes the rule at teardown and every leftover Keiko rule at start.
 
 ## Delivery order and exit evidence
 
@@ -114,6 +122,8 @@ reports `gateway-service-unqualified`.
    first confined run starts and stops at B. The elevated transport proof has not run on Windows 11
    yet ([record](../qa/opencode-windows-qualification.md)).
 2. **D1.** The host reaches OpenCode's server in the tree, and a foreign port stays refused.
+   Implemented on 2026-11-06. The host reached the server, and the first confined run succeeded.
+   The foreign-port and transport proofs have not run on Windows 11 yet.
 3. **B1.**
    - The tree reads its worktree and writes its state.
    - Denied: another worktree, a user checkout, and the runtime root for writing.
@@ -137,6 +147,11 @@ reports `gateway-service-unqualified`.
 ## Verification items
 
 1. Under the mapped profile, does OpenCode write anything in its working directory, beyond reading
-   instructions and detecting the project?
-2. Does the D18 loopback exemption cover inbound connections to a listener in the tree?
+   instructions and detecting the project? A read-only task needed only read access (2026-11-06);
+   a write task has not run yet.
+2. Does the D18 loopback exemption cover inbound connections to a listener in the tree? No. The
+   host's connection timed out until the broker admitted it (2026-11-06).
 3. Which capabilities does OpenCode 2.2.5, a Bun executable, need under LPAC?
+4. New (2026-11-06): may a confined run's workspace and state lie on a non-system volume? Not on the
+   observed host: the runtime's `realpath` is denied there. Should Keiko refuse such a run before
+   spawn with a closed reason, or relocate its worktrees?

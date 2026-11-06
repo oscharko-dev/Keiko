@@ -34,7 +34,10 @@ enum error_code {
   ERROR_GRANTS_ACL = 8,
   ERROR_GRANTS_CAPABILITY = 9,
   /* The broker could not be reached or did not prove its SCM identity. */
-  ERROR_GATEWAY_CONNECT = 10
+  ERROR_GATEWAY_CONNECT = 10,
+  /* The broker did not acknowledge the suspended tree: its filters, exemption or inbound
+   * admission failed, or it answered too late. */
+  ERROR_GATEWAY_ADMIT = 11
 };
 
 struct launch_request {
@@ -410,17 +413,23 @@ static int admit_gateway(struct keiko_gateway_connection *gateway, HANDLE job,
 
 static int launch_in_job(const struct launch_request *request, HANDLE job,
                          PROCESS_INFORMATION *process, struct keiko_gateway_connection *gateway,
-                         struct keiko_gateway_grants *grants) {
+                         struct keiko_gateway_grants *grants, int *admission_refused) {
   STARTUPINFOEXW startup;
   SECURITY_CAPABILITIES capabilities = {0};
+  /* Retained through CreateProcessW, like the attribute list that points at it. */
+  SID_AND_ATTRIBUTES held[KEIKO_GATEWAY_GRANTS_MAX + 1] = {0};
   wchar_t *appdata = NULL;
   if (gateway) {
     capabilities.AppContainerSid = gateway->sid;
-    /* A managed worktree's capability, granted read access before this spawn (#4068). */
-    if (grants != NULL && grants->capability_count != 0) {
-      capabilities.Capabilities = grants->capabilities;
-      capabilities.CapabilityCount = grants->capability_count;
-    }
+    /* Inbound loopback for the host's control connection, then a managed worktree's capability,
+     * granted read access before this spawn (#4068). */
+    held[0].Sid = gateway->network_capability;
+    held[0].Attributes = SE_GROUP_ENABLED;
+    capabilities.CapabilityCount = 1;
+    for (DWORD i = 0; grants != NULL && i < grants->capability_count &&
+                      i < KEIKO_GATEWAY_GRANTS_MAX; i++)
+      held[capabilities.CapabilityCount++] = grants->capabilities[i];
+    capabilities.Capabilities = held;
     /* AppContainer process creation needs LOCALAPPDATA even when the caller submits a
      * hermetic environment. Resolve it for this user; never trust a packet-supplied path. */
     if (FAILED(SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, NULL, &appdata))) return 0;
@@ -443,8 +452,8 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
     created = CreateProcessW(executable, line, NULL, NULL, TRUE, flags, environment, cwd,
                              &startup.StartupInfo, process);
     if (!created && gateway) fprintf(stderr, "gateway suspended spawn failed: %lu\n", GetLastError());
-    if (created && ((gateway && !admit_gateway(gateway, job, request)) ||
-                    ResumeThread(process->hThread) == (DWORD)-1)) {
+    if (created && gateway && !admit_gateway(gateway, job, request)) *admission_refused = 1;
+    if (created && (*admission_refused || ResumeThread(process->hThread) == (DWORD)-1)) {
       TerminateJobObject(job, 127);
       created = FALSE;
     }
@@ -678,9 +687,10 @@ int wmain(int argc, wchar_t **argv) {
     send_error(ERROR_JOB_CREATE);
     goto cleanup;
   }
+  int admission_refused = 0;
   if (!launch_in_job(&request, job, &process, confined ? &gateway : NULL,
-                     confined ? &grants : NULL)) {
-    send_error(ERROR_PROCESS_CREATE);
+                     confined ? &grants : NULL, &admission_refused)) {
+    send_error(admission_refused ? ERROR_GATEWAY_ADMIT : ERROR_PROCESS_CREATE);
     goto cleanup;
   }
   if (!send_response(RESPONSE_LAUNCHED, NULL, 0)) goto cleanup;

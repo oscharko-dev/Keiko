@@ -7,6 +7,7 @@ import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import { OPENCODE_PINNED_BUILT_IN_TOOLS } from "./opencodeToolSchemas.js";
 import { parseOpenCodeHistory } from "./opencodeProtocol.js";
+import { OpenCodeV2HttpStatusError } from "./opencodeV2HttpClient.js";
 import { opencodeRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
 import {
   DEFAULT_SANDBOX_POLICY,
@@ -770,6 +771,60 @@ describe("OpenCode runtime adapter readiness", () => {
       correlationId: "run-handshake-1",
       phase: "sse-history-reconciliation",
     });
+  });
+
+  // #4068: a confined Windows runtime announced its server, then the first request to it failed
+  // with no Keiko-code frame and a bare `Error` cause, which named neither a refusal nor a timeout.
+  it.each([
+    [
+      "a refused socket",
+      Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error(`connect ECONNREFUSED ${SECRET}`), {
+          code: "ECONNREFUSED",
+        }),
+      }),
+      { errorClass: "TypeError", transportCode: "ECONNREFUSED" },
+    ],
+    [
+      "a socket code outside the closed set",
+      Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error(SECRET), { code: "EWHATEVER" }),
+      }),
+      { errorClass: "TypeError", transportCode: "other" },
+    ],
+    [
+      "an HTTP refusal",
+      new OpenCodeV2HttpStatusError(503),
+      { errorClass: "OpenCodeV2HttpStatusError", httpStatus: 503 },
+    ],
+  ])("records the error class, socket code and status of %s", async (_name, thrown, facts) => {
+    const harness = readinessPorts();
+    const events: ServerLogEvent[] = [];
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      readiness: {
+        ...harness.ports.readiness,
+        health: (): Promise<never> => Promise.reject(thrown),
+      },
+      correlationId: "run-4068-health",
+      activityLog: {
+        write: (entry): void => {
+          events.push(entry);
+        },
+      },
+    });
+    await expect(adapter.start()).resolves.toMatchObject({
+      ok: false,
+      phase: "authenticated-health",
+    });
+    const failure = events.find((event) => event.op === "coding-runtime.readiness.failed");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.readiness.failed.emitted-line",
+        formatActivityLogProofLine(failure ?? {}),
+      ),
+    ).toMatchObject({ correlationId: "run-4068-health", phase: "authenticated-health", ...facts });
+    expect(JSON.stringify(events)).not.toContain(SECRET);
   });
 
   // #3873: this wait bounds one submitted task's WHOLE agent loop (every model turn until the

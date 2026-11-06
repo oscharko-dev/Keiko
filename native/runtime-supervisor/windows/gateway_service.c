@@ -1,5 +1,7 @@
 /* LocalSystem broker. The SCM image and supervisor are the same protected installed file. */
 #include "gateway_service.h"
+#include "gateway_firewall.h"
+#include "gateway_inbound.h"
 #include "gateway_install.h"
 #include "gateway_loopback.h"
 #include "gateway_peer.h"
@@ -11,6 +13,9 @@
 
 #define PIPE_NAME L"\\\\.\\pipe\\KeikoRuntimeGateway-v1"
 #define IO_TIMEOUT_MS 5000
+/* The broker acknowledges only after it installed the tree's filters, exemption and inbound rule;
+ * the rule runs the system PowerShell, bounded at 60 s in gateway_firewall.c (#4068). */
+#define ACK_TIMEOUT_MS 90000
 #define CHALLENGE_SIZE KEIKO_GATEWAY_CHALLENGE_BYTES
 
 static HANDLE stopping;
@@ -18,7 +23,8 @@ static SERVICE_STATUS_HANDLE registration;
 
 /* Message pipes keep the hello, challenge, open and acknowledgement distinct. A short or
  * oversized message, a stop, or a timeout is fatal. Drain cancelled I/O before releasing o. */
-static BOOL transfer(HANDLE pipe, void *data, DWORD size, BOOL write, HANDLE stop) {
+static BOOL transfer_within(HANDLE pipe, void *data, DWORD size, BOOL write, HANDLE stop,
+                            DWORD timeout) {
   OVERLAPPED o = {0};
   HANDLE waits[2];
   DWORD count = 0;
@@ -29,13 +35,17 @@ static BOOL transfer(HANDLE pipe, void *data, DWORD size, BOOL write, HANDLE sto
   waits[1] = stop;
   ok = write ? WriteFile(pipe, data, size, NULL, &o) : ReadFile(pipe, data, size, NULL, &o);
   if (!ok && GetLastError() == ERROR_IO_PENDING) {
-    ok = WaitForMultipleObjects(stop ? 2 : 1, waits, FALSE, IO_TIMEOUT_MS) == WAIT_OBJECT_0;
+    ok = WaitForMultipleObjects(stop ? 2 : 1, waits, FALSE, timeout) == WAIT_OBJECT_0;
     if (!ok) (void)CancelIoEx(pipe, &o);
     BOOL completed = GetOverlappedResult(pipe, &o, &count, TRUE);
     ok = ok && completed;
   } else if (ok) ok = GetOverlappedResult(pipe, &o, &count, FALSE);
   CloseHandle(o.hEvent);
   return ok && count == size;
+}
+
+static BOOL transfer(HANDLE pipe, void *data, DWORD size, BOOL write, HANDLE stop) {
+  return transfer_within(pipe, data, size, write, stop, IO_TIMEOUT_MS);
 }
 
 static void tree_name(const BYTE *nonce, wchar_t name[48]) {
@@ -97,8 +107,20 @@ int keiko_gateway_connect(struct keiko_gateway_connection *c) {
     fputs("gateway peer challenge unavailable\n", stderr); return 0;
   }
   tree_name(c->nonce, c->profile);
+  /* #4068: the host reaches the runtime's own server through inbound loopback, which Windows
+   * admits into an AppContainer only with this capability. Keiko's per-tree outbound filters still
+   * deny every destination but the gateway; the broker admits inbound on loopback only. */
+  DWORD size = sizeof(c->network_capability);
+  SID_AND_ATTRIBUTES network = {0};
+  if (!CreateWellKnownSid(WinCapabilityPrivateNetworkClientServerSid, NULL, c->network_capability,
+                          &size)) {
+    fprintf(stderr, "gateway network capability unavailable: %lu\n", GetLastError());
+    return 0;
+  }
+  network.Sid = c->network_capability;
+  network.Attributes = SE_GROUP_ENABLED;
   HRESULT result = CreateAppContainerProfile(c->profile, c->profile, L"Keiko supervised runtime",
-                                            NULL, 0, &c->sid);
+                                            &network, 1, &c->sid);
   if (FAILED(result)) {
     fprintf(stderr, "gateway profile creation failed: %08lx\n", (unsigned long)result);
     return 0;
@@ -113,7 +135,8 @@ int keiko_gateway_confirm(struct keiko_gateway_connection *c, HANDLE job, BYTE *
   memcpy(frame + 12, c->nonce, CHALLENGE_SIZE);
   memcpy(frame + 76, &value, sizeof(value));
   return transfer(c->pipe, frame, KEIKO_GATEWAY_OPEN_BYTES, TRUE, NULL) &&
-      transfer(c->pipe, acknowledgement, sizeof(acknowledgement), FALSE, NULL) &&
+      transfer_within(c->pipe, acknowledgement, sizeof(acknowledgement), FALSE, NULL,
+                      ACK_TIMEOUT_MS) &&
       !memcmp(acknowledgement, "KGA1", 4) &&
       !memcmp(acknowledgement + 4, c->nonce, CHALLENGE_SIZE) &&
       scm_peer(c->pipe, &pid) && pid == c->server_pid;
@@ -151,6 +174,41 @@ static BOOL tree_matches(HANDLE job, PSID expected_sid) {
   return ok;
 }
 
+/* The tree root's own image: the one program the inbound firewall rule admits. */
+static BOOL tree_program(HANDLE job, wchar_t *path, DWORD capacity) {
+  JOBOBJECT_BASIC_PROCESS_ID_LIST ids = {0};
+  HANDLE process = NULL;
+  BOOL ok = FALSE;
+  if (!QueryInformationJobObject(job, JobObjectBasicProcessIdList, &ids, sizeof(ids), NULL) ||
+      ids.NumberOfProcessIdsInList != 1) return FALSE;
+  process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)ids.ProcessIdList[0]);
+  if (process) ok = QueryFullProcessImageNameW(process, 0, path, &capacity);
+  if (process) CloseHandle(process);
+  return ok;
+}
+
+/* The authenticated client's user owns the tree, so it owns the tree's inbound rule. */
+static BOOL peer_user(const struct keiko_gateway_peer *peer, BYTE *buffer, DWORD size) {
+  DWORD bytes;
+  return GetTokenInformation(peer->token, TokenUser, buffer, size, &bytes);
+}
+
+/* #4068: lifts the two OS blocks on the host's inbound loopback connection into this tree, its
+ * application isolation and Windows Firewall, for this tree's package and program only. */
+static BOOL admit_inbound(const struct keiko_gateway_peer *peer, HANDLE job, PSID sid,
+                          HANDLE engine, struct keiko_gateway_firewall_rule *rule) {
+  BYTE user[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+  GUID key;
+  wchar_t *program = calloc(32768, sizeof(wchar_t));
+  BOOL ok = program != NULL && tree_program(job, program, 32768) &&
+            peer_user(peer, user, sizeof(user)) &&
+            keiko_gateway_inbound_admit(engine, sid, AF_INET, &key) == ERROR_SUCCESS &&
+            keiko_gateway_firewall_admit(sid, ((TOKEN_USER *)user)->User.Sid, program, rule) ==
+                ERROR_SUCCESS;
+  free(program);
+  return ok;
+}
+
 static DWORD serve(HANDLE pipe, HANDLE image) {
   BYTE hello[4], frame[KEIKO_GATEWAY_OPEN_BYTES], nonce[CHALLENGE_SIZE];
   BYTE ack[4 + CHALLENGE_SIZE] = {'K','G','A','1'};
@@ -158,6 +216,7 @@ static DWORD serve(HANDLE pipe, HANDLE image) {
   struct keiko_gateway_challenge challenge = {0};
   struct keiko_gateway_request request = {0};
   struct keiko_gateway_filters filters = {0};
+  struct keiko_gateway_firewall_rule rule = {0};
   HANDLE source = NULL, job = NULL;
   PSID sid = NULL;
   wchar_t name[48];
@@ -186,6 +245,8 @@ static DWORD serve(HANDLE pipe, HANDLE image) {
    * acknowledgement below is what lets the caller resume it, so no packet precedes this. */
   if (keiko_gateway_loopback_exempt(sid) != ERROR_SUCCESS) goto done;
   exempted = TRUE;
+  /* The host's control connection into the tree, still before the child can resume. */
+  if (!admit_inbound(&peer, job, sid, filters.engine, &rule)) goto done;
   if (!transfer(pipe, ack, sizeof(ack), TRUE, stopping)) goto done;
   for (;;) {
     JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
@@ -200,6 +261,7 @@ done:
     /* Revoking only narrows access, so it precedes closing the filters and does not wait for
      * verified termination; a failed revoke leaves an entry for a per-tree SID that the durable
      * deny guard still blocks and that no later process can obtain. */
+    (void)keiko_gateway_firewall_revoke(&rule);
     if (exempted) (void)keiko_gateway_loopback_revoke(sid);
     /* Retain durable denies if termination cannot be verified within the shutdown budget. */
     for (unsigned i = 0; i < 100; i++) {
@@ -292,6 +354,9 @@ static void WINAPI service_main(DWORD argc, LPWSTR *argv) {
   if (pipe == INVALID_HANDLE_VALUE) { error = GetLastError(); goto done; }
   prune_stale_exemptions();
   report(SERVICE_RUNNING, ERROR_SUCCESS);
+  /* A broker that did not survive its run left that tree's inbound rule behind. No tree is served
+   * yet, so every Keiko tree rule is stale; a failure leaves rules for SIDs no process can obtain. */
+  (void)keiko_gateway_firewall_prune();
   while (WaitForSingleObject(stopping, 0) == WAIT_TIMEOUT && accept_client(pipe)) {
     error = serve(pipe, image);
     DisconnectNamedPipe(pipe);

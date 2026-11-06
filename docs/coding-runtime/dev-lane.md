@@ -34,6 +34,13 @@ activation, not a platform qualification:
   rebuilds the supervisor, run `repair --dev-lane`. Remove the broker with `uninstall --dev-lane`.
   No unconfined fallback exists, and a checkout run never counts as platform qualification.
 
+  The confined tree reads only what it is granted (ADR-0043 D18):
+  - **Work location.** Choose a new local worktree. A run on your own checkout (Lokal) has no
+    workspace grant and fails inside the runtime.
+  - **Volume.** The runtime cannot resolve a path on a non-system volume. If the checkout is on
+    another volume than Windows, start the dev UI with its state on the system volume, for example
+    `KEIKO_STATE_DIR=C:\Users\<you>\.keiko-dev`. The task worktrees and run state then live there.
+
 - **Forgone: platform signature chains.** The OpenCode payload is verified byte-for-byte against
   the review-approved redistribution catalog (`portable-runtime-approvals.json`), and the
   secure-read helper is digest-pinned at build time and re-verified on every read — but no

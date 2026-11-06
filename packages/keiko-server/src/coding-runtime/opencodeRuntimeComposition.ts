@@ -111,6 +111,7 @@ import type { OpenCodeQuestionRequest } from "./opencodeHttpClient.js";
 import {
   classifyOpenCodeV2PromptFailure,
   createOpenCodeV2HttpClient,
+  OpenCodeV2HttpStatusError,
   parseOpenCodeV2ChildEndpoint,
   type OpenCodeV2HttpClient,
   type OpenCodeV2MessageWindow,
@@ -289,6 +290,7 @@ import {
   openCodeCatalogSettlementBudgetMs,
 } from "../tool-catalog/catalogToolFacadeBridge.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -3373,8 +3375,8 @@ async function runGatewayChallenge(
         accepted || signal.aborted ? "live-verification-failed" : "gateway-refused",
       );
     return verified;
-  } catch {
-    recordGatewayChallengeFailure(input.diagnostics, run.runId, "live-verification-failed");
+  } catch (error) {
+    recordGatewayChallengeFailure(input.diagnostics, run.runId, "live-verification-failed", error);
     return false;
   } finally {
     input.gatewayReadiness.clear(run.runId, verified);
@@ -3399,10 +3401,13 @@ function gatewayChallengePrecondition(
   return input.capabilities.modelGatewayCapability.length < 32 ? "capability-invalid" : undefined;
 }
 
+// #4068: a challenge that threw keeps its frames, cause classes and the runtime's HTTP status, so a
+// refused prompt reads apart from a broken route; the error's own text is never recorded.
 function recordGatewayChallengeFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
   reason: GatewayChallengePreconditionFailure,
+  error?: unknown,
 ): void {
   emitServerDiagnostic(diagnostics, {
     correlationId: runId,
@@ -3412,6 +3417,10 @@ function recordGatewayChallengeFailure(
     errorClass: "OpenCodeGatewayChallengeFailure",
     message: "runtime-handshake-failed",
     code: `stage=gateway-challenge:reason=${reason}`,
+    ...(error === undefined
+      ? {}
+      : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+    ...(error instanceof OpenCodeV2HttpStatusError ? { httpStatus: error.status } : {}),
   });
 }
 

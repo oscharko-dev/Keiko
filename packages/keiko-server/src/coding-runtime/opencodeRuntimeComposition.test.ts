@@ -775,6 +775,8 @@ interface StartBridgeControl {
   readonly mode?: "governed-assist" | "supervised-coding" | "autonomous-delivery";
   /** The gateway route refused the readiness challenge's model request (#3603). */
   readonly gatewayRefused?: boolean;
+  /** The runtime answers the readiness challenge's prompt with this HTTP status (#4068). */
+  readonly readinessPromptStatus?: number;
   /** Native session continuity (S02/S03, #3904): the shared service and what the runtime holds. */
   readonly continuity?: FixtureContinuity;
   readonly runControl?: {
@@ -1444,6 +1446,8 @@ async function startBridgeFixture(
     if (path.endsWith("/prompt")) {
       control?.sessionLocation?.stages?.push("prompt");
       if (typeof init?.body === "string" && init.body.includes("runtime readiness handshake")) {
+        if (control?.readinessPromptStatus !== undefined)
+          return Promise.resolve(new Response(null, { status: control.readinessPromptStatus }));
         readinessChallengePhase = "prompt-pending";
       } else if (typeof init?.body === "string" && control?.runControl !== undefined) {
         return storedTurnPrompt(control.runControl, path, init.body);
@@ -5626,6 +5630,33 @@ describe("private OpenCode tool bridge", () => {
       ).toMatchObject({
         diagnosticOperation: "coding-runtime.handshake",
         code: "stage=gateway-challenge:reason=gateway-refused",
+      });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // #4068: on Windows a confined run's challenge prompt failed within milliseconds, and the log held
+  // only the closed reason. The runtime's HTTP status and the error's frames now travel with it.
+  it("records the runtime's HTTP status when its challenge prompt is refused", async () => {
+    const diagnostics = persistedDiagnostics();
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        readinessPromptStatus: 500,
+        startTimeoutMs: 60_000,
+        expectedStart: { ok: false, failureCode: "gateway-challenge-failed", retryable: false },
+      },
+    );
+    try {
+      expect(
+        expectPersistedDiagnostic(diagnostics.read(), "opencode.gateway-challenge"),
+      ).toMatchObject({
+        diagnosticOperation: "coding-runtime.handshake",
+        code: "stage=gateway-challenge:reason=live-verification-failed",
+        httpStatus: 500,
       });
     } finally {
       await fixture.stop();

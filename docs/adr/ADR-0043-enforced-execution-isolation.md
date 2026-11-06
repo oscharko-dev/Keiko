@@ -46,8 +46,8 @@ without recording a command, argument, path or output (2026-10-06).
 elevate (2026-11-02); and D20: governed repository verification on Windows stays container-backed
 (2026-11-03).
 
-1.9 — #4068 amends D18 with the confined Windows tree's filesystem grants, and D19 with the broker
-lookups a standard user can make (2026-11-06).
+1.9 — #4068 amends D18 with the confined Windows tree's filesystem grants and the host's inbound
+control connection into it, and D19 with the broker lookups a standard user can make (2026-11-06).
 
 ## Context
 
@@ -832,9 +832,12 @@ one closed `KGG1` frame, after the launch packet and before the broker open
 (`native/runtime-supervisor/windows/gateway_grants.c`):
 
 - **What.** The per-tree SID gets read on the runtime root and modify on the run's private state
-  directory. A managed task worktree gets read through the capability `keiko.workspace.<32 hex>`,
-  derived from the worktree's canonical path. The mapped tool profile changes files through Keiko's
-  facade, so the confined runtime never writes the worktree itself. No other path is granted.
+  directory. It also gets read on the verified ripgrep directory when that directory lies outside
+  the runtime root, as a checkout's `.ripgrep` does: that directory is the only entry on the
+  runtime's `PATH`. A managed task worktree gets read through the capability
+  `keiko.workspace.<32 hex>`, derived from the worktree's canonical path. The mapped tool profile
+  changes files through Keiko's facade, so the confined runtime never writes the worktree itself.
+  No other path is granted.
 - **When.** The supervisor applies the grants once the broker has named the SID, before it creates
   the runtime. If any grant fails, it revokes those already applied and refuses the run.
 - **Lifetime.** Tree grants are revoked when the tree is reaped. A crash can leave such an entry, but
@@ -846,10 +849,44 @@ one closed `KGG1` frame, after the launch packet and before the broker open
   capability, an unknown capability name, a missing directory and a reparse point are refused. The
   supervisor's refusal names the closed step that failed (`supervisor-grants-frame`,
   `supervisor-grants-directory`, `supervisor-grants-acl`, `supervisor-grants-capability`,
-  `supervisor-gateway-connect`), and the runtime's exit diagnostic records it.
+  `supervisor-gateway-connect`, `supervisor-gateway-admit`), and the runtime's exit diagnostic
+  records it.
 - **Evidence.** `runtime.confinement.spawned` records `backend: windows-wfp`,
   `childExecutablePolicy: appcontainer-inherited`, the number of tree grants and whether a worktree
   capability applied. It never records a path or a capability name.
+- **Volumes.** On 2026-11-06 a granted worktree on a non-system volume (`D:`) could be opened from
+  the tree, but `GetFinalPathNameByHandleW` with `VOLUME_NAME_DOS` was denied, so OpenCode's
+  `realpath` of its workspace failed. The same probe on the system volume succeeded. A release keeps
+  its task worktrees and runtime state under the user profile, on the system volume. A checkout on
+  another volume sets `KEIKO_STATE_DIR` to a directory on the system volume. A user's own checkout
+  is not granted at all.
+
+Inbound control (amended 2026-11-06, #4068, pending owner approval in review). The host drives
+OpenCode through the server the runtime opens on `127.0.0.1` inside the tree. Windows drops that
+inbound loopback connection twice, silently: its application isolation blocks loopback into any
+AppContainer, and Windows Firewall blocks inbound to a package without a rule. The D18 exemption
+lifts only the outbound direction. The broker now admits exactly this connection after the
+exemption and before its acknowledgement:
+
+- **Capability.** The tree's profile and token carry `privateNetworkClientServer`, which Windows
+  requires before an AppContainer may accept a connection. Keiko's per-tree connect filters still
+  deny every destination but the attested gateway, so the capability widens no egress.
+- **Isolation.** A soft permit at the explicit maximum weight inside the application-isolation
+  sublayer, at `ALE_AUTH_RECV_ACCEPT_V4`, matches only this package, TCP, the loopback flag and the
+  local address `127.0.0.1` (`gateway_inbound.c`). It stays soft, so a block in any other sublayer
+  still wins. It lives in the broker's dynamic session and goes when that session closes.
+- **Firewall.** A Windows Firewall rule admits inbound TCP from `127.0.0.1` to `127.0.0.1` for this
+  package, its owner and the tree root's own program (`gateway_firewall.c`). NetSecurity is the
+  documented interface that accepts a package principal, so the broker runs the system PowerShell
+  with a fixed script, values passed only through the environment, output discarded and a 60 s
+  bound. The rule is removed at teardown, and the broker removes every leftover Keiko tree rule at
+  start.
+- **Order and refusal.** The acknowledgement waits for both, up to 90 s. A failure refuses the run
+  as `supervisor-gateway-admit`.
+
+These are the same three admissions that passed the disposable-runner composition on 2026-10-29.
+The port is not pinned: OpenCode chooses it inside the tree, and the per-run server password stays
+its authentication.
 
 D13 still holds: no D1–D10 denial is relaxed, and no endpoint beyond D11's attested gateway becomes
 reachable. The installed Windows transport proof (`test-windows-gateway-scm.ps1 -VerifyTransport`)

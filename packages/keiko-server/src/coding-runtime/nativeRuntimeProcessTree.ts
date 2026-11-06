@@ -35,6 +35,7 @@ const SUPERVISOR_REFUSALS: Readonly<Record<number, string>> = {
   8: "supervisor-grants-acl",
   9: "supervisor-grants-capability",
   10: "supervisor-gateway-connect",
+  11: "supervisor-gateway-admit",
 };
 
 export class NativeRuntimeTree implements RuntimeProcessTree {

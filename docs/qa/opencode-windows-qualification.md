@@ -1353,7 +1353,8 @@ Result:
 - **Stop.** The host's `authenticated-health` request failed after about 320 ms
   (`OpenCodeHandshakeFailure`), and the start settled as `protocol-schema-mismatch`.
 - **Cause (likely, not yet proven).** OpenCode listens inside the AppContainer, and nothing admits
-  the host's inbound connection. That is step D of the proposal and its verification item 2.
+  the host's inbound connection. That is step D of the proposal and its verification item 2. The
+  next section confirms it.
 
 That run predates the new `runtime.confinement.spawned` line for Windows. Launches of this build
 record `backend: windows-wfp`, the number of tree grants and whether a worktree capability applied,
@@ -1371,6 +1372,66 @@ Limits:
 - `gateway_grants.test.c` covers the frame, apply and revoke on temporary directories, a capability
   that persists without duplicating, and a missing directory. It runs in
   `check-windows-native-quality.ps1`.
+
+## The host reaches the confined runtime, and the first confined Workbench run succeeds (W1/W11, 2026-11-06)
+
+Step D of the [proposal](../coding-runtime/windows-runnable-workbench-proposal.md) is implemented
+for review, and ADR-0043 D18 records it. Same host and user. The human ran
+`keiko gateway-service repair --dev-lane` once, through UAC, for the new broker.
+
+Every step below was located from the Activity Log. Two missing pieces of evidence were added
+first, under Rule 2 of `AGENTS.md`:
+
+- `coding-runtime.readiness.failed` now records the closed `errorClass`, `transportCode` and
+  `httpStatus` of a thrown readiness request.
+- The `opencode.gateway-challenge` diagnostic now records the frames, cause classes and the runtime's
+  HTTP status of a challenge that threw.
+
+| Step                                 | What the log showed                                                                                                                              | Repair                                                                                                                                                                                                                  |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Inbound control into the tree        | `authenticated-health` failed with `errorClass: TypeError`, `transportCode: ETIMEDOUT` after about 300 ms. That is a silent drop, not a refusal. | The broker admits the host's loopback connection: the `privateNetworkClientServer` capability, a soft maximum-weight permit in the application-isolation sublayer, and a per-tree Windows Firewall rule (ADR-0043 D18). |
+| The runtime's search tool            | The verified `rg` of a checkout lies in its `.ripgrep`, outside the granted runtime root, and is the only entry on the runtime's `PATH`.         | The tree gets read on that directory too, revoked at reap.                                                                                                                                                              |
+| The workspace on a non-system volume | After the inbound fix every readiness phase up to `gateway-challenge` passed. The challenge prompt then got HTTP 500 from the runtime.           | None in code (see Volumes in ADR-0043 D18). Moving the dev UI's state to the system volume with `KEIKO_STATE_DIR` let the run pass.                                                                                     |
+
+The last row was the hardest to locate, because the runtime answered with an empty body. A local
+diagnosis, never committed, made the runtime print its own log for one run. The cause was
+`FileSystem.DirectoryAccessDeniedError`, caused by `EPERM` from `realpath` on the worktree.
+A minimal AppContainer probe then isolated the step:
+
+- With a capability ACE on the directory, the probe could open it and read its attributes on both
+  volumes.
+- `GetFinalPathNameByHandleW` with `VOLUME_NAME_DOS` was denied (`5`) on `D:`, even with
+  `FILE_NAME_OPENED`.
+- The same call succeeded on `C:`, including a nested directory under the user profile, the shape a
+  release uses.
+
+Result, with the dev UI's state on `C:`:
+
+- **Run.** A read-only task ("explain greet.js") in the scratch repository, in Ask for approval mode,
+  in a new managed worktree.
+- **Readiness.** Every phase passed, including `gateway-challenge` and `tool-facade-challenge`.
+- **Turns.** Three model turns went through the Keiko gateway. Two tool calls went through Keiko's
+  facade, among them a completed workspace discovery.
+- **Answer.** The answer was correct, and the run settled `succeeded` after 9 s.
+- **Logged facts.** `runtime.confinement.spawned` recorded `windowsTreeGrantCount: 3` and
+  `windowsWorktreeAccess: capability-read`.
+
+This is the first Coding Workbench run on Windows that went through the confined, brokered path from
+start to finish.
+
+Limits:
+
+- **Model.** The model was the one the dev UI was configured with, not an owner-approved model
+  (item E of the proposal). Its evidence stays `functional-not-platform-qualified`.
+- **Coverage.** No write task, approval, delivery or other mode was exercised.
+- **User checkout.** A run on the user's own checkout (Lokal) gets no workspace grant. It still
+  starts and then fails inside the runtime; it should be refused before spawn with a closed reason.
+- **Volumes.** The volume finding comes from one host and one non-system volume. A refusal that names
+  it before spawn is not implemented.
+- **Proofs not run.** Neither the transport proof nor the step B denial probes ran on this host.
+- **Native tests.** The native readback rules for the inbound permit run in the disposable-runner
+  filter suite, now against the production `gateway_inbound.c`. The broker's firewall step has no
+  hosted run yet.
 
 ## Update impact
 

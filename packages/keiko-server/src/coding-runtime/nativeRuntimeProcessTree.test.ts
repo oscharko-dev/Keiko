@@ -230,3 +230,36 @@ describe("NativeRuntimeTree packet reassembly", () => {
     expect(exits).toEqual([null]);
   });
 });
+
+// #4068: the supervisor names the step that refused a confined tree. The host recorded every such
+// refusal as exit code `signal`, so a broker or grant failure on Windows left no reason in the log.
+describe("NativeRuntimeTree supervisor refusals", () => {
+  function refusalPacket(code: number): Buffer {
+    const header = Buffer.alloc(RESPONSE_HEADER_BYTES);
+    header.write("KRS1", 0, "ascii");
+    header.writeUInt16LE(1, 4);
+    header.writeUInt16LE(3, 6);
+    header.writeUInt32LE(2, 8);
+    const body = Buffer.alloc(2);
+    body.writeUInt16LE(code, 0);
+    return Buffer.concat([header, body]);
+  }
+
+  it.each([
+    [1, "supervisor-protocol"],
+    [3, "supervisor-process-create"],
+    [7, "supervisor-grants-directory"],
+    [10, "supervisor-gateway-connect"],
+    [11, "supervisor-gateway-admit"],
+    [99, "supervisor-unknown"],
+  ])("names refusal code %i as %s and ends the tree", (code, reason) => {
+    const h = harness();
+    const exits: (number | null)[] = [];
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    tree.onTreeExit((exit) => exits.push(exit));
+    expect(tree.failureReason()).toBeUndefined();
+    h.controlOutput.emit("data", refusalPacket(code));
+    expect(tree.failureReason()).toBe(reason);
+    expect(exits).toEqual([null]);
+  });
+});
