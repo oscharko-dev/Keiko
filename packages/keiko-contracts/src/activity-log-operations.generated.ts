@@ -23578,7 +23578,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     op: "gateway.tool-catalog.rejected",
     category: "gateway",
     owner: "keiko-model-gateway",
-    emitter: "toolCatalogBridge.reject",
+    emitter: "toolCatalogBridge.recordAndReject",
     fields: {
       completeness: {
         type: "string",
@@ -30977,6 +30977,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      acceptanceCriteriaMissingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       labelsAppliedCount: {
         type: "integer",
