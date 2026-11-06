@@ -1617,6 +1617,7 @@
     "keiko-server/gitChangeSnapshotReader",
     "keiko-server/gitChangeSnapshotRegistry",
     "keiko-server/gitChangeSnapshotService",
+    "keiko-server/gitDelivery/_support",
     "keiko-server/gitDelivery/actionSheetProjection",
     "keiko-server/gitDelivery/actionSheetRoutes",
     "keiko-server/gitDelivery/agentOperationsRoutes",

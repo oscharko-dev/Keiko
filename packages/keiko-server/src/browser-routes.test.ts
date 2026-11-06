@@ -1,3 +1,7 @@
+import {
+  createSseResponseObservation,
+  defineSessionSseBackpressureContract,
+} from "../../../tests/support/sse-subscription-observations.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // ADR-0017 D8 — /api/browser/* route integration tests. A FakeBrowserSessionManager replaces
@@ -14,10 +18,9 @@ import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
-import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
 import { handleBrowserEvents, openBrowserSseStream } from "./browser.js";
-import { SSE_STALLED_READER_TIMEOUT_MS, type SseBackpressureSignal } from "./sse-write.js";
+import { SSE_STALLED_READER_TIMEOUT_MS } from "./sse-write.js";
 import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
@@ -686,62 +689,7 @@ interface FakeSseRes {
 }
 
 function makeFakeSseRes(): FakeSseRes {
-  const writes: string[] = [];
-  const emitter = new EventEmitter();
-  const state: FakeSseRes = {
-    res: undefined as unknown as ServerResponse,
-    writes,
-    destroyCount: 0,
-    destroyed: false,
-    ended: false,
-    writeReturns: true,
-    emitClose: (): void => {
-      emitter.emit("close");
-    },
-    emitDrain: (): void => {
-      emitter.emit("drain");
-    },
-  };
-  const res = {
-    get destroyed(): boolean {
-      return state.destroyed;
-    },
-    get writableEnded(): boolean {
-      return state.ended;
-    },
-    writeHead(): ServerResponse {
-      return res as unknown as ServerResponse;
-    },
-    write(chunk: string): boolean {
-      writes.push(chunk);
-      return state.writeReturns;
-    },
-    end(): ServerResponse {
-      state.ended = true;
-      return res as unknown as ServerResponse;
-    },
-    // Like a real response: destroying marks it destroyed and fires `close`, which is what the
-    // route's own close handler unsubscribes on.
-    destroy(): void {
-      state.destroyCount += 1;
-      state.destroyed = true;
-      emitter.emit("close");
-    },
-    on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.on(event, listener);
-      return res as unknown as ServerResponse;
-    },
-    once(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.once(event, listener);
-      return res as unknown as ServerResponse;
-    },
-    off(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.off(event, listener);
-      return res as unknown as ServerResponse;
-    },
-  };
-  state.res = res as unknown as ServerResponse;
-  return state;
+  return createSseResponseObservation();
 }
 
 function browserEvent(sessionId: string, kind: string, seq: number): BrowserEventEnvelope {
@@ -759,137 +707,20 @@ function browserEvent(sessionId: string, kind: string, seq: number): BrowserEven
 }
 
 describe("openBrowserSseStream backpressure (KEIKO-0142)", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("aborts, unsubscribes, destroys once, and signals when the reader stalls after res.write returns false", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeBrowserSessionManager();
-    const signals: SseBackpressureSignal[] = [];
-    fake.writeReturns = false;
-    openBrowserSseStream(
-      fake.res,
-      manager,
-      "session-bp",
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-
-    // A false write is flow control: the stream stays open and keeps queueing frames.
-    manager.emit("session-bp", browserEvent("session-bp", "navigated", 1));
-    expect(fake.writes).toHaveLength(2);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-    expect(signals[0]?.accepted).toBe(false);
-    expect(signals[0]?.frameBytes).toBeGreaterThan(0);
-
-    const writesAfterKill = fake.writes.length;
-    manager.emit("session-bp", browserEvent("session-bp", "navigated", 2));
-    expect(fake.writes).toHaveLength(writesAfterKill);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-
-    expect(() => {
-      fake.emitClose();
-    }).not.toThrow();
-  });
-
-  it("protects the ready frame itself, not just later events (KEIKO-0142)", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeBrowserSessionManager();
-    const signals: SseBackpressureSignal[] = [];
-    fake.writeReturns = false;
-    openBrowserSseStream(
-      fake.res,
-      manager,
-      "session-ready",
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-    expect(fake.writes.length).toBeGreaterThan(0);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-  });
-
-  it("kills a stalled reader on an event frame when the ready frame was accepted (KEIKO-0142)", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeBrowserSessionManager();
-    const signals: SseBackpressureSignal[] = [];
-    openBrowserSseStream(
-      fake.res,
-      manager,
-      "session-late",
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-    expect(fake.destroyCount).toBe(0);
-
-    fake.writeReturns = false;
-    manager.emit("session-late", browserEvent("session-late", "navigated", 1));
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-
-    vi.advanceTimersByTime(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-  });
-
-  it("keeps the stream open and subscribed when a false write is followed by drain", () => {
-    vi.useFakeTimers();
-    const fake = makeFakeSseRes();
-    const manager = new FakeBrowserSessionManager();
-    const signals: SseBackpressureSignal[] = [];
-    fake.writeReturns = false;
-    openBrowserSseStream(
-      fake.res,
-      manager,
-      "session-drain",
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-
-    fake.emitDrain();
-    fake.writeReturns = true;
-    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
-
-    expect(fake.destroyCount).toBe(0);
-    expect(signals).toHaveLength(0);
-    const writesBefore = fake.writes.length;
-    manager.emit("session-drain", browserEvent("session-drain", "navigated", 1));
-    expect(fake.writes).toHaveLength(writesBefore + 1);
-    expect(fake.destroyCount).toBe(0);
+  defineSessionSseBackpressureContract({
+    response: makeFakeSseRes,
+    scenario: (name) => {
+      const manager = new FakeBrowserSessionManager();
+      const sessionId = `session-${name}`;
+      return {
+        open: (res, onBackpressure): void => {
+          openBrowserSseStream(res, manager, sessionId, (value) => value, onBackpressure);
+        },
+        emit: (sequence): void => {
+          manager.emit(sessionId, browserEvent(sessionId, "navigated", sequence));
+        },
+      };
+    },
   });
 
   it("keeps the session-closed early-return intact while wired to the controller", () => {
@@ -1008,5 +839,117 @@ describe("handleBrowserEvents backpressure correlation (ADR-0173 D5 / g12)", () 
     expect(records).toHaveLength(1);
     expect(records[0]?.source).toBe("sse.browser.backpressure");
     expect(records[0]?.correlationId).toBe("req-browser-thread-01");
+  });
+});
+
+describe("openBrowserSseStream session subscription ownership", () => {
+  it("handles session closure reentrantly from ready before end can emit another event", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeBrowserSessionManager();
+    manager.opened.push("session-reentrant");
+    const subscribe = manager.subscribe;
+    const write = fake.res.write.bind(fake.res);
+    const end = fake.res.end.bind(fake.res);
+    const trace: string[] = [];
+    const redactor = vi.fn((value: unknown): unknown => value);
+    vi.spyOn(manager, "subscribe").mockImplementation(function (
+      this: BrowserSessionManager,
+      sessionId: string,
+      listener: BrowserEventEmitter,
+    ): () => void {
+      expect(this).toBe(manager);
+      expect(sessionId).toBe("session-reentrant");
+      trace.push("subscribe");
+      const release = subscribe(sessionId, listener);
+      return (): void => {
+        trace.push("unsubscribe");
+        release();
+      };
+    });
+    vi.spyOn(fake.res, "write").mockImplementation((chunk: unknown): boolean => {
+      if (typeof chunk !== "string") throw new TypeError("expected an SSE string frame");
+      const accepted = write(chunk);
+      if (chunk === "event: ready\ndata: {}\n\n") {
+        trace.push("ready");
+        manager.emit("session-reentrant", browserEvent("session-reentrant", "session-closed", 7));
+      } else {
+        trace.push("closed-frame");
+      }
+      return accepted;
+    });
+    vi.spyOn(fake.res, "end").mockImplementation(() => {
+      trace.push("end");
+      manager.emit("session-reentrant", browserEvent("session-reentrant", "navigated", 8));
+      return end();
+    });
+    try {
+      openBrowserSseStream(fake.res, manager, "session-reentrant", redactor);
+      expect(trace).toEqual(["subscribe", "ready", "closed-frame", "unsubscribe", "end"]);
+      expect(fake.writes).toHaveLength(2);
+      expect(fake.writes[0]).toBe("event: ready\ndata: {}\n\n");
+      expect(fake.writes[1]).toContain("id: 1\nevent: browser:session-closed\n");
+      expect(fake.ended).toBe(true);
+      expect(fake.destroyCount).toBe(0);
+      expect(redactor).toHaveBeenCalledTimes(1);
+      fake.emitClose();
+      fake.emitClose();
+      manager.emit("session-reentrant", browserEvent("session-reentrant", "navigated", 9));
+      expect(trace).toEqual(["subscribe", "ready", "closed-frame", "unsubscribe", "end"]);
+      expect(redactor).toHaveBeenCalledTimes(1);
+    } finally {
+      fake.emitClose();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("preserves session keys and cache sharing while each connection keeps its own cursor", () => {
+    const manager = new FakeBrowserSessionManager();
+    manager.opened.push("session-a", "session-b");
+    const first = makeFakeSseRes();
+    const second = makeFakeSseRes();
+    const other = makeFakeSseRes();
+    const subscribe = manager.subscribe;
+    const receivers: unknown[] = [];
+    const sessionIds: string[] = [];
+    vi.spyOn(manager, "subscribe").mockImplementation(function (
+      this: BrowserSessionManager,
+      sessionId: string,
+      listener: BrowserEventEmitter,
+    ): () => void {
+      receivers.push(this);
+      sessionIds.push(sessionId);
+      return subscribe(sessionId, listener);
+    });
+    const redactor = vi.fn((value: unknown): unknown => value);
+    try {
+      openBrowserSseStream(first.res, manager, "session-a", redactor);
+      openBrowserSseStream(second.res, manager, "session-a", redactor);
+      openBrowserSseStream(other.res, manager, "session-b", redactor);
+      expect(receivers).toEqual([manager, manager, manager]);
+      expect(sessionIds).toEqual(["session-a", "session-a", "session-b"]);
+      const shared = browserEvent("session-a", "navigated", 17);
+      manager.emit("session-a", shared);
+      expect(first.writes).toHaveLength(2);
+      expect(second.writes[1]).toBe(first.writes[1]);
+      expect(first.writes[1]).toContain("id: 1\nevent: browser:navigated\n");
+      expect(other.writes).toEqual(["event: ready\ndata: {}\n\n"]);
+      expect(redactor).toHaveBeenCalledTimes(1);
+      manager.emit("session-b", browserEvent("session-b", "navigated", 29));
+      expect(other.writes[1]).toContain("id: 1\nevent: browser:navigated\n");
+      expect(first.writes).toHaveLength(2);
+      expect(second.writes).toHaveLength(2);
+      expect(redactor).toHaveBeenCalledTimes(2);
+      first.emitClose();
+      manager.emit("session-a", browserEvent("session-a", "navigated", 41));
+      expect(first.writes).toHaveLength(2);
+      expect(second.writes[2]).toContain("id: 2\nevent: browser:navigated\n");
+      expect(other.writes).toHaveLength(2);
+      expect(redactor).toHaveBeenCalledTimes(3);
+    } finally {
+      first.emitClose();
+      second.emitClose();
+      other.emitClose();
+      vi.restoreAllMocks();
+    }
   });
 });

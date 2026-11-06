@@ -7,15 +7,12 @@
 //   DELETE /api/commands/runs/:runId           cancel an in-flight run
 //   GET    /api/commands/events                SSE stream of run lifecycle events
 
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { parseCommandTaskRunRequest } from "@oscharko-dev/keiko-contracts/runtime/command-runner";
 import { CommandRunnerError } from "./command-runner-errors.js";
 import type { CommandRunInput, CommandRunnerManager } from "./command-runner.js";
-import type { CommandRunnerEvent } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
-import { SSE_HEADERS, startSseHeartbeat, readyMessage } from "./sse.js";
-import { writeSseFrame, type SseBackpressureSignal } from "./sse-write.js";
-import { redactedEventJson } from "./sse-frame-cache.js";
+import { openPlainNamespacedRouteStream, plainNamespacedStreamOpener } from "./sse.js";
 import {
   errorBody,
   STREAMING,
@@ -172,62 +169,9 @@ export function handleDeleteCommandRun(ctx: RouteContext, deps: UiHandlerDeps): 
 export function handleCommandEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
   const guard = requireRunner(deps);
   if (isRouteResult(guard)) return guard;
-  openCommandSseStream(ctx.res, guard, deps.redactor, undefined, ctx.correlationId);
-  ctx.req.on("close", () => {
-    ctx.res.end();
-  });
+  openPlainNamespacedRouteStream(ctx, openCommandSseStream, guard, deps.redactor);
   return STREAMING;
 }
 
-// Exported for unit testing the backpressure path. `onBackpressure` is optional and defaults to
-// undefined in production (no behavior change); it is emitted exactly once when a frame is rejected
-// because the client is not draining, before the socket is destroyed.
-export function openCommandSseStream(
-  res: ServerResponse,
-  manager: CommandRunnerManager,
-  redactor: UiHandlerDeps["redactor"],
-  onBackpressure?: (signal: SseBackpressureSignal) => void,
-  correlationId?: string,
-): void {
-  res.writeHead(200, SSE_HEADERS);
-  startSseHeartbeat(res);
-  // Per-connection abort: a slow-client backpressure kill (writeSseFrame) aborts this controller,
-  // which unsubscribes from the manager so no further frames are produced for a dead socket. The
-  // res.on("close") listener also unsubscribes; `unsubscribed` guards against the double call.
-  // subscribe() returns synchronously and events fire only asynchronously afterward, so no event
-  // (hence no abort) can occur before `unsubscribe` is assigned.
-  const controller = new AbortController();
-  let seq = 0;
-  const unsubscribe = manager.subscribe((event) => {
-    seq += 1;
-    writeCommandEvent(res, event, seq, redactor, controller, onBackpressure);
-  });
-  let unsubscribed = false;
-  const stop = (): void => {
-    if (unsubscribed) return;
-    unsubscribed = true;
-    unsubscribe();
-  };
-  controller.signal.addEventListener("abort", stop, { once: true });
-  // The ready frame takes the same abort-and-destroy path as every event frame: refused, it aborts
-  // this controller at once, which unsubscribes the stream, so the socket is destroyed exactly once.
-  writeSseFrame(res, readyMessage(), controller, onBackpressure, correlationId);
-  res.on("close", () => {
-    stop();
-  });
-}
-
-function writeCommandEvent(
-  res: ServerResponse,
-  event: CommandRunnerEvent,
-  seq: number,
-  redactor: UiHandlerDeps["redactor"],
-  controller: AbortController,
-  onBackpressure?: (signal: SseBackpressureSignal) => void,
-): void {
-  // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
-  // the per-connection `id:` cursor differs between them.
-  const data = redactedEventJson(redactor, event);
-  const frame = `id: ${String(seq)}\nevent: command:${event.kind}\ndata: ${data}\n\n`;
-  writeSseFrame(res, frame, controller, onBackpressure);
-}
+// Exported for unit testing stalled-reader handling.
+export const openCommandSseStream = plainNamespacedStreamOpener("command");

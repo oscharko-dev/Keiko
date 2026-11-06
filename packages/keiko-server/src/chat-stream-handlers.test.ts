@@ -10,6 +10,7 @@ import { initializeConfiguredConversationReadiness } from "./gateway-readiness.j
 import { handleUpdateChat } from "./store-handlers.js";
 import { runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
+import { createSseResponseEventMethods } from "../../../tests/support/sse-subscription-observations.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
@@ -216,18 +217,10 @@ function captureResWithEvents(): CapturedResWithEvents {
       result.destroyed = true;
       emitter.emit("close");
     },
-    on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.on(event, listener);
-      return res as unknown as ServerResponse;
-    },
-    once(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.once(event, listener);
-      return res as unknown as ServerResponse;
-    },
-    off(event: string, listener: (...args: unknown[]) => void): ServerResponse {
-      emitter.off(event, listener);
-      return res as unknown as ServerResponse;
-    },
+    ...createSseResponseEventMethods(
+      emitter,
+      (): ServerResponse => res as unknown as ServerResponse,
+    ),
     emit(event: string): boolean {
       return emitter.emit(event);
     },
@@ -847,6 +840,40 @@ describe("desktop chat SSE streaming handler", () => {
     },
   );
 
+  // A changed or deleted skill selection is refused before either transport dispatches the model.
+  async function expectStaleSkillSelectionRefused(
+    transport: "buffered" | "streamed",
+    chatId: string,
+    expectedSkillSelectionRevision: number | null | undefined,
+  ): Promise<void> {
+    const gateway = streamingModel("Must not dispatch");
+    const bufferedCall = vi.spyOn(gateway.model, "call");
+    const paired = pairedSkillFixture(gateway.model);
+    const handlers = { buffered: handleSendDesktopChat, streamed: handleSendDesktopChatStream };
+    const result = await handlers[transport](
+      routeContext(
+        paired.request({
+          chatId,
+          projectPath: projectDir,
+          content: "Review boundary",
+          modelId: CHAT_MODEL,
+          clientTurnId: "stale-skill",
+          expectedSkillSelectionRevision,
+        }),
+        captureResWithEvents().res,
+      ),
+      paired.deps,
+    );
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "SKILL_SELECTION_CHANGED" } },
+    });
+    expect(gateway.calls.count).toBe(0);
+    expect(gateway.recorded.request).toBeUndefined();
+    expect(bufferedCall).not.toHaveBeenCalled();
+    expect(store.listMessages(chatId)).toHaveLength(0);
+  }
+
   it.each([
     ["buffered", 0],
     ["streamed", 0],
@@ -861,32 +888,7 @@ describe("desktop chat SSE streaming handler", () => {
         contentBase64: Buffer.from("# Synthetic\nCheck bounds.\n").toString("base64"),
       });
       store.markdownSkills.select(chatId, skill, 0);
-      const gateway = streamingModel("Must not dispatch");
-      const bufferedCall = vi.spyOn(gateway.model, "call");
-      const paired = pairedSkillFixture(gateway.model);
-      const handlers = { buffered: handleSendDesktopChat, streamed: handleSendDesktopChatStream };
-      const result = await handlers[transport](
-        routeContext(
-          paired.request({
-            chatId,
-            projectPath: projectDir,
-            content: "Review boundary",
-            modelId: CHAT_MODEL,
-            clientTurnId: "stale-skill",
-            expectedSkillSelectionRevision,
-          }),
-          captureResWithEvents().res,
-        ),
-        paired.deps,
-      );
-      expect(result).toMatchObject({
-        status: 409,
-        body: { error: { code: "SKILL_SELECTION_CHANGED" } },
-      });
-      expect(gateway.calls.count).toBe(0);
-      expect(gateway.recorded.request).toBeUndefined();
-      expect(bufferedCall).not.toHaveBeenCalled();
-      expect(store.listMessages(chatId)).toHaveLength(0);
+      await expectStaleSkillSelectionRefused(transport, chatId, expectedSkillSelectionRevision);
     },
   );
 
@@ -905,32 +907,7 @@ describe("desktop chat SSE streaming handler", () => {
       });
       store.markdownSkills.select(chatId, skill, 0);
       store.markdownSkills.delete(skill.id, skill.revision);
-      const gateway = streamingModel("Must not dispatch");
-      const bufferedCall = vi.spyOn(gateway.model, "call");
-      const paired = pairedSkillFixture(gateway.model);
-      const handlers = { buffered: handleSendDesktopChat, streamed: handleSendDesktopChatStream };
-      const result = await handlers[transport](
-        routeContext(
-          paired.request({
-            chatId,
-            projectPath: projectDir,
-            content: "Review boundary",
-            modelId: CHAT_MODEL,
-            clientTurnId: "stale-skill",
-            expectedSkillSelectionRevision,
-          }),
-          captureResWithEvents().res,
-        ),
-        paired.deps,
-      );
-      expect(result).toMatchObject({
-        status: 409,
-        body: { error: { code: "SKILL_SELECTION_CHANGED" } },
-      });
-      expect(gateway.calls.count).toBe(0);
-      expect(gateway.recorded.request).toBeUndefined();
-      expect(bufferedCall).not.toHaveBeenCalled();
-      expect(store.listMessages(chatId)).toHaveLength(0);
+      await expectStaleSkillSelectionRefused(transport, chatId, expectedSkillSelectionRevision);
     },
   );
 

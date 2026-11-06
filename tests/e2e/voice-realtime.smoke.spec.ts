@@ -15,7 +15,8 @@
 // Playwright; the executable AC coverage that runs in `ci` lives in the keiko-server + keiko-ui suites
 // (the gated WS upgrade integration test boots the real BFF and a real `ws` client).
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { openChatComposer } from "./support/chat-composer.js";
 import { fakeDictationMediaInit } from "./support/dictation-media.js";
 import { evidenceScreenshotPath } from "./support/evidence.js";

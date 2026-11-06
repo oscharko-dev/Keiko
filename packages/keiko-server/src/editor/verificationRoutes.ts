@@ -9,12 +9,9 @@
 //   DELETE /api/editor/verification/runs/:runId           cancel an in-flight run
 //   GET    /api/editor/verification/events                SSE stream of content-free lifecycle events
 
-import type { IncomingMessage, ServerResponse } from "node:http";
-import type { EditorVerificationEvent } from "@oscharko-dev/keiko-contracts";
+import type { IncomingMessage } from "node:http";
 import { parseEditorVerificationRunRequest } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
-import { redactedEventJson } from "../sse-frame-cache.js";
-import { SSE_HEADERS, startSseHeartbeat, readyMessage } from "../sse.js";
-import { writeSseFrame, type SseBackpressureSignal } from "../sse-write.js";
+import { openPlainNamespacedRouteStream, plainNamespacedStreamOpener } from "../sse.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
 import {
@@ -258,58 +255,9 @@ export function handleDeleteVerificationRun(ctx: RouteContext, deps: UiHandlerDe
 export function handleVerificationEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
   const guard = requireRunner(deps);
   if (isRouteResult(guard)) return guard;
-  openVerificationSseStream(ctx.res, guard, deps.redactor, undefined, ctx.correlationId);
-  ctx.req.on("close", () => {
-    ctx.res.end();
-  });
+  openPlainNamespacedRouteStream(ctx, openVerificationSseStream, guard, deps.redactor);
   return STREAMING;
 }
 
-// Exported for unit-testing the backpressure path (mirrors openCommandSseStream). `onBackpressure` is
-// optional and defaults to undefined in production; it fires exactly once when the client drains
-// nothing within the shared stall bound, before the socket is destroyed.
-export function openVerificationSseStream(
-  res: ServerResponse,
-  manager: VerificationRunnerManager,
-  redactor: UiHandlerDeps["redactor"],
-  onBackpressure?: (signal: SseBackpressureSignal) => void,
-  correlationId?: string,
-): void {
-  res.writeHead(200, SSE_HEADERS);
-  startSseHeartbeat(res);
-  const controller = new AbortController();
-  let seq = 0;
-  const unsubscribe = manager.subscribe((event) => {
-    seq += 1;
-    writeVerificationEvent(res, event, seq, redactor, controller, onBackpressure);
-  });
-  let unsubscribed = false;
-  const stop = (): void => {
-    if (unsubscribed) return;
-    unsubscribed = true;
-    unsubscribe();
-  };
-  controller.signal.addEventListener("abort", stop, { once: true });
-  // The ready frame takes the same flow control as every event frame: a reader that never drains it
-  // aborts this controller at the stall bound, which unsubscribes the stream, so the socket is
-  // destroyed exactly once.
-  writeSseFrame(res, readyMessage(), controller, onBackpressure, correlationId);
-  res.on("close", () => {
-    stop();
-  });
-}
-
-function writeVerificationEvent(
-  res: ServerResponse,
-  event: EditorVerificationEvent,
-  seq: number,
-  redactor: UiHandlerDeps["redactor"],
-  controller: AbortController,
-  onBackpressure?: (signal: SseBackpressureSignal) => void,
-): void {
-  // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only the
-  // per-connection `id:` cursor differs between them.
-  const data = redactedEventJson(redactor, event);
-  const frame = `id: ${String(seq)}\nevent: verification:${event.kind}\ndata: ${data}\n\n`;
-  writeSseFrame(res, frame, controller, onBackpressure);
-}
+// Exported for unit testing stalled-reader handling.
+export const openVerificationSseStream = plainNamespacedStreamOpener("verification");

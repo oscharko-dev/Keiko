@@ -3,11 +3,11 @@ import { once } from "node:events";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   realpathSync,
-  statSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -486,13 +486,31 @@ describe.runIf(process.platform === "darwin")("native profile containment only",
     },
   );
 
+  function readablePrebootChild(boot: string): string {
+    for (const name of readdirSync(boot).sort()) {
+      if (name === "Cryptexes") continue;
+      const candidate = join(boot, name);
+      try {
+        if (lstatSync(candidate).isDirectory() && realpathSync(candidate) === candidate) {
+          readdirSync(candidate);
+          return candidate;
+        }
+      } catch (error) {
+        if (!(
+          error instanceof Error &&
+          "code" in error &&
+          (error.code === "EPERM" || error.code === "EACCES")
+        )) {
+          throw error;
+        }
+      }
+    }
+    throw new TypeError("Readable Preboot directory fixture unavailable");
+  }
+
   it("allows the dyld boot directory metadata while denying unrelated Preboot children", async () => {
     const boot = "/System/Volumes/Preboot";
-    const child = readdirSync(boot).find(
-      (name) => name !== "Cryptexes" && statSync(join(boot, name)).isDirectory(),
-    );
-    if (child === undefined) throw new TypeError("Preboot directory fixture unavailable");
-    const outside = join(boot, child);
+    const outside = readablePrebootChild(boot);
     const code = `
       const fs=require("node:fs");const top=Array.isArray(fs.readdirSync(process.argv[1]));
       let denied=false;try{fs.readdirSync(process.argv[2])}catch(e){denied=e.code==="EPERM"}

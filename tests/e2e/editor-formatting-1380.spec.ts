@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import type { EditorBuiltinFormattingSource } from "@oscharko-dev/keiko-contracts";
 import { editorBuiltinDocumentFormatting } from "@oscharko-dev/keiko-contracts/runtime/editor-builtin-capabilities";
 import { inferEditorLanguageModeId } from "@oscharko-dev/keiko-contracts/runtime/editor-language-mode-map";

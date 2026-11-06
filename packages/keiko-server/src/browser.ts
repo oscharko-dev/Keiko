@@ -3,15 +3,15 @@
 // events are exempt by the same gate. SSE framing reuses the existing sse.ts helpers.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { sseBackpressureReporter, writeSseFrame, type SseBackpressureSignal } from "./sse-write.js";
-import {
-  BrowserToolError,
-  type BrowserEventEnvelope,
-  type BrowserSessionManager,
-} from "@oscharko-dev/keiko-tools";
+import { sseBackpressureReporter, type SseBackpressureSignal } from "./sse-write.js";
+import { BrowserToolError, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
 import type { UiHandlerDeps } from "./deps.js";
-import { redactedEventJson } from "./sse-frame-cache.js";
-import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "./sse.js";
+import {
+  SSE_HEADERS,
+  attachSseSubscription,
+  startSseHeartbeat,
+  writeNamespacedSseEvent,
+} from "./sse.js";
 import {
   errorBody,
   STREAMING,
@@ -273,9 +273,8 @@ export function handleBrowserEvents(ctx: RouteContext, deps: UiHandlerDeps): Han
   return STREAMING;
 }
 
-// Exported for unit testing the backpressure path. `onBackpressure` is optional and defaults to
-// undefined in production (no behavior change); it is emitted exactly once when a frame is rejected
-// because the client is not draining, before the socket is destroyed.
+// Exported for unit testing stalled-reader handling. The optional observer runs once after the
+// canonical no-drain deadline, before the controller aborts and the socket is destroyed.
 export function openBrowserSseStream(
   res: ServerResponse,
   manager: BrowserSessionManager,
@@ -301,43 +300,23 @@ export function openBrowserSseStream(
     ...(correlationId === undefined ? {} : { correlationId }),
   });
   let seq = 0;
-  const unsubscribe = manager.subscribe(sessionId, (event) => {
-    seq += 1;
-    writeBrowserEvent(res, event, seq, redactor, controller, onBackpressure);
-    if (event.kind === "session-closed") {
-      stop();
-      res.end();
-    }
-  });
-  let unsubscribed = false;
-  const stop = (): void => {
-    if (unsubscribed) return;
-    unsubscribed = true;
-    unsubscribe();
-  };
-  controller.signal.addEventListener("abort", stop, { once: true });
-  // The ready frame goes through the same protective path: a client that is already not draining
-  // must abort and unsubscribe here too, rather than leaving the subscription live until some
-  // later event happens to trip writeSseFrame.
-  writeSseFrame(res, readyMessage(), controller, onBackpressure, correlationId);
-  res.on("close", () => {
-    stop();
-  });
-}
-
-function writeBrowserEvent(
-  res: ServerResponse,
-  event: BrowserEventEnvelope,
-  seq: number,
-  redactor: UiHandlerDeps["redactor"],
-  controller: AbortController,
-  onBackpressure?: (signal: SseBackpressureSignal) => void,
-): void {
-  // KEIKO-0674: reuse the WeakMap-keyed redactedEventJson helper (GEN-PERF-FANOUT-001) so a fan-
-  // out of the same browser event to K subscribers pays the redact+serialize cost once, not K
-  // times. Every other SSE fan-out path (agent-run/container/command-runner/terminal) already
-  // routes through this helper; this one was the last inline call to redactor()+JSON.stringify.
-  const data = redactedEventJson(redactor, event);
-  const frame = `id: ${String(seq)}\nevent: browser:${event.kind}\ndata: ${data}\n\n`;
-  writeSseFrame(res, frame, controller, onBackpressure);
+  attachSseSubscription(
+    res,
+    controller,
+    (stop) =>
+      manager.subscribe(sessionId, (event) => {
+        seq += 1;
+        // KEIKO-0674: reuse the WeakMap-keyed redactedEventJson helper (GEN-PERF-FANOUT-001) so a fan-
+        // out of the same browser event to K subscribers pays the redact+serialize cost once, not K
+        // times. Every other SSE fan-out path (agent-run/container/command-runner/terminal) already
+        // routes through this helper; this one was the last inline call to redactor()+JSON.stringify.
+        writeNamespacedSseEvent(res, event, seq, "browser", redactor, controller, onBackpressure);
+        if (event.kind === "session-closed") {
+          stop();
+          res.end();
+        }
+      }),
+    onBackpressure,
+    correlationId,
+  );
 }

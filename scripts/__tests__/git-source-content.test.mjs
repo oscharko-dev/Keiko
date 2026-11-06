@@ -95,6 +95,7 @@ describe("Git source batch framing", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-h1-git-symlink-"));
     try {
       execFileSync("git", ["init", "--quiet"], { cwd: root });
+      execFileSync("git", ["config", "--local", "commit.gpgsign", "false"], { cwd: root });
       execFileSync("git", ["config", "user.email", "fixture@keiko.invalid"], { cwd: root });
       execFileSync("git", ["config", "user.name", "Keiko Fixture"], { cwd: root });
       const oid = execFileSync("git", ["hash-object", "-w", "--stdin"], {
