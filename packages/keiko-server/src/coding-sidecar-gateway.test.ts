@@ -4581,6 +4581,8 @@ describe("coding-sidecar gateway", () => {
     expect(result.status).toBe(200);
     expect(seenRequests).toHaveLength(1);
     expect(seenRequests[0]?.logContext?.correlationId).toBe("sidecar-corr-logcontext-0001");
+    // The run is the parent of the call, so the run's timeline shows its model calls.
+    expect(seenRequests[0]?.logContext?.parentCorrelationId).toBe("run-gateway-test");
   });
 
   it("returns BAD_REQUEST for malformed OpenAI-compatible tools", async () => {

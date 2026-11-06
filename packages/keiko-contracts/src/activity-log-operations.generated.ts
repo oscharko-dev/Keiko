@@ -23464,6 +23464,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "duration",
         required: false,
       },
+      firstTokenKind: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["content", "tool-call", "reasoning"],
+      },
       promptTokens: {
         type: "integer",
         dataClass: "count",

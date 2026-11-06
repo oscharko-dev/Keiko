@@ -28143,6 +28143,12 @@
               "required": true
             },
             {
+              "name": "firstTokenKind",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "firstTokenMs",
               "type": "number",
               "dataClass": "duration",

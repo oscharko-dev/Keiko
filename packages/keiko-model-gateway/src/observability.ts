@@ -28,6 +28,7 @@ import {
   defineActivityLogOperation,
   recordActivityLogLoss,
   withActivityLogCorrelation,
+  withActivityLogParentCorrelation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
@@ -248,6 +249,9 @@ function reportFailedLogSink(
 // label) is additive here and would otherwise be a second parameter at every call site.
 export interface ModelGatewayLogContext {
   readonly correlationId?: string | undefined;
+  // The id of the enclosing run (a coding run), so `keiko support analyze --correlation-id <run>`
+  // shows the model calls the run made. Stamped on every line of the call as `parentCorrelationId`.
+  readonly parentCorrelationId?: string | undefined;
 }
 
 // Binds a correlation id to a sink so every event written through it carries the id, instead of
@@ -280,6 +284,26 @@ export function withCorrelationId(
       return logLevelEnabled(sink, level);
     },
     correlationId,
+    errorEvidence: (error): GatewayFailureEvidence => gatewayFailureEvidence(sink, error),
+  };
+}
+
+// Binds the parent of an enclosing run to every event whose correlation id has one registered:
+// the gateway writes its lines through one shared sink, and a call's lines carry only that call's
+// id, so the parent is looked up by it. An event that names its own parent keeps it.
+export function withParentCorrelationLookup(
+  sink: ModelGatewayLogSink,
+  parentOf: (correlationId: string) => string | undefined,
+): ModelGatewayLogSink {
+  return {
+    write(event: ModelGatewayLogEvent): void {
+      const parent = event.correlationId === undefined ? undefined : parentOf(event.correlationId);
+      sink.write(parent === undefined ? event : withActivityLogParentCorrelation(event, parent));
+    },
+    enabled(level: ModelGatewayLogLevel): boolean {
+      return logLevelEnabled(sink, level);
+    },
+    ...(sink.correlationId === undefined ? {} : { correlationId: sink.correlationId }),
     errorEvidence: (error): GatewayFailureEvidence => gatewayFailureEvidence(sink, error),
   };
 }

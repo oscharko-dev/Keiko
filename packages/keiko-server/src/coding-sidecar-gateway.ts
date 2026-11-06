@@ -1838,6 +1838,7 @@ function buildChatRequest(
   cancellationSignal: AbortSignal,
   maxOutputTokens: number,
   correlationId: string | undefined,
+  parentCorrelationId: string,
   reasoningEffort: ModelReasoningEffort | undefined,
   toolCatalogOffer: GatewayToolCatalogOffer,
 ): GatewayCallRequest {
@@ -1850,7 +1851,7 @@ function buildChatRequest(
     cancellationSignal,
     maxOutputTokens,
     ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-    logContext: { correlationId },
+    logContext: { correlationId, parentCorrelationId },
   };
 }
 
@@ -3577,6 +3578,7 @@ function requestForGatewayDelivery(
       signal,
       delivery.maxOutputTokens,
       ctx.correlationId,
+      runId,
       delivery.reasoningEffort,
       {
         coverage: delivery.toolCatalogCoverage,
