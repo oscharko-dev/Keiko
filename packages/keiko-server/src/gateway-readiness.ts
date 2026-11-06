@@ -2242,6 +2242,28 @@ function readinessRunEvidence(
   };
 }
 
+// Keiko ended a run itself (a live run outranks it, shutdown, a replaced configuration): the gateway
+// did not fail, so no verdict about it is recorded and nothing is reconciled.
+function recordReadinessVerdict(
+  deps: UiHandlerDeps,
+  report: GatewayReadinessReport,
+  observedGeneration: number | undefined,
+  correlationId: string,
+): void {
+  if (deps.gatewayReadinessSignal?.aborted === true) return;
+  // F-01: this run is the product's only live evidence about the gateway. Record its outcome on the
+  // config holder so the surfaces that used to infer readiness from configuration alone (the editor
+  // AI-assist badge, the Coding Workbench source projection) report what was actually observed.
+  // Content-free: one state word, no probe bodies, no endpoints, no credentials.
+  recordReadinessObservation(deps, report, observedGeneration, correlationId);
+  // Read BEFORE the tool-calling reconcile: persisting that conclusion bumps the generation, and
+  // the context-window reconcile must tell "we just wrote it" from "the config was replaced".
+  const probedCurrentConfig =
+    observedGeneration === undefined || deps.gatewayConfig?.generation() === observedGeneration;
+  reconcileToolCallingReadiness(deps, report, observedGeneration, correlationId);
+  if (probedCurrentConfig) reconcileContextWindowReadiness(deps, report, correlationId);
+}
+
 export async function runGatewayReadiness(
   request: GatewayReadinessRequest,
   deps: UiHandlerDeps,
@@ -2286,23 +2308,7 @@ export async function runGatewayReadiness(
     probes,
     verifiedCapabilities: verifiedCapabilities(probes),
   };
-  // Keiko ended this run itself (a live run outranks it, shutdown, a replaced configuration): the
-  // gateway did not fail, so no verdict about it is recorded and nothing is reconciled.
-  if (deps.gatewayReadinessSignal?.aborted === true) {
-    logReadinessRunCompleted(deps, run, report);
-    return report;
-  }
-  // F-01: this run is the product's only live evidence about the gateway. Record its outcome on the
-  // config holder so the surfaces that used to infer readiness from configuration alone (the editor
-  // AI-assist badge, the Coding Workbench source projection) report what was actually observed.
-  // Content-free: one state word, no probe bodies, no endpoints, no credentials.
-  recordReadinessObservation(deps, report, observedGeneration, correlationId);
-  // Read BEFORE the tool-calling reconcile: persisting that conclusion bumps the generation, and
-  // the context-window reconcile must tell "we just wrote it" from "the config was replaced".
-  const probedCurrentConfig =
-    observedGeneration === undefined || deps.gatewayConfig?.generation() === observedGeneration;
-  reconcileToolCallingReadiness(deps, report, observedGeneration, correlationId);
-  if (probedCurrentConfig) reconcileContextWindowReadiness(deps, report, correlationId);
+  recordReadinessVerdict(deps, report, observedGeneration, correlationId);
   logReadinessRunCompleted(deps, run, report);
   return report;
 }
@@ -2367,6 +2373,8 @@ interface WorkbenchProbeEntry {
   readonly withhold: () => boolean;
   /** Ends the probe a live run outranks while it is in flight; false when it is not eligible. */
   readonly abortForLiveRun: () => boolean;
+  /** Set once a live run ended this probe in flight; its conclusion is then discarded. */
+  withheldInFlight: boolean;
   prioritized: boolean;
   running: boolean;
   at: number;
@@ -2678,6 +2686,45 @@ export function withholdRunningWorkbenchProbesForLiveRun(deps: UiHandlerDeps): n
   return aborted;
 }
 
+// The probe's dependencies with its own in-flight signal joined to the conversation queue's.
+function workbenchProbeDeps(deps: UiHandlerDeps, inFlight: AbortSignal): UiHandlerDeps {
+  const queueSignal =
+    deps.gatewayConfig === undefined
+      ? undefined
+      : conversationQueue(deps.gatewayConfig).controller.signal;
+  return cancellableConversationProbeDeps(
+    deps,
+    queueSignal === undefined ? inFlight : AbortSignal.any([queueSignal, inFlight]),
+  );
+}
+
+// The settled end of a probe a live run ended in flight: no outcome, no cooldown, entry dropped.
+function dropWithheldProbe(
+  deps: UiHandlerDeps,
+  entry: WorkbenchProbeEntry,
+  key: string,
+  modelId: string,
+  correlationId: string,
+): void {
+  if (workbenchProbes.get(key) === entry) workbenchProbes.delete(key);
+  entry.settled = true;
+  logAutomaticReadinessWithheld(deps, modelId, correlationId);
+}
+
+function abortProbeForLiveRun(entry: WorkbenchProbeEntry, inFlight: AbortController): boolean {
+  if (!entry.running || entry.settled || entry.prioritized || entry.withheldInFlight) return false;
+  entry.withheldInFlight = true;
+  inFlight.abort();
+  return true;
+}
+
+function settleWorkbenchProbe(entry: WorkbenchProbeEntry, outcome: WorkbenchProbeOutcome): void {
+  entry.settled = true;
+  entry.outcome = outcome;
+  entry.at = Date.now();
+  entry.cooldownMs = workbenchProbeCooldownMs(outcome);
+}
+
 function createWorkbenchProbeEntry(
   deps: UiHandlerDeps,
   target: WorkbenchProbeTarget,
@@ -2687,7 +2734,6 @@ function createWorkbenchProbeEntry(
   key: string,
 ): WorkbenchProbeEntry {
   const inFlight = new AbortController();
-  let withheldInFlight = false;
   let finish: () => void = (): void => undefined;
   const promise = new Promise<void>((resolve) => {
     finish = resolve;
@@ -2701,39 +2747,22 @@ function createWorkbenchProbeEntry(
       finish();
     },
     withhold: (): boolean => withholdForLiveRun(deps, entry, key, target.modelId, correlationId),
-    abortForLiveRun: (): boolean => {
-      if (!entry.running || entry.settled || entry.prioritized || withheldInFlight) return false;
-      withheldInFlight = true;
-      inFlight.abort();
-      return true;
-    },
+    abortForLiveRun: (): boolean => abortProbeForLiveRun(entry, inFlight),
     perform: async (): Promise<void> => {
-      const queueSignal =
-        deps.gatewayConfig === undefined
-          ? undefined
-          : conversationQueue(deps.gatewayConfig).controller.signal;
-      const controlled = cancellableConversationProbeDeps(
-        deps,
-        queueSignal === undefined
-          ? inFlight.signal
-          : AbortSignal.any([queueSignal, inFlight.signal]),
+      const outcome = await runWorkbenchProbe(
+        workbenchProbeDeps(deps, inFlight.signal),
+        target,
+        correlationId,
+        trigger,
       );
-      const outcome = await runWorkbenchProbe(controlled, target, correlationId, trigger);
-      if (withheldInFlight) {
-        if (workbenchProbes.get(key) === entry) workbenchProbes.delete(key);
-        entry.settled = true;
-        logAutomaticReadinessWithheld(deps, target.modelId, correlationId);
-        finish();
-        return;
-      }
-      entry.settled = true;
-      entry.outcome = outcome;
-      entry.at = Date.now();
-      entry.cooldownMs = workbenchProbeCooldownMs(outcome);
+      if (entry.withheldInFlight)
+        dropWithheldProbe(deps, entry, key, target.modelId, correlationId);
+      else settleWorkbenchProbe(entry, outcome);
       finish();
-      if (outcome === "stale")
+      if (!entry.withheldInFlight && outcome === "stale")
         requeueStaleWorkbenchProbe(deps, target.modelId, correlationId, trigger);
     },
+    withheldInFlight: false,
     prioritized,
     running: false,
     at: Date.now(),

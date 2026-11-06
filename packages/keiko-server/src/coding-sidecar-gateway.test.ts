@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { PassThrough, Writable } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   Gateway,
   ProviderError,
@@ -80,6 +80,7 @@ import {
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
   PROFILE_PROBE_WAIT_MS,
+  resetProviderUnavailableWindowsForTests,
   MINIMUM_ADMITTED_OUTPUT_TOKENS,
   admissiblePromptTokens,
   admittedOutputTokens,
@@ -498,6 +499,9 @@ async function* streamedResponse(response: NormalizedResponse): AsyncGenerator<G
   if (response.content.length > 0) yield { type: "delta" as const, token: response.content };
   yield { type: "done" as const, response };
 }
+
+// The consecutive-unavailable count is per run id and these tests reuse one: each starts clean.
+beforeEach(resetProviderUnavailableWindowsForTests);
 
 describe("coding-sidecar gateway", () => {
   afterEach(resetServerLogger);
@@ -5828,6 +5832,62 @@ describe("coding sidecar gateway turn failure projection", () => {
         });
       },
     );
+
+    // A gateway that never recovers: the runtime retried each outage window without end. The first
+    // unavailable window stays retryable; the second, consecutive one is final and answered with
+    // the closed unavailable message, recorded with its window count on the turn-failed line.
+    describe("consecutive provider-unavailable windows of one run", () => {
+      async function failTurn(
+        error: Error,
+        sink: ReturnType<typeof captureServerLog>,
+      ): Promise<{ readonly result: unknown; readonly line: ServerLogEvent | undefined }> {
+        sink.events.length = 0;
+        const deps: UiHandlerDeps = {
+          ...depsValue(configValue(provider(), capability()), () => () => Promise.reject(error)),
+          codingRuntimeOrchestrator: runningOrchestrator,
+        };
+        const result = await handleCodingSidecarGatewayChatCompletions(
+          routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+          deps,
+        );
+        return { result, line: turnFailedLine(sink.events) };
+      }
+
+      it("refuses the runtime retry from the second consecutive window on", async () => {
+        const sink = captureServerLog("warn");
+        const unavailable = new ProviderError("synthetic unavailable", 503);
+        const first = await failTurn(unavailable, sink);
+        expect(first.result).toMatchObject({ status: 503 });
+        expect(first.line?.extra).toMatchObject({
+          runtimeRetry: "allowed",
+          providerUnavailable: true,
+          unavailableWindowCount: 1,
+        });
+        const second = await failTurn(unavailable, sink);
+        expect(second.result).toMatchObject({ status: 400 });
+        expect(JSON.stringify(second.result)).toContain("stayed unavailable");
+        expect(second.line?.extra).toMatchObject({
+          runtimeRetry: "refused",
+          providerUnavailable: true,
+          unavailableWindowCount: 2,
+        });
+        expectActivityLogProof(
+          "coding-sidecar.gateway.turn-failed.emitted-line",
+          formatActivityLogProofLine(second.line ?? {}),
+        );
+      });
+
+      it("restarts the count after a failure that is not an unavailable window", async () => {
+        const sink = captureServerLog("warn");
+        await failTurn(new ProviderError("synthetic unavailable", 503), sink);
+        await failTurn(new ProviderError("synthetic bad request", 400), sink);
+        const next = await failTurn(new ProviderError("synthetic unavailable", 503), sink);
+        expect(next.line?.extra).toMatchObject({
+          runtimeRetry: "allowed",
+          unavailableWindowCount: 1,
+        });
+      });
+    });
 
     // F10 (#3873 review, PR #3876): `provider-failed` names a provider that rejected the turn and one
     // that stayed unavailable alike. The turn's line and the run's last-failure record carry the

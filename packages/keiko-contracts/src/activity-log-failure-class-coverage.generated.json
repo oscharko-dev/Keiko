@@ -17277,6 +17277,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "unavailableWindowCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             }
           ],
           "evidenceClasses": [

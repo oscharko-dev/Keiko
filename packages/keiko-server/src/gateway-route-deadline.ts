@@ -60,7 +60,11 @@ export function gatewayRouteDeadlineMs(
   const budget =
     raised === undefined
       ? UNCONFIGURED_MODEL_ROUTE_DEADLINE_MS
-      : Math.max(...shapes.map((shape) => gatewayCallBudgetMs(raised, shape, outageWindowMs, maxOutputTokens)));
+      : Math.max(
+          ...shapes.map((shape) =>
+            gatewayCallBudgetMs(raised, shape, outageWindowMs, maxOutputTokens),
+          ),
+        );
   // Armed with AbortSignal.timeout, which fires at once past 2^31 - 1 ms: an absurd budget must not
   // turn the backstop into an immediate abort.
   return Math.min(budget + GATEWAY_ROUTE_DEADLINE_GRACE_MS, MAX_TIMER_DELAY_MS);

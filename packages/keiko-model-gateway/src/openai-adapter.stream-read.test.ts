@@ -13,11 +13,7 @@ import {
   TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
-import {
-  OpenAiAdapter,
-  STREAM_WIRE_BYTES_PER_TOKEN,
-  streamWireByteCap,
-} from "./openai-adapter.js";
+import { OpenAiAdapter, STREAM_WIRE_BYTES_PER_TOKEN, streamWireByteCap } from "./openai-adapter.js";
 import {
   activityLogErrorKind,
   logModelId,

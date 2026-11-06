@@ -671,6 +671,11 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
     // every other failure; `required: false` because a line written before this field existed
     // lacks it.
     providerUnavailable: { type: "boolean", dataClass: "closed-enum", required: false },
+    // How many consecutive provider-unavailable windows the run has now spent, on a
+    // `providerUnavailable` failure. The runtime retries each one; at the cap (two) the turn is
+    // refused (`runtimeRetry=refused`) and answered with the closed unavailable message, so a
+    // gateway that never recovers no longer holds the run in "waiting for the model" without end.
+    unavailableWindowCount: { type: "integer", dataClass: "count", required: false },
     ...OUTPUT_REPAIR_FIELDS,
     // The Keiko-code frames and cause classes of the failure, when the turn failed on an error
     // (PR #3617 review): a model-answer failure writes no error-level diagnostic, so this line is
@@ -2073,6 +2078,7 @@ function recordGatewayOutcome(
   repair: RepairEvidence,
 ): void {
   const { completionTokens, outputBytes } = metrics;
+  if (outcome === "accepted") providerUnavailableWindows.delete(runId);
   getServerLogger().info(
     activityLogEvent(
       CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION,
@@ -2432,7 +2438,14 @@ function reportGatewayTurnFailure(
     runId,
     run,
     failureCode,
-    { publicationReason, runtimeRetry, providerUnavailable },
+    {
+      publicationReason,
+      runtimeRetry,
+      providerUnavailable,
+      ...(providerUnavailable && providerUnavailableWindows.has(runId)
+        ? { unavailableWindowCount: providerUnavailableWindows.get(runId) }
+        : {}),
+    },
     error,
   );
   return true;
@@ -2662,10 +2675,12 @@ function logGatewayTurnFailure(
     publicationReason,
     runtimeRetry,
     providerUnavailable,
+    unavailableWindowCount,
   }: {
     readonly publicationReason: GatewayFailurePublicationReason;
     readonly runtimeRetry: RuntimeRetry;
     readonly providerUnavailable: boolean;
+    readonly unavailableWindowCount?: number | undefined;
   },
   error: unknown,
 ): void {
@@ -2688,6 +2703,7 @@ function logGatewayTurnFailure(
         // Present only when the provider could not serve the call (a retryable status, a rate limit,
         // an open breaker): the fact a run that ends on this failure settles `provider-unavailable`.
         ...(providerUnavailable ? { providerUnavailable } : {}),
+        ...(unavailableWindowCount === undefined ? {} : { unavailableWindowCount }),
         // The turn failed with a settled gateway error, which says whether a repair ran.
         ...repairEvidence(settledRepair(outputRepairOf(error))),
         ...(error === undefined || frames === undefined ? {} : { frames }),
@@ -2791,6 +2807,60 @@ function runtimeRetryFor(
   return isFinalProviderRejection(error, failureCode) ? "refused" : "allowed";
 }
 
+// The runtime retries a provider that stayed unavailable without end: each retry is a new call that
+// rides out its own outage window (default 600 s), so a gateway that never recovers held a run in
+// "waiting for the model" for hours. After this many CONSECUTIVE unavailable windows of one run the
+// turn is final and the runtime reads the closed unavailable message. A turn the provider answers
+// resets the count. The map is per process and bounded by the oldest-first eviction below.
+const MAX_CONSECUTIVE_PROVIDER_UNAVAILABLE_WINDOWS = 2;
+const MAX_TRACKED_UNAVAILABLE_RUNS = 256;
+const PROVIDER_UNAVAILABLE_MESSAGE =
+  "The model provider stayed unavailable. Start a new coding task once it is back.";
+const providerUnavailableWindows = new Map<string, number>();
+const unavailableCappedErrors = new WeakSet();
+
+// One more consecutive unavailable window for the run; the oldest tracked run is dropped past the bound.
+function countProviderUnavailableWindow(runId: string): number {
+  const windows = (providerUnavailableWindows.get(runId) ?? 0) + 1;
+  providerUnavailableWindows.delete(runId);
+  providerUnavailableWindows.set(runId, windows);
+  if (providerUnavailableWindows.size > MAX_TRACKED_UNAVAILABLE_RUNS) {
+    const oldest = providerUnavailableWindows.keys().next().value;
+    if (oldest !== undefined) providerUnavailableWindows.delete(oldest);
+  }
+  return windows;
+}
+
+/**
+ * What the runtime may do after a failed turn of this run: `runtimeRetryFor`, then the per-run cap on
+ * consecutive provider-unavailable windows. The count is the number of windows the run has now
+ * spent, readable by the turn-failed line through `providerUnavailableWindowCount`.
+ */
+function runtimeRetryForRun(
+  runId: string,
+  error: unknown,
+  failureCode: CodingWorkbenchTurnFailureCode,
+  cancelled = false,
+): RuntimeRetry {
+  const retry = runtimeRetryFor(error, failureCode);
+  // A turn the run cancelled is no window the provider spent.
+  if (cancelled) return retry;
+  if (failureCode !== "provider-failed" || !providerUnavailableFault(error)) {
+    providerUnavailableWindows.delete(runId);
+    return retry;
+  }
+  if (retry === "refused") return retry;
+  const windows = countProviderUnavailableWindow(runId);
+  if (windows < MAX_CONSECUTIVE_PROVIDER_UNAVAILABLE_WINDOWS) return retry;
+  if (typeof error === "object" && error !== null) unavailableCappedErrors.add(error);
+  return "refused";
+}
+
+/** Test seam: forget every run's consecutive-unavailable count. */
+export function resetProviderUnavailableWindowsForTests(): void {
+  providerUnavailableWindows.clear();
+}
+
 // How the repaired attempt of each model-answer failure ends when the model fails that way again.
 const REPAIRED_ANSWER_FAILED_AGAIN: ReadonlyMap<
   CodingWorkbenchTurnFailureCode,
@@ -2848,6 +2918,9 @@ const PROVIDER_REJECTION_CHUNK = {
 } as const;
 
 function providerRejectionMessage(error: unknown): string {
+  if (typeof error === "object" && error !== null && unavailableCappedErrors.has(error)) {
+    return PROVIDER_UNAVAILABLE_MESSAGE;
+  }
   return error instanceof ReasoningHistoryUnavailableError
     ? "Model continuation is unavailable. Start a new coding task."
     : PROVIDER_REJECTION_MESSAGE;
@@ -3659,7 +3732,7 @@ function settleFailedGatewayChat(
     gatewaySpendRejectionReason(error) === undefined
       ? gatewayTurnFailureCode(error)
       : "turn-rejected";
-  const runtimeRetry = runtimeRetryFor(error, failureCode);
+  const runtimeRetry = runtimeRetryForRun(runId, error, failureCode, cancelled);
   const turnFailureRecorded =
     !cancelled && reportGatewayTurnFailure(ctx, deps, runId, { failureCode, runtimeRetry, error });
   emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded, cancellation);
@@ -3903,7 +3976,7 @@ async function streamGatewayChat(
       settledRepair(outputRepairOf(error)),
     );
     const failureCode = gatewayTurnFailureCode(error);
-    const runtimeRetry = runtimeRetryFor(error, failureCode);
+    const runtimeRetry = runtimeRetryForRun(runId, error, failureCode);
     const turnFailureRecorded = reportGatewayTurnFailure(ctx, deps, runId, {
       failureCode,
       runtimeRetry,
@@ -3949,7 +4022,12 @@ async function pumpGatewayStreamWithCancellation(
     await pumpGatewayStream(session);
   } catch (error) {
     const failureCode = gatewayStreamFailureCode(error);
-    const runtimeRetry = runtimeRetryFor(error, failureCode);
+    const runtimeRetry = runtimeRetryForRun(
+      session.runId,
+      error,
+      failureCode,
+      cancellationSignal.aborted,
+    );
     const turnFailureRecorded =
       !cancellationSignal.aborted &&
       reportGatewayTurnFailure(session.ctx, deps, session.runId, {

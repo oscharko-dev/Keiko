@@ -16815,6 +16815,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
       },
+      unavailableWindowCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       repairAttempted: {
         type: "boolean",
         dataClass: "closed-enum",

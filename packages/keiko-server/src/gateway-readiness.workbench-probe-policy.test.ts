@@ -380,10 +380,12 @@ describe("automatic Workbench probes — a live run keeps the gateway", () => {
         );
       Object.assign(deps, {
         gatewayReadinessFetch: (_url: unknown, init?: RequestInit): Promise<Response> => {
-          if (!String(init?.body).includes("other-chat")) return Promise.resolve(ok());
+          if (typeof init?.body !== "string" || !init.body.includes("other-chat")) {
+            return Promise.resolve(ok());
+          }
           markStarted();
           return new Promise<Response>((_resolve, reject) => {
-            init?.signal?.addEventListener("abort", () => {
+            init.signal?.addEventListener("abort", () => {
               aborted = true;
               reject(new DOMException("aborted", "AbortError"));
             });

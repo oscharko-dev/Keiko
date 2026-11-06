@@ -562,7 +562,7 @@ describe("streamRequestBudgetMs: the output allowance sizes the budget of a live
   it("grants a 32k-token answer the time it needs at the slowest granted rate", () => {
     const needed = streamOutputAllowanceMs(32_768);
     // 8 tok/s for 32k tokens is 68 minutes: more than the old fixed 30 minutes.
-    expect(32_768 / 8) .toBeGreaterThan(GATEWAY_STREAM_BUDGET_FLOOR_MS / 1000);
+    expect(32_768 / 8).toBeGreaterThan(GATEWAY_STREAM_BUDGET_FLOOR_MS / 1000);
     expect(needed).toBeGreaterThan((32_768 / 8) * 1000);
     expect(streamRequestBudgetMs(provider, 32_768)).toBe(needed);
     expect(streamedCallBudgetMs(provider, 0, 32_768)).toBe(needed);
