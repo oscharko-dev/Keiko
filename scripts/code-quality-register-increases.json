@@ -6730,6 +6730,14 @@
       "issue": 3914
     },
     {
+      "path": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 14,
+      "to": 15,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-server/src/conversation-readiness-admission.test.ts",
       "rule": "anti-slop/no-known-value-widening",
       "from": 1,
@@ -8391,6 +8399,14 @@
       "from": 1,
       "to": 3,
       "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "scripts/coding-runtime-performance-harness.mjs",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 2,
+      "to": 3,
+      "reason": "proof-fixture",
       "issue": 3918
     },
     {
