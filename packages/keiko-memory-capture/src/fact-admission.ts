@@ -278,6 +278,12 @@ const HYPOTHETICAL_RE = anyWordPattern([
   "suppose",
   "imagine",
   "hypothetically",
+  "gesetzt den fall",
+  "im fall",
+  "es sei denn",
+  "unless",
+  "provided",
+  "what if",
 ]);
 const LEADING_CONDITION_RE = /^\s*(?:wenn|falls|angenommen|if|suppose|imagine)(?!\p{L})/iu;
 const SUBJUNCTIVE_RE = anyWordPattern([
@@ -292,7 +298,9 @@ const SUBJUNCTIVE_RE = anyWordPattern([
   "would",
   "could",
   "might",
-  "should have",
+  "sollten?",
+  "solltest",
+  "should",
 ]);
 const IRONY_RE = anyWordPattern([
   "ja total",
@@ -605,16 +613,34 @@ const CONTEXT_NEGATION_RE = anyWordPattern([
   "wrong",
   "unwahr",
 ]);
+// Someone else's words or view framing the claim: "Laut Anna nutze ich Vim", "Anna findet, ich ...".
+// "Das Daily findet montags statt" is no view. A reason ("weil Anna es mir sagte") is judged as one.
 const REPORTED_SPEECH_RE = anyWordPattern([
   "sagte?",
   "meinte?",
   "behauptete?",
+  "glaubt",
+  "denkt",
+  String.raw`findet(?=\s*(?:,|dass(?!\p{L})))`,
+  "zufolge",
+  "angeblich",
   "says",
   "said",
   "claims",
   "claimed",
   "told me",
+  "thinks",
+  "according to",
+  "supposedly",
+  "allegedly",
 ]);
+// "laut" is also "loud"; as attribution it names someone: "Laut Anna", "laut meinem Chef".
+// The first two words of each later clause.
+const CLAUSE_HEAD_RE = /[,;:–—-]\s*(\p{L}+)(?:\s+\p{L}+)?/gu;
+const RELATIVE_LEAD_RE =
+  /^(?:which|that|who|whom|whose|where|because|since|der|die|das|den|dem|welche[rsmn]?|weil|da|wo|denn|obwohl)$/iu;
+const ATTRIBUTED_RE =
+  /(?:^|[^\p{L}])[Ll]aut\s+(?:\p{Lu}|(?:mein(?:em|er)?|ihr|ihm|ihnen|dem|der|den)(?!\p{L}))/u;
 
 function sentenceAround(text: string, start: number, end: number): { from: number; to: number } {
   let from = start;
@@ -660,7 +686,6 @@ function isHypothetical(evidence: string, prefix: string): boolean {
 
 // "Es stimmt nicht, dass ich ..." denies the claim. A separate clause before it does not.
 function isDeniedByPrefix(prefix: string): boolean {
-  if (REPORTED_SPEECH_RE.test(prefix)) return true;
   if (SUBORDINATE_LEAD_RE.test(prefix)) return CONTEXT_NEGATION_RE.test(prefix);
   return CONTEXT_NEGATION_RE.test(prefix.split(CLAUSE_SPLIT_RE).at(-1) ?? "");
 }
@@ -773,8 +798,18 @@ function contextDropReason(
   if (IRONY_RE.test(sentence) || IRONIC_OPENING_RE.test(sentence)) return "ironic";
   if (UNCERTAIN_RE.test(sentence)) return "uncertain";
   if (isPast(evidence)) return "past-statement";
-  const denied = isDeniedByPrefix(prefix) || REPORTED_SPEECH_RE.test(opening);
-  return denied ? "negated-context" : null;
+  const rest = sentence.slice(prefix.length);
+  return isDeniedByPrefix(prefix) || isReported(opening, rest) ? "negated-context" : null;
+}
+
+// Attribution before the person's subject, or opening a later clause: "Dass ich Tabellen mag, sagt
+// Anna", "I use Vim, Anna says". A relative clause or reason ("…, which says nothing", "…, weil Anna
+// es mir sagte") is no attribution; a reason is judged by the subject checks.
+function isReported(opening: string, rest: string): boolean {
+  if (REPORTED_SPEECH_RE.test(opening) || ATTRIBUTED_RE.test(opening)) return true;
+  return [...rest.matchAll(CLAUSE_HEAD_RE)].some(
+    (head) => !RELATIVE_LEAD_RE.test(head[1] ?? "") && REPORTED_SPEECH_RE.test(head[0]),
+  );
 }
 
 // The words up to the person's own subject frame the claim like the words before it: "Anna says I

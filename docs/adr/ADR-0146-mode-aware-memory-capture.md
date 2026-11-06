@@ -239,7 +239,9 @@ D2 lets a fact through.
   sits inside a word ("Home-Office") and opens no clause; a bracket opens an aside, so "Anna mag
   Kaffee" in "Ich mag Tee (aber Anna mag Kaffee)" is never the person's clause. The words up to the
   person's own subject are read like the words before the clause, so "Anna says I like tables" and
-  "Stell dir vor ich nutze Excel" are dropped with or without a comma. The clause is not a question, request,
+  "Stell dir vor ich nutze Excel" are dropped with or without a comma, and so is an attribution that
+  opens a later clause ("Dass ich Tabellen mag, sagt Anna"); a relative clause or a reason is no
+  attribution ("I use vim, which says nothing" stands, "weil Anna es mir sagte" is a third party's). The clause is not a question, request,
   quotation, hypothesis, irony, hedge ("Ich glaube, …"), denial or past statement. Tense and
   pronouns are judged on the claim itself, not on its reason or condition, so "Ich nutze Tabellen,
   weil sie übersichtlich sind" stands; a decision, switch or migration made in the past holds now.

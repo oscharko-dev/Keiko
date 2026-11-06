@@ -465,6 +465,34 @@ describe("a span copied without the first words of its clause", () => {
     },
   );
 
+  it.each<[string, string, FactDropReason]>([
+    ["Dass ich Tabellen mag, sagt Anna.", "Dass ich Tabellen mag", "negated-context"],
+    ["Ich nutze Jira, sagt Anna.", "Ich nutze Jira, sagt Anna", "negated-context"],
+    ["I use Vim, Anna says.", "I use Vim", "negated-context"],
+    ["Laut Anna nutze ich Vim.", "Laut Anna nutze ich Vim", "negated-context"],
+    ["Laut meinem Chef nutze ich Vim.", "nutze ich Vim", "negated-context"],
+    ["According to Anna I use Vim.", "I use Vim", "negated-context"],
+    ["Anna thinks I use Vim.", "Anna thinks I use Vim", "negated-context"],
+    ["Anna findet, ich nutze Vim.", "ich nutze Vim", "negated-context"],
+    ["Angeblich nutze ich Vim.", "Angeblich nutze ich Vim", "negated-context"],
+    ["Supposedly I use Vim.", "I use Vim", "negated-context"],
+    ["Sollte ich Vim nutzen, sage ich es.", "Sollte ich Vim nutzen", "hypothetical"],
+    ["Gesetzt den Fall, ich nutze Vim.", "ich nutze Vim", "hypothetical"],
+    ["Unless I use Vim, nothing changes.", "Unless I use Vim", "hypothetical"],
+    ["I should use Vim.", "I should use Vim", "hypothetical"],
+  ])("keeps another's words or a condition out: %s", (text, evidence, reason) => {
+    expect(reasonOf(text, evidence)).toBe(reason);
+  });
+
+  it.each([
+    ["Das Daily findet montags statt, ich nutze dann Vim.", "ich nutze dann Vim"],
+    ["Ich sage immer, dass ich Tabellen mag.", "dass ich Tabellen mag"],
+    ["Ehrlich gesagt mag ich Tabellen.", "Ehrlich gesagt mag ich Tabellen"],
+    ["Ich höre gern laute Musik.", "Ich höre gern laute Musik"],
+  ])("keeps a genuine statement that only resembles one: %s", (text, evidence) => {
+    expect(admit(text, evidence).admitted).toBe(true);
+  });
+
   it("keeps an aside in brackets out of the person's clause", () => {
     const text = "Ich mag Tee (aber Anna mag Kaffee).";
     expect(admit(text, "Anna mag Kaffee", "Ich mag Kaffee").admitted).toBe(false);
