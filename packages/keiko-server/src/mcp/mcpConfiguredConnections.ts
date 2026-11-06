@@ -18,6 +18,7 @@ import {
   connectExternalMcp,
   createMcpRelayEndpoint,
   ManagedMcpError,
+  noEffectError,
   supportsOwnedMcpStdio,
   type McpNativeStdioOwner,
   type ExternalMcpTransportOptions,
@@ -27,7 +28,8 @@ import {
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { savePrivateJson } from "../private-json.js";
-import { resolveMcpSecretHeaders } from "./mcpCredentialRelay.js";
+import { recordMcpRelay, resolveMcpSecretHeaders } from "./mcpCredentialRelay.js";
+import { HUNG_TIMEOUTS_BEFORE_RECYCLE, McpReconnectPolicy } from "./mcpReconnectPolicy.js";
 import type { McpSettingsStore } from "./mcpSettingsStore.js";
 import type { McpAuthorization } from "./mcpAuthorization.js";
 
@@ -61,6 +63,18 @@ interface Options {
   readonly egress: () => OutboundHttpEgressConfig | undefined;
   readonly connect?: typeof connectExternalMcp;
   readonly fetch?: typeof gatewayFetch;
+  /** Clock for the reconnect backoff; tests inject one. */
+  readonly now?: () => number;
+}
+
+/**
+ * What the shared connection's callers report back: a success clears the failure history, and a
+ * run of timeouts with no success in between proves the server is connected but hung, so the
+ * connection is recycled instead of costing every following call a full deadline.
+ */
+interface ConnectionHealth {
+  readonly succeeded: () => void;
+  readonly timedOut: (connection: ExternalMcpConnection, correlationId: string) => void;
 }
 
 function currentServer(options: Options, name: string, correlationId: string): McpServerDefinition {
@@ -239,11 +253,37 @@ function projectMcpResult(
     throw new ManagedMcpError("protocol-error");
   return safe;
 }
+/** A refusal before the call is effect-free, whether the check says no or cannot be made. */
+function admittedBeforeCall(beforeEffect: () => boolean): boolean {
+  try {
+    return beforeEffect();
+  } catch {
+    return false;
+  }
+}
+async function callObserved(
+  connection: ExternalMcpConnection,
+  health: ConnectionHealth,
+  name: string,
+  args: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+): Promise<CatalogJsonObject> {
+  try {
+    const data = await connection.call(name, args, context);
+    health.succeeded();
+    return data;
+  } catch (error) {
+    if (error instanceof ManagedMcpError && error.reason === "deadline-exceeded")
+      health.timedOut(connection, context.correlationId);
+    throw error;
+  }
+}
 function guardedConnection(
   options: Options,
   server: McpServerDefinition,
   signal: AbortSignal,
   connection: ExternalMcpConnection,
+  health: ConnectionHealth,
 ): ExternalMcpConnection {
   const secrets = mcpServerSecretReferences(server)
     .map((reference) => options.settings.secret(reference, server))
@@ -265,8 +305,8 @@ function guardedConnection(
         currentGeneration(options, server, context.correlationId);
         return !signal.aborted && context.beforeEffect();
       };
-      if (!beforeEffect()) throw new ManagedMcpError("not-admitted");
-      const data = await connection.call(name, args, {
+      if (!admittedBeforeCall(beforeEffect)) throw noEffectError("not-admitted");
+      const data = await callObserved(connection, health, name, args, {
         ...context,
         signal: AbortSignal.any([signal, context.signal]),
         beforeEffect,
@@ -287,6 +327,8 @@ interface ConnectionEntry {
   readonly connection: Promise<ExternalMcpConnection>;
   client?: ExternalMcpConnection;
   failed: boolean;
+  /** The failure that ended this connection is already counted in the reconnect policy. */
+  counted: boolean;
   endpoint?: ReturnType<typeof createMcpRelayEndpoint>;
 }
 
@@ -361,6 +403,7 @@ async function openConnection(
   signal: AbortSignal,
   correlationId: string,
   previous: ExternalMcpConnection | undefined,
+  health: ConnectionHealth,
 ): Promise<ExternalMcpConnection> {
   await previous?.close();
   const transport =
@@ -372,18 +415,87 @@ async function openConnection(
     log: options.log,
     correlationId,
     signal,
+    // Automatic discovery needs the whole catalog; otherwise only the registry's tools matter.
+    allowedTools: server.discovery === "automatic" ? undefined : Object.keys(server.tools),
+    serverDigest: createHash("sha256").update(server.name).digest("hex"),
   });
   currentGeneration(options, server, correlationId);
   if (signal.aborted || client.signal.aborted) {
     await client.close();
     throw new ManagedMcpError("closed");
   }
-  return guardedConnection(options, server, signal, client);
+  return guardedConnection(options, server, signal, client, health);
+}
+/** A connection that ended on its own, other than by a catalog change, counts as a failure. */
+function noteEndedConnection(
+  existing: ConnectionEntry | undefined,
+  policy: McpReconnectPolicy,
+  name: string,
+): void {
+  const reason: unknown = existing?.client?.signal.reason;
+  if (
+    existing?.client?.signal.aborted !== true ||
+    existing.counted ||
+    (reason instanceof ManagedMcpError && reason.reason === "descriptor-drift")
+  )
+    return;
+  // Once per ended connection: later calls during the backoff see the same dead entry.
+  existing.counted = true;
+  policy.failed(name);
+}
+function refuseDuringBackoff(
+  options: Options,
+  policy: McpReconnectPolicy,
+  name: string,
+  correlationId: string,
+): ManagedMcpError | undefined {
+  try {
+    policy.admit(name);
+    return undefined;
+  } catch (error) {
+    recordMcpRelay(options.log, correlationId, {
+      action: "request",
+      outcome: "refused",
+      reason: "reconnect-backoff",
+      failureCount: policy.failures(name),
+      backoffMs: policy.remainingMs(name),
+    });
+    return error instanceof ManagedMcpError ? error : new ManagedMcpError("backoff");
+  }
+}
+function healthOf(
+  options: Options,
+  policy: McpReconnectPolicy,
+  name: string,
+  entry: () => ConnectionEntry,
+): ConnectionHealth {
+  let timeouts = 0;
+  return {
+    succeeded: (): void => {
+      timeouts = 0;
+      policy.succeeded(name);
+    },
+    timedOut: (connection, correlationId): void => {
+      if (++timeouts < HUNG_TIMEOUTS_BEFORE_RECYCLE) return;
+      timeouts = 0;
+      entry().counted = true;
+      const failures = policy.failed(name);
+      recordMcpRelay(options.log, correlationId, {
+        action: "request",
+        outcome: "failed",
+        reason: "server-hung-recycled",
+        failureCount: failures,
+        backoffMs: policy.remainingMs(name),
+      });
+      void connection.close().catch(() => undefined);
+    },
+  };
 }
 function connectCurrent(
   options: Options,
   lifetime: AbortSignal,
   connections: Map<string, ConnectionEntry>,
+  policy: McpReconnectPolicy,
   name: string,
   correlationId: string,
 ): Promise<ExternalMcpConnection> {
@@ -398,30 +510,52 @@ function connectCurrent(
     existing.client?.signal.aborted !== true
   )
     return existing.connection;
+  noteEndedConnection(existing, policy, name);
+  const refused = refuseDuringBackoff(options, policy, name, correlationId);
+  if (refused !== undefined) return Promise.reject(refused);
   const signal = AbortSignal.any([lifetime, generation]);
-  const connection = openConnection(options, server, signal, correlationId, existing?.client).then(
-    (client) => {
-      entry.client = client;
-      return client;
-    },
-  );
-  const entry: ConnectionEntry = { signal, connection, failed: false };
+  const health = healthOf(options, policy, name, () => entry);
+  const connection = openConnection(
+    options,
+    server,
+    signal,
+    correlationId,
+    existing?.client,
+    health,
+  ).then((client) => {
+    entry.client = client;
+    return client;
+  });
+  const entry: ConnectionEntry = { signal, connection, failed: false, counted: false };
   connections.set(name, entry);
-  signal.addEventListener(
+  watchEntry(connections, policy, name, entry, generation);
+  return connection;
+}
+function watchEntry(
+  connections: Map<string, ConnectionEntry>,
+  policy: McpReconnectPolicy,
+  name: string,
+  entry: ConnectionEntry,
+  generation: AbortSignal,
+): void {
+  entry.signal.addEventListener(
     "abort",
     () => {
       if (connections.get(name) === entry) connections.delete(name);
+      // A changed configuration or a shutdown starts from a clean slate, not from old failures.
+      if (generation.aborted) policy.succeeded(name);
     },
     { once: true },
   );
-  void connection.catch(() => {
+  void entry.connection.catch(() => {
     entry.failed = true;
+    if (!entry.signal.aborted) policy.failed(name);
   });
-  return connection;
 }
 export function createConfiguredMcpConnections(options: Options): ConfiguredMcpConnections {
   const lifetime = new AbortController();
   const connections = new Map<string, ConnectionEntry>();
+  const policy = new McpReconnectPolicy(options.now);
   const manager: ConfiguredMcpConnections = {
     inspect: (correlationId) =>
       options.settings
@@ -438,7 +572,7 @@ export function createConfiguredMcpConnections(options: Options): ConfiguredMcpC
       return endpointFor(entry, connection, server).fetch(request, context);
     },
     connect: (name, correlationId) =>
-      connectCurrent(options, lifetime.signal, connections, name, correlationId),
+      connectCurrent(options, lifetime.signal, connections, policy, name, correlationId),
     close: async (): Promise<void> => {
       await options.authorization?.close();
       const pending = [...connections.values()];

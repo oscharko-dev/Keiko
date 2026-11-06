@@ -82,6 +82,11 @@ export interface McpCredentialRelay {
   /** A capability for one run and one server; `undefined` when the relay holds its maximum. */
   bind(target: McpRelayTarget): McpRelayBinding | undefined;
   authenticate(relayId: string, capability: string | undefined): McpRelayAdmission | undefined;
+  /**
+   * Whether this exact capability once belonged to a binding that was revoked. The proof of the
+   * capability is required, so an unauthenticated caller learns nothing about relay ids.
+   */
+  wasRevoked?(relayId: string, capability: string | undefined): boolean;
   releaseRun(runId: string): void;
 }
 
@@ -96,8 +101,29 @@ function capabilityHash(capability: string): Buffer {
   return createHash("sha256").update(capability, "utf8").digest();
 }
 
+/** Revoked capabilities remembered so a late request can be told why it was refused. */
+const MAX_REVOKED_BINDINGS = 1024;
+
 class InMemoryMcpCredentialRelay implements McpCredentialRelay {
   private readonly bindings = new Map<string, StoredBinding>();
+  private readonly revoked = new Map<string, Buffer>();
+
+  private remember(relayId: string, stored: StoredBinding): void {
+    this.revoked.set(relayId, stored.capabilityHash);
+    if (this.revoked.size > MAX_REVOKED_BINDINGS) {
+      const [oldest] = this.revoked.keys();
+      if (oldest !== undefined) this.revoked.delete(oldest);
+    }
+  }
+
+  public wasRevoked(relayId: string, capability: string | undefined): boolean {
+    const hash = this.revoked.get(relayId);
+    return (
+      hash !== undefined &&
+      capability !== undefined &&
+      timingSafeEqual(hash, capabilityHash(capability))
+    );
+  }
 
   public bind(target: McpRelayTarget): McpRelayBinding | undefined {
     if (this.bindings.size >= MAX_BINDINGS || target.signal?.aborted === true) return undefined;
@@ -106,6 +132,8 @@ class InMemoryMcpCredentialRelay implements McpCredentialRelay {
     const controller = new AbortController();
     const revoke = (): void => {
       controller.abort();
+      const stored = this.bindings.get(relayId);
+      if (stored !== undefined) this.remember(relayId, stored);
       this.bindings.delete(relayId);
     };
     target.signal?.addEventListener("abort", revoke, { once: true });
@@ -138,6 +166,7 @@ class InMemoryMcpCredentialRelay implements McpCredentialRelay {
       if (stored.target.runId !== runId) continue;
       stored.controller.abort();
       stored.detach();
+      this.remember(relayId, stored);
       this.bindings.delete(relayId);
     }
   }
@@ -198,6 +227,9 @@ const REASONS = [
   "credential-in-response-header",
   "credential-spelling-unbounded",
   "mutation-outcome-unknown",
+  "binding-revoked",
+  "server-hung-recycled",
+  "reconnect-backoff",
 ] as const;
 type RelayReason = (typeof REASONS)[number];
 
@@ -227,6 +259,9 @@ const MCP_RELAY_OPERATION = defineActivityLogOperation({
     // Credential occurrences the relay replaced in the server's response before the run read it.
     redactedCount: { type: "integer", dataClass: "count", required: false },
     durationMs: { type: "integer", dataClass: "count", required: false },
+    // Consecutive failures behind a recycle or a backoff, and how long the next attempt must wait.
+    failureCount: { type: "integer", dataClass: "count", required: false },
+    backoffMs: { type: "integer", dataClass: "count", required: false },
     frames: {
       type: "string-array",
       dataClass: "opaque-id",
@@ -263,6 +298,8 @@ export interface McpRelayLine extends ActivityActionLine<
   readonly requestBytes?: number | undefined;
   readonly responseBytes?: number | undefined;
   readonly redactedCount?: number | undefined;
+  readonly failureCount?: number | undefined;
+  readonly backoffMs?: number | undefined;
 }
 
 /** Counts and closed values only; never a credential, a URL or a server name. */
@@ -291,6 +328,8 @@ export function recordMcpRelay(
           "responseBytes",
           "redactedCount",
           "durationMs",
+          "failureCount",
+          "backoffMs",
         ] as const),
         ...activityErrorFields(line),
       },
@@ -469,9 +508,22 @@ async function pipeResponse(
   return { bytes, redacted: redactor.redactedCount() };
 }
 
-function refuse(response: ServerResponse, status: number): void {
+/** Fixed words for the one refusal a model should understand; never a name, URL or credential. */
+const REVOKED_BODY = JSON.stringify({
+  error: "binding-revoked",
+  message:
+    "This tool connection was ended because its coding run was stopped or its permissions changed. Start a new run to use the tool again.",
+});
+
+function refuse(response: ServerResponse, status: number, reason?: RelayReason): void {
   if (response.headersSent) {
     response.destroy();
+    return;
+  }
+  if (reason === "binding-revoked") {
+    response
+      .writeHead(status, { "cache-control": "no-store", "content-type": "application/json" })
+      .end(REVOKED_BODY);
     return;
   }
   response.writeHead(status, { "cache-control": "no-store" }).end();
@@ -487,8 +539,12 @@ function admittedExchange(
     relayId,
     headerValue(request, MCP_RELAY_CAPABILITY_HEADER),
   );
-  if (admission === undefined) throw new RelayRefusal(401, "capability-invalid");
-  return admission;
+  if (admission !== undefined) return admission;
+  const revoked = options.relay?.wasRevoked?.(
+    relayId,
+    headerValue(request, MCP_RELAY_CAPABILITY_HEADER),
+  );
+  throw new RelayRefusal(401, revoked === true ? "binding-revoked" : "capability-invalid");
 }
 
 interface ExchangeState {
@@ -622,7 +678,11 @@ export async function serveMcpRelayRequest(
   } catch (error) {
     // A refusal answers its own status; a failure answers 502, or is cut off once bytes were sent.
     const settled = settledLine(error, state, response.headersSent);
-    refuse(response, error instanceof RelayRefusal ? error.status : 502);
+    refuse(
+      response,
+      error instanceof RelayRefusal ? error.status : 502,
+      error instanceof RelayRefusal ? error.reason : undefined,
+    );
     recordSettled(settled);
   } finally {
     detach();
