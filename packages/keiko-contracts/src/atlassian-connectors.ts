@@ -63,6 +63,52 @@ export interface AtlassianNetworkConfig {
   readonly privateTargets: readonly AtlassianPrivateTarget[];
 }
 
+/** Observed REST v2 identity on Jira >=10.3.0; this grants no operation or Jira permission. */
+export interface JiraDataCenterCompatibilityFacts {
+  readonly schemaVersion: 1;
+  readonly deploymentType: "Server" | "Data Center";
+  readonly versionNumbers: readonly [number, number, number];
+  readonly restApi: "v2";
+  readonly agileApi: "unverified";
+}
+
+const JIRA_COMPATIBILITY_KEYS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "deploymentType",
+  "versionNumbers",
+  "restApi",
+  "agileApi",
+]);
+
+function isJiraReleaseNumbers(value: unknown): value is readonly [number, number, number] {
+  return (
+    Array.isArray(value) &&
+    value.length === 3 &&
+    Object.keys(value).length === 3 &&
+    [value[0], value[1], value[2]].every(
+      (part) => Number.isSafeInteger(part) && Number(part) >= 0,
+    ) &&
+    // 10.3 is the oldest supported source baseline, not an exact release allow-list.
+    (Number(value[0]) > 10 || (value[0] === 10 && Number(value[1]) >= 3))
+  );
+}
+
+/** Exact private metadata shape: unknown fields and unverified capabilities fail closed. */
+export function isJiraDataCenterCompatibilityFacts(
+  value: unknown,
+): value is JiraDataCenterCompatibilityFacts {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).every((key) => JIRA_COMPATIBILITY_KEYS.has(key)) &&
+    record.schemaVersion === 1 &&
+    (record.deploymentType === "Server" || record.deploymentType === "Data Center") &&
+    isJiraReleaseNumbers(record.versionNumbers) &&
+    record.restApi === "v2" &&
+    record.agileApi === "unverified"
+  );
+}
+
 interface AtlassianCredentialMetadataBase {
   readonly schemaVersion: typeof ATLASSIAN_CONNECTOR_SCHEMA_VERSION;
   readonly authRef: string;
@@ -83,6 +129,8 @@ export interface JiraLivePodMetadata {
   readonly verificationRevision: number;
   readonly verificationInProgress: boolean;
   readonly verificationStatus: "unverified" | AtlassianConnectionVerificationStatus;
+  /** Bound to this credential generation and verification revision; absent on legacy records. */
+  readonly compatibility?: JiraDataCenterCompatibilityFacts;
 }
 
 /** A secret-free projection. An absent legacy deployment always means Cloud. */
@@ -538,6 +586,8 @@ export type AtlassianSyncJobState =
 // ─── Governed action vocabulary and effect-class table (ADR-0128 D4) ──────────
 export type AtlassianConnectorActionType =
   | JiraManagedReadToolName
+  | "create-project"
+  | "update-project"
   | "assign-issue"
   | "sync-space"
   | "sync-project"
@@ -564,6 +614,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorAction
     "add-page-comment",
     ...JIRA_MANAGED_READ_TOOLS,
     "assign-issue",
+    "create-project",
+    "update-project",
   ] as const satisfies readonly AtlassianConnectorActionType[]);
 
 /** One mapping from canonical tools to the existing connector policy vocabulary. */
@@ -578,6 +630,8 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
     JiraManagedReadToolName
   >),
   "jira.create": "create-issue",
+  "jira.create-project": "create-project",
+  "jira.update-project": "update-project",
   "jira.edit": "update-issue-fields",
   "jira.assign": "assign-issue",
   "jira.comment": "add-issue-comment",
@@ -613,6 +667,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorActionClass>
 > = Object.freeze({
   ...jiraReadActionValues("connector-access"),
+  "create-project": "connector-write",
+  "update-project": "connector-write",
   "assign-issue": "connector-write",
   "sync-space": "connector-access",
   "sync-project": "connector-access",
@@ -630,6 +686,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
   ...jiraReadActionValues("jira"),
+  "create-project": "jira",
+  "update-project": "jira",
   "assign-issue": "jira",
   "sync-space": "confluence",
   "sync-project": "jira",
@@ -647,6 +705,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
   ...jiraReadActionValues("issue-tracker.read"),
+  "create-project": "issue-tracker.write",
+  "update-project": "issue-tracker.write",
   "assign-issue": "issue-tracker.write",
   "sync-space": "knowledge-base.read",
   "sync-project": "issue-tracker.read",
@@ -667,6 +727,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
   ...jiraReadActionValues("low"),
+  "create-project": "high",
+  "update-project": "medium",
   "assign-issue": "medium",
   "sync-space": "low",
   "sync-project": "low",

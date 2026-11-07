@@ -7,6 +7,46 @@ import {
 } from "./jira-field-metadata.js";
 
 describe("Data Center description serialization", () => {
+  it("uses the canonical supported Markdown projection before validation and preparation", () => {
+    const parsed = parseJiraFieldMetadata([field("description", "string")]);
+    if (!parsed.ok) throw new TypeError("Missing synthetic description");
+    const fields = {
+      description: { format: "markdown", text: "## Criteria\n- **Exact**\n  1. `detail`" },
+    };
+    const expected = {
+      ok: true,
+      fields: { description: "h2. Criteria\n* *Exact*\n*# {{detail}}" },
+      update: {},
+      descriptionConvertedHeadingCount: 1,
+      descriptionProjection: "supported-markdown",
+    };
+    expect(validateJiraFieldChanges(parsed.fields, fields, "edit", "data-center")).toEqual(
+      expected,
+    );
+    expect(prepareJiraDescriptionFields(fields, parsed.fields)).toMatchObject(expected);
+  });
+
+  it("refuses an unsupported Markdown document without returning a partially converted value", () => {
+    const parsed = parseJiraFieldMetadata([field("description", "string")]);
+    if (!parsed.ok) throw new TypeError("Missing synthetic description");
+    const result = prepareJiraDescriptionFields(
+      {
+        description: {
+          format: "markdown",
+          text: "## Heading\n![Image](https://example.invalid/image.png)",
+        },
+      },
+      parsed.fields,
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      fieldId: "description",
+      reason: "invalid-field",
+    });
+    if (result.ok) throw new TypeError("Expected unsupported Markdown refusal");
+    expect(result.message).toContain("unsupported structure");
+    expect(result).not.toHaveProperty("fields");
+  });
   it("serializes only the description and carries an internal actual conversion count", () => {
     const parsed = parseJiraFieldMetadata([
       field("description", "string"),
@@ -28,6 +68,7 @@ describe("Data Center description serialization", () => {
       fields: { description: "h2. Criteria\n* exact", environment: "## Literal environment" },
       update: {},
       descriptionConvertedHeadingCount: 1,
+      descriptionProjection: "supported-markdown",
     });
   });
 
@@ -1044,6 +1085,7 @@ describe("description admission before requirement trace", () => {
       fields: { description: "h2. Criteria\n* exact" },
       update: {},
       descriptionConvertedHeadingCount: 1,
+      descriptionProjection: "supported-markdown",
     });
   });
 });

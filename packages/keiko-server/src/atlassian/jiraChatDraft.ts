@@ -85,6 +85,8 @@ export interface JiraChatDraftExecution {
    * draft is refused.
    */
   readonly openTrace?: (() => TraceSession) | undefined;
+  /** The immutable source payload covered by this write's source digest. */
+  readonly preparedTraces?: ReadonlyMap<string, ItemTrace>;
   /**
    * Whether a draft whose items name no requirement is returned once with guidance instead of run
    * (S14, #4179). Asked only when the Chat's Pods hold requirement units; true claims the one
@@ -846,7 +848,13 @@ export async function executeJiraChatDraft(
   const tally = newTally();
   try {
     const excluded = excludedJiraDraftRefs(draft, input.deselected);
-    const resolved = resolveItemTraces(session, draft, tally, excluded);
+    const resolved =
+      input.preparedTraces === undefined
+        ? resolveItemTraces(session, draft, tally, excluded)
+        : {
+            traces: input.preparedTraces,
+            refused: new Map<string, Extract<TraceResolution, { ok: false }>>(),
+          };
     if (resolved.refused.size > 0) {
       logTrace(input.intent.correlationId, "draft", tally);
       return refusedDraft(resolved.refused);

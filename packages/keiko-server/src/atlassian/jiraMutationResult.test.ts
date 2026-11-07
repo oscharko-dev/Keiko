@@ -20,7 +20,83 @@ const PARTIAL: JiraMutationAttempt = {
   links: LINKS,
 };
 
+describe("project mutation receipts", () => {
+  const receipt = {
+    projectId: "9223372036854775807",
+    projectKey: "SYN",
+    projectName: "Synthetic project",
+    browseUrl: "https://jira.example.invalid/context/projects/SYN/summary",
+  };
+  it.each(["jira.create-project", "jira.update-project"] as const)(
+    "preserves the independently confirmed project identity for %s",
+    (operation) => {
+      const attempt = validJiraMutationAttempt({ ok: true, receipt }, operation);
+      expect(attempt).toEqual({ ok: true, receipt });
+      expect(jiraAttemptToolResult("succeeded", attempt).data).toMatchObject(receipt);
+    },
+  );
+  it("keeps partial project identity with an uncertain effect and no invented issue key", () => {
+    const attempt = validJiraMutationAttempt(
+      { ok: false, reason: "conflict", receipt },
+      "jira.create-project",
+    );
+    const result = jiraAttemptToolResult("unknown", attempt);
+    expect(result.data).toMatchObject({
+      ...receipt,
+      outcome: "unknown",
+      reason: "conflict",
+      guidance: JIRA_UNCERTAIN_GUIDANCE,
+    });
+    expect(result.data).not.toHaveProperty("issueKey");
+  });
+  it.each([
+    { ...receipt, issueKey: "SYN-1" },
+    { ...receipt, projectId: "not-numeric" },
+    { ...receipt, projectName: "Synthetic\nproject" },
+    {
+      ...receipt,
+      browseUrl: "https://user:password@jira.example.invalid/context/projects/SYN/summary",
+    },
+    { ...receipt, browseUrl: "https://jira.example.invalid/context/projects/OTHER/summary" },
+    {
+      ...receipt,
+      browseUrl: "https://jira.example.invalid/context/projects/SYN/summary?next=foreign",
+    },
+    { ...receipt, browseUrl: "https://jira.example.invalid/context/browse/SYN-1" },
+  ])("refuses mixed or unvalidated project receipts %#", (invalid) => {
+    expect(validJiraMutationAttempt({ ok: true, receipt: invalid }, "jira.create-project")).toEqual(
+      { ok: false, reason: "malformed-payload" },
+    );
+    expect(
+      validJiraMutationAttempt(
+        { ok: false, reason: "conflict", receipt: invalid },
+        "jira.create-project",
+      ),
+    ).not.toHaveProperty("receipt");
+  });
+});
+
 describe("internal description formatting evidence", () => {
+  it("keeps body-only Markdown projection evidence private and drops foreign values", () => {
+    const attempt: JiraMutationAttempt = {
+      ok: true,
+      receipt: { issueKey: "SYN-1" },
+      descriptionProjection: "supported-markdown",
+    };
+    const valid = validJiraMutationAttempt(attempt, "jira.edit");
+    expect(valid.descriptionProjection).toBe("supported-markdown");
+    expect(valid).not.toHaveProperty("descriptionConvertedHeadingCount");
+    expect(jiraAttemptToolResult("succeeded", valid).data).not.toHaveProperty(
+      "descriptionProjection",
+    );
+    const foreign = {
+      ...attempt,
+      descriptionProjection: "private body",
+    } as unknown as JiraMutationAttempt;
+    expect(validJiraMutationAttempt(foreign, "jira.edit")).not.toHaveProperty(
+      "descriptionProjection",
+    );
+  });
   it.each([true, false])(
     "keeps bounded counts internally and omits them from the model result (ok=%s)",
     (ok) => {

@@ -1463,6 +1463,56 @@ describe("POST /api/diagnostics/client", () => {
 
   // PR #3678 review: the catalog's availability counts used to ride only the message, which ingest
   // reduces to a digest. They are now their own counted line, at warn, joined to the report.
+  it("persists counted Jira presentation joined to the parent transcript without content", async () => {
+    const sink = captureServerLog();
+    const jiraResultPresentation = {
+      messageDigest: "a".repeat(64),
+      exchangeCount: 2,
+      itemCount: 7,
+      shownCount: 5,
+      returnedCount: 8,
+      unreadableCount: 1,
+      problemCount: 2,
+      ruleCount: 1,
+      failure: "fields",
+      restored: true,
+    };
+    const request = {
+      message: "Jira results presented.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui-jira-presentation-0001",
+      jiraResultPresentation,
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(request)))).status).toBe(204);
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const events = sink.events.filter((event) => event.op === "client.jira-result.presented");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.level).toBe("info");
+    const proof = expectActivityLogProof(
+      "client.jira-result.presented.line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(proof).toMatchObject({
+      ...jiraResultPresentation,
+      correlationId: request.correlationId,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(
+      (
+        await handleClientDiagnosticIngest(
+          context(
+            JSON.stringify({
+              ...request,
+              jiraResultPresentation: { ...jiraResultPresentation, content: "PRIVATE_CONTENT" },
+            }),
+          ),
+        )
+      ).status,
+    ).toBe(400);
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_CONTENT");
+  });
+
   it("persists the knowledge catalog counts as client.knowledge-catalog.unavailable", async () => {
     const sink = captureServerLog();
     const knowledgeCatalog = {

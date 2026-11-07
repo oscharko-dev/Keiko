@@ -902,7 +902,7 @@ describe("source traceability of a draft (#4179)", () => {
       unitCount: () => units,
       resolve: (references) =>
         references.includes("aaaaaaaa:LH-001")
-          ? { ok: true, trace: TRACE }
+          ? { ok: true, trace: TRACE, sourceDigest: "a".repeat(64) }
           : {
               ok: false,
               reason: "references",

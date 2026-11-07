@@ -1,3 +1,9 @@
+import {
+  isJiraOperationBinding,
+  jiraOperationActionDigest,
+  type JiraOperationBinding,
+} from "../atlassian/jiraOperationRegistry.js";
+import { jiraMutationToolId } from "../atlassian/jiraMutationToolId.js";
 import type { DatabaseSync } from "node:sqlite";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
@@ -35,7 +41,12 @@ import { invalidRequest, notFound } from "./errors.js";
 import { withImmediateTransaction } from "./transaction.js";
 
 export type ChatToolTranscriptUpdate =
-  | { readonly kind: "started"; readonly call: ChatToolExchange["call"] }
+  | {
+      readonly kind: "started";
+      readonly call: ChatToolExchange["call"];
+      readonly operationBinding?: JiraOperationBinding;
+    }
+  | { readonly kind: "write-prepared"; readonly callId: string; readonly sourceDigest: string }
   | {
       readonly kind: "settled";
       readonly callId: string;
@@ -49,8 +60,12 @@ export type ChatToolTranscriptUpdate =
       readonly kind: "write-approval";
       readonly callId: string;
       readonly approval: ChatToolWriteApprovalView;
+      readonly operationBinding?: JiraOperationBinding;
     };
 interface StoredExchange extends ChatToolExchange {
+  /** Immutable private snapshot; history does not depend on the installed registry version. */
+  readonly operationBinding?: JiraOperationBinding;
+  readonly sourceDigest?: string;
   readonly resultBinding?: ToolResultValidationBinding;
 }
 interface StoredTranscript extends ChatToolTranscript {
@@ -93,7 +108,7 @@ const UPDATE = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["started", "settled", "read-consent", "write-approval"],
+      values: ["started", "write-prepared", "settled", "read-consent", "write-approval"],
     },
     exchangeCount: { type: "integer", dataClass: "count", required: true },
     draftReceiptCount: { type: "integer", dataClass: "count", required: false },
@@ -146,41 +161,76 @@ interface TranscriptIdentity {
 }
 const MUTATION_ALIASES = new Map<string, string>(
   JIRA_MUTATION_OPERATIONS.map((operation) => [
-    operation.replaceAll(".", "_"),
-    `keiko.${operation}`,
+    operation.replace(/[.-]/gu, "_"),
+    jiraMutationToolId(operation),
   ]),
 );
+function approvalActionDigest(
+  approval: ChatToolWriteApprovalView,
+  argumentsDigest: string,
+  operationBinding?: JiraOperationBinding,
+  sourceDigest?: string,
+): string {
+  return approval.kind === "jira-chat-write"
+    ? jiraOperationActionDigest(approval.operation, argumentsDigest, operationBinding, sourceDigest)
+    : sha256Hex(canonicalise({ operation: approval.operation, argumentsDigest }));
+}
 function matchesApprovalCall(
   approval: ChatToolWriteApprovalView,
   call: ChatToolExchange["call"],
   identity: TranscriptIdentity,
+  operationBinding?: JiraOperationBinding,
+  sourceDigest?: string,
 ): boolean {
   return (
+    (approval.kind === "jira-chat-write" ||
+      (operationBinding === undefined && sourceDigest === undefined)) &&
     approval.chatId === identity.chatId &&
     approval.invocationId ===
       sha256Hex(canonicalise({ messageId: identity.messageId, callId: call.id })) &&
-    call.name === approval.operation.replaceAll(".", "_") &&
+    call.name === approval.operation.replace(/[.-]/gu, "_") &&
     approval.actionDigest ===
-      sha256Hex(
-        canonicalise({
-          operation: approval.operation,
-          argumentsDigest: sha256Hex(canonicalise(call.arguments)),
-        }),
+      approvalActionDigest(
+        approval,
+        sha256Hex(canonicalise(call.arguments)),
+        operationBinding,
+        sourceDigest,
       )
   );
+}
+function validPrivateBindings(
+  value: Record<string, unknown>,
+  call: ChatToolExchange["call"],
+): value is Record<string, unknown> & {
+  operationBinding?: JiraOperationBinding;
+  sourceDigest?: string;
+} {
+  const binding = value.operationBinding;
+  if (binding !== undefined && !isJiraOperationBinding(binding)) return false;
+  if (binding !== undefined && !MUTATION_ALIASES.has(call.name)) return false;
+  if (
+    value.sourceDigest !== undefined &&
+    (!validSourceDigest(value.sourceDigest) ||
+      binding === undefined ||
+      !MUTATION_ALIASES.has(call.name))
+  )
+    return false;
+  return true;
 }
 function validApproval(
   value: Record<string, unknown>,
   call: ChatToolExchange["call"],
   identity: TranscriptIdentity | undefined,
 ): boolean {
+  if (!validPrivateBindings(value, call)) return false;
+  if (value.approval === undefined) return true;
   return (
-    value.approval === undefined ||
-    (isChatToolWriteApprovalView(value.approval) &&
-      identity !== undefined &&
-      matchesApprovalCall(value.approval, call, identity))
+    isChatToolWriteApprovalView(value.approval) &&
+    identity !== undefined &&
+    matchesApprovalCall(value.approval, call, identity, value.operationBinding, value.sourceDigest)
   );
 }
+
 function isMcpMutationProjection(
   value: Record<string, unknown>,
   call: ChatToolExchange["call"],
@@ -237,6 +287,8 @@ function validExchange(
       "result",
       "resultBinding",
       "approval",
+      "operationBinding",
+      "sourceDigest",
       "mutationOutcome",
       "draftProgress",
     ]) ||
@@ -300,7 +352,41 @@ export function decodeChatToolTranscript(
   json: string | null,
   identity?: TranscriptIdentity,
 ): ChatToolTranscript | undefined {
+  return decodeChatToolTranscriptForHistory(json, identity).transcript;
+}
+
+/** Private history qualification stays beside the public projection, never inside its wire data. */
+export function decodeChatToolTranscriptForHistory(
+  json: string | null,
+  identity?: TranscriptIdentity,
+): {
+  readonly transcript: ChatToolTranscript | undefined;
+  readonly operationBindings: ReadonlyMap<string, JiraOperationBinding>;
+  readonly sourceDigests: ReadonlyMap<string, string>;
+} {
   const stored = decodeStoredTranscript(json, identity);
+  return {
+    transcript: projectStoredTranscript(stored),
+    operationBindings: new Map(
+      stored?.exchanges.flatMap((exchange) =>
+        exchange.operationBinding === undefined
+          ? []
+          : [[exchange.call.id, exchange.operationBinding] as const],
+      ) ?? [],
+    ),
+    sourceDigests: new Map(
+      stored?.exchanges.flatMap((exchange) =>
+        exchange.sourceDigest === undefined
+          ? []
+          : [[exchange.call.id, exchange.sourceDigest] as const],
+      ) ?? [],
+    ),
+  };
+}
+
+function projectStoredTranscript(
+  stored: StoredTranscript | undefined,
+): ChatToolTranscript | undefined {
   return stored === undefined
     ? undefined
     : {
@@ -377,11 +463,22 @@ function applyExchange(
   const existing = current.exchanges.find((exchange) => exchange.call.id === id);
   if (update.kind === "started") {
     if (existing !== undefined) {
-      if (canonicalise(canonicalCall(existing.call)) !== canonicalise(canonicalCall(update.call)))
+      if (!sameStartedExchange(existing, update))
         throw invalidRequest("Tool call identity conflict.");
       return current;
     }
-    return { ...current, exchanges: [...current.exchanges, { call: update.call }] };
+    return {
+      ...current,
+      exchanges: [
+        ...current.exchanges,
+        {
+          call: update.call,
+          ...(update.operationBinding === undefined
+            ? {}
+            : { operationBinding: update.operationBinding }),
+        },
+      ],
+    };
   }
   if (existing === undefined || !sameSettlement(existing, update))
     throw invalidRequest("Tool result identity conflict.");
@@ -408,6 +505,7 @@ function applyUpdate(
   chatId: string,
   messageId: string,
 ): StoredTranscript {
+  if (update.kind === "write-prepared") return applyPrepared(current, update);
   if (update.kind === "write-approval") return applyApproval(current, update, chatId, messageId);
   if (update.kind !== "read-consent") return applyExchange(current, update);
   if (update.grant.chatId !== chatId) throw invalidRequest("Tool consent Chat mismatch.");
@@ -418,6 +516,33 @@ function applyUpdate(
   return { ...current, readGrant: update.grant, readGrants };
 }
 
+function validSourceDigest(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+/** The derived source payload is committed before review or effects, and can never be replaced. */
+function applyPrepared(
+  current: StoredTranscript,
+  update: Extract<ChatToolTranscriptUpdate, { kind: "write-prepared" }>,
+): StoredTranscript {
+  const exchange = current.exchanges.find((entry) => entry.call.id === update.callId);
+  if (exchange?.operationBinding === undefined || !MUTATION_ALIASES.has(exchange.call.name))
+    throw invalidRequest("Tool source identity conflict.");
+  if (exchange.sourceDigest !== undefined) {
+    if (exchange.sourceDigest !== update.sourceDigest)
+      throw invalidRequest("Tool source identity conflict.");
+    return current;
+  }
+  if (exchange.approval !== undefined || exchange.result !== undefined)
+    throw invalidRequest("Tool source identity conflict.");
+  return {
+    ...current,
+    exchanges: current.exchanges.map((entry) =>
+      entry === exchange ? { ...entry, sourceDigest: update.sourceDigest } : entry,
+    ),
+  };
+}
+
 function applyApproval(
   current: StoredTranscript,
   update: Extract<ChatToolTranscriptUpdate, { kind: "write-approval" }>,
@@ -426,9 +551,18 @@ function applyApproval(
 ): StoredTranscript {
   const exchange = current.exchanges.find((entry) => entry.call.id === update.callId);
   const approval = update.approval;
+  const operationBinding = update.operationBinding ?? exchange?.operationBinding;
   if (
     exchange === undefined ||
-    !matchesApprovalCall(approval, exchange.call, { messageId, chatId })
+    (exchange.operationBinding !== undefined &&
+      canonicalise(exchange.operationBinding) !== canonicalise(operationBinding)) ||
+    !matchesApprovalCall(
+      approval,
+      exchange.call,
+      { messageId, chatId },
+      operationBinding,
+      exchange.sourceDigest,
+    )
   )
     throw invalidRequest("Tool approval identity conflict.");
   const admitted =
@@ -439,7 +573,13 @@ function applyApproval(
   return {
     ...current,
     exchanges: current.exchanges.map((entry) =>
-      entry === exchange ? { ...entry, approval } : entry,
+      entry === exchange
+        ? {
+            ...entry,
+            approval,
+            ...(operationBinding === undefined ? {} : { operationBinding: operationBinding }),
+          }
+        : entry,
     ),
   };
 }
@@ -537,18 +677,47 @@ function redactSettlement(
         }),
   };
 }
+function sameStartedExchange(
+  existing: StoredExchange,
+  update: Extract<ChatToolTranscriptUpdate, { kind: "started" }>,
+): boolean {
+  return (
+    canonicalise(canonicalCall(existing.call)) === canonicalise(canonicalCall(update.call)) &&
+    canonicalise(existing.operationBinding ?? null) ===
+      canonicalise(update.operationBinding ?? null)
+  );
+}
+
+function redactStarted(
+  update: Extract<ChatToolTranscriptUpdate, { kind: "started" }>,
+  redact: (value: string) => string,
+): ChatToolTranscriptUpdate {
+  const call = deepRedactStrings(update.call, redact);
+  if (
+    !validCall(call) ||
+    (update.operationBinding !== undefined &&
+      (!isJiraOperationBinding(update.operationBinding) || !MUTATION_ALIASES.has(call.name)))
+  )
+    throw invalidRequest("Invalid tool call.");
+  return { ...update, call: canonicalCall(call) };
+}
+
 function redactUpdate(
   update: ChatToolTranscriptUpdate,
   redact: (value: string) => string,
 ): ChatToolTranscriptUpdate {
-  if (update.kind === "started") {
-    const call = deepRedactStrings(update.call, redact);
-    if (!validCall(call)) throw invalidRequest("Invalid tool call.");
-    return { kind: "started", call: canonicalCall(call) };
-  }
+  if (update.kind === "started") return redactStarted(update, redact);
   if (update.kind === "settled") return redactSettlement(update, redact);
+  if (update.kind === "write-prepared") {
+    if (!validSourceDigest(update.sourceDigest))
+      throw invalidRequest("Invalid tool source snapshot.");
+    return update;
+  }
   if (update.kind === "write-approval") {
-    if (!isChatToolWriteApprovalView(update.approval))
+    if (
+      !isChatToolWriteApprovalView(update.approval) ||
+      (update.operationBinding !== undefined && !isJiraOperationBinding(update.operationBinding))
+    )
       throw invalidRequest("Invalid tool approval projection.");
     return update;
   }

@@ -1,10 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { JIRA_DRAFT_STAGE_BYTES_MAX } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { trimOwnedBytes } from "./jira-store-bounds.js";
 
-/** One validated item as the model sent it; relations are resolved only when the draft is run. */
+/** One validated, source-prepared item; relations are resolved only when the draft is run. */
 export type StagedJiraDraftItem = Readonly<Record<string, unknown>>;
+
+/** Server-owned commitment to the full source revision and prepared payload for one item. */
+export interface JiraDraftSourceBinding {
+  readonly ref: string;
+  readonly sourceDigest: string;
+}
 
 /**
  * A backlog draft being assembled in pages (#4178). It lives in memory only: the model appends
@@ -18,10 +25,12 @@ export interface StagedJiraDraft {
   /** The Jira instance and credential the draft was started with; never the credential. */
   readonly fingerprint: string;
   readonly items: readonly StagedJiraDraftItem[];
-  /** Canonical JSON bytes of the items; the resource bound is measured on this. */
+  /** Private source revisions; never accepted from model arguments or emitted as tool data. */
+  readonly sourceBindings?: readonly JiraDraftSourceBinding[];
+  /** Canonical JSON bytes retained for items and source bindings. */
   readonly bytes: number;
   readonly pageCount: number;
-  /** Commits to the exact item list and its order. */
+  /** Commits to the exact item list, its order and any private source revisions. */
   readonly digest: string;
   readonly lastUsedAt: number;
 }
@@ -30,7 +39,8 @@ export type JiraDraftAppend =
   | { readonly ok: true; readonly draft: StagedJiraDraft }
   | {
       readonly ok: false;
-      readonly refusal: "draft-not-found" | "connection-changed" | "duplicate-ref" | "too-large";
+      readonly refusal:
+        "draft-not-found" | "connection-changed" | "duplicate-ref" | "too-large" | "invalid-input";
     };
 
 export interface JiraDraftStore {
@@ -40,6 +50,7 @@ export interface JiraDraftStore {
     draftId: string | undefined,
     fingerprint: string,
     page: readonly StagedJiraDraftItem[],
+    sourceBindings?: readonly JiraDraftSourceBinding[],
   ) => JiraDraftAppend;
   /** The draft only for the owner that started it; anything else is indistinguishable from absent. */
   readonly get: (id: string, owner: string) => StagedJiraDraft | undefined;
@@ -65,9 +76,40 @@ export const JIRA_DRAFT_OWNER_DRAFTS_MAX = 8;
 
 type Drafts = Map<string, StagedJiraDraft>;
 
-/** The digest an approval commits to: the items in the order they were staged. */
-export function jiraDraftDigest(items: readonly StagedJiraDraftItem[]): string {
-  return sha256Hex(canonicalise({ items }));
+/** The exact staged payload and private revisions the approval commits to. */
+export function jiraDraftDigest(
+  items: readonly StagedJiraDraftItem[],
+  sourceBindings: readonly JiraDraftSourceBinding[] = [],
+): string {
+  return sha256Hex(
+    canonicalise({ items, ...(sourceBindings.length === 0 ? {} : { sourceBindings }) }),
+  );
+}
+
+function isSourceBinding(value: unknown): value is JiraDraftSourceBinding {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const binding = value as Record<string, unknown>;
+  return (
+    Object.keys(binding).length === 2 &&
+    typeof binding.ref === "string" &&
+    typeof binding.sourceDigest === "string" &&
+    /^[a-f0-9]{64}$/u.test(binding.sourceDigest)
+  );
+}
+
+/** Every binding belongs to exactly one item on this page and contains only its full digest. */
+export function validJiraDraftSourceBindings(
+  page: readonly StagedJiraDraftItem[],
+  sourceBindings: unknown,
+): sourceBindings is readonly JiraDraftSourceBinding[] {
+  if (!Array.isArray(sourceBindings)) return false;
+  const refs = refsOf(page);
+  const seen = new Set<string>();
+  return sourceBindings.every((binding: unknown) => {
+    if (!isSourceBinding(binding) || !refs.has(binding.ref) || seen.has(binding.ref)) return false;
+    seen.add(binding.ref);
+    return true;
+  });
 }
 function itemBytes(item: StagedJiraDraftItem): number {
   return Buffer.byteLength(canonicalise(item));
@@ -115,18 +157,33 @@ function appendRefusal(
 function extendedDraft(
   current: StagedJiraDraft | undefined,
   page: readonly StagedJiraDraftItem[],
+  pageBindings: readonly JiraDraftSourceBinding[],
   base: Pick<StagedJiraDraft, "id" | "owner" | "fingerprint" | "bytes" | "lastUsedAt">,
 ): StagedJiraDraft {
-  const items = [...(current?.items ?? []), ...page];
-  return Object.freeze({
+  const items = [...(current?.items ?? []), ...structuredClone(page)];
+  const sourceBindings = [...(current?.sourceBindings ?? []), ...structuredClone(pageBindings)];
+  return deepFreeze({
     ...base,
-    items: Object.freeze(items),
+    items,
+    ...(sourceBindings.length === 0 ? {} : { sourceBindings }),
     pageCount: (current?.pageCount ?? 0) + 1,
-    digest: jiraDraftDigest(items),
+    digest: jiraDraftDigest(items, sourceBindings),
   });
 }
 function pageBytes(page: readonly StagedJiraDraftItem[]): number {
   return page.reduce((sum, item) => sum + itemBytes(item), 0);
+}
+function retainedDraftBytes(
+  current: StagedJiraDraft | undefined,
+  page: readonly StagedJiraDraftItem[],
+  sourceBindings: readonly JiraDraftSourceBinding[],
+): number | undefined {
+  if (!validJiraDraftSourceBindings(page, sourceBindings)) return undefined;
+  const bindingBytes = sourceBindings.reduce(
+    (sum, binding) => sum + Buffer.byteLength(canonicalise(binding)),
+    0,
+  );
+  return (current?.bytes ?? 0) + pageBytes(page) + bindingBytes;
 }
 
 export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraDraftStore {
@@ -148,14 +205,15 @@ export function createJiraDraftStore(options: JiraDraftStoreOptions = {}): JiraD
     return draft?.owner === owner ? draft : undefined;
   };
   return {
-    append: (owner, draftId, fingerprint, page): JiraDraftAppend => {
+    append: (owner, draftId, fingerprint, page, sourceBindings = []): JiraDraftAppend => {
       const current = draftId === undefined ? undefined : peek(draftId, owner);
       if (draftId !== undefined && current === undefined)
         return { ok: false, refusal: "draft-not-found" };
-      const bytes = (current?.bytes ?? 0) + pageBytes(page);
+      const bytes = retainedDraftBytes(current, page, sourceBindings);
+      if (bytes === undefined) return { ok: false, refusal: "invalid-input" };
       const refusal = appendRefusal(current, fingerprint, page, bytes, maxDraftBytes);
       if (refusal !== undefined) return { ok: false, refusal };
-      const draft = extendedDraft(current, page, {
+      const draft = extendedDraft(current, page, sourceBindings, {
         id: current?.id ?? newId(),
         owner,
         fingerprint,

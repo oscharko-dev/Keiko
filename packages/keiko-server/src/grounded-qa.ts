@@ -19,6 +19,7 @@ import {
   scopeChatToolTurn,
 } from "./chat-tool-runtime.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
+import { chatAuthenticationInterruption } from "./chat-authentication-interruption.js";
 import {
   assertCitationRepairTurnActive,
   callGroundedSynthesisModel,
@@ -3593,7 +3594,23 @@ async function executeGroundedAsk(
     },
     generation,
   );
-  return result === CHAT_TURN_WAIT_CANCELLED ? groundedCancelledResult() : result;
+  return groundedTurnResult(result, prepared, deps);
+}
+
+function groundedTurnResult(
+  result: RouteResult | typeof CHAT_TURN_WAIT_CANCELLED,
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): RouteResult {
+  if (result !== CHAT_TURN_WAIT_CANCELLED) return result;
+  return (
+    chatAuthenticationInterruption(
+      prepared.signal,
+      deps,
+      prepared.correlationId,
+      "POST /api/chats/messages/grounded",
+    ) ?? groundedCancelledResult()
+  );
 }
 
 function groundedCancelledResult(): RouteResult {

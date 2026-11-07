@@ -1,3 +1,4 @@
+import { chatAuthenticationInterruption } from "./chat-authentication-interruption.js";
 import { browserChatMessages } from "./chat-message-projection.js";
 import { parseDocumentContext } from "./chat-document-context.js";
 import {
@@ -4055,11 +4056,28 @@ export async function handleSendDesktopChat(
       },
       cancellation.controller,
     );
-    const response = result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;
-    return logChatResponse(response, ctx.correlationId);
+    return interruptedChatResponse(result, cancellation.signal, deps, ctx);
   } finally {
     cancellation.dispose();
   }
+}
+
+function interruptedChatResponse(
+  result: RouteResult | typeof CHAT_TURN_WAIT_CANCELLED,
+  signal: AbortSignal,
+  deps: UiHandlerDeps,
+  ctx: RouteContext,
+): RouteResult {
+  const response =
+    result === CHAT_TURN_WAIT_CANCELLED
+      ? (chatAuthenticationInterruption(
+          signal,
+          deps,
+          ctx.correlationId,
+          "POST /api/desktop/chat",
+        ) ?? requestCancelledResult())
+      : result;
+  return logChatResponse(response, ctx.correlationId);
 }
 
 function requestCancelledResult(): RouteResult {
@@ -4689,8 +4707,7 @@ export async function handleRegenerateDesktopChat(
       },
       cancellation.controller,
     );
-    const response = result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;
-    return logChatResponse(response, ctx.correlationId);
+    return interruptedChatResponse(result, cancellation.signal, deps, ctx);
   } finally {
     cancellation.dispose();
   }

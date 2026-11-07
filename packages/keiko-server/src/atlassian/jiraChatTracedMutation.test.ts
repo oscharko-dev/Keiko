@@ -55,6 +55,64 @@ function run(outcome?: JiraTraceOutcome): {
 }
 
 describe("traced create and edit", () => {
+  it.each([
+    ["jira.create", "native"],
+    ["jira.create", "markdown"],
+    ["jira.edit", "native"],
+    ["jira.edit", "markdown"],
+  ] as const)(
+    "refuses %s with a %s description missing a source criterion before any effect",
+    async (operation, format) => {
+      const call = run();
+      const text = "Thema 1 ist verfügbar.";
+      const description = format === "native" ? text : { format: "markdown", text };
+
+      const result = await executeTracedMutation(
+        f.deps,
+        turn(),
+        operation,
+        { fields: { description }, requirementIds: ["LH-001"] },
+        call.fn,
+      );
+
+      expect(call.seen).toHaveLength(0);
+      expect(result).toMatchObject({
+        isError: true,
+        data: {
+          outcome: "rejected",
+          requirementProblems: [{ reason: "acceptance-criteria-missing" }],
+        },
+      });
+      expect(
+        sink.events.find((event) => event.op === "knowledge.requirement-trace.applied"),
+      ).toMatchObject({ extra: { acceptanceCriteriaMissingCount: 1 } });
+    },
+  );
+
+  it.each(["jira.create", "jira.edit"] as const)(
+    "accepts %s with all source criteria after canonical Markdown projection",
+    async (operation) => {
+      const call = run();
+      const result = await executeTracedMutation(
+        f.deps,
+        turn(),
+        operation,
+        {
+          fields: {
+            description: {
+              format: "markdown",
+              text: "## Criteria\n- Thema 1 ist verfügbar.\n- Fehler zu Thema 1 werden gemeldet.",
+            },
+          },
+          requirementIds: ["LH-001"],
+        },
+        call.fn,
+      );
+      expect(result.isError).not.toBe(true);
+      expect(call.seen).toHaveLength(1);
+    },
+  );
+
   it.each(["jira.create", "jira.edit"] as const)(
     "passes the validated labels and footer of an explicit reference to %s and reports the outcome",
     async (operation) => {

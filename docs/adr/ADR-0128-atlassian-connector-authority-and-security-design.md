@@ -557,6 +557,12 @@ No Pod identity or verification status confers Chat authority. Verification comp
 and checks the current credential generation and latest probe revision against the retained record;
 it cannot recreate deleted metadata. Failed verification advances the authorization generation.
 Starting a new check retains previously observed readiness until that check has a result.
+It clears the previous private compatibility observation. A successful current ticket may retain
+validated release numbers, the declared Server/Data Center deployment and the observed REST-v2
+identity capability. These facts belong to that credential record and verification revision;
+failed or aborted checks, observed authentication failure, token rotation and deletion clear them.
+Legacy records have no inferred compatibility observation. These facts are neither a permission
+grant nor evidence of Agile support.
 
 Authenticated credential creation obtains the existing local operator identity from the server;
 the request cannot select an owner. List, verify and delete enforce that owner for Live Pods.
@@ -580,7 +586,19 @@ removal. Older/repeated generation notifications are harmless. The existing Chat
 then interrupts affected generations; other Pods' Chats remain untouched. A running tool turn that
 already holds a write takes a scope change itself (2026-11-03, S17): it stops at once and answers from
 its transcript, naming those writes, with `authority-invalid` on `chat.tool-turn.ended`. A turn with
-no write to report, a human stop and queued turns stay cancellations. Applied scope changes
+no write to report, a human stop and queued turns stay cancellations. Observed authentication
+revocation is carried as a server-owned interruption reason from custody through the same
+serializer, including the running tool-turn callback. A turn that holds a write finishes with its
+saved receipt answer and explicit re-verification guidance; its closed Activity Log end reason is
+`authentication-failed`. The answer distinguishes acknowledged and uncertain effects and never
+invents a key absent from the receipt. Other interrupted turns terminate with
+`JIRA_AUTHENTICATION_FAILED` in buffered, streamed and grounded Chat; a stream that already
+started emits the stable code in its terminal error frame. A completed response takes precedence
+over a later signal change. The cause is
+not inferred from mutable credential state after cancellation, so a later successful verification
+cannot rewrite the interrupted request’s outcome. HTTP 409 denotes the invalidated bound Jira
+credential, not failed local app-session authentication; EN/DE remediation points to the
+Knowledge Pods hub. Neither the old request nor its effects are retried. Applied scope changes
 and requested cancellation use the registered `chat.scope.update` event. Request correlation passes
 through custody and invalidation, linking the HTTP result, binding effects and cancellation; only
 operations outside a request mint a fresh server correlation. Cleanup failure cannot restore access: incomplete token replacement
@@ -671,9 +689,24 @@ uniformly: reads name the `CodingWorkbenchActionClass`, writes name the
 The shared action vocabulary and registered outcome event include all twenty-two rows. The managed
 tools map to this same table: `jira.create` → `create-issue`, `jira.edit` → `update-issue-fields`,
 `jira.assign` → `assign-issue`, `jira.comment` → `add-issue-comment`, and `jira.transition` →
-`transition-issue`, and `jira.attach` → `update-issue-fields`. The eleven read tools retain their
-names. Assignment has the same medium risk
+`transition-issue`, and `jira.attach` → `update-issue-fields`. Every read tool in
+[`JIRA_MANAGED_READ_TOOLS`](../../packages/keiko-contracts/src/jira-tool-fields.ts) retains its
+name. Assignment has the same medium risk
 as a bounded field edit; no separate policy subsystem or broader connector scope is introduced.
+
+**Operation contracts (#4287, #4290).** The managed provider binds each implemented native
+operation to a server-owned method/path identity, reviewed effects, existing authority action,
+permission policy and typed argument/result descriptor. Composites have a distinct identity and
+pin their constituent contracts. A canonical digest binds these facts together. It travels through
+catalog validation, the exact write approval and journal action digest, dispatch and validated
+result projection, including preflight refusals. A caller cannot supply a URL or substitute a stale
+contract; the write owner compares the captured binding with the current registry before any
+effect. The HTTP verb alone never determines the operation's authority. Existing template,
+source, credential-generation, permission and one-use approval guards remain the execution owners.
+Persisted approval views use the private historical snapshot described in ADR-0181, without
+restoring execution authority from history. The discovery tools described there expose metadata
+under current accepted Chat authority, without Jira HTTP or a Jira read-grant lookup. Selecting
+schemas does not approve a remote operation; remote calls retain their existing authority checks.
 
 **Attachments (#4176, 2026-10-31).** `jira.attach` maps to `update-issue-fields` (medium): it
 changes an existing issue exactly as an edit does and is governed, approved, journaled and
@@ -1090,7 +1123,17 @@ the approval.
   Markdown: ATX, setext (three or more `=` or `-`) and Jira wiki (`h2.`) headings. The projected
   Data Center wire description is judged in native wiki mode: only `hN.` headings count, so a
   native `#` numbered list or setext-looking text never satisfies a required section. Explicit
-  Markdown is serialized to native headings before this check; native strings remain unchanged.
+  Explicit Markdown is projected before this check and before the reviewed draft/action digest.
+  The bounded CommonMark parser and constrained Jira writer support headings, ordinary paragraphs,
+  emphasis, inline and fenced/indented code, simple nested lists, validated links, simple quotes,
+  unaligned tables and strikethrough. Unsupported or lossy structures are refused as a whole,
+  including HTML, images, unsafe destinations, unterminated fences and discarded table cells.
+  Literal wiki punctuation and native heading/quote prefixes in Markdown prose are escaped;
+  code contents remain code. Bare native strings never enter that converter and remain unchanged.
+  Template section identities and source-criterion matching use the same rendered projection.
+  The existing Chat/Coding mutation evidence records the closed `supported-markdown` projection
+  even without a heading, alongside the actual converted-heading count; neither field contains
+  description content. The existing public headings-only helper remains unchanged for its callers.
   Backtick and tilde fences are Markdown syntax only: native descriptions and the native samples
   from which a template is proposed recognize matching `{code}` and `{noformat}` blocks instead.
   Markdown heading discovery ignores backtick/tilde fences and wiki code macros. Native wire
@@ -1471,10 +1514,17 @@ without answer or tool-result bodies.
   updates) is applied first and the trace merged into the one legal field mutation, so it neither
   conflicts with it nor removes trace labels the caller's set left out. What the instance dropped is returned in the tool
   result as `trace {labelsApplied, footerApplied, droppedLabels}` and counted on the log. The item
-  identity, the journal and the approval are unaffected; `jira.draft` keeps its byte bound and no item-count limit.
+  identity and existing journal remain authoritative; `jira.draft` keeps its byte bound and no item-count limit.
   The traced labels and footer are part of the item the customer-template gate (#4177) judges, so a
   template that governs `description` or `labels` sees the final values, not the model's draft; the
-  pre-approval dry run of a create or edit judges the values as the model wrote them.
+  pre-approval dry run judges the prepared source-derived values before asking for approval.
+  Preparation binds the canonical description, applied footer and labels, and complete document and
+  requirement revision digests. This private source digest participates in the exact action digest
+  and is persisted before approval or effects; truncated display digests are insufficient. A staged
+  draft commits to its prepared items and private source bindings before returning its preview.
+  Execution rechecks the bound revisions and refuses changed or unavailable sources rather than
+  substituting a new footer under an old approval. A traced staged draft without that binding must
+  be staged again. Unreferenced writes do not open Knowledge Pods.
   A traced draft also preserves the original acceptance criteria before a page is staged, before
   human approval and again before final execution. Each referenced unit requires all its original
   criteria; an explicit criterion reference requires that exact criterion. The canonical description
@@ -1485,6 +1535,7 @@ without answer or tool-result bodies.
   no approved description is silently rewritten. This proves content preservation, not semantic
   implementation or fulfillment of a criterion. The existing source lifecycle and model-use guards,
   preview digest, template checks, journal and idempotent reconciliation continue to apply.
+  Direct create and edit calls apply the same criterion check whenever they supply a description.
 - _Change check._ A new document version is compared with the backlog through the labels alone;
   no earlier inventory is kept anywhere, so the baseline is what Jira holds. `change-queries`
   returns, per document, label-only JQL batches under the JQL length bound for items whose revision
@@ -1715,13 +1766,30 @@ describes is not redacted at the workspace layer.
 
 ### D7 — Qualified platforms and named follow-ups
 
-Cloud REST behavior remains supported. Epic #4081 adds a bounded Jira Data Center 10.3.26
-REST-v2/PAT connection path. Version and active identity are verified with bounded `serverInfo`
-and `myself` JSON reads under one deadline; HTML, redirects, authentication, permission, version,
-TLS and network failures have closed outcomes. Context paths are preserved. This implementation
-is not a qualification claim: real lab and model acceptance is recorded in
-[the epic evidence matrix](../qa/jira-chat-pods-4081.md). Other Data Center versions and
-Confluence Data Center remain unsupported. The existing sync lane remains Cloud-only.
+Cloud REST behavior remains supported. Epic #4081 added the bounded Jira Data Center REST-v2/PAT
+connection path, initially pinned to 10.3.26. Under #4287, connection admission requires a released
+version of **10.3.0 or later**, coherent numeric release/deployment facts and an active REST-v2
+identity. The lower bound is the oldest supported
+[official API source baseline](https://developer.atlassian.com/server/jira/platform/jira_software_dc_10003_swagger.v3.json),
+not a claim that all earlier releases lack REST v2. In particular, successful identity probes alone
+cannot establish compatibility with the split create-metadata endpoints
+[introduced in Jira 8.4](https://developer.atlassian.com/server/jira/platform/jira-rest-api-examples/).
+The same baseline validation applies to privately persisted compatibility facts; lower releases
+are refused after `serverInfo`, before requesting identity. There is no exact patch allow-list or
+upper-version ceiling. Coherent later releases, including versions newer than 11.3, may pass the
+two probes as observed releases but remain unqualified until their live acceptance is recorded.
+Bounded `serverInfo` and `myself` JSON reads share one deadline; HTML, redirects, authentication,
+permission, malformed or inconsistent version evidence, TLS and network failures have closed
+outcomes. Context paths are preserved. Compatibility facts record REST-v2 identity verification
+and leave Agile unverified; they do not claim that every operation exists or that the actor has
+permission to execute it. Task-required metadata and actual operation responses remain authoritative.
+There are no continuous probes or write-based discovery calls.
+
+Connection compatibility is not live qualification: real lab and model acceptance is recorded
+separately from deterministic protocol tests, including
+[the existing epic evidence matrix](../qa/jira-chat-pods-4081.md). Qualify the 10.3, 10.4, 11.2 and 11.3
+baselines where an environment exists; unavailable environments remain explicit limitations.
+Confluence Data Center remains unsupported. The existing sync lane remains Cloud-only.
 
 The following capabilities remain deferred:
 - **OAuth 2.0 (3LO).** API-token Basic auth is sufficient for a single local user's own credential

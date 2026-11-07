@@ -85,6 +85,7 @@
   "client.files-scope.decision": "client-diagnostics",
   "client.git-operation.attempted": "client-diagnostics",
   "client.git-operation.settled": "client-diagnostics",
+  "client.jira-result.presented": "client-diagnostics",
   "client.knowledge-catalog.unavailable": "client-diagnostics",
   "client.markdown.layout": "client-diagnostics",
   "client.scope.notice": "client-diagnostics",

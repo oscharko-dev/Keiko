@@ -145,6 +145,15 @@ zero unwaived findings, and all 74 existing Composer/parser controls pass. Exist
 expiry dates and reachability limits remain unchanged. Earlier qualification records retain their
 original dependency inputs; current release qualification is repeated for the patched resolution.
 
+For #4291, the Contracts package directly pins the same resolved `markdown-it` 14.3.3 and
+`@types/markdown-it` 14.2.0 for explicit Markdown description projection. This adds no internal
+package dependency or parser types to the public API. The MIT-licensed ESM parser also supports
+browser consumers. This separate consumer recognizes HTML tokens solely to refuse them; it never
+renders HTML, loads plugins or fetches links. Input and output are bounded to 32,768 characters,
+nesting is bounded, and a limited Jira wiki writer refuses unsupported or lossy structures. Native
+Jira strings bypass conversion. The existing patched resolutions are reused; this scope change
+does not claim a new repository-wide vulnerability scan or currency qualification.
+
 ### How this queue must be queried — and the trap in it
 
 The count above is 2, not 1, and reproducing it requires the exact query

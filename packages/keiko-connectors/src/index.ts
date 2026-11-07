@@ -76,7 +76,11 @@ export {
   type AtlassianConnectionVerificationStatus,
   type VerifyAtlassianConnectionInput,
 } from "./atlassian-connection-verification.js";
-export { verifyJiraDataCenterConnection } from "./jira-connection-verification.js";
+export {
+  verifyJiraDataCenterConnection,
+  verifyJiraDataCenterCompatibility,
+  type JiraDataCenterCompatibilityResult,
+} from "./jira-connection-verification.js";
 export {
   ADF_SUPPORTED_DOC_VERSION,
   ADF_TO_TEXT_MAX_DEPTH,
@@ -273,6 +277,7 @@ export { createJiraReportTemplateChecker } from "./jira-report-template-checker.
 export { createJiraReportStore, type JiraReportStore } from "./jira-report-store.js";
 export {
   createJiraDraftStore,
+  type JiraDraftSourceBinding,
   type JiraDraftStore,
   type StagedJiraDraft,
 } from "./jira-draft-store.js";
@@ -281,6 +286,7 @@ export {
   parseJiraDraftReference,
   resolveJiraDraftArguments,
   type JiraDraftActivity,
+  type JiraDraftPreparation,
   type JiraDraftTemplateRefusal,
   type JiraDraftRefusal,
   type JiraDraftResolution,

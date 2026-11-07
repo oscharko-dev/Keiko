@@ -5,6 +5,8 @@ import { compareStrings } from "./comparators.js";
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
   "jira.create",
+  "jira.create-project",
+  "jira.update-project",
   "jira.edit",
   "jira.assign",
   "jira.comment",
@@ -129,6 +131,14 @@ export type JiraMutationResultState = (typeof JIRA_MUTATION_RESULT_STATES)[numbe
 
 /** Validated Jira identities only; remote bodies and headers never become a mutation receipt. */
 export interface JiraMutationReceipt {
+  readonly projectId?: string;
+  readonly projectKey?: string;
+  readonly projectName?: string;
+  readonly browseUrl?: string;
+  readonly boardId?: string;
+  readonly sprintId?: string;
+  readonly epicKey?: string;
+  readonly issueKeys?: readonly string[];
   readonly issueKey?: string;
   readonly issueId?: string;
   readonly commentId?: string;
@@ -194,6 +204,7 @@ export type JiraMutationAttempt =
       readonly links?: JiraMutationLinkAccount;
       /** Internal bounded serializer evidence; omitted from model results and remote receipts. */
       readonly descriptionConvertedHeadingCount?: number;
+      readonly descriptionProjection?: "supported-markdown";
     }
   | {
       readonly ok: false;
@@ -206,6 +217,7 @@ export type JiraMutationAttempt =
       readonly violations?: readonly JiraTemplateViolation[];
       /** A prepared description is evidence even when the provider refuses the subsequent write. */
       readonly descriptionConvertedHeadingCount?: number;
+      readonly descriptionProjection?: "supported-markdown";
     };
 
 // eslint-disable-next-line no-control-regex -- remote text is shown to a model, not a terminal.

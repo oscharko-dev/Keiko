@@ -332,6 +332,7 @@ function clientMessagePostBody(
     composerSubmission: meta.composerSubmission,
     composerFocusIndicator: meta.composerFocusIndicator,
     composerCodeStage: meta.composerCodeStage,
+    jiraResultPresentation: meta.jiraResultPresentation,
     loss,
   };
   const readyStateDigit = SSE_DIAGNOSTIC_MESSAGE_PATTERN.exec(message)?.[1];
@@ -438,6 +439,7 @@ function routineClosedReportEvidence(meta: ClientDiagnosticMeta): boolean {
     meta.gitRetryAttemptReport !== undefined ||
     meta.selectDismissal !== undefined ||
     meta.knowledgeCatalog !== undefined ||
+    meta.jiraResultPresentation !== undefined ||
     meta.answerSpeech !== undefined ||
     routineSupportReportEvidence(meta)
   );

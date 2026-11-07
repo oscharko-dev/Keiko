@@ -51,20 +51,42 @@ import {
   requestCatalogWriteApproval,
 } from "./jiraChatCatalogWrite.js";
 import type { ChatWriteApprovalClaim } from "./chatWriteApprovalState.js";
+import {
+  JIRA_CATALOG_DISCOVERY_TOOLS,
+  type JiraCatalogDiscoveryToolName,
+} from "./jiraCatalogDiscovery.js";
+import {
+  isCurrentJiraOperationBinding,
+  jiraOperationForTool,
+  jiraOperationBindingForTool,
+} from "./jiraManagedProvider.js";
+import type { JiraOperationBinding } from "./jiraOperationRegistry.js";
 
 /** Private ordinary-Chat scope. Neither a workspace nor a Coding session is required. */
 export interface JiraChatCatalogContext extends ToolConsumerContext {
+  readonly jiraDiscoveryResultFits?: ((result: CatalogJsonObject) => boolean) | undefined;
   readonly chatId: string;
   readonly authorityReference: EditorAgentGovernedAuthorityReference;
   readonly userMessageId?: string;
+  /** Server-owned selection for the next model round, after the current invocation settles. */
+  readonly selectJiraOperations?:
+    ((identities: readonly string[], result: CatalogJsonObject) => Promise<void>) | undefined;
   /** Server-private pure snapshot; never serialized into model/MCP arguments. */
   readonly retainDraftProgress?:
     | ((actionId: string, invocationId: string, snapshot: () => CatalogJsonObject) => void)
     | undefined;
 }
 export interface JiraChatCatalogAction extends ToolConsumerActionIdentity {
-  readonly tool: JiraManagedReadToolName | JiraMutationOperation | KnowledgeChatToolName;
+  readonly tool:
+    | JiraManagedReadToolName
+    | JiraMutationOperation
+    | KnowledgeChatToolName
+    | JiraCatalogDiscoveryToolName;
   readonly argumentsDigest: string;
+  /** Required for Jira operations; local Knowledge/discovery reads carry no Jira binding. */
+  readonly operationBinding?: JiraOperationBinding;
+  /** Server-prepared source payload, captured before the approval identity is minted. */
+  readonly sourceDigest?: string;
 }
 export interface JiraChatCatalogConsumer extends CatalogConsumer {
   readonly context: JiraChatCatalogContext;
@@ -73,61 +95,105 @@ export interface JiraChatCatalogConsumer extends CatalogConsumer {
     readonly write?: {
       readonly action: JiraChatCatalogAction;
       readonly beforeMutation: () => boolean;
+      readonly source?: import("./jiraChatRequirementBinding.js").PreparedJiraSource;
     };
   };
 }
 const READ_TOOLS: ReadonlySet<string> = new Set([
   ...JIRA_MANAGED_READ_TOOLS,
   ...KNOWLEDGE_CHAT_TOOLS,
+  ...JIRA_CATALOG_DISCOVERY_TOOLS,
 ]);
 export const JIRA_CHAT_TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
 /** Every tool the Chat catalog hosts: the Jira tools and the local Knowledge reads (#4179). */
 export const CHAT_CATALOG_TOOLS: readonly JiraChatCatalogAction["tool"][] = [
   ...JIRA_CHAT_TOOLS,
   ...KNOWLEDGE_CHAT_TOOLS,
+  ...JIRA_CATALOG_DISCOVERY_TOOLS,
 ];
 const CHAT_TOOLS: ReadonlySet<string> = new Set(CHAT_CATALOG_TOOLS);
-function isKnowledgeTool(tool: string): tool is KnowledgeChatToolName {
-  return (KNOWLEDGE_CHAT_TOOLS as readonly string[]).includes(tool);
+function isLocalCatalogRead(
+  tool: string,
+): tool is KnowledgeChatToolName | JiraCatalogDiscoveryToolName {
+  return (
+    (KNOWLEDGE_CHAT_TOOLS as readonly string[]).includes(tool) ||
+    (JIRA_CATALOG_DISCOVERY_TOOLS as readonly string[]).includes(tool)
+  );
+}
+
+function validActionFields(action: CatalogJsonObject): boolean {
+  return (
+    typeof action.actionId === "string" &&
+    typeof action.idempotencyKey === "string" &&
+    typeof action.argumentsDigest === "string" &&
+    /^[a-f0-9]{64}$/u.test(action.argumentsDigest)
+  );
+}
+function validActionBinding(tool: string, action: CatalogJsonObject): boolean {
+  const bound = jiraOperationForTool(tool) !== undefined;
+  const keys = bound
+    ? `actionId,argumentsDigest,idempotencyKey,operationBinding,${action.sourceDigest === undefined ? "" : "sourceDigest,"}tool`
+    : "actionId,argumentsDigest,idempotencyKey,tool";
+  return (
+    Object.keys(action).sort(compareStrings).join() === keys &&
+    (!bound || isCurrentJiraOperationBinding(tool, action.operationBinding)) &&
+    (action.sourceDigest === undefined ||
+      (typeof action.sourceDigest === "string" && /^[0-9a-f]{64}$/u.test(action.sourceDigest)))
+  );
+}
+function actionBinding(tool: string): Pick<JiraChatCatalogAction, "operationBinding"> {
+  const binding = jiraOperationBindingForTool(tool);
+  return binding === undefined ? {} : { operationBinding: binding };
 }
 
 function captureAction(value: CatalogJsonValue): JiraChatCatalogAction | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const action = value as CatalogJsonObject;
   const tool = CHAT_CATALOG_TOOLS.find((name) => name === action.tool);
-  if (
-    Object.keys(action).sort(compareStrings).join() !==
-      "actionId,argumentsDigest,idempotencyKey,tool" ||
-    tool === undefined ||
-    typeof action.actionId !== "string" ||
-    typeof action.idempotencyKey !== "string" ||
-    typeof action.argumentsDigest !== "string" ||
-    !/^[a-f0-9]{64}$/u.test(action.argumentsDigest)
-  )
+  if (tool === undefined || !validActionFields(action) || !validActionBinding(tool, action))
     return undefined;
   return {
     tool,
-    actionId: action.actionId,
-    idempotencyKey: action.idempotencyKey,
-    argumentsDigest: action.argumentsDigest,
+    actionId: action.actionId as string,
+    idempotencyKey: action.idempotencyKey as string,
+    argumentsDigest: action.argumentsDigest as string,
+    ...actionBinding(tool),
+    ...(typeof action.sourceDigest === "string" ? { sourceDigest: action.sourceDigest } : {}),
   };
 }
 
-export const jiraChatCatalogConsumerPort: CatalogConsumerPort<JiraChatCatalogConsumer> = {
-  scope: (context) => ({
-    kind: "jira-chat",
-    chatId: context.chatId,
-    authorityRunId: context.authorityReference.runId,
-    authorityDigest: context.authorityReference.envelopeDigest,
-  }),
-  staleReason: "consumer-stale",
-  requiredEffects: () => ["connector-access"],
-  captureAction: (handler, value) => {
+export function createJiraChatCatalogConsumerPort(
+  sourceDigestFor?: (actionId: string, argumentsDigest: string) => string | undefined,
+): CatalogConsumerPort<JiraChatCatalogConsumer> {
+  const capture = (value: CatalogJsonValue): JiraChatCatalogAction | undefined => {
     const action = captureAction(value);
-    return handler.binding?.catalogAction === action?.tool ? action : undefined;
-  },
-  captureApprovedAction: captureAction,
-};
+    if (action === undefined) return undefined;
+    const sourceDigest = sourceDigestFor?.(action.actionId, action.argumentsDigest);
+    if (action.sourceDigest !== undefined && action.sourceDigest !== sourceDigest) return undefined;
+    return sourceDigest === undefined ? action : { ...action, sourceDigest };
+  };
+  return {
+    scope: (context) => ({
+      kind: "jira-chat",
+      chatId: context.chatId,
+      authorityRunId: context.authorityReference.runId,
+      authorityDigest: context.authorityReference.envelopeDigest,
+    }),
+    staleReason: "consumer-stale",
+    requiredEffects: () => ["connector-access"],
+    captureAction: (handler, value): JiraChatCatalogAction | undefined => {
+      const action = capture(value);
+      const operation = action === undefined ? undefined : jiraOperationForTool(action.tool);
+      return handler.binding?.catalogAction === action?.tool &&
+        (operation === undefined ||
+          handler.descriptor.descriptorDigest === operation.declaration.descriptor.descriptorDigest)
+        ? action
+        : undefined;
+    },
+    captureApprovedAction: capture,
+  };
+}
+export const jiraChatCatalogConsumerPort = createJiraChatCatalogConsumerPort();
 
 /** Use with the application-owned managed catalog; this creates no MCP host or transport. */
 function hasNextPage(data: CatalogJsonObject): boolean {
@@ -149,11 +215,13 @@ export function jiraChatCatalogRoutes(
       ...identity,
       tool,
       argumentsDigest: sha256Hex(canonicalise({})),
+      ...actionBinding(tool),
     }),
     actionFor: (args, identity): JiraChatCatalogAction => ({
       ...identity,
       tool,
       argumentsDigest: sha256Hex(canonicalise(args)),
+      ...actionBinding(tool),
     }),
     resultFor: (data, context): CatalogHandlerResult => {
       if (READ_TOOLS.has(tool)) requireDispatch(context.beforeEffect(), "denied", "effect-denied");
@@ -171,6 +239,7 @@ export function jiraChatCatalogRoutes(
 }
 
 export interface JiraChatAdmissionOptions {
+  readonly sourcePreparation?: import("./jiraChatRequirementBinding.js").JiraChatSourcePreparation;
   readonly deps: JiraChatAuthorityDeps & Pick<UiHandlerDeps, "atlassianActionApprovalRegistry">;
   readonly context: () => JiraChatCatalogContext;
   readonly now: () => number;
@@ -229,7 +298,7 @@ function readPermission(
     return DENIED;
   // A Knowledge Pod the human attached to this Chat is read like a grounded answer reads it: the
   // current Chat authority admits it, no Jira consent is involved (#4179).
-  if (isKnowledgeTool(action.tool)) return ALLOWED;
+  if (isLocalCatalogRead(action.tool)) return ALLOWED;
   const policy = decideAtlassianEnvelopeAction(
     JIRA_MANAGED_ACTION_TYPES[action.tool],
     current.envelope,
@@ -297,9 +366,18 @@ async function requestWriteStage(
   action: JiraChatCatalogAction,
   context: JiraChatCatalogContext,
 ): Promise<void> {
-  const refusal = await options.preflightWrite?.(action, context);
+  const refusal =
+    options.sourcePreparation?.refusalFor(action.actionId, action.argumentsDigest) ??
+    (await options.preflightWrite?.(action, context));
   if (refusal !== undefined) {
-    throw new CatalogDispatchFault("failed", "provider-reported-error", undefined, refusal);
+    const binding = jiraOperationBindingForTool(action.tool);
+    requireDispatch(binding !== undefined, "failed", "provider-reported-error");
+    // Preflight outcomes bypass the provider wrapper, but carry the same server-owned contract.
+    // A refusal can never substitute its own operation identity or digest.
+    throw new CatalogDispatchFault("failed", "provider-reported-error", undefined, {
+      ...refusal,
+      operationBinding: { ...binding },
+    });
   }
   await requestCatalogWriteApproval({ ...options, context: () => context }, action);
 }
@@ -359,6 +437,7 @@ function mutationGuard(
   action: JiraChatCatalogAction,
 ): JiraChatCatalogConsumer["guard"] {
   let claim: ChatWriteApprovalClaim | undefined;
+  const source = options.sourcePreparation?.sourceFor(action.actionId, action.argumentsDigest);
   const check = (): boolean => preview(options, capability, action, claim).ok;
   return READ_TOOLS.has(action.tool)
     ? { check }
@@ -366,8 +445,15 @@ function mutationGuard(
         check,
         write: {
           action,
+          ...(source === undefined ? {} : { source }),
           beforeMutation: (): boolean => {
             if (!check()) return false;
+            if (
+              action.sourceDigest !== undefined &&
+              (source?.sourceDigest !== action.sourceDigest ||
+                options.sourcePreparation?.current(source) !== true)
+            )
+              return false;
             // One approval covers one action; a backlog draft dispatches its items under it (#4178).
             if (claim !== undefined) return true;
             const result = claimJiraChatWrite(options, action);

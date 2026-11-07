@@ -165,9 +165,14 @@ function finish(
       jiraLinkCounts(attempt),
       errorDocument ? { jiraErrorDocument: true } : undefined,
       localRefusal(attempt),
-      attempt.descriptionConvertedHeadingCount === undefined
-        ? undefined
-        : { descriptionConvertedHeadingCount: attempt.descriptionConvertedHeadingCount },
+      {
+        ...(attempt.descriptionConvertedHeadingCount === undefined
+          ? {}
+          : { descriptionConvertedHeadingCount: attempt.descriptionConvertedHeadingCount }),
+        ...(attempt.descriptionProjection === undefined
+          ? {}
+          : { descriptionProjection: attempt.descriptionProjection }),
+      },
     );
   } catch (error) {
     emitServerDiagnostic(undefined, mutationDiagnostic(input.intent, error));

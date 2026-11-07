@@ -1362,6 +1362,29 @@ describe("fanOutClientDiagnostic budgets", () => {
 
 // PR #3678 review: the catalog counts reach the wire as structured evidence and spend the routine
 // budget, like every other closed, non-failure report.
+it("posts Jira result counts on the existing wire without spending the failure budget", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const jiraResultPresentation = {
+    messageDigest: "a".repeat(64),
+    exchangeCount: 2,
+    itemCount: 7,
+    shownCount: 5,
+    returnedCount: 8,
+    unreadableCount: 1,
+    problemCount: 0,
+    ruleCount: 0,
+    failure: "none" as const,
+    restored: true,
+  };
+  for (let index = 0; index < 25; index += 1)
+    fanOutClientDiagnostic("Jira results presented.", { jiraResultPresentation });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ jiraResultPresentation });
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+});
+
 it("posts the knowledge catalog counts on the wire and spends the routine budget", () => {
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const fetchMock = vi.fn().mockResolvedValue(jsonResponse());

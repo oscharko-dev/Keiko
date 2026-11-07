@@ -124,6 +124,7 @@ import {
   createInlineCompletionRateLimiter,
   type InlineCompletionRateLimiter,
 } from "./editor/inlineCompletionRateLimiter.js";
+import { logClientJiraResult } from "./client-jira-result-log.js";
 import { getServerLogger } from "./observability/index.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 
@@ -2397,6 +2398,10 @@ function logPresentationClientReport(
 ): boolean {
   return (
     logClientUpdateNotice(request, correlationId) ||
+    logClientJiraResult(
+      request.jiraResultPresentation,
+      clientDiagnosticCorrelation(request, correlationId),
+    ) ||
     logClientEditorLineEnding(request, correlationId)
   );
 }
@@ -3234,6 +3239,7 @@ function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReport
   if (
     report.selectDismissal !== undefined ||
     report.knowledgeCatalog !== undefined ||
+    report.jiraResultPresentation !== undefined ||
     report.answerSpeech !== undefined ||
     isRoutineScopedReport(report)
   ) {

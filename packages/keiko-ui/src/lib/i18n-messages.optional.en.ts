@@ -117,6 +117,15 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "This draft is no longer available, so it cannot be approved. Ask Keiko to prepare it again.",
   "chat.jira.fact.issue": "Issue",
   "chat.jira.fact.project": "Project",
+  "chat.jira.fact.projectKey": "Project key",
+  "chat.jira.fact.projectIdOrKey": "Project ID or key",
+  "chat.jira.fact.projectName": "Project name",
+  "chat.jira.fact.projectLead": "Project lead",
+  "chat.jira.fact.projectType": "Project type",
+  "chat.jira.fact.projectTemplate": "Project template",
+  "chat.jira.fact.projectDescription": "Project description",
+  "chat.jira.fact.projectWebsite": "Project website",
+  "chat.jira.fact.projectAssignee": "Default assignee",
   "chat.jira.fact.issueType": "Issue type",
   "chat.jira.fact.transition": "Transition",
   "chat.jira.fact.comment": "Comment",
@@ -132,6 +141,76 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
 
   "chat.jira.resultUnavailable": "Result unavailable",
   "chat.jira.partial": "Partial Jira result. Some available data is not included.",
+  "chat.jira.outcome.results": "Jira results",
+  "chat.jira.outcome.projectId": "Project ID: {id}",
+  "chat.jira.outcome.keyAvailable": "This project key is available.",
+  "chat.jira.outcome.keyUnavailable": "This project key cannot be used. Choose another key.",
+  "chat.jira.outcome.permissionGranted": "Permission granted",
+  "chat.jira.outcome.permissionDenied": "Permission not granted",
+  "chat.jira.outcome.problems": "What Jira said",
+  "chat.jira.outcome.more": "Show {count} more results",
+  "chat.jira.outcome.newTab": "(opens Jira in a new tab)",
+  "chat.jira.outcome.returned": "Returned results: {count}.",
+  "chat.jira.outcome.returnedTotal": "{count} of {total} results returned.",
+  "chat.jira.outcome.staged": "Issues in the saved draft: {count}.",
+  "chat.jira.outcome.unresolved": "Draft references still unresolved: {count}.",
+  "chat.jira.outcome.unreadable": "Saved results without readable details: {count}.",
+  "chat.jira.outcome.required": "Required",
+  "chat.jira.outcome.optional": "Optional",
+  "chat.jira.outcome.active": "Active",
+  "chat.jira.outcome.inactive": "Inactive",
+  "chat.jira.outcome.state.pending": "Pending",
+  "chat.jira.outcome.state.created": "Created",
+  "chat.jira.outcome.state.existing": "Already exists",
+  "chat.jira.outcome.state.failed": "Failed",
+  "chat.jira.outcome.state.uncertain": "Uncertain",
+  "chat.jira.outcome.state.skipped": "Skipped",
+  "chat.jira.outcome.state.excluded": "Excluded",
+  "chat.jira.outcome.validation.required-field":
+    "A required Jira field was missing, so nothing was sent. Fill it in before requesting the change again.",
+  "chat.jira.outcome.validation.unsupported-field":
+    "A required Jira field cannot be filled from Keiko. Review that field in Jira before requesting the change again.",
+  "chat.jira.outcome.validation.invalid-field":
+    "A Jira field has an invalid value. Correct it before requesting the change again.",
+  "chat.jira.outcome.validation.invalid-operation":
+    "The requested field change is not available. Review the permitted changes in Jira.",
+  "chat.jira.outcome.validation.bounds-exceeded":
+    "The change was too large to send. Reduce its scope before requesting it again.",
+  "chat.jira.outcome.rules": "Template rules not met",
+  "chat.jira.outcome.rule.summary-too-short": "The summary is too short.",
+  "chat.jira.outcome.rule.summary-too-long": "The summary is too long.",
+  "chat.jira.outcome.rule.summary-pattern": "The summary does not follow the required pattern.",
+  "chat.jira.outcome.rule.section-missing": "The description lacks the section “{subject}”.",
+  "chat.jira.outcome.rule.section-empty": "The section “{subject}” is empty.",
+  "chat.jira.outcome.rule.field-missing": "The field “{subject}” is required.",
+  "chat.jira.outcome.rule.field-unavailable":
+    "The field “{subject}” is unavailable in this Jira project.",
+  "chat.jira.outcome.rule.label-missing": "The label “{subject}” is required.",
+  "chat.jira.outcome.rule.label-pattern": "A label does not follow the required pattern.",
+  "chat.jira.outcome.rule.label-count": "The number of labels does not meet the template rule.",
+  "chat.jira.outcome.rule.parent-missing": "The issue needs a parent ({subject}).",
+  "chat.jira.outcome.rule.template-unreadable":
+    "The template could not be read. Check it before requesting the change again.",
+  "chat.jira.outcome.failure.auth":
+    "Verify the Jira Pod connection and its credentials before trying again.",
+  "chat.jira.outcome.failure.permission":
+    "Check the Jira account's permission for the requested project and action.",
+  "chat.jira.outcome.failure.notFound":
+    "Check that the requested Jira issue or project exists and is visible to this account.",
+  "chat.jira.outcome.failure.rateLimited":
+    "Jira limited requests. Wait before making another request.",
+  "chat.jira.outcome.failure.conflict":
+    "The Jira state changed. Read the current issue before requesting another change.",
+  "chat.jira.outcome.failure.transition":
+    "This status transition is unavailable. Read the issue's current transitions.",
+  "chat.jira.outcome.failure.bounds":
+    "The requested result exceeded a limit. Narrow the request or request a smaller page.",
+  "chat.jira.outcome.failure.response":
+    "Jira returned an unreadable response. Check the Jira connection and requested operation.",
+  "chat.jira.outcome.failure.fields":
+    "Review the required Jira fields and template rules before requesting the change again.",
+  "chat.jira.outcome.failure.unavailable":
+    "The Jira result is unavailable. Check the connection and the remote state before making another request.",
   "chat.requirements.tool": "Requirements",
   "chat.requirements.details": "View requirements",
   "chat.requirements.partial": "Partial list. Some requirements are not included.",
@@ -387,7 +466,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.proposing": "Reading project…",
   "chat.skills.jira.proposalNone": "No template could be derived from this project.",
   "chat.skills.jira.proposalTitle": "Proposed for {issueType} ({count} issues sampled)",
-  "chat.skills.jira.save": "Save as skill",
+  "chat.skills.jira.save": "Save Jira template",
   "chat.skills.jira.error":
     "Jira or the template library could not be read. Check the Pod and try again.",
   "chat.skills.title": "Skills",
@@ -2944,7 +3023,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The address returned no valid Atlassian JSON response. Check the address and login gateway.",
   "atlassianConnectors.verify.unsupported-version.label": "Unsupported Jira version",
   "atlassianConnectors.verify.unsupported-version.copy":
-    "This connection supports Jira Data Center 10.3.26. Verify the deployment and version.",
+    "Jira reported an unsupported deployment or release, or inconsistent version details. Check the address and REST v2 access to Jira Server or Data Center 10.3 or later, then verify again.",
   "atlassianConnectors.verify.tls-failed.label": "Certificate verification failed",
   "atlassianConnectors.verify.tls-failed.copy":
     "Check the certificate validity, hostname and trusted certificate authority.",
@@ -3022,6 +3101,12 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.approvals.rejected": "Rejected. The action was not executed.",
   "atlassianConnectors.action.sync-space": "Sync Confluence space",
   "atlassianConnectors.action.jira.projects": "Read Jira projects",
+  "atlassianConnectors.action.jira.project": "Read Jira project",
+  "atlassianConnectors.action.jira.validate-project-key": "Check Jira project key",
+  "atlassianConnectors.action.jira.project-permissions": "Check Jira project permissions",
+  "atlassianConnectors.action.jira.project-type": "Read Jira project type",
+  "atlassianConnectors.action.create-project": "Create Jira project",
+  "atlassianConnectors.action.update-project": "Update Jira project",
   "atlassianConnectors.action.jira.issue-types": "Read Jira issue types",
   "atlassianConnectors.action.jira.create-fields": "Read Jira create fields",
   "atlassianConnectors.action.jira.edit-fields": "Read Jira edit fields",

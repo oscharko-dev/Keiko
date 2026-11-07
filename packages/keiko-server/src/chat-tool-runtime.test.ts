@@ -31,6 +31,7 @@ import { handleDecideChatWriteApproval } from "./atlassian/chatWriteApprovalRout
 import { installMcpChatCatalogRuntime } from "./mcp/mcpChatCatalogRuntime.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { conversationForGateway } from "./conversation-gateway.js";
+import { jiraOperationContracts } from "./atlassian/jiraManagedProvider.js";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { createGatewayAtlassianHttpBodyPort } from "./atlassian/httpPort.js";
 import {
@@ -47,6 +48,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 interface Options {
+  readonly demandDiscovery?: boolean;
   readonly jiraAction?: {
     readonly canonicalId: "keiko.jira.draft" | "keiko.jira.attach";
     readonly arguments: () => Record<string, unknown>;
@@ -93,6 +95,7 @@ function configure(deps: UiHandlerDeps, reasoningHistory?: "required-with-tools"
       capabilities: [
         {
           ...createDefaultChatCapability(MODEL),
+          contextWindow: 32768,
           ...(reasoningHistory === undefined
             ? {}
             : { contextWindow: 128_000, maxOutputTokens: 4_096 }),
@@ -114,6 +117,31 @@ function configure(deps: UiHandlerDeps, reasoningHistory?: "required-with-tools"
     new Date().toISOString(),
     deps.gatewayConfig.generation(),
   );
+}
+function discoveryResponse(
+  request: GatewayCallRequest,
+  options: Options,
+  round: number,
+  response: NormalizedResponse,
+): NormalizedResponse | undefined {
+  if (options.demandDiscovery !== true || round !== 1) return undefined;
+  const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
+  return {
+    ...response,
+    content: "",
+    finishReason: "tool_calls",
+    toolCalls: [
+      bridge.bind({
+        id: "select-projects",
+        name: "jira_describe",
+        arguments: { identities: ["GET /rest/api/2/project"] },
+      }),
+    ],
+  };
+}
+
+function modelFinished(options: Options, round: number): boolean {
+  return options.repeat !== true && round > (options.demandDiscovery === true ? 2 : 1);
 }
 function model(calls: GatewayCallRequest[], options: Options): ModelPort {
   const promptTokens = options.promptTokens ?? 100;
@@ -138,8 +166,10 @@ function model(calls: GatewayCallRequest[], options: Options): ModelPort {
         },
       };
       admission?.settle(response.usage, true, "observed");
-      if (calls.length > 1 && options.repeat !== true) return Promise.resolve(response);
+      if (modelFinished(options, calls.length)) return Promise.resolve(response);
       if (request.toolCatalog?.kind !== "bound") throw new Error("Expected shared bound catalog");
+      const discovery = discoveryResponse(request, options, calls.length, response);
+      if (discovery !== undefined) return Promise.resolve(discovery);
       const jira = request.toolCatalog.projection.tools.find(
         (entry) =>
           entry.toolRef.canonicalId ===
@@ -277,6 +307,7 @@ function fixture(options: Options = {}): Fixture {
     rmSync(root, { recursive: true, force: true });
   });
   configure(deps, options.reasoningHistory);
+  preselectKnownFixtureTools(deps, options);
   deps.store.createProject(root);
   const chat = deps.store.createChat(root, "Synthetic combined", MODEL);
   deps.store.updateChat(
@@ -320,6 +351,14 @@ function fixture(options: Options = {}): Fixture {
       },
   );
   return { deps, chatId: chat.id, root, calls, effects, acceptedReadGrants };
+}
+function preselectKnownFixtureTools(deps: UiHandlerDeps, options: Options): void {
+  if (options.demandDiscovery === true) return;
+  const catalog = deps.jiraChatCatalog;
+  if (catalog === undefined) throw new TypeError("Missing Jira catalog");
+  vi.spyOn(catalog, "get").mockImplementation(() =>
+    catalog.select(jiraOperationContracts().map((entry) => entry.binding.identity)),
+  );
 }
 function send(f: Fixture): ReturnType<typeof handleSendDesktopChat> {
   return handleSendDesktopChat(
@@ -424,6 +463,27 @@ it("offers both sources through one ordinary Chat handler and grants each first 
       .filter((message) => message.role === "tool")
       .map((message) => message.toolCallId),
   ).toEqual(["call-1-0", "call-1-1"]);
+});
+it("keeps external MCP tools available while Jira typed schemas are selected between rounds", async () => {
+  const f = fixture({ demandDiscovery: true });
+  expect((await send(f)).status).toBe(200);
+  expect(f.effects).toEqual(["mcp-read", "jira-read"]);
+  expect(f.calls).toHaveLength(3);
+  const first = f.calls[0]?.toolCatalog;
+  const second = f.calls[1]?.toolCatalog;
+  if (first?.kind !== "bound" || second?.kind !== "bound")
+    throw new TypeError("Expected round catalogs");
+  expect(first.projection.tools.map((tool) => tool.alias)).not.toContain("jira_projects");
+  expect(second.projection.tools.map((tool) => tool.alias)).toContain("jira_projects");
+  expect(
+    second.projection.tools
+      .filter((tool) => tool.alias.startsWith("mcp_"))
+      .map((tool) => tool.alias),
+  ).toEqual(
+    first.projection.tools
+      .filter((tool) => tool.alias.startsWith("mcp_"))
+      .map((tool) => tool.alias),
+  );
 });
 it("resolves Full access for a Chat without a mode and runs both writes without an approval", async () => {
   const f = fixture({ write: true, defaultMode: true });

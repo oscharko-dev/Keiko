@@ -3,7 +3,8 @@ import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import { JiraWriteApproval } from "./JiraWriteApproval";
-import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
+import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 
 // The acceptance criterion of #4178: an approval never shows the request as raw JSON, whatever the
 // operation. Every case renders the real component and reads what a person would read.
@@ -61,6 +62,79 @@ afterEach(() => {
   window.localStorage.removeItem(I18N_STORAGE_KEY);
 });
 
+describe.each(["en", "de"] as const)("readable project approvals in %s (#4293)", (locale) => {
+  it.each(["jira.create-project", "jira.update-project"] as const)(
+    "shows every %s argument with project-specific labels and keeps the website as a value",
+    async (operation) => {
+      await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+      localStorage.setItem(I18N_STORAGE_KEY, locale);
+      const view = approvalFor(operation);
+      const args =
+        operation === "jira.create-project"
+          ? {
+              key: "SYN",
+              name: "Delivery workspace",
+              lead: "project-lead",
+              projectTypeKey: "software",
+              projectTemplateKey: "com.pyxis.greenhopper.jira:gh-scrum-template",
+              description: "Project purpose",
+              url: "https://homepage.example.test",
+              assigneeType: "PROJECT_LEAD",
+            }
+          : {
+              projectIdOrKey: "9223372036854775807",
+              name: "Renamed workspace",
+              lead: "updated-lead",
+              description: "Updated purpose",
+              url: "https://updated.example.test",
+              assigneeType: "UNASSIGNED",
+            };
+      const { container } = render(
+        <I18nProvider>
+          <JiraWriteApproval
+            approval={view}
+            call={{ id: "project-write", name: operation.replace(/[.-]/gu, "_"), arguments: args }}
+            turnState="pending"
+            observe={vi.fn().mockResolvedValue(view)}
+            decide={vi.fn()}
+          />
+        </I18nProvider>,
+      );
+      const allow = locale === "en" ? "Approve this action" : "Diese Aktion genehmigen";
+      await waitFor(() => expect(screen.getByRole("button", { name: allow })).toBeEnabled());
+      const region = screen.getByRole("region", {
+        name: locale === "en" ? "Review Jira action" : "Jira-Aktion prüfen",
+      });
+      const labels =
+        locale === "en"
+          ? [
+              "Project name",
+              "Project lead",
+              "Project description",
+              "Project website",
+              "Default assignee",
+            ]
+          : [
+              "Projektname",
+              "Projektleitung",
+              "Projektbeschreibung",
+              "Projektwebseite",
+              "Standardbearbeiter",
+            ];
+      for (const label of labels) expect(region.textContent).toContain(label);
+      if (operation === "jira.create-project")
+        expect(region.textContent).toContain(
+          locale === "en" ? "Project template" : "Projektvorlage",
+        );
+      for (const value of Object.values(args)) expect(region.textContent).toContain(value);
+      expect(region.textContent).not.toContain(locale === "en" ? "File name" : "Dateiname");
+      expect(region.querySelector("a")).toBeNull();
+      expectNoJson({ region });
+      expect(await axe(container)).toHaveNoViolations();
+    },
+  );
+});
+
 describe("Jira write approvals never show the request as JSON (#4178)", () => {
   it.each(["jira.create", "jira.draft"] as const)(
     "shows the canonical Data Center description without mutating %s arguments",
@@ -79,7 +153,7 @@ describe("Jira write approvals never show the request as JSON (#4178)", () => {
       const before = JSON.stringify(args);
       const review = await reviewed(operation, args);
       expect(review.text).toContain(
-        "h2. Requirement\nExact\nh2. Criteria\n* one\n* two\n* three\n* four\n* five\nh2. Source\nExact source",
+        "h2. Requirement\n\nExact\n\nh2. Criteria\n\n* one\n* two\n* three\n* four\n* five\n\nh2. Source\n\nExact source",
       );
       expect(JSON.stringify(args)).toBe(before);
       expect(fields.description).toEqual({ format: "markdown", text: description });

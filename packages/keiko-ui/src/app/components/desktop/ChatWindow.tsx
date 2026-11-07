@@ -1163,6 +1163,7 @@ function ChatBubbleImpl({
         />
         <JiraChatTools
           transcript={message.toolTranscript}
+          messageId={message.id}
           turnState={message.turnState}
           chatId={message.chatId}
           showPending={isUser && message.turnState === "pending"}

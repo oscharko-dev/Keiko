@@ -1,0 +1,163 @@
+# Jira Software Data Center API coverage
+
+This is the operation ledger for [#4287](https://github.com/oscharko-dev/Keiko/issues/4287).
+It accounts for published operations and existing constrained capabilities. It is not a runtime
+registry, an executable HTTP interface, a compatibility allowlist, or acceptance evidence.
+
+The code baseline is `334c01d5868ca12e40501b03d960e35a0151bedd`. The published sources were
+retrieved on 2026-11-07. Runtime availability has not been qualified by this inventory capture;
+every initial row therefore says `unknown` and has no verification references. The epic remains
+open until its workflow acceptance and operation-level completion conditions are proven.
+
+## Source provenance and local originals
+
+[provenance.json](provenance.json) identifies each official source URL, original-byte SHA-256,
+original byte count, source version, and operation/path/component-schema counts. The repository
+retains normalized method/path/operation-ID facts, rather than redistributing the complete
+Atlassian source documents and their component schemas. Originals are fetched directly from
+Atlassian on demand and retained under the gitignored `.jira-api-sources/<release>/<sha256>.json`
+cache. The provisioner preserves exact original bytes, including all schemas, descriptions and
+response definitions; reserialization is not used to reproduce a digest.
+
+Run `node scripts/provision-jira-api-sources.mjs` when original schemas or full source reconciliation are
+needed. The explicit network step accepts only the four canonical URLs below, sends no
+credentials, refuses redirects, bounds response bytes by the pinned source length, verifies
+SHA-256 before atomic installation, and verifies existing cache entries before reuse. It never
+fetches sources as a side effect of an ordinary test or offline inventory check. The local cache
+is not part of the tracked source tree or a runtime dependency.
+
+| Published release                                                                                   | Source `info.version`        | Operations | Paths | Component schemas |
+| --------------------------------------------------------------------------------------------------- | ---------------------------- | ---------: | ----: | ----------------: |
+| [10.3](https://developer.atlassian.com/server/jira/platform/jira_software_dc_10003_swagger.v3.json) | 10.3.27                      |        433 |   285 |               304 |
+| [10.4](https://developer.atlassian.com/server/jira/platform/jira_software_dc_10004_swagger.v3.json) | swagger-merged-template.yaml |        432 |   285 |               296 |
+| [11.2](https://developer.atlassian.com/server/jira/platform/jira_software_dc_11002_swagger.v3.json) | 11.2.1                       |        435 |   288 |               332 |
+| [11.3](https://developer.atlassian.com/server/jira/platform/jira_software_dc_11003_swagger.v3.json) | 11.3.13                      |        437 |   289 |               334 |
+
+The union contains **439 distinct method/path identities, 291 paths and 67 resource families**:
+211 GET, 91 POST, 73 PUT and 64 DELETE operations. A family is the first segment below its API
+root. `/rest/api/2` has 61 families, `/rest/agile/1.0` has five and `/rest/auth/1` has two;
+`issue` occurs under two roots and is counted once in the family total.
+
+The source paths omit `/rest` because their server template already includes it. Ledger paths
+include `/rest`, independent of an installation's context path. These public template paths and
+upstream example server URLs grant no execution authority. Runtime targets must still come from
+the selected Pod and its server-owned connection binding.
+
+Eight operation IDs collide within every individual source: `getPropertiesKeys`, `getProperty`,
+`setProperty`, `getIssue`, `getPropertiesKeys_1`, `getProperty_1`, `setProperty_1` and
+`deleteProperty_1`. Across releases, four `createAvatarFromTemporary*` IDs also refer to different
+paths because upstream renumbered them. There are therefore twelve reused IDs across the union.
+The ledger retains `operationId` separately for each source release; identity is always the HTTP
+method plus templated path. Never merge rows by operation ID alone.
+
+## Row semantics
+
+[operations.json](operations.json) records every identity, root, family, primary cluster,
+cluster prerequisites, source releases and their operation IDs. `baselineCapabilityIds` resolves
+to the same file's `baselineCapabilities` records, which name current owners and precise
+constraints. An empty capability list means this capture found no corresponding exposed or
+auxiliary implementation; it is not an assertion that no future reuse exists.
+
+`implementationState` and `runtimeAvailability` answer different questions:
+
+- `not-implemented`: no complete public operation is implemented in the captured baseline.
+- `partial`: a constrained existing tool implements some operation behavior; this is not full
+  published API coverage.
+- `implemented`: implementation is complete for the operation's recorded acceptance boundary;
+  verification references are required.
+- `deferred` or `excluded-by-policy`: an explicit owner decision and reason must be recorded in
+  `ownerDecision`. Neither state is an implicit exemption from the epic's completion criteria.
+- Runtime `unknown`, `executable`, `denied` and `unavailable` describe separately recorded runtime
+  qualification. `executable` requires verification references. An installed descriptor alone
+  does not establish availability, permission, or successful execution.
+
+Verification references identify exact-head tests, readback and applicable live environment
+evidence. A nonempty reference is necessary but does not make its contents trustworthy: the
+owning acceptance and evidence gates remain authoritative. Evidence from other heads must not be
+combined into a current-head success claim. Update the row and its references when an operation
+is implemented or requalified; retain the historical baseline capability description separately.
+
+The primary family assignment is exhaustive. It is not a permission classification, an effect
+classification or a requirement to deliver every operation in a family together. For example,
+Agile ranking belongs to the `issue` family (C6) while the board workflow consumes it earlier;
+project-role and scheme mutations remain administrative even though `project` is assigned C1.
+Cluster prerequisites describe shared dependencies; operation-specific dependencies and effect
+contracts belong to the executable child and server-owned registry.
+
+| Cluster                                 | Operation rows |
+| --------------------------------------- | -------------: |
+| C0 — Metadata and prerequisites         |             41 |
+| C1 — Project setup                      |             45 |
+| C2 — Boards, backlog and Epics          |             28 |
+| C3 — Sprint lifecycle                   |             14 |
+| C4 — Search and reporting               |              3 |
+| C5 — Versions and components            |             22 |
+| C6 — Issue collaboration                |             70 |
+| C7 — Saved views and preferences        |             23 |
+| C8 — Files and media                    |             12 |
+| C9 — Schema and workflow administration |             84 |
+| C10 — Identity and sessions             |             56 |
+| C11 — Instance operations               |             41 |
+
+## Existing capability boundary
+
+The baseline declares eleven read tools and seven mutation tools. Coding exposes sixteen,
+excluding `jira.draft` and `jira.attach`. The composites `jira.report`, `jira.draft-stage` and
+`jira.draft` do not add native API identities. The remaining fifteen tools map to fifteen
+constrained native operations, recorded as `partial`.
+
+Six additional native operations are recorded as `auxiliary-only`: connection server/identity
+verification, field metadata for reports/templates, attachment metadata, link-type metadata and
+link creation behind issue create/edit. They remain `not-implemented` for full public API
+coverage. No Agile operation is exposed by this baseline. There are 424 `not-implemented` rows
+and fifteen `partial` rows; this ledger does not relabel them as delivered functionality.
+
+The baseline owners are the existing connector tools/mutations, template enforcement, connection
+verification and provider/Coding bindings. Ordinary issue links and parent fields must continue
+through their existing validated paths. Adding an operation to this JSON file cannot expose it
+to Chat or Coding, grant authority, or bypass those owners.
+
+## Source caveats that affect implementations
+
+The published schemas are retained as evidence, not blindly trusted as sufficient validators:
+
+- The 10.4 `info.version` is a placeholder. It cannot serve as a runtime compatibility fact.
+- Several Agile paginated responses reference a singular item schema. Qualify their page wrappers
+  and completion markers independently; do not infer completeness from an item count alone.
+- Input schemas sometimes omit `required` despite documented requirements. Board creation requires
+  name, type and filter ID; sprint creation requires name and origin board ID.
+- Project-key validation returns HTTP 200 for an error collection. Successful HTTP status alone
+  does not establish a valid key. Project creation can return 409 after a workflow assignment
+  failure; reconcile possible creation before any retry.
+- Sprint POST is a partial update. Sprint PUT clears omitted fields. Closing a sprint has native
+  state/subtask constraints and a server-owned completion date.
+- Issue ranking can return 207 with per-issue outcomes. Filter creation inherits the person's
+  default sharing settings; do not silently assume a private filter.
+- HTTP method does not determine effects: POST search is a read, while a GET exporter may create
+  an artifact. Each implemented operation needs an explicit effect and permission contract.
+
+Cloud, Service Management, Assets, webhooks, plugins and private/UI-only APIs are outside this
+439-operation denominator. No source snapshot or declaration count proves their coverage.
+
+## Integrity verification
+
+Run `node scripts/check-jira-api-inventory.mjs` for offline ledger integrity. It checks the pinned
+normalized identity/source-ID digest, historical union and per-release counts, family/cluster
+assignments, capability references, prerequisites and state claims. The digest is SHA-256 of
+UTF-8 `JSON.stringify` over identity/source-ID tuples sorted by identity and release; the shared
+script helper owns that projection. Implementation state is excluded so delivery can advance
+without rewriting source provenance. This check reports `PASS ledger`; it does not assert that
+original source bytes were present or reconciled.
+
+For full source reconciliation, run `node scripts/provision-jira-api-sources.mjs` followed by
+`node scripts/check-jira-api-inventory.mjs --sources`. The latter never downloads implicitly: missing or
+modified originals fail closed. It verifies every original-byte digest and retained component
+count, independently reconstructs the complete method/path union from the original documents,
+and compares all source operation IDs and ledger rows. Only that mode reports `PASS sources`.
+The ordinary root test lane exercises both modes with adversarial normalized-ledger changes and
+small, repository-authored source fixtures; full upstream schemas are not copied into tests.
+
+Both gate modes check accounting integrity. They make no network calls, probe no Jira installation,
+and cannot certify operation correctness, authority, permissions, live compatibility or workflow
+acceptance. Refreshing sources requires retaining new original bytes, reviewing changes and
+updating provenance and all affected rows together; a changed digest is never silently accepted.

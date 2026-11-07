@@ -122,6 +122,15 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Dieser Entwurf ist nicht mehr verfügbar und kann deshalb nicht freigegeben werden. Bitte Keiko, ihn erneut vorzubereiten.",
   "chat.jira.fact.issue": "Vorgang",
   "chat.jira.fact.project": "Projekt",
+  "chat.jira.fact.projectKey": "Projektschlüssel",
+  "chat.jira.fact.projectIdOrKey": "Projekt-ID oder Schlüssel",
+  "chat.jira.fact.projectName": "Projektname",
+  "chat.jira.fact.projectLead": "Projektleitung",
+  "chat.jira.fact.projectType": "Projekttyp",
+  "chat.jira.fact.projectTemplate": "Projektvorlage",
+  "chat.jira.fact.projectDescription": "Projektbeschreibung",
+  "chat.jira.fact.projectWebsite": "Projektwebseite",
+  "chat.jira.fact.projectAssignee": "Standardbearbeiter",
   "chat.jira.fact.issueType": "Vorgangstyp",
   "chat.jira.fact.transition": "Statusübergang",
   "chat.jira.fact.comment": "Kommentar",
@@ -137,6 +146,79 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
 
   "chat.jira.resultUnavailable": "Ergebnis nicht verfügbar",
   "chat.jira.partial": "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
+  "chat.jira.outcome.results": "Jira-Ergebnisse",
+  "chat.jira.outcome.projectId": "Projekt-ID: {id}",
+  "chat.jira.outcome.keyAvailable": "Dieser Projektschlüssel ist verfügbar.",
+  "chat.jira.outcome.keyUnavailable":
+    "Dieser Projektschlüssel ist nicht verwendbar. Wähle einen anderen Schlüssel.",
+  "chat.jira.outcome.permissionGranted": "Berechtigung erteilt",
+  "chat.jira.outcome.permissionDenied": "Berechtigung nicht erteilt",
+  "chat.jira.outcome.problems": "Jiras Rückmeldung",
+  "chat.jira.outcome.more": "{count} weitere Ergebnisse anzeigen",
+  "chat.jira.outcome.newTab": "(öffnet Jira in einem neuen Tab)",
+  "chat.jira.outcome.returned": "Zurückgegebene Ergebnisse: {count}.",
+  "chat.jira.outcome.returnedTotal": "{count} von {total} Ergebnissen zurückgegeben.",
+  "chat.jira.outcome.staged": "Vorgänge im gespeicherten Entwurf: {count}.",
+  "chat.jira.outcome.unresolved": "Noch ungeklärte Entwurfsverweise: {count}.",
+  "chat.jira.outcome.unreadable": "Gespeicherte Ergebnisse ohne lesbare Details: {count}.",
+  "chat.jira.outcome.required": "Erforderlich",
+  "chat.jira.outcome.optional": "Optional",
+  "chat.jira.outcome.active": "Aktiv",
+  "chat.jira.outcome.inactive": "Inaktiv",
+  "chat.jira.outcome.state.pending": "Ausstehend",
+  "chat.jira.outcome.state.created": "Erstellt",
+  "chat.jira.outcome.state.existing": "Bereits vorhanden",
+  "chat.jira.outcome.state.failed": "Fehlgeschlagen",
+  "chat.jira.outcome.state.uncertain": "Unklar",
+  "chat.jira.outcome.state.skipped": "Übersprungen",
+  "chat.jira.outcome.state.excluded": "Ausgeschlossen",
+  "chat.jira.outcome.validation.required-field":
+    "Ein erforderliches Jira-Feld fehlt; es wurde nichts gesendet. Fülle es aus, bevor du die Änderung erneut anforderst.",
+  "chat.jira.outcome.validation.unsupported-field":
+    "Ein erforderliches Jira-Feld lässt sich aus Keiko nicht ausfüllen. Prüfe es in Jira, bevor du die Änderung erneut anforderst.",
+  "chat.jira.outcome.validation.invalid-field":
+    "Ein Jira-Feld enthält einen ungültigen Wert. Korrigiere ihn, bevor du die Änderung erneut anforderst.",
+  "chat.jira.outcome.validation.invalid-operation":
+    "Die angeforderte Feldänderung ist nicht verfügbar. Prüfe die erlaubten Änderungen in Jira.",
+  "chat.jira.outcome.validation.bounds-exceeded":
+    "Die Änderung war zum Senden zu groß. Verkleinere ihren Umfang, bevor du sie erneut anforderst.",
+  "chat.jira.outcome.rules": "Vorlagenregeln nicht erfüllt",
+  "chat.jira.outcome.rule.summary-too-short": "Die Zusammenfassung ist zu kurz.",
+  "chat.jira.outcome.rule.summary-too-long": "Die Zusammenfassung ist zu lang.",
+  "chat.jira.outcome.rule.summary-pattern":
+    "Die Zusammenfassung entspricht nicht dem vorgeschriebenen Muster.",
+  "chat.jira.outcome.rule.section-missing": "Der Beschreibung fehlt der Abschnitt „{subject}“.",
+  "chat.jira.outcome.rule.section-empty": "Der Abschnitt „{subject}“ ist leer.",
+  "chat.jira.outcome.rule.field-missing": "Das Feld „{subject}“ ist erforderlich.",
+  "chat.jira.outcome.rule.field-unavailable":
+    "Das Feld „{subject}“ ist in diesem Jira-Projekt nicht verfügbar.",
+  "chat.jira.outcome.rule.label-missing": "Das Label „{subject}“ ist erforderlich.",
+  "chat.jira.outcome.rule.label-pattern": "Ein Label entspricht nicht dem vorgeschriebenen Muster.",
+  "chat.jira.outcome.rule.label-count": "Die Anzahl der Labels entspricht nicht der Vorlagenregel.",
+  "chat.jira.outcome.rule.parent-missing":
+    "Der Vorgang benötigt einen übergeordneten Vorgang ({subject}).",
+  "chat.jira.outcome.rule.template-unreadable":
+    "Die Vorlage ließ sich nicht lesen. Prüfe sie, bevor du die Änderung erneut anforderst.",
+  "chat.jira.outcome.failure.auth":
+    "Prüfe die Verbindung des Jira-Pods und seine Zugangsdaten, bevor du es erneut versuchst.",
+  "chat.jira.outcome.failure.permission":
+    "Prüfe die Berechtigung des Jira-Kontos für das angeforderte Projekt und die Aktion.",
+  "chat.jira.outcome.failure.notFound":
+    "Prüfe, ob der angeforderte Jira-Vorgang oder das Projekt existiert und für dieses Konto sichtbar ist.",
+  "chat.jira.outcome.failure.rateLimited":
+    "Jira hat Anfragen begrenzt. Warte vor einer weiteren Anfrage.",
+  "chat.jira.outcome.failure.conflict":
+    "Der Jira-Stand hat sich geändert. Lies den aktuellen Vorgang, bevor du eine weitere Änderung anforderst.",
+  "chat.jira.outcome.failure.transition":
+    "Dieser Statusübergang ist nicht verfügbar. Lies die aktuellen Übergänge des Vorgangs.",
+  "chat.jira.outcome.failure.bounds":
+    "Das angeforderte Ergebnis überschritt eine Grenze. Grenze die Anfrage ein oder fordere eine kleinere Seite an.",
+  "chat.jira.outcome.failure.response":
+    "Jira lieferte eine unlesbare Antwort. Prüfe die Jira-Verbindung und die angeforderte Aktion.",
+  "chat.jira.outcome.failure.fields":
+    "Prüfe die erforderlichen Jira-Felder und Vorlagenregeln, bevor du die Änderung erneut anforderst.",
+  "chat.jira.outcome.failure.unavailable":
+    "Das Jira-Ergebnis ist nicht verfügbar. Prüfe die Verbindung und den Stand in Jira vor einer weiteren Anfrage.",
   "chat.requirements.tool": "Anforderungen",
   "chat.requirements.details": "Anforderungen ansehen",
   "chat.requirements.partial": "Teilliste. Nicht alle Anforderungen sind enthalten.",
@@ -403,7 +485,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.proposing": "Projekt wird gelesen…",
   "chat.skills.jira.proposalNone": "Aus diesem Projekt ließ sich keine Vorlage ableiten.",
   "chat.skills.jira.proposalTitle": "Vorschlag für {issueType} ({count} Vorgänge geprüft)",
-  "chat.skills.jira.save": "Als Skill speichern",
+  "chat.skills.jira.save": "Als Jira-Vorlage speichern",
   "chat.skills.jira.error":
     "Jira oder die Vorlagenbibliothek konnte nicht gelesen werden, die Einhaltung wurde nicht geprüft. Prüfe den Pod und versuche es erneut.",
   "chat.skills.title": "Skills",
@@ -3056,7 +3138,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Adresse lieferte keine gültige Atlassian-JSON-Antwort. Prüfe die Adresse und das Anmelde-Gateway.",
   "atlassianConnectors.verify.unsupported-version.label": "Jira-Version nicht unterstützt",
   "atlassianConnectors.verify.unsupported-version.copy":
-    "Diese Verbindung unterstützt Jira Data Center 10.3.26. Prüfe Bereitstellung und Version.",
+    "Jira meldet eine nicht unterstützte Bereitstellung oder Version oder widersprüchliche Versionsangaben. Prüfe die Adresse und den REST-v2-Zugriff auf Jira Server oder Data Center ab Version 10.3 und verifiziere erneut.",
   "atlassianConnectors.verify.tls-failed.label": "Zertifikatsprüfung fehlgeschlagen",
   "atlassianConnectors.verify.tls-failed.copy":
     "Prüfe Gültigkeit, Hostname und vertrauenswürdige Zertifizierungsstelle.",
@@ -3136,6 +3218,12 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.approvals.rejected": "Abgelehnt. Die Aktion wurde nicht ausgeführt.",
   "atlassianConnectors.action.sync-space": "Confluence-Bereich synchronisieren",
   "atlassianConnectors.action.jira.projects": "Jira-Projekte lesen",
+  "atlassianConnectors.action.jira.project": "Jira-Projekt lesen",
+  "atlassianConnectors.action.jira.validate-project-key": "Jira-Projektschlüssel prüfen",
+  "atlassianConnectors.action.jira.project-permissions": "Jira-Projektberechtigungen prüfen",
+  "atlassianConnectors.action.jira.project-type": "Jira-Projekttyp lesen",
+  "atlassianConnectors.action.create-project": "Jira-Projekt erstellen",
+  "atlassianConnectors.action.update-project": "Jira-Projekt aktualisieren",
   "atlassianConnectors.action.jira.issue-types": "Jira-Vorgangstypen lesen",
   "atlassianConnectors.action.jira.create-fields": "Jira-Erstellungsfelder lesen",
   "atlassianConnectors.action.jira.edit-fields": "Jira-Bearbeitungsfelder lesen",

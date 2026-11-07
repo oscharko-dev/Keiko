@@ -1,4 +1,3 @@
-import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   JIRA_MANAGED_ACTION_TYPES,
   JIRA_MUTATION_OPERATIONS,
@@ -16,6 +15,8 @@ import type {
 } from "./chatWriteApprovalState.js";
 import { sameWriteAction } from "./chatWriteApprovalState.js";
 import { decideAtlassianEnvelopeAction } from "./actionPolicy.js";
+import { isCurrentJiraOperationBinding } from "./jiraManagedProvider.js";
+import { jiraOperationActionDigest } from "./jiraOperationRegistry.js";
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
 import {
   isCurrentJiraChatWriteApproval,
@@ -30,13 +31,17 @@ export function jiraChatWriteAction(
   action: JiraChatCatalogAction,
 ): JiraChatWriteActionIdentity | undefined {
   const operation = JIRA_MUTATION_OPERATIONS.find((value) => value === action.tool);
-  return operation === undefined
+  return operation === undefined ||
+    !isCurrentJiraOperationBinding(action.tool, action.operationBinding)
     ? undefined
     : {
         invocationId: action.actionId,
         operation,
-        actionDigest: sha256Hex(
-          canonicalise({ operation, argumentsDigest: action.argumentsDigest }),
+        actionDigest: jiraOperationActionDigest(
+          operation,
+          action.argumentsDigest,
+          action.operationBinding,
+          action.sourceDigest,
         ),
       };
 }

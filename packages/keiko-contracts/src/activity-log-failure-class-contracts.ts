@@ -1401,6 +1401,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "client-jira-result",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["client.jira-result.presented"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["client.jira-result.presented"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["client.jira-result.presented"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["client.jira-result.presented"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "client-knowledge-catalog",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

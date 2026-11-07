@@ -121,6 +121,24 @@ const ATLASSIAN_CONNECTION_CHECKED_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["applied", "stale"],
     },
+    jiraCompatibility: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["verified", "unverified"],
+    },
+    restApi: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["v2"],
+    },
+    agileApi: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["unverified"],
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -131,6 +149,7 @@ const ATLASSIAN_CONNECTION_CHECKED_OPERATION = defineActivityLogOperation({
   proofIds: [
     "atlassian.connection.checked.line",
     "atlassian.connection.checked.observed-authentication",
+    "atlassian.connection.checked.compatibility",
   ],
   releaseImpact: "patch",
 });
@@ -141,6 +160,7 @@ export function recordConnectionCheck(
   result: AtlassianConnectionVerificationStatus | "sync-unsupported" | "verification-aborted",
   verificationState?: "applied" | "stale",
   source: "verify" | "request" = "verify",
+  jiraCompatibility?: "verified" | "unverified",
 ): void {
   try {
     deps.activityLog?.write(
@@ -151,6 +171,8 @@ export function recordConnectionCheck(
           action: result === "sync-unsupported" ? "sync" : source,
           outcome: result,
           ...(verificationState === undefined ? {} : { verificationState }),
+          ...(jiraCompatibility === undefined ? {} : { jiraCompatibility }),
+          ...(jiraCompatibility === "verified" ? { restApi: "v2", agileApi: "unverified" } : {}),
           completeness: "complete",
           loss: "none",
         },

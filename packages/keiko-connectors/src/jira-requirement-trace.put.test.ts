@@ -108,7 +108,7 @@ describe("explicit Markdown description in a traced edit", () => {
     expect(result).toMatchObject({ ok: true, descriptionConvertedHeadingCount: 2 });
     expect(remote.puts()).toHaveLength(1);
     expect(stored.fields.description).toBe(
-      `h2. Requirement\nExact body\nh2. Source\n> Exact quote\n\n${block("NEW")}`,
+      `h2. Requirement\nExact body\nh2. Source\n{quote}\nExact quote\n{quote}\n\n${block("NEW")}`,
     );
     expect(JSON.stringify(description)).toBe(before);
   });
@@ -120,6 +120,7 @@ describe("explicit Markdown description in a traced edit", () => {
     const result = await remote.edit({ fields: { description } }, trace());
     expect(result.ok).toBe(true);
     expect(result).not.toHaveProperty("descriptionConvertedHeadingCount");
+    expect(result).not.toHaveProperty("descriptionProjection");
     expect(stored.fields.description).toBe(`${description}\n\n${block("NEW")}`);
   });
 

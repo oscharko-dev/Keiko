@@ -429,13 +429,21 @@ class CodingJiraPodService implements CodingJiraPods {
   ): void {
     try {
       recordJiraTemplateAttempt(correlationId, operation, attempt);
-      if (attempt.descriptionConvertedHeadingCount !== undefined)
+      if (
+        attempt.descriptionConvertedHeadingCount !== undefined ||
+        attempt.descriptionProjection !== undefined
+      )
         recordCodingJiraPod(this.log, correlationId, {
           action: "serialize-description",
           outcome: attempt.ok ? "completed" : "failed",
           tool,
           risk: "write",
-          descriptionConvertedHeadingCount: attempt.descriptionConvertedHeadingCount,
+          ...(attempt.descriptionConvertedHeadingCount === undefined
+            ? {}
+            : { descriptionConvertedHeadingCount: attempt.descriptionConvertedHeadingCount }),
+          ...(attempt.descriptionProjection === undefined
+            ? {}
+            : { descriptionProjection: attempt.descriptionProjection }),
         });
     } catch (error) {
       emitServerDiagnostic(

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { jiraMutationToolId } from "../atlassian/jiraMutationToolId.js";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatToolReadGrant, ChatToolReadGrantView } from "@oscharko-dev/keiko-contracts";
 import {
@@ -6,6 +7,10 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import {
+  jiraOperationActionDigest,
+  type JiraOperationBinding,
+} from "../atlassian/jiraOperationRegistry.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ChatMessage } from "./types.js";
 import type { ChatToolMutationRecord } from "./chatToolMutationTypes.js";
@@ -42,20 +47,28 @@ function matchesCall(
   message: ChatMessage,
   call: ChatToolExchange,
   record: ChatToolMutationRecord,
+  operationBinding: JiraOperationBinding | undefined,
+  sourceDigest: string | undefined,
 ): boolean {
   const expected = sha256Hex(canonicalise({ messageId: message.id, callId: call.call.id }));
-  const action = sha256Hex(
-    canonicalise({
-      operation: record.operation,
-      argumentsDigest: sha256Hex(canonicalise(call.call.arguments)),
-    }),
-  );
+  const argumentsDigest = sha256Hex(canonicalise(call.call.arguments));
+  const action =
+    record.sourceKind === "configured-mcp"
+      ? sha256Hex(canonicalise({ operation: record.operation, argumentsDigest }))
+      : jiraOperationActionDigest(
+          record.operation,
+          argumentsDigest,
+          operationBinding,
+          sourceDigest,
+        );
   return (
+    (record.sourceKind !== "configured-mcp" ||
+      (operationBinding === undefined && sourceDigest === undefined)) &&
     record.invocationId === expected &&
     record.userMessageId === message.id &&
     record.chatId === message.chatId &&
     record.turnRef === message.canonicalTurnRef &&
-    call.call.name === record.operation.replaceAll(".", "_") &&
+    call.call.name === record.operation.replace(/[.-]/gu, "_") &&
     record.actionDigest === action
   );
 }
@@ -75,13 +88,18 @@ function validObservation(
   message: ChatMessage,
   call: ChatToolExchange,
   record: ChatToolMutationRecord,
+  operationBinding: JiraOperationBinding | undefined,
+  sourceDigest: string | undefined,
 ): boolean {
-  if (!matchesCall(message, call, record) || !observationAvailable(message, call, record))
+  if (
+    !matchesCall(message, call, record, operationBinding, sourceDigest) ||
+    !observationAvailable(message, call, record)
+  )
     return false;
   const canonicalId =
     record.sourceKind === "configured-mcp"
       ? `keiko.mcp.t${sha256Hex(canonicalise({ server: record.serverName, tool: record.toolName }))}`
-      : `keiko.${record.operation}`;
+      : jiraMutationToolId(record.operation);
   if (call.result !== undefined && call.result.toolRef?.canonicalId !== canonicalId) return false;
   return mutationIntentError({ ...record, userMessageId: message.id }) === undefined;
 }
@@ -114,7 +132,12 @@ function observedOutcome(
 
 /** Historical effects remain visible after authority expires or the connection closes.
  * The journal is authoritative; projection neither grants authority nor executes an action. */
-export function projectChatToolMutationHistory(db: DatabaseSync, input: ChatMessage): ChatMessage {
+export function projectChatToolMutationHistory(
+  db: DatabaseSync,
+  input: ChatMessage,
+  operationBindings: ReadonlyMap<string, JiraOperationBinding>,
+  sourceDigests: ReadonlyMap<string, string> = new Map(),
+): ChatMessage {
   const message = projectChatReadConsentHistory(db, input);
   const transcript = message.toolTranscript;
   if (message.role !== "user" || message.canonicalTurnRef === undefined || transcript === undefined)
@@ -123,7 +146,15 @@ export function projectChatToolMutationHistory(db: DatabaseSync, input: ChatMess
   let observationCount = 0;
   let correlationId: string | undefined;
   const exchanges = transcript.exchanges.map((exchange) => {
-    const record = records.find((candidate) => validObservation(message, exchange, candidate));
+    const record = records.find((candidate) =>
+      validObservation(
+        message,
+        exchange,
+        candidate,
+        operationBindings.get(exchange.call.id),
+        sourceDigests.get(exchange.call.id),
+      ),
+    );
     const mutationOutcome = observedOutcome(message, exchange, record, records);
     if (mutationOutcome === undefined || mutationOutcome === exchange.mutationOutcome)
       return exchange;

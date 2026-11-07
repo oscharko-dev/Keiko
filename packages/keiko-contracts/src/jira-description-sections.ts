@@ -9,6 +9,8 @@
  * heading belongs to the enclosing section; the next heading of the same or a shallower level
  * ends it. Nothing backtracks: every line is classified in time linear in its bounded length.
  */
+import { projectMarkdownToJiraWiki } from "./jira-markdown-wiki.js";
+
 export const JIRA_HEADING_LINE_CHARS_MAX = 512;
 export const JIRA_HEADING_TITLE_CHARS_MAX = 200;
 const DESCRIPTION_CHARS_MAX = 1 << 20;
@@ -357,6 +359,8 @@ export interface JiraDescriptionHeadingSerialization {
 const MARKDOWN_DESCRIPTION_CHARS_MAX = 32768;
 /** Native strings remain native Jira wiki text; Markdown requires explicit input provenance. */
 export const JIRA_DESCRIPTION_INPUT_SCHEMA = {
+  description:
+    "Native Jira wiki text is unchanged. Explicit Markdown supports headings, inline formatting, links, simple lists, tables, quotes and closed code blocks. Unsupported structures are refused; use native wiki text when needed.",
   oneOf: [
     { type: "string", maxLength: MARKDOWN_DESCRIPTION_CHARS_MAX },
     {
@@ -412,7 +416,7 @@ export function projectJiraDescriptionInput(
 ): JiraDescriptionHeadingSerialization | undefined {
   if (typeof value === "string") return { text: value, convertedHeadingCount: 0 };
   const markdown = readJiraMarkdownDescription(value);
-  return markdown === undefined ? undefined : serializeJiraDescriptionHeadings(markdown);
+  return markdown === undefined ? undefined : projectMarkdownToJiraWiki(markdown);
 }
 
 function writableSetextTitle(line: string): boolean {

@@ -34,6 +34,8 @@ const RECEIPT_KEYS: ReadonlySet<string> = new Set([
 const REQUIRED_RECEIPTS: Readonly<
   Record<JiraMutationOperation, readonly (keyof JiraMutationReceipt)[]>
 > = {
+  "jira.create-project": ["projectId", "projectKey"],
+  "jira.update-project": ["projectId", "projectKey"],
   "jira.create": ["issueKey", "issueId"],
   "jira.edit": ["issueKey"],
   "jira.assign": ["issueKey"],
@@ -48,10 +50,62 @@ function confirmed(value: unknown): boolean {
   return value === true;
 }
 
-function validIdentities(receipt: JiraMutationReceipt): boolean {
+const PROJECT_RECEIPT_KEYS = new Set(["projectId", "projectKey", "projectName", "browseUrl"]);
+function projectOperation(operation: JiraMutationOperation): boolean {
+  return operation === "jira.create-project" || operation === "jira.update-project";
+}
+function projectLink(value: unknown, key: string | undefined): boolean {
+  if (typeof value !== "string" || value.length > 4096 || key === undefined) return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.search === "" &&
+      url.hash === "" &&
+      url.pathname.endsWith(`/projects/${encodeURIComponent(key)}/summary`)
+    );
+  } catch {
+    return false;
+  }
+}
+function validProjectReceipt(receipt: JiraMutationReceipt): boolean {
+  if (
+    !isSafeAtlassianIdentifier(receipt.projectKey) ||
+    typeof receipt.projectId !== "string" ||
+    !/^[0-9]{1,32}$/u.test(receipt.projectId)
+  )
+    return false;
+  return Object.entries(receipt).every(([key, value]) => {
+    if (!PROJECT_RECEIPT_KEYS.has(key)) return false;
+    if (key === "projectName")
+      return (
+        typeof value === "string" &&
+        value.length > 0 &&
+        value.length <= 255 &&
+        !/\p{Cc}/u.test(value)
+      );
+    if (key === "browseUrl") return projectLink(value, receipt.projectKey);
+    return isSafeAtlassianIdentifier(value);
+  });
+}
+function validIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
+  if (projectOperation(operation)) return validProjectReceipt(receipt);
   return Object.entries(receipt).every(
     ([key, id]) => RECEIPT_KEYS.has(key) && isSafeAtlassianIdentifier(id),
   );
+}
+
+function partialReceipt(
+  receipt: JiraMutationReceipt | undefined,
+  operation: JiraMutationOperation,
+): JiraMutationReceipt | undefined {
+  return receipt !== undefined &&
+    (projectOperation(operation) || isSafeAtlassianIdentifier(receipt.issueKey)) &&
+    validIdentities(receipt, operation)
+    ? Object.freeze({ ...receipt })
+    : undefined;
 }
 
 /**
@@ -61,6 +115,7 @@ function validIdentities(receipt: JiraMutationReceipt): boolean {
  */
 function failedAttempt(
   value: Extract<JiraMutationAttempt, { ok: false }>,
+  operation: JiraMutationOperation,
 ): Extract<JiraMutationAttempt, { ok: false }> {
   if (!REASONS.has(value.reason)) return { ok: false, reason: "malformed-payload" };
   const detail = sanitizeJiraMutationFailureDetail(value.detail);
@@ -68,12 +123,7 @@ function failedAttempt(
   // Only an issue-template refusal carries violations; no other reason may smuggle them in.
   const violations =
     value.reason === "field-validation" ? boundedViolations(value.violations) : undefined;
-  const receipt =
-    value.receipt !== undefined &&
-    isSafeAtlassianIdentifier(value.receipt.issueKey) &&
-    validIdentities(value.receipt)
-      ? Object.freeze({ ...value.receipt })
-      : undefined;
+  const receipt = partialReceipt(value.receipt, operation);
   return {
     ok: false,
     reason: value.reason,
@@ -88,11 +138,18 @@ function failedAttempt(
 /** Internal serializer evidence has a hard count bound and never enters a receipt or model data. */
 function descriptionFormattingFacts(
   value: JiraMutationAttempt,
-): Pick<JiraMutationAttempt, "descriptionConvertedHeadingCount"> {
+): Pick<JiraMutationAttempt, "descriptionConvertedHeadingCount" | "descriptionProjection"> {
   const count = value.descriptionConvertedHeadingCount;
-  return typeof count === "number" && Number.isInteger(count) && count > 0 && count <= 32768
-    ? { descriptionConvertedHeadingCount: count }
-    : {};
+  const headingCount =
+    typeof count === "number" && Number.isInteger(count) && count > 0 && count <= 32768
+      ? { descriptionConvertedHeadingCount: count }
+      : {};
+  return {
+    ...headingCount,
+    ...(value.descriptionProjection === "supported-markdown"
+      ? { descriptionProjection: "supported-markdown" }
+      : {}),
+  };
 }
 
 function boundedViolations(
@@ -120,12 +177,12 @@ export function validJiraMutationAttempt(
   value: JiraMutationAttempt,
   operation: JiraMutationOperation,
 ): JiraMutationAttempt {
-  if (!value.ok) return failedAttempt(value);
+  if (!value.ok) return failedAttempt(value, operation);
   const receipt = Object.freeze({ ...value.receipt });
   const valid =
     confirmed(value.ok) &&
     REQUIRED_RECEIPTS[operation].every((key) => receipt[key] !== undefined) &&
-    validIdentities(receipt);
+    validIdentities(receipt, operation);
   if (!valid) return { ok: false, reason: "malformed-payload" };
   const links = sanitizeJiraMutationLinkAccount(value.links);
   return {
@@ -186,7 +243,7 @@ export const JIRA_EXISTING_GUIDANCE =
 export const JIRA_ALREADY_REFUSED_GUIDANCE =
   "This exact request was refused earlier in this Chat and nothing was changed, so sending it again cannot succeed. Do what the earlier result said instead.";
 export const JIRA_UNCERTAIN_GUIDANCE =
-  "Whether this change reached Jira is uncertain. Do not repeat it and make no further change in this turn. Tell the user in plain language that the change may or may not have been applied and ask them to check the issue in Jira before deciding whether to try again.";
+  "Whether this change reached Jira is uncertain. Do not repeat it and make no further change in this turn. Tell the user in plain language that the change may or may not have been applied and ask them to check its outcome in Jira before deciding whether to try again.";
 
 /** The instruction a result carries, or undefined when the outcome needs none. */
 export function jiraResultGuidance(

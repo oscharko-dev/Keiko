@@ -1,6 +1,6 @@
 import { decodeStoredDocumentContext, encodeStoredDocumentContext } from "./chatDocumentContext.js";
 import { projectChatToolMutationHistory } from "./chatToolMutationProjection.js";
-import { decodeChatToolTranscript } from "./chatToolTranscript.js";
+import { decodeChatToolTranscriptForHistory } from "./chatToolTranscript.js";
 // ADR-0013 — chat_messages CRUD. shortResult is redacted+truncated to ≤ MAX_SHORT_RESULT before persist.
 // Issue #66 adds:
 //   - `cancelled` to the accepted workflow status set (parity with src/ui/runs.ts RunStatus).
@@ -157,6 +157,10 @@ function parseGroundedPreviewCitations(
 }
 
 function rowToMessage(db: DatabaseSync, row: MessageRow): ChatMessage {
+  const history = decodeChatToolTranscriptForHistory(row.tool_transcript_json, {
+    messageId: row.id,
+    chatId: row.chat_id,
+  });
   const groundedAnswer = parseGroundedAnswer(row.grounded_answer_json);
   const turnState = parseClientTurnState(row.client_turn_state);
   const responseVersions = parseAssistantResponseVersions(row);
@@ -179,12 +183,14 @@ function rowToMessage(db: DatabaseSync, row: MessageRow): ChatMessage {
     taskType: row.task_type ?? undefined,
     groundedAnswer,
     documentContext: decodeStoredDocumentContext(row.document_context_json, row.role),
-    toolTranscript: decodeChatToolTranscript(row.tool_transcript_json, {
-      messageId: row.id,
-      chatId: row.chat_id,
-    }),
+    toolTranscript: history.transcript,
   };
-  return projectChatToolMutationHistory(db, message);
+  return projectChatToolMutationHistory(
+    db,
+    message,
+    history.operationBindings,
+    history.sourceDigests,
+  );
 }
 
 const COLUMNS =

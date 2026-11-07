@@ -34,6 +34,12 @@ import {
 import { JIRA_DRAFT_STAGE_DECLARATION } from "./jiraDraftDescriptor.js";
 import { JIRA_REPORT_DECLARATION } from "./jiraReportDescriptor.js";
 import { JIRA_APPLICABLE_TEMPLATES_SCHEMA } from "./jiraTemplateMetadataSchema.js";
+import {
+  createJiraOperationContracts,
+  matchesJiraOperationBinding,
+  type JiraOperationBinding,
+  type JiraOperationContract,
+} from "./jiraOperationRegistry.js";
 
 const PAGE_NUMBER = { type: "integer", minimum: 0, maximum: 1000000 };
 const REFERENCE = object({
@@ -59,7 +65,7 @@ const FIELD = object(
     schemaType: text(129),
     inputSchema: { ...object({}), additionalProperties: true },
     nativeFormat: { type: "string", enum: ["jira-wiki"] },
-    markdownSerialization: { type: "string", enum: ["headings-only"] },
+    markdownSerialization: { type: "string", enum: ["supported-markdown"] },
   },
   ["id", "name", "required", "hasDefaultValue", "kind", "richText", "operations"],
 );
@@ -116,10 +122,65 @@ interface ReadDefinition {
   readonly required: readonly string[];
   readonly item: CatalogJsonObject;
   readonly paged?: boolean;
+  readonly rootResult?: CatalogJsonObject;
 }
 const DEFINITIONS: Readonly<
   Record<Exclude<JiraManagedReadToolName, "jira.report" | "jira.draft-stage">, ReadDefinition>
 > = {
+  "jira.project": {
+    description:
+      "Inspect one visible Jira project by its current id or key, including ordinary metadata and a trusted Jira link.",
+    arguments: { projectIdOrKey: text(64) },
+    required: ["projectIdOrKey"],
+    paged: false,
+    item: object({}),
+    rootResult: {
+      projectId: text(64),
+      projectKey: text(64),
+      projectName: text(255),
+      description: READ_TEXT,
+      url: text(4096),
+      lead: text(255),
+      assigneeType: { type: "string", enum: ["PROJECT_LEAD", "UNASSIGNED"] },
+      projectTypeKey: text(64),
+    },
+  },
+  "jira.validate-project-key": {
+    description:
+      "Validate a proposed project key using the connected Jira instance's configured key rules. Validation does not reserve a key or create a project.",
+    arguments: { key: text(64) },
+    required: ["key"],
+    paged: false,
+    item: object({}),
+    rootResult: { key: text(64), valid: { type: "boolean" } },
+  },
+  "jira.project-permissions": {
+    description:
+      "Read explicit current Jira permission facts globally or for one project. Missing facts do not grant permission.",
+    arguments: { projectIdOrKey: text(64) },
+    required: [],
+    paged: false,
+    item: object({}),
+    rootResult: {
+      permissions: {
+        type: "array",
+        maxItems: 100,
+        items: object({ key: text(128), name: text(255), havePermission: { type: "boolean" } }, [
+          "key",
+          "havePermission",
+        ]),
+      },
+    },
+  },
+  "jira.project-type": {
+    description:
+      "Read whether a native Jira project type is accessible to the current actor before creating a project.",
+    arguments: { projectTypeKey: text(64) },
+    required: ["projectTypeKey"],
+    paged: false,
+    item: object({}),
+    rootResult: { projectTypeKey: text(64), name: text(255) },
+  },
   "jira.projects": {
     description: "Read projects visible to the connected identity.",
     arguments: {},
@@ -245,6 +306,7 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
     ),
     resultSchema: object(
       {
+        ...definition.rootResult,
         outcome: { type: "string", enum: ["succeeded", "failed"] },
         reason: text(64),
         fieldErrors: JIRA_FAILURE_FIELD_ERRORS_SCHEMA,
@@ -276,7 +338,31 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   });
   return Object.freeze({ name, risk: "read", descriptor });
 }
-const DECLARATIONS = [...JIRA_MANAGED_READ_TOOLS.map(declaration), ...JIRA_MUTATION_DECLARATIONS];
+const OPERATION_CONTRACTS = createJiraOperationContracts([
+  ...JIRA_MANAGED_READ_TOOLS.map(declaration),
+  ...JIRA_MUTATION_DECLARATIONS,
+]);
+
+/** Pure lookups let a consumer compile only its demanded subset of the existing provider. */
+export function jiraOperationContracts(): readonly JiraOperationContract[] {
+  return OPERATION_CONTRACTS;
+}
+export function jiraOperationForTool(tool: string): JiraOperationContract | undefined {
+  return OPERATION_CONTRACTS.find((entry) => entry.definition.tool === tool);
+}
+export function jiraDeclarationForTool(tool: string): ManagedMcpToolDeclaration | undefined {
+  return jiraOperationForTool(tool)?.declaration;
+}
+export function jiraOperationBindingForTool(tool: string): JiraOperationBinding | undefined {
+  return jiraOperationForTool(tool)?.binding;
+}
+export function isCurrentJiraOperationBinding(
+  tool: string,
+  value: unknown,
+): value is JiraOperationBinding {
+  const contract = jiraOperationForTool(tool);
+  return contract !== undefined && matchesJiraOperationBinding(contract, value);
+}
 
 /** Canonical descriptors are built by the server; the connector owns only Jira behavior. */
 export function createJiraProviderForCatalog<Context extends ManagedMcpInvocationContext>(
@@ -287,15 +373,30 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
   draft?: JiraDraftToolDeps<Context>,
 ): ManagedMcpProvider<Context> {
   const selected = tools.map((name) => {
-    const declaration = DECLARATIONS.find((item) => item.name === name);
+    const declaration = jiraDeclarationForTool(name);
     if (declaration === undefined) throw new TypeError("Unsupported Jira tool");
     return declaration;
   });
-  return createJiraManagedProvider({
+  const provider = createJiraManagedProvider({
     connection,
     declarations: selected,
     ...(executeMutation === undefined ? {} : { executeMutation }),
     ...(report === undefined ? {} : { report }),
     ...(draft === undefined ? {} : { draft }),
   });
+  const boundTools = Object.freeze(
+    provider.tools().map((tool) => {
+      const binding = jiraOperationBindingForTool(tool.name);
+      if (binding === undefined) throw new TypeError("Unknown Jira operation");
+      return Object.freeze({
+        ...tool,
+        execute: async (...args: Parameters<typeof tool.execute>) => {
+          const result = await tool.execute(...args);
+          // Provider response content never chooses the operation or its contract authority.
+          return { ...result, data: { ...result.data, operationBinding: binding } };
+        },
+      });
+    }),
+  );
+  return Object.freeze({ ...provider, tools: () => boundTools });
 }

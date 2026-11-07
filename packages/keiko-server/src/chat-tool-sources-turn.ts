@@ -16,6 +16,7 @@ import {
   ChatToolTurn,
   chatModelSupportsTools,
   type ChatToolTurnPort,
+  type ChatToolTurnOptions,
 } from "./chat-tool-turn.js";
 import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 import { correlationIdOrUnknown } from "./correlation.js";
@@ -30,6 +31,7 @@ import { prepareAcceptedMcpChatAuthority } from "./mcp/mcpChatAuthority.js";
 import {
   createJiraChatTurnReviewPorts,
   observeJiraChatMutation,
+  jiraSourcePreparationForTurn,
   type JiraChatTurnOptions,
 } from "./atlassian/jiraChatToolTurn.js";
 import { openTraceSession } from "./requirement-trace.js";
@@ -39,11 +41,16 @@ import {
   type McpChatTurnOptions,
 } from "./mcp/mcpChatToolTurn.js";
 import type { McpChatCatalog } from "./mcp/mcpChatCatalogRuntime.js";
-import type { JiraChatCatalogContext } from "./atlassian/jiraChatCatalogConsumer.js";
+import {
+  createJiraChatCatalogConsumerPort,
+  type JiraChatCatalogContext,
+} from "./atlassian/jiraChatCatalogConsumer.js";
+import type { JiraChatSourcePreparation } from "./atlassian/jiraChatRequirementBinding.js";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
   combineChatCatalogs,
   chatSourcesAuthorityDigest,
-  chatSourcesConsumerPort,
+  createChatSourcesConsumerPort,
   createChatSourcesAdmission,
   currentChatSources,
   type ChatSourcesConsumer,
@@ -95,43 +102,108 @@ function sourceContext(options: Options): ChatSourcesContext {
   };
 }
 
+function selectedSourceCatalog(
+  deps: UiHandlerDeps,
+  mcp: McpChatCatalog,
+  bind: (
+    managed: ReturnType<typeof combineChatCatalogs>,
+  ) => ChatToolTurnOptions<ChatSourcesContext>["bind"],
+): NonNullable<ChatToolTurnOptions<ChatSourcesContext>["selectTools"]> {
+  return async (identities) => {
+    requireDispatch(deps.jiraChatCatalog !== undefined, "failed", "handler-unavailable");
+    const selected = await deps.jiraChatCatalog.select(identities);
+    try {
+      const combined = combineChatCatalogs(selected, mcp);
+      return { managed: combined, bind: bind(combined), close: selected.close };
+    } catch (error) {
+      await selected.close();
+      throw error;
+    }
+  };
+}
+
+function sourcePreparationFor(options: Options): {
+  readonly initialContext: ChatSourcesContext;
+  readonly sourcePreparation: JiraChatSourcePreparation | undefined;
+  readonly consumerPort: ReturnType<typeof createChatSourcesConsumerPort>;
+} {
+  const initialContext = sourceContext(options);
+  const sourcePreparation =
+    options.primary.kind === "jira"
+      ? jiraSourcePreparationForTurn(options.primary.options, initialContext.jira)
+      : undefined;
+  return {
+    initialContext,
+    sourcePreparation,
+    consumerPort: createChatSourcesConsumerPort(
+      createJiraChatCatalogConsumerPort(sourcePreparation?.sourceDigestFor),
+    ),
+  };
+}
+
+function sourceReviewPorts(
+  primary: Primary,
+  sourcePreparation: JiraChatSourcePreparation | undefined,
+  access: Parameters<typeof createJiraChatTurnReviewPorts>[1],
+): Pick<Parameters<typeof createChatSourcesAdmission>[0], "jiraReview"> {
+  return primary.kind === "jira"
+    ? {
+        jiraReview: {
+          ...createJiraChatTurnReviewPorts(primary.options, access),
+          ...(sourcePreparation === undefined ? {} : { sourcePreparation }),
+        },
+      }
+    : {};
+}
+
 /** One binder, harness and model loop; source adapters keep their existing consent and effect owners. */
 class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
+  private readonly sourcePreparation: JiraChatSourcePreparation | undefined;
   constructor(private readonly sourceOptions: Options) {
     const { deps, message, correlationId, primary, mcp } = sourceOptions;
     const managed = combineChatCatalogs(primary.options.managed, mcp.managed);
-    super({
-      deps,
-      message,
-      correlationId,
-      managed,
-      context: sourceContext(sourceOptions),
-      budget: primary.options.authority.envelope.budget,
-      ...(primary.kind === "jira" ? { guidance: JIRA_TOOL_GUIDANCE } : {}),
-      bind: (context, budgetPort) =>
+    const { initialContext, sourcePreparation, consumerPort } = sourcePreparationFor(sourceOptions);
+    const bind =
+      (selected: typeof managed): ChatToolTurnOptions<ChatSourcesContext>["bind"] =>
+      (context, budgetPort, invocationRegistry) =>
         bindChatToolCatalog<ChatSourcesConsumer>({
           deps,
-          managed,
+          managed: selected,
           context: context,
           budgetPort,
-          consumerPort: chatSourcesConsumerPort,
+          invocationRegistry,
+          consumerPort,
           admission: createChatSourcesAdmission({
             deps,
             context: () => context,
             tools: mcp.managed.tools,
             ...this.consentPorts(),
-            ...(primary.kind === "jira"
-              ? {
-                  jiraReview: createJiraChatTurnReviewPorts(primary.options, {
-                    writeExchange: (actionId) => this.writeExchange(actionId),
-                    reviewableWrite: (action) => this.reviewableWrite(action),
-                    readAllowed: () => !context.signal.aborted && currentChatSources(deps, context),
-                  }),
-                }
-              : {}),
+            ...sourceReviewPorts(primary, sourcePreparation, {
+              writeExchange: (actionId) => this.writeExchange(actionId),
+              reviewableWrite: (action) => this.reviewableWrite(action),
+              readAllowed: () => !context.signal.aborted && currentChatSources(deps, context),
+            }),
           }),
-        }),
+        });
+    super({
+      deps,
+      message,
+      correlationId,
+      managed,
+      context: initialContext,
+      budget: primary.options.authority.envelope.budget,
+      ...(sourcePreparation === undefined
+        ? {}
+        : { prepareInvocation: sourcePreparation.prepareInvocation }),
+      ...(primary.kind === "jira"
+        ? {
+            guidance: JIRA_TOOL_GUIDANCE,
+            selectTools: selectedSourceCatalog(deps, mcp.managed, bind),
+          }
+        : {}),
+      bind: bind(managed),
     });
+    this.sourcePreparation = sourcePreparation;
   }
   protected override reserveAuthorityPrompt(promptTokens: number): boolean {
     return (
@@ -152,7 +224,16 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
   ): ChatToolExchange["mutationOutcome"] {
     return (
       (this.sourceOptions.primary.kind === "jira"
-        ? observeJiraChatMutation(this.sourceOptions.primary.options, call, identity, result)
+        ? observeJiraChatMutation(
+            this.sourceOptions.primary.options,
+            call,
+            identity,
+            result,
+            this.sourcePreparation?.sourceDigestFor(
+              identity,
+              sha256Hex(canonicalise(call.arguments)),
+            ),
+          )
         : undefined) ?? observeMcpChatMutation(this.sourceOptions.mcp, call, identity, result)
     );
   }

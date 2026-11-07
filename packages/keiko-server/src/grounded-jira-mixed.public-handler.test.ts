@@ -18,6 +18,7 @@ import {
 import { AtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import { createJiraChatCatalogRuntime } from "./atlassian/jiraChatCatalogRuntime.js";
+import { jiraOperationContracts } from "./atlassian/jiraManagedProvider.js";
 import { projectChatReadGrant } from "./atlassian/chatReadGrantState.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -46,6 +47,7 @@ import type {
   AtlassianCredentialMetadata,
 } from "@oscharko-dev/keiko-connectors";
 import type { ChatToolExchange, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import { buildUiHandlerDeps, currentContextProfileForModel, type UiHandlerDeps } from "./deps.js";
 import { handleGroundedAsk, modelWindowAwareBudget } from "./grounded-qa.js";
 import { mockRequest, mockResponse } from "./_support.js";
@@ -292,7 +294,23 @@ function restartConsentGraph(deps: UiHandlerDeps): UiHandlerDeps {
     diagnostics: defaultServerDiagnosticSink,
   });
   cleanup.push(() => catalog.close());
+  preselectKnownFixtureTools(catalog);
   return { ...next, jiraChatCatalog: catalog };
+}
+
+/** These existing regressions isolate scope, approval and budget behavior with known tools. */
+function preselectKnownFixtureTools(
+  catalog: UiHandlerDeps["jiraChatCatalog"],
+  tool?: string,
+): void {
+  if (catalog === undefined) throw new TypeError("Missing Jira catalog");
+  vi.spyOn(catalog, "get").mockImplementation(() =>
+    catalog.select(
+      jiraOperationContracts()
+        .filter((entry) => tool === undefined || entry.declaration.name === tool)
+        .map((entry) => entry.binding.identity),
+    ),
+  );
 }
 
 function context(body: Record<string, unknown>, approvalId?: string): RouteContext {
@@ -330,6 +348,8 @@ function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
 function runtime(
   mutation = false,
   deployment: Readonly<Record<string, string>> = {},
+  demandDiscovery = false,
+  selectedTool?: string,
 ): {
   deps: UiHandlerDeps;
   chatId: string;
@@ -362,6 +382,7 @@ function runtime(
     rmSync(state, { recursive: true, force: true });
   });
   configure(deps);
+  if (!demandDiscovery) preselectKnownFixtureTools(deps.jiraChatCatalog, selectedTool);
   deps.store.createProject(root);
   const chat = deps.store.createChat(root, "Mixed Chat", MODEL);
   // Ask for approval is pinned so the concrete write approvals under test stay required; an
@@ -839,10 +860,12 @@ function providerBody(init: RequestInit | undefined): string {
 function isToolStep(body: string, step: ProviderStep): boolean {
   return (
     step === "repair-write" ||
-    (body.includes('"tools":') && (step === "tool" || step === "write" || step === "malformed"))
+    (body.includes('"tools":') &&
+      (step === "describe" || step === "tool" || step === "write" || step === "malformed"))
   );
 }
 function toolArguments(step: ProviderStep, commentBody: string): string {
+  if (step === "describe") return JSON.stringify({ identities: ["GET /rest/api/2/project"] });
   if (step === "repair-write")
     return JSON.stringify({ issueKey: "KEIKO-1", body: "Changed citation repair comment" });
   if (step === "write") return JSON.stringify({ issueKey: "KEIKO-1", body: commentBody });
@@ -865,6 +888,7 @@ function finalContent(step: ProviderStep, steps: readonly ProviderStep[]): strin
   return steps.includes("uncited") ? "Feature returns true [src/Feature.ts:1]." : CITED;
 }
 type ProviderStep =
+  | "describe"
   | "tool"
   | "write"
   | "repair-write"
@@ -970,10 +994,7 @@ function provider(
                       id: `mixed-call-${String(requests.length)}${index === 0 ? "" : `-${String(index)}`}`,
                       type: "function",
                       function: {
-                        name:
-                          step === "write" || step === "repair-write"
-                            ? "jira_comment"
-                            : "jira_projects",
+                        name: providerToolName(step),
                         arguments: toolArguments(step, commentBody),
                       },
                     })),
@@ -992,6 +1013,36 @@ function provider(
   );
   return requests;
 }
+
+function providerToolName(step: ProviderStep): string {
+  if (step === "describe") return "jira_describe";
+  return step === "write" || step === "repair-write" ? "jira_comment" : "jira_projects";
+}
+
+it("discovers a Jira schema on demand while retaining mixed grounding and its read grant", async () => {
+  const f = runtime(false, {}, true);
+  const requests = provider(["describe", "tool", "answer"]);
+  const result = await askFeatureAndProjects(f);
+  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  const offered = requests.map(
+    (body) =>
+      (
+        JSON.parse(body) as {
+          tools?: { function: { name: string } }[];
+        }
+      ).tools?.map((tool) => tool.function.name) ?? [],
+  );
+  expect(offered[0]).toContain("jira_describe");
+  expect(offered[0]).not.toContain("jira_projects");
+  expect(offered[1]).toContain("jira_projects");
+  expect(f.jiraRequests).toEqual(["GET"]);
+  expect(f.acceptedReadGrants).toHaveLength(1);
+  expect(
+    (result.body as GroundedAnswer).citations.some(
+      (citation) => "scopePath" in citation && citation.scopePath === "src/Feature.ts",
+    ),
+  ).toBe(true);
+});
 
 // #4175: a confirmed Jira tool round is charged to and bounded by the turn's Authority Envelope,
 // so it no longer spends the grounded answer's own token grant; the envelope still ends the turn.
@@ -1736,27 +1787,32 @@ function assertOriginalMutationRetryGrant(
   const synthesisCost = costs.slice(1).reduce((total, cost) => total + cost, 0);
   expect(synthesisCost).toBeLessThanOrEqual(grant);
   if (calls === 2) {
-    const tools = deps.jiraChatCatalog?.toolDefinitions();
-    if (tools === undefined) throw new Error("Expected the current Jira catalog");
+    const actual = JSON.parse(requests.at(-1) ?? "{}") as {
+      tools?: {
+        function: { name: string; description: string; parameters: ToolDefinition["parameters"] };
+      }[];
+    };
+    const tools = actual.tools?.map(({ function: tool }) => tool);
+    if (tools === undefined) throw new TypeError("Expected the physically offered Jira tools");
     const catalogFloor = countGatewayPromptTokens({ messages: [], tools });
     expect(grant - synthesisCost).toBeLessThan(catalogFloor);
   }
 }
 
 // Size the original cumulative grant around the complete provider prompts, including tool schemas.
-// Keep the owner's original 8192 caller allowance: shared Jira instructions must fit this
-// complete prompt. Physical-cost assertions derive from the owning gateway counter; only the
+// Keep the owner's original 8192 caller allowance with the operation this workflow needs.
+// Physical-cost assertions derive from the owning gateway counter; only the
 // confirmed write leaves this grant.
 it.each([
-  { grant: 8192, calls: 2 },
-  { grant: 10000, calls: 2 },
-  { grant: 12000, calls: 2 },
-  { grant: 17000, calls: 3 },
-  { grant: 18000, calls: 3 },
+  { grant: 4096, calls: 2 },
+  { grant: 4500, calls: 2 },
+  { grant: 4600, calls: 2 },
+  { grant: 8192, calls: 3 },
+  { grant: 10000, calls: 3 },
 ])(
   "settles an adopted retry inside the original positive input grant $grant",
   async ({ grant, calls }) => {
-    const f = runtime(true);
+    const f = runtime(true, {}, false, "jira.comment");
     boundCallerSynthesisInput(grant);
     const requests = provider(["write", "overflow", "answer", "answer"], undefined, undefined, {
       overflowContextWindow: RETRY_CONTEXT_WINDOW,
@@ -1787,7 +1843,7 @@ it.each([
 it.each(["cancel", "scope"] as const)(
   "keeps a %s interruption before the adopted retry's preflight terminal",
   async (kind) => {
-    const f = runtime(true);
+    const f = runtime(true, {}, false, "jira.comment");
     boundCallerSynthesisInput(8192);
     beforeAdoptedGroundedRetry(async () => {
       if (kind === "scope") await changeOwnedMode(f, f.chatId);
@@ -1911,7 +1967,7 @@ it("keeps a committed mutation's deadline answer when an overflow arrives after 
 });
 
 it("keeps the already sent empty-answer correction on its existing adopted-window retry", async () => {
-  const f = runtime();
+  const f = runtime(false, {}, false, "jira.projects");
   f.deps.store.updateChat(f.chatId, { connectedScope: null });
   const requests = provider(["tool", "empty", "overflow", "answer"]);
   const response = await startOwnedTurn(f, f.chatId);

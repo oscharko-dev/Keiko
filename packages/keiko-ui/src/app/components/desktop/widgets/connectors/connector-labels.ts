@@ -130,6 +130,12 @@ export function syncFailureReasonKey(reason: AtlassianSyncFailureReason): Messag
 
 const ACTION_LABEL: Readonly<Record<AtlassianConnectorActionType, MessageKey>> = {
   "jira.projects": "atlassianConnectors.action.jira.projects",
+  "jira.project": "atlassianConnectors.action.jira.project",
+  "jira.validate-project-key": "atlassianConnectors.action.jira.validate-project-key",
+  "jira.project-permissions": "atlassianConnectors.action.jira.project-permissions",
+  "jira.project-type": "atlassianConnectors.action.jira.project-type",
+  "create-project": "atlassianConnectors.action.create-project",
+  "update-project": "atlassianConnectors.action.update-project",
   "jira.issue-types": "atlassianConnectors.action.jira.issue-types",
   "jira.create-fields": "atlassianConnectors.action.jira.create-fields",
   "jira.edit-fields": "atlassianConnectors.action.jira.edit-fields",

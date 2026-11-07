@@ -134,6 +134,30 @@ it("uses the injected custody transport factory with journal-owned lifecycle hoo
   expect(httpPortFactory.mock.calls[0]?.[0].onResponse).toBeTypeOf("function");
   expect(f.effects).toHaveBeenCalledOnce();
 });
+
+it("records a body-only Markdown projection only in the settled body-free audit event", async () => {
+  const f = fixture();
+  const execute = f.input.execute;
+  const result = await executeJiraChatMutation({
+    ...f.input,
+    execute: async (...args) => ({
+      ...(await execute(...args)),
+      descriptionProjection: "supported-markdown",
+    }),
+  });
+  expect(result.data).not.toHaveProperty("descriptionProjection");
+  expect(f.input.journal?.find(f.input.intent.invocationId)).not.toHaveProperty(
+    "descriptionProjection",
+  );
+  const events = f.logs.events.filter((event) => event.extra?.descriptionProjection !== undefined);
+  expect(events).toHaveLength(1);
+  expect(events[0]?.extra).toMatchObject({
+    event: "settled",
+    descriptionProjection: "supported-markdown",
+  });
+  expect(events[0]?.extra).not.toHaveProperty("descriptionConvertedHeadingCount");
+  expect(f.logs.lines().join()).not.toMatch(/synthetic-test-pat|jira\.example|SYN-1/u);
+});
 const LINK_ACCOUNT = { requested: 3, created: 3, missing: [], unconfirmed: false } as const;
 /** The same journal and approval, over a Jira that answers each call by its path (#4176). */
 function linkFixture(answer: (url: string, index: number) => Response): {

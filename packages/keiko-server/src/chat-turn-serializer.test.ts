@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { CHAT_TURN_WAIT_CANCELLED, createChatTurnSerializer } from "./chat-turn-serializer.js";
+import {
+  CHAT_TURN_JIRA_AUTHENTICATION_FAILED,
+  CHAT_TURN_WAIT_CANCELLED,
+  createChatTurnSerializer,
+} from "./chat-turn-serializer.js";
 
 function deferred<T>(): {
   readonly promise: Promise<T>;
@@ -180,6 +184,21 @@ describe("chat turn serializer", () => {
     next.release.resolve("new answer");
     expect(await next.result).toBe("new answer");
     expect(serializer.interruptGenerations("chat-a")).toBe(0);
+  });
+
+  it("preserves the trusted authentication cause for active and queued generations", async () => {
+    const serializer = createChatTurnSerializer();
+    const running = heldGeneration(serializer, "chat-a");
+    await running.started;
+    const queued = heldGeneration(serializer, "chat-a");
+    expect(
+      serializer.interruptGenerations("chat-a", false, CHAT_TURN_JIRA_AUTHENTICATION_FAILED),
+    ).toBe(2);
+    expect(running.controller.signal.reason).toBe(CHAT_TURN_JIRA_AUTHENTICATION_FAILED);
+    expect(queued.controller.signal.reason).toBe(CHAT_TURN_JIRA_AUTHENTICATION_FAILED);
+    expect(await queued.result).toBe(CHAT_TURN_WAIT_CANCELLED);
+    running.release.resolve("late answer");
+    expect(await running.result).toBe(CHAT_TURN_WAIT_CANCELLED);
   });
 
   it("spares only a turn that is running when it takes a scope change itself", async () => {

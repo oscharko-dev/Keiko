@@ -11,12 +11,14 @@ import {
   REQUIREMENT_TRACE_FOOTER_START,
   REQUIREMENT_REVISION_LABEL_PREFIX,
   requirementTrace,
+  requirementReference,
   resolveRequirementReferences,
   normaliseText,
   type RequirementReferenceProblem,
   type RequirementTraceUnit,
   type ResolvedRequirementReference,
 } from "@oscharko-dev/keiko-quality-intelligence";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import type { JiraTraceOutcome, JiraTraceRequest } from "@oscharko-dev/keiko-connectors";
 import {
   projectJiraDescriptionInput,
@@ -58,7 +60,7 @@ interface TraceDescriptionCheck {
 }
 
 export type TraceResolution =
-  | { readonly ok: true; readonly trace: ItemTrace }
+  | { readonly ok: true; readonly trace: ItemTrace; readonly sourceDigest: string }
   | {
       readonly ok: false;
       readonly reason: "no-knowledge-pod" | "unavailable" | "references";
@@ -121,8 +123,11 @@ function acceptanceCriteriaProblems(
   redact: (value: string) => string,
 ): readonly TraceProblem[] {
   const projected = projectJiraDescriptionInput(description.description)?.text ?? "";
-  const syntax = typeof description.description === "string" ? "jira-wiki" : "markdown";
-  const blocks = new Set(readJiraDescriptionBlocks(projected, syntax).map(criterionText));
+  const blocks = new Set(
+    readJiraDescriptionBlocks(projected, "jira-wiki").map((block) =>
+      criterionText(block.replaceAll(/\\([\\*_+^~{}[\]!|#?.>-])/gu, "$1")),
+    ),
+  );
   const criteria = new Map<string, string>();
   for (const item of resolved) {
     const required =
@@ -161,6 +166,19 @@ function resolveAgainst(
   const { labels, footer } = requirementTrace(located, redact);
   return {
     ok: true,
+    sourceDigest: sha256Hex(
+      canonicalise(
+        located.map(({ unit, criterion }) => ({
+          reference: requirementReference(unit.entry),
+          requirementDigest: unit.entry.digest,
+          source: unit.source,
+          sectionPath: unit.entry.sectionPath,
+          characterStart: unit.entry.characterStart,
+          characterEnd: unit.entry.characterEnd,
+          criterion: criterion?.id ?? null,
+        })),
+      ),
+    ),
     trace: {
       labels,
       footer,

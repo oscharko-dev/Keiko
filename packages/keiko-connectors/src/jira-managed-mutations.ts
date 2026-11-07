@@ -45,6 +45,7 @@ import {
 } from "./jira-issue-links.js";
 import { dispatchFailure } from "./jira-mutation-failure.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
+import { executeJiraProjectMutation, isJiraProjectMutation } from "./jira-managed-projects.js";
 import {
   gateJiraMutationByTemplates,
   type JiraIssueTemplateSource,
@@ -93,6 +94,7 @@ interface MutationPolicy {
   readonly templates: JiraIssueTemplateSource | undefined;
   readonly check: boolean;
   readonly descriptionConvertedHeadingCount?: number;
+  readonly descriptionProjection?: "supported-markdown";
 }
 const CHECKED: JiraMutationAttempt = { ok: true, receipt: {} };
 const INVALID = { ok: false, reason: "field-validation" } as const;
@@ -135,14 +137,9 @@ function validationFailure(
 type Validated = Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: true }>;
 function withDescriptionFormatting(
   attempt: JiraMutationAttempt,
-  count: number | undefined,
+  metrics: Pick<CreateRequest, "descriptionConvertedHeadingCount" | "descriptionProjection">,
 ): JiraMutationAttempt {
-  return count === undefined
-    ? attempt
-    : {
-        ...attempt,
-        descriptionConvertedHeadingCount: count,
-      };
+  return { ...attempt, ...metrics };
 }
 /** Every requested link must read back from the issue; confirmation checks them all (#4176). */
 function withLinks(
@@ -379,11 +376,16 @@ function createdFields(
   };
 }
 function descriptionMetric(
-  prepared: Validated,
-): Pick<CreateRequest, "descriptionConvertedHeadingCount"> {
-  return prepared.descriptionConvertedHeadingCount === undefined
-    ? {}
-    : { descriptionConvertedHeadingCount: prepared.descriptionConvertedHeadingCount };
+  prepared: Pick<CreateRequest, "descriptionConvertedHeadingCount" | "descriptionProjection">,
+): Pick<CreateRequest, "descriptionConvertedHeadingCount" | "descriptionProjection"> {
+  return {
+    ...(prepared.descriptionConvertedHeadingCount === undefined
+      ? {}
+      : { descriptionConvertedHeadingCount: prepared.descriptionConvertedHeadingCount }),
+    ...(prepared.descriptionProjection === undefined
+      ? {}
+      : { descriptionProjection: prepared.descriptionProjection }),
+  };
 }
 const ISSUE_KEY_VALUE = /^[A-Z][A-Z0-9_]{0,63}-\d{1,12}$/u;
 /**
@@ -487,6 +489,7 @@ interface CreateRequest {
   readonly fields: Readonly<Record<string, unknown>>;
   readonly links: readonly JiraIssueLinkRequest[];
   readonly descriptionConvertedHeadingCount?: number;
+  readonly descriptionProjection?: "supported-markdown";
 }
 async function createWithMetadata(
   request: JiraMutationRequest,
@@ -530,10 +533,10 @@ async function createWithMetadata(
         onAcknowledged,
       )
     : dispatchFailure(response, metadata);
-  return withDescriptionFormatting(
-    attempt,
-    create.descriptionConvertedHeadingCount ?? validated.descriptionConvertedHeadingCount,
-  );
+  return withDescriptionFormatting(attempt, {
+    ...descriptionMetric(validated),
+    ...descriptionMetric(create),
+  });
 }
 function confirmCreatedIssue(
   request: JiraMutationRequest,
@@ -694,12 +697,11 @@ async function fieldMutation(
   );
   const update = linkedUpdate(validated, plan);
   const onlyLinkCalls = changesOnlyThroughLinkCalls(purpose, validated, update, admitted.links);
-  const convertedHeadingCount =
-    validated.descriptionConvertedHeadingCount ?? policy.descriptionConvertedHeadingCount;
+  const formatting = { ...descriptionMetric(policy), ...descriptionMetric(validated) };
   if (!onlyLinkCalls) {
     const body = { fields: validated.fields, update, ...target.body };
     const sent = await statusMutation(request, target.path, target.method, body, metadata.fields);
-    if (!sent.ok) return withDescriptionFormatting(sent, convertedHeadingCount);
+    if (!sent.ok) return withDescriptionFormatting(sent, formatting);
   }
   const attempt = await completeJiraLinkedMutation(
     request,
@@ -714,7 +716,7 @@ async function fieldMutation(
     plan,
     onlyLinkCalls,
   );
-  return withDescriptionFormatting(attempt, convertedHeadingCount);
+  return withDescriptionFormatting(attempt, formatting);
 }
 function editArgumentsRefusal(args: CatalogJsonObject): Refusal | undefined {
   const fields = fieldsInput(args.fields ?? {});
@@ -1311,6 +1313,12 @@ export function executeJiraManagedMutation(
 ): Promise<JiraMutationAttempt> {
   if (connection.deployment !== "data-center")
     return Promise.resolve({ ok: false, reason: "unavailable" });
+  if (isJiraProjectMutation(operation))
+    return executeJiraProjectMutation(
+      operation,
+      structuredClone(source),
+      requestFor(connection, context),
+    );
   // An attachment changes no field a template describes: it takes no template check.
   if (operation === "jira.attach")
     return attachFile(requestFor(connection, context), structuredClone(source), connection);
@@ -1342,6 +1350,13 @@ function checkedAttempt(
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
 ): Promise<JiraMutationAttempt> {
+  if (connection.deployment === "data-center" && isJiraProjectMutation(operation))
+    return executeJiraProjectMutation(
+      operation,
+      structuredClone(source),
+      requestFor(connection, context),
+      true,
+    );
   // The check mode must never reach any write.
   if (connection.deployment !== "data-center" || !TEMPLATE_CHECKED.has(operation))
     return Promise.resolve({ ok: true, receipt: {} });

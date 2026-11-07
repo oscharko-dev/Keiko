@@ -29,6 +29,15 @@ import { JiraReportCard } from "./JiraReportCard";
 import { jiraReportView } from "./jira-report-view";
 import { ChatProcessingPipeline } from "./ChatProcessingPipeline";
 import { chatProcessingSteps } from "./chat-processing-pipeline";
+import { useJiraResultEvidence } from "./jira-result-evidence";
+import {
+  jiraToolOutcomeView,
+  JIRA_OUTCOME_ITEMS_SHOWN,
+  JIRA_PROJECT_TOOLS,
+  type JiraOutcomeItem,
+  type JiraOutcomeRule,
+  type JiraToolOutcomeView,
+} from "./jira-tool-outcome";
 const COVERAGE_ISSUE_MESSAGES = {
   "pending-reads": "chat.knowledgeCoverage.pendingReads",
   "unavailable-documents": "chat.knowledgeCoverage.unavailableDocuments",
@@ -85,6 +94,161 @@ function JiraToolResultDetails({ exchange }: { readonly exchange: ChatToolExchan
     </details>
   );
 }
+function JiraResultItems({ items }: { readonly items: readonly JiraOutcomeItem[] }): ReactNode {
+  const t = useTranslate();
+  return (
+    <ul className={styles.cmpResultItems} aria-label={t("chat.jira.outcome.results")}>
+      {items.map((item, index) => {
+        const title = (
+          <>
+            {item.key === undefined ? null : <strong>{item.key}</strong>}
+            {item.name === undefined ? null : <span>{item.name}</span>}
+          </>
+        );
+        return (
+          <li key={`${item.key ?? item.name ?? ""}:${String(index)}`}>
+            <div className={styles.cmpResultTitle}>
+              {item.href === undefined ? (
+                title
+              ) : (
+                <a className="sm-link" href={item.href} target="_blank" rel="noopener noreferrer">
+                  {title}
+                  <span className="sr-only"> {t("chat.jira.outcome.newTab")}</span>
+                </a>
+              )}
+            </div>
+            {item.projectId === undefined ? null : (
+              <p>{t("chat.jira.outcome.projectId", { id: item.projectId })}</p>
+            )}
+            {item.status === undefined ? null : <p>{item.status}</p>}
+            {item.labels.map((label) => (
+              <p key={label}>{t(label)}</p>
+            ))}
+            {item.body === undefined ? null : <p className={styles.cmpResultText}>{item.body}</p>}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+const RULE_MESSAGES = {
+  "summary-too-short": "chat.jira.outcome.rule.summary-too-short",
+  "summary-too-long": "chat.jira.outcome.rule.summary-too-long",
+  "summary-pattern": "chat.jira.outcome.rule.summary-pattern",
+  "section-missing": "chat.jira.outcome.rule.section-missing",
+  "section-empty": "chat.jira.outcome.rule.section-empty",
+  "field-missing": "chat.jira.outcome.rule.field-missing",
+  "field-unavailable": "chat.jira.outcome.rule.field-unavailable",
+  "label-missing": "chat.jira.outcome.rule.label-missing",
+  "label-pattern": "chat.jira.outcome.rule.label-pattern",
+  "label-count": "chat.jira.outcome.rule.label-count",
+  "parent-missing": "chat.jira.outcome.rule.parent-missing",
+  "template-unreadable": "chat.jira.outcome.rule.template-unreadable",
+} as const satisfies Readonly<Record<JiraOutcomeRule["ruleId"], string>>;
+const VALIDATION_MESSAGES = {
+  "required-field": "chat.jira.outcome.validation.required-field",
+  "unsupported-field": "chat.jira.outcome.validation.unsupported-field",
+  "invalid-field": "chat.jira.outcome.validation.invalid-field",
+  "invalid-operation": "chat.jira.outcome.validation.invalid-operation",
+  "bounds-exceeded": "chat.jira.outcome.validation.bounds-exceeded",
+} as const;
+
+function JiraResultCounts({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
+  const t = useTranslate();
+  return (
+    <>
+      {view.returnedCount === undefined ? null : (
+        <p>
+          {view.total === undefined
+            ? t("chat.jira.outcome.returned", { count: view.returnedCount })
+            : t("chat.jira.outcome.returnedTotal", {
+                count: view.returnedCount,
+                total: view.total,
+              })}
+        </p>
+      )}
+      {view.stagedCount === undefined ? null : (
+        <p>{t("chat.jira.outcome.staged", { count: view.stagedCount })}</p>
+      )}
+      {view.unreadableCount === 0 ? null : (
+        <p>{t("chat.jira.outcome.unreadable", { count: view.unreadableCount })}</p>
+      )}
+      {view.unresolvedCount === undefined || view.unresolvedCount === 0 ? null : (
+        <p>{t("chat.jira.outcome.unresolved", { count: view.unresolvedCount })}</p>
+      )}
+    </>
+  );
+}
+function JiraResultList({ items }: { readonly items: readonly JiraOutcomeItem[] }): ReactNode {
+  const t = useTranslate();
+  return (
+    <>
+      {items.length === 0 ? null : (
+        <JiraResultItems items={items.slice(0, JIRA_OUTCOME_ITEMS_SHOWN)} />
+      )}
+      {items.length <= JIRA_OUTCOME_ITEMS_SHOWN ? null : (
+        <details className={styles.cmpResultMore}>
+          <summary>
+            {t("chat.jira.outcome.more", { count: items.length - JIRA_OUTCOME_ITEMS_SHOWN })}
+          </summary>
+          <JiraResultItems items={items.slice(JIRA_OUTCOME_ITEMS_SHOWN)} />
+        </details>
+      )}
+    </>
+  );
+}
+function JiraResultProblems({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
+  const t = useTranslate();
+  return (
+    <>
+      {view.problems.length === 0 ? null : (
+        <ul className={styles.cmpResultProblems} aria-label={t("chat.jira.outcome.problems")}>
+          {view.problems.map((problem, index) => (
+            <li key={`${problem.field ?? ""}:${String(index)}`}>
+              {problem.field === undefined ? null : <strong>{problem.field}: </strong>}
+              <span>{problem.message}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {view.validation === undefined ? null : <p>{t(VALIDATION_MESSAGES[view.validation])}</p>}
+      {view.rules.length === 0 ? null : (
+        <ul className={styles.cmpResultProblems} aria-label={t("chat.jira.outcome.rules")}>
+          {view.rules.map((rule) => (
+            <li key={`${rule.ruleId}:${rule.subject}`}>
+              {t(RULE_MESSAGES[rule.ruleId], { subject: rule.subject })}
+            </li>
+          ))}
+        </ul>
+      )}
+      {view.failure === undefined ||
+      view.validation !== undefined ||
+      view.rules.length > 0 ? null : (
+        <p>{t(view.failure)}</p>
+      )}
+    </>
+  );
+}
+/** Read the saved receipt directly; reloading a Chat neither fetches Jira nor repeats a write. */
+function JiraToolOutcome({ exchange }: { readonly exchange: ChatToolExchange }): ReactNode {
+  const view = jiraToolOutcomeView(exchange);
+  return (
+    <>
+      <JiraResultCounts view={view} />
+      <JiraResultList items={view.items} />
+      <JiraResultProblems view={view} />
+    </>
+  );
+}
+function resultCardSemantics(exchange: ChatToolExchange): {
+  readonly tag: "div" | "section";
+  readonly role: "group" | undefined;
+  readonly label: ReturnType<typeof jiraToolLabel>;
+} {
+  return JIRA_PROJECT_TOOLS.has(exchange.call.name)
+    ? { tag: "div", role: "group", label: jiraToolLabel(exchange) }
+    : { tag: "section", role: undefined, label: jiraToolRegionLabel(exchange) };
+}
 function JiraToolExchange({
   exchange,
   turnState,
@@ -103,15 +267,22 @@ function JiraToolExchange({
     (turnState === "pending" ? undefined : jiraToolOutcomeHelp(state));
   const report = jiraReportOf(exchange);
   const partial = jiraToolPartialNotice(exchange);
+  const { tag: Card, role, label } = resultCardSemantics(exchange);
   return (
-    <section className={styles.cmpCard} aria-label={t(jiraToolRegionLabel(exchange))}>
+    <Card className={styles.cmpCard} role={role} aria-label={t(label)}>
       <strong>{mcp ? exchange.call.name : t(jiraToolLabel(exchange))}</strong>
       <output>{t(state)}</output>
       {help === undefined ? null : <p>{t(help)}</p>}
       {report === undefined ? null : <JiraReportCard view={report} chatId={chatId} />}
       {report === undefined && partial !== undefined ? <p>{t(partial)}</p> : null}
-      <JiraToolResultDetails exchange={exchange} />
-    </section>
+      {exchange.call.name.startsWith("jira_") ? (
+        report === undefined ? (
+          <JiraToolOutcome exchange={exchange} />
+        ) : null
+      ) : (
+        <JiraToolResultDetails exchange={exchange} />
+      )}
+    </Card>
   );
 }
 /** The card already says what an undecided action is waiting for. */
@@ -126,15 +297,18 @@ export function JiraChatTools({
   transcript,
   turnState,
   chatId,
+  messageId,
   showPending = false,
   waitingForDecision = false,
 }: {
   readonly transcript: ChatToolTranscript | undefined;
   readonly turnState?: ChatTurnState | undefined;
   readonly chatId?: string | undefined;
+  readonly messageId?: string | undefined;
   readonly showPending?: boolean | undefined;
   readonly waitingForDecision?: boolean | undefined;
 }): ReactNode {
+  useJiraResultEvidence(transcript, turnState, messageId);
   const steps = chatProcessingSteps(transcript, turnState, showPending, waitingForDecision);
   if (steps.length === 0) return null;
   return (

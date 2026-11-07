@@ -4,6 +4,9 @@ import { logChatScopeUpdate } from "./chat-scope-update-log.js";
 import { AbortRaceError, raceAbort } from "./abort-race.js";
 
 export const CHAT_TURN_WAIT_CANCELLED = Symbol("chat-turn-wait-cancelled");
+/** Only the credential owner can select this interruption; no mutable state is re-read. */
+export const CHAT_TURN_JIRA_AUTHENTICATION_FAILED = Symbol("jira-authentication-failed");
+export type ChatGenerationInterruption = typeof CHAT_TURN_JIRA_AUTHENTICATION_FAILED;
 
 export interface ChatTurnSerializer {
   readonly runExclusive: <T>(
@@ -13,7 +16,11 @@ export interface ChatTurnSerializer {
     generation?: AbortController,
   ) => Promise<T | typeof CHAT_TURN_WAIT_CANCELLED>;
   /** `keepRunning` spares the Chat's running turn, which has taken the interruption itself. */
-  readonly interruptGenerations: (chatId: string, keepRunning?: boolean) => number;
+  readonly interruptGenerations: (
+    chatId: string,
+    keepRunning?: boolean,
+    reason?: ChatGenerationInterruption,
+  ) => number;
   readonly hasGenerations: (chatId: string) => boolean;
 }
 
@@ -98,8 +105,8 @@ export function createChatTurnSerializer(): ChatTurnSerializer {
   };
   return {
     runExclusive,
-    interruptGenerations: (chatId, keepRunning = false): number =>
-      interruptGenerations(generations.get(chatId), keepRunning),
+    interruptGenerations: (chatId, keepRunning = false, reason): number =>
+      interruptGenerations(generations.get(chatId), keepRunning, reason),
     hasGenerations: (chatId): boolean => activeGenerations(generations.get(chatId)).length > 0,
   };
 }
@@ -132,11 +139,12 @@ function activeGenerations(
 function interruptGenerations(
   generations: ReadonlySet<PendingChatGeneration> | undefined,
   keepRunning: boolean,
+  reason?: ChatGenerationInterruption,
 ): number {
   const interrupted = activeGenerations(generations).filter(
     ({ running }) => !(keepRunning && running),
   );
-  for (const { controller } of interrupted) controller.abort("connected sources changed");
+  for (const { controller } of interrupted) controller.abort(reason ?? "connected sources changed");
   return interrupted.length;
 }
 
@@ -189,7 +197,7 @@ export function interruptChatGenerations(deps: ChatTurnSerializationDeps, chatId
   return (deps.chatTurnSerializer ?? serializerForStore(deps.store)).interruptGenerations(chatId);
 }
 
-type ChatTurnInterruption = () => boolean;
+type ChatTurnInterruption = (reason?: ChatGenerationInterruption) => boolean;
 const turnInterruptions = new WeakMap<UiStore, Map<string, ChatTurnInterruption>>();
 
 /**
@@ -220,16 +228,19 @@ export function interruptChangedChatGenerations(
   current: Chat,
   correlationId: string | undefined,
   patch: UpdateChatPatch = {},
+  reason?: ChatGenerationInterruption,
 ): void {
   if (
     previous === undefined ||
     deriveChatGroundingScopeIdentity(previous) === deriveChatGroundingScopeIdentity(current)
   )
     return;
-  const keepRunning = turnInterruptions.get(deps.store)?.get(current.id)?.() === true;
+  const handled = turnInterruptions.get(deps.store)?.get(current.id)?.(reason) === true;
+  const keepRunning = handled;
   const count = (deps.chatTurnSerializer ?? serializerForStore(deps.store)).interruptGenerations(
     current.id,
     keepRunning,
+    reason,
   );
   if (count > 0)
     logChatScopeUpdate("cancellation-requested", previous, current, patch, correlationId, count);

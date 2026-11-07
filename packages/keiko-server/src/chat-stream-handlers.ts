@@ -1,3 +1,4 @@
+import { chatAuthenticationInterruption } from "./chat-authentication-interruption.js";
 import { browserChatMessages } from "./chat-message-projection.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { hasMixedToolGroundingScope } from "./chat-grounding.js";
@@ -382,9 +383,28 @@ function failCancelledStreamTurn(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   emitTerminal: boolean,
+  signal: AbortSignal,
 ): void {
-  failDesktopChatTurn(deps, request, "cancelled");
-  if (emitTerminal) writeTerminalFrame(ctx, sseMessage({ event: "cancelled", data: {} }));
+  const failure = authenticationStreamFailure(ctx, deps, signal);
+  failDesktopChatTurn(deps, request, failure === undefined ? "cancelled" : "failed");
+  if (emitTerminal)
+    writeTerminalFrame(ctx, sseMessage(failure ?? { event: "cancelled", data: {} }));
+}
+
+function authenticationStreamFailure(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  signal: AbortSignal,
+): Extract<DesktopChatStreamEvent, { event: "error" }> | undefined {
+  const failure = chatAuthenticationInterruption(
+    signal,
+    deps,
+    ctx.correlationId,
+    "POST /api/desktop/chat/stream",
+  );
+  if (failure === undefined) return undefined;
+  const body = failure.body as { error: { code: string; message: string; correlationId?: string } };
+  return { event: "error", data: body.error };
 }
 
 async function streamAndPersist(
@@ -398,7 +418,7 @@ async function streamAndPersist(
   const startedAt = Date.now();
   const memory = admitted.memory ?? (await resolveMemory(deps, request, memoryContext));
   if (requestIsAborted(controller.signal)) {
-    failCancelledStreamTurn(ctx, deps, request, true);
+    failCancelledStreamTurn(ctx, deps, request, true, controller.signal);
     return;
   }
   const termination: StreamTermination = { backpressure: false, tokenFrames: 0 };
@@ -413,7 +433,7 @@ async function streamAndPersist(
   if (turn === undefined || requestIsAborted(controller.signal)) {
     // A backpressure kill already destroyed the socket; do not write-after-destroy nor relabel it as
     // a user cancel. Only an actual (non-backpressure) cancel emits the `cancelled` terminal event.
-    failCancelledStreamTurn(ctx, deps, request, !termination.backpressure);
+    failCancelledStreamTurn(ctx, deps, request, !termination.backpressure, controller.signal);
     return;
   }
   const payload = await persistStreamedTurn(
@@ -426,7 +446,7 @@ async function streamAndPersist(
     ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
   );
   if (payload === undefined) {
-    failCancelledStreamTurn(ctx, deps, request, true);
+    failCancelledStreamTurn(ctx, deps, request, true, controller.signal);
     return;
   }
   finalizeStreamedTurn(ctx, deps, payload, assembly.compaction, admitted, startedAt);
@@ -825,12 +845,15 @@ function writeStreamFailure(
   controller: AbortController,
   error: unknown,
 ): void {
-  const cancelled = requestIsAborted(controller.signal);
+  const authentication = authenticationStreamFailure(ctx, deps, controller.signal);
+  const cancelled = requestIsAborted(controller.signal) && authentication === undefined;
   if (!settlePromptPreparationRejection(deps, turn.prepared, turn.admitted, error))
     failDesktopChatTurn(deps, turn.prepared.request, cancelled ? "cancelled" : "failed");
-  const event: DesktopChatStreamEvent = cancelled
-    ? { event: "cancelled", data: {} }
-    : { event: "error", data: errorEvent(error, deps, ctx.correlationId) };
+  const event: DesktopChatStreamEvent =
+    authentication ??
+    (cancelled
+      ? { event: "cancelled", data: {} }
+      : { event: "error", data: errorEvent(error, deps, ctx.correlationId) });
   writeTerminalFrame(ctx, sseMessage(event));
 }
 
@@ -1217,7 +1240,22 @@ async function runDesktopChatStream(
     controller,
   );
   if (result !== CHAT_TURN_WAIT_CANCELLED) return result;
-  return streamState.started
-    ? STREAMING
-    : { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
+  return interruptedStreamOutcome(ctx, deps, controller.signal, streamState);
+}
+
+function interruptedStreamOutcome(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  signal: AbortSignal,
+  state: DesktopChatStreamState,
+): HandlerOutcome {
+  if (state.started) return STREAMING;
+  return (
+    chatAuthenticationInterruption(
+      signal,
+      deps,
+      ctx.correlationId,
+      "POST /api/desktop/chat/stream",
+    ) ?? { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") }
+  );
 }

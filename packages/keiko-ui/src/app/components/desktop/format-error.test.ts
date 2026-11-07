@@ -10,6 +10,44 @@ import { formatUserError, toUserErrorNotice } from "./format-error";
 
 describe("formatUserError", () => {
   it.each(["en", "de"] as const)(
+    "explains expired Jira credentials and preserves the saved support reference in %s",
+    async (locale) => {
+      await loadLocaleMessages(locale);
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      try {
+        const error = new ApiError("JIRA_AUTHENTICATION_FAILED", "Private provider detail", 409);
+        error.correlationId = "jira-auth-proof";
+        const notice = toUserErrorNotice(error, "Could not send message.");
+        expect(notice.title).toBe(
+          locale === "en" ? "Jira authentication failed" : "Jira-Anmeldung fehlgeschlagen",
+        );
+        expect(notice.message).toBe(
+          locale === "en"
+            ? "The Jira connection could not be authenticated."
+            : "Die Jira-Verbindung konnte nicht authentifiziert werden.",
+        );
+        expect(notice.remediation).toBe(
+          locale === "en"
+            ? "Verify the Jira connection in the Knowledge Pods Hub. Before requesting another change, check its outcome in Jira."
+            : "Prüfe die Jira-Verbindung erneut im Knowledge Pods Hub. Prüfe vor einer weiteren Änderung den Stand in Jira.",
+        );
+        const restored = toUserErrorNotice(
+          formatUserError(error, "Could not send message."),
+          "Could not send message.",
+        );
+        expect(restored).toEqual(notice);
+        expect(restored).toMatchObject({
+          code: "JIRA_AUTHENTICATION_FAILED",
+          correlationId: "jira-auth-proof",
+        });
+        expect(JSON.stringify(restored)).not.toContain("Private provider detail");
+      } finally {
+        window.localStorage.removeItem(I18N_STORAGE_KEY);
+        resetLoadedMessageCatalogs();
+      }
+    },
+  );
+  it.each(["en", "de"] as const)(
     "explains unavailable Chat capabilities without service-specific checks in %s",
     async (locale) => {
       await loadLocaleMessages(locale);

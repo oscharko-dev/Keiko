@@ -2,7 +2,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
-import { JIRA_MANAGED_ACTION_TYPES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogLifecycleLogPort } from "../tool-catalog/catalogToolLifecycle.js";
 import { buildUiHandlerDeps } from "../deps.js";
 import {
@@ -58,6 +57,30 @@ function fixture(): {
 }
 
 describe("application-owned Jira catalog initialization", () => {
+  it("advertises only local discovery and Knowledge schemas before an explicit selection", async () => {
+    const f = fixture();
+    expect(
+      f.runtime
+        .toolDefinitions()
+        .map((tool) => tool.name)
+        .sort(),
+    ).toEqual(
+      [
+        "jira_discover",
+        "jira_describe",
+        ...KNOWLEDGE_CHAT_TOOLS.map((tool) => tool.replace(/[.-]/gu, "_")),
+      ].sort(),
+    );
+    const initial = await f.runtime.get();
+    expect(initial.projection.tools.map((tool) => tool.alias).sort()).toEqual(
+      f.runtime
+        .toolDefinitions()
+        .map((tool) => tool.name)
+        .sort(),
+    );
+    await f.runtime.close();
+  });
+
   it("recovers a fresh shared SDK catalog after a transient admission-log failure", async () => {
     const f = fixture();
     f.write.mockImplementationOnce(() => {
@@ -66,10 +89,7 @@ describe("application-owned Jira catalog initialization", () => {
     await expect(f.runtime.get()).rejects.toMatchObject({ reason: "log-unavailable" });
     const [first, second] = await Promise.all([f.runtime.get(), f.runtime.get()]);
     expect(second).toBe(first);
-    // Every Jira action plus the shared Knowledge document/requirement/review tools.
-    expect(first.catalog.descriptors).toHaveLength(
-      Object.keys(JIRA_MANAGED_ACTION_TYPES).length + KNOWLEDGE_CHAT_TOOLS.length,
-    );
+    expect(first.catalog.descriptors).toHaveLength(2 + KNOWLEDGE_CHAT_TOOLS.length);
     expect(f.record).toHaveBeenCalledOnce();
     expect(JSON.stringify(f.record.mock.calls)).not.toContain("synthetic-private-sink-failure");
     const records = f.lines.map((line) =>
@@ -101,6 +121,36 @@ describe("application-owned Jira catalog initialization", () => {
     await expect(closed).resolves.toBeUndefined();
     await expect(f.runtime.get()).rejects.toMatchObject({ reason: "handler-unavailable" });
     expect(f.record).toHaveBeenCalledOnce();
+  });
+
+  it("keeps concurrent selected schema sets isolated and the initial advertisement unchanged", async () => {
+    const f = fixture();
+    const [projects, issue] = await Promise.all([
+      f.runtime.select(["GET /rest/api/2/project"]),
+      f.runtime.select(["GET /rest/api/2/issue/{issueIdOrKey}"]),
+    ]);
+    expect(projects.projection.tools.map((tool) => tool.alias)).toContain("jira_projects");
+    expect(projects.projection.tools.map((tool) => tool.alias)).not.toContain("jira_issue");
+    expect(issue.projection.tools.map((tool) => tool.alias)).toContain("jira_issue");
+    expect(issue.projection.tools.map((tool) => tool.alias)).not.toContain("jira_projects");
+    expect(f.runtime.toolDefinitions().map((tool) => tool.name)).not.toContain("jira_projects");
+    await projects.close();
+    expect(issue.handlerBindings.every((binding) => binding.readiness() === "ready")).toBe(true);
+    await f.runtime.close();
+    expect(issue.handlerBindings[0]?.readiness()).toBe("unavailable");
+    await expect(f.runtime.select([])).rejects.toMatchObject({ reason: "handler-unavailable" });
+  });
+
+  it("refuses unknown or duplicate identities before admitting a selected host", async () => {
+    const f = fixture();
+    await expect(
+      f.runtime.select(["GET https://unexpected.invalid/private"]),
+    ).rejects.toMatchObject({ reason: "invalid-arguments" });
+    await expect(
+      f.runtime.select(["GET /rest/api/2/project", "GET /rest/api/2/project"]),
+    ).rejects.toMatchObject({ reason: "invalid-arguments" });
+    expect(f.write).not.toHaveBeenCalled();
+    await f.runtime.close();
   });
 
   it("settles close while the failed initialization is still pending", async () => {

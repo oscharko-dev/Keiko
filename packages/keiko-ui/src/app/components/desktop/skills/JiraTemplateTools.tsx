@@ -64,6 +64,8 @@ interface Validation {
 }
 /** Each proposal run is a generation, so a new proposal never inherits an earlier draft's edits. */
 interface Proposals {
+  readonly scope: RequestScope;
+  readonly correlationId: string;
   readonly generation: number;
   readonly items: readonly JiraTemplateProposal[];
 }
@@ -181,9 +183,18 @@ function useTemplateActions(
 ): Pick<Tools, "validate" | "propose"> & Pick<Tools, "validation" | "proposals"> {
   const [validation, setValidation] = useState<Validation>();
   const [proposals, setProposals] = useState<Proposals>();
+  const retired = useRef<Proposals | undefined>(undefined);
+  useEffect(() => {
+    if (proposals === undefined || proposals.scope === scope || retired.current === proposals)
+      return;
+    retired.current = proposals;
+    reportClientDiagnostic("Jira template proposal superseded.", {
+      correlationId: proposals.correlationId,
+    });
+  }, [proposals, scope]);
   return {
     validation,
-    proposals,
+    proposals: proposals?.scope === scope ? proposals : undefined,
     validate: (entry): Promise<void> => {
       setValidation(undefined);
       return run(
@@ -198,7 +209,12 @@ function useTemplateActions(
         if (scope.podId === undefined) return;
         const items = await proposeJiraTemplates(scope.podId, projectKey, correlationId);
         if (!isCurrent()) return;
-        setProposals((current) => ({ generation: (current?.generation ?? 0) + 1, items }));
+        setProposals((current) => ({
+          scope,
+          correlationId,
+          generation: (current?.generation ?? 0) + 1,
+          items,
+        }));
       }),
   };
 }

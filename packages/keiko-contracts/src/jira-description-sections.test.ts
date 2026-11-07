@@ -26,7 +26,7 @@ describe("Data Center description heading serialization", () => {
       expect(projectJiraDescriptionInput(text)).toEqual({ text, convertedHeadingCount: 0 });
     }
     expect(projectJiraDescriptionInput({ format: "markdown", text: "## Heading\nBody" })).toEqual({
-      text: "h2. Heading\nBody",
+      text: "h2. Heading\n\nBody",
       convertedHeadingCount: 1,
     });
   });

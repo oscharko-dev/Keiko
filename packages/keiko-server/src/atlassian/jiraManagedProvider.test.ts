@@ -1,7 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { JIRA_MUTATION_OPERATIONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
-import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
+import {
+  createJiraProviderForCatalog,
+  jiraOperationBindingForTool,
+} from "./jiraManagedProvider.js";
 import type {
   JiraManagedConnection,
   JiraManagedMutationExecutor,
@@ -109,6 +112,7 @@ it("builds canonical field metadata descriptors that admit the advertised input 
   });
   const data = {
     outcome: "succeeded",
+    operationBinding: jiraOperationBindingForTool("jira.create-fields"),
     items: [
       {
         id: "description",

@@ -1,7 +1,7 @@
 import {
   JIRA_FIELD_ID_PATTERN,
   readJiraDescriptionSections,
-  serializeJiraDescriptionHeadings,
+  projectJiraDescriptionInput,
   readJiraMarkdownDescription,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 // Capability validation only: HTTP, authority, custody and audit remain with their existing owners.
@@ -309,6 +309,7 @@ export type JiraFieldValidationResult =
       readonly update: Readonly<Record<string, readonly Record<string, string>[]>>;
       /** Internal serialization evidence, never field content or a remote receipt. */
       readonly descriptionConvertedHeadingCount?: number;
+      readonly descriptionProjection?: "supported-markdown";
     }
   | {
       readonly ok: false;
@@ -329,6 +330,7 @@ type ValueResult =
       readonly ok: true;
       readonly value: unknown;
       readonly descriptionConvertedHeadingCount?: number;
+      readonly descriptionProjection?: "supported-markdown";
     }
   | { readonly ok: false; readonly message?: string };
 const INVALID: ValueResult = { ok: false };
@@ -435,11 +437,16 @@ function encodedDocumentStructure(value: string): boolean {
 function markdownDescriptionValue(field: JiraFieldMetadata, value: unknown): ValueResult {
   const markdown = readJiraMarkdownDescription(value);
   if (markdown === undefined || !validFieldText(field, markdown)) return INVALID;
-  const serialized = serializeJiraDescriptionHeadings(markdown);
+  const serialized = projectJiraDescriptionInput(value);
+  if (serialized === undefined)
+    return invalidWith(
+      "The Markdown description contains unsupported structure or exceeds the Jira field limit. Use supported Markdown or submit native Jira wiki text.",
+    );
   if (!validFieldText(field, serialized.text)) return INVALID;
   return {
     ok: true,
     value: serialized.text,
+    descriptionProjection: "supported-markdown",
     ...(serialized.convertedHeadingCount === 0
       ? {}
       : { descriptionConvertedHeadingCount: serialized.convertedHeadingCount }),
@@ -596,6 +603,7 @@ type SetResult =
       readonly ok: true;
       readonly fields: Readonly<Record<string, unknown>>;
       readonly descriptionConvertedHeadingCount?: number;
+      readonly descriptionProjection?: "supported-markdown";
     }
   | FieldFailure;
 type UpdateResult =
@@ -640,6 +648,7 @@ function validateSets(
 ): SetResult {
   const fields: Record<string, unknown> = {};
   let descriptionConvertedHeadingCount = 0;
+  let descriptionProjection: "supported-markdown" | undefined;
   for (const [id, value] of Object.entries(input)) {
     if (!isJiraFieldId(id)) return { ok: false, reason: "invalid-field" };
     const result = setValue(byId.get(id), value, deployment);
@@ -652,11 +661,13 @@ function validateSets(
       };
     fields[id] = result.value;
     descriptionConvertedHeadingCount += result.descriptionConvertedHeadingCount ?? 0;
+    descriptionProjection ??= result.descriptionProjection;
   }
   return {
     ok: true,
     fields,
     ...(descriptionConvertedHeadingCount === 0 ? {} : { descriptionConvertedHeadingCount }),
+    ...(descriptionProjection === undefined ? {} : { descriptionProjection }),
   };
 }
 /**
@@ -745,12 +756,8 @@ export function validateJiraFieldChanges(
   const changesResult = validateUpdates(byId, sets.fields, requestedUpdates);
   if (!changesResult.ok) return changesResult;
   return {
-    ok: true,
-    fields: sets.fields,
+    ...sets,
     update: changesResult.update,
-    ...(sets.descriptionConvertedHeadingCount === undefined
-      ? {}
-      : { descriptionConvertedHeadingCount: sets.descriptionConvertedHeadingCount }),
   };
 }
 

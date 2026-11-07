@@ -226,6 +226,9 @@ describe("template identification", () => {
     expect(normalizeJiraSectionHeading("  **Acceptance   Criteria**: ")).toBe(
       "acceptance criteria",
     );
+    expect(normalizeJiraSectionHeading("Literal \\[42\\] and file\\_a")).toBe(
+      normalizeJiraSectionHeading("Literal [42] and file_a"),
+    );
   });
 });
 

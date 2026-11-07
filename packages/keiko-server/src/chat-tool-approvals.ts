@@ -1,3 +1,4 @@
+import { jiraOperationBindingForTool } from "./atlassian/jiraManagedProvider.js";
 import type {
   CatalogConsumer,
   CatalogBoundAuthorityPort,
@@ -82,6 +83,13 @@ export async function acceptChatToolReadGrant(
   );
   await input.publish();
 }
+function approvalOperationBinding(approval: ChatToolWriteApprovalView): {
+  readonly operationBinding?: NonNullable<ReturnType<typeof jiraOperationBindingForTool>>;
+} {
+  const binding = jiraOperationBindingForTool(approval.operation);
+  return binding === undefined ? {} : { operationBinding: binding };
+}
+
 export async function waitForChatToolWriteConsent(
   input: ChatToolApprovalContext,
   approval: ChatToolWriteApprovalView,
@@ -93,7 +101,12 @@ export async function waitForChatToolWriteConsent(
   const save = (view: ChatToolWriteApprovalView): void => {
     deps.store.updateChatToolTranscript(
       message.id,
-      { kind: "write-approval", callId: exchange.call.id, approval: view },
+      {
+        kind: "write-approval",
+        callId: exchange.call.id,
+        approval: view,
+        ...approvalOperationBinding(view),
+      },
       correlationId,
     );
   };
@@ -129,7 +142,7 @@ export function refreshChatToolWriteApproval(
     return;
   deps.store.updateChatToolTranscript(
     message.id,
-    { kind: "write-approval", callId, approval: observed },
+    { kind: "write-approval", callId, approval: observed, ...approvalOperationBinding(observed) },
     correlationId,
   );
 }

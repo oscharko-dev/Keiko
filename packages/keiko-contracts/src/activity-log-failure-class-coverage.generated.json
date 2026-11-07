@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 392,
-  "completeClassCount": 392,
+  "supportedClassCount": 393,
+  "completeClassCount": 393,
   "completeness": "complete",
   "classes": [
     {
@@ -2064,10 +2064,28 @@
               "required": true
             },
             {
+              "name": "agileApi",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "jiraCompatibility",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "outcome",
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "restApi",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "verificationState",
@@ -2083,7 +2101,8 @@
           },
           "proofIds": [
             "atlassian.connection.checked.line",
-            "atlassian.connection.checked.observed-authentication"
+            "atlassian.connection.checked.observed-authentication",
+            "atlassian.connection.checked.compatibility"
           ],
           "replayReferences": [],
           "missingObligations": []
@@ -3562,6 +3581,12 @@
               "name": "descriptionConvertedHeadingCount",
               "type": "integer",
               "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "descriptionProjection",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             },
             {
@@ -6698,6 +6723,110 @@
             "causeChain": false
           },
           "proofIds": ["client.git-operation.settled.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "client-jira-result",
+      "requirementContract": "client-jira-result",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["client.jira-result.presented"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "client.jira-result.presented",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["client.jira-result.presented"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "client.jira-result.presented",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "exchangeCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "failure",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "itemCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "messageDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "problemCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "restored",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "returnedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "ruleCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "shownCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "unreadableCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["client.jira-result.presented.line"],
           "replayReferences": [],
           "missingObligations": []
         }
@@ -11038,6 +11167,12 @@
               "name": "descriptionConvertedHeadingCount",
               "type": "integer",
               "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "descriptionProjection",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             },
             {

@@ -566,6 +566,27 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
     });
   }
 
+  it("records body-only Markdown projection without content or a fabricated heading count", async () => {
+    const h = harness();
+    h.state.fields.description = null;
+    descriptionTransport(h);
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const result = await client.call("jira.edit", {
+      issueKey: "SYN-1",
+      fields: { description: { format: "markdown", text: "**Exact body**" } },
+    });
+    expect(result).toMatchObject({ structuredContent: { outcome: "succeeded" } });
+    expect(h.state.fields.description).toBe("*Exact body*");
+    const evidence = proofLines(h).find((line) => line.action === "serialize-description");
+    expect(evidence).toMatchObject({
+      descriptionProjection: "supported-markdown",
+      outcome: "completed",
+    });
+    expect(evidence).not.toHaveProperty("descriptionConvertedHeadingCount");
+    expect(JSON.stringify(evidence)).not.toMatch(/Exact body|SYN-1/u);
+    expect(result.structuredContent).not.toHaveProperty("descriptionProjection");
+  });
+
   it("preserves a confirmed write when its serialization audit sink throws", async () => {
     const h = harness({ failSerializationLog: true });
     // Jira includes an unset selected description as null, allowing before/after confirmation.
