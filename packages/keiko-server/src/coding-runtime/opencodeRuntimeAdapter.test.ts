@@ -350,6 +350,41 @@ async function* finiteHints(values: readonly OpenCodeSyncHint[]): AsyncIterable<
   for (const value of values) yield value;
 }
 
+// A live stream the test feeds: the first hint opens it, every later push wakes its reader.
+function hintChannel(first: OpenCodeSyncHint): {
+  readonly subscribe: (signal: AbortSignal) => AsyncIterable<OpenCodeSyncHint>;
+  readonly push: (hint: OpenCodeSyncHint) => void;
+} {
+  const queue: OpenCodeSyncHint[] = [first];
+  let wake: (() => void) | undefined;
+  const take = (): IteratorResult<OpenCodeSyncHint> => {
+    const hint = queue.shift();
+    return hint === undefined ? { done: true, value: undefined } : { done: false, value: hint };
+  };
+  const next = (signal: AbortSignal): Promise<IteratorResult<OpenCodeSyncHint>> => {
+    if (queue.length > 0 || signal.aborted) return Promise.resolve(take());
+    return new Promise((resolve) => {
+      const settle = (): void => {
+        wake = undefined;
+        resolve(take());
+      };
+      wake = settle;
+      signal.addEventListener("abort", settle, { once: true });
+    });
+  };
+  return {
+    subscribe: (signal) => ({
+      [Symbol.asyncIterator]: (): AsyncIterator<OpenCodeSyncHint> => ({
+        next: (): Promise<IteratorResult<OpenCodeSyncHint>> => next(signal),
+      }),
+    }),
+    push: (hint): void => {
+      queue.push(hint);
+      wake?.();
+    },
+  };
+}
+
 function record(value: unknown): Readonly<Record<string, unknown>> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("expected object");
@@ -2069,6 +2104,45 @@ describe("OpenCode runtime adapter readiness", () => {
 
       expect(statusCalls).toBeLessThanOrEqual(6);
       expect(statusCalls).toBeGreaterThanOrEqual(3);
+      adapter.cancelTurn();
+      stopMonitor();
+      await expect(waiting).resolves.toBe(false);
+      await adapter.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns the status poll to its base delay when a live notification ends a wait", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = readinessPorts();
+      const channel = hintChannel({ id: "evt_0" });
+      harness.ports.readiness.subscribe = channel.subscribe;
+      const pollTimes: number[] = [];
+      harness.ports.control.status = (): Promise<"activity"> => {
+        pollTimes.push(Date.now());
+        return Promise.resolve("activity");
+      };
+      const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
+      await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+      const stopMonitor = adapter.monitor(() => undefined);
+      expect(adapter.armTurn()).toBe(true);
+      const waiting = adapter.waitForTerminal(new AbortController().signal);
+      await vi.advanceTimersByTimeAsync(5_000);
+      const gaps = (times: readonly number[]): number[] =>
+        times.slice(1).map((time, index) => time - (times[index] ?? time));
+      expect(gaps(pollTimes).at(-1)).toBe(2_000);
+
+      const quietPolls = pollTimes.length;
+      channel.push({
+        requiresHistoryIdentity: false,
+        control: { sessionId: "ses_1", state: "terminal" },
+      });
+      await vi.advanceTimersByTimeAsync(260);
+
+      // The notification ends the wait at once; the next wait starts again at 250 ms, not 2 s.
+      expect(gaps(pollTimes.slice(quietPolls - 1)).slice(1)).toEqual([250]);
       adapter.cancelTurn();
       stopMonitor();
       await expect(waiting).resolves.toBe(false);

@@ -84,6 +84,11 @@ const RECONNECT_BUDGET_MS = 30_000;
 // proves nothing about a half-dead runtime, so it must not reset the reconnect pressure.
 const TURN_POLL_BASE_MS = 250;
 const TURN_POLL_MAX_MS = 2_000;
+
+interface QuietTurnPolls {
+  readonly generation: number;
+  count: number;
+}
 const MIN_HEALTHY_STREAM_MS = 10_000;
 const MAX_STREAM_FLAPS = 32;
 const EVENTS_ENDED_MESSAGE = "opencode-events-ended";
@@ -466,6 +471,8 @@ export function createOpenCodeRuntimeAdapter(
   let monitorTask: Promise<void> | undefined;
   let monitoring = false;
   let turnPollFailures = 0;
+  // Status polls of the current turn generation that no live notification interrupted.
+  let turnQuietPolls: QuietTurnPolls = { generation: -1, count: 0 };
   // Aborted when the monitor is disposed, so a reconnect backoff never outlives its monitor.
   let monitorStop = new AbortController();
   let closed = false;
@@ -718,12 +725,10 @@ export function createOpenCodeRuntimeAdapter(
     sessionId: string,
   ): Promise<OpenCodeTurnOutcome> {
     try {
-      let quietPolls = 0;
       while (turnCurrent(generation, signal)) {
         const outcome = await pollTurnOnce(generation, signal, sessionId);
         if (outcome !== undefined) return outcome;
-        const notified = await waitForTurnChange(signal, generation, turnPollDelayMs(quietPolls));
-        quietPolls = notified ? 0 : quietPolls + 1;
+        await waitForTurnChange(signal, generation);
       }
       return turnSettled(generation) ? (turnSettledOutcome ?? false) : false;
     } finally {
@@ -829,24 +834,28 @@ export function createOpenCodeRuntimeAdapter(
     return terminalSequence !== undefined && terminalSequence > baselineSequence ? true : undefined;
   }
 
-  // Resolves true when a notification (or abort) ended the wait, false when the poll delay did.
-  function waitForTurnChange(
-    signal: AbortSignal,
-    generation: number,
-    delayMs: number,
-  ): Promise<boolean> {
+  // The backoff counts the generation's quiet polls: a notification (or abort) that ends a wait
+  // resets it, a wait the poll delay ended extends it. A new turn generation starts at zero.
+  function quietTurnPolls(generation: number): QuietTurnPolls {
+    if (turnQuietPolls.generation !== generation) turnQuietPolls = { generation, count: 0 };
+    return turnQuietPolls;
+  }
+
+  function waitForTurnChange(signal: AbortSignal, generation: number): Promise<void> {
+    const quiet = quietTurnPolls(generation);
     return new Promise((resolve) => {
       let timedOut = false;
       const done = (): void => {
         clearTimeout(timer);
         signal.removeEventListener("abort", done);
         turnNotifications.delete(done);
-        resolve(!timedOut);
+        quiet.count = timedOut ? quiet.count + 1 : 0;
+        resolve();
       };
       const timer = setTimeout(() => {
         timedOut = true;
         done();
-      }, delayMs);
+      }, turnPollDelayMs(quiet.count));
       timer.unref();
       signal.addEventListener("abort", done, { once: true });
       if (generation !== turnGeneration || closed) done();
