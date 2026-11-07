@@ -168,7 +168,6 @@
     "check:editor-doc-links": "node scripts/check-editor-doc-links.mjs",
     "check:e2e-suite-wiring": "node scripts/check-e2e-suite-wiring.mjs",
     "check:adr-index": "node scripts/check-adr-index.mjs",
-    "check:jira-api-inventory": "node scripts/check-jira-api-inventory.mjs",
     "check:lift-icon-parity": "node scripts/check-lift-icon-parity.mjs",
     "check:op-catalog": "vitest run scripts/__tests__/op-catalog-drift.test.mjs",
     "check:activity-log": "node scripts/check-activity-log.mjs",

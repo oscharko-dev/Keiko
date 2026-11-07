@@ -7,18 +7,27 @@ credential metadata store unavailable**, including credentials without that obse
 encrypted tokens have not been lost. Do not delete credentials or recreate Pods to hide this error.
 
 Prefer a forward repair. If reverting to a build from before #4289 is necessary, use the following
-offline procedure **from the newer source checkout before installing the older build**. A normal
+offline procedure **from the exact currently installed build's source before installing the older build**. A normal
 upgrade does not require this procedure. This is an operator maintenance command, not a remote
 API or an automatic application downgrade.
 
-1. Finish or cancel active Jira tasks and let credential replacement/deletion and verification
+1. Record the currently installed version with `keiko --version`. Obtain a fresh, clean source
+   checkout of that exact release tag (`v<version>`) from the Keiko repository. For a development
+   installation, use the exact source commit recorded when that build was produced; a shared
+   development version number alone cannot identify it. Do not use an arbitrary newer `dev`
+   checkout or mix package output from another version: the command must use the installed build's
+   metadata validator. This source-checkout procedure also applies to **npm-installed Keiko**;
+   the maintenance scripts are not included in the npm package. If the matching source is
+   unavailable, retain the current installation and obtain it before attempting this downgrade.
+2. Finish or cancel active Jira tasks and let credential replacement/deletion and verification
    settle. Reconcile uncertain Jira effects using the existing mutation recovery flow; never replay
    them as part of this procedure. Stop all Keiko processes using the target configuration. Keep
    them stopped until the migration and code reversion are complete.
-2. Make a private backup of the complete configuration directory, including credentials, using the
+3. Make a private backup of the complete configuration directory, including credentials, using the
    installation's existing backup process. The backup stays local; never attach it to an issue or
-   support report. Build this checkout with `npm run build:packages` if its package output is absent.
-3. Preview against the **exact configuration file used by that installation**:
+   support report. In the fresh matching source checkout, run `npm ci` and then
+   `npm run build:packages` to build from its committed lockfile with no stale package output.
+4. Preview against the **exact configuration file used by that installation**:
 
    ```sh
    node scripts/downgrade-jira-compatibility.mjs --config /absolute/path/to/keiko.config.json
@@ -29,7 +38,7 @@ API or an automatic application downgrade.
    with the newer build before proceeding. A missing store also fails; verify the selected
    configuration path rather than creating an empty replacement store.
 
-4. Apply while all Keiko processes remain stopped:
+5. Apply while all Keiko processes remain stopped:
 
    ```sh
    node scripts/downgrade-jira-compatibility.mjs --config /absolute/path/to/keiko.config.json --server-stopped --apply
@@ -43,7 +52,7 @@ API or an automatic application downgrade.
    store and atomic private writer. If interrupted between records, rerunning completes the
    remaining records without advancing an already migrated record again.
 
-5. Repeat the preview: affected and changed must both be zero. Install the older build and restart
+6. Repeat the preview: affected and changed must both be zero. Install the older build and restart
    Keiko. Verify connections through the ordinary UI under that build's rules. In particular, the
    previous exact **10.3.26** gate returns; a newer Jira release remains unsupported by that build.
    Return to the fixed newer build if its compatibility support is needed.
