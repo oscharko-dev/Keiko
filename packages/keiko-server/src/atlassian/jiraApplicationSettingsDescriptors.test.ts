@@ -74,3 +74,30 @@ it("preserves zero as an integer preference observation, without a quota claim",
   expect(describeCatalogSchemaMismatch(schema, { ...result, unlimited: true })).toBeDefined();
   expect(describeCatalogSchemaMismatch(schema, { ...result, effectivePermission: "SYSADMIN" })).toBeDefined();
 });
+it.each([
+  { valueState: "withheld", stringValue: "private" },
+  { valueState: "withheld", booleanValue: false },
+  { valueState: "withheld", integerValue: 0 },
+  { valueState: "unknown", valueType: "string", stringValue: "invented default" },
+  { valueState: "unknown", valueType: "boolean", booleanValue: false },
+  { valueState: "unknown", valueType: "integer", integerValue: 0 },
+  { valueState: "observed", valueType: "boolean", stringValue: "false" },
+  { valueState: "observed", valueType: "integer", integerValue: 0, stringValue: "leak" },
+] as const)("refuses incoherent singleton settings values %j", (fields) => {
+  for (const [name, scope] of [["jira.my-preference", "current-user-preference"], ["jira.application-properties", "application-properties"]] as const) {
+    expect(describeCatalogSchemaMismatch(declaration(name).descriptor.resultSchema, {
+      outcome: "succeeded", settingsScope: scope, key: "jira.user.locale", ...fields,
+    })).toBeDefined();
+  }
+});
+it("does not allow the list-only advanced endpoint or singleton preference to switch shapes", () => {
+  expect(describeCatalogSchemaMismatch(declaration("jira.advanced-settings").descriptor.resultSchema, {
+    outcome: "succeeded", settingsScope: "advanced-settings", key: "jira.clone.prefix", valueState: "withheld",
+  })).toBeDefined();
+  expect(describeCatalogSchemaMismatch(declaration("jira.my-preference").descriptor.resultSchema, {
+    outcome: "succeeded", settingsScope: "current-user-preference", items: [], startAt: 0, total: 0,
+  })).toBeDefined();
+  expect(describeCatalogSchemaMismatch(declaration("jira.my-preference").descriptor.resultSchema, {
+    outcome: "failed", reason: "permission-denied",
+  })).toBeUndefined();
+});

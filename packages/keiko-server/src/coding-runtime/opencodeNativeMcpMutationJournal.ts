@@ -1,11 +1,12 @@
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import { randomUUID } from "node:crypto";
 import { captureCatalogJson } from "@oscharko-dev/keiko-tool-catalog";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
   type ToolDescriptor,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type { ManagedMcpMutationInvocation } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import type { ManagedMcpMutationInvocation, ManagedMcpReadCapture } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { UiStore } from "../store/types.js";
 import type { CodingNativeToolTranscript } from "../store/codingHistory.js";
@@ -17,7 +18,7 @@ import type {
 import { journalConflict } from "../store/chatToolMutationState.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
-import { codingJiraResultCapture } from "./codingJiraResultCapture.js";
+import { codingJiraResultCapture, codingJiraReadResultCapture } from "./codingJiraResultCapture.js";
 import {
   CHAT_TOOL_TRANSCRIPT_BASE_BYTES,
   CHAT_TOOL_TRANSCRIPT_MAX_BYTES,
@@ -39,6 +40,14 @@ export interface NativeMcpMutationSource {
 }
 export interface NativeMcpMutationJournal {
   readonly bindTurn: (runId: string, nativeMessageId: string, text: string) => void;
+  /** Share the bound transcript and capacity owner; reads never prepare an effect record. */
+  readonly beginReadCapture: (input: {
+    readonly runId: string;
+    readonly toolName: string;
+    readonly argumentsValue: CatalogJsonObject;
+    readonly signal: AbortSignal;
+    readonly localProvider: "jira";
+  }) => ManagedMcpReadCapture | undefined;
   readonly prepare: (
     input: NativeMcpCallIdentity & NativeMcpMutationSource & { readonly argumentsValue: unknown },
   ) => ChatToolMutationPreparation;
@@ -131,6 +140,28 @@ class NativeMutationJournal implements NativeMcpMutationJournal {
   }
   bindTurn(runId: string, nativeMessageId: string, text: string): void {
     this.#historyOwner.bindNativeTurn(runId, nativeMessageId, text);
+  }
+  beginReadCapture(
+    request: Parameters<NativeMcpMutationJournal["beginReadCapture"]>[0],
+  ): ManagedMcpReadCapture | undefined {
+    if (request.localProvider !== "jira" || request.signal.aborted) return undefined;
+    const turn = this.#history.nativeTurn(request.runId);
+    if (turn === undefined || this.input.snapshots.get(request.runId) === undefined) return undefined;
+    const args = capturedArguments(request.argumentsValue);
+    const invocationId = `mcp-read-${randomUUID()}`;
+    const transcript = this.#history.nativeToolTranscript(request.runId, turn);
+    const capture = codingJiraReadResultCapture({
+      ...request, invocationId, argumentsValue: args, capture: transcript.capture,
+      reserve: (descriptor, alias) => this.reserveResult({
+        messageId: turn.userMessageId, invocationId, args, descriptor, alias, transcript,
+      }),
+    });
+    return {
+      invocationId,
+      retainProviderResult: capture.retainProviderResult,
+      retainLocalFailure: capture.retainLocalFailure,
+      release: capture.releaseReservation,
+    };
   }
   prepare(
     request: Parameters<NativeMcpMutationJournal["prepare"]>[0],

@@ -44,6 +44,15 @@ function jiraPropertyAction(name: JiraEntityPropertyMutation): JiraEntityPropert
   return name.slice(5) as JiraEntityPropertyAction;
 }
 const JIRA_PROPERTY_ACTIONS = Object.freeze(JIRA_ENTITY_PROPERTY_MUTATIONS.map(jiraPropertyAction));
+const JIRA_SAVED_ADMIN_ACTIONS = Object.freeze([
+  "create-filter", "set-filter-share-scope", "add-filter-permission", "delete-filter-permission",
+] as const);
+const JIRA_SAVED_WRITE_ACTIONS = Object.freeze([
+  "update-filter", "delete-filter", "set-filter-columns", "reset-filter-columns",
+  "set-my-preference", "delete-my-preference",
+] as const);
+const JIRA_SAVED_ACTIONS = Object.freeze([...JIRA_SAVED_ADMIN_ACTIONS, ...JIRA_SAVED_WRITE_ACTIONS]);
+type JiraSavedConfigurationAction = (typeof JIRA_SAVED_ACTIONS)[number];
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
@@ -597,6 +606,7 @@ export type AtlassianSyncJobState =
 export type AtlassianConnectorActionType =
   | JiraManagedReadToolName
   | JiraEntityPropertyAction
+  | JiraSavedConfigurationAction
   | "set-app-monitoring"
   | "set-ipd-monitoring"
   | "start-jmx-metrics"
@@ -641,6 +651,7 @@ export type AtlassianConnectorActionType =
 
 export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorActionType[] =
   Object.freeze([
+    ...JIRA_SAVED_ACTIONS,
     ...JIRA_PROPERTY_ACTIONS,
     "set-app-monitoring",
     "set-ipd-monitoring",
@@ -693,6 +704,16 @@ export const JIRA_REQUIREMENT_REFERENCE_CHARS_MAX = 120;
 export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   Record<JiraManagedReadToolName | JiraMutationOperation, AtlassianConnectorActionType>
 > = Object.freeze({
+  "jira.create-filter": "create-filter",
+  "jira.update-filter": "update-filter",
+  "jira.delete-filter": "delete-filter",
+  "jira.set-filter-share-scope": "set-filter-share-scope",
+  "jira.set-filter-columns": "set-filter-columns",
+  "jira.reset-filter-columns": "reset-filter-columns",
+  "jira.add-filter-permission": "add-filter-permission",
+  "jira.delete-filter-permission": "delete-filter-permission",
+  "jira.set-my-preference": "set-my-preference",
+  "jira.delete-my-preference": "delete-my-preference",
   ...(Object.fromEntries(JIRA_MANAGED_READ_TOOLS.map((name) => [name, name])) as Record<
     JiraManagedReadToolName,
     JiraManagedReadToolName
@@ -769,6 +790,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASSES: readonly AtlassianConnectorActi
 export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorActionClass>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "connector-admin"),
+  ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "connector-write"),
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "connector-access"),
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "connector-write"),
   "set-issue-type-property": "connector-admin",
@@ -819,6 +842,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_SAVED_ACTIONS, "jira"),
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "jira"),
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "jira"),
   "set-app-monitoring": "jira",
@@ -867,6 +891,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "issue-tracker.admin"),
+  ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "issue-tracker.write"),
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "issue-tracker.read"),
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "issue-tracker.write"),
   "set-issue-type-property": "issue-tracker.admin",
@@ -927,6 +953,9 @@ export function jiraRequiredConnectorScope(
 export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
+  ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "high"),
+  ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "medium"),
+  "delete-filter": "high",
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "low"),
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "high"),
   "set-app-monitoring": "high",
@@ -1852,6 +1881,8 @@ export {
   isJiraDraftRef,
   type JiraDraftItemState,
   JIRA_MUTATION_OPERATIONS,
+  JIRA_SAVED_CONFIGURATION_MUTATIONS,
+  type JiraSavedConfigurationMutation,
   JIRA_MUTATION_OUTCOMES,
   JIRA_MUTATION_RESULT_STATES,
   type JiraMutationOperation,

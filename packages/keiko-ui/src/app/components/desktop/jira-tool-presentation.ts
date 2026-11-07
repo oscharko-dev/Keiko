@@ -34,6 +34,7 @@ import { JIRA_PROPERTY_MUTATION_TOOLS, jiraPropertyMutationIdentityComplete } fr
 import { JIRA_ACCOUNT_DIAGNOSTIC_TOOLS } from "./jira-account-diagnostic-presentation";
 import { JIRA_APPLICATION_SETTINGS_TOOLS } from "./jira-application-settings-presentation";
 import { JIRA_REMOTE_VERSION_LINK_TOOLS } from "./jira-remote-version-link-presentation";
+import { JIRA_SAVED_CONFIGURATION_WRITE_TOOLS, jiraSavedConfigurationIdentityComplete, jiraSavedConfigurationDeletionUnconfirmed } from "./jira-saved-configuration-presentation";
 const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_REMOTE_VERSION_LINK_TOOLS,
   ...JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,
@@ -212,14 +213,15 @@ function isMutation(exchange: ChatToolExchange): boolean {
     (name) => name.replace(/[.-]/gu, "_") === exchange.call.name,
   );
 }
-function propertyIdentityMissing(exchange: ChatToolExchange): boolean {
-  return JIRA_PROPERTY_MUTATION_TOOLS.has(exchange.call.name) &&
-    !jiraPropertyMutationIdentityComplete(exchange.call.name, plainRecord(exchange.result?.data) ?? {});
+function mutationIdentityMissing(exchange: ChatToolExchange): boolean {
+  const data = plainRecord(exchange.result?.data) ?? {};
+  if (JIRA_PROPERTY_MUTATION_TOOLS.has(exchange.call.name)) return !jiraPropertyMutationIdentityComplete(exchange.call.name, data);
+  return JIRA_SAVED_CONFIGURATION_WRITE_TOOLS.has(exchange.call.name) && !jiraSavedConfigurationIdentityComplete(exchange.call.name, data);
 }
 /** Only an explicit, rejected no-change receipt can soften a conflict; journal state wins. */
 export function jiraMutationUnchanged(exchange: ChatToolExchange): boolean {
   const data = plainRecord(exchange.result?.data);
-  if (propertyIdentityMissing(exchange)) return false;
+  if (mutationIdentityMissing(exchange) || jiraSavedConfigurationDeletionUnconfirmed(exchange.call.name)) return false;
   return (
     isMutation(exchange) &&
     mutationOutcome(exchange) === "rejected" &&
@@ -233,7 +235,8 @@ function managedMutationState(
   turnState: ChatTurnState | undefined,
 ): WidgetMessageKey {
   const outcome = mutationOutcome(exchange);
-  if (outcome === "succeeded" && propertyIdentityMissing(exchange)) return OUTCOME_KEYS.unknown;
+  if (outcome === "succeeded" && mutationIdentityMissing(exchange)) return OUTCOME_KEYS.unknown;
+  if (outcome === "succeeded" && jiraSavedConfigurationDeletionUnconfirmed(exchange.call.name)) return OUTCOME_KEYS["succeeded-unconfirmed"];
   if (outcome !== undefined)
     return jiraMutationUnchanged(exchange) ? "chat.jira.write.unchanged" : OUTCOME_KEYS[outcome];
   return exchange.result === undefined && turnState === "pending"

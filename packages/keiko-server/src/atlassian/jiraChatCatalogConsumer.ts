@@ -61,6 +61,7 @@ import {
   jiraOperationBindingForTool,
 } from "./jiraManagedProvider.js";
 import type { JiraOperationBinding } from "./jiraOperationRegistry.js";
+import { jiraCatalogResult } from "./jiraCatalogResult.js";
 
 /** Private ordinary-Chat scope. Neither a workspace nor a Coding session is required. */
 export interface JiraChatCatalogContext extends ToolConsumerContext {
@@ -195,11 +196,6 @@ export function createJiraChatCatalogConsumerPort(
 }
 export const jiraChatCatalogConsumerPort = createJiraChatCatalogConsumerPort();
 
-/** Use with the application-owned managed catalog; this creates no MCP host or transport. */
-function hasNextPage(data: CatalogJsonObject): boolean {
-  return typeof data.nextStartAt === "number" || typeof data.nextCursor === "string";
-}
-
 export function jiraChatReadCatalogRoutes(): readonly ManagedCatalogRoute<JiraChatCatalogConsumer>[] {
   return jiraChatCatalogRoutes(JIRA_MANAGED_READ_TOOLS);
 }
@@ -225,15 +221,7 @@ export function jiraChatCatalogRoutes(
     }),
     resultFor: (data, context): CatalogHandlerResult => {
       if (READ_TOOLS.has(tool)) requireDispatch(context.beforeEffect(), "denied", "effect-denied");
-      return {
-        data,
-        page: {
-          truncated: hasNextPage(data),
-          reason: hasNextPage(data) ? "result-cap" : "none",
-          cursor: null,
-        },
-        resultCount: Array.isArray(data.items) ? data.items.length : 0,
-      };
+      return jiraCatalogResult(data);
     },
   }));
 }

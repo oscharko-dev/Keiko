@@ -8,6 +8,8 @@ import {
 import { CODING_WORKBENCH_MODES } from "./coding-workbench.js";
 
 const ADMIN_TOOLS = [
+  "jira.create-filter", "jira.set-filter-share-scope",
+  "jira.add-filter-permission", "jira.delete-filter-permission",
   "jira.set-app-monitoring", "jira.set-ipd-monitoring",
   "jira.start-jmx-metrics", "jira.stop-jmx-metrics",
   "jira.create-screen-tab", "jira.rename-screen-tab", "jira.delete-screen-tab",

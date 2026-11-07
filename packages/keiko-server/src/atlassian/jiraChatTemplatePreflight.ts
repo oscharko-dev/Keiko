@@ -12,6 +12,7 @@ import {
 } from "@oscharko-dev/keiko-connectors";
 import {
   JIRA_ENTITY_PROPERTY_MUTATIONS,
+  JIRA_SAVED_CONFIGURATION_MUTATIONS,
   sanitizeJiraMutationFailureDetail,
   type JiraFieldValidationFailure,
   type JiraMutationOperation,
@@ -39,6 +40,7 @@ import {
 
 /** Field and metadata writes share read-only validation; templates apply only to issue fields. */
 const FIELD_OPERATIONS = [
+  ...JIRA_SAVED_CONFIGURATION_MUTATIONS,
   ...JIRA_ENTITY_PROPERTY_MUTATIONS,
   "jira.set-app-monitoring",
   "jira.set-ipd-monitoring",

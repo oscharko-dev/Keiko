@@ -1070,6 +1070,37 @@ function contractApproval(f: ReturnType<typeof fixture>): {
 }
 
 describe("persisted Jira operation approval contracts", () => {
+  it("captures a read with its schema snapshot and refuses write metadata or an effect claim", () => {
+    const f = fixture();
+    const contract = jiraOperationForTool("jira.projects");
+    if (contract === undefined) throw new Error("Expected read contract");
+    const binding = { descriptor: contract.declaration.descriptor, projectionDigest: "a".repeat(64) };
+    const call = { id: "mcp-read-synthetic", name: "jira_projects", arguments: {} };
+    const data = { outcome: "succeeded", items: [], startAt: 0, total: 0, operationBinding: contract.binding };
+    const result = validateToolResultEnvelope({
+      schemaVersion: 1, invocationId: call.id, toolRef: binding.descriptor.toolRef,
+      projectionDigest: binding.projectionDigest, status: "completed", reason: "none",
+      effectStarted: false, data, page: { truncated: false, reason: "none", cursor: null },
+      metrics: { inputBytes: 2, outputBytes: Buffer.byteLength(JSON.stringify(data)), resultCount: 0, durationMs: 0 },
+    }, binding);
+    const captured = { kind: "captured", call, result, binding } as const;
+    f.store.updateChatToolTranscript(f.id, captured, "native-read");
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges).toEqual([{ call, result }]);
+    expect(() => f.store.updateChatToolTranscript(f.id, {
+      ...captured, mutationOutcome: "succeeded",
+    }, "native-read")).toThrow();
+    expect(() => f.store.updateChatToolTranscript(f.id, {
+      ...captured, operationBinding: contract.binding,
+    }, "native-read")).toThrow();
+    expect(() => f.store.updateChatToolTranscript(f.id, {
+      ...captured, result: { ...result, effectStarted: true },
+    }, "native-read")).toThrow();
+    expect(() => f.store.updateChatToolTranscript(f.id, {
+      ...captured, call: { ...call, name: "jira_guessed" },
+    }, "native-read")).toThrow();
+    expect(chatToolTranscriptOccupancy(f.db, f.id).exchangeCount).toBe(1);
+  });
+
   it("captures a native result atomically with its private snapshot and no intermediate start", () => {
     const f = fixture();
     const contract = jiraOperationForTool("jira.comment");
@@ -1101,6 +1132,9 @@ describe("persisted Jira operation approval contracts", () => {
     }, "native-result")).toThrow();
     expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges).toHaveLength(1);
     expect(JSON.stringify(f.logs.events)).not.toContain("private-token");
+    expect(() => f.store.updateChatToolTranscript(f.id, {
+      kind: "captured", call: nativeCall, result, binding,
+    }, "native-result")).toThrow();
   });
 
   it.each(["jira.create-project", "jira.update-project"] as const)(

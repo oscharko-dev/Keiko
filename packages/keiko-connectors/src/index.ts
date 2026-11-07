@@ -352,3 +352,4 @@ export type {
 } from "./jira-report-types.js";
 export { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
 export { jiraPropertyPathKey, jiraPropertyUserText } from "./jira-entity-property-values.js";
+export { JIRA_NONSECRET_PREFERENCE_KINDS } from "./jira-managed-application-settings.js";

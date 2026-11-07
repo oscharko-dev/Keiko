@@ -20,7 +20,7 @@ describe("server-owned Jira operation contracts", () => {
   it("binds every administration write to an explicit instance-admin permission contract", () => {
     const admin = jiraOperationContracts().filter((entry) =>
       jiraRequiredConnectorScope(entry.definition.tool) === "issue-tracker.admin");
-    expect(admin).toHaveLength(9);
+    expect(admin).toHaveLength(13);
     for (const contract of admin) {
       expect(contract.definition.permissionPolicy).toMatch(/^instance-admin-/);
       expect(contract.definition.effects).toContain("remote-write");
@@ -53,7 +53,7 @@ describe("server-owned Jira operation contracts", () => {
   });
   it("keeps executable native operations distinct from local compositions", () => {
     const entries = jiraOperationContracts();
-    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(258);
+    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(268);
     expect(entries.filter((entry) => entry.definition.kind === "composite")).toHaveLength(3);
     expect(jiraOperationForTool("jira.discover")).toBeUndefined();
     expect(jiraOperationForTool("DELETE /rest/api/2/project")).toBeUndefined();

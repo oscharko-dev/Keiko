@@ -1,6 +1,11 @@
 import { executeJiraScreenTabMutation, isJiraScreenTabMutation } from "./jira-managed-screen-tab-mutations.js";
 import { executeJiraMonitoringMutation, isJiraMonitoringMutation } from "./jira-managed-monitoring-mutations.js";
 import { executeJiraEntityPropertyMutation, isJiraEntityPropertyMutation } from "./jira-managed-entity-property-mutations.js";
+import { executeJiraFilterMutation, isJiraFilterMutation } from "./jira-managed-filter-mutations.js";
+import { executeJiraFilterPermissionMutation, isJiraFilterPermissionMutation } from "./jira-managed-filter-permission-mutations.js";
+import { executeJiraFilterColumnMutation, isJiraFilterColumnMutation } from "./jira-managed-filter-column-mutations.js";
+import { executeJiraPreferenceMutation, isJiraPreferenceMutation } from "./jira-managed-preference-mutations.js";
+import { jiraFilterBrowseUrl } from "./jira-browse-url.js";
 import { jiraAgileRequest } from "./jira-agile-request.js";
 import {
   executeJiraParticipationMutation,
@@ -1346,15 +1351,36 @@ function deletionMutation(
   return undefined;
 }
 
-function dedicatedMutation(
+function savedConfigurationMutation(
   operation: JiraMutationOperation,
-  source: CatalogJsonObject,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  check: boolean,
+  baseUrl: string,
+): Promise<JiraMutationAttempt> | undefined {
+  let attempt: Promise<JiraMutationAttempt> | undefined;
+  if (isJiraFilterMutation(operation)) attempt = executeJiraFilterMutation(operation, args, request, check);
+  else if (isJiraFilterPermissionMutation(operation)) attempt = executeJiraFilterPermissionMutation(operation, args, request, check);
+  else if (isJiraFilterColumnMutation(operation)) attempt = executeJiraFilterColumnMutation(operation, args, request, check);
+  else if (isJiraPreferenceMutation(operation)) attempt = executeJiraPreferenceMutation(operation, args, request, check);
+  return attempt?.then((value) => savedFilterLink(value, baseUrl));
+}
+function savedFilterLink(attempt: JiraMutationAttempt, baseUrl: string): JiraMutationAttempt {
+  const receipt = attempt.receipt;
+  if (receipt?.filterId === undefined) return attempt;
+  const browseUrl = jiraFilterBrowseUrl(baseUrl, receipt.filterId);
+  if (browseUrl === undefined) return attempt;
+  // Replace any supplied destination; native self/view URLs never control a result link.
+  return { ...attempt, receipt: { ...receipt, browseUrl } };
+}
+function configurationMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
   check: boolean,
 ): Promise<JiraMutationAttempt> | undefined {
-  const args = structuredClone(source);
-  const request = requestFor(connection, context);
   if (isJiraEntityPropertyMutation(operation))
     return executeJiraEntityPropertyMutation(operation, args, {
       platform: request,
@@ -1365,6 +1391,19 @@ function dedicatedMutation(
     return executeJiraMonitoringMutation(operation, args, request, check);
   if (isJiraScreenTabMutation(operation))
     return executeJiraScreenTabMutation(operation, args, request, check);
+  return savedConfigurationMutation(operation, args, request, check, connection.baseUrl);
+}
+function dedicatedMutation(
+  operation: JiraMutationOperation,
+  source: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  const args = structuredClone(source);
+  const request = requestFor(connection, context);
+  const configuration = configurationMutation(operation, args, request, context, connection, check);
+  if (configuration !== undefined) return configuration;
   const deletion = deletionMutation(operation, args, request, connection, check);
   if (deletion !== undefined) return deletion;
   if (isJiraParticipationMutation(operation))
@@ -1458,8 +1497,13 @@ export type JiraMutationCheckResult =
       readonly detail?: JiraMutationFailureDetail;
     };
 
+function isSavedConfigurationMutation(operation: JiraMutationOperation): boolean {
+  return [isJiraFilterMutation, isJiraFilterPermissionMutation, isJiraFilterColumnMutation, isJiraPreferenceMutation]
+    .some((accepts) => accepts(operation));
+}
 function requiresSuccessfulPreflight(operation: JiraMutationOperation): boolean {
   return (
+    isSavedConfigurationMutation(operation) ||
     isJiraEntityPropertyMutation(operation) ||
     isJiraScreenTabMutation(operation) ||
     isJiraMonitoringMutation(operation) ||

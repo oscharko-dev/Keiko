@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **258 native identities: 206 reads and 52 writes**. Each is mapped to
+The current registry supplies **268 native identities: 206 reads and 62 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **181 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **171 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -137,8 +137,7 @@ worklog create/update with connected-user watching/voting; fourteen C9 workflow-
 and screen reads; three reviewed comment/attachment/worklog deletions; and eight C10 user, group and
 application-role reads; ten permission/security/notification configuration reads; and five additional
 project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; two JQL metadata/suggestion reads; nine additional Agile context reads; seven configuration metadata reads; three scalar runtime-setting observations; four maintenance-status observations; seven resource-page/link-type/accessibility/column-layout reads; nine additional job/monitoring observations; sixteen entity-property reads; three reviewed screen-tab writes; six additional issue-context reads; four governed monitoring changes; and sixteen reviewed entity-property set/delete operations. The three existing
-report/draft composites remain compositions, not extra native API identities. Remaining filter
-creation, ranking, other estimate-adjustment modes and destructive operations, administration and
+report/draft composites remain compositions, not extra native API identities. Remaining ranking, other estimate-adjustment modes and destructive operations, administration and
 other inventory gaps stay open. A registered declaration is not evidence that
 Jira grants the current person permission or that a particular installation supports the operation.
 
@@ -155,14 +154,16 @@ Two further native observations bind a permission-scheme attribute and read the 
 
 Three remote-version-link readers bind native versions where selected, decode only the documented JSON-encoded native link once and reuse the complete typed-value owner. Two worklog change feeds preserve exact native time windows and cursors without totals, synthetic offsets, skipped prefixes or implied all-history coverage. Native permission/retention limits and the excluded latest minute remain explicit. All five new wire/policy/schema and readable EN/DE result regression sources remain unexecuted.
 
-Nine instance-administration writes (four monitoring changes, three screen-tab changes and two
-global issue-type property mutations) require the explicit `issue-tracker.admin` grant. Ordinary
+Thirteen administration writes (four monitoring changes, three screen-tab changes, two
+global issue-type property mutations and four filter creation/sharing changes) require the explicit `issue-tracker.admin` grant. Ordinary
 Jira write access, a selected credential and Full access mode do not supply that grant. Coding binds
 the human's selected scope into its start confirmation and real Authority Envelope, and rechecks the
 current exact action scope before native dispatch. Metadata reads retain `issue-tracker.read`.
 This authority repair changes no native identity or qualification status; its source regressions,
 ledger reconciliation and generated log contracts remain pending the deferred final validation.
-Coding mutation results now use the existing run/turn-bound History and transcript owner to retain validated success/error payloads and known receipts before recovery. Private immutable descriptor, operation and original-argument bindings survive display redaction and registry changes. Existing transcript byte/call reservations are admitted before native dispatch; unavailable capacity or unreadable stored state refuses the write. Generic Chat APIs remain isolated from Coding rows. Local scope denial is stored without fabricating a native Jira permission response, and a valid provider receipt takes precedence after post-dispatch scope loss. Error results never acknowledge a write; the existing journal remains authoritative for unknown/unconfirmed/succeeded history and no replay. The existing result cards render those exchanges in EN/DE after reload even when user text is already in the timeline. Native read-result capture is still being completed separately; AC9 acceptance and every confirming run remain open.
+Coding mutation results now use the existing run/turn-bound History and transcript owner to retain validated success/error payloads and known receipts before recovery. Private immutable descriptor, operation and original-argument bindings survive display redaction and registry changes. Existing transcript byte/call reservations are admitted before native dispatch; unavailable capacity or unreadable stored state refuses the write. Generic Chat APIs remain isolated from Coding rows. Local scope denial is stored without fabricating a native Jira permission response, and a valid provider receipt takes precedence after post-dispatch scope loss. Error results never acknowledge a write; the existing journal remains authoritative for unknown/unconfirmed/succeeded history and no replay. The existing result cards render those exchanges in EN/DE after reload even when user text is already in the timeline. Validated native reads now share the same immutable result projection, capacity owner and run/turn-bound atomic transcript capture, without creating mutation rows, acknowledgements or recovery barriers. Success, failure and local scope denial remain readable after reload. Cancellation, changed turns or released reservations refuse late capture. AC9 acceptance and every confirming run remain open.
+
+Ten saved-configuration writes add owned-filter metadata/deletion, default sharing, ordered column layouts, exact permissions and six documented nonsecret preference keys. Every change matches reviewed native state and uses the existing approval/journal owner. Filter creation explicitly accepts the current default-sharing limitation: native creation is non-atomic, and only complete actual permission readback supplies an observed scope. Default-sharing changes affect future filters; view and edit rights remain distinct. Global sharing requires explicit acceptance of native replacement of prior shares. The JSON column overload is documented by the primary [FilterResource contract](https://docs.atlassian.com/software/jira/docs/api/11.3.3/com/atlassian/jira/rest/v2/search/FilterResource.html). Column order, repeats, provenance, nullable descriptions and typed false/zero/empty preferences are preserved. Filter and preference deletions remain acknowledged but unconfirmed because their APIs cannot independently prove absence; favourites, fallback values and bare404 never become absence evidence. Optional filter links derive solely from the selected connection and exact ID. Forward migrationV70 preserves prior journal rows and historical SQL. All new wire, receipt, schema, policy, migration, EN/DE, reload and accessibility regression sources remain unexecuted.
 
 Worklog writes depend on the existing issue-template admission owner. The post-state uses observed
 `timespent`/`timetracking` and safe create/update deltas; absent or inconsistent aggregates never

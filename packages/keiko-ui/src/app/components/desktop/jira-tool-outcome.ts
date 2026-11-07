@@ -58,6 +58,7 @@ import { JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS, jiraAdministrativeObservationDet
 import { JIRA_APPLICATION_SETTINGS_TOOLS, jiraApplicationSettingsDetails } from "./jira-application-settings-presentation";
 import { JIRA_REMOTE_VERSION_LINK_TOOLS, jiraRemoteVersionLinkDetails } from "./jira-remote-version-link-presentation";
 import { JIRA_WORKLOG_FEED_TOOLS, jiraWorklogFeedDetails } from "./jira-worklog-feed-presentation";
+import { JIRA_SAVED_CONFIGURATION_WRITE_TOOLS, jiraSavedConfigurationDetails, jiraSavedConfigurationFilterContextComplete } from "./jira-saved-configuration-presentation";
 import { JIRA_PROPERTY_TOOLS, jiraPropertyDetails } from "./jira-property-presentation";
 import { JIRA_MONITORING_WRITE_TOOLS, jiraMonitoringDetails } from "./jira-monitoring-presentation";
 import { JIRA_PROPERTY_MUTATION_TOOLS, jiraPropertyMutationDetails } from "./jira-property-mutation-presentation";
@@ -75,6 +76,7 @@ export interface JiraOutcomeItem {
   readonly body?: string;
   readonly href?: string;
   readonly boardHref?: string;
+  readonly filterHref?: string;
   readonly status?: string;
   readonly labels: readonly WidgetMessageKey[];
   readonly facts: readonly JiraOutcomeFact[];
@@ -185,6 +187,13 @@ function boardLink(value: unknown, identity: unknown): string | undefined {
     ? url.href
     : undefined;
 }
+function filterLink(tool: string, source: UnknownRecord): string | undefined {
+  if (!jiraSavedConfigurationFilterContextComplete(tool, source)) return undefined;
+  if (typeof source.browseUrl !== "string" || /[\p{Cc}\\]/u.test(source.browseUrl)) return undefined;
+  const url = savedUrl(source.browseUrl, true);
+  return url?.pathname.endsWith("/issues/") === true && !/%(?:2f|5c|25)/iu.test(url.pathname) &&
+    url.search === `?filter=${String(source.filterId)}` ? url.href : undefined;
+}
 function issueLink(value: unknown, key: string | undefined): string | undefined {
   if (key === undefined || !ISSUE_KEY.test(key)) return undefined;
   const url = savedUrl(value);
@@ -269,6 +278,7 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
 }
 type ConfigurationPresenter = (tool: string, source: UnknownRecord) => readonly JiraAgileDetails[];
 const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, ConfigurationPresenter])[] = [
+  [JIRA_SAVED_CONFIGURATION_WRITE_TOOLS, jiraSavedConfigurationDetails],
   [JIRA_REMOTE_VERSION_LINK_TOOLS, jiraRemoteVersionLinkDetails],
   [JIRA_WORKLOG_FEED_TOOLS, jiraWorklogFeedDetails],
   [JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS, jiraAdministrativeObservationDetails],
@@ -368,6 +378,11 @@ function presentedDetails(details: readonly JiraAgileDetails[]): JiraOutcomeItem
     return item === undefined ? [] : [item];
   });
 }
+function configurationItems(tool: string, data: UnknownRecord, details: readonly JiraAgileDetails[]): JiraOutcomeItem[] {
+  const items = presentedDetails(details);
+  const filterHref = filterLink(tool, data);
+  return filterHref === undefined ? items : items.map((item, index) => index === 0 ? { ...item, filterHref } : item);
+}
 function issueContextItems(tool: string, data: UnknownRecord): JiraOutcomeItem[] | undefined {
   if (tool === "jira_issue_picker")
     return jiraIssuePickerGroups(data).flatMap((group) => [
@@ -395,7 +410,7 @@ function outcomeItems(
   const issueContext = issueContextItems(exchange.call.name, data ?? {});
   if (issueContext !== undefined) return issueContext;
   const configuration = configurationDetails(exchange.call.name, data ?? {});
-  if (configuration !== undefined) return presentedDetails(configuration);
+  if (configuration !== undefined) return configurationItems(exchange.call.name, data ?? {}, configuration);
   const items = returnedEntries(data, exchange.call.name) ?? [];
   const progress = Array.isArray(exchange.draftProgress?.items) ? exchange.draftProgress.items : [];
   const single = data?.issueKey !== undefined || STANDALONE_TOOLS.has(exchange.call.name);
@@ -519,7 +534,7 @@ function pageCounts(
 export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcomeView {
   const stored = record(exchange.result?.data) ?? {};
   const data =
-    [JIRA_PARTICIPATION_TOOLS, JIRA_MONITORING_WRITE_TOOLS, JIRA_PROPERTY_MUTATION_TOOLS].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
+    [JIRA_PARTICIPATION_TOOLS, JIRA_MONITORING_WRITE_TOOLS, JIRA_PROPERTY_MUTATION_TOOLS, JIRA_SAVED_CONFIGURATION_WRITE_TOOLS].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
       ? { ...stored, outcome: exchange.mutationOutcome }
       : stored;
   return {

@@ -67,20 +67,48 @@ function layoutItem(value: unknown): CatalogJsonObject | undefined {
   const fields = projectJiraOptionalFields(raw, ["position", "columnHeadingKey"], layoutField);
   return fields === undefined ? undefined : { id: raw.id, ...fields };
 }
+export function projectJiraColumnItems(values: readonly unknown[], layout: boolean): readonly CatalogJsonObject[] | undefined {
+  if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems) return undefined;
+  const items: CatalogJsonObject[] = [];
+  for (const value of values) {
+    const item = layout ? layoutItem(value) : option(value);
+    if (item === undefined) return undefined;
+    items.push(item);
+  }
+  return items;
+}
+/** Internal complete-layout evidence for writes; selectors and read projections stay unchanged. */
+export function projectJiraFilterColumnState(response: JiraReadResponse):
+  | { readonly ok: true; readonly columns?: readonly string[]; readonly columnConfig?: string }
+  | { readonly ok: false; readonly reason: "malformed-payload" | "bounds-exceeded" } {
+  const body = response.body;
+  const configuration = response.items === undefined && body !== undefined ? layoutConfiguration(body) : {};
+  if (configuration === undefined) return { ok: false, reason: "malformed-payload" };
+  const raw = response.items ?? body?.columnLayoutItems;
+  const columnConfig = typeof configuration.columnConfig === "string" ? configuration.columnConfig : undefined;
+  if (raw === undefined || raw === null) return { ok: true, ...(columnConfig === undefined ? {} : { columnConfig }) };
+  if (!Array.isArray(raw)) return { ok: false, reason: "malformed-payload" };
+  if (raw.length > TOOL_CATALOG_LIMITS.maxArrayItems) return { ok: false, reason: "bounds-exceeded" };
+  const items = projectJiraColumnItems(raw, response.items === undefined);
+  if (items === undefined) return { ok: false, reason: "malformed-payload" };
+  const fields: string[] = [];
+  for (const item of items) {
+    const field = response.items === undefined ? item.id : item.value;
+    if (typeof field !== "string") return { ok: false, reason: "malformed-payload" };
+    fields.push(field);
+  }
+  return { ok: true, columns: fields, ...(columnConfig === undefined ? {} : { columnConfig }) };
+}
 function columns(
   values: readonly unknown[],
   selected: Selection,
-  project: (value: unknown) => CatalogJsonObject | undefined,
+  layout: boolean,
   configuration: CatalogJsonObject,
 ): ManagedMcpToolResult {
   if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems) return jiraReadFailure("bounds-exceeded");
-  const items: CatalogJsonObject[] = [];
-  // Keep the returned order, including repeated fields; it is a layout, not a set of field definitions.
-  for (const value of values) {
-    const item = project(value);
-    if (item === undefined) return jiraReadFailure("malformed-payload");
-    items.push(item);
-  }
+  // Keep returned order and repetitions through the same complete-layout projection used by writes.
+  const items = projectJiraColumnItems(values, layout);
+  if (items === undefined) return jiraReadFailure("malformed-payload");
   const page = localJiraPage(items, selected.startAt, selected.maxResults);
   return boundJiraReadResult({ data: {
     ...page.data, ...selected.context, ...configuration, columnsAvailable: true,
@@ -101,10 +129,10 @@ function filterLayout(body: Record<string, unknown>, selected: Selection): Manag
     } };
   const values = asArray(body.columnLayoutItems);
   return values === undefined ? jiraReadFailure("malformed-payload")
-    : columns(values, selected, layoutItem, configuration);
+    : columns(values, selected, true, configuration);
 }
 function projectResponse(response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
-  if (response.items !== undefined) return columns(response.items, selected, option, {});
+  if (response.items !== undefined) return columns(response.items, selected, false, {});
   return selected.filter && response.body !== undefined
     ? filterLayout(response.body, selected) : jiraReadFailure("malformed-payload");
 }

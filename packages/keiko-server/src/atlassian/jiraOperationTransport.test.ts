@@ -23,6 +23,14 @@ import {
   type Observation,
 } from "../../../../tests/support/jira-operation-transport-contract.js";
 import { propertyTransportFixture, PROPERTY_FIXTURE_KEY, REVIEWED_PROPERTY_NODES, REQUESTED_PROPERTY_NODES } from "../../../../tests/support/jira-property-transport-fixture.js";
+import {
+  SAVED_CONFIGURATION_ARGUMENTS,
+  SAVED_CONFIGURATION_RECEIPTS,
+  savedConfigurationRemoteState,
+  prepareSavedConfiguration,
+  nativeSavedConfigurationRead,
+  nativeSavedConfigurationWrite,
+} from "../../../../tests/support/jira-managed-saved-configuration-scenarios.js";
 
 const ISSUE_PARAMETERS = { issueIdOrKey: "SYN-1" };
 const PAGING = { startAt: "0", maxResults: "25" };
@@ -33,6 +41,16 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.create-filter", args: SAVED_CONFIGURATION_ARGUMENTS["jira.create-filter"] },
+  { tool: "jira.update-filter", args: SAVED_CONFIGURATION_ARGUMENTS["jira.update-filter"], parameters: { id: "37" } },
+  { tool: "jira.delete-filter", args: SAVED_CONFIGURATION_ARGUMENTS["jira.delete-filter"], parameters: { id: "37" }, expectedOutcome: "succeeded-unconfirmed", expectedReceipt: SAVED_CONFIGURATION_RECEIPTS["jira.delete-filter"] },
+  { tool: "jira.set-filter-share-scope", args: SAVED_CONFIGURATION_ARGUMENTS["jira.set-filter-share-scope"] },
+  { tool: "jira.set-filter-columns", args: SAVED_CONFIGURATION_ARGUMENTS["jira.set-filter-columns"], parameters: { id: "37" } },
+  { tool: "jira.reset-filter-columns", args: SAVED_CONFIGURATION_ARGUMENTS["jira.reset-filter-columns"], parameters: { id: "37" } },
+  { tool: "jira.add-filter-permission", args: SAVED_CONFIGURATION_ARGUMENTS["jira.add-filter-permission"], parameters: { id: "37" } },
+  { tool: "jira.delete-filter-permission", args: SAVED_CONFIGURATION_ARGUMENTS["jira.delete-filter-permission"], parameters: { id: "37", "permission-id": "51" } },
+  { tool: "jira.set-my-preference", args: SAVED_CONFIGURATION_ARGUMENTS["jira.set-my-preference"], query: { key: "user.notify.own.changes" } },
+  { tool: "jira.delete-my-preference", args: SAVED_CONFIGURATION_ARGUMENTS["jira.delete-my-preference"], query: { key: "user.notify.own.changes" }, expectedOutcome: "succeeded-unconfirmed", expectedReceipt: SAVED_CONFIGURATION_RECEIPTS["jira.delete-my-preference"] },
   { tool: "jira.set-comment-property", args: { issueIdOrKey: "SYN-1", commentId: "10002", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES, valueNodes: REQUESTED_PROPERTY_NODES }, parameters: { commentId: "10002", propertyKey: PROPERTY_FIXTURE_KEY } },
   { tool: "jira.delete-comment-property", args: { issueIdOrKey: "SYN-1", commentId: "10002", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES }, parameters: { commentId: "10002", propertyKey: PROPERTY_FIXTURE_KEY } },
   { tool: "jira.set-dashboard-item-property", args: { dashboardId: "71", itemId: "81", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES, valueNodes: REQUESTED_PROPERTY_NODES }, parameters: { dashboardId: "71", itemId: "81", propertyKey: PROPERTY_FIXTURE_KEY } },
@@ -1311,6 +1329,7 @@ const PROPERTY_WRITE_ROOTS: Readonly<Record<string, string>> = {
   "jira.set-user-property": "user/properties", "jira.delete-user-property": "user/properties",
 };
 function remote(tool?: string, initiallyPresent = true): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
+  if (tool !== undefined && Object.hasOwn(SAVED_CONFIGURATION_ARGUMENTS, tool)) return savedConfigurationRemote(tool);
   const propertyRoot = PROPERTY_WRITE_ROOTS[tool ?? ""];
   const property = propertyTransportFixture(propertyRoot === undefined ? undefined : `/context/rest/api/2/${propertyRoot}`, initiallyPresent);
   const state: RemoteState = {
@@ -1369,6 +1388,33 @@ function remote(tool?: string, initiallyPresent = true): ReturnType<typeof vi.fn
     );
   });
 }
+function savedConfigurationRemote(tool: string): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
+  const state = savedConfigurationRemoteState();
+  prepareSavedConfiguration(state, tool);
+  return vi.fn<AtlassianHttpBodyPort>(async (request) => {
+    const url = new URL(request.url);
+    expect(url.origin).toBe("https://jira.example.invalid");
+    expect(url.pathname.startsWith("/context/rest/api/2/")).toBe(true);
+    if (request.method === "GET") {
+      if (url.pathname === "/context/rest/api/2/myself")
+        return response({ key: "synthetic-key", name: "synthetic-user" });
+      const read = nativeSavedConfigurationRead(url.pathname, state);
+      if (read === undefined)
+        throw new TypeError("Unexpected saved configuration prerequisite/readback");
+      return read;
+    }
+    const write = await nativeSavedConfigurationWrite(
+      new Request(request.url, {
+        method: request.method,
+        ...(request.bodyJson === undefined ? {} : { body: request.bodyJson }),
+        headers: { "content-type": "application/json" },
+      }),
+      state,
+    );
+    if (write === undefined) throw new TypeError("Unexpected saved configuration mutation route");
+    return write;
+  });
+}
 function connection(http: AtlassianHttpBodyPort): JiraManagedConnection {
   const bytes = new TextEncoder().encode("Governed attachment fixture");
   return {
@@ -1396,7 +1442,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(223);
+    expect(native).toHaveLength(233);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1407,6 +1453,40 @@ describe("native Jira registry and real connector transport agreement", () => {
     assertPrimary(observed, scenario);
     const writes = observed.requests.filter((request) => request.method !== "GET");
     expect(writes).toHaveLength(observed.definition.method === "GET" ? 0 : 1);
+  });
+  it("serializes a typed false preference as a native JSON string, not a JSON boolean", async () => {
+    const scenario = SCENARIOS.find(({ tool }) => tool === "jira.set-my-preference");
+    if (scenario === undefined) throw new TypeError("Missing preference transport fixture");
+    const observed = await observe(scenario);
+    const writes = observed.requests.filter(({ method }) => method !== "GET");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ method: "PUT", url: "https://jira.example.invalid/context/rest/api/2/mypreferences?key=user.notify.own.changes", bodyJson: '"false"' });
+    expect(writes[0]?.upload).toBeUndefined();
+    expect(observed.requests.at(-1)?.method).toBe("GET");
+    expect(observed.result.data).toMatchObject({ outcome: "succeeded", preferencePresent: true, preferenceKey: "user.notify.own.changes" });
+  });
+  it("uses the published JSON ColumnsBean overload through the existing bounded HTTP port", async () => {
+    const scenario = SCENARIOS.find(({ tool }) => tool === "jira.set-filter-columns");
+    if (scenario === undefined) throw new TypeError("Missing columns transport fixture");
+    const observed = await observe(scenario);
+    const writes = observed.requests.filter(({ method }) => method !== "GET");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ method: "PUT", url: "https://jira.example.invalid/context/rest/api/2/filter/37/columns", bodyJson: '{"columns":["summary","status"]}' });
+    expect(writes[0]?.upload).toBeUndefined();
+    expect(observed.requests.at(-1)?.url).toBe("https://jira.example.invalid/context/rest/api/2/filter/37/columns");
+  });
+  it.each(["jira.delete-filter", "jira.delete-my-preference"] as const)("retains explicit uncertainty for %s while preserving its known reviewed identity", async (tool) => {
+    const scenario = SCENARIOS.find((candidate) => candidate.tool === tool);
+    if (scenario === undefined) throw new TypeError("Missing unconfirmed deletion fixture");
+    expect(scenario.expectedOutcome).toBe("succeeded-unconfirmed");
+    const observed = await observe(scenario);
+    assertPrimary(observed, scenario);
+    expect(observed.result).toMatchObject({ isError: true, data: { outcome: "succeeded-unconfirmed", reason: "unavailable", ...SAVED_CONFIGURATION_RECEIPTS[tool] } });
+    const writes = observed.requests.filter(({ method }) => method !== "GET");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.method).toBe("DELETE");
+    expect(writes[0]?.bodyJson).toBeUndefined();
+    expect(observed.requests.at(-1)?.method).toBe("GET");
   });
   it.each(["jira.set-issue-property", "jira.delete-issue-property"] as const)(
     "rebinds the canonical parent and reads keys/value after exactly one %s effect", async (tool) => {

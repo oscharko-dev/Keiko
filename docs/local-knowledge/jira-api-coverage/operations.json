@@ -5142,12 +5142,252 @@
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-issue-details.test.ts"
       ]
+    },
+    "jira.create-filter": {
+      "identity": "POST /rest/api/2/filter",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-filter-create-default-sharing",
+      "kind": "constrained-tool",
+      "constraints": "Create under the reviewed current-user default scope, with explicit acceptDefaultSharing and repeated actor/default reads. Native creation cannot atomically bind default sharing; defaultSharingAtomic is always false. Confirm the independent owned-filter metadata and complete actual view/edit permission list; never assert private creation from a default alone. Existing exact scope, one-use approval, saved authority and durable journal govern at most one fixed native write. No automatic replay follows lost acknowledgement, unavailable readback or reload. Optional filter links are minted from the selected connection, never remote URLs. Source and regression additions are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-filter-mutations.ts",
+        "packages/keiko-connectors/src/jira-saved-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-filter-permission-values.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-configuration-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraSavedConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.update-filter": {
+      "identity": "PUT /rest/api/2/filter/{id}",
+      "effect": "write",
+      "permissionPolicy": "owned-filter-metadata-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Match the complete reviewed owned-filter name, JQL and nullable description before replacing only the explicitly supplied supported metadata. Equal targets report unchanged. Independently confirm the canonical filter and current actor. Existing exact scope, one-use approval, saved authority and durable journal govern at most one fixed native write. No automatic replay follows lost acknowledgement, unavailable readback or reload. Optional filter links are minted from the selected connection, never remote URLs. Source and regression additions are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-filter-mutations.ts",
+        "packages/keiko-connectors/src/jira-saved-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-filter-permission-values.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-configuration-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraSavedConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-filter": {
+      "identity": "DELETE /rest/api/2/filter/{id}",
+      "effect": "write",
+      "permissionPolicy": "owned-filter-delete-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Delete only the exact owned filter after matching complete reviewed metadata. The native API provides no complete owned-filter collection. An acknowledgement, selected 404 or missing favourite never proves removal; retain the known target and report succeeded-unconfirmed. Existing exact scope, one-use approval, saved authority and durable journal govern at most one fixed native write. No automatic replay follows lost acknowledgement, unavailable readback or reload. Optional filter links are minted from the selected connection, never remote URLs. Source and regression additions are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-filter-mutations.ts",
+        "packages/keiko-connectors/src/jira-saved-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-filter-permission-values.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-configuration-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraSavedConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-filter-share-scope": {
+      "identity": "PUT /rest/api/2/filter/defaultShareScope",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-default-filter-sharing",
+      "kind": "constrained-tool",
+      "constraints": "Match the reviewed connected actor and native default scope. Set only PRIVATE or AUTHENTICATED and independently read the resulting default. GLOBAL may be observed as an old scope. This setting affects future filter defaults, not existing filter permissions. Existing exact scope, one-use approval, saved authority and durable journal govern at most one fixed native write. No automatic replay follows lost acknowledgement, unavailable readback or reload. Optional filter links are minted from the selected connection, never remote URLs. Source and regression additions are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-filter-mutations.ts",
+        "packages/keiko-connectors/src/jira-saved-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-filter-permission-values.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-configuration-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraSavedConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-filter-columns": {
+      "identity": "PUT /rest/api/2/filter/{id}/columns",
+      "effect": "write",
+      "permissionPolicy": "owned-filter-columns-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Match the owned filter, full ordered columns and native configuration provenance. Use the documented JSON ColumnsBean overload; preserve order and repetitions. Independently read the entire target layout. Existing exact scope, one-use approval, saved authority and durable journal govern at most one fixed native write. No automatic replay follows lost acknowledgement, unavailable readback or reload. Optional filter links are minted from the selected connection, never remote URLs. Source and regression additions are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-filter-column-mutations.ts",
+        "packages/keiko-connectors/src/jira-saved-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-filter-permission-values.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-configuration-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraSavedConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.reset-filter-columns": {
+      "identity": "DELETE /rest/api/2/filter/{id}/columns",
+      "effect": "write",
+      "permissionPolicy": "owned-filter-columns-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Match the owned filter, full ordered columns and native configuration provenance before reset. Confirm only when independent native provenance establishes SYSTEM, USER or NONE. A legacy array, selected 404 or inherited layout alone never proves reset. Existing exact scope, one-use approval, saved authority and durable journal govern at most one fixed native write. No automatic replay follows lost acknowledgement, unavailable readback or reload. Optional filter links are minted from the selected connection, never remote URLs. Source and regression additions are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-filter-column-mutations.ts",
+        "packages/keiko-connectors/src/jira-saved-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-filter-permission-values.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-configuration-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraSavedConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.add-filter-permission": {
+      "identity": "POST /rest/api/2/filter/{id}/permission",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-filter-permission-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Match the owned filter and complete reviewed permission list. Bind one supported user/group/project/role recipient and explicit view/edit rights. Global replacement requires explicit acceptGlobalReplacement because native global sharing removes prior shares. Confirm complete recipient rights and all retained permissions independently. Existing exact scope, one-use approval, saved authority and durable journal govern at most one fixed native write. No automatic replay follows lost acknowledgement, unavailable readback or reload. Optional filter links are minted from the selected connection, never remote URLs. Source and regression additions are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-filter-permission-mutations.ts",
+        "packages/keiko-connectors/src/jira-saved-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-filter-permission-values.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-configuration-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraSavedConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-filter-permission": {
+      "identity": "DELETE /rest/api/2/filter/{id}/permission/{permission-id}",
+      "effect": "write",
+      "permissionPolicy": "instance-admin-filter-permission-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Match the owned filter and every reviewed permission row. Remove the selected exact permission ID once and independently prove absence in the complete same-parent permission collection while preserving all other rows. A selected 404 cannot prove removal. Existing exact scope, one-use approval, saved authority and durable journal govern at most one fixed native write. No automatic replay follows lost acknowledgement, unavailable readback or reload. Optional filter links are minted from the selected connection, never remote URLs. Source and regression additions are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-filter-permission-mutations.ts",
+        "packages/keiko-connectors/src/jira-saved-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-filter-permission-values.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-configuration-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraSavedConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-my-preference": {
+      "identity": "PUT /rest/api/2/mypreferences",
+      "effect": "write",
+      "permissionPolicy": "current-user-preference-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Only six shared documented nonsecret preference keys for the reviewed connected actor. Match the exact typed current value, serialize the requested native JSON string and independently read it back. False, zero and empty text remain distinct. No arbitrary keys, secret arguments or other-user selector. Existing exact scope, one-use approval, saved authority and durable journal govern at most one fixed native write. No automatic replay follows lost acknowledgement, unavailable readback or reload. Optional filter links are minted from the selected connection, never remote URLs. Source and regression additions are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-preference-mutations.ts",
+        "packages/keiko-connectors/src/jira-saved-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-filter-permission-values.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-configuration-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraSavedConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-my-preference": {
+      "identity": "DELETE /rest/api/2/mypreferences",
+      "effect": "write",
+      "permissionPolicy": "current-user-preference-delete-unconfirmed",
+      "kind": "constrained-tool",
+      "constraints": "Match one supported nonsecret key and the reviewed connected actor/value. The API exposes no complete explicit-preference collection and cannot distinguish inherited defaults from removal. Acknowledged deletion remains unconfirmed; preferencePresent:false records only the requested target. Existing exact scope, one-use approval, saved authority and durable journal govern at most one fixed native write. No automatic replay follows lost acknowledgement, unavailable readback or reload. Optional filter links are minted from the selected connection, never remote URLs. Source and regression additions are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-preference-mutations.ts",
+        "packages/keiko-connectors/src/jira-saved-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-filter-permission-values.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-saved-configuration-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationMutationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraSavedConfigurationReceipts.test.ts",
+        "packages/keiko-server/src/store/jiraSavedConfigurationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
     }
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "8264dfffcbf369952eb5e690b86c9a9fc2b8f7e37948a068b29ec40d7b361232",
-    "nativeOperationCount": 258
+    "sha256": "1cf9053f7c43ab2caf3b1b56a36f2dcb14bf552f8870573e6d0eababb63541a5",
+    "nativeOperationCount": 268
   },
   "operations": [
     {
@@ -8653,10 +8893,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.create-filter"
+      ]
     },
     {
       "identity": "GET /rest/api/2/filter/defaultShareScope",
@@ -8723,10 +8965,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-filter-share-scope"
+      ]
     },
     {
       "identity": "GET /rest/api/2/filter/favourite",
@@ -8793,10 +9037,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-filter"
+      ]
     },
     {
       "identity": "GET /rest/api/2/filter/{id}",
@@ -8863,10 +9109,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.update-filter"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/filter/{id}/columns",
@@ -8897,10 +9145,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.reset-filter-columns"
+      ]
     },
     {
       "identity": "GET /rest/api/2/filter/{id}/columns",
@@ -8967,10 +9217,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-filter-columns"
+      ]
     },
     {
       "identity": "GET /rest/api/2/filter/{id}/permission",
@@ -9037,10 +9289,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.add-filter-permission"
+      ]
     },
     {
       "identity": "DELETE /rest/api/2/filter/{id}/permission/{permission-id}",
@@ -9071,10 +9325,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-filter-permission"
+      ]
     },
     {
       "identity": "GET /rest/api/2/filter/{id}/permission/{permissionId}",
@@ -12907,10 +13163,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.delete-my-preference"
+      ]
     },
     {
       "identity": "GET /rest/api/2/mypreferences",
@@ -12977,10 +13235,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.set-my-preference"
+      ]
     },
     {
       "identity": "GET /rest/api/2/myself",

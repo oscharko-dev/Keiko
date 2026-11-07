@@ -19,6 +19,14 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "instance-admin-filter-create-default-sharing"
+  | "owned-filter-metadata-and-readback"
+  | "owned-filter-delete-unconfirmed"
+  | "instance-admin-default-filter-sharing"
+  | "owned-filter-columns-and-readback"
+  | "instance-admin-filter-permission-and-readback"
+  | "current-user-preference-and-readback"
+  | "current-user-preference-delete-unconfirmed"
   | "native-visible-worklog-change-window"
   | "native-version-remote-links"
   | "admin-email-template-metadata"
@@ -172,6 +180,32 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...writes("instance-admin-filter-create-default-sharing", {
+    "jira.create-filter": ["POST", "/filter"],
+  }),
+  ...writes("owned-filter-metadata-and-readback", {
+    "jira.update-filter": ["PUT", "/filter/{id}"],
+  }),
+  ...writes("owned-filter-delete-unconfirmed", {
+    "jira.delete-filter": ["DELETE", "/filter/{id}"],
+  }),
+  ...writes("instance-admin-default-filter-sharing", {
+    "jira.set-filter-share-scope": ["PUT", "/filter/defaultShareScope"],
+  }),
+  ...writes("owned-filter-columns-and-readback", {
+    "jira.set-filter-columns": ["PUT", "/filter/{id}/columns"],
+    "jira.reset-filter-columns": ["DELETE", "/filter/{id}/columns"],
+  }),
+  ...writes("instance-admin-filter-permission-and-readback", {
+    "jira.add-filter-permission": ["POST", "/filter/{id}/permission"],
+    "jira.delete-filter-permission": ["DELETE", "/filter/{id}/permission/{permission-id}"],
+  }),
+  ...writes("current-user-preference-and-readback", {
+    "jira.set-my-preference": ["PUT", "/mypreferences"],
+  }),
+  ...writes("current-user-preference-delete-unconfirmed", {
+    "jira.delete-my-preference": ["DELETE", "/mypreferences"],
+  }),
   ...reads("native-visible-worklog-change-window", {
     "jira.deleted-worklogs": "/worklog/deleted",
     "jira.updated-worklogs": "/worklog/updated",

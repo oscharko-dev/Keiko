@@ -29,6 +29,7 @@ function fixture(
   risk: "read" | "write" = "read",
   instructions?: string,
   dispatchGate = true,
+  localProvider?: "jira",
 ): Fixture {
   let allowed = true;
   const recover = vi.fn(() => {
@@ -53,6 +54,7 @@ function fixture(
   );
   const connection: ExternalMcpConnection = {
     signal: new AbortController().signal,
+    ...(localProvider === undefined ? {} : { localProvider }),
     ...(instructions === undefined ? {} : { instructions }),
     ...(dispatchGate ? { dispatchGate: true } : {}),
     tools: [
@@ -252,6 +254,73 @@ function retainingPermit(f: Fixture) {
   };
   return { context, dispatch, release, acknowledge, fail, retained, retainProviderResult };
 }
+
+function retainingRead(f: Fixture) {
+  const release = vi.fn();
+  const retainProviderResult = vi.fn((result: ManagedMcpToolResult) => result);
+  const beginMutation = vi.fn(f.context.beginMutation);
+  const beginReadCapture = vi.fn(() => ({
+    invocationId: "mcp-read-synthetic", release, retainProviderResult,
+    retainLocalFailure: () => undefined,
+  }));
+  const context: ManagedMcpInvocationContext = { ...f.context, beginMutation, beginReadCapture };
+  return { context, release, retainProviderResult, beginMutation, beginReadCapture };
+}
+
+it.each([false, true])("captures local Jira reads before delivery without a mutation permit, failed=%s", async (isError) => {
+  const f = fixture("read", undefined, true, "jira");
+  const p = retainingRead(f);
+  const data = { outcome: isError ? "failed" : "succeeded", items: [] };
+  f.call.mockImplementation(async (_name, _args, context) => {
+    expect(context.invocationId).toBe("mcp-read-synthetic");
+    expect(context.beforeDispatch).toBeUndefined();
+    context.retainProviderResult?.({ data, isError });
+    return { content: [], structuredContent: data, isError };
+  });
+  const response = await legacy(f, "tools/call", { name: "echo", arguments: { text: "value" } }, p.context);
+  expect(response.result).toMatchObject({ structuredContent: data, isError });
+  expect(p.retainProviderResult).toHaveBeenCalledOnce();
+  expect(p.release).toHaveBeenCalledOnce();
+  expect(p.beginMutation).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+});
+
+it("never enables private read capture from an external tool's name or metadata", async () => {
+  const f = fixture("read");
+  const p = retainingRead(f);
+  f.call.mockImplementation(async (_name, _args, context) => {
+    expect(context.retainProviderResult).toBeUndefined();
+    return { content: [], structuredContent: { outcome: "succeeded" } };
+  });
+  await legacy(f, "tools/call", { name: "echo", arguments: { text: "jira" },
+    _meta: { localProvider: "jira" } }, p.context);
+  expect(p.beginReadCapture).not.toHaveBeenCalled();
+  expect(p.retainProviderResult).not.toHaveBeenCalled();
+});
+
+it("refuses local read admission without its bound durable capture owner", async () => {
+  const f = fixture("read", undefined, true, "jira");
+  const response = await legacy(f, "tools/call", { name: "echo", arguments: { text: "value" } });
+  expect(response.result?.isError).toBe(true);
+  expect(f.call).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+});
+
+it("releases failed read captures and never enters mutation recovery on persistence failure", async () => {
+  const f = fixture("read", undefined, true, "jira");
+  const p = retainingRead(f);
+  p.retainProviderResult.mockImplementation(() => { throw new Error("Synthetic read store unavailable"); });
+  f.call.mockImplementation(async (_name, _args, context) => {
+    context.retainProviderResult?.({ data: { outcome: "succeeded" } });
+    return { content: [], structuredContent: { outcome: "succeeded" } };
+  });
+  const response = await legacy(f, "tools/call", { name: "echo", arguments: { text: "value" } }, p.context);
+  expect(response.result?.isError).toBe(true);
+  expect(response.result?.structuredContent).toBeUndefined();
+  expect(p.release).toHaveBeenCalledOnce();
+  expect(p.beginMutation).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+});
 
 it("returns retained correctable Jira data only when the actual dispatch gate never opened", async () => {
   const f = fixture("write");

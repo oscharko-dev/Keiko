@@ -121,12 +121,16 @@ function permissionTargets(raw: Record<string, unknown>): CatalogJsonObject | un
   }
   return result;
 }
-function permission(value: unknown): CatalogJsonObject | undefined {
+export function projectJiraFilterPermission(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   const id = wireId(raw?.id);
   if (raw === undefined || id === undefined || !jiraNativeText(raw.type, 64)) return undefined;
   const fields = permissionTargets(raw);
   return fields === undefined ? undefined : { id, type: raw.type, ...fields };
+}
+/** The native endpoint returns a complete, unpaged permission list; never silently truncate it. */
+export function projectJiraFilterPermissions(items: readonly unknown[]): readonly CatalogJsonObject[] | undefined {
+  return projectJiraCollection(items, TOOL_CATALOG_LIMITS.maxArrayItems, projectJiraFilterPermission, "id");
 }
 function single(item: CatalogJsonObject | undefined, selected: Selection): ManagedMcpToolResult {
   return item === undefined || item.id !== selected.identity
@@ -167,12 +171,7 @@ function permissionsPage(
 ): ManagedMcpToolResult {
   if (items === undefined) return jiraReadFailure("malformed-payload");
   if (items.length > TOOL_CATALOG_LIMITS.maxArrayItems) return jiraReadFailure("bounds-exceeded");
-  const projected = projectJiraCollection(
-    items,
-    TOOL_CATALOG_LIMITS.maxArrayItems,
-    permission,
-    "id",
-  );
+  const projected = projectJiraFilterPermissions(items);
   if (projected === undefined) return jiraReadFailure("malformed-payload");
   const page = localJiraPage(projected, selected.startAt, selected.maxResults);
   return boundJiraReadResult({
@@ -197,7 +196,7 @@ function savedViewResult(
       : jiraReadFailure("malformed-payload");
   }
   return single(
-    name === "jira.dashboard" ? dashboard(response.body) : permission(response.body),
+    name === "jira.dashboard" ? dashboard(response.body) : projectJiraFilterPermission(response.body),
     selected,
   );
 }

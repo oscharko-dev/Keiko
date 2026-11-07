@@ -62,6 +62,7 @@ import { JIRA_ACCOUNT_DIAGNOSTIC_TOOLS } from "./jira-account-diagnostic-present
 import { JIRA_APPLICATION_SETTINGS_TOOLS } from "./jira-application-settings-presentation";
 import { JIRA_REMOTE_VERSION_LINK_TOOLS } from "./jira-remote-version-link-presentation";
 import { JIRA_WORKLOG_FEED_TOOLS } from "./jira-worklog-feed-presentation";
+import { JIRA_SAVED_CONFIGURATION_WRITE_TOOLS } from "./jira-saved-configuration-presentation";
 import {
   jiraToolOutcomeView,
   JIRA_OUTCOME_ITEMS_SHOWN,
@@ -126,11 +127,14 @@ function JiraToolResultDetails({ exchange }: { readonly exchange: ChatToolExchan
     </details>
   );
 }
-function JiraBoardContextLink({ href }: { readonly href: string | undefined }): ReactNode {
+function JiraContextLink({ href, label }: {
+  readonly href: string | undefined;
+  readonly label: "chat.jira.outcome.openBoard" | "chat.jira.outcome.openFilter";
+}): ReactNode {
   const t = useTranslate();
   return href === undefined ? null : (
     <a className="sm-link" href={href} target="_blank" rel="noopener noreferrer">
-      {t("chat.jira.outcome.openBoard")}
+      {t(label)}
       <span className="sr-only"> {t("chat.jira.outcome.newTab")}</span>
     </a>
   );
@@ -166,7 +170,8 @@ function JiraResultItems({ items }: { readonly items: readonly JiraOutcomeItem[]
                 {t(fact.label)}: {fact.value}
               </p>
             ))}
-            <JiraBoardContextLink href={item.boardHref} />
+            <JiraContextLink href={item.boardHref} label="chat.jira.outcome.openBoard" />
+            <JiraContextLink href={item.filterHref} label="chat.jira.outcome.openFilter" />
             {item.status === undefined ? null : <p>{item.status}</p>}
             {item.labels.map((label) => (
               <p key={label}>{t(label)}</p>
@@ -293,6 +298,7 @@ function resultCardSemantics(exchange: ChatToolExchange): {
   readonly label: ReturnType<typeof jiraToolLabel>;
 } {
   return [
+    JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,
     JIRA_REMOTE_VERSION_LINK_TOOLS,
     JIRA_WORKLOG_FEED_TOOLS,
     JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,

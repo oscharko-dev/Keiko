@@ -208,6 +208,12 @@ function harness(
     signal: new AbortController().signal,
     beforeEffect: () => true,
     onUncertainMutation: recover,
+    beginReadCapture: () => ({
+      invocationId: "mcp-read-synthetic",
+      retainProviderResult: (result) => result,
+      retainLocalFailure: () => undefined,
+      release: () => undefined,
+    }),
     beginMutation: ({ toolName }) => {
       begun.push(toolName);
       return {
@@ -239,6 +245,13 @@ function retainingHarness(h: Harness) {
   });
   const context: ManagedMcpInvocationContext = {
     ...h.context,
+    beginReadCapture: (request) => {
+      expect(request.localProvider).toBe("jira");
+      const read = h.context.beginReadCapture?.(request);
+      if (read === undefined) throw new Error("Expected private read capture");
+      return { ...read, retainProviderResult: capture,
+        retainLocalFailure: (reason) => { localFailures.push(reason); } };
+    },
     beginMutation: (request) => {
       expect(request.localProvider).toBe("jira");
       const permit = h.context.beginMutation?.(request);
@@ -577,14 +590,55 @@ describe("serving the bound Pod through the relay", () => {
   });
 
   it("hands the model a failed read as data, not as a broken run", async () => {
-    const h = harness();
+    const h = retainingHarness(harness());
     h.http.mockResolvedValue(response({}, 403));
     const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
     const result = await client.call("jira.issue", { issueKey: "SYN-1" });
     expect(result).toMatchObject({ isError: true, structuredContent: { outcome: "failed" } });
+    expect(h.retained).toEqual([{ data: result.structuredContent, isError: true }]);
+    expect(h.begun).toEqual([]);
+    expect(h.recover).not.toHaveBeenCalled();
     expect(proofLines(h)).toEqual([
       expect.objectContaining({ outcome: "failed", reason: "tool-failed", level: "warn" }),
     ]);
+  });
+
+  it("retains validated issue reads without acquiring an effect permit", async () => {
+    const h = retainingHarness(harness());
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
+    const result = await client.call("jira.issue", { issueKey: "SYN-1" });
+    expect(h.retained).toEqual([{ data: result.structuredContent }]);
+    expect(h.retained[0]?.data).toMatchObject({ outcome: "succeeded", items: [{ key: "SYN-1" }] });
+    expect(h.begun).toEqual([]);
+    expect(h.dispatched).not.toHaveBeenCalled();
+    expect(h.recover).not.toHaveBeenCalled();
+  });
+
+  it("retains a closed read scope refusal without inventing Jira data or an effect", async () => {
+    const h = retainingHarness(harness());
+    const client = connect(h, h.pods.connections(undefined, bound(h), {
+      runId: h.context.correlationId,
+      currentScopes: (phase) => phase === "discovery" ? ["issue-tracker.read"] : [],
+    }));
+    const result = await client.call("jira.issue", { issueKey: "SYN-1" });
+    expect(result.isError).toBe(true);
+    expect(h.localFailures).toEqual(["connector-scope-missing"]);
+    expect(h.retained).toEqual([]);
+    expect(h.http).not.toHaveBeenCalled();
+    expect(h.begun).toEqual([]);
+    expect(h.recover).not.toHaveBeenCalled();
+  });
+
+  it("refuses read delivery on capture failure without creating a write recovery state", async () => {
+    const h = retainingHarness(harness());
+    h.capture.mockImplementation(() => { throw new Error("Synthetic durable store unavailable"); });
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
+    const result = await client.call("jira.issue", { issueKey: "SYN-1" });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    expect(h.capture).toHaveBeenCalledOnce();
+    expect(h.begun).toEqual([]);
+    expect(h.recover).not.toHaveBeenCalled();
   });
 });
 

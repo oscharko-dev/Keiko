@@ -39,6 +39,7 @@ import {
 } from "../../../../tests/support/jira-managed-mutation-scenarios.js";
 import { jiraMutationToolId } from "./jiraMutationToolId.js";
 import { nativeAdministrationWrite } from "../../../../tests/support/jira-managed-administration-scenarios.js";
+import { expectedSavedConfigurationOutcome, nativeSavedConfigurationWrite, prepareSavedConfiguration } from "../../../../tests/support/jira-managed-saved-configuration-scenarios.js";
 import { jiraChatCatalogRoutes } from "./jiraChatCatalogConsumer.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
@@ -243,6 +244,8 @@ async function fixtureWriteResult(
   path: string,
   state: MutationRemoteState,
 ): Promise<ReturnType<typeof fixtureWrite>> {
+  const savedConfiguration = await nativeSavedConfigurationWrite(request, state.savedConfiguration);
+  if (savedConfiguration !== undefined) return savedConfiguration;
   const administration = await nativeAdministrationWrite(request, state.administration);
   if (administration !== undefined) return administration;
   const deletion = nativeDeletionWrite(request, state);
@@ -337,6 +340,7 @@ async function fixture(
   jira.state.isWatching = initialOperation === "jira.unwatch";
   jira.state.hasVoted = initialOperation === "jira.unvote";
   jira.state.administration.jmxExposed = initialOperation === "jira.stop-jmx-metrics";
+  prepareSavedConfiguration(jira.state.savedConfiguration, initialOperation);
   if (initialOperation === "jira.set-comment-property" || initialOperation === "jira.delete-comment-property")
     jira.state.comment = "Original";
   if (initialOperation === "jira.delete-comment") jira.state.comment = "Original";
@@ -508,12 +512,13 @@ it.each(SINGLE_MUTATIONS)(
   "executes %s through the real gateway/binder/SDK and durable journal",
   async (operation) => {
     const f = await fixture("confirmed", undefined, operation, reviewedAuthority(operation));
+    const expectedOutcome = expectedSavedConfigurationOutcome(operation) ?? "succeeded";
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
       result: {
-        status: "completed",
+        status: expectedOutcome === "succeeded" ? "completed" : "failed",
         data: {
-          outcome: "succeeded",
+          outcome: expectedOutcome,
           ...SUCCESS_RECEIPTS[operation],
         },
       },
@@ -522,7 +527,7 @@ it.each(SINGLE_MUTATIONS)(
     expect(f.state).toMatchObject(REMOTE_STATE[operation]);
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
-      result: { data: { outcome: "succeeded", replayed: true } },
+      result: { data: { outcome: expectedOutcome, replayed: true } },
     });
     expect(f.writes()).toBe(1);
     expect(JSON.stringify(f.offered)).not.toMatch(
@@ -871,7 +876,7 @@ it("keeps an independent complete argument/state/receipt case for every register
   expect(Object.keys(ARGUMENTS).sort()).toEqual([...JIRA_MUTATION_OPERATIONS].sort());
   expect(Object.keys(REMOTE_STATE).sort()).toEqual([...SINGLE_MUTATIONS].sort());
   expect(Object.keys(SUCCESS_RECEIPTS).sort()).toEqual([...SINGLE_MUTATIONS].sort());
-  expect(ADMIN_MUTATIONS).toHaveLength(9);
+  expect(ADMIN_MUTATIONS).toHaveLength(13);
 });
 it.each(ADMIN_MUTATIONS)("does not grant %s administration from ordinary issue scopes or verified credentials", async (operation) => {
   const f = await fixture("confirmed", undefined, operation);

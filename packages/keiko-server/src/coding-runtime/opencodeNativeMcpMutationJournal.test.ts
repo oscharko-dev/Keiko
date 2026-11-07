@@ -57,6 +57,22 @@ function jiraPermit(f: Fixture) {
   if (permit?.retainProviderResult === undefined) throw new Error("Expected private result capture");
   return { permit, retain: permit.retainProviderResult };
 }
+function jiraRead(f: Fixture, signal = new AbortController().signal) {
+  const capture = f.owner.beginReadCapture({
+    runId: identity.runId, toolName: "jira.projects", argumentsValue: {}, signal,
+    localProvider: "jira",
+  });
+  if (capture?.retainProviderResult === undefined) throw new Error("Expected private read capture");
+  return { capture, retain: capture.retainProviderResult };
+}
+function jiraReadResult(failed = false): ManagedMcpToolResult {
+  const operationBinding = jiraOperationBindingForTool("jira.projects");
+  if (operationBinding === undefined) throw new Error("Expected Jira read binding");
+  return failed
+    ? { isError: true, data: { outcome: "failed", reason: "permission-denied", operationBinding } }
+    : { data: { outcome: "succeeded", operationBinding,
+      items: [{ id: "10000", key: "SYN", name: "Synthetic project" }], startAt: 0, nextStartAt: 1 } };
+}
 function jiraExchange(f: Fixture) {
   const turn = f.store.codingHistory?.nativeTurn(identity.runId);
   return turn === undefined ? undefined :
@@ -155,6 +171,106 @@ it("does not confirm success until the committed native producer tool completes"
   expect(f.owner.observeCompletion(identity, true)).toBe("confirmed");
   expect(f.owner.unsettled(identity.runId)).toBe(false);
   expect(f.owner.observeCompletion(identity, true)).toBe("ignored");
+});
+
+it.each([false, true])("retains a validated read across reload without a write journal row, failed=%s", (failed) => {
+  const f = fixture();
+  const { capture, retain } = jiraRead(f);
+  expect(jiraExchange(f)).toBeUndefined();
+  const result = jiraReadResult(failed);
+  retain(result);
+  capture.release();
+  f.reopen();
+  expect(jiraExchange(f)).toMatchObject({
+    call: { id: capture.invocationId, name: "jira_projects" },
+    result: { status: failed ? "failed" : "completed", effectStarted: false, data: result.data },
+  });
+  expect(jiraExchange(f)).not.toHaveProperty("mutationOutcome");
+  expect(jiraExchange(f)).not.toHaveProperty("resultBinding");
+  expect(jiraExchange(f)).not.toHaveProperty("operationBinding");
+  expect(jiraExchange(f)?.result?.page).toEqual(failed ? null : {
+    truncated: true, reason: "result-cap", cursor: null,
+  });
+  expect(f.db.prepare("SELECT COUNT(*) AS count FROM chat_tool_mutations").get()?.count).toBe(0);
+  expect(f.owner.observeCompletion(identity, true)).toBe("ignored");
+  expect(f.owner.unsettled(identity.runId)).toBe(false);
+});
+
+it("retains read scope denial without provider data, write state or a journal row", () => {
+  const f = fixture();
+  const { capture } = jiraRead(f);
+  if (capture.retainLocalFailure === undefined) throw new Error("Expected local refusal capture");
+  capture.retainLocalFailure("connector-scope-missing");
+  capture.release();
+  expect(jiraExchange(f)?.result).toMatchObject({
+    status: "denied", reason: "effect-denied", effectStarted: false, data: null,
+  });
+  expect(jiraExchange(f)).not.toHaveProperty("mutationOutcome");
+  expect(f.db.prepare("SELECT COUNT(*) AS count FROM chat_tool_mutations").get()?.count).toBe(0);
+});
+
+it("validates read delivery and history against the admitted snapshot after registry drift", () => {
+  const f = fixture();
+  const { capture, retain } = jiraRead(f);
+  const data = jiraReadResult();
+  vi.spyOn(jiraProvider, "jiraOperationForTool").mockImplementation(() => {
+    throw new Error("Do not resolve the current registry for an admitted read");
+  });
+  retain(data);
+  capture.release();
+  f.reopen();
+  expect(jiraExchange(f)?.result?.data).toEqual(data.data);
+});
+
+it("refuses read capture after release, cancellation or a changed accepted turn", () => {
+  const f = fixture();
+  const released = jiraRead(f);
+  released.capture.release();
+  expect(() => released.retain(jiraReadResult())).toThrow();
+  const controller = new AbortController();
+  const cancelled = jiraRead(f, controller.signal);
+  controller.abort();
+  expect(() => cancelled.retain(jiraReadResult())).toThrow();
+  cancelled.capture.release();
+  const stale = jiraRead(f);
+  f.owner.bindTurn(identity.runId, "msg_next_human", "New human instruction");
+  expect(() => stale.retain(jiraReadResult())).toThrow("owner changed");
+  stale.capture.release();
+  expect(jiraExchange(f)).toBeUndefined();
+});
+
+it("refuses unknown or mutation tools on the read-only retention path", () => {
+  const f = fixture();
+  for (const toolName of ["jira.guessed", "jira.comment"]) {
+    expect(() => f.owner.beginReadCapture({ runId: identity.runId, toolName,
+      argumentsValue: {}, signal: new AbortController().signal, localProvider: "jira" })).toThrow();
+  }
+  expect(f.owner.beginReadCapture({ runId: "foreign-run", toolName: "jira.projects",
+    argumentsValue: {}, signal: new AbortController().signal, localProvider: "jira" })).toBeUndefined();
+  expect(jiraExchange(f)).toBeUndefined();
+});
+
+it("shares reservation capacity between reads and writes without reserving an effect for reads", () => {
+  const f = fixture();
+  forcedOccupancy(f, { bytes: 0, exchangeCount: CHAT_TOOL_TURN_BUDGET.maxToolCalls - 1 });
+  const first = jiraRead(f);
+  expect(() => jiraRead(f)).toThrow();
+  f.owner.prepare(jiraRequest);
+  expect(() => f.owner.begin({ ...jiraRequest, localProvider: "jira", beforeEffect: () => true })).toThrow();
+  first.capture.release();
+  const second = jiraRead(f);
+  expect(second.capture.invocationId).not.toBe(first.capture.invocationId);
+  second.capture.release();
+  expect(f.store.chatToolMutations?.find(nativeMcpInvocationId(jiraRequest))?.outcome).toBe("not-dispatched");
+});
+
+it("refuses read admission when known transcript capacity or durable data is unavailable", () => {
+  const f = fixture();
+  const turn = f.history.nativeTurn(identity.runId);
+  if (turn === undefined) throw new Error("Expected native turn");
+  f.db.prepare("UPDATE chat_messages SET tool_transcript_json='' WHERE id=?").run(turn.userMessageId);
+  expect(() => jiraRead(f)).toThrow();
+  expect(f.db.prepare("SELECT COUNT(*) AS count FROM chat_tool_mutations").get()?.count).toBe(0);
 });
 
 it("persists a validated Jira success before delivery and derives its state from the same native journal", () => {

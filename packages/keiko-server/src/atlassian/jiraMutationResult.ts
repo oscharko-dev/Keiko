@@ -18,6 +18,12 @@ import {
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import {
+  JIRA_SAVED_CONFIGURATION_RECEIPTS,
+  isJiraSavedConfigurationOperation,
+  validJiraSavedConfigurationReceipt,
+  canConfirmJiraSavedConfiguration,
+} from "./jiraSavedConfigurationReceipts.js";
 
 /**
  * The shared projection of a Jira mutation attempt onto the managed tool result. Ordinary Chat and
@@ -95,6 +101,7 @@ type CollaborationOperation = keyof typeof COLLABORATION_RECEIPTS;
 const REQUIRED_RECEIPTS: Readonly<
   Record<JiraMutationOperation, readonly (keyof JiraMutationReceipt)[]>
 > = {
+  ...JIRA_SAVED_CONFIGURATION_RECEIPTS,
   ...PROPERTY_RECEIPTS,
   ...MONITORING_RECEIPTS,
   ...SCREEN_TAB_RECEIPTS,
@@ -311,6 +318,7 @@ function validProjectReceipt(receipt: JiraMutationReceipt): boolean {
   });
 }
 function validIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
+  if (isJiraSavedConfigurationOperation(operation)) return validJiraSavedConfigurationReceipt(receipt, operation);
   if (propertyOperation(operation)) return validPropertyReceipt(receipt, operation);
   if (monitoringOperation(operation)) return validMonitoringReceipt(receipt, operation);
   if (screenTabOperation(operation)) return validScreenTabReceipt(receipt);
@@ -335,6 +343,7 @@ function partialReceipt(
 }
 function partialIdentity(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
   return (
+    isJiraSavedConfigurationOperation(operation) ||
     propertyOperation(operation) ||
     monitoringOperation(operation) ||
     screenTabOperation(operation) ||
@@ -345,11 +354,14 @@ function partialIdentity(receipt: JiraMutationReceipt, operation: JiraMutationOp
   );
 }
 function snapshotReceipt(receipt: JiraMutationReceipt): JiraMutationReceipt {
+  const ownIssueKeys = Object.getOwnPropertyDescriptor(receipt, "issueKeys");
+  const issueKeys = ownIssueKeys !== undefined && "value" in ownIssueKeys
+    ? receipt.issueKeys : undefined;
   return Object.freeze({
     ...receipt,
-    ...(receipt.issueKeys === undefined
+    ...(issueKeys === undefined
       ? {}
-      : { issueKeys: Object.freeze([...receipt.issueKeys]) }),
+      : { issueKeys: Object.freeze([...issueKeys]) }),
   });
 }
 
@@ -423,6 +435,10 @@ export function validJiraMutationAttempt(
   operation: JiraMutationOperation,
 ): JiraMutationAttempt {
   if (!value.ok) return failedAttempt(value, operation);
+  if (isJiraSavedConfigurationOperation(operation) && !validJiraSavedConfigurationReceipt(value.receipt, operation))
+    return { ok: false, reason: "malformed-payload" };
+  if (!canConfirmJiraSavedConfiguration(operation))
+    return failedAttempt({ ok: false, reason: "malformed-payload", receipt: value.receipt }, operation);
   const receipt = Object.freeze({ ...value.receipt });
   const valid =
     confirmed(value.ok) &&

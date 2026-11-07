@@ -20,14 +20,14 @@ export const JIRA_APPLICATION_SETTINGS_READS = JIRA_READ_TOOL_FAMILIES.applicati
 type SettingsRead = (typeof JIRA_APPLICATION_SETTINGS_READS)[number];
 type ValueKind = "string" | "boolean" | "integer";
 type Projection = { readonly item: CatalogJsonObject } | { readonly reason: "malformed-payload" | "bounds-exceeded" };
-type Selection = {
+interface Selection {
   readonly path: string;
   readonly scope: "application-properties" | "advanced-settings" | "current-user-preference";
   readonly mode: "one" | "list" | "preference";
   readonly key?: string;
   readonly permissionLevel?: "ADMIN" | "SYSADMIN";
   readonly page?: JiraReadPageSelection;
-};
+}
 const PAGE_ARGS = new Set(["startAt", "maxResults"]);
 const APPLICATION_ARGS = new Set(["permissionLevel", "startAt", "maxResults"]);
 // Exact APKeys / PreferenceKeys constants, not a caller-supplied whitelist or native type hint.
@@ -38,14 +38,14 @@ const APPLICATION_VALUE_KINDS: Readonly<Record<string, ValueKind>> = {
   "jira.option.watching": "boolean",
   "jira.option.timetracking": "boolean",
 };
-export const JIRA_NONSECRET_PREFERENCE_KINDS: Readonly<Record<string, ValueKind>> = {
+export const JIRA_NONSECRET_PREFERENCE_KINDS = Object.freeze({
   "jira.user.locale": "string",
   "jira.user.timezone": "string",
   "user.notifications.mimetype": "string",
   "user.issues.per.page": "integer",
   "user.keyboard.shortcuts.disabled": "boolean",
   "user.notify.own.changes": "boolean",
-};
+} as const satisfies Readonly<Record<string, ValueKind>>);
 const VALUE_MAX_CHARS = 4096;
 function oneKey(args: CatalogJsonObject): string | undefined {
   return Object.keys(args).length === 1 && jiraPropertyKey(args.key) ? args.key : undefined;
@@ -82,7 +82,7 @@ function selection(name: SettingsRead, args: CatalogJsonObject): Selection | und
   };
 }
 function valueKind(key: string, preference: boolean): ValueKind | undefined {
-  const kinds = preference ? JIRA_NONSECRET_PREFERENCE_KINDS : APPLICATION_VALUE_KINDS;
+  const kinds: Readonly<Record<string, ValueKind>> = preference ? JIRA_NONSECRET_PREFERENCE_KINDS : APPLICATION_VALUE_KINDS;
   return Object.hasOwn(kinds, key) ? kinds[key] : undefined;
 }
 function integerValue(key: string, value: string): Projection {

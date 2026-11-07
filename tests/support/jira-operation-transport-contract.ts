@@ -26,6 +26,9 @@ export interface Scenario {
   readonly parameters?: Readonly<Record<string, string>>;
   readonly query?: Readonly<Record<string, string>>;
   readonly primaryMethodIndex?: number;
+  /** Only the two native deletions without an independent absence-proof API opt into this case. */
+  readonly expectedOutcome?: "succeeded-unconfirmed";
+  readonly expectedReceipt?: CatalogJsonObject;
 }
 export interface Observation {
   readonly requests: readonly AtlassianHttpBodyRequest[];
@@ -42,12 +45,33 @@ export async function observeNativeJiraOperation(
     return supplied.http(request);
   };
   const executor: JiraManagedMutationExecutor<ManagedMcpInvocationContext> = async (
-    _operation,
+    operation,
     _args,
     _context,
     execute,
   ) => {
     const attempt = await execute(http);
+    if (scenario.expectedOutcome === "succeeded-unconfirmed") {
+      if (operation !== "jira.delete-filter" && operation !== "jira.delete-my-preference")
+        throw new TypeError(
+          "Only the declared absence-proof limitations may expect an unconfirmed transport result",
+        );
+      if (scenario.expectedReceipt === undefined)
+        throw new TypeError(
+          "An unconfirmed deletion must retain an independently specified known receipt",
+        );
+      expect(attempt).toMatchObject({
+        ok: false,
+        reason: "unavailable",
+        receipt: scenario.expectedReceipt,
+      });
+      if (attempt.ok || attempt.receipt === undefined)
+        throw new TypeError("Expected acknowledged, unconfirmed deletion with known target");
+      return {
+        data: { outcome: "succeeded-unconfirmed", reason: attempt.reason, ...attempt.receipt },
+        isError: true,
+      };
+    }
     expect(attempt).toMatchObject({ ok: true });
     return { data: { outcome: "succeeded", ...attempt.receipt } };
   };
@@ -68,9 +92,14 @@ export async function observeNativeJiraOperation(
     beforeEffect: (): boolean => true,
   });
   expect(result).toMatchObject({
-    data: { outcome: "succeeded", operationBinding: contract.binding },
+    data: { outcome: scenario.expectedOutcome ?? "succeeded", operationBinding: contract.binding },
   });
-  expect(result.isError).toBeUndefined();
+  if (scenario.expectedOutcome === "succeeded-unconfirmed") {
+    expect(result).toMatchObject({
+      isError: true,
+      data: { reason: "unavailable", ...scenario.expectedReceipt },
+    });
+  } else expect(result.isError).toBeUndefined();
   return {
     requests,
     result,

@@ -14,6 +14,7 @@ import {
   type ManagedMcpInvocationContext,
   type ManagedMcpMutationInvocation,
   type ManagedMcpToolResult,
+  type ManagedMcpReadCapture,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -164,7 +165,7 @@ interface RelayObservation {
   retained?: ManagedMcpToolResult;
 }
 function resultCapture(
-  permit: ManagedMcpMutationInvocation | undefined,
+  permit: ManagedMcpMutationInvocation | ManagedMcpReadCapture | undefined,
   observation: RelayObservation,
 ): Pick<ManagedMcpInvocationContext, "retainProviderResult" | "retainLocalFailure"> {
   const retain = permit?.retainProviderResult;
@@ -176,6 +177,16 @@ function resultCapture(
       return retained;
     },
   };
+}
+
+function beginReadCapture(input: RelayCall, context: ManagedMcpInvocationContext): ManagedMcpReadCapture | undefined {
+  if (input.mutation || input.connection.localProvider !== "jira") return undefined;
+  const capture = context.beginReadCapture?.({
+    toolName: input.name, argumentsValue: input.argumentsValue, localProvider: "jira",
+    signal: AbortSignal.any([context.signal, input.signal]),
+  });
+  if (capture === undefined) throw new ManagedMcpError("not-admitted");
+  return capture;
 }
 function assertRetainedResult(result: CallToolResult, observation: RelayObservation): void {
   const retained = observation.retained;
@@ -205,15 +216,16 @@ async function invokeRelayTool(input: RelayCall): Promise<CallToolResult> {
   const { context } = input;
   assertCurrent(context, input.active, input.signal);
   const permit = beginMutation(input, context);
+  const readCapture = beginReadCapture(input, context);
   const observation: RelayObservation = { dispatched: input.mutation && permit?.dispatch === undefined };
   try {
     const signal = AbortSignal.any([context.signal, input.signal]);
     const result = await input.connection.call(input.name, input.argumentsValue, {
       ...context,
       signal,
-      invocationId: permit?.invocationId ?? context.invocationId,
+      invocationId: permit?.invocationId ?? readCapture?.invocationId ?? context.invocationId,
       ...dispatchAdmission(input.connection, permit, observation),
-      ...resultCapture(permit, observation),
+      ...resultCapture(permit ?? readCapture, observation),
     });
     if (!isCallToolResult(result)) throw new ManagedMcpError("protocol-error");
     assertRetainedResult(result, observation);
@@ -231,6 +243,8 @@ async function invokeRelayTool(input: RelayCall): Promise<CallToolResult> {
     await settleFailedCall(input, context, permit, effect);
     // The SDK delivers a thrown error's message to the model as an error result.
     throw new RelayToolFailure(failureText(reason, effect, input.mutation), reason, effect);
+  } finally {
+    readCapture?.release();
   }
 }
 

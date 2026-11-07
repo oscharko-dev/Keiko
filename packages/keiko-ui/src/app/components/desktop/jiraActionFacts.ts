@@ -17,6 +17,7 @@ import { jiraProjectMetadataArgumentLabel } from "./jira-project-metadata-presen
 import { jiraScreenTabArgumentLabel } from "./jira-administration-presentation";
 import { jiraMonitoringArgumentLabel, jiraMonitoringFixedTarget } from "./jira-monitoring-presentation";
 import { jiraPropertyMutationFacts } from "./jira-property-mutation-presentation";
+import { jiraSavedConfigurationFacts, jiraSavedConfigurationContextFacts } from "./jira-saved-configuration-approval";
 
 type Raw = Readonly<Record<string, unknown>>;
 type Fact = JiraDraftField;
@@ -284,6 +285,7 @@ export function jiraActionFacts(
     if (!managed) return [{ id: key, value: jiraDraftValueOf(value) }];
     const specificPreview = deletionFacts(operation, key, value, t) ??
       jiraPropertyMutationFacts(operation, key, value, t) ??
+      jiraSavedConfigurationFacts(operation, key, value, t) ??
       screenTabFacts(operation, key, value, t) ?? monitoringFacts(operation, key, value, t);
     if (specificPreview !== undefined) return specificPreview;
     const worklogPreview = worklog
@@ -298,7 +300,8 @@ export function jiraActionFacts(
       ? managedFacts(key, value, raw, t, names)
       : [{ id: t(label), value: jiraDraftValueOf(value) }];
   });
-  return managed ? [...facts, ...deletionContextFacts(raw, operation, t), ...monitoringContextFacts(operation, t)] : facts;
+  return managed ? [...facts, ...deletionContextFacts(raw, operation, t), ...monitoringContextFacts(operation, t),
+    ...jiraSavedConfigurationContextFacts(operation, raw, t)] : facts;
 }
 /** Jira's own names where this turn read them; a field that repeats the target is said once. */
 function managedFacts(

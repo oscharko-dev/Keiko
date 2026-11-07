@@ -176,18 +176,18 @@ describe("CodingTaskTranscript", () => {
 function savedJiraResult(
   id: string,
   name: string,
-  mutationOutcome: NonNullable<ChatToolExchange["mutationOutcome"]>,
+  mutationOutcome: ChatToolExchange["mutationOutcome"],
   data: CatalogJsonObject,
 ): ChatToolExchange {
   return {
     call: { id, name, arguments: {} },
-    mutationOutcome,
+    ...(mutationOutcome === undefined ? {} : { mutationOutcome }),
     result: {
       schemaVersion: 1,
       invocationId: id,
       toolRef: null,
       projectionDigest: null,
-      effectStarted: mutationOutcome !== "rejected",
+      effectStarted: mutationOutcome !== undefined && mutationOutcome !== "rejected",
       metrics: { inputBytes: 10, outputBytes: 10, resultCount: 1, durationMs: 20 },
       status: "completed",
       reason: "none",
@@ -313,6 +313,40 @@ describe.each(["en", "de"] as const)("stored Coding Jira results in %s", (locale
     expect(screen.getByRole("link", { name: /SYN-1/u })).toBeVisible();
     expect(screen.getByText("A reviewed comment is required.")).toBeVisible();
     expect(second.container.querySelector("pre, button")).toBeNull();
+  });
+
+  it("restores report read progress and a partial read page without inventing totals or mutation state", async () => {
+    const message: HistoryMessage = {
+      ...historyMessage("read-turn", "run-7", "The live feed already carries the reading request"),
+      toolTranscript: { schemaVersion: 1, exchanges: [
+        savedJiraResult("report-read", "jira_report", undefined, {
+          outcome: "succeeded", status: "reading", reportId: "11111111-2222-4333-8444-555555555555",
+          progress: { issuesRead: 25, pageCount: 2, elapsedMs: 10 },
+        }),
+        savedJiraResult("version-read", "jira_global_version_page", undefined, {
+          outcome: "succeeded", startAt: 1, nextStartAt: 2,
+          items: [{ versionId: "9001", name: "Observed release", released: false }],
+        }),
+      ] },
+    };
+    const detail = JSON.parse(JSON.stringify(sessionWith([message]).detail)) as NonNullable<CodingTaskSession["detail"]>;
+    const show = (): ReturnType<typeof render> => render(<I18nProvider>
+      <CodingTaskTranscript session={{ ...session(), detail }} shownRun={wholeRun} />
+    </I18nProvider>);
+    const first = show();
+    const savedText = first.container.textContent;
+    first.unmount();
+    const { container } = show();
+    expect(container.textContent).toBe(savedText);
+    expect(screen.getByText(locale === "en" ? "Reading Jira: 25 issues" : "Jira wird gelesen: 25 Vorgänge")).toBeVisible();
+    expect(screen.getByText(locale === "en" ? "Partial Jira result. Some available data is not included."
+      : "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.")).toBeVisible();
+    expect(container.textContent).toContain("Observed release");
+    expect(container.textContent).not.toContain("The live feed already carries the reading request");
+    expect(screen.queryByText(labels.confirmed)).toBeNull();
+    expect(screen.queryByText(labels.unknown)).toBeNull();
+    expect(container.querySelector("pre, button")).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it("preserves text for other runs while refusing an unsafe saved receipt link", () => {

@@ -41,11 +41,14 @@ function filterProjection(value: unknown): CatalogJsonObject | undefined {
     !agileText(raw.jql, TOOL_CATALOG_LIMITS.maxStringBytes)
   )
     return undefined;
+  const description = raw.description ?? null;
+  if (description !== null && (typeof description !== "string" || description.length > 32768 || /\p{Surrogate}/u.test(description))) return undefined;
   const permissions = asArray(raw.sharePermissions);
   const result: Record<string, CatalogJsonValue> = {
     id,
     name: raw.name,
     jql: raw.jql,
+    description,
     shareScope: shareScope(permissions),
   };
   const owner = ownerProjection(raw.owner);

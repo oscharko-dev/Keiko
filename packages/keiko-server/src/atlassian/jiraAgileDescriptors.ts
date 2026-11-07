@@ -171,18 +171,19 @@ const FILTER = object(
     id: ID,
     name: NAME,
     jql: text(TOOL_CATALOG_LIMITS.maxStringBytes),
+    description: { anyOf: [text(32768), { type: "null" }] },
     owner: object({ key: text(255), name: text(255), displayName: text(255) }),
     favourite: { type: "boolean" },
     shareScope: { type: "string", enum: ["private", "shared", "unknown"] },
     sharePermissionCount: PAGE_NUMBER,
   },
-  ["id", "name", "jql", "shareScope"],
+  ["id", "name", "jql", "description", "shareScope"],
 );
 /** C2 board reuse prerequisites remain native REST v2 reads, not Agile-root operations. */
 export const JIRA_FILTER_READ_DEFINITIONS = {
   "jira.filter": {
     description:
-      "Read a saved filter's ID, name, native JQL and available owner/sharing facts before using it for a board. Missing sharing facts mean unknown, never private.",
+      "Read a saved filter's ID, name, native JQL, description and available owner/sharing facts before reuse or a reviewed change. Missing/null native description is explicit null, distinct from empty text. Missing sharing facts mean unknown, never private.",
     parameters: { filterId: ID },
     required: ["filterId"],
     item: FILTER,

@@ -356,8 +356,10 @@ const ADMIN_ACTIONS = [
   "create-screen-tab", "rename-screen-tab", "delete-screen-tab",
   "set-app-monitoring", "set-ipd-monitoring", "start-jmx-metrics", "stop-jmx-metrics",
   "set-issue-type-property", "delete-issue-type-property",
+  "create-filter", "set-filter-share-scope", "add-filter-permission", "delete-filter-permission",
 ] as const satisfies readonly AtlassianConnectorActionType[];
 const HIGH_WRITES = [
+  "delete-filter",
   "create-project", "create-component", "create-version", "update-version",
   "create-board", "create-sprint", "update-sprint", "move-issues-to-sprint",
   "move-issues-to-backlog", "update-epic", "move-issues-to-epic",
@@ -368,6 +370,7 @@ const HIGH_WRITES = [
   "set-user-property", "delete-user-property",
 ] as const satisfies readonly AtlassianConnectorActionType[];
 const MEDIUM_WRITES = [
+  "update-filter", "set-filter-columns", "reset-filter-columns", "set-my-preference", "delete-my-preference",
   "update-project", "update-component", "update-issue-comment", "create-worklog", "update-worklog",
   "watch-issue", "unwatch-issue", "vote-issue", "unvote-issue",
 ] as const satisfies readonly AtlassianConnectorActionType[];

@@ -122,6 +122,46 @@ describe.each(["en", "de"] as const)("reviewed typed property changes in %s", (l
   });
 });
 
+const REVIEWED_FILTER = { filterId: "9001", expectedOwnerKey: "owner-key", expectedName: "Reviewed filter", expectedJql: "project = SYN", expectedDescription: null };
+const REVIEWED_SHARES = [{ id: "9002", type: "group", groupName: "reviewed-group", view: true, edit: false }];
+describe.each(["en", "de"] as const)("reviewed filter and preference changes in %s", (locale) => {
+  it.each([
+    { operation: "jira.create-filter", args: { expectedActorKey: "owner-key", expectedDefaultShareScope: "PRIVATE", acceptDefaultSharing: true, name: "New filter", jql: "project = SYN", description: "" } },
+    { operation: "jira.update-filter", args: { ...REVIEWED_FILTER, description: "" } },
+    { operation: "jira.delete-filter", args: REVIEWED_FILTER },
+    { operation: "jira.set-filter-share-scope", args: { expectedActorKey: "owner-key", expectedScope: "GLOBAL", scope: "PRIVATE" } },
+    { operation: "jira.set-filter-columns", args: { filterId: "9001", expectedOwnerKey: "owner-key", expectedColumns: ["summary", "status", "summary"], expectedColumnConfig: null, columns: ["status", "summary"] } },
+    { operation: "jira.reset-filter-columns", args: { filterId: "9001", expectedOwnerKey: "owner-key", expectedColumns: [], expectedColumnConfig: "FILTER" } },
+    { operation: "jira.add-filter-permission", args: { filterId: "9001", expectedOwnerKey: "owner-key", expectedPermissions: REVIEWED_SHARES, permission: { type: "global", view: true, edit: false }, acceptGlobalReplacement: true } },
+    { operation: "jira.delete-filter-permission", args: { filterId: "9001", expectedOwnerKey: "owner-key", expectedPermissions: REVIEWED_SHARES, permissionId: "9002" } },
+    { operation: "jira.set-my-preference", args: { expectedActorKey: "owner-key", key: "user.keyboard.shortcuts.disabled", expectedValue: true, value: false } },
+    { operation: "jira.set-my-preference", args: { expectedActorKey: "owner-key", key: "user.issues.per.page", expectedValue: 25, value: 0 } },
+    { operation: "jira.set-my-preference", args: { expectedActorKey: "owner-key", key: "jira.user.locale", expectedValue: "en", value: "" } },
+    { operation: "jira.delete-my-preference", args: { expectedActorKey: "owner-key", key: "jira.user.locale", expectedValue: "en" } },
+  ] as const)("shows the exact reviewed snapshot and native limitations for $operation", async ({ operation, args }) => {
+    const review = await reviewed(operation, args, locale);
+    expect(review.text).toContain("owner-key");
+    if ("filterId" in args) expect(review.text).toContain("9001");
+    if ("expectedPermissions" in args) {
+      expect(review.text).toContain("reviewed-group");
+      expect(review.text).toContain("9002");
+      expect(review.text).toContain(locale === "en" ? "Entry does not grant editing" : "Eintrag erlaubt kein Bearbeiten");
+    }
+    if (operation === "jira.create-filter") expect(review.text).toContain(locale === "en"
+      ? "The endpoint cannot atomically bind creation" : "Der Endpunkt kann die Erstellung nicht atomar");
+    if (operation === "jira.add-filter-permission") expect(review.text).toContain(locale === "en"
+      ? "Adding global sharing removes all existing filter shares" : "Eine globale Freigabe entfernt alle bestehenden Filterfreigaben");
+    if (operation === "jira.delete-filter" || operation === "jira.delete-my-preference") expect(review.text).toContain(locale === "en"
+      ? "An acknowledged deletion remains unconfirmed" : "Eine angenommene Löschung bleibt unbestätigt");
+    if ("value" in args && args.value === false) expect(review.text).toContain(locale === "en" ? "Boolean: false" : "Wahrheitswert: falsch");
+    if ("value" in args && args.value === 0) expect(review.text).toContain(locale === "en" ? "Integer: 0" : "Ganzzahl: 0");
+    if ("value" in args && args.value === "") expect(review.text).toContain(locale === "en" ? "Value: empty text" : "Wert: leerer Text");
+    expectNoJson(review);
+    expect(review.region.querySelector("a, img")).toBeNull();
+    if (operation === "jira.add-filter-permission") expect(await axe(review.container)).toHaveNoViolations();
+  });
+});
+
 describe.each(["en", "de"] as const)("reviewed monitoring changes in %s", (locale) => {
   it.each([
     ["jira.set-app-monitoring", false, true], ["jira.set-ipd-monitoring", true, false],

@@ -17,6 +17,7 @@ import type {
 import {
   JIRA_MUTATION_OUTCOMES,
   JIRA_MUTATION_OPERATIONS,
+  JIRA_MANAGED_READ_TOOLS,
   type JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
@@ -45,11 +46,11 @@ export type ChatToolTranscriptUpdate =
       /** An observed native Coding result: start and settlement are one existing-store transaction. */
       readonly kind: "captured";
       readonly call: ChatToolExchange["call"];
-      readonly operationBinding: JiraOperationBinding;
-      readonly nativeArgumentsDigest: string;
+      readonly operationBinding?: JiraOperationBinding;
+      readonly nativeArgumentsDigest?: string;
       readonly result: ToolResultEnvelope;
       readonly binding: ToolResultValidationBinding;
-      readonly mutationOutcome: JiraMutationOutcome;
+      readonly mutationOutcome?: JiraMutationOutcome;
     }
   | {
       readonly kind: "started";
@@ -554,14 +555,16 @@ function applyUpdate(
     if (existing !== undefined && existing.nativeArgumentsDigest !== update.nativeArgumentsDigest)
       throw invalidRequest("Native tool arguments conflict.");
     const started = applyExchange(current, {
-      kind: "started", call: update.call, operationBinding: update.operationBinding,
+      kind: "started", call: update.call,
+      ...(update.operationBinding === undefined ? {} : { operationBinding: update.operationBinding }),
     });
     const captured = { ...started, exchanges: started.exchanges.map((exchange) =>
-      exchange.call.id === update.call.id
+      exchange.call.id === update.call.id && update.nativeArgumentsDigest !== undefined
         ? { ...exchange, nativeArgumentsDigest: update.nativeArgumentsDigest } : exchange) };
     return applyExchange(captured, {
       kind: "settled", callId: update.call.id, result: update.result,
-      binding: update.binding, mutationOutcome: update.mutationOutcome,
+      binding: update.binding,
+      ...(update.mutationOutcome === undefined ? {} : { mutationOutcome: update.mutationOutcome }),
     });
   }
   if (update.kind === "write-prepared") return applyPrepared(current, update);
@@ -790,8 +793,8 @@ function redactCaptured(
   update: Extract<ChatToolTranscriptUpdate, { kind: "captured" }>,
   redact: (value: string) => string,
 ): ChatToolTranscriptUpdate {
-  if (update.nativeArgumentsDigest !== sha256Hex(canonicalise(update.call.arguments)) ||
-      !update.call.id.startsWith("mcp-") || update.result.invocationId !== update.call.id)
+  if (!validCaptureKind(update) || !update.call.id.startsWith("mcp-") ||
+      update.result.invocationId !== update.call.id)
     throw invalidRequest("Invalid native tool capture identity.");
   return {
     ...update,
@@ -799,6 +802,16 @@ function redactCaptured(
     result: redactResult(update, redact),
     binding: { ...update.binding, descriptor: verifyToolDescriptor(update.binding.descriptor) },
   };
+}
+
+function validCaptureKind(update: Extract<ChatToolTranscriptUpdate, { kind: "captured" }>): boolean {
+  if (!MUTATION_ALIASES.has(update.call.name))
+    return JIRA_MANAGED_READ_TOOLS.some((tool) => tool.replace(/[.-]/gu, "_") === update.call.name) &&
+      update.result.effectStarted === false &&
+      update.nativeArgumentsDigest === undefined && update.operationBinding === undefined &&
+      update.mutationOutcome === undefined;
+  return update.nativeArgumentsDigest === sha256Hex(canonicalise(update.call.arguments)) &&
+    update.operationBinding !== undefined && update.mutationOutcome !== undefined;
 }
 
 function draftReceiptLogFields(update: ChatToolTranscriptUpdate): { draftReceiptCount?: number } {

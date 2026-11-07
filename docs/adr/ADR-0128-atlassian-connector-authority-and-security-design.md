@@ -701,9 +701,9 @@ Memory retains its separate explicit-or-`governed-assist` default. This availabi
 itself grant a Chat read grant, mutation approval, connector scope or authority envelope.
 
 
-**Explicit instance administration (#4287, review 4503902861).** The nine implemented global
-administration writes—application/IPD monitoring, JMX exposure start/stop, screen-tab
-create/rename/delete and issue-type property set/delete—use the separate connector class
+**Explicit instance administration (#4287, review 4503902861).** The thirteen implemented administration writes—application/IPD monitoring, JMX exposure
+start/stop, screen-tab create/rename/delete, issue-type property set/delete, filter creation,
+future-filter default sharing and filter permission addition/removal—use the separate connector class
 `connector-admin` and require `issue-tracker.admin`. Ordinary `issue-tracker.write` never admits
 these operations, including in Full access. They retain high risk and the same Workbench
 `connector-access` class, `internet` resource scope, supervised `connector-write` kind and existing
@@ -716,7 +716,11 @@ uses the global issue-type permission service. The retained 11.3 issue-type upda
 requires Jira administration. Keiko classifies those two writes as administration accordingly.
 
 The classification follows the operation's effect boundary, rather than copying Jira's permission
-names. Instance runtime and shared schema configuration require the explicit administration scope.
+names. Instance runtime, shared schema configuration and filter creation/publication or sharing changes
+require the explicit administration scope. Filter creation inherits native default sharing and has
+no atomic private override; explicit acceptance and independent actual-permission readback are
+required. Ordinary owned-filter metadata, columns, deletion and documented nonsecret current-user
+preferences retain write scope. Local scope and native ownership/permissions remain independent.
 Project creation and ordinary project metadata updates are project lifecycle actions under
 `issue-tracker.write`; they retain their high-risk, exact approval and durable readback contracts.
 Jira Data Center independently requires the global Jira Administrators permission to create a

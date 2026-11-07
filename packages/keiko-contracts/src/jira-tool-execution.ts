@@ -15,8 +15,18 @@ export const JIRA_ENTITY_PROPERTY_MUTATIONS = Object.freeze([
 ] as const);
 export type JiraEntityPropertyMutation = (typeof JIRA_ENTITY_PROPERTY_MUTATIONS)[number];
 
+/** Closed saved-filter and current-user preference operations; no arbitrary setting writes. */
+export const JIRA_SAVED_CONFIGURATION_MUTATIONS = Object.freeze([
+  "jira.create-filter", "jira.update-filter", "jira.delete-filter",
+  "jira.set-filter-share-scope", "jira.set-filter-columns", "jira.reset-filter-columns",
+  "jira.add-filter-permission", "jira.delete-filter-permission",
+  "jira.set-my-preference", "jira.delete-my-preference",
+] as const);
+export type JiraSavedConfigurationMutation = (typeof JIRA_SAVED_CONFIGURATION_MUTATIONS)[number];
+
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
+  ...JIRA_SAVED_CONFIGURATION_MUTATIONS,
   ...JIRA_ENTITY_PROPERTY_MUTATIONS,
   "jira.set-app-monitoring",
   "jira.set-ipd-monitoring",
@@ -174,6 +184,14 @@ export type JiraMutationResultState = (typeof JIRA_MUTATION_RESULT_STATES)[numbe
 /** Validated Jira identities and closed state facts; never remote bodies or headers.
  * Monitoring booleans on unknown/unconfirmed writes are requested targets, not success evidence. */
 export interface JiraMutationReceipt {
+  readonly filterId?: string;
+  readonly permissionId?: string;
+  readonly preferenceKey?: string;
+  /** Requested target only until an independent native read confirms it. */
+  readonly preferencePresent?: boolean;
+  /** The native filter-create API never atomically binds its default-sharing observation. */
+  readonly defaultSharingAtomic?: false;
+  readonly observedShareScope?: "PRIVATE" | "AUTHENTICATED" | "GLOBAL";
   readonly propertyKey?: string;
   /** Requested target on unknown/unconfirmed writes; success requires independent readback. */
   readonly propertyPresent?: boolean;

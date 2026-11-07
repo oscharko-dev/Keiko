@@ -1,4 +1,5 @@
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
+import { jiraPresentationFact as fact, jiraPresentationRecord as record } from "./jira-presentation-values";
 
 type Source = Readonly<Record<string, unknown>>;
 export interface JiraOutcomeFact {
@@ -111,6 +112,7 @@ function agileLabels(tool: string, source: Source): WidgetMessageKey[] {
     ...(JIRA_SPRINT_TOOLS.has(tool) ? closedLabel(source.state, STATES) : []),
     ...(BOARDS.has(tool) ? closedLabel(source.type, BOARD_TYPES) : []),
     ...(FILTERS.has(tool) ? closedLabel(source.shareScope, FILTER_SCOPES) : []),
+    ...(FILTERS.has(tool) ? filterDescriptionLabels(source.description) : []),
   ];
   if (EPICS.has(tool) && typeof source.done === "boolean")
     labels.push(source.done ? "chat.jira.agile.epicDone" : "chat.jira.agile.epicOpen");
@@ -118,7 +120,16 @@ function agileLabels(tool: string, source: Source): WidgetMessageKey[] {
 }
 function filterFacts(source: Source): JiraOutcomeFact[] {
   const query = content(source, "jql");
-  return query === undefined ? [] : [{ label: "chat.jira.fact.filterQuery", value: query }];
+  const owner = record(source.owner);
+  return [...fact("chat.jira.fact.filterQuery", query),
+    ...fact("chat.jira.savedConfiguration.ownerKey", owner?.key),
+    ...fact("chat.jira.savedConfiguration.ownerName", owner?.name),
+    ...fact("chat.jira.savedConfiguration.ownerDisplayName", owner?.displayName)];
+}
+function filterDescriptionLabels(value: unknown): WidgetMessageKey[] {
+  if (typeof value !== "string") return ["chat.jira.savedConfiguration.descriptionNotProvided"];
+  return value === "" ? ["chat.jira.savedConfiguration.descriptionEmpty"]
+    : value.trim() === "" ? ["chat.jira.savedConfiguration.descriptionWhitespace"] : [];
 }
 /** Closed native facts from the saved receipt; this projection never invents board/sprint URLs. */
 export function jiraAgileDetails(tool: string, source: Source): JiraAgileDetails {

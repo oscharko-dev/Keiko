@@ -591,6 +591,17 @@ settlement releases the reservation. Known lack of storage capacity therefore re
 native write; an unpredictable storage failure after a response retains the existing unknown-effect
 recovery semantics.
 
+Validated local Jira reads use the same immutable descriptor snapshot, capacity reservation and
+run-and-turn-bound transcript port. A private per-call read capture writes success, provider failure
+or the closed local scope refusal atomically before delivery. It creates no mutation journal row,
+acknowledgement or mutation outcome, and records `effectStarted: false`. Read capture failure
+refuses delivery without creating a write recovery barrier. The reservation is released when the
+result is durable or the read finishes; cancellation, a changed accepted turn or an already released
+capture cannot append a late result. Read history retains the admitted schema without consulting
+the current registry, including result paging and unknown totals. Chat and Coding share the existing
+Jira result-to-catalog page projection. The existing body-free transcript event records capture;
+provider bodies and report content are never added to the Activity Log.
+
 Only the server-owned local Jira connection can supply this callback; an external server's name,
 arguments or metadata cannot enable it. An error result never acknowledges a mutation. A validated
 preflight error can remain readable without revoking the run only when the actual native dispatch

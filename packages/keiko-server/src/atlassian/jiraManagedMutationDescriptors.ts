@@ -1,4 +1,8 @@
 import {
+  jiraSavedConfigurationMutationDeclarationForTool,
+  type JIRA_SAVED_CONFIGURATION_WRITE_DEFINITIONS,
+} from "./jiraSavedConfigurationMutationDescriptors.js";
+import {
   jiraEntityPropertyMutationDeclarationForTool,
   type JIRA_ENTITY_PROPERTY_WRITE_DEFINITIONS,
 } from "./jiraEntityPropertyMutationDescriptors.js";
@@ -401,6 +405,7 @@ type CoreMutationToolName = Exclude<
   JiraMutationOperation,
   Extract<
     JiraMutationOperation,
+    | keyof typeof JIRA_SAVED_CONFIGURATION_WRITE_DEFINITIONS
     | keyof typeof JIRA_AGILE_WRITE_DEFINITIONS
     | keyof typeof JIRA_PROJECT_STRUCTURE_WRITE_DEFINITIONS
     | keyof typeof JIRA_ISSUE_COLLABORATION_WRITE_DEFINITIONS
@@ -577,22 +582,20 @@ function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationTo
   return Object.hasOwn(DEFINITIONS, name);
 }
 export function jiraMutationDeclaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
-  const property = jiraEntityPropertyMutationDeclarationForTool(name);
-  if (property !== undefined) return property;
-  const monitoring = jiraMonitoringDeclarationForTool(name);
-  if (monitoring !== undefined) return monitoring;
-  const screenTab = jiraScreenTabDeclarationForTool(name);
-  if (screenTab !== undefined) return screenTab;
-  const agile = jiraAgileDeclarationForTool(name);
-  if (agile !== undefined) return agile;
-  const structure = jiraProjectStructureDeclarationForTool(name);
-  if (structure !== undefined) return structure;
-  const participation = jiraParticipationDeclarationForTool(name);
-  if (participation !== undefined) return participation;
-  const deletion = jiraDeletionDeclarationForTool(name);
-  if (deletion !== undefined) return deletion;
-  const collaboration = jiraIssueCollaborationDeclarationForTool(name);
-  if (collaboration !== undefined) return collaboration;
+  for (const producer of [
+    jiraSavedConfigurationMutationDeclarationForTool,
+    jiraEntityPropertyMutationDeclarationForTool,
+    jiraMonitoringDeclarationForTool,
+    jiraScreenTabDeclarationForTool,
+    jiraAgileDeclarationForTool,
+    jiraProjectStructureDeclarationForTool,
+    jiraParticipationDeclarationForTool,
+    jiraDeletionDeclarationForTool,
+    jiraIssueCollaborationDeclarationForTool,
+  ]) {
+    const selected = producer(name);
+    if (selected !== undefined) return selected;
+  }
   if (!isCoreMutationTool(name)) throw new TypeError("Unsupported Jira mutation tool");
   return coreDeclaration(name);
 }
