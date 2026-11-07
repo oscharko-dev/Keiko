@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "retrievedOn": "2026-11-07",
+  "sourceProduct": "Jira Software Data Center",
+  "sources": [
+    {
+      "release": "10.3",
+      "url": "https://developer.atlassian.com/server/jira/platform/jira_software_dc_10003_swagger.v3.json",
+      "file": "sources/jira-10.3.json.gz",
+      "sha256": "443f7d166f1a466d6bd472ab03ed03efa32c57b98ef20fc96cec17fe10326fb8",
+      "bytes": 562400,
+      "infoVersion": "10.3.27",
+      "operationCount": 433,
+      "pathCount": 285,
+      "schemaCount": 304
+    },
+    {
+      "release": "10.4",
+      "url": "https://developer.atlassian.com/server/jira/platform/jira_software_dc_10004_swagger.v3.json",
+      "file": "sources/jira-10.4.json.gz",
+      "sha256": "14f50dc50eb79c6621eb70774b00685f175536c40081138e738000192b90ab1e",
+      "bytes": 538025,
+      "infoVersion": "swagger-merged-template.yaml",
+      "operationCount": 432,
+      "pathCount": 285,
+      "schemaCount": 296
+    },
+    {
+      "release": "11.2",
+      "url": "https://developer.atlassian.com/server/jira/platform/jira_software_dc_11002_swagger.v3.json",
+      "file": "sources/jira-11.2.json.gz",
+      "sha256": "9d3241293438a872a7d38965fe9cd73346570693849822c1b7d4abafea00f378",
+      "bytes": 578371,
+      "infoVersion": "11.2.1",
+      "operationCount": 435,
+      "pathCount": 288,
+      "schemaCount": 332
+    },
+    {
+      "release": "11.3",
+      "url": "https://developer.atlassian.com/server/jira/platform/jira_software_dc_11003_swagger.v3.json",
+      "file": "sources/jira-11.3.json.gz",
+      "sha256": "a13550ee8770cd0215b2ba309296bf7bb84517b11a943ede8bbbf8a4906653bf",
+      "bytes": 579764,
+      "infoVersion": "11.3.13",
+      "operationCount": 437,
+      "pathCount": 289,
+      "schemaCount": 334
+    }
+  ]
+}
