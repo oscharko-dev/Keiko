@@ -27,6 +27,7 @@ import { JIRA_AGILE_CONTEXT_TOOLS } from "./jira-agile-context-presentation";
 import { JIRA_ADMIN_METADATA_TOOLS, jiraAdminMetadataNotice } from "./jira-admin-metadata-presentation";
 import { JIRA_MAINTENANCE_TOOLS } from "./jira-maintenance-presentation";
 import { JIRA_VIEW_SETTINGS_TOOLS } from "./jira-view-settings-presentation";
+import { JIRA_JOB_OBSERVATION_TOOLS } from "./jira-job-observation-presentation";
 const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_PROJECT_METADATA_TOOLS,
   ...JIRA_COLLABORATION_TOOLS,
@@ -47,6 +48,7 @@ const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_ADMIN_METADATA_TOOLS,
   ...JIRA_MAINTENANCE_TOOLS,
   ...JIRA_VIEW_SETTINGS_TOOLS,
+  ...JIRA_JOB_OBSERVATION_TOOLS,
 ]);
 
 const OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKey>> = {

@@ -32,6 +32,7 @@ const PATHS = [
   "cluster/zdu/state",
   "index-snapshot/isRunning",
   "user/columns",
+  "index-snapshot",
 ] as const;
 const directories: string[] = [];
 afterEach(() => {
@@ -178,7 +179,7 @@ it.each([403, 404, 429, 503, "malformed", "inactive", "wrong-shape"] as const)(
     expect(f.invalidated).toEqual([]);
   },
 );
-it.each(["project", "issuetypescheme/1", "workflowscheme/1/unknown", "workflow/unknown", "screens/1/tabs/2", "readonly-mode", "cluster/nodes/1", "cluster/zdu/approve", "index-snapshot", "index/summary", "user/a11y/personal-settings", "settings/columns", "filter/1/columns", "user/columns/unknown", "myself"])(
+it.each(["project", "issuetypescheme/1", "workflowscheme/1/unknown", "workflow/unknown", "screens/1/tabs/2", "readonly-mode", "cluster/nodes/1", "cluster/zdu/approve", "index-snapshot/unknown", "reindex", "reindex/progress", "reindex/request/1", "upgrade", "monitoring/app", "index/summary", "user/a11y/personal-settings", "settings/columns", "filter/1/columns", "user/columns/unknown", "myself"])(
   "keeps ordinary401 invalidation on %s without a probe",
   async (path) => {
     const f = fixture(() => response({}, 401));
@@ -187,7 +188,7 @@ it.each(["project", "issuetypescheme/1", "workflowscheme/1/unknown", "workflow/u
     expect(f.invalidated).toEqual([2]);
   },
 );
-it.each(["workflowscheme/1", "workflow", "screens", "cluster/nodes", "cluster/zdu/state", "index-snapshot/isRunning", "user/columns"])("does not classify a %s write as an ambiguous administrator read", async (path) => {
+it.each(["workflowscheme/1", "workflow", "screens", "cluster/nodes", "cluster/zdu/state", "index-snapshot/isRunning", "user/columns", "index-snapshot"])("does not classify a %s write as an ambiguous administrator read", async (path) => {
   const f = fixture(() => response({}, 401));
   await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method: "PUT", bodyJson: "{}" });
   expect(f.urls).toHaveLength(1);
@@ -326,6 +327,7 @@ it.each([
   ["jira.cluster-upgrade-state", {}],
   ["jira.index-snapshot-status", {}],
   ["jira.user-columns", {}],
+  ["jira.index-snapshots", {}],
 ] as const)(
   "returns actionable %s permission failure through the real managed read",
   async (name, args) => {

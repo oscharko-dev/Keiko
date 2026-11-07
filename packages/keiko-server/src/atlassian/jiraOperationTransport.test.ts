@@ -32,6 +32,15 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.reindex-status", args: {} },
+  { tool: "jira.reindex-progress", args: { taskId: "9223372036854775807" }, query: { taskId: "9223372036854775807" } },
+  { tool: "jira.reindex-request", args: { requestId: "7" }, parameters: { requestId: "7" } },
+  { tool: "jira.reindex-requests", args: { requestIds: ["7"], startAt: 0, maxResults: 1 }, query: { requestId: "7" } },
+  { tool: "jira.upgrade-result", args: {} },
+  { tool: "jira.index-snapshots", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.app-monitoring", args: {} },
+  { tool: "jira.ipd-monitoring", args: {} },
+  { tool: "jira.jmx-metrics", args: {} },
   { tool: "jira.global-version-page", args: { startAt: 0, maxResults: 1, query: "Next & later", projectIds: ["10000"] },
     query: { startAt: "0", maxResults: "1", query: "Next & later", projectIds: "10000" } },
   { tool: "jira.component-page", args: { startAt: 0, maxResults: 1, query: "", projectIds: ["10000"] },
@@ -971,6 +980,20 @@ function instanceRead(path: string): AtlassianHttpBodyResult | undefined {
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
+function jobObservationRead(path: string): AtlassianHttpBodyResult | undefined {
+  const bodies: Readonly<Record<string, unknown>> = {
+    reindex: { currentProgress: 0, success: false, type: "BACKGROUND" },
+    "reindex/progress": { currentProgress: -1, currentSubTask: "Native step", success: false },
+    "reindex/request/7": { id: 7, status: "COMPLETE", type: "BACKGROUND" },
+    "reindex/request/bulk": [{ id: 7, status: "PENDING" }],
+    upgrade: { outcome: "FAILED", duration: 0, message: "Synthetic upgrade result" },
+    "index-snapshot": [{ absolutePath: "/server/snapshots/synthetic.zip", timestamp: 0 }],
+    "monitoring/app": { enabled: false },
+    "monitoring/ipd": {},
+    "monitoring/jmx/getAvailableMetrics": "metric.one\nmetric.two",
+  };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
+}
 function coreMetadataRead(path: string): AtlassianHttpBodyResult | undefined {
   const type = { id: "10001", name: "Story", description: "Story metadata", subtask: false, avatarId: 71 };
   const priority = { id: "3", name: "Normal", statusColor: "#123456" };
@@ -1102,6 +1125,7 @@ function remoteRead(
     savedViewRead(path) ??
     assetRead(path, state) ??
     administrationRead(path, absoluteUrl) ??
+    jobObservationRead(path) ??
     issueMetadata(path, state) ??
     fixtureRead(absolute, state)
   );
@@ -1186,7 +1210,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(163);
+    expect(native).toHaveLength(172);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1278,6 +1302,40 @@ describe("native Jira registry and real connector transport agreement", () => {
     }
     expect(observed.requests).toHaveLength(1);
   });
+  it("keeps selected reindex IDs exact and distinguishes unreturned IDs from an empty task population", async () => {
+    const observed = await observe({ tool: "jira.reindex-requests", args: {
+      requestIds: ["7", "9223372036854775807"], startAt: 0, maxResults: 1,
+    } });
+    const request = observed.requests[0];
+    if (request === undefined) throw new TypeError("Missing native reindex request");
+    expect(new URL(request.url).searchParams.getAll("requestId")).toEqual(["7", "9223372036854775807"]);
+    expect(observed.result.data).toMatchObject({ total: 1, requestScope: "selected-requests",
+      requestedRequestIds: ["7", "9223372036854775807"], unreturnedRequestIds: ["9223372036854775807"],
+      items: [{ id: "7", status: "PENDING" }],
+    });
+    expect(observed.requests).toHaveLength(1);
+  });
+  it("keeps native progress, monitoring flags and scalar metric descriptions independent", async () => {
+    expect((await observe({ tool: "jira.reindex-status", args: {} })).result.data).toMatchObject({
+      taskSelection: "active-or-latest", currentProgress: 0, success: false,
+    });
+    expect((await observe({ tool: "jira.app-monitoring", args: {} })).result.data).toMatchObject({ enabled: false });
+    expect((await observe({ tool: "jira.ipd-monitoring", args: {} })).result.data).not.toHaveProperty("enabled");
+    const metrics = await observe({ tool: "jira.jmx-metrics", args: {} });
+    expect(metrics.result.data).toMatchObject({ metricsText: "metric.one\nmetric.two" });
+    expect(metrics.requests).toHaveLength(1);
+    expect(metrics.requests[0]?.method).toBe("GET");
+  });
+  it.each([[303, "running"], [404, "no-prior-result"]] as const)(
+    "represents the native upgrade response %s without following or starting a job", async (status, upgradeState) => {
+      const observed = await observeNativeJiraOperation({ tool: "jira.upgrade-result", args: {} }, connection(
+        () => Promise.resolve(response({}, status)),
+      ));
+      expect(observed.result.data).toEqual({ outcome: "succeeded", upgradeState });
+      expect(observed.requests).toHaveLength(1);
+      expect(observed.requests[0]?.method).toBe("GET");
+    },
+  );
   it.each(["jira.create", "jira.edit"] as const)(
     "keeps %s's approved link continuation on POST issueLink",
     async (tool) => {

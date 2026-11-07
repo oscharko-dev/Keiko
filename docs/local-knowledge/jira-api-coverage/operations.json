@@ -196,6 +196,26 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.app-monitoring": {
+      "identity": "GET /rest/api/2/monitoring/app",
+      "effect": "read",
+      "permissionPolicy": "observed-maintenance-status",
+      "kind": "constrained-tool",
+      "constraints": "No-argument native application monitoring observation. Missing/null enabled stays unknown and actual false remains false. No configuration change, polling, inferred health or monitoring activation.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.application-role": {
       "identity": "GET /rest/api/2/applicationrole/{key}",
       "effect": "read",
@@ -1283,6 +1303,26 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.index-snapshots": {
+      "identity": "GET /rest/api/2/index-snapshot",
+      "effect": "read",
+      "permissionPolicy": "observed-maintenance-status",
+      "kind": "constrained-tool",
+      "constraints": "Bounded native snapshot metadata list with local pagination and unique observed absolutePath values. Paths are text metadata only, never local filesystem references or destinations to follow; signed timestamps are preserved without unit inference. No snapshot create/delete/job action.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.index-summary": {
       "identity": "GET /rest/api/2/index/summary",
       "effect": "read",
@@ -1319,6 +1359,26 @@
         "packages/keiko-connectors/src/jira-managed-instance-reads.test.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraInstanceDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.ipd-monitoring": {
+      "identity": "GET /rest/api/2/monitoring/ipd",
+      "effect": "read",
+      "permissionPolicy": "observed-maintenance-status",
+      "kind": "constrained-tool",
+      "constraints": "No-argument native IPD monitoring observation with optional observed enabled boolean. Missing state is not disabled; no activation, scheduling, configuration change or derived availability.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -1522,6 +1582,26 @@
       "constraints": "Create-metadata issue types for one selected project; does not expose global issue-type administration.",
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
       "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
+    },
+    "jira.jmx-metrics": {
+      "identity": "GET /rest/api/2/monitoring/jmx/getAvailableMetrics",
+      "effect": "read",
+      "permissionPolicy": "observed-maintenance-status",
+      "kind": "constrained-tool",
+      "constraints": "No-argument bounded native JSON string describing available JMX metrics. The string remains metricsText without a second JSON parse, evaluation, remote fetch or metric collection loop. Empty text is retained; no monitoring change or inferred metric availability.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
     },
     "jira.jmx-metrics-exposed": {
       "identity": "GET /rest/api/2/monitoring/jmx/areMetricsExposed",
@@ -2294,6 +2374,86 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.reindex-progress": {
+      "identity": "GET /rest/api/2/reindex/progress",
+      "effect": "read",
+      "permissionPolicy": "observed-maintenance-status",
+      "kind": "constrained-tool",
+      "constraints": "Native on-demand reindex progress with optional exact taskId selector and explicit selected-task versus active-or-latest context. Missing/null fields remain unknown; timestamps and signed progress are preserved without clock arithmetic or invented units. No job start or repeated polling.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.reindex-request": {
+      "identity": "GET /rest/api/2/reindex/request/{requestId}",
+      "effect": "read",
+      "permissionPolicy": "observed-maintenance-status",
+      "kind": "constrained-tool",
+      "constraints": "One exact positive int64 request ID; the observed native ID must match. Optional status/type/time fields remain observed metadata. No resubmission, retry, cancellation or inferred job availability.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.reindex-requests": {
+      "identity": "GET /rest/api/2/reindex/request/bulk",
+      "effect": "read",
+      "permissionPolicy": "observed-maintenance-status",
+      "kind": "constrained-tool",
+      "constraints": "Bounded unique selected request IDs are serialized as repeated native requestId query keys. Only returned IDs from that selected set are admitted; local paging retains requestedRequestIds and unreturnedRequestIds. An unreturned ID does not prove nonexistence or a completed/cancelled job. No broad request enumeration or job changes.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.reindex-status": {
+      "identity": "GET /rest/api/2/reindex",
+      "effect": "read",
+      "permissionPolicy": "observed-maintenance-status",
+      "kind": "constrained-tool",
+      "constraints": "Native on-demand reindex status with optional exact taskId selector; absent selector explicitly means active-or-latest. Optional signed progress, task text, timestamps, success and type remain native observations, not derived completion or percentages. No reindex start, polling or task mutation.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.resolution": {
       "identity": "GET /rest/api/2/resolution/{id}",
       "effect": "read",
@@ -2962,6 +3122,26 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.upgrade-result": {
+      "identity": "GET /rest/api/2/upgrade",
+      "effect": "read",
+      "permissionPolicy": "observed-maintenance-status",
+      "kind": "constrained-tool",
+      "constraints": "Native on-demand upgrade observation: documented 303 means running without following its location, 404 means no prior result, and 200 exposes bounded previous result metadata. Native outcome is projected separately as upgradeOutcome, never confused with tool outcome. Duration remains an observed count without invented units; no upgrade job is started or advanced.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.ts",
+        "packages/keiko-connectors/src/jira-maintenance-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-job-observations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraJobObservationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.user": {
       "identity": "GET /rest/api/2/user",
       "effect": "read",
@@ -3387,8 +3567,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "f337a9b216b0172f685b9fecb57587a639e19b889c23492bcf8470402c722ac3",
-    "nativeOperationCount": 190
+    "sha256": "c0cba6de4ed62edea38697b175dfd7bccbf5f240ecd266ec7ebe2b06697b1679",
+    "nativeOperationCount": 199
   },
   "operations": [
     {
@@ -7210,10 +7390,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.index-snapshots"]
     },
     {
       "identity": "POST /rest/api/2/index-snapshot",
@@ -10106,10 +10286,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.app-monitoring"]
     },
     {
       "identity": "POST /rest/api/2/monitoring/app",
@@ -10170,10 +10350,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.ipd-monitoring"]
     },
     {
       "identity": "POST /rest/api/2/monitoring/ipd",
@@ -10266,10 +10446,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.jmx-metrics"]
     },
     {
       "identity": "POST /rest/api/2/monitoring/jmx/startExposing",
@@ -12874,10 +13054,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.reindex-status"]
     },
     {
       "identity": "POST /rest/api/2/reindex",
@@ -12970,10 +13150,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.reindex-progress"]
     },
     {
       "identity": "POST /rest/api/2/reindex/request",
@@ -13034,10 +13214,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.reindex-requests"]
     },
     {
       "identity": "GET /rest/api/2/reindex/request/{requestId}",
@@ -13066,10 +13246,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.reindex-request"]
     },
     {
       "identity": "GET /rest/api/2/resolution",
@@ -14578,10 +14758,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.upgrade-result"]
     },
     {
       "identity": "POST /rest/api/2/upgrade",

@@ -52,6 +52,7 @@ import { JIRA_ADMIN_METADATA_TOOLS, jiraAdminMetadataDetails } from "./jira-admi
 import { JIRA_RUNTIME_SETTINGS_TOOLS, jiraRuntimeSettingsDetails } from "./jira-runtime-settings-presentation";
 import { JIRA_MAINTENANCE_TOOLS, jiraMaintenanceDetails } from "./jira-maintenance-presentation";
 import { JIRA_VIEW_SETTINGS_TOOLS, jiraViewSettingsDetails } from "./jira-view-settings-presentation";
+import { JIRA_JOB_OBSERVATION_TOOLS, jiraJobObservationDetails } from "./jira-job-observation-presentation";
 
 export interface JiraOutcomeItem {
   readonly key?: string;
@@ -118,6 +119,7 @@ const STANDALONE_TOOLS = new Set([
   ...JIRA_RUNTIME_SETTINGS_TOOLS,
   ...JIRA_MAINTENANCE_TOOLS,
   ...JIRA_VIEW_SETTINGS_TOOLS,
+  ...JIRA_JOB_OBSERVATION_TOOLS,
 ]);
 const BOARD_READ_TOOLS = new Set(["jira_board", "jira_boards", "jira_board_configuration"]);
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -252,6 +254,7 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
 }
 type ConfigurationPresenter = (tool: string, source: UnknownRecord) => readonly JiraAgileDetails[];
 const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, ConfigurationPresenter])[] = [
+  [JIRA_JOB_OBSERVATION_TOOLS, jiraJobObservationDetails],
   [JIRA_VIEW_SETTINGS_TOOLS, jiraViewSettingsDetails],
   [JIRA_MAINTENANCE_TOOLS, jiraMaintenanceDetails],
   [JIRA_RUNTIME_SETTINGS_TOOLS, jiraRuntimeSettingsDetails],
