@@ -539,6 +539,7 @@
   "search.symbol-line.unavailable": "memory-knowledge",
   "security.fs.atomic-rename-failed": "runtime-packages",
   "security.fs.atomic-rename-retried": "runtime-packages",
+  "security.java-parser.unavailable": "runtime-packages",
   "security.java-parser.worker-recycled": "runtime-packages",
   "security.java-parser.worker-retired": "runtime-packages",
   "security.java-parser.worker-started": "runtime-packages",

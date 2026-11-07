@@ -188,8 +188,13 @@ Only a clear statement acts this way, because it changes memory with no question
 "die Erinnerung an". "Speichere die Datei" and "Lösche den Cache" are tasks and never reach a memory.
 A negation ("Merke dir nicht", "Vergiss den Bericht nicht"), a question, and the idioms "Vergiss es"
 and "Forget it" state nothing to store or forget. A named thing whose sentence goes on with a task verb
-("Vergiss den alten API-Pfad, nimm den neuen") is an instruction for the task and forgets nothing;
-any other continuation ("und meine Telefonnummer", ", danke") still names what to forget. A
+("Vergiss den alten API-Pfad, nimm den neuen") is an instruction for the task and forgets nothing.
+A thing named with an article whose sentence goes on by asking for the answer ("Forget the
+formatting, just give me the answer", "Forget the address I gave you, show me what else you have")
+forgets the memory it names and, when nothing stored matches, is an ordinary request: no question
+about which memory was meant (2026-11-07, #4212). The person's own fact ("Forget my phone number and
+tell me when it is gone") keeps the question, and any other continuation ("und meine
+Telefonnummer", ", danke") still names what to forget. A
 named forget reaches a memory only through the same word or an inflection of it, so "Java" does not
 reach "JavaScript".
 

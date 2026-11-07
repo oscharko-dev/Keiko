@@ -34,7 +34,9 @@
       "learner": [
         {
           "body": "Ab jetzt bevorzuge ich Listen.",
-          "type": "preference"
+          "type": "preference",
+          "relation": "update",
+          "related": 1
         }
       ]
     }

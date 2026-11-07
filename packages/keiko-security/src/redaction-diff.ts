@@ -202,6 +202,14 @@ function projectFile(
   return { regions: fileRegions(file), literals, report };
 }
 
+/** The values of the private literals this projection scope has seen. Shared private literal keys
+ * are `<kind>:<value>` (TypeScript, Java and YAML projections). */
+export function privateLiteralTexts(ports: ProjectionPorts): readonly string[] {
+  return [...(ports.privateLiteralValues ?? [])]
+    .map((key) => key.slice(key.indexOf(":") + 1))
+    .filter((value) => value.length > 0);
+}
+
 /**
  * #4114: a diff view whose file hunks fail only the syntax check keeps them readable under the
  * credential floor instead of masking every line. Each old/new image is floored as a whole, so a
@@ -219,10 +227,7 @@ function credentialFloorFile(
   const floor = ports.unparsedDiffHunkFloor;
   if (floor === undefined || report.syntaxRefusals === 0) return undefined;
   if (report.depthRefusals + report.sizeRefusals > 0) return undefined;
-  // Shared private literal keys are `<kind>:<value>` (TypeScript, Java and YAML projections).
-  const values = [...(ports.privateLiteralValues ?? [])]
-    .map((key) => key.slice(key.indexOf(":") + 1))
-    .filter((value) => value.length > 0);
+  const values = privateLiteralTexts(ports);
   const masked = (value: string): string =>
     values.reduce(
       (current, secret) => current.split(secret).join(REDACTION_PLACEHOLDER),

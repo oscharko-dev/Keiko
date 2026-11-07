@@ -9071,7 +9071,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-security"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["security.java-parser.worker-started"],
+      state: ["security.java-parser.unavailable", "security.java-parser.worker-started"],
       end: ["security.java-parser.worker-recycled"],
       failure: ["security.java-parser.worker-retired"],
       loss: [],
@@ -9079,12 +9079,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredCausalOperations: [],
     requiredLossOperations: [],
     requiredProofOperations: [
+      "security.java-parser.unavailable",
       "security.java-parser.worker-recycled",
       "security.java-parser.worker-retired",
       "security.java-parser.worker-started",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
+      "security.java-parser.unavailable",
       "security.java-parser.worker-recycled",
       "security.java-parser.worker-started",
     ],

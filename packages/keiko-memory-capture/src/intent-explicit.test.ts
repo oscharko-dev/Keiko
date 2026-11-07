@@ -613,6 +613,69 @@ describe("a forget whose next clause starts with a word ending in an astral lett
   });
 });
 
+describe("a forget of how to answer, followed by what to answer", () => {
+  const stored = (): MemoryId[] => ["m-stored" as MemoryId];
+  const nothingStored = (): MemoryId[] => [];
+
+  // The thing is named with an article and the sentence asks for an answer: it may be a manner of
+  // answering or a stored fact. It acts on a memory it names, and with nothing stored it is an
+  // ordinary request, never a question about which memory was meant.
+  const answerRequests = [
+    "Forget the formatting, just give me the answer",
+    "Forget the formatting and summarize the text",
+    "Vergiss die Höflichkeit, sag es direkt",
+    "Vergiss die Einleitung, bitte gib mir nur das Ergebnis",
+    "Forget the address I gave you, show me what else you have stored",
+    "Vergiss die Telefonnummer, sag Bescheid wenn weg",
+    "Forget the address, then tell me what you remember",
+    "Forget the old address and tell me the new one",
+    "Forget the fact that I use Python, just answer the question",
+  ];
+
+  it.each(answerRequests)("asks nothing when %j names nothing stored", (text) => {
+    expect(explicitStatementKind(text)).toBe("forget");
+    expect(tryExtractForget(text, ctx(), { resolver: nothingStored })).toBeNull();
+  });
+
+  it.each(answerRequests)("forgets the memory %j names", (text) => {
+    expect(tryExtractForget(text, ctx(), { resolver: stored })?.kind).toBe("forget");
+  });
+
+  it.each(answerRequests)("asks which memory when %j names several", (text) => {
+    const several = (): MemoryId[] => ["m-1" as MemoryId, "m-2" as MemoryId];
+    expect(tryExtractForget(text, ctx(), { resolver: several })).toMatchObject({
+      kind: "rejected",
+      reason: "ambiguous-forget",
+    });
+  });
+
+  it.each([
+    "Forget my phone number, thanks",
+    "Forget my phone number and tell me when it is gone",
+    "Vergiss meine Adresse, ich bin umgezogen",
+    "Vergiss meine Adresse und sag mir Bescheid",
+    "Vergiss einfach meine Telefonnummer und sag mir Bescheid, wenn sie weg ist",
+  ])("asks about the person's own fact in %j even when nothing matches it", (text) => {
+    expect(explicitStatementKind(text)).toBe("forget");
+    expect(tryExtractForget(text, ctx(), { resolver: nothingStored })).toMatchObject({
+      kind: "rejected",
+      reason: "ambiguous-forget",
+    });
+  });
+
+  it("still falls back to the last statement for a bare reference", () => {
+    expect(tryExtractForget("Vergiss das", ctx(), { resolver: nothingStored })).toMatchObject({
+      kind: "rejected",
+      reason: "forget-reference-unresolved",
+    });
+  });
+
+  it("still reads a task verb after the person's own fact", () => {
+    expect(explicitStatementKind("Vergiss meinen Entwurf, nimm den Bericht")).toBeNull();
+    expect(explicitStatementKind("Vergiss einfach den Bericht, nimm den Entwurf")).toBeNull();
+  });
+});
+
 describe("a forget followed by a long glued run of marks", () => {
   it("stays linear: the words after each comma are read only a short way", () => {
     const text = `Vergiss den Bericht, ${",".repeat(100_000)}`;

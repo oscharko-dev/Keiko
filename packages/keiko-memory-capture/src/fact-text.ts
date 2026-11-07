@@ -129,6 +129,7 @@ const PREDICATE_WORDS: readonly string[] = [
   "live",
   "liebt",
   "like",
+  "love",
   "mag",
   "named",
   "nutzt",
@@ -195,6 +196,25 @@ export function isPredicateWord(word: string): boolean {
 
 export function isSingleValuePredicate(word: string): boolean {
   return SINGLE_VALUE_PREDICATES.some((predicate) => sameFactWord(word, predicate));
+}
+
+// A rewording stays inside one kind of fact: "mag" and "bevorzugt" both state a choice, "nutzt" and
+// "verwendet" both state a use. Liking a tool and using it are two facts, as is deciding on it.
+const PREDICATE_CLASSES: readonly (readonly string[])[] = [
+  ["bevorzugt", "liebt", "like", "love", "mag", "prefer"],
+  ["nutzt", "use", "uses", "verwendet"],
+  ["decided", "decision", "entscheidung"],
+];
+
+function predicateClassOf(word: string): number {
+  return PREDICATE_CLASSES.findIndex((members) =>
+    members.some((member) => sameFactWord(word, member)),
+  );
+}
+
+// Whether the differing predicate words name more than one kind of fact.
+export function spansPredicateClasses(words: readonly string[]): boolean {
+  return new Set(words.map((word) => predicateClassOf(word))).size > 1;
 }
 
 // A word of one list as a pattern that does not match inside a longer word.

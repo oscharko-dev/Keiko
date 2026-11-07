@@ -53,6 +53,7 @@ const RULE_VERBS = new Set([
   "ignoring",
   "override",
   "overrides",
+  "overridden",
   "overriden",
   "overriding",
 ]);

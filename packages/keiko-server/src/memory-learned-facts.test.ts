@@ -23,6 +23,10 @@ import {
   FACT_DROP_REASONS,
   FACT_RELATION_LABELS,
 } from "@oscharko-dev/keiko-memory-capture";
+import {
+  planMemoryMaintenance,
+  type MemoryMaintenancePlan,
+} from "@oscharko-dev/keiko-memory-governance";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
   expectActivityLogProof,
@@ -51,6 +55,8 @@ import { captureSalientFromTurn } from "./memory-salience.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
 import { createInMemoryUiStore } from "./store/index.js";
+
+const DAY_MS = 86_400_000;
 
 interface ScriptedItem {
   readonly body: string;
@@ -350,6 +356,56 @@ describe("what the person repeats and what the answer repeats", () => {
     expect(vault.getAccessStats([record.id]).get(record.id)?.accessCount).toBe(1);
   });
 
+  it.each([
+    ["forgot", "forget"],
+    ["edited", "edit"],
+  ] as const)(
+    "leaves alone a fact the person %s while the model was answering",
+    async (_label, change) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const vault = makeVault();
+      const ctx = context();
+      const fact = "Ich bevorzuge Tabellen";
+      await say(vault, ctx, fact, [stated(fact)]);
+      const [record] = recordsWith(vault, ctx, "accepted");
+      if (record === undefined) throw new Error("expected the fact");
+      const deps = makeDeps(vault, []);
+      const model = scriptedModel([{ body: fact, relation: "same", related: 1 }]);
+      const changingModel: ModelPort = {
+        call: (request, signal) => {
+          if (change === "forget") {
+            vault.deleteMemory(record.id, {
+              tombstone: true,
+              forgetterSurface: "test",
+              nowMs: record.updatedAt + 1,
+            });
+          } else {
+            vault.updateMemory(record.id, { body: "Ich bevorzuge Listen" }, record.updatedAt + 1);
+          }
+          return model.call(request, signal);
+        },
+      };
+
+      await expect(
+        captureSalientFromTurn(
+          { ...deps, modelPortFactory: () => changingModel },
+          { content: fact, memory: { enabled: true } },
+          ctx,
+          "gpt-test",
+          "ok",
+        ),
+      ).resolves.toBeDefined();
+
+      expect(vault.getAccessStats([record.id]).get(record.id)?.accessCount ?? 0).toBe(0);
+      const relation = sink.events.filter((event) => event.op === "memory.learn.relation").at(-1);
+      if (relation === undefined) throw new Error("expected a relation line");
+      expect(
+        expectActivityLogProof("memory.learn.relation.line", formatActivityLogProofLine(relation)),
+      ).toMatchObject({ decision: "refused", label: "same" });
+    },
+  );
+
   it("does not strengthen a memory because an answer repeated it", async () => {
     const vault = makeVault();
     const ctx = context();
@@ -368,6 +424,44 @@ describe("what the person repeats and what the answer repeats", () => {
     const stats = vault.getAccessStats([record.id]).get(record.id);
     expect(stats?.accessCount ?? 0).toBe(0);
     expect(stats?.lastUsedAt).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["a fresh", 1],
+    ["an aged", 400],
+  ])("leaves the retention of %s memory as it was when an answer used it", async (_l, days) => {
+    const vault = makeVault();
+    const ctx = context();
+    const fact = "Ich bevorzuge Tabellen";
+    await say(vault, ctx, fact, [stated(fact)]);
+    const [record] = recordsWith(vault, ctx, "accepted");
+    if (record === undefined) throw new Error("expected the fact");
+    const nowMs = record.createdAt + days * DAY_MS;
+    const plan = (): MemoryMaintenancePlan =>
+      planMemoryMaintenance([record], vault.getAccessStats(), { nowMs });
+    const before = plan();
+
+    vault.recordUse([record.id], nowMs, ctx.conversationId);
+
+    expect(vault.getAccessStats([record.id]).get(record.id)?.lastUsedAt).toBe(nowMs);
+    expect(plan()).toEqual(before);
+  });
+
+  it("does change the retention of an aged memory the person recalled, as a control", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const fact = "Ich bevorzuge Tabellen";
+    await say(vault, ctx, fact, [stated(fact)]);
+    const [record] = recordsWith(vault, ctx, "accepted");
+    if (record === undefined) throw new Error("expected the fact");
+    const nowMs = record.createdAt + 400 * DAY_MS;
+    const plan = (): MemoryMaintenancePlan =>
+      planMemoryMaintenance([record], vault.getAccessStats(), { nowMs });
+    expect(plan().archive).toEqual([record.id]);
+
+    vault.recordAccess([record.id], nowMs, ctx.conversationId);
+
+    expect(plan().archive).toEqual([]);
   });
 });
 

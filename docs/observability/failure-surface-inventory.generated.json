@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e4a66355b69af7c894251c8dc178917cef9a88f922f07a43c0d3311e2c3df53d"
+    "catalogDigest": "314f9a7afe479f93586871ad9a2460ed971ac060d168daf02ce9666fbc07c4fe"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 648,
-    "proofCount": 670,
-    "resolvedProofCount": 670,
+    "operationCount": 649,
+    "proofCount": 671,
+    "resolvedProofCount": 671,
     "failureClassCount": 391,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -777,6 +777,7 @@
         "portable.windows-authenticode.system-binary-refused",
         "security.fs.atomic-rename-failed",
         "security.fs.atomic-rename-retried",
+        "security.java-parser.unavailable",
         "security.java-parser.worker-recycled",
         "security.java-parser.worker-retired",
         "security.java-parser.worker-started",
@@ -2863,6 +2864,7 @@
     "security.fs.atomic-rename-retried.attempts": [
       "packages/keiko-security/src/fs-atomic-rename.test.ts"
     ],
+    "security.java-parser.unavailable.line": ["packages/keiko-security/src/redaction-java.test.ts"],
     "security.java-parser.worker-recycled.line": [
       "packages/keiko-security/src/redaction-java.test.ts"
     ],

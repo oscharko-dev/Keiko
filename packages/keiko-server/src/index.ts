@@ -452,6 +452,9 @@ export {
   type SupportIncidentSegmentFile,
 } from "@oscharko-dev/keiko-activity-log";
 export { contentFreeErrorClass, describeError } from "./diagnostics-log.js";
+// #4212 — the real launch starts the bounded Java parser's worker once it listens, so the grammar
+// loads off the event loop instead of in the first redaction that needs it.
+export { prewarmJavaParserWorker } from "@oscharko-dev/keiko-security";
 
 // #3532 — product-wide Activity Log wiring. `createActivityLogSink` is the level-gated production
 // sink every CLI composition site uses for lifecycle and loss evidence (mandatory evidence is never

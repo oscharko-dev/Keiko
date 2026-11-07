@@ -37336,6 +37336,43 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "security.java-parser.unavailable",
+    category: "security",
+    owner: "keiko-security",
+    emitter: "redaction-java-parser.emitParserUnavailable",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      workerOrdinal: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["starting", "start-refused"],
+      },
+    },
+    causal: "none",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["security-java-parse-bound"],
+    proofIds: ["security.java-parser.unavailable.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "security.java-parser.worker-recycled",
     category: "security",
     owner: "keiko-security",

@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +14,7 @@ import { isJavaSource } from "./redaction-java.js";
 import {
   installJavaParserLogSink,
   parseJavaBounded,
+  prewarmJavaParserWorker,
   resetJavaParserWorker,
 } from "./redaction-java-parser.js";
 
@@ -25,6 +27,14 @@ describe("Java redaction uses the initializer's syntax ownership", () => {
       expect(redact(`${name} += 918273;`, [], options)).not.toContain("918273");
     },
   );
+
+  // A fragment the parser refused may quote a value in any single quotes, so every apostrophe
+  // keeps it closed; only text no parser was available for reads an apostrophe inside a word as
+  // prose.
+  it("keeps a single-quoted value in a malformed fragment closed", () => {
+    const fragment = "@Broken(!) class A { String label = 'hunter2value'; }";
+    expect(redact(fragment, [], options)).not.toContain("hunter2value");
+  });
 
   it("retains a public malformed fragment without literal or sensitive-name ambiguity", () => {
     const input = "@Broken(!) class Example {}";
@@ -272,15 +282,150 @@ describe("the bounded Java parser worker", () => {
     30_000,
   );
 
-  it("refuses every parse while its worker cannot start, and retries only after the cooldown", () => {
+  it("answers unavailable while its worker cannot start, and retries only after the cooldown", () => {
     resetJavaParserWorker({ parserPath: "/nonexistent/java-parser/index.js" });
-    expect(parseJavaBounded(valid)).toEqual({ kind: "budget" });
-    expect(events.map((event) => event.extra?.reason)).toEqual(["start-failed"]);
-    expect(parseJavaBounded("class C {}")).toEqual({ kind: "budget" });
-    expect(events).toHaveLength(1);
+    expect(parseJavaBounded(valid)).toEqual({ kind: "unavailable" });
+    expect(ops()).toEqual([
+      "security.java-parser.worker-retired",
+      "security.java-parser.unavailable",
+    ]);
+    const [retired, unavailable] = [eventAt(0), eventAt(1)];
+    expect(retired.extra?.reason).toBe("start-failed");
+    // The refused answers join the failed start's lifetime, once per cooldown.
+    expect(unavailable).toMatchObject({
+      level: "warn",
+      correlationId: retired.correlationId,
+      extra: { reason: "start-refused", workerOrdinal: retired.extra?.workerOrdinal },
+    });
+    expect(
+      expectActivityLogProof(
+        "security.java-parser.unavailable.line",
+        formatActivityLogProofLine(unavailable),
+      ),
+    ).toMatchObject({ reason: "start-refused" });
+    expect(parseJavaBounded("class C {}")).toEqual({ kind: "unavailable" });
     expect(() => redact(`password = "${"s".repeat(12)}";`, [], options)).not.toThrow();
+    expect(events).toHaveLength(2);
     resetJavaParserWorker();
     expect(parseJavaBounded(valid).kind).toBe("parsed");
+  }, 30_000);
+
+  // A grammar that takes three seconds to load, then marks that it has loaded. The bounds below
+  // leave a slow machine room; what they pin is the order: 2 s at most for one caller, no wait for
+  // the next, and a start measured by the worker itself.
+  const slowParser = (directory: string): { parserPath: string; loaded: string } => {
+    const parserPath = join(directory, "parser.cjs");
+    const loaded = join(directory, "loaded");
+    const realParser = createRequire(import.meta.url).resolve("java-parser");
+    writeFileSync(
+      parserPath,
+      [
+        "const loading = Date.now();",
+        "while (Date.now() - loading < 3000) {}",
+        `module.exports = require(${JSON.stringify(realParser)});`,
+        `require("node:fs").writeFileSync(${JSON.stringify(loaded)}, "");`,
+      ].join("\n"),
+    );
+    return { parserPath, loaded };
+  };
+
+  it("waits for a starting worker once and briefly, then uses it when it is ready", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-java-slow-start-"));
+    try {
+      const { parserPath } = slowParser(directory);
+      resetJavaParserWorker({ parserPath });
+      let started = performance.now();
+      expect(parseJavaBounded(valid)).toEqual({ kind: "unavailable" });
+      expect(performance.now() - started).toBeLessThan(4_000);
+      started = performance.now();
+      expect(parseJavaBounded("class C {}")).toEqual({ kind: "unavailable" });
+      expect(performance.now() - started).toBeLessThan(1_000);
+      await vi.waitFor(
+        () => {
+          expect(parseJavaBounded(valid).kind).toBe("parsed");
+        },
+        { timeout: 15_000, interval: 100 },
+      );
+      // One unavailable line per start, however many parses found it loading.
+      expect(ops()).toEqual([
+        "security.java-parser.unavailable",
+        "security.java-parser.worker-started",
+      ]);
+      const [unavailable, workerStarted] = [eventAt(0), eventAt(1)];
+      expect(unavailable).toMatchObject({ level: "warn", extra: { reason: "starting" } });
+      expect(unavailable.correlationId).toBe(workerStarted.correlationId);
+      expect(workerStarted.extra?.startupMs).toBeGreaterThanOrEqual(2_500);
+    } finally {
+      resetJavaParserWorker();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("loads the grammar in the background when prewarmed, so the first parse needs no start", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-java-prewarm-"));
+    try {
+      const { parserPath, loaded } = slowParser(directory);
+      resetJavaParserWorker({ parserPath });
+      prewarmJavaParserWorker();
+      prewarmJavaParserWorker();
+      // Nothing is recorded until a parse observes the start.
+      expect(events).toEqual([]);
+      await vi.waitFor(
+        () => {
+          expect(existsSync(loaded)).toBe(true);
+        },
+        { timeout: 15_000, interval: 50 },
+      );
+      const started = performance.now();
+      expect(parseJavaBounded(valid).kind).toBe("parsed");
+      expect(performance.now() - started).toBeLessThan(1_000);
+      // One worker for both calls, which loaded before the parse asked for it.
+      expect(ops()).toEqual(["security.java-parser.worker-started"]);
+      expect(eventAt(0).extra?.workerOrdinal).toBeTypeOf("number");
+      expect(eventAt(0).extra?.startupMs).toBeGreaterThanOrEqual(2_500);
+    } finally {
+      resetJavaParserWorker();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("replaces a worker that loaded and then exited before any parse, without a cooldown", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-java-exited-"));
+    try {
+      const parserPath = join(directory, "parser.cjs");
+      const loaded = join(directory, "loaded");
+      const realParser = createRequire(import.meta.url).resolve("java-parser");
+      writeFileSync(
+        parserPath,
+        [
+          `module.exports = require(${JSON.stringify(realParser)});`,
+          `require("node:fs").writeFileSync(${JSON.stringify(loaded)}, "");`,
+          "setTimeout(() => process.exit(0), 50);",
+        ].join("\n"),
+      );
+      resetJavaParserWorker({ parserPath });
+      prewarmJavaParserWorker();
+      await vi.waitFor(
+        () => {
+          expect(existsSync(loaded)).toBe(true);
+        },
+        { timeout: 15_000, interval: 50 },
+      );
+      // Its exit reaches this thread between calls.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(parseJavaBounded(valid)).toEqual({ kind: "unavailable" });
+      expect(ops().slice(0, 2)).toEqual([
+        "security.java-parser.worker-started",
+        "security.java-parser.worker-retired",
+      ]);
+      expect(eventAt(1).extra?.reason).toBe("exited");
+      // Replaced, not refused: its successor is already starting.
+      expect(ops()).toContain("security.java-parser.unavailable");
+      expect(events.at(-1)?.extra?.reason).toBe("starting");
+    } finally {
+      resetJavaParserWorker();
+      rmSync(directory, { recursive: true, force: true });
+    }
   }, 30_000);
 
   it("parses 300 KiB of ordinary Java within its deadline", () => {
@@ -294,4 +439,72 @@ describe("the bounded Java parser worker", () => {
     // A worker that grew past the heap it may keep is replaced, never reported as a failure.
     expect(ops()).not.toContain("security.java-parser.worker-retired");
   }, 60_000);
+});
+
+// A parser that could not answer says nothing about the text (#4212): prose that holds nothing Java
+// projection would mask stays readable, and text that may be Java stays closed.
+describe("Java inference while no parser is available", () => {
+  const inferred = { preserveSourceLineBreaks: true };
+
+  beforeEach(() => {
+    resetJavaParserWorker({ parserPath: "/nonexistent/java-parser/index.js" });
+  });
+
+  afterEach(() => {
+    resetJavaParserWorker();
+  });
+
+  it.each([
+    "final prompt fitting; the function was fully read (it's done).",
+    "public notes; the review ran twice (it's settled).",
+  ])("keeps prose readable: %s", (text) => {
+    expect(parseJavaBounded("class Probe {}")).toEqual({ kind: "unavailable" });
+    expect(redact(text, [], inferred)).toBe(text);
+  });
+
+  it.each([
+    ['final String label = "private-data";', "private-data"],
+    ["final char mark = 'q'; int count = 1;", "'q'"],
+    ["final String label = \\u0022private-data\\u0022;", "private-data"],
+    ["final int password = 918273;", "918273"],
+  ])("keeps text that may be Java closed: %s", (text, hidden) => {
+    expect(redact(text, [], inferred)).not.toContain(hidden);
+  });
+
+  // Java-like text with a value in single quotes: without a parser it may be a literal.
+  it("keeps a value quoted at a word's edge closed", () => {
+    expect(redact("final String label = 'hunter2value';", [], inferred)).not.toContain(
+      "hunter2value",
+    );
+  });
+
+  it("keeps an explicitly Java fragment closed unless it holds nothing to mask", () => {
+    const literalFree = "@Broken(!) class Example {}";
+    expect(redact(literalFree, [], options)).toBe(literalFree);
+    const withLiteral = 'class Example { String label = "public-data"; }';
+    expect(redact(withLiteral, [], options)).not.toContain("public-data");
+  });
+  // A private value is masked wherever it appears in one projection, so a Java hunk that holds it
+  // unquoted is not literal-free, whichever file of the diff comes first.
+  const privateValue = ["Zq81", "value", "X"].join("");
+  const tsFile = [
+    "--- a/config.ts",
+    "+++ b/config.ts",
+    "@@ -1,1 +1,1 @@",
+    '-export const password = "old";',
+    `+export const password = "${privateValue}";`,
+  ];
+  const javaFile = [
+    "--- a/Use.java",
+    "+++ b/Use.java",
+    "@@ -1,1 +1,1 @@",
+    "-class Use { int a = 1; }",
+    `+class Use { int ${privateValue} = 2; }`,
+  ];
+  it.each([
+    ["after", [...tsFile, ...javaFile]],
+    ["before", [...javaFile, ...tsFile]],
+  ])("keeps a private value closed in a Java hunk %s its literal", (_order, lines) => {
+    expect(redact(lines.join("\n"), [], inferred)).not.toContain(privateValue);
+  });
 });

@@ -147,6 +147,17 @@ describe("memory lab offline run", () => {
       );
       expect(store).toBeDefined();
       expect(metric(store, "live")).toBe(0);
+      // The broken reply was served and nothing of it was left queued, so it was admission that
+      // kept the message out, not a learner call that never happened.
+      const out = join(root, "broken-hypothetical-run");
+      const [timing] = JSON.parse(readFileSync(join(out, "timing.json"), "utf8"));
+      expect(timing.learnerCalls).toBeGreaterThanOrEqual(1);
+      const unit = JSON.parse(
+        readFileSync(join(out, "runs", "hypothetical-en.product.r0.json"), "utf8"),
+      );
+      const learned = unit.turns.filter((turn) => turn.memory);
+      expect(learned.length).toBeGreaterThan(0);
+      for (const turn of learned) expect(turn.learnerUnused).toBe(0);
     },
     RUN_TIMEOUT_MS,
   );

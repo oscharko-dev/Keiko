@@ -104,6 +104,25 @@ describe("findStaleMemories - aged-out", () => {
     const flags = findStaleMemories([r], options({ accessStatsFor: () => undefined }));
     expect(flags.map((f) => f.reason)).toContain("aged-out");
   });
+
+  // The row the vault writes when an answer only used a memory (#4212): no recall, so no access
+  // count and an access timestamp of 0, beside its own use timestamp.
+  const useOnly = {
+    accessCount: 0,
+    lastAccessedAt: 0,
+    outcomeCount: 0,
+    utilitySum: 0,
+    lastUsedAt: FIXED_NOW_MS - 1,
+  };
+
+  it("reads an answer's use of an aged memory as no reinforcement (#4212)", () => {
+    const r = makeRecord({ id: "m-1", updatedAt: FIXED_NOW_MS - MAX_AGE_MS_DEFAULT - 1 });
+    const withoutRow = findStaleMemories([r], options({ accessStatsFor: () => undefined }));
+    const withUse = findStaleMemories([r], options({ accessStatsFor: () => useOnly }));
+    // Not vacuous: the aged memory is flagged without the row, and the use row keeps that flag.
+    expect(withoutRow.map((flag) => flag.reason)).toContain("aged-out");
+    expect(withUse).toEqual(withoutRow);
+  });
 });
 
 describe("findStaleMemories - pinned exemption (AC: pinned memories never go stale)", () => {

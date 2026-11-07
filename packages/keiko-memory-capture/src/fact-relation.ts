@@ -10,9 +10,10 @@ import {
   hasWord,
   isNegated,
   isNumberWord,
-  isSingleValuePredicate,
   isPredicateWord,
+  isSingleValuePredicate,
   sameFactWord,
+  spansPredicateClasses,
 } from "./fact-text.js";
 
 export const FACT_RELATION_LABELS = ["new", "same", "update", "contradiction"] as const;
@@ -272,7 +273,8 @@ function sharesSlot(
 }
 
 // Only the wording differs: "Mag Tabellen" and "Bevorzugt Tabellen". Living somewhere and working
-// there are two facts, so a differing single-value predicate never reads as a rewording.
+// there are two facts, so a differing single-value predicate never reads as a rewording; nor does a
+// predicate of another kind: using Python is not preferring it.
 function predicateOnlyComparison(
   a: string,
   b: string,
@@ -280,9 +282,9 @@ function predicateOnlyComparison(
   wordsB: readonly string[],
   differing: readonly string[],
 ): FactComparison {
-  return differing.some((word) => isSingleValuePredicate(word))
-    ? "different"
-    : equalWordsComparison(a, b, wordsA, wordsB);
+  if (differing.some((word) => isSingleValuePredicate(word))) return "different";
+  if (spansPredicateClasses(differing)) return "different";
+  return equalWordsComparison(a, b, wordsA, wordsB);
 }
 
 export function compareFacts(a: string, b: string): FactComparison {

@@ -105,7 +105,7 @@ interface ProposedItem {
   readonly about: string;
   readonly type: string;
   readonly relation: string;
-  readonly related: string | null;
+  readonly related: number | null;
 }
 
 // A run of whole words out of `text`, the way a model copies a span.
@@ -129,8 +129,9 @@ function item(random: Random, evidence: string): ProposedItem {
     evidence,
     about: random.pick(["self", "self", "self", "self", "team", "other"]),
     type: random.pick(["preference", "fact", "decision", "workflow", "goal"]),
-    relation: random.pick(["new", "new", "same", "update"]),
-    related: random.chance(0.2) ? "1" : null,
+    relation: random.pick(["new", "new", "same", "update", "contradiction"]),
+    // The number of a shown known fact, as the prompt asks; a turn holds at most three.
+    related: random.chance(0.4) ? random.integer(1, 3) : null,
   };
 }
 
@@ -180,6 +181,9 @@ const knownFacts = (bodies: readonly string[]): SalienceInput["knownFacts"] =>
 // Every property below states its run count once, so its coverage floors follow a widened or
 // narrowed run (KEIKO_PROPERTY_RUNS) instead of failing a short replay for being short.
 const PROPERTY_TIMEOUT_MS = 120_000;
+// Each relation to a known fact must be reached at least this often in the reference 800 runs; the
+// generators reached the rarest one 19 times there.
+const RELATION_REACH_FLOOR = 5;
 
 function runsOf(name: string, runs: number): number {
   return propertySettings({ name, runs }).runs;
@@ -252,6 +256,30 @@ const OWN_TURN: Generator<Turn> = (random) => {
   };
 };
 
+// A message that repeats, negates or states a change of a known fact, placed first so a model's
+// numbered relation can name it. Random sentences alone reach these rules by chance only.
+const RELATION_VERBS = ["nutze", "bevorzuge", "mag"] as const;
+const RELATION_VALUES = ["Excel", "Numbers", "Tabellen", "Listen"] as const;
+
+const RELATION_TURN: Generator<Turn> = (random) => {
+  const verb = random.pick(RELATION_VERBS);
+  const [old, current] = [random.pick(RELATION_VALUES), random.pick(RELATION_VALUES)];
+  const context = random.pick(["", " für Berichte", " im Team"]);
+  const fact = `Ich ${verb} ${old}${context}`;
+  const said = random.pick([
+    fact,
+    `${fact} nicht`,
+    `Ab jetzt ${verb} ich ${current}${context}`,
+    `Ich ${verb} ${current}${context}`,
+  ]);
+  return {
+    userText: `${said}.`,
+    previousUserText: EARLIER_TEXT(random),
+    known: [fact, ...arrayOf(OWN_SENTENCES, 0, 2)(random)],
+    items: [item(random, said)],
+  };
+};
+
 interface ForeignTurn extends Turn {
   readonly assistantText: string;
   // The earlier sentence this message repeats with one letter changed.
@@ -320,14 +348,30 @@ function countReach(reach: Map<string, number>, { outcomes, diagnostics }: Learn
   }
 }
 
+// How learned facts stood to the known ones: a repeat confirms, a change supersedes either because
+// the model named the known fact or because the comparison found it without a label.
+type RelationReach = "confirmation" | "labelled-supersede" | "deterministic-supersede";
+
+function countRelationReach(reach: Map<RelationReach, number>, { outcomes }: Learned): void {
+  const add = (key: RelationReach): void => {
+    reach.set(key, (reach.get(key) ?? 0) + 1);
+  };
+  for (const outcome of outcomes) {
+    if (outcome.kind === "confirmation") add("confirmation");
+    else if (outcome.relation.kind !== "supersede") continue;
+    else add(outcome.relationLabel === "new" ? "deterministic-supersede" : "labelled-supersede");
+  }
+}
+
 describe("memory capture properties", () => {
   it("learns only the person's own words", { timeout: PROPERTY_TIMEOUT_MS }, async () => {
     const reach = new Map<string, number>();
+    const relations = new Map<RelationReach, number>();
     const runs = runsOf("origin", 800);
     await checkProperty({
       name: "origin",
       runs,
-      generate: OWN_TURN,
+      generate: oneOf(OWN_TURN, OWN_TURN, RELATION_TURN),
       shrink: shrinkTurn,
       property: async (turn) => {
         const learned = await learn(inputOf(turn), reply(turn.items));
@@ -335,6 +379,7 @@ describe("memory capture properties", () => {
         for (const outcome of learned.outcomes)
           expectOwnWords(outcome, userText, turn.previousUserText.normalize("NFC"));
         countReach(reach, learned);
+        countRelationReach(relations, learned);
       },
     });
     // The generator must reach admission, or the property above held vacuously.
@@ -345,6 +390,13 @@ describe("memory capture properties", () => {
       (key) => key !== "candidate" && key !== "confirmation",
     );
     expect(reasons.length, summary).toBeGreaterThanOrEqual(scaledFloor(10, 800, runs));
+    // …and the relations to known facts, not only a fact that stands alone.
+    const relationSummary = JSON.stringify(Object.fromEntries(relations));
+    for (const key of ["confirmation", "labelled-supersede", "deterministic-supersede"] as const) {
+      expect(relations.get(key) ?? 0, `${key} ${relationSummary}`).toBeGreaterThanOrEqual(
+        scaledFloor(RELATION_REACH_FLOOR, 800, runs),
+      );
+    }
   });
 
   it(

@@ -101,12 +101,18 @@ export class JavaSyntaxRefusal extends Error {
 }
 
 // A parse that ran out of stack, time or memory is a resource refusal, as a stack overflow was
-// before: callers count it as a depth refusal and keep the text closed.
+// before: callers count it as a depth refusal and keep the text closed. So is a parse no worker
+// was available for, except where the text holds nothing Java projection would mask.
 export class JavaParseLimit extends RangeError {
-  constructor(readonly limit: "depth" | "budget") {
+  constructor(readonly limit: "depth" | "budget" | "unavailable") {
     super("Java code projection exceeded its parse budget");
     this.name = "JavaParseLimit";
   }
+}
+
+/** No parser was available to answer: the machine's state at that moment, not the text's. */
+export function isJavaParserUnavailable(error: unknown): boolean {
+  return error instanceof JavaParseLimit && error.limit === "unavailable";
 }
 
 function javaTree(text: string): JavaCstTree {

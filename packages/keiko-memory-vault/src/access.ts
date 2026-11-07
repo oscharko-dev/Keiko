@@ -32,9 +32,13 @@ export interface MemoryAccessStat {
 // timestamp advance, so the row reflects the MOST RECENT touch and the TOTAL touch count. A
 // duplicate id inside one batch is applied as two separate statements => counted twice, which is
 // the intended semantics (two recalls of the same memory in one turn are two reinforcements).
+//
+// Every write below names its memory in the same statement that checks it still exists: a memory
+// forgotten while a model call was running is touched by nobody, and the write neither fails its
+// foreign key nor stops the caller's settlement (#4212).
 const UPSERT_SQL = `
 INSERT INTO memory_access (memory_id, last_accessed_at, access_count, last_accessed_conversation_id)
-VALUES (?, ?, 1, ?)
+SELECT ?1, ?2, 1, ?3 WHERE EXISTS (SELECT 1 FROM memories WHERE id = ?1)
 ON CONFLICT(memory_id) DO UPDATE SET
   access_count = access_count + 1,
   last_accessed_at = excluded.last_accessed_at,
@@ -48,7 +52,7 @@ ON CONFLICT(memory_id) DO UPDATE SET
 // is clamped to [0,1] so a caller bug cannot skew the mean outside the modelled range.
 const RECORD_OUTCOME_SQL = `
 INSERT INTO memory_access (memory_id, last_accessed_at, access_count, outcome_count, utility_sum)
-VALUES (?, ?, 0, 1, ?)
+SELECT ?1, ?2, 0, 1, ?3 WHERE EXISTS (SELECT 1 FROM memories WHERE id = ?1)
 ON CONFLICT(memory_id) DO UPDATE SET
   outcome_count = outcome_count + 1,
   utility_sum = utility_sum + excluded.utility_sum
@@ -58,7 +62,7 @@ ON CONFLICT(memory_id) DO UPDATE SET
 // 0, so neither the maintenance recency model nor the stale check reads it as a recall.
 const RECORD_USE_SQL = `
 INSERT INTO memory_access (memory_id, last_accessed_at, access_count, last_used_at, last_used_conversation_id)
-VALUES (?, 0, 0, ?, ?)
+SELECT ?1, 0, 0, ?2, ?3 WHERE EXISTS (SELECT 1 FROM memories WHERE id = ?1)
 ON CONFLICT(memory_id) DO UPDATE SET
   last_used_at = excluded.last_used_at,
   last_used_conversation_id = excluded.last_used_conversation_id

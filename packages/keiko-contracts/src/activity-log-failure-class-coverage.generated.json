@@ -41821,12 +41821,16 @@
       "lifecycleTransitions": ["end", "failure", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["security.java-parser.worker-started"],
+        "state": ["security.java-parser.unavailable", "security.java-parser.worker-started"],
         "end": ["security.java-parser.worker-recycled"],
         "failure": ["security.java-parser.worker-retired"],
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "security.java-parser.unavailable",
+          "mode": "none"
+        },
         {
           "op": "security.java-parser.worker-recycled",
           "mode": "none"
@@ -41842,11 +41846,42 @@
       ],
       "lossSignals": [],
       "resourceSignals": [
+        "security.java-parser.unavailable",
         "security.java-parser.worker-recycled",
         "security.java-parser.worker-started"
       ],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "security.java-parser.unavailable",
+          "owner": "keiko-security",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "workerOrdinal",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["security.java-parser.unavailable.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "security.java-parser.worker-recycled",
           "owner": "keiko-security",

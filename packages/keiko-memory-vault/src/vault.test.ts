@@ -645,6 +645,22 @@ describe("atomic graph mutations", () => {
     vault.close();
   });
 
+  it("touches nobody for a memory that no longer exists (#4212)", () => {
+    const dir = freshDir();
+    const vault = openVault(dir, []);
+    const kept = vault.insertMemory(makeMemory({ id: "m-kept" as MemoryId, status: "accepted" }));
+    const gone = "m-gone" as MemoryId;
+
+    expect(() => {
+      vault.recordAccess([gone, kept.id], 1_700_000_000_500, "chat-a");
+      vault.recordUse([gone], 1_700_000_000_600, "chat-a");
+      vault.recordOutcome([gone], 1, 1_700_000_000_700);
+    }).not.toThrow();
+    expect([...vault.getAccessStats().keys()]).toEqual([kept.id]);
+    expect(vault.getAccessStats([kept.id]).get(kept.id)?.accessCount).toBe(1);
+    vault.close();
+  });
+
   it("rejects a stale graph status precondition before mutation", () => {
     const dir = freshDir();
     const events: MemoryEvent[] = [];

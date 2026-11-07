@@ -504,14 +504,28 @@ function recordRelation(
 }
 
 // The person said it again: the existing memory records the confirmation, and nothing else changes.
+// Only a memory that still stands as the learner saw it is confirmed: one the person forgot, edited
+// or replaced while the model call was running is left alone and the relation is recorded as
+// refused. The check and the write run without yielding, and the vault's own write touches only a
+// memory that still exists.
 function confirmKnownFact(
   vault: MemoryVaultStore,
   outcome: Extract<SalienceOutcome, { readonly kind: "confirmation" }>,
   trace: LearningTrace,
 ): PersistedCandidate {
+  if (!standsAsSeen(vault, outcome.memoryId, trace.seen.get(outcome.memoryId))) {
+    recordRelation(outcome, "refused", trace);
+    return { action: null, disposition: "none" };
+  }
   vault.recordAccess([outcome.memoryId], Date.now(), trace.conversationId);
   recordRelation(outcome, "confirmed", trace);
   return { action: null, disposition: "merged" };
+}
+
+function standsAsSeen(vault: MemoryVaultStore, id: MemoryId, seen: SeenFact | undefined): boolean {
+  if (seen === undefined) return false;
+  const current = vault.getMemory(id);
+  return current?.status === seen.status && current.updatedAt === seen.updatedAt;
 }
 
 // Persists one learned candidate and returns its wire action plus how it settled. Returns a null

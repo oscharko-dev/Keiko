@@ -9,11 +9,15 @@
 // Each parse therefore runs in a worker with a heap ceiling and a deadline that grows with the
 // text. The caller blocks on a shared signal, as it blocked on the parse itself before, but for no
 // longer than the deadline. A worker that misses it, runs out of memory, answers what this thread
-// cannot read back, or grows past the heap it may keep is discarded, and the next parse starts a
-// fresh one with empty caches. Only closed outcomes leave the worker: the tree's node names, token
-// types, offsets and images, never a library diagnostic, which would carry source text. Every
-// start, every routine replacement and every discarded worker is recorded on the Activity Log as
-// counts and closed reasons, under one correlation per worker lifetime.
+// cannot read back, or grows past the heap it may keep is discarded, and its replacement starts at
+// once in the background with empty caches. A worker loads its grammar off this thread: the server
+// starts the first one when it begins listening, and a caller waits for a worker that is still
+// starting only briefly and only once per start. Without a ready worker the parse answers that no
+// parser was available, which says nothing about the text. Only closed outcomes leave the worker:
+// the tree's node names, token types, offsets and images, never a library diagnostic, which would
+// carry source text. Every start, every routine replacement, every discarded worker and the first
+// parse without a ready worker per start or cooldown is recorded on the Activity Log as counts and
+// closed reasons, under one correlation per worker lifetime.
 
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
@@ -53,14 +57,22 @@ export type JavaParseOutcome =
   | { readonly kind: "syntax" }
   // The parse ran out of stack, time or memory before it could answer.
   | { readonly kind: "depth" }
-  | { readonly kind: "budget" };
+  | { readonly kind: "budget" }
+  // No worker was ready to parse: a property of the machine at that moment, not of the text.
+  | { readonly kind: "unavailable" };
 
 // Parsing, projecting and passing the tree back take about 3.3 ms per KiB of ordinary Java (a
 // 346 KiB file took 1.1 s); the deadline allows a loaded machine nearly twice that.
 const DEADLINE_BASE_MS = 750;
 const DEADLINE_MS_PER_KIB = 6;
-// Loading the grammar runs its self-analysis once per worker.
+// Loading the grammar runs its self-analysis once per worker, off this thread. A start that has not
+// answered by this deadline is retired.
 const STARTUP_DEADLINE_MS = 15_000;
+// How long one caller waits for a worker that is still starting. A cold start measured 132 to
+// 236 ms on the development machine, as long as loading the grammar in process took before the
+// worker; this allows a slow machine about ten times that. Only the first caller of a start
+// waits; later ones find it ready or answer at once that no parser was available.
+const STARTUP_WAIT_MS = 2_000;
 // A worker that could not start is not tried again before this, so a broken environment costs one
 // startup deadline a minute instead of one per parse.
 const START_RETRY_COOLDOWN_MS = 60_000;
@@ -83,6 +95,11 @@ const RETIREMENT_REASONS = [
   "start-deadline",
 ] as const;
 type RetirementReason = (typeof RETIREMENT_REASONS)[number];
+
+// Why a parse found no ready worker: one was still loading its grammar, or starts were refused
+// after a failed one.
+const UNAVAILABLE_REASONS = ["starting", "start-refused"] as const;
+type UnavailableReason = (typeof UNAVAILABLE_REASONS)[number];
 
 const JAVA_PARSER_WORKER_OPERATION_BASE = {
   contractKind: "activity-log-operation",
@@ -145,6 +162,24 @@ const JAVA_PARSER_WORKER_RETIRED_OPERATION = defineActivityLogOperation({
   proofIds: ["security.java-parser.worker-retired.line"],
 });
 
+const JAVA_PARSER_UNAVAILABLE_OPERATION = defineActivityLogOperation({
+  ...JAVA_PARSER_WORKER_OPERATION_BASE,
+  op: "security.java-parser.unavailable",
+  emitter: "redaction-java-parser.emitParserUnavailable",
+  fields: {
+    workerOrdinal: COUNT_FIELD,
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...UNAVAILABLE_REASONS],
+    },
+  },
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  proofIds: ["security.java-parser.unavailable.line"],
+});
+
 // Plain JavaScript: the worker evaluates this source, so it needs no file beside the module and
 // works the same from the TypeScript sources and from the built package. It reads Node's modules
 // through process.getBuiltinModule, so it runs as a script or as a module alike, and a failure to
@@ -192,7 +227,7 @@ try {
 }
 if (parse !== undefined) {
   parentPort.on("message", ({ id, text }) => answer({ id, ...project(parse, text) }));
-  answer({ id: 0, kind: "ready" });
+  answer({ id: 0, kind: "ready", readyAt: performance.timeOrigin + performance.now() });
 }
 `;
 
@@ -208,6 +243,10 @@ interface ParserWorker {
   // Cleared by the worker's error and exit events, which arrive between calls.
   alive: boolean;
   retired: boolean;
+  // Set once the worker answered that its grammar loaded.
+  ready: boolean;
+  // Set once a caller waited for this start, so no later caller waits for it again.
+  awaited: boolean;
 }
 
 const ANSWER_KINDS = new Set(["ready", "failed", "parsed", "syntax", "depth", "budget"]);
@@ -217,6 +256,8 @@ interface WorkerAnswer {
   readonly kind: "ready" | "failed" | JavaParseOutcome["kind"];
   readonly tree?: JavaCstTree;
   readonly heapBytes?: number;
+  // When the grammar finished loading, in milliseconds since the epoch.
+  readonly readyAt?: number;
 }
 
 type Failure = "deadline" | "exited" | "transfer" | "desync";
@@ -231,12 +272,17 @@ interface WorkerRecord {
 
 const BUDGET: JavaParseOutcome = { kind: "budget" };
 const DEPTH: JavaParseOutcome = { kind: "depth" };
+const UNAVAILABLE: JavaParseOutcome = { kind: "unavailable" };
 
 const requireParser = createRequire(import.meta.url);
 let current: ParserWorker | undefined;
 let workerCount = 0;
 let nextJobId = 1;
 let startRefusedUntil = 0;
+// The start a refusal of starts follows, so its unavailable answers join that start's lifetime.
+let refusedStart: WorkerRecord | undefined;
+// The start or cooldown whose first unavailable answer is already on the Activity Log.
+let unavailableReported: string | undefined;
 let logSink: SecurityLogSink | undefined;
 let parserPathOverride: string | undefined;
 let heapRecycleBytes = HEAP_RECYCLE_BYTES;
@@ -250,13 +296,18 @@ function elapsedMs(since: number): number {
   return Math.max(0, Math.round(performance.now() - since));
 }
 
-function emitWorkerStarted(parser: ParserWorker): void {
+// Recorded when the start is first observed; the duration is the worker's own, up to its answer.
+function emitWorkerStarted(parser: ParserWorker, readyAt: number | undefined): void {
+  const startupMs =
+    readyAt === undefined
+      ? elapsedMs(parser.startedAt)
+      : Math.max(0, Math.round(readyAt - (performance.timeOrigin + parser.startedAt)));
   emitSecurityLogEvent(
     logSink,
     activityLogEvent(
       JAVA_PARSER_WORKER_STARTED_OPERATION,
       { correlationId: parser.correlationId },
-      { workerOrdinal: parser.ordinal, startupMs: elapsedMs(parser.startedAt) },
+      { workerOrdinal: parser.ordinal, startupMs },
     ),
   );
 }
@@ -318,6 +369,8 @@ function startWorker(record: WorkerRecord): ParserWorker {
     parses: 0,
     alive: true,
     retired: false,
+    ready: false,
+    awaited: false,
   };
   // An out-of-memory exit or a startup failure arrives as an event; it only marks the worker.
   worker.on("error", () => {
@@ -341,13 +394,47 @@ function discard(parser: ParserWorker): boolean {
   return true;
 }
 
+// A worker that failed after it started is replaced at once, so the next parse finds its successor
+// loading or ready instead of paying a cold start. A start that failed is not: it waits out the
+// cooldown.
 function recordRetirement(parser: ParserWorker, reason: RetirementReason): void {
-  if (discard(parser)) emitWorkerRetired(parser, reason);
+  if (!discard(parser)) return;
+  emitWorkerRetired(parser, reason);
+  if (reason === "start-failed" || reason === "start-deadline") refuseStarts(parser);
+  else startInBackground();
 }
 
 // Routine: a worker that answered but holds more heap than it may keep is replaced, not failed.
 function recycle(parser: ParserWorker, heapBytes: number): void {
-  if (discard(parser)) emitWorkerRecycled(parser, heapBytes);
+  if (!discard(parser)) return;
+  emitWorkerRecycled(parser, heapBytes);
+  startInBackground();
+}
+
+function refuseStarts(record: WorkerRecord): void {
+  startRefusedUntil = performance.now() + START_RETRY_COOLDOWN_MS;
+  refusedStart = record;
+}
+
+// The first parse answered without a worker is recorded once per start and once per cooldown, so a
+// window in which inference read text without a parser can be reconstructed without a line per
+// message.
+function emitParserUnavailable(): void {
+  const starting = current;
+  const record = starting ?? refusedStart;
+  if (record === undefined) return;
+  const reason: UnavailableReason = starting === undefined ? "start-refused" : "starting";
+  const key = `${reason}:${record.correlationId}`;
+  if (unavailableReported === key) return;
+  unavailableReported = key;
+  emitSecurityLogEvent(
+    logSink,
+    activityLogEvent(
+      JAVA_PARSER_UNAVAILABLE_OPERATION,
+      { level: "warn", correlationId: record.correlationId },
+      { workerOrdinal: record.ordinal, reason },
+    ),
+  );
 }
 
 // Between calls Node can report a worker that is no longer running as thread -1 before its exit
@@ -389,13 +476,10 @@ function awaitAnswer(parser: ParserWorker, id: number, deadlineMs: number): Rece
   }
 }
 
-function startReason(received: Received): RetirementReason {
-  return "failure" in received && received.failure === "deadline"
-    ? "start-deadline"
-    : "start-failed";
-}
-
-function startedWorker(): ParserWorker | undefined {
+// Starts a worker without waiting for it; its grammar loads on its own thread. Nothing starts while
+// a worker is current or while a failed start's cooldown lasts.
+function startInBackground(): void {
+  if (current !== undefined || performance.now() < startRefusedUntil) return;
   workerCount += 1;
   const record: WorkerRecord = {
     ordinal: workerCount,
@@ -403,31 +487,55 @@ function startedWorker(): ParserWorker | undefined {
     startedAt: performance.now(),
     correlationId: randomUUID(),
   };
-  let parser: ParserWorker;
   try {
-    parser = startWorker(record);
+    current = startWorker(record);
   } catch {
-    // No worker, no parser module or no shared memory: every parse is refused, as on a deadline.
+    // No worker, no parser module or no shared memory: every parse is refused until the cooldown.
     emitWorkerRetired(record, "start-failed");
-    return undefined;
+    refuseStarts(record);
   }
-  const received = awaitAnswer(parser, 0, STARTUP_DEADLINE_MS);
-  if ("answer" in received && received.answer.kind === "ready") {
-    emitWorkerStarted(parser);
-    return parser;
+}
+
+type StartState = "ready" | "failed" | "pending";
+
+// Reads the start's answer if it has arrived, waiting at most `waitMs`. A wait that ran out leaves
+// the signal as it is, so an answer that arrives afterwards is found by the next look.
+function awaitReady(parser: ParserWorker, waitMs: number): StartState {
+  if (Atomics.wait(parser.signal, 0, 0, waitMs) === "timed-out") return "pending";
+  const answer = answerOf(receiveMessageOnPort(parser.port)?.message);
+  Atomics.store(parser.signal, 0, 0);
+  if (answer?.id !== 0 || answer.kind !== "ready") return "failed";
+  parser.ready = true;
+  emitWorkerStarted(parser, answer.readyAt);
+  return "ready";
+}
+
+// Whether a starting worker is ready now. The first caller of a start waits for it briefly; every
+// later caller only looks. A start past its deadline, or one that exited, is retired. A worker that
+// loaded and exited before any parse looked has started: its exit is replaced at once, not refused.
+function startedInTime(parser: ParserWorker): boolean {
+  if (!isRunning(parser)) {
+    recordRetirement(parser, awaitReady(parser, 0) === "ready" ? "exited" : "start-failed");
+    return false;
   }
-  recordRetirement(parser, startReason(received));
-  return undefined;
+  const remaining = STARTUP_DEADLINE_MS - (performance.now() - parser.startedAt);
+  const waitMs = parser.awaited ? 0 : Math.min(STARTUP_WAIT_MS, Math.max(0, remaining));
+  parser.awaited = true;
+  const state = awaitReady(parser, waitMs);
+  if (state === "ready") return true;
+  if (state === "failed") recordRetirement(parser, "start-failed");
+  else if (performance.now() - parser.startedAt >= STARTUP_DEADLINE_MS) {
+    recordRetirement(parser, "start-deadline");
+  }
+  return false;
 }
 
 function readyWorker(): ParserWorker | undefined {
-  if (current !== undefined && isRunning(current)) return current;
-  if (current !== undefined) recordRetirement(current, "exited");
-  if (performance.now() < startRefusedUntil) return undefined;
-  const parser = startedWorker();
-  if (parser === undefined) startRefusedUntil = performance.now() + START_RETRY_COOLDOWN_MS;
-  current = parser;
-  return parser;
+  if (current?.ready === true && !isRunning(current)) recordRetirement(current, "exited");
+  startInBackground();
+  const parser = current;
+  if (parser === undefined || parser.ready) return parser;
+  return startedInTime(parser) ? parser : undefined;
 }
 
 export function javaParseDeadlineMs(text: string): number {
@@ -476,7 +584,11 @@ export function parseJavaBounded(text: string): JavaParseOutcome {
   const known = remembered(text);
   if (known !== undefined) return known;
   const parser = readyWorker();
-  if (parser === undefined) return BUDGET;
+  // Not remembered: the next call may find a worker.
+  if (parser === undefined) {
+    emitParserUnavailable();
+    return UNAVAILABLE;
+  }
   const id = nextJobId;
   nextJobId += 1;
   parser.worker.postMessage({ id, text });
@@ -486,6 +598,14 @@ export function parseJavaBounded(text: string): JavaParseOutcome {
   // A lost exchange says nothing about the text, so the next call parses it afresh.
   if (!("failure" in received && received.failure === "desync")) remember(text, outcome);
   return outcome;
+}
+
+/**
+ * Starts the first worker in the background, so the first parse does not wait for the grammar to
+ * load. The server calls it once it is listening.
+ */
+export function prewarmJavaParserWorker(): void {
+  startInBackground();
 }
 
 /**
@@ -500,6 +620,8 @@ export function resetJavaParserWorker(
   if (current !== undefined) discard(current);
   current = undefined;
   startRefusedUntil = 0;
+  refusedStart = undefined;
+  unavailableReported = undefined;
   lastText = undefined;
   lastOutcome = undefined;
   lastRefusedAt = 0;
