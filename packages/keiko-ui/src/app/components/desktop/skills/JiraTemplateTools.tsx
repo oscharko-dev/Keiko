@@ -190,7 +190,6 @@ function useTemplateActions(
     retired.current = proposals;
     reportClientDiagnostic("Jira template proposal superseded.", {
       correlationId: proposals.correlationId,
-      errorKind: "conflict",
     });
   }, [proposals, scope]);
   return {

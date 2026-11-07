@@ -465,9 +465,7 @@ describe("Jira issue template tools", () => {
     const discarded = vi
       .mocked(reportClientDiagnostic)
       .mock.calls.filter(([message]) => message === "Jira template proposal superseded.");
-    expect(discarded).toEqual([
-      ["Jira template proposal superseded.", { correlationId, errorKind: "conflict" }],
-    ]);
+    expect(discarded).toEqual([["Jira template proposal superseded.", { correlationId }]]);
     expect(JSON.stringify(discarded)).not.toMatch(/PRIVATE|pod-1|pod-2|Story/u);
     expect(upload).not.toHaveBeenCalled();
     vi.mocked(templates.proposeJiraTemplates).mockResolvedValue([

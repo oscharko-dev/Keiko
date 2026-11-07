@@ -291,8 +291,17 @@ function nextJourneyCall(text, current, all) {
   return completed(current, "jira_draft") ? undefined : ["jira_draft", replayReference(text)];
 }
 
+function assertNotAlreadySelected(name, identity, results) {
+  // Each completed selection replaces the subset; older selections may need selecting again.
+  const selected = results.findLast(
+    (result) => result.name === "jira_describe" && result.status === "completed",
+  );
+  if (Array.isArray(selected?.args?.identities) && selected.args.identities.includes(identity))
+    throw new TypeError(`Selection did not offer ${name}`);
+}
+
 /** Script the same discovery/selection rounds a model must complete before a typed Jira call. */
-function offeredJourneyCall(next, tools, results) {
+function offeredJourneyCall(next, tools = [], results) {
   const [name] = next;
   if (tools.some((tool) => tool.function?.name === name)) return next;
   if (!name.startsWith("jira_")) throw new TypeError(`Missing offered ${name}`);
@@ -302,8 +311,10 @@ function offeredJourneyCall(next, tools, results) {
   const operation = pages
     .flatMap((page) => (Array.isArray(page.data?.items) ? page.data.items : []))
     .find((item) => item.tool === name);
-  if (typeof operation?.identity === "string")
+  if (typeof operation?.identity === "string") {
+    assertNotAlreadySelected(name, operation.identity, results);
     return ["jira_describe", { identities: [operation.identity] }];
+  }
   const lastPage = pages.at(-1)?.data;
   const startAt = lastPage === undefined ? 0 : lastPage.nextStartAt;
   if (!Number.isSafeInteger(startAt) || startAt < 0)
