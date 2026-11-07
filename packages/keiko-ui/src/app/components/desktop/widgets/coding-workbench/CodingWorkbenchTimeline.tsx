@@ -20,7 +20,10 @@ import type {
   CodingSafeActivityTool,
   CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
-import type { CodingSafeActivityVerificationOutcome } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
+import type {
+  CodingSafeActivityGitOutcome,
+  CodingSafeActivityVerificationOutcome,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
@@ -1083,7 +1086,13 @@ type UnrunVerificationOutcome = Extract<
   CodingSafeActivityVerificationOutcome,
   "waiting-for-trust" | "no-runnable-steps" | "not-run"
 >;
-type ShownToolState = CodingSafeActivityTool["state"] | "exited" | UnrunVerificationOutcome;
+//
+// And for a governed Git step (lab T37, #4271): the facade answers a refused commit, stage or branch
+// as a completed call, so its tool state reads "succeeded" for a step that never happened. The server's
+// closed Git outcome decides the badge instead: still waiting for the human, or not done.
+type UnfinishedGitState = "not-done" | "waiting-for-approval";
+type ShownToolState =
+  CodingSafeActivityTool["state"] | "exited" | UnrunVerificationOutcome | UnfinishedGitState;
 
 const UNRUN_VERIFICATION_OUTCOMES: ReadonlySet<CodingSafeActivityVerificationOutcome> = new Set([
   "waiting-for-trust",
@@ -1099,7 +1108,16 @@ const OPEN_WITH_REASON_STATES: ReadonlySet<ShownToolState> = new Set([
   "waiting-for-trust",
   "no-runnable-steps",
   "not-run",
+  "not-done",
+  "waiting-for-approval",
 ]);
+
+function unfinishedGitState(
+  outcome: CodingSafeActivityGitOutcome | undefined,
+): UnfinishedGitState | undefined {
+  if (outcome === undefined || outcome === "completed") return undefined;
+  return outcome === "waiting-for-approval" ? outcome : "not-done";
+}
 
 function isUnrunVerificationOutcome(
   outcome: CodingSafeActivityVerificationOutcome | undefined,
@@ -1108,6 +1126,9 @@ function isUnrunVerificationOutcome(
 }
 
 function shownToolState(tool: CodingSafeActivityTool): ShownToolState {
+  if (tool.state === "succeeded") {
+    return unfinishedGitState(tool.presentation?.gitOutcome) ?? tool.state;
+  }
   if (tool.state !== "failed") return tool.state;
   const exitCode = tool.presentation?.exitCode;
   if (exitCode !== undefined && exitCode !== 0) return "exited";
@@ -1157,6 +1178,12 @@ function ToolOutcome({
       <p className={styles.cmpToolOutcome}>
         {t(`codingWorkbench.activity.verification.${verificationOutcome}`)}
       </p>
+    );
+  }
+  const gitOutcome = tool.presentation?.gitOutcome;
+  if (gitOutcome !== undefined) {
+    return (
+      <p className={styles.cmpToolOutcome}>{t(`codingWorkbench.activity.git.${gitOutcome}`)}</p>
     );
   }
   return tool.state === "failed" ? (

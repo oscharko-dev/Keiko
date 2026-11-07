@@ -15828,6 +15828,12 @@
               "required": true
             },
             {
+              "name": "gitOutcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "resultStatus",
               "type": "string",
               "dataClass": "closed-enum",

@@ -21,6 +21,7 @@ import {
 import {
   createCodingToolFacade,
   codingToolEditPresentation,
+  codingToolGitPresentation,
   codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
@@ -34,7 +35,7 @@ import type {
 } from "./codingToolFacadePorts.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { SHELL_VERIFICATION_STATUS_RULE } from "./codingRuntimeVerificationContinuation.js";
-import type { CodingToolActionRequest } from "./codingToolIpc.js";
+import type { CodingToolActionRequest, CodingToolResult } from "./codingToolIpc.js";
 import { codingToolDiscoveryText } from "./codingToolIpc.js";
 import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
 import { createCodingToolGovernedDelegate } from "./codingToolGovernedDelegate.js";
@@ -2389,6 +2390,75 @@ describe("CodingToolFacade verification presentation (#3579)", () => {
     ).toEqual({});
     for (const status of ["denied", "cancelled", "timeout", "busy"] as const) {
       expect(codingToolVerificationPresentation({ status, evidence: [] })).toEqual({});
+    }
+  });
+});
+
+// Lab T37 (2026-11-07, #4271): the facade answers a refused Git step as a completed call that
+// carries the refusal, so the Workbench card read "Succeeded" for a commit that never happened. The
+// presentation names, in the contract's closed words, how the step the model received really ended.
+describe("CodingToolFacade Git presentation (#4271)", () => {
+  const completedWith = (field: "verifiedCommit" | "git", value: unknown): CodingToolResult =>
+    ({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+      [field]: value,
+    }) as unknown as CodingToolResult;
+
+  it.each([
+    ["succeeded", "completed", "completed"],
+    ["approval-required", "approval-required", "waiting-for-approval"],
+    ["blocked", "policy-block", "blocked"],
+    ["blocked", "message-policy", "blocked"],
+    ["verification-failed", "verification-failed", "verification-failed"],
+    ["verification-failed", "verification-missing", "verification-missing"],
+    ["verification-failed", "candidate-not-staged", "verification-missing"],
+    ["drift", "verification-stale", "changed"],
+    ["failed", "execution-failed", "not-done"],
+    ["recovery-required", "execution-uncertain", "not-done"],
+  ] as const)("presents a commit answered %s/%s as %s", (status, reason, gitOutcome) => {
+    expect(codingToolGitPresentation(completedWith("verifiedCommit", { status, reason }))).toEqual({
+      gitOutcome,
+    });
+  });
+
+  it.each([
+    [{ kind: "stage", status: "succeeded", reason: "none" }, "completed"],
+    [{ kind: "stage", status: "blocked", reason: "scope-denied" }, "blocked"],
+    [{ kind: "unstage", status: "drift", reason: "candidate-drift" }, "changed"],
+    [
+      { kind: "stage", status: "approval-required", reason: "approval-required" },
+      "waiting-for-approval",
+    ],
+    [{ kind: "stage", status: "failed", reason: "execution-failed" }, "not-done"],
+    [{ kind: "branch", status: "succeeded", reason: "none" }, "completed"],
+    [{ kind: "branch", status: "blocked", reason: "branch-exists" }, "blocked"],
+    [{ kind: "branch", status: "failed", reason: "rebind-failed" }, "not-done"],
+    [{ kind: "fetch", status: "succeeded" }, "completed"],
+    [{ kind: "pull", status: "up-to-date" }, "completed"],
+    [{ kind: "pull", status: "not-fast-forward" }, "not-done"],
+    [{ kind: "fetch", status: "auth-failed" }, "not-done"],
+  ] as const)("presents the Git result %j as %s", (git, gitOutcome) => {
+    expect(codingToolGitPresentation(completedWith("git", git))).toEqual({ gitOutcome });
+  });
+
+  it("presents nothing for reads, an unprepared proposal, other results and other statuses", () => {
+    expect(codingToolGitPresentation(completedWith("git", { kind: "status" }))).toEqual({});
+    expect(codingToolGitPresentation(completedWith("git", { kind: "diff" }))).toEqual({});
+    expect(
+      codingToolGitPresentation(
+        completedWith("git", { kind: "stage", status: "ready", reason: "none" }),
+      ),
+    ).toEqual({});
+    expect(
+      codingToolGitPresentation({
+        status: "completed",
+        evidence: [],
+        verification: {},
+      } as unknown as CodingToolResult),
+    ).toEqual({});
+    for (const status of ["failed", "denied", "cancelled", "timeout", "busy"] as const) {
+      expect(codingToolGitPresentation({ status, evidence: [] })).toEqual({});
     }
   });
 });

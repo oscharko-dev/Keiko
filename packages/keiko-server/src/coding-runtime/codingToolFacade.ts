@@ -40,6 +40,7 @@ import type {
 import {
   CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES,
   isCodingSafeActivityPresentationPath,
+  type CodingSafeActivityGitOutcome,
   type CodingSafeActivityToolPresentation,
   type CodingSafeActivityVerificationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
@@ -404,6 +405,51 @@ export function codingToolVerificationPresentation(
       ? undefined
       : VERIFICATION_OUTCOME_BY_REASON.get(result.reasonCode);
   return verificationOutcome === undefined ? {} : Object.freeze({ verificationOutcome });
+}
+
+type GitStatusOutcomes = Readonly<Record<string, CodingSafeActivityGitOutcome | undefined>>;
+
+// The shared lifecycle statuses of a stage, an unstage and a branch. `ready` is a prepared proposal
+// that nothing carried out yet: it claims no outcome.
+const GIT_STEP_OUTCOME_BY_STATUS: GitStatusOutcomes = {
+  succeeded: "completed",
+  "approval-required": "waiting-for-approval",
+  blocked: "blocked",
+  drift: "changed",
+  failed: "not-done",
+  "recovery-required": "not-done",
+};
+
+const GIT_SYNC_COMPLETED_STATUSES: ReadonlySet<string> = new Set(["succeeded", "up-to-date"]);
+
+function commitOutcome(commit: VerifiedCommitResult): CodingSafeActivityGitOutcome | undefined {
+  if (commit.status !== "verification-failed") return GIT_STEP_OUTCOME_BY_STATUS[commit.status];
+  return commit.reason === "verification-failed" ? "verification-failed" : "verification-missing";
+}
+
+function gitResultOutcome(git: CodingRuntimeGitResult): CodingSafeActivityGitOutcome | undefined {
+  if (git.kind === "fetch" || git.kind === "pull")
+    return GIT_SYNC_COMPLETED_STATUSES.has(git.status) ? "completed" : "not-done";
+  if (git.kind === "stage" || git.kind === "unstage" || git.kind === "branch")
+    return GIT_STEP_OUTCOME_BY_STATUS[git.status];
+  return undefined;
+}
+
+/**
+ * Server-private live presentation of one answered Git step (stage, unstage, fetch, pull, branch or
+ * the verified commit): how it really ended, in the contract's closed words, from the result the
+ * model received. The facade answers a refusal as a completed call that carries it, so without this
+ * the card reads "Succeeded" for a commit that never happened (lab T37, #4271). A read, a prepared
+ * proposal and every other result present nothing.
+ */
+export function codingToolGitPresentation(
+  result: CodingToolResult,
+): CodingSafeActivityToolPresentation {
+  if (result.status !== "completed") return {};
+  let gitOutcome: CodingSafeActivityGitOutcome | undefined;
+  if ("verifiedCommit" in result) gitOutcome = commitOutcome(result.verifiedCommit);
+  else if ("git" in result) gitOutcome = gitResultOutcome(result.git);
+  return gitOutcome === undefined ? {} : Object.freeze({ gitOutcome });
 }
 
 async function executeAdmitted(

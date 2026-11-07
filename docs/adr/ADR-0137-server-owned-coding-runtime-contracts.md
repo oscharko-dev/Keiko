@@ -720,8 +720,9 @@ facts come from the governed producer, remain bounded by the existing aggregate 
 survive native restatement and immutable replay. Raw arguments/results, unknown refusal strings,
 unknown outcomes and unsafe paths are rejected. The verification outcome is derived from the closed
 result code the model received (`codingToolVerificationPresentation`), so the timeline shows a
-package-script decision still waiting on the operator, a repository with nothing the verifier can
-run and a run whose steps were skipped, denied or cancelled as what they were and not as a failed
+package-script decision still waiting on the operator, a request for which the verifier found
+nothing it can run (the selected package or target has no test, lint or build script; the repository
+may define others) and a run whose steps were skipped, denied or cancelled as what they were and not as a failed
 check; only a check that ran and went red keeps the failed badge, and a timeout, a resource ceiling
 or a refusal before the runner claim nothing beyond the generic failure.
 Paths never enter Activity Log evidence, model-facing edit refusal replies or Coding History;
@@ -729,6 +730,16 @@ the existing tool-result operation records service duration through its standard
 and the existing `coding-runtime.tool-result-rendered` operation records the closed verification
 outcome as an optional field, declared `diagnosticWhen` for every outcome but `passed` so a support
 report keeps a verification that did not pass.
+
+The same projection carries a governed Git step's closed outcome (`gitOutcome`: `completed`,
+`waiting-for-approval`, `verification-failed`, `verification-missing`, `blocked`, `changed`,
+`not-done`; lab T37, #4271). The facade answers a refused stage, unstage, branch, fetch, pull or
+verified commit as a completed call that carries the refusal, so the call state alone painted a
+commit that never happened as "Succeeded". `codingToolGitPresentation` derives the word from the
+result the model received (never from a message or path); the timeline shows every word but
+`completed` as not done or waiting for approval, with a one-line reason, and the same field is
+recorded body-free on `coding-runtime.tool-result-rendered`, declared `diagnosticWhen` for
+`verification-failed`, `verification-missing`, `blocked`, `changed` and `not-done`.
 
 An explicit Stop or takeover keeps the run's live safe-activity feed, as standalone OpenCode keeps
 the tool steps of an aborted session (owner decision 2026-10-30, #3907 F3). Until then both ends

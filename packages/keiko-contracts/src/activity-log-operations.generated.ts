@@ -15623,6 +15623,20 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["passed", "failed-check", "waiting-for-trust", "no-runnable-steps", "not-run"],
       },
+      gitOutcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "completed",
+          "waiting-for-approval",
+          "verification-failed",
+          "verification-missing",
+          "blocked",
+          "changed",
+          "not-done",
+        ],
+      },
     },
     causal: "correlation",
     lifecycle: "state",
@@ -15634,6 +15648,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       {
         field: "verificationOutcome",
         values: ["failed-check", "waiting-for-trust", "no-runnable-steps", "not-run"],
+      },
+      {
+        field: "gitOutcome",
+        values: ["verification-failed", "verification-missing", "blocked", "changed", "not-done"],
       },
     ],
   },

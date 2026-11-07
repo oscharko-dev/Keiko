@@ -56,7 +56,9 @@
 .statusBadge[data-tone="warning"],
 .resourceState[data-tone="warning"],
 .activityBadge[data-state="cancelled"],
-.activityBadge[data-state="waiting-for-trust"] {
+.activityBadge[data-state="waiting-for-trust"],
+.activityBadge[data-state="waiting-for-approval"],
+.activityBadge[data-state="not-done"] {
   color: var(--feedback-warning);
 }
 

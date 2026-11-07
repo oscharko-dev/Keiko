@@ -66,8 +66,9 @@ export type CodingSafeActivityEditRefusalReason =
  * Why one governed verification (`keiko_verification`) ended as it did, in closed words (#3579). A
  * verification that could not check anything is not a check that failed, and the timeline must not
  * paint it as one: `waiting-for-trust` is the package-script decision only the operator can make,
- * `no-runnable-steps` a repository that defines nothing the verifier can run, and `not-run` a run
- * whose steps were skipped, denied or cancelled. `failed-check` is a check that ran and went red,
+ * `no-runnable-steps` a request for which the verifier found nothing it can run (the selected
+ * package or target has no test, lint or build script; the repository may still define others), and
+ * `not-run` a run whose steps were skipped, denied or cancelled. `failed-check` is a check that ran and went red,
  * `passed` every requested check green.
  */
 export const CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES = [
@@ -81,8 +82,29 @@ export type CodingSafeActivityVerificationOutcome =
   (typeof CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES)[number];
 
 /**
+ * How one governed Git step (`keiko_git` stage, unstage, fetch, pull, branch, or the verified
+ * commit) really ended, in closed words. The governed facade answers a refused step as a completed
+ * tool call that carries the refusal, so the call state alone reads "Succeeded" although nothing was
+ * committed or staged. `completed` is a step Keiko carried out; every other word names why it did
+ * not: `waiting-for-approval` the human decision still open, `verification-failed` and
+ * `verification-missing` a commit that no passing verification of the staged change covers,
+ * `blocked` a policy or authority refusal, `changed` a candidate or repository that moved since the
+ * proposal, and `not-done` a step that failed or whose result is uncertain.
+ */
+export const CODING_SAFE_ACTIVITY_GIT_OUTCOMES = [
+  "completed",
+  "waiting-for-approval",
+  "verification-failed",
+  "verification-missing",
+  "blocked",
+  "changed",
+  "not-done",
+] as const;
+export type CodingSafeActivityGitOutcome = (typeof CODING_SAFE_ACTIVITY_GIT_OUTCOMES)[number];
+
+/**
  * Canonical server facts only. Live authenticated presentation. Paths and byte counts never enter
- * Activity Log evidence; the closed `verificationOutcome` alone is also recorded, body-free, on
+ * Activity Log evidence; the closed `verificationOutcome` and `gitOutcome` alone are also recorded, body-free, on
  * `coding-runtime.tool-result-rendered`.
  */
 export interface CodingSafeActivityToolPresentation {
@@ -99,6 +121,8 @@ export interface CodingSafeActivityToolPresentation {
   readonly refusalReason?: CodingSafeActivityEditRefusalReason;
   /** Why a governed verification ended as it did; present on `keiko_verification` calls only. */
   readonly verificationOutcome?: CodingSafeActivityVerificationOutcome;
+  /** How a governed Git step really ended; present on `keiko_git` and commit calls only. */
+  readonly gitOutcome?: CodingSafeActivityGitOutcome;
   /** Elapsed bridge service time; includes governed waits, excludes model generation time. */
   readonly bridgeDurationMs?: number;
   /** A finished native shell call's own exit status, as the runtime reported it. */
@@ -531,6 +555,7 @@ export function isCodingSafeActivityToolPresentation(
     "returnedPathCount",
     "refusalReason",
     "verificationOutcome",
+    "gitOutcome",
     "bridgeDurationMs",
     "exitCode",
   ];
@@ -545,7 +570,8 @@ function validPresentationVocabulary(value: Record<string, unknown>): boolean {
     (value.refusalReason === undefined ||
       isOneOf(value.refusalReason, CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES)) &&
     (value.verificationOutcome === undefined ||
-      isOneOf(value.verificationOutcome, CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES))
+      isOneOf(value.verificationOutcome, CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES)) &&
+    (value.gitOutcome === undefined || isOneOf(value.gitOutcome, CODING_SAFE_ACTIVITY_GIT_OUTCOMES))
   );
 }
 

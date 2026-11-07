@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8810c093089e92207dfd83a99171f93b6712e81df729af36ec3ee2fc3d489a6a",
+    "catalogDigest": "c340bebfbbbcd7a9dbbacd527ba32f7b66f3045e8bc9f836213368a4b3b292f8",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -16287,6 +16287,20 @@
               "no-runnable-steps",
               "not-run"
             ]
+          },
+          "gitOutcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "completed",
+              "waiting-for-approval",
+              "verification-failed",
+              "verification-missing",
+              "blocked",
+              "changed",
+              "not-done"
+            ]
           }
         },
         "causal": "correlation",
@@ -16296,13 +16310,23 @@
           {
             "field": "verificationOutcome",
             "values": ["failed-check", "waiting-for-trust", "no-runnable-steps", "not-run"]
+          },
+          {
+            "field": "gitOutcome",
+            "values": [
+              "verification-failed",
+              "verification-missing",
+              "blocked",
+              "changed",
+              "not-done"
+            ]
           }
         ],
         "failureClasses": ["coding-runtime-tool-result"],
         "proofIds": ["coding-runtime.tool-result-rendered.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/governedToolModelContent.ts:49",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/governedToolModelContent.ts:162"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/governedToolModelContent.ts:51",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/governedToolModelContent.ts:180"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -73245,6 +73269,12 @@
                   "required": true
                 },
                 {
+                  "name": "gitOutcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "resultStatus",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -111991,14 +112021,14 @@
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5258",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5257",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5313",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5312",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -112039,7 +112069,7 @@
     {
       "op": "coding-runtime.tool-result-rendered",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/governedToolModelContent.ts:52",
+      "site": "packages/keiko-server/src/coding-runtime/governedToolModelContent.ts:54",
       "package": "keiko-server"
     },
     {
