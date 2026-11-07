@@ -596,15 +596,15 @@ export function resolveLocalVaultKey(options: ResolveLocalVaultKeyOptions): Reso
     emitKeyResolutionFailed(options.sink, error);
     throw error;
   }
-  emitSecurityLogEvent(
-    options.sink,
-    activityLogEvent(
-      SECURITY_VAULT_KEY_RESOLVED_OPERATION,
-      { level: "info" },
-      { source: resolved.source },
-    ),
-  );
+  emitKeyResolved(options.sink, resolved.source);
   return resolved;
+}
+
+function emitKeyResolved(sink: SecurityLogSink | undefined, source: LocalVaultKeySource): void {
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(SECURITY_VAULT_KEY_RESOLVED_OPERATION, { level: "info" }, { source }),
+  );
 }
 
 function computeLocalVaultKey(options: ResolveLocalVaultKeyOptions): ResolvedLocalVaultKey {
@@ -1315,7 +1315,14 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
   };
 }
 
-const resolvedKeyCache = new Map<string, ResolvedLocalVaultKey>();
+interface RememberedKey {
+  readonly key: Buffer;
+  readonly source: LocalVaultKeySource;
+  /** Sinks that already received this key's `security.vault.key-resolved` line. */
+  readonly announcedTo: WeakSet<object>;
+}
+
+const resolvedKeyCache = new Map<string, RememberedKey>();
 const keychainAccessIds = new WeakMap<LocalVaultKeychainAccess, number>();
 let nextKeychainAccessId = 1;
 
@@ -1341,25 +1348,75 @@ function resolvedKeyCacheKey(options: ResolveLocalVaultKeyOptions): string {
     options.keychainService,
     options.keyfileName,
     keychainAccessCacheId(options.keychainAccess),
+    // Whether the real keychain is reachable at all changes which tier answers.
+    keychainWithheldReason(options.env) ?? "",
     envDigest,
   ]);
+}
+
+/**
+ * A keyfile answer is provisional when the real keychain was asked and gave none: a locked or slow
+ * keychain may answer next time, and the key must then return to it. A withheld keychain, another
+ * platform or an injected seam answers the same way every time and is remembered.
+ */
+export function resolvedKeyIsFinal(
+  options: ResolveLocalVaultKeyOptions,
+  resolved: ResolvedLocalVaultKey,
+): boolean {
+  if (resolved.source !== "keyfile") return true;
+  return (
+    options.keychainAccess !== undefined ||
+    process.platform !== "darwin" ||
+    keychainWithheldReason(options.env) !== undefined
+  );
+}
+
+function rememberedKeyIsCurrent(
+  options: ResolveLocalVaultKeyOptions,
+  remembered: RememberedKey,
+): boolean {
+  // A wiped state directory must not leave a key in use that no file holds any more.
+  return (
+    remembered.source !== "keyfile" || existsSync(resolve(options.vaultDir, options.keyfileName))
+  );
+}
+
+function announceOnce(remembered: RememberedKey, sink: SecurityLogSink | undefined): void {
+  if (sink === undefined || remembered.announcedTo.has(sink)) return;
+  remembered.announcedTo.add(sink);
+  emitKeyResolved(sink, remembered.source);
 }
 
 /**
  * Resolves a vault key once per process, vault directory and key namespace, and reuses it on every
  * later call. A key does not change while the process runs, and each uncached resolution can run a
  * synchronous `security` child process on the event loop, which a per-request caller must not pay
- * on every request. Only the first resolution emits `security.vault.key-resolved`, so the winning
- * tier stays visible once. A failed resolution is not cached and is retried by the next call.
+ * on every request. `security.vault.key-resolved` is written once per key and sink, so the winning
+ * tier stays visible once. A failed resolution is not cached and is retried by the next call, and
+ * so is a keyfile answer given while the real keychain was reachable but silent.
  */
 export function resolveLocalVaultKeyOnce(
   options: ResolveLocalVaultKeyOptions,
 ): ResolvedLocalVaultKey {
   const cacheKey = resolvedKeyCacheKey(options);
-  const cached = resolvedKeyCache.get(cacheKey);
-  if (cached !== undefined) return { key: Buffer.from(cached.key), source: cached.source };
+  const remembered = resolvedKeyCache.get(cacheKey);
+  if (remembered !== undefined) {
+    if (rememberedKeyIsCurrent(options, remembered)) {
+      announceOnce(remembered, options.sink);
+      return { key: Buffer.from(remembered.key), source: remembered.source };
+    }
+    resolvedKeyCache.delete(cacheKey);
+  }
   const resolved = resolveLocalVaultKey(options);
-  resolvedKeyCache.set(cacheKey, { key: Buffer.from(resolved.key), source: resolved.source });
+  if (resolvedKeyIsFinal(options, resolved)) {
+    const entry: RememberedKey = {
+      key: Buffer.from(resolved.key),
+      source: resolved.source,
+      announcedTo: new WeakSet(),
+    };
+    if (options.sink !== undefined) entry.announcedTo.add(options.sink);
+    resolvedKeyCache.set(cacheKey, entry);
+  }
   return resolved;
 }
 

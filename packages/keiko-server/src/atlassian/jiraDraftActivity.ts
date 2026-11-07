@@ -57,6 +57,9 @@ const JIRA_DRAFT_OPERATION = defineActivityLogOperation({
     violationCount: COUNT_FIELD,
     settledCount: { type: "integer", dataClass: "count", required: false },
     pendingCount: { type: "integer", dataClass: "count", required: false },
+    // A staging call only: Jira reads sent, and reads answered from the invocation's own memo.
+    readCount: { type: "integer", dataClass: "count", required: false },
+    readReusedCount: { type: "integer", dataClass: "count", required: false },
     durationMs: { type: "integer", dataClass: "duration", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -88,6 +91,13 @@ const REFUSAL_KIND: Readonly<Record<JiraDraftRefusalKind, ActivityLogErrorKind>>
   "requirements-untraced": "invalid-request",
 };
 
+function readFields(input: JiraDraftLogInput): Record<string, number> {
+  return {
+    ...(input.readCount === undefined ? {} : { readCount: input.readCount }),
+    ...(input.readReusedCount === undefined ? {} : { readReusedCount: input.readReusedCount }),
+  };
+}
+
 /** Counts and closed words only: no summary, field value, issue key, ref or draft id. */
 export function recordJiraDraftActivity(
   log: ServerLogSink | undefined,
@@ -115,6 +125,7 @@ export function recordJiraDraftActivity(
         violationCount: input.violationCount,
         ...(input.settledCount === undefined ? {} : { settledCount: input.settledCount }),
         ...(input.pendingCount === undefined ? {} : { pendingCount: input.pendingCount }),
+        ...readFields(input),
         durationMs: input.durationMs,
         completeness: errorKind === undefined ? "complete" : "partial",
         loss: "none",

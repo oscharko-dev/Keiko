@@ -1706,6 +1706,18 @@
               "required": true
             },
             {
+              "name": "readCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "readReusedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "refusal",
               "type": "string",
               "dataClass": "closed-enum",
@@ -4445,6 +4457,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "capsuleCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "messageCount",
               "type": "integer",
               "dataClass": "count",
@@ -4455,9 +4473,15 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "stampMemo",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             }
           ],
-          "evidenceClasses": ["completeness-state", "count", "loss-state"],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false

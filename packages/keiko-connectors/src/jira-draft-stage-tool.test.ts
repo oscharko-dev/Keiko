@@ -645,4 +645,16 @@ describe("jira.draft-stage read reuse", () => {
     await executeJiraDraftStageTool(pageOf("b"), { ...CONTEXT }, target, h.deps);
     expect(vi.mocked(target.http).mock.calls.length).toBe(afterFirst * 2);
   });
+
+  it("reports the reads it sent and reused on the staged and refused activity", async () => {
+    const h = harness();
+    const target = connection();
+    const context = { ...CONTEXT };
+    await executeJiraDraftStageTool(fifteen(), context, target, h.deps);
+    const staged = h.activity.find((entry) => entry.phase === "staged");
+    expect(staged?.readCount).toBe(vi.mocked(target.http).mock.calls.length);
+    expect(staged?.readReusedCount).toBeGreaterThan(0);
+    await executeJiraDraftStageTool({ items: "nope" }, context, target, h.deps);
+    expect(h.activity.at(-1)).toMatchObject({ phase: "refused", readCount: 0, readReusedCount: 0 });
+  });
 });

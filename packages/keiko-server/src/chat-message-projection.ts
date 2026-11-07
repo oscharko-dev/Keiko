@@ -16,6 +16,15 @@ const CHAT_MESSAGES_PROJECTED = defineActivityLogOperation({
   fields: {
     messageCount: { type: "integer", dataClass: "count", required: true },
     omittedDocumentCount: { type: "integer", dataClass: "count", required: true },
+    // Set when the list carried answers whose Local Knowledge index lifecycle was refreshed: how the
+    // current capsule stamps were obtained, and for how many capsules.
+    stampMemo: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["hit", "reread-token", "reread-age", "reread-missing"],
+    },
+    capsuleCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -27,10 +36,17 @@ const CHAT_MESSAGES_PROJECTED = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+/** How an index-lifecycle refresh obtained the current capsule stamps; counts and a closed word. */
+export interface ChatLifecycleRefresh {
+  readonly stampMemo: "hit" | "reread-token" | "reread-age" | "reread-missing";
+  readonly capsuleCount: number;
+}
+
 /** Private document bodies belong to stored prompt history, not repeated browser responses. */
 export function browserChatMessages(
   messages: readonly ChatMessage[],
   correlationId?: string,
+  refresh?: ChatLifecycleRefresh,
 ): readonly ChatMessage[] {
   let omittedDocumentCount = 0;
   const projected = messages.map((message) => {
@@ -39,7 +55,7 @@ export function browserChatMessages(
     omittedDocumentCount += documentContext.length;
     return visible;
   });
-  if (omittedDocumentCount > 0)
+  if (omittedDocumentCount > 0 || refresh !== undefined)
     processServerLogSink().write(
       activityLogEvent(
         CHAT_MESSAGES_PROJECTED,
@@ -47,6 +63,9 @@ export function browserChatMessages(
         {
           messageCount: messages.length,
           omittedDocumentCount,
+          ...(refresh === undefined
+            ? {}
+            : { stampMemo: refresh.stampMemo, capsuleCount: refresh.capsuleCount }),
           completeness: "complete",
           loss: "none",
         },

@@ -1209,6 +1209,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      readCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      readReusedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       durationMs: {
         type: "integer",
         dataClass: "duration",
@@ -2595,6 +2605,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      stampMemo: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["hit", "reread-token", "reread-age", "reread-missing"],
+      },
+      capsuleCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "none",

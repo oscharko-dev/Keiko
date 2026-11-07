@@ -1,5 +1,5 @@
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
-import { browserChatMessages } from "./chat-message-projection.js";
+import { browserChatMessages, type ChatLifecycleRefresh } from "./chat-message-projection.js";
 import {
   revokeChangedJiraChatAuthority,
   revokeJiraChatAccess,
@@ -1506,23 +1506,32 @@ function lifecycleCapsuleIds(messages: readonly ChatMessage[]): readonly Knowled
   return [...ids];
 }
 
+interface LifecycleProjection {
+  readonly messages: readonly ChatMessage[];
+  readonly refresh?: ChatLifecycleRefresh;
+}
+
 function projectMessagesWithCurrentLocalKnowledgeLifecycle(
   deps: UiHandlerDeps,
   messages: readonly ChatMessage[],
-): readonly ChatMessage[] {
-  if (!messages.some(hasLocalKnowledgeLifecycle)) return messages;
-  const lookup = currentCapsuleStampLookup(
+): LifecycleProjection {
+  if (!messages.some(hasLocalKnowledgeLifecycle)) return { messages };
+  const capsuleIds = lifecycleCapsuleIds(messages);
+  const { lookup, outcome } = currentCapsuleStampLookup(
     localKnowledgeProjectionStoreSource(deps),
-    lifecycleCapsuleIds(messages),
+    capsuleIds,
   );
-  return messages.map((message) =>
-    message.groundedAnswer === undefined
-      ? message
-      : {
-          ...message,
-          groundedAnswer: refreshGroundedAnswerIndexLifecycle(lookup, message.groundedAnswer),
-        },
-  );
+  return {
+    messages: messages.map((message) =>
+      message.groundedAnswer === undefined
+        ? message
+        : {
+            ...message,
+            groundedAnswer: refreshGroundedAnswerIndexLifecycle(lookup, message.groundedAnswer),
+          },
+    ),
+    refresh: { stampMemo: outcome, capsuleCount: capsuleIds.length },
+  };
 }
 
 export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -1541,13 +1550,11 @@ export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): Rout
     const messages = deps.store
       .listMessages(chatId, limit)
       .filter((message) => !isLegacyEmptyAssistantPlaceholder(message));
+    const projection = projectMessagesWithCurrentLocalKnowledgeLifecycle(deps, messages);
     return {
       status: 200,
       body: {
-        messages: browserChatMessages(
-          projectMessagesWithCurrentLocalKnowledgeLifecycle(deps, messages),
-          ctx.correlationId,
-        ),
+        messages: browserChatMessages(projection.messages, ctx.correlationId, projection.refresh),
       },
     };
   });
