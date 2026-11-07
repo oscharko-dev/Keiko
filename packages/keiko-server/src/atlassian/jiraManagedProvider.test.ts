@@ -110,9 +110,12 @@ it("builds canonical field metadata descriptors that admit the advertised input 
       },
     },
   });
+  const operationBinding = jiraOperationBindingForTool("jira.create-fields");
+  if (operationBinding === undefined)
+    throw new TypeError("Expected create-fields operation binding");
   const data = {
     outcome: "succeeded",
-    operationBinding: jiraOperationBindingForTool("jira.create-fields"),
+    operationBinding,
     items: [
       {
         id: "description",
@@ -137,7 +140,7 @@ it("builds canonical field metadata descriptors that admit the advertised input 
           ],
         },
         nativeFormat: "jira-wiki",
-        markdownSerialization: "headings-only",
+        markdownSerialization: "supported-markdown",
       },
     ],
   };

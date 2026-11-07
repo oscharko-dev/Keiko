@@ -27,9 +27,13 @@ import {
 import type {
   AtlassianConnectorActionType,
   CodingWorkbenchConnectorScope,
+  CodingWorkbenchApprovalRisk,
   CodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts";
-import { ATLASSIAN_CONNECTOR_ACTION_TYPES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  ATLASSIAN_CONNECTOR_ACTION_TYPES,
+  ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { RouteContext } from "../../packages/keiko-server/src/routes.js";
 import type { UiHandlerDeps } from "../../packages/keiko-server/src/deps.js";
 import type { AtlassianConnectorCredentialDeps } from "../../packages/keiko-server/src/atlassian/credentialRoutes.js";
@@ -70,6 +74,40 @@ const D4: Readonly<
   >
 > = {
   "governed-assist": {
+    "jira.project": "review-required",
+    "jira.validate-project-key": "review-required",
+    "jira.project-permissions": "review-required",
+    "jira.project-type": "review-required",
+    "jira.components": "review-required",
+    "jira.component": "review-required",
+    "jira.versions": "review-required",
+    "jira.version": "review-required",
+    "jira.filter": "review-required",
+    "jira.favourite-filters": "review-required",
+    "jira.boards": "review-required",
+    "jira.board": "review-required",
+    "jira.board-configuration": "review-required",
+    "jira.board-backlog": "review-required",
+    "jira.board-issues": "review-required",
+    "jira.board-epics": "review-required",
+    "jira.epic": "review-required",
+    "jira.epic-issues": "review-required",
+    "jira.sprints": "review-required",
+    "jira.sprint": "review-required",
+    "jira.sprint-issues": "review-required",
+    "create-project": "review-required",
+    "update-project": "review-required",
+    "create-component": "review-required",
+    "update-component": "review-required",
+    "create-version": "review-required",
+    "update-version": "review-required",
+    "create-board": "review-required",
+    "create-sprint": "review-required",
+    "update-sprint": "review-required",
+    "move-issues-to-sprint": "review-required",
+    "move-issues-to-backlog": "review-required",
+    "update-epic": "review-required",
+    "move-issues-to-epic": "review-required",
     "jira.projects": "review-required",
     "jira.issue-types": "review-required",
     "jira.create-fields": "review-required",
@@ -95,6 +133,40 @@ const D4: Readonly<
   },
   // ADR-0138: supervised-coding internet-scope operations require approval at every risk.
   "supervised-coding": {
+    "jira.project": "review-required",
+    "jira.validate-project-key": "review-required",
+    "jira.project-permissions": "review-required",
+    "jira.project-type": "review-required",
+    "jira.components": "review-required",
+    "jira.component": "review-required",
+    "jira.versions": "review-required",
+    "jira.version": "review-required",
+    "jira.filter": "review-required",
+    "jira.favourite-filters": "review-required",
+    "jira.boards": "review-required",
+    "jira.board": "review-required",
+    "jira.board-configuration": "review-required",
+    "jira.board-backlog": "review-required",
+    "jira.board-issues": "review-required",
+    "jira.board-epics": "review-required",
+    "jira.epic": "review-required",
+    "jira.epic-issues": "review-required",
+    "jira.sprints": "review-required",
+    "jira.sprint": "review-required",
+    "jira.sprint-issues": "review-required",
+    "create-project": "review-required",
+    "update-project": "review-required",
+    "create-component": "review-required",
+    "update-component": "review-required",
+    "create-version": "review-required",
+    "update-version": "review-required",
+    "create-board": "review-required",
+    "create-sprint": "review-required",
+    "update-sprint": "review-required",
+    "move-issues-to-sprint": "review-required",
+    "move-issues-to-backlog": "review-required",
+    "update-epic": "review-required",
+    "move-issues-to-epic": "review-required",
     "jira.projects": "review-required",
     "jira.issue-types": "review-required",
     "jira.create-fields": "review-required",
@@ -119,6 +191,40 @@ const D4: Readonly<
     "add-page-comment": "review-required",
   },
   "autonomous-delivery": {
+    "jira.project": "allowed",
+    "jira.validate-project-key": "allowed",
+    "jira.project-permissions": "allowed",
+    "jira.project-type": "allowed",
+    "jira.components": "allowed",
+    "jira.component": "allowed",
+    "jira.versions": "allowed",
+    "jira.version": "allowed",
+    "jira.filter": "allowed",
+    "jira.favourite-filters": "allowed",
+    "jira.boards": "allowed",
+    "jira.board": "allowed",
+    "jira.board-configuration": "allowed",
+    "jira.board-backlog": "allowed",
+    "jira.board-issues": "allowed",
+    "jira.board-epics": "allowed",
+    "jira.epic": "allowed",
+    "jira.epic-issues": "allowed",
+    "jira.sprints": "allowed",
+    "jira.sprint": "allowed",
+    "jira.sprint-issues": "allowed",
+    "create-project": "allowed",
+    "update-project": "allowed",
+    "create-component": "allowed",
+    "update-component": "allowed",
+    "create-version": "allowed",
+    "update-version": "allowed",
+    "create-board": "allowed",
+    "create-sprint": "allowed",
+    "update-sprint": "allowed",
+    "move-issues-to-sprint": "allowed",
+    "move-issues-to-backlog": "allowed",
+    "update-epic": "allowed",
+    "move-issues-to-epic": "allowed",
     "jira.projects": "allowed",
     "jira.issue-types": "allowed",
     "jira.create-fields": "allowed",
@@ -146,6 +252,40 @@ const D4: Readonly<
 
 // Literal deny reason per action (reads → connector-access-denied, writes → connector-write-denied).
 const MISSING_SCOPE_REASON: Readonly<Record<AtlassianConnectorActionType, string>> = {
+  "jira.project": "connector-access-denied",
+  "jira.validate-project-key": "connector-access-denied",
+  "jira.project-permissions": "connector-access-denied",
+  "jira.project-type": "connector-access-denied",
+  "jira.components": "connector-access-denied",
+  "jira.component": "connector-access-denied",
+  "jira.versions": "connector-access-denied",
+  "jira.version": "connector-access-denied",
+  "jira.filter": "connector-access-denied",
+  "jira.favourite-filters": "connector-access-denied",
+  "jira.boards": "connector-access-denied",
+  "jira.board": "connector-access-denied",
+  "jira.board-configuration": "connector-access-denied",
+  "jira.board-backlog": "connector-access-denied",
+  "jira.board-issues": "connector-access-denied",
+  "jira.board-epics": "connector-access-denied",
+  "jira.epic": "connector-access-denied",
+  "jira.epic-issues": "connector-access-denied",
+  "jira.sprints": "connector-access-denied",
+  "jira.sprint": "connector-access-denied",
+  "jira.sprint-issues": "connector-access-denied",
+  "create-project": "connector-write-denied",
+  "update-project": "connector-write-denied",
+  "create-component": "connector-write-denied",
+  "update-component": "connector-write-denied",
+  "create-version": "connector-write-denied",
+  "update-version": "connector-write-denied",
+  "create-board": "connector-write-denied",
+  "create-sprint": "connector-write-denied",
+  "update-sprint": "connector-write-denied",
+  "move-issues-to-sprint": "connector-write-denied",
+  "move-issues-to-backlog": "connector-write-denied",
+  "update-epic": "connector-write-denied",
+  "move-issues-to-epic": "connector-write-denied",
   "jira.projects": "connector-access-denied",
   "jira.issue-types": "connector-access-denied",
   "jira.create-fields": "connector-access-denied",
@@ -169,6 +309,83 @@ const MISSING_SCOPE_REASON: Readonly<Record<AtlassianConnectorActionType, string
   "update-page": "connector-write-denied",
   "add-page-comment": "connector-write-denied",
 };
+
+// Independent policy expectations: a future union member must receive an explicit risk and mode row.
+const EXPECTED_RISK: Readonly<Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>> = {
+  "jira.projects": "low",
+  "jira.issue-types": "low",
+  "jira.create-fields": "low",
+  "jira.edit-fields": "low",
+  "jira.search": "low",
+  "jira.issue": "low",
+  "jira.comments": "low",
+  "jira.transitions": "low",
+  "jira.assignable-users": "low",
+  "jira.report": "low",
+  "jira.draft-stage": "low",
+  "sync-space": "low",
+  "sync-project": "low",
+  "search-issues-live": "low",
+  "jira.project": "low",
+  "jira.validate-project-key": "low",
+  "jira.project-permissions": "low",
+  "jira.project-type": "low",
+  "jira.components": "low",
+  "jira.component": "low",
+  "jira.versions": "low",
+  "jira.version": "low",
+  "jira.filter": "low",
+  "jira.favourite-filters": "low",
+  "jira.boards": "low",
+  "jira.board": "low",
+  "jira.board-configuration": "low",
+  "jira.board-backlog": "low",
+  "jira.board-issues": "low",
+  "jira.board-epics": "low",
+  "jira.epic": "low",
+  "jira.epic-issues": "low",
+  "jira.sprints": "low",
+  "jira.sprint": "low",
+  "jira.sprint-issues": "low",
+  "add-issue-comment": "low",
+  "add-page-comment": "low",
+  "assign-issue": "medium",
+  "update-issue-fields": "medium",
+  "update-page": "medium",
+  "update-project": "medium",
+  "update-component": "medium",
+  "create-issue": "high",
+  "transition-issue": "high",
+  "create-page": "high",
+  "create-project": "high",
+  "create-component": "high",
+  "create-version": "high",
+  "update-version": "high",
+  "create-board": "high",
+  "create-sprint": "high",
+  "update-sprint": "high",
+  "move-issues-to-sprint": "high",
+  "move-issues-to-backlog": "high",
+  "update-epic": "high",
+  "move-issues-to-epic": "high",
+};
+const MANAGED_WRITES: ReadonlySet<AtlassianConnectorActionType> =
+  new Set<AtlassianConnectorActionType>([
+    "assign-issue",
+    "create-project",
+    "update-project",
+    "create-component",
+    "update-component",
+    "create-version",
+    "update-version",
+    "create-board",
+    "create-sprint",
+    "update-sprint",
+    "move-issues-to-sprint",
+    "move-issues-to-backlog",
+    "update-epic",
+    "move-issues-to-epic",
+  ]);
 
 // ─── Fixture transport (sync reads + writes + live search) ─────────────────────
 function response(status: number, bodyText: string): AtlassianHttpBodyResult {
@@ -348,7 +565,7 @@ function admit(
   authority: { runId: string; envelopeDigest: string; workspaceRoot: string },
   deps: UiHandlerDeps,
 ): Promise<Admission> {
-  if (actionType.startsWith("jira.") || actionType === "assign-issue") {
+  if (actionType.startsWith("jira.") || MANAGED_WRITES.has(actionType)) {
     const outcome = decideGovernedAtlassianAction(actionType, authority, deps);
     if (outcome.kind === "allowed" || outcome.kind === "review-required")
       return Promise.resolve({ disposition: outcome.kind });
@@ -403,9 +620,18 @@ describe("legacy routes and managed admission — D4 matrix, scope present (Scop
     },
   );
 
-  it("covers all twenty-two action types in every mode", () => {
+  it("covers every declared action in every mode and its independent risk table", () => {
     expect(PRESENT_MATRIX).toHaveLength(MODES.length * ATLASSIAN_CONNECTOR_ACTION_TYPES.length);
-    expect(ATLASSIAN_CONNECTOR_ACTION_TYPES).toHaveLength(22);
+    expect(Object.keys(D4["governed-assist"]).sort()).toEqual(
+      [...ATLASSIAN_CONNECTOR_ACTION_TYPES].sort(),
+    );
+    expect(Object.keys(D4["supervised-coding"]).sort()).toEqual(
+      [...ATLASSIAN_CONNECTOR_ACTION_TYPES].sort(),
+    );
+    expect(Object.keys(D4["autonomous-delivery"]).sort()).toEqual(
+      [...ATLASSIAN_CONNECTOR_ACTION_TYPES].sort(),
+    );
+    expect(ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK).toEqual(EXPECTED_RISK);
   });
 });
 

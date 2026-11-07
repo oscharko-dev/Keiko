@@ -21,8 +21,20 @@ import {
   fixtureRead,
   fixtureWrite,
   response,
-  type SyntheticJira,
 } from "../../../../tests/support/jira-managed-remote.js";
+import {
+  ARGUMENTS,
+  ATTACHED,
+  REMOTE_STATE,
+  SUCCESS_RECEIPTS,
+  mutationRemoteState,
+  nativeRead,
+  nativeWrite,
+  type MutationRemoteState,
+  type SingleMutation,
+} from "../../../../tests/support/jira-managed-mutation-scenarios.js";
+import { jiraMutationToolId } from "./jiraMutationToolId.js";
+import { jiraChatCatalogRoutes } from "./jiraChatCatalogConsumer.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
   expectRegisteredActivityLogLine,
@@ -57,57 +69,9 @@ const BASE_URL = "https://203.0.113.10/context";
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
-/** Single-issue mutations; a backlog draft dispatches its items as journaled creates (#4178). */
-type SingleMutation = Exclude<JiraMutationOperation, "jira.draft">;
 const SINGLE_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
   (operation): operation is SingleMutation => operation !== "jira.draft",
 );
-const DRAFT: CatalogJsonObject = {
-  items: [
-    {
-      ref: "one",
-      projectId: "10000",
-      issueTypeId: "10001",
-      fields: { summary: "Changed", customfield_10000: "Required" },
-    },
-  ],
-};
-const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject>> = {
-  "jira.create": {
-    projectId: "10000",
-    issueTypeId: "10001",
-    fields: { summary: "Changed", customfield_10000: "Required" },
-  },
-  "jira.edit": { issueKey: "SYN-1", fields: { summary: "Changed" } },
-  "jira.assign": { issueKey: "SYN-1", assigneeName: "synthetic-user" },
-  "jira.comment": { issueKey: "SYN-1", body: "Synthetic comment" },
-  "jira.transition": {
-    issueKey: "SYN-1",
-    transitionId: "31",
-    fields: { customfield_10000: "Screen value" },
-  },
-  "jira.draft": DRAFT,
-  "jira.attach": {
-    issueKey: "SYN-1",
-    source: { kind: "connected-file", path: "docs/report.txt" },
-  },
-};
-const ATTACHED = new TextEncoder().encode("synthetic attachment body");
-const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
-  "jira.create": {
-    fields: {
-      summary: "Changed",
-      customfield_10000: "Required",
-      project: { id: "10000" },
-      issuetype: { id: "10001" },
-    },
-  },
-  "jira.edit": { fields: { summary: "Changed", labels: ["initial"] } },
-  "jira.assign": { fields: { assignee: { name: "synthetic-user" } } },
-  "jira.comment": { comment: "Synthetic comment" },
-  "jira.transition": { fields: { status: { id: "3" }, customfield_10000: "Screen value" } },
-  "jira.attach": { fields: { attachment: [{ id: "10300", size: ATTACHED.length }] } },
-};
 function database(): {
   journal: ReturnType<typeof createChatToolMutationStore>;
   chatId: string;
@@ -192,29 +156,21 @@ function verificationProbe(path: string): ReturnType<typeof response> | undefine
 function fixtureReadResult(
   mode: RemoteMode,
   path: string,
-  state: SyntheticJira,
+  state: MutationRemoteState,
   writes: number,
 ): ReturnType<typeof fixtureRead> {
   if (mode === "readback-denied" && writes > 0) return response({}, 403);
-  return verificationProbe(path) ?? fixtureRead(path, state);
+  return verificationProbe(path) ?? nativeRead(path, state) ?? fixtureRead(path, state);
 }
 function remote(
   mode: RemoteMode,
   beforeWrite: () => void,
 ): {
   fetch: typeof fetch;
-  state: SyntheticJira;
+  state: MutationRemoteState;
   writes: () => number;
 } {
-  const state: SyntheticJira = {
-    fields: {
-      summary: "Original",
-      assignee: { name: "previous-user" },
-      status: { id: "1" },
-      labels: ["initial"],
-    },
-    comment: "",
-  };
+  const state = mutationRemoteState();
   let writes = 0;
   return {
     state,
@@ -247,10 +203,12 @@ function remote(
 async function fixtureWriteResult(
   request: Request,
   path: string,
-  state: SyntheticJira,
+  state: MutationRemoteState,
 ): Promise<ReturnType<typeof fixtureWrite>> {
-  if (!request.headers.get("content-type")?.startsWith("multipart/form-data; boundary=keiko-"))
-    return fixtureWrite(path, await request.text(), state);
+  if (!request.headers.get("content-type")?.startsWith("multipart/form-data; boundary=keiko-")) {
+    const text = await request.text();
+    return nativeWrite(path, text, state) ?? fixtureWrite(path, text, state);
+  }
   expect(request.headers.get("x-atlassian-token")).toBe("no-check");
   expect(request.method).toBe("POST");
   return fixtureWrite(path, undefined, state, {
@@ -308,7 +266,7 @@ async function fixture(
   intent: () => ChatToolMutationIntent;
   journal: ReturnType<typeof createChatToolMutationStore>;
   writes: () => number;
-  state: SyntheticJira;
+  state: MutationRemoteState;
   logs: ReturnType<typeof createBufferedServerLogSink>;
   offered: unknown;
 }> {
@@ -388,9 +346,9 @@ async function fixture(
     log: { primary: db.logs, diagnostics: { record: () => undefined } },
     correlationId: "mutation-admission",
     now: () => 1000,
-    routes: JIRA_MUTATION_OPERATIONS.map((name) => ({
+    routes: jiraChatCatalogRoutes(JIRA_MUTATION_OPERATIONS).map(({ name, alias }) => ({
       name,
-      alias: name.replace(".", "_"),
+      alias,
       catalogAction: name,
       previewAction: (identity): ConversationAction => ({
         ...identity,
@@ -444,7 +402,11 @@ async function fixture(
     offered: gateway.tools,
     invoke: async (operation, args = ARGUMENTS[operation]): Promise<CatalogToolDispatchOutcome> => {
       const id = `model-call-${String(++serial)}`;
-      const call = gateway.bind({ id, name: operation.replace(".", "_"), arguments: args });
+      const projected = managed.projection.tools.find(
+        (tool) => tool.toolRef.canonicalId === jiraMutationToolId(operation),
+      );
+      if (projected === undefined) throw new TypeError("Expected offered mutation identity");
+      const call = gateway.bind({ id, name: projected.alias, arguments: args });
       return consumer.binder.dispatch(call.invocation, { actionId: id, idempotencyKey: id });
     },
   };
@@ -484,8 +446,7 @@ it.each(SINGLE_MUTATIONS)(
         status: "completed",
         data: {
           outcome: "succeeded",
-          issueKey: "SYN-1",
-          browseUrl: `${BASE_URL}/browse/SYN-1`,
+          ...SUCCESS_RECEIPTS[operation],
         },
       },
     });
@@ -763,7 +724,7 @@ it("treats a draft whose items all exist already as a completed no-op, not a too
   expect(f.writes()).toBe(1);
   // The same backlog under another local reference is a new draft action with a fresh journal:
   // its one item is reconciled to the issue that exists, so Jira receives nothing.
-  const [first] = DRAFT.items as readonly Record<string, unknown>[];
+  const [first] = ARGUMENTS["jira.draft"].items as readonly Record<string, unknown>[];
   const rerun = { items: [{ ...first, ref: "uno" }] } as unknown as CatalogJsonObject;
   expect(await f.invoke("jira.draft", rerun)).toMatchObject({
     kind: "settled",
