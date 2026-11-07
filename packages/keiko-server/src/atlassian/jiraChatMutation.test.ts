@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi, type Mock } from "vitest";
-import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { JiraMutationAttempt, JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { JiraAcknowledgedMutationError } from "@oscharko-dev/keiko-connectors";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
@@ -267,6 +267,106 @@ it("uses the injected custody transport factory with journal-owned lifecycle hoo
   expect(httpPortFactory.mock.calls[0]?.[0].beforeDispatch).toBeTypeOf("function");
   expect(httpPortFactory.mock.calls[0]?.[0].onResponse).toBeTypeOf("function");
   expect(f.effects).toHaveBeenCalledOnce();
+});
+
+const MONITORING_WRITES = [
+  { operation: "jira.set-app-monitoring", path: "monitoring/app", read: "monitoring/app",
+    before: false, target: true, args: { expectedEnabled: false, enabled: true }, receipt: { monitoringEnabled: true } },
+  { operation: "jira.set-ipd-monitoring", path: "monitoring/ipd", read: "monitoring/ipd",
+    before: true, target: false, args: { expectedEnabled: true, enabled: false }, receipt: { monitoringEnabled: false } },
+  { operation: "jira.start-jmx-metrics", path: "monitoring/jmx/startExposing", read: "monitoring/jmx/areMetricsExposed",
+    before: false, target: true, args: { expectedEnabled: false }, receipt: { jmxMetricsExposed: true } },
+  { operation: "jira.stop-jmx-metrics", path: "monitoring/jmx/stopExposing", read: "monitoring/jmx/areMetricsExposed",
+    before: true, target: false, args: { expectedEnabled: true }, receipt: { jmxMetricsExposed: false } },
+] as const;
+type MonitoringCase = (typeof MONITORING_WRITES)[number];
+type MonitoringObservation = "confirmed" | "lost-ack" | "denied-readback" | "unchanged" | "stale";
+function monitoringFixture(scenario: MonitoringCase, observation: MonitoringObservation, path = ":memory:") {
+  const f = fixture(path);
+  let dispatched = false;
+  const scalar = scenario.read === "monitoring/jmx/areMetricsExposed";
+  f.effects.mockImplementation((input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (init?.method === "POST") {
+      expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("dispatched");
+      expect(url.pathname).toBe(`/rest/api/2/${scenario.path}`);
+      dispatched = true;
+      if (observation === "lost-ack") return Promise.reject(new Error("Synthetic lost monitoring response"));
+      return Promise.resolve(new Response(null, { status: scalar ? 200 : 204 }));
+    }
+    expect(init?.method).toBe("GET");
+    expect(url.pathname).toBe(`/rest/api/2/${scenario.read}`);
+    if (dispatched && observation === "denied-readback")
+      return Promise.resolve(new Response('{"errorMessages":["Readback denied"]}', { status: 403 }));
+    const enabled = dispatched || observation === "unchanged" || observation === "stale"
+      ? scenario.target : scenario.before;
+    return Promise.resolve(new Response(JSON.stringify(scalar ? enabled : { enabled }), { status: 200 }));
+  });
+  const args: CatalogJsonObject = observation === "unchanged"
+    ? { ...scenario.args, expectedEnabled: scenario.target } : scenario.args;
+  const execute = managedAttempt(f, scenario.operation, args);
+  return { ...f, input: { ...f.input, intent: { ...f.input.intent, operation: scenario.operation }, execute } };
+}
+it.each(MONITORING_WRITES)("confirms $operation only after one effect and independent boolean readback", async (scenario) => {
+  const f = monitoringFixture(scenario, "confirmed");
+  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded", ...scenario.receipt } });
+  expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "POST", "GET"]);
+  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded", replayed: true } });
+  expect(f.effects).toHaveBeenCalledTimes(3);
+  expect(f.logs.lines().join()).not.toMatch(/jira\.example|monitoring\/|expectedEnabled|synthetic-test-pat/u);
+});
+it.each(MONITORING_WRITES)("keeps $operation target boolean unconfirmed after denied readback without replay", async (scenario) => {
+  const f = monitoringFixture(scenario, "denied-readback");
+  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded-unconfirmed", ...scenario.receipt } });
+  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "succeeded-unconfirmed", replayed: true } });
+  expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "POST", "GET"]);
+});
+it.each(MONITORING_WRITES)("keeps a lost $operation response unknown across store reload without another provider call", async (scenario) => {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-monitoring-replay-"));
+  const path = join(directory, "ui.sqlite");
+  try {
+    const f = monitoringFixture(scenario, "lost-ack", path);
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "unknown", ...scenario.receipt } });
+    f.close();
+    const reopened = createNodeUiStore(path);
+    try {
+      const execute = vi.fn(f.input.execute);
+      expect(await executeJiraChatMutation({ ...f.input, journal: reopened.chatToolMutations, execute }))
+        .toMatchObject({ data: { outcome: "unknown", replayed: true } });
+      expect(execute).not.toHaveBeenCalled();
+      expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "POST"]);
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+it.each(MONITORING_WRITES)("settles an observed unchanged $operation without a POST", async (scenario) => {
+  const f = monitoringFixture(scenario, "unchanged");
+  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: {
+    outcome: "rejected", reason: "conflict", unchanged: true, ...scenario.receipt,
+  } });
+  expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET"]);
+});
+it.each(MONITORING_WRITES)("refuses stale reviewed $operation state before dispatch", async (scenario) => {
+  const f = monitoringFixture(scenario, "stale");
+  const result = await executeJiraChatMutation(f.input);
+  expect(result).toMatchObject({ data: { outcome: "rejected", reason: "conflict" } });
+  expect(result.data).not.toHaveProperty("monitoringEnabled");
+  expect(result.data).not.toHaveProperty("jmxMetricsExposed");
+  expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET"]);
+});
+it.each(MONITORING_WRITES)("does not infer an atomic no-effect rejection for $operation from a structured HTTP400", async (scenario) => {
+  const f = monitoringFixture(scenario, "confirmed");
+  const original = f.effects.getMockImplementation();
+  if (original === undefined) throw new TypeError("Missing native monitoring fixture");
+  f.effects.mockImplementation((input, init) => init?.method === "POST"
+    ? Promise.resolve(new Response('{"errorMessages":["Native refusal"]}', { status: 400 }))
+    : original(input, init));
+  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "unknown", ...scenario.receipt } });
+  expect(await executeJiraChatMutation(f.input)).toMatchObject({ data: { outcome: "unknown", replayed: true } });
+  expect(f.effects.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "POST"]);
 });
 
 it("records a body-only Markdown projection only in the settled body-free audit event", async () => {
@@ -1096,6 +1196,32 @@ function tabArguments(operation: TabWrite): CatalogJsonObject {
   return operation === "jira.rename-screen-tab" ? { ...tab, name: "Implementation" }
     : { ...tab, expectedFieldIds: ["summary"] };
 }
+function managedAttempt(
+  f: ReturnType<typeof fixture>,
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+): JiraChatMutationExecution["execute"] {
+  return async (http) => {
+    let attempted: JiraMutationAttempt = { ok: false, reason: "unavailable" };
+    const provider = createJiraProviderForCatalog(
+      () => ({ deployment: "data-center", baseUrl: "https://jira.example.invalid", http }),
+      [operation],
+      async (_operation, _args, _context, executeNative) => {
+        attempted = await executeNative(http);
+        return { data: { outcome: "pending" } };
+      },
+    );
+    const tool = provider.tools()[0];
+    if (tool === undefined) throw new TypeError("Missing selected Jira mutation tool");
+    await tool.execute(args, {
+      invocationId: f.input.intent.invocationId,
+      correlationId: f.input.intent.correlationId,
+      signal: new AbortController().signal,
+      beforeEffect: () => true,
+    });
+    return attempted;
+  };
+}
 function tabFixture(operation: TabWrite, observation: "confirmed" | "denied-readback" | "lost-ack", path = ":memory:") {
   const f = fixture(path);
   let changed = false;
@@ -1121,26 +1247,7 @@ function tabFixture(operation: TabWrite, observation: "confirmed" | "denied-read
       : operation === "jira.rename-screen-tab" ? [{ id: 21, name: "Implementation" }, original[1]] : [original[1]];
     return Promise.resolve(json(tabs));
   });
-  const execute: JiraChatMutationExecution["execute"] = async (http) => {
-    let attempted: JiraMutationAttempt = { ok: false, reason: "unavailable" };
-    const provider = createJiraProviderForCatalog(
-      () => ({ deployment: "data-center", baseUrl: "https://jira.example.invalid", http }),
-      [operation],
-      async (_operation, _args, _context, executeNative) => {
-        attempted = await executeNative(http);
-        return { data: { outcome: "pending" } };
-      },
-    );
-    const tool = provider.tools()[0];
-    if (tool === undefined) throw new TypeError("Missing screen-tab tool");
-    await tool.execute(tabArguments(operation), {
-      invocationId: f.input.intent.invocationId,
-      correlationId: f.input.intent.correlationId,
-      signal: new AbortController().signal,
-      beforeEffect: () => true,
-    });
-    return attempted;
-  };
+  const execute = managedAttempt(f, operation, tabArguments(operation));
   return { ...f, input: { ...f.input, intent: { ...f.input.intent, operation }, execute } };
 }
 it.each(TAB_WRITES)("journals one real %s effect and its independent same-parent readback", async (operation) => {

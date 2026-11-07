@@ -659,6 +659,16 @@ and positively classified administrator 401 settle as rejected only with the exi
 structured Jira error-document proof. Other responses retain uncertainty; no general 4xx or
 bulk-operation rule is widened.
 
+Application monitoring, in-product diagnostics and JMX exposure changes are high-risk actions
+through the same approval and journal owners. Each fixed native POST requires an explicit reviewed
+boolean state, reads that current state before dispatch and independently reads it again after the
+acknowledgement. An unchanged target produces a no-op without POST. The private receipt's
+`monitoringEnabled` or `jmxMetricsExposed` boolean describes the requested target when the result is
+unknown or unconfirmed; only a successful independent readback establishes the resulting state.
+False is preserved as a real value. These endpoints add no authentication exception or assumed
+atomic-error rule, and an uncertain invocation is never replayed. They do not fetch metric contents
+or start reindex, snapshot or upgrade jobs.
+
 Both outbound HTTP factories capture the selected credential generation by value. The custody
 resolver checks it against current private metadata before reading ciphertext, so an old transport
 cannot silently materialize a replacement credential. The existing typed rejection event and 409

@@ -481,6 +481,10 @@ describe("the dry run before approval", () => {
 
   it.each([
     "jira.create-screen-tab",
+    "jira.set-app-monitoring",
+    "jira.set-ipd-monitoring",
+    "jira.start-jmx-metrics",
+    "jira.stop-jmx-metrics",
     "jira.rename-screen-tab",
     "jira.delete-screen-tab",
     "jira.create-project",
@@ -541,6 +545,22 @@ describe("the dry run before approval", () => {
     expect(f.http).toHaveBeenCalled();
     expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
     expect(f.http.mock.calls.some(([request]) => request.url.includes("/issue/"))).toBe(false);
+  });
+
+  it.each([
+    ["jira.set-app-monitoring", { expectedEnabled: false, enabled: true }],
+    ["jira.set-ipd-monitoring", { expectedEnabled: true, enabled: false }],
+    ["jira.start-jmx-metrics", { expectedEnabled: false }],
+    ["jira.stop-jmx-metrics", { expectedEnabled: true }],
+  ] as const)("reads the reviewed %s state before approval without a POST or issue template", async (operation, args) => {
+    const f = preflight(TEMPLATE, args, operation);
+    f.http.mockImplementation((request) => Promise.resolve(response(
+      request.url.endsWith("/areMetricsExposed") ? args.expectedEnabled : { enabled: args.expectedEnabled },
+    )));
+    expect(await f.run()).toBeUndefined();
+    expect(f.http).toHaveBeenCalledTimes(1);
+    expect(f.http.mock.calls[0]?.[0].method).toBe("GET");
+    expect(f.http.mock.calls[0]?.[0].url).toContain("/monitoring/");
   });
 
   it("lets a conforming proposal through to the human's approval", async () => {

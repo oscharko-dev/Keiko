@@ -176,6 +176,10 @@ const FIELD_ADMISSION = defineActivityLogOperation({
         "jira.assign",
         "jira.draft",
         "jira.create-screen-tab",
+        "jira.set-app-monitoring",
+        "jira.set-ipd-monitoring",
+        "jira.start-jmx-metrics",
+        "jira.stop-jmx-metrics",
         "jira.rename-screen-tab",
         "jira.delete-screen-tab",
         "jira.create-project",
@@ -286,6 +290,10 @@ export function recordJiraFieldRefusal(
       | JiraTemplateOperation
       | "jira.draft"
       | "jira.create-screen-tab"
+      | "jira.set-app-monitoring"
+      | "jira.set-ipd-monitoring"
+      | "jira.start-jmx-metrics"
+      | "jira.stop-jmx-metrics"
       | "jira.rename-screen-tab"
       | "jira.delete-screen-tab"
       | "jira.create-project"

@@ -586,6 +586,10 @@ export type AtlassianSyncJobState =
 // ─── Governed action vocabulary and effect-class table (ADR-0128 D4) ──────────
 export type AtlassianConnectorActionType =
   | JiraManagedReadToolName
+  | "set-app-monitoring"
+  | "set-ipd-monitoring"
+  | "start-jmx-metrics"
+  | "stop-jmx-metrics"
   | "create-screen-tab"
   | "rename-screen-tab"
   | "delete-screen-tab"
@@ -626,6 +630,10 @@ export type AtlassianConnectorActionType =
 
 export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorActionType[] =
   Object.freeze([
+    "set-app-monitoring",
+    "set-ipd-monitoring",
+    "start-jmx-metrics",
+    "stop-jmx-metrics",
     "create-screen-tab",
     "rename-screen-tab",
     "delete-screen-tab",
@@ -678,6 +686,10 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
     JiraManagedReadToolName
   >),
   "jira.create": "create-issue",
+  "jira.set-app-monitoring": "set-app-monitoring",
+  "jira.set-ipd-monitoring": "set-ipd-monitoring",
+  "jira.start-jmx-metrics": "start-jmx-metrics",
+  "jira.stop-jmx-metrics": "stop-jmx-metrics",
   "jira.create-screen-tab": "create-screen-tab",
   "jira.rename-screen-tab": "rename-screen-tab",
   "jira.delete-screen-tab": "delete-screen-tab",
@@ -739,6 +751,10 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorActionClass>
 > = Object.freeze({
   ...jiraReadActionValues("connector-access"),
+  "set-app-monitoring": "connector-write",
+  "set-ipd-monitoring": "connector-write",
+  "start-jmx-metrics": "connector-write",
+  "stop-jmx-metrics": "connector-write",
   "create-screen-tab": "connector-write",
   "rename-screen-tab": "connector-write",
   "delete-screen-tab": "connector-write",
@@ -782,6 +798,10 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
   ...jiraReadActionValues("jira"),
+  "set-app-monitoring": "jira",
+  "set-ipd-monitoring": "jira",
+  "start-jmx-metrics": "jira",
+  "stop-jmx-metrics": "jira",
   "create-screen-tab": "jira",
   "rename-screen-tab": "jira",
   "delete-screen-tab": "jira",
@@ -825,6 +845,10 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
   ...jiraReadActionValues("issue-tracker.read"),
+  "set-app-monitoring": "issue-tracker.write",
+  "set-ipd-monitoring": "issue-tracker.write",
+  "start-jmx-metrics": "issue-tracker.write",
+  "stop-jmx-metrics": "issue-tracker.write",
   "create-screen-tab": "issue-tracker.write",
   "rename-screen-tab": "issue-tracker.write",
   "delete-screen-tab": "issue-tracker.write",
@@ -871,6 +895,10 @@ export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
   ...jiraReadActionValues("low"),
+  "set-app-monitoring": "high",
+  "set-ipd-monitoring": "high",
+  "start-jmx-metrics": "high",
+  "stop-jmx-metrics": "high",
   "create-screen-tab": "high",
   "rename-screen-tab": "high",
   "delete-screen-tab": "high",

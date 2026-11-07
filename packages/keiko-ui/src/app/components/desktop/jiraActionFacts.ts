@@ -15,6 +15,7 @@ import { jiraNamed, jiraNameOf, NO_JIRA_NAMES, restatesTarget, type JiraNames } 
 import { jiraAgileArgumentLabel } from "./jira-agile-presentation";
 import { jiraProjectMetadataArgumentLabel } from "./jira-project-metadata-presentation";
 import { jiraScreenTabArgumentLabel } from "./jira-administration-presentation";
+import { jiraMonitoringArgumentLabel, jiraMonitoringFixedTarget } from "./jira-monitoring-presentation";
 
 type Raw = Readonly<Record<string, unknown>>;
 type Fact = JiraDraftField;
@@ -214,6 +215,19 @@ function screenTabFacts(operation: string | undefined, key: string, value: unkno
     ? textValue(t("chat.jira.screenTabs.reviewedEmptyFields")) : Array.isArray(value)
       ? listOf(value.map((entry: unknown) => jiraDraftValueOf(entry))) : jiraDraftValueOf(value) }];
 }
+function monitoringFacts(operation: string | undefined, key: string, value: unknown, t: OptionalWidgetTranslate): readonly Fact[] | undefined {
+  const label = jiraMonitoringArgumentLabel(operation, key);
+  if (label === undefined) return undefined;
+  return [{ id: t(label), value: typeof value === "boolean"
+    ? textValue(t(value ? "chat.jira.monitoring.enabled" : "chat.jira.monitoring.disabled")) : jiraDraftValueOf(value) }];
+}
+function monitoringContextFacts(operation: string | undefined, t: OptionalWidgetTranslate): readonly Fact[] {
+  if (jiraMonitoringArgumentLabel(operation, "expectedEnabled") === undefined) return [];
+  const target = jiraMonitoringFixedTarget(operation);
+  const targetFacts: readonly Fact[] = target === undefined ? [] : [{ id: t("chat.jira.monitoring.requestedState"),
+    value: textValue(t(target ? "chat.jira.monitoring.enabled" : "chat.jira.monitoring.disabled")) }];
+  return [...targetFacts, { id: t("chat.jira.monitoring.scope"), value: textValue(t("chat.jira.monitoring.instanceScope")) }];
+}
 
 /** One argument of a managed Jira write as one or more facts, in request order. */
 function jiraFacts(key: string, value: unknown, t: OptionalWidgetTranslate): readonly Fact[] {
@@ -269,8 +283,8 @@ export function jiraActionFacts(
     if (!managed) return [{ id: key, value: jiraDraftValueOf(value) }];
     const deletionPreview = deletionFacts(operation, key, value, t);
     if (deletionPreview !== undefined) return deletionPreview;
-    const screenTabPreview = screenTabFacts(operation, key, value, t);
-    if (screenTabPreview !== undefined) return screenTabPreview;
+    const specificPreview = screenTabFacts(operation, key, value, t) ?? monitoringFacts(operation, key, value, t);
+    if (specificPreview !== undefined) return specificPreview;
     const worklogPreview = worklog
       ? worklogFacts(key, value, t, operation === "jira.update-worklog")
       : undefined;
@@ -283,7 +297,7 @@ export function jiraActionFacts(
       ? managedFacts(key, value, raw, t, names)
       : [{ id: t(label), value: jiraDraftValueOf(value) }];
   });
-  return managed ? [...facts, ...deletionContextFacts(raw, operation, t)] : facts;
+  return managed ? [...facts, ...deletionContextFacts(raw, operation, t), ...monitoringContextFacts(operation, t)] : facts;
 }
 /** Jira's own names where this turn read them; a field that repeats the target is said once. */
 function managedFacts(

@@ -456,6 +456,10 @@ it.each([
   ["DELETE", "screens/1/tabs/2/fields"],
   ["POST", "screens/1/tabs/2/move/1"],
   ["PUT", "project/1"],
+  ["POST", "monitoring/app"],
+  ["POST", "monitoring/ipd"],
+  ["POST", "monitoring/jmx/startExposing"],
+  ["POST", "monitoring/jmx/stopExposing"],
 ] as const)("retains ordinary credential failure for unlisted %s %s", async (method, path) => {
   const f = fixture(() => response({}, 401));
   await f.deps.httpBodyPortFactory(f.metadata)(tabRequest(method, path));

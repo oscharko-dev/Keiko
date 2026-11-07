@@ -4,6 +4,10 @@ import { compareStrings } from "./comparators.js";
 
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
+  "jira.set-app-monitoring",
+  "jira.set-ipd-monitoring",
+  "jira.start-jmx-metrics",
+  "jira.stop-jmx-metrics",
   "jira.create-screen-tab",
   "jira.rename-screen-tab",
   "jira.delete-screen-tab",
@@ -153,8 +157,11 @@ export type JiraMutationOutcome = (typeof JIRA_MUTATION_OUTCOMES)[number];
 export const JIRA_MUTATION_RESULT_STATES = [...JIRA_MUTATION_OUTCOMES, "pending"] as const;
 export type JiraMutationResultState = (typeof JIRA_MUTATION_RESULT_STATES)[number];
 
-/** Validated Jira identities only; remote bodies and headers never become a mutation receipt. */
+/** Validated Jira identities and closed state facts; never remote bodies or headers.
+ * Monitoring booleans on unknown/unconfirmed writes are requested targets, not success evidence. */
 export interface JiraMutationReceipt {
+  readonly monitoringEnabled?: boolean;
+  readonly jmxMetricsExposed?: boolean;
   readonly screenId?: string;
   readonly tabId?: string;
   readonly projectId?: string;

@@ -1,4 +1,8 @@
 import {
+  jiraMonitoringDeclarationForTool,
+  type JIRA_MONITORING_WRITE_DEFINITIONS,
+} from "./jiraMonitoringDescriptors.js";
+import {
   jiraScreenTabDeclarationForTool,
   type JIRA_SCREEN_TAB_WRITE_DEFINITIONS,
 } from "./jiraScreenTabDescriptors.js";
@@ -399,6 +403,7 @@ type CoreMutationToolName = Exclude<
     | keyof typeof JIRA_PARTICIPATION_WRITE_DEFINITIONS
     | keyof typeof JIRA_DELETION_DEFINITIONS
     | keyof typeof JIRA_SCREEN_TAB_WRITE_DEFINITIONS
+    | keyof typeof JIRA_MONITORING_WRITE_DEFINITIONS
   >
 >;
 const DEFINITIONS: Readonly<
@@ -567,6 +572,8 @@ function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationTo
   return Object.hasOwn(DEFINITIONS, name);
 }
 export function jiraMutationDeclaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
+  const monitoring = jiraMonitoringDeclarationForTool(name);
+  if (monitoring !== undefined) return monitoring;
   const screenTab = jiraScreenTabDeclarationForTool(name);
   if (screenTab !== undefined) return screenTab;
   const agile = jiraAgileDeclarationForTool(name);

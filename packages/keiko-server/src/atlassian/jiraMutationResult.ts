@@ -31,6 +31,13 @@ const RECEIPT_KEYS: ReadonlySet<string> = new Set([
   "transitionId",
   "attachmentId",
 ]);
+const MONITORING_RECEIPTS = {
+  "jira.set-app-monitoring": ["monitoringEnabled"],
+  "jira.set-ipd-monitoring": ["monitoringEnabled"],
+  "jira.start-jmx-metrics": ["jmxMetricsExposed"],
+  "jira.stop-jmx-metrics": ["jmxMetricsExposed"],
+} as const;
+type MonitoringOperation = keyof typeof MONITORING_RECEIPTS;
 const SCREEN_TAB_RECEIPTS = {
   "jira.create-screen-tab": ["screenId", "tabId"],
   "jira.rename-screen-tab": ["screenId", "tabId"],
@@ -69,6 +76,7 @@ type CollaborationOperation = keyof typeof COLLABORATION_RECEIPTS;
 const REQUIRED_RECEIPTS: Readonly<
   Record<JiraMutationOperation, readonly (keyof JiraMutationReceipt)[]>
 > = {
+  ...MONITORING_RECEIPTS,
   ...SCREEN_TAB_RECEIPTS,
   ...AGILE_RECEIPTS,
   ...STRUCTURE_RECEIPTS,
@@ -88,6 +96,16 @@ const REQUIRED_RECEIPTS: Readonly<
 
 function confirmed(value: unknown): boolean {
   return value === true;
+}
+function monitoringOperation(operation: JiraMutationOperation): operation is MonitoringOperation {
+  return Object.hasOwn(MONITORING_RECEIPTS, operation);
+}
+function validMonitoringReceipt(receipt: JiraMutationReceipt, operation: MonitoringOperation): boolean {
+  const [key] = MONITORING_RECEIPTS[operation];
+  if (Object.keys(receipt).length !== 1 || typeof receipt[key] !== "boolean") return false;
+  if (operation === "jira.start-jmx-metrics") return receipt.jmxMetricsExposed === true;
+  if (operation === "jira.stop-jmx-metrics") return receipt.jmxMetricsExposed === false;
+  return true;
 }
 function screenTabOperation(operation: JiraMutationOperation): operation is ScreenTabOperation {
   return Object.hasOwn(SCREEN_TAB_RECEIPTS, operation);
@@ -253,6 +271,7 @@ function validProjectReceipt(receipt: JiraMutationReceipt): boolean {
   });
 }
 function validIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
+  if (monitoringOperation(operation)) return validMonitoringReceipt(receipt, operation);
   if (screenTabOperation(operation)) return validScreenTabReceipt(receipt);
   if (projectOperation(operation)) return validProjectReceipt(receipt);
   if (agileOperation(operation)) return validAgileReceipt(receipt, operation);
@@ -275,6 +294,7 @@ function partialReceipt(
 }
 function partialIdentity(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
   return (
+    monitoringOperation(operation) ||
     screenTabOperation(operation) ||
     projectOperation(operation) ||
     agileOperation(operation) ||

@@ -32,6 +32,10 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.set-app-monitoring", args: { expectedEnabled: false, enabled: true } },
+  { tool: "jira.set-ipd-monitoring", args: { expectedEnabled: true, enabled: false } },
+  { tool: "jira.start-jmx-metrics", args: { expectedEnabled: false } },
+  { tool: "jira.stop-jmx-metrics", args: { expectedEnabled: true } },
   { tool: "jira.issue-picker", args: { query: "Plan & QA", currentIssueKey: "SYN-1", currentProjectId: "10000", showSubTasks: false, showSubTaskParent: true },
     query: { query: "Plan & QA", currentIssueKey: "SYN-1", currentProjectId: "10000", showSubTasks: "false", showSubTaskParent: "true" }, primaryMethodIndex: 2 },
   { tool: "jira.pinned-comments", args: { issueIdOrKey: "SYN-1", startAt: 0, maxResults: 1 },
@@ -647,6 +651,7 @@ const SCENARIOS: readonly Scenario[] = [
   },
 ];
 interface RemoteState extends SyntheticJira {
+  monitoring: { app: boolean; ipd: boolean; jmx: boolean } | undefined;
   screenTabs: readonly Record<string, unknown>[] | undefined;
   worklog: Record<string, unknown>;
   worklogDeleted: boolean;
@@ -657,6 +662,30 @@ interface RemoteState extends SyntheticJira {
   project: Record<string, unknown>;
   component: Record<string, unknown>;
   version: Record<string, unknown>;
+}
+const MONITORING_WRITES = new Set(["jira.set-app-monitoring", "jira.set-ipd-monitoring", "jira.start-jmx-metrics", "jira.stop-jmx-metrics"]);
+function monitoringRead(path: string, state: RemoteState): AtlassianHttpBodyResult | undefined {
+  const current = state.monitoring;
+  if (current === undefined) return undefined;
+  if (path === "monitoring/jmx/areMetricsExposed") return response(current.jmx);
+  if (path === "monitoring/app") return response({ enabled: current.app });
+  return path === "monitoring/ipd" ? response({ enabled: current.ipd }) : undefined;
+}
+function monitoringWrite(path: string, request: AtlassianHttpBodyRequest, state: RemoteState): AtlassianHttpBodyResult | undefined {
+  const current = state.monitoring;
+  if (current === undefined || !path.startsWith("monitoring/")) return undefined;
+  expect(request.method).toBe("POST");
+  expect(request.expect).toBe("none");
+  if (path === "monitoring/app" || path === "monitoring/ipd") {
+    const enabled = path === "monitoring/app";
+    expect(JSON.parse(request.bodyJson ?? "null")).toEqual({ enabled });
+    current[enabled ? "app" : "ipd"] = enabled;
+  } else {
+    expect(new Set(["monitoring/jmx/startExposing", "monitoring/jmx/stopExposing"]).has(path)).toBe(true);
+    expect(request.bodyJson).toBeUndefined();
+    current.jmx = path === "monitoring/jmx/startExposing";
+  }
+  return response({}, 204);
 }
 const SCREEN_TAB_WRITES = new Set(["jira.create-screen-tab", "jira.rename-screen-tab", "jira.delete-screen-tab"]);
 function screenTabRead(path: string, state: RemoteState): AtlassianHttpBodyResult | undefined {
@@ -1206,6 +1235,7 @@ function remoteRead(
   absoluteUrl: string,
 ): AtlassianHttpBodyResult {
   return (
+    monitoringRead(path, state) ??
     screenTabRead(path, state) ??
     projectRead(path, state) ??
     structureRead(path, state) ??
@@ -1224,6 +1254,7 @@ function remoteRead(
 }
 function remote(tool?: string): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
   const state: RemoteState = {
+    monitoring: MONITORING_WRITES.has(tool ?? "") ? { app: false, ipd: true, jmx: tool === "jira.stop-jmx-metrics" } : undefined,
     screenTabs: SCREEN_TAB_WRITES.has(tool ?? "") ? [{ id: 81, name: "Details" }, { id: 82, name: "Other" }] : undefined,
     fields: {
       summary: "Before",
@@ -1267,7 +1298,8 @@ function remote(tool?: string): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> 
     return Promise.resolve(
       path === "project" || path === "project/10000"
         ? projectWrite(request, state)
-        : (screenTabWrite(path, request, state) ??
+        : (monitoringWrite(path, request, state) ??
+            screenTabWrite(path, request, state) ??
             participationWrite(path, request.method, state) ??
             assetWrite(path, request, state) ??
             worklogWrite(path, request, state) ??
@@ -1304,7 +1336,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(193);
+    expect(native).toHaveLength(197);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1315,6 +1347,20 @@ describe("native Jira registry and real connector transport agreement", () => {
     assertPrimary(observed, scenario);
     const writes = observed.requests.filter((request) => request.method !== "GET");
     expect(writes).toHaveLength(observed.definition.method === "GET" ? 0 : 1);
+  });
+  it.each([
+    ["jira.set-app-monitoring", "monitoringEnabled", true],
+    ["jira.set-ipd-monitoring", "monitoringEnabled", false],
+    ["jira.start-jmx-metrics", "jmxMetricsExposed", true],
+    ["jira.stop-jmx-metrics", "jmxMetricsExposed", false],
+  ] as const)("confirms %s through its independent original state endpoint", async (tool, field, target) => {
+    const scenario = SCENARIOS.find((candidate) => candidate.tool === tool);
+    if (scenario === undefined) throw new TypeError("Missing monitoring fixture");
+    const observed = await observe(scenario);
+    expect(observed.requests.map(({ method }) => method)).toEqual(["GET", "POST", "GET"]);
+    expect(observed.requests[0]?.url).toBe(observed.requests[2]?.url);
+    expect(observed.requests[0]?.expect).toBe(field === "jmxMetricsExposed" ? "json-scalar" : "json");
+    expect(observed.result.data).toMatchObject({ outcome: "succeeded", [field]: target });
   });
   it("keeps a false native reorder observation and binds its parent without authorizing a write", async () => {
     const observed = await observe({ tool: "jira.subtask-move-availability", args: { issueIdOrKey: "SYN-1" } });

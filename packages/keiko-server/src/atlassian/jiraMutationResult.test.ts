@@ -20,6 +20,41 @@ const PARTIAL: JiraMutationAttempt = {
   links: LINKS,
 };
 
+describe("monitoring setting receipts", () => {
+  it.each([
+    ["jira.set-app-monitoring", "monitoringEnabled", false],
+    ["jira.set-ipd-monitoring", "monitoringEnabled", true],
+    ["jira.start-jmx-metrics", "jmxMetricsExposed", true],
+    ["jira.stop-jmx-metrics", "jmxMetricsExposed", false],
+  ] as const)("preserves the exact confirmed or requested boolean for %s", (operation, field, value) => {
+    const receipt = { [field]: value };
+    const confirmed = validJiraMutationAttempt({ ok: true, receipt }, operation);
+    expect(confirmed).toEqual({ ok: true, receipt });
+    expect(jiraAttemptToolResult("succeeded", confirmed).data).toMatchObject({ outcome: "succeeded", ...receipt });
+    const uncertain = validJiraMutationAttempt({ ok: false, reason: "timeout", receipt }, operation);
+    expect(uncertain).toEqual({ ok: false, reason: "timeout", receipt });
+    for (const outcome of ["unknown", "succeeded-unconfirmed"] as const)
+      expect(jiraAttemptToolResult(outcome, uncertain).data).toMatchObject({ outcome, ...receipt });
+    expect(validJiraMutationAttempt({ ok: true, receipt: {} }, operation)).toEqual({ ok: false, reason: "malformed-payload" });
+    for (const extra of [{ issueKey: "SYN-1" }, { screenId: "71" }, { browseUrl: "https://untrusted.invalid/monitoring" }, { monitoringEnabled: true, jmxMetricsExposed: true }]) {
+      const contaminated = { ...receipt, ...extra };
+      expect(validJiraMutationAttempt({ ok: true, receipt: contaminated }, operation)).toEqual({ ok: false, reason: "malformed-payload" });
+      expect(validJiraMutationAttempt({ ok: false, reason: "timeout", receipt: contaminated }, operation)).not.toHaveProperty("receipt");
+    }
+    expect(validJiraMutationAttempt({ ok: true, receipt: { [field]: "false" } }, operation)).toEqual({ ok: false, reason: "malformed-payload" });
+  });
+  it.each([
+    ["jira.start-jmx-metrics", false], ["jira.stop-jmx-metrics", true],
+  ] as const)("refuses a receipt that contradicts the fixed target of %s", (operation, jmxMetricsExposed) => {
+    expect(validJiraMutationAttempt({ ok: true, receipt: { jmxMetricsExposed } }, operation)).toEqual({ ok: false, reason: "malformed-payload" });
+    expect(validJiraMutationAttempt({ ok: false, reason: "timeout", receipt: { jmxMetricsExposed } }, operation)).not.toHaveProperty("receipt");
+  });
+  it("retains observed disabled no-op without reporting an applied write", () => {
+    const attempt = validJiraMutationAttempt({ ok: false, reason: "conflict", receipt: { monitoringEnabled: false }, detail: { unchanged: true } }, "jira.set-app-monitoring");
+    expect(jiraAttemptToolResult("rejected", attempt).data).toMatchObject({ outcome: "rejected", reason: "conflict", unchanged: true, monitoringEnabled: false });
+  });
+});
+
 describe("screen tab receipts", () => {
   it.each(["jira.create-screen-tab", "jira.rename-screen-tab", "jira.delete-screen-tab"] as const)(
     "requires both exact screen and tab identities for confirmed %s", (operation) => {

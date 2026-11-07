@@ -3173,6 +3173,48 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.set-app-monitoring": {
+      "identity": "POST /rest/api/2/monitoring/app",
+      "effect": "write",
+      "permissionPolicy": "monitoring-state-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "App monitoring uses the documented object boolean read and typed enabled body. The observed prior boolean must match reviewed expectedEnabled before one POST; missing state is not false, changed snapshots refuse and already-equal states report unchanged without dispatch. Existing high-risk authority, exact approval and durable no-replay journal govern the effect. Fresh independent native state readback is required after acknowledgement. Failed/unconfirmed receipts retain the requested target, not an observed-state claim; no retry, setting inference or expansion of auth/atomic-error policy.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-monitoring-mutations.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-monitoring-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraMonitoringMigration.test.ts",
+        "packages/keiko-server/src/store/jiraOperationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-ipd-monitoring": {
+      "identity": "POST /rest/api/2/monitoring/ipd",
+      "effect": "write",
+      "permissionPolicy": "monitoring-state-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "IPD monitoring uses the documented object boolean read and typed enabled body. The observed prior boolean must match reviewed expectedEnabled before one POST; missing state is not false, changed snapshots refuse and already-equal states report unchanged without dispatch. Existing high-risk authority, exact approval and durable no-replay journal govern the effect. Fresh independent native state readback is required after acknowledgement. Failed/unconfirmed receipts retain the requested target, not an observed-state claim; no retry, setting inference or expansion of auth/atomic-error policy.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-monitoring-mutations.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-monitoring-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraMonitoringMigration.test.ts",
+        "packages/keiko-server/src/store/jiraOperationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.sprint": {
       "identity": "GET /rest/agile/1.0/sprint/{sprintId}",
       "effect": "read",
@@ -3301,6 +3343,27 @@
       ],
       "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
     },
+    "jira.start-jmx-metrics": {
+      "identity": "POST /rest/api/2/monitoring/jmx/startExposing",
+      "effect": "write",
+      "permissionPolicy": "monitoring-state-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "JMX exposure is read through the existing scalar boolean owner; this fixed operation targets true and sends no body. The observed prior boolean must match reviewed expectedEnabled before one POST; missing state is not false, changed snapshots refuse and already-equal states report unchanged without dispatch. Existing high-risk authority, exact approval and durable no-replay journal govern the effect. Fresh independent native state readback is required after acknowledgement. Failed/unconfirmed receipts retain the requested target, not an observed-state claim; no retry, setting inference or expansion of auth/atomic-error policy.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-monitoring-mutations.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-monitoring-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraMonitoringMigration.test.ts",
+        "packages/keiko-server/src/store/jiraOperationMigration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.status": {
       "identity": "GET /rest/api/2/status/{idOrName}",
       "effect": "read",
@@ -3402,6 +3465,27 @@
         "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.stop-jmx-metrics": {
+      "identity": "POST /rest/api/2/monitoring/jmx/stopExposing",
+      "effect": "write",
+      "permissionPolicy": "monitoring-state-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "JMX exposure is read through the existing scalar boolean owner; this fixed operation targets false and sends no body. The observed prior boolean must match reviewed expectedEnabled before one POST; missing state is not false, changed snapshots refuse and already-equal states report unchanged without dispatch. Existing high-risk authority, exact approval and durable no-replay journal govern the effect. Fresh independent native state readback is required after acknowledgement. Failed/unconfirmed receipts retain the requested target, not an observed-state claim; no retry, setting inference or expansion of auth/atomic-error policy.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-monitoring-mutations.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-monitoring-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMonitoringDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraMonitoringMigration.test.ts",
+        "packages/keiko-server/src/store/jiraOperationMigration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -4126,8 +4210,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "c17368d24e2515d681f1f46f9fac0c911caa8150032a6e540d9c8742c0d4210d",
-    "nativeOperationCount": 224
+    "sha256": "44b27953f02eed48d70e705d95f6eded99f3748a64c445f661e1ce310fd2a1bb",
+    "nativeOperationCount": 228
   },
   "operations": [
     {
@@ -10877,10 +10961,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.set-app-monitoring"]
     },
     {
       "identity": "GET /rest/api/2/monitoring/ipd",
@@ -10941,10 +11025,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.set-ipd-monitoring"]
     },
     {
       "identity": "GET /rest/api/2/monitoring/jmx/areMetricsExposed",
@@ -11037,10 +11121,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.start-jmx-metrics"]
     },
     {
       "identity": "POST /rest/api/2/monitoring/jmx/stopExposing",
@@ -11069,10 +11153,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.stop-jmx-metrics"]
     },
     {
       "identity": "GET /rest/api/2/mypermissions",

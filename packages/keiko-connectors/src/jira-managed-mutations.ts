@@ -1,4 +1,5 @@
 import { executeJiraScreenTabMutation, isJiraScreenTabMutation } from "./jira-managed-screen-tab-mutations.js";
+import { executeJiraMonitoringMutation, isJiraMonitoringMutation } from "./jira-managed-monitoring-mutations.js";
 import {
   executeJiraParticipationMutation,
   isJiraParticipationMutation,
@@ -1352,6 +1353,8 @@ function dedicatedMutation(
 ): Promise<JiraMutationAttempt> | undefined {
   const args = structuredClone(source);
   const request = requestFor(connection, context);
+  if (isJiraMonitoringMutation(operation))
+    return executeJiraMonitoringMutation(operation, args, request, check);
   if (isJiraScreenTabMutation(operation))
     return executeJiraScreenTabMutation(operation, args, request, check);
   const deletion = deletionMutation(operation, args, request, connection, check);

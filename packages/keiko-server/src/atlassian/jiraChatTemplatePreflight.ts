@@ -38,6 +38,10 @@ import {
 
 /** Field and metadata writes share read-only validation; templates apply only to issue fields. */
 const FIELD_OPERATIONS = [
+  "jira.set-app-monitoring",
+  "jira.set-ipd-monitoring",
+  "jira.start-jmx-metrics",
+  "jira.stop-jmx-metrics",
   "jira.create-screen-tab",
   "jira.rename-screen-tab",
   "jira.delete-screen-tab",

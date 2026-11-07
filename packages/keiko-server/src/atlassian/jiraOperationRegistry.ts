@@ -19,6 +19,7 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "monitoring-state-and-readback"
   | "screen-tab-create-and-readback"
   | "screen-tab-rename-and-readback"
   | "screen-tab-delete-and-absence"
@@ -164,6 +165,12 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...writes("monitoring-state-and-readback", {
+    "jira.set-app-monitoring": ["POST", "/monitoring/app"],
+    "jira.set-ipd-monitoring": ["POST", "/monitoring/ipd"],
+    "jira.start-jmx-metrics": ["POST", "/monitoring/jmx/startExposing"],
+    "jira.stop-jmx-metrics": ["POST", "/monitoring/jmx/stopExposing"],
+  }),
   ...writes("screen-tab-create-and-readback", { "jira.create-screen-tab": ["POST", "/screens/{screenId}/tabs"] }),
   ...writes("screen-tab-rename-and-readback", { "jira.rename-screen-tab": ["PUT", "/screens/{screenId}/tabs/{tabId}"] }),
   ...writes("screen-tab-delete-and-absence", { "jira.delete-screen-tab": ["DELETE", "/screens/{screenId}/tabs/{tabId}"] }),

@@ -73,6 +73,31 @@ afterEach(() => {
   window.localStorage.removeItem(I18N_STORAGE_KEY);
 });
 
+describe.each(["en", "de"] as const)("reviewed monitoring changes in %s", (locale) => {
+  it.each([
+    ["jira.set-app-monitoring", false, true], ["jira.set-ipd-monitoring", true, false],
+    ["jira.start-jmx-metrics", false, true], ["jira.stop-jmx-metrics", true, false],
+  ] as const)("shows the exact prior state and requested target for %s", async (operation, expectedEnabled, enabled) => {
+    const args = operation === "jira.set-app-monitoring" || operation === "jira.set-ipd-monitoring"
+      ? { expectedEnabled, enabled } : { expectedEnabled };
+    const review = await reviewed(operation, args, locale);
+    for (const label of locale === "en" ? ["Reviewed current enabled state", "Requested enabled state", "Scope of this change", "Enabled", "Disabled"]
+      : ["Geprüfter aktueller Aktivierungszustand", "Angeforderter Aktivierungszustand", "Geltungsbereich dieser Änderung", "Aktiviert", "Deaktiviert"])
+      expect(review.text).toContain(label);
+    const reviewedLabel = locale === "en" ? "Reviewed current enabled state" : "Geprüfter aktueller Aktivierungszustand";
+    const targetLabel = locale === "en" ? "Requested enabled state" : "Angeforderter Aktivierungszustand";
+    const terms = [...review.region.querySelectorAll("dt")];
+    for (const [label, value] of [[reviewedLabel, expectedEnabled], [targetLabel, enabled]] as const) {
+      const expected = locale === "en" ? (value ? "Enabled" : "Disabled") : (value ? "Aktiviert" : "Deaktiviert");
+      expect(terms.find((term) => term.textContent === label)?.nextElementSibling?.textContent).toBe(expected);
+    }
+    expect(review.text).toContain(locale === "en" ? "Jira instance" : "Jira-Instanz");
+    expect(review.text).not.toContain("expectedEnabled");
+    expectNoJson(review);
+    expect(await axe(review.container)).toHaveNoViolations();
+  });
+});
+
 describe.each(["en", "de"] as const)("reviewed screen tab changes in %s", (locale) => {
   it.each(["jira.create-screen-tab", "jira.rename-screen-tab"] as const)(
     "shows the bound screen and exact reviewed/new names for %s", async (operation) => {
