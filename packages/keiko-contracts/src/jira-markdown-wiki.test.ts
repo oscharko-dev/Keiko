@@ -9,7 +9,7 @@ describe("explicit Markdown description projection", () => {
   it.each([
     [
       "## Goal\n**Strong** and *emphasis* with `code`.",
-      "h2. Goal\n*Strong* and _emphasis_ with {{code}}.",
+      "h2. Goal\n\n*Strong* and _emphasis_ with {{code}}.",
     ],
     ["- First\n  1. Nested\n  2. Next\n- Last", "* First\n*# Nested\n*# Next\n* Last"],
     ["1. First\n   - Nested\n2. Last", "# First\n#* Nested\n# Last"],
@@ -57,6 +57,51 @@ describe("explicit Markdown description projection", () => {
     expect(project("Literal {panel}, [42], a_b and \\*star\\*.")).toBe(
       "Literal \\{panel\\}, \\[42\\], a\\_b and \\*star\\*.",
     );
+  });
+
+  it.each([
+    ["[~user]", "\\[\\~user\\]"],
+    ["!https://example.invalid/image.png!", "\\!https://example.invalid/image.png\\!"],
+    ["*b*", "\\*b\\*"],
+    ["[x|https://example.invalid]", "\\[x\\|https://example.invalid\\]"],
+  ])("keeps wiki control characters inert inside inline code: %s", (text, escaped) => {
+    expect(project(`\`${text}\``)).toBe(`{{${escaped}}}`);
+  });
+
+  it.each(["C:\\path", "ends\\", "a\\\\\nb", "`x\\y`"])(
+    "refuses a literal backslash rather than converting it into a wiki line break: %s",
+    (text) => {
+      expect(project(text)).toBeUndefined();
+      expect(projectJiraDescriptionInput(text)).toEqual({ text, convertedHeadingCount: 0 });
+    },
+  );
+
+  it.each(["a  \nb", "a\\\nb"])("preserves an actual Markdown hard break: %s", (text) => {
+    expect(project(text)).toBe("a\\\\\nb");
+  });
+
+  it.each([
+    ["| | B | C |", "| x | y | z |", "|| ||B||C||\n|x|y|z|"],
+    ["| A | | C |", "| x | y | z |", "||A|| ||C||\n|x|y|z|"],
+    ["| A | B | |", "| x | y | z |", "||A||B|| ||\n|x|y|z|"],
+    ["| A | B | C |", "| | y | z |", "||A||B||C||\n| |y|z|"],
+    ["| A | B | C |", "| x | | z |", "||A||B||C||\n|x| |z|"],
+    ["| A | B | C |", "| x | y | |", "||A||B||C||\n|x|y| |"],
+  ])(
+    "preserves empty table cells without changing delimiter semantics: %s / %s",
+    (header, row, expected) => {
+      expect(project(`${header}\n| --- | --- | --- |\n${row}`)).toBe(expected);
+    },
+  );
+
+  it.each([
+    ["- a\n- b\n\npara", "* a\n* b\n\npara"],
+    ["- a\n\n  - b", "* a\n** b"],
+    ["- a\n\n  - b\n\n    1. c\n\n- d", "* a\n** b\n**# c\n* d"],
+    ["Before\n\n\n- a\n\n\nAfter", "Before\n\n* a\n\nAfter"],
+    ["## Heading\nParagraph\n\n- a", "h2. Heading\n\nParagraph\n\n* a"],
+  ])("normalizes top-level block gaps without splitting nested lists: %s", (text, expected) => {
+    expect(project(text)).toBe(expected);
   });
 
   it("reads variable marker widths and more than six nesting levels from parser structure", () => {

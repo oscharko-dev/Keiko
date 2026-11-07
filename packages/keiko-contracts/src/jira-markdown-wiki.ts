@@ -54,7 +54,9 @@ function tree(tokens: readonly Token[]): Node[] {
 }
 
 function literal(text: string): string {
-  return text.replaceAll(/[\\*_+^~{}[\]!|#?>-]/gu, (character) => `\\${character}`);
+  // Wiki's doubled backslash is a hard break, not a qualified literal-backslash encoding.
+  requireSupported(!text.includes("\\"));
+  return text.replaceAll(/[*_+^~{}[\]!|#?>-]/gu, (character) => `\\${character}`);
 }
 function linkTarget(token: Token): string {
   const target = token.attrGet("href") ?? "";
@@ -76,7 +78,7 @@ function inlineNode(node: Node): string {
   if (token.type === "hardbreak") return "\\\\\n";
   if (token.type === "code_inline") {
     requireSupported(!/[{}\r\n]/u.test(token.content));
-    return `{{${token.content.replaceAll(/[\\|]/gu, (character) => `\\${character}`)}}}`;
+    return `{{${literal(token.content)}}}`;
   }
   const content = children.map(inlineNode).join("");
   if (token.type === "link_open") return `[${content}|${linkTarget(token)}]`;
@@ -111,15 +113,8 @@ class WikiWriter {
   public constructor(private readonly lines: readonly string[]) {}
 
   public blocks(nodes: readonly Node[], list = ""): string {
-    let end: number | undefined;
-    return nodes
-      .map((node) => {
-        const start = node.token.map?.[0] ?? end ?? 0;
-        const gap = end === undefined ? "" : "\n".repeat(Math.max(1, start - end + 1));
-        end = node.token.map?.[1] ?? start + 1;
-        return gap + this.block(node, list);
-      })
-      .join("");
+    // Blank lines delimit top-level wiki blocks but would terminate a nested wiki list.
+    return nodes.map((node) => this.block(node, list)).join(list === "" ? "\n\n" : "\n");
   }
 
   private block(node: Node, list: string): string {
@@ -225,7 +220,7 @@ class WikiWriter {
             requireSupported(cell.token.attrs === null && cell.children.length === 1);
             const child = cell.children[0];
             requireSupported(child !== undefined);
-            return inline(child);
+            return inline(child) || " ";
           });
           return `${separator}${cells.join(separator)}${separator}`;
         }),
