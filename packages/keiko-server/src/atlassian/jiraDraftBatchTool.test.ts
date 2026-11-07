@@ -21,6 +21,7 @@ import type { GatewayCallRequest, NormalizedResponse } from "@oscharko-dev/keiko
 import { ProviderOutputExhaustedError } from "@oscharko-dev/keiko-security";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { afterEach, describe, expect, it } from "vitest";
+import { batchDraftDecision } from "../chat-tool-batch-draft.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -182,6 +183,7 @@ interface Harness {
       readonly model?: boolean;
       readonly beforeEffect?: () => boolean;
       readonly signal?: AbortSignal;
+      readonly citationSources?: () => ReadonlyMap<number, string>;
       readonly budget?: { readonly nowMs: () => number; readonly deadlineAtMs: number };
     },
   ) => ReturnType<ReturnType<typeof createJiraDraftBatchExecutor>>;
@@ -196,7 +198,7 @@ interface Harness {
 async function harness(
   script: Script,
   pods: Parameters<typeof podFixture>[0],
-  options: { readonly bindPods?: boolean } = {},
+  options: { readonly bindPods?: boolean; readonly storeNow?: () => number } = {},
 ): Promise<Harness> {
   const f = await podFixture(pods, options);
   fixtures.push(f);
@@ -204,7 +206,10 @@ async function harness(
   const requests: GatewayCallRequest[] = [];
   const progress: ChatToolBatchProgress[] = [];
   const confirmed: NormalizedResponse[] = [];
-  const store = createJiraDraftStore({ newId: () => DRAFT_ID });
+  const store = createJiraDraftStore({
+    newId: () => DRAFT_ID,
+    ...(options.storeNow === undefined ? {} : { now: options.storeNow }),
+  });
   const port: ModelPort = {
     call: (request) => {
       requests.push(request);
@@ -237,6 +242,9 @@ async function harness(
         chatId: f.chatId,
         userMessageId: "turn-1",
         knowledgeReviewModelId: () => "chat-model",
+        ...(runOptions.citationSources === undefined
+          ? {}
+          : { citationSources: runOptions.citationSources }),
         meterModel: (model: ModelPort): ModelPort => model,
         confirmModelOperation: (response: NormalizedResponse): void => {
           confirmed.push(response);
@@ -711,6 +719,133 @@ describe("jira.draft-batch (#4173)", () => {
     const covered = stagedItems(h).flatMap((item) => item.requirementIds as string[]);
     expect(covered).toHaveLength(60);
     expect(new Set(covered).size).toBe(60);
+  });
+
+  describe("review findings F17, F18 and F27 of #4292", () => {
+    it("keeps document-owned [n] markers when the Chat has an unrelated citation namespace", async () => {
+      const text = specification(1).text.replace(
+        "Thema 1 ist verfügbar.",
+        "Thema 1 ist verfügbar [1].",
+      );
+      const grounded = await harness(
+        (request) => page(keysOf(request)),
+        [{ capsuleId: "cap-a", text }],
+      );
+      const control = await harness(
+        (request) => page(keysOf(request)),
+        [{ capsuleId: "cap-a", text }],
+      );
+
+      const withMap = await grounded.run(ARGS, {
+        citationSources: () => new Map([[1, "Unrelated design memo.pdf"]]),
+      });
+      const noMap = await control.run(ARGS);
+
+      expect(noMap.data).toMatchObject({ outcome: "succeeded", draftedCount: 1 });
+      expect(withMap.data).toMatchObject({ outcome: "succeeded", draftedCount: 1, failedCount: 0 });
+      expect(descriptionOf(stagedItems(grounded)[0])).toContain("Thema 1 ist verfügbar [1].");
+      expect(descriptionOf(stagedItems(grounded)[0])).not.toContain("Unrelated design memo");
+    });
+
+    it("never offers creation for a filtered run over a cut collection", async () => {
+      const h = await harness(
+        (request) => page(keysOf(request)),
+        [{ capsuleId: "cap-a", text: specification(5001).text }],
+      );
+
+      const result = await h.run({
+        ...ARGS,
+        create: true,
+        requirements: { ids: ["LH-001", "LH-5001"] },
+      });
+
+      expect(result.data).toMatchObject({ selectionIncomplete: true });
+      expect(result.data.guidance).toEqual(expect.stringContaining("not listed"));
+      expect(
+        batchDraftDecision({
+          result: {
+            status: "completed",
+            toolRef: { canonicalId: "keiko.jira.draft.batch" },
+            data: result.data,
+          },
+        } as never),
+      ).toEqual({ kind: "skip", reason: "selection-incomplete" });
+    }, 120_000);
+
+    it("restarts the original selection when the paused draft expired", async () => {
+      let now = 0;
+      let clock = 0;
+      const h = await harness(
+        (request) => {
+          now += 100_000;
+          return page(keysOf(request));
+        },
+        [{ capsuleId: "cap-a", text: specification(60).text }],
+        { storeNow: () => clock },
+      );
+      const first = await h.run(
+        { ...ARGS, create: true },
+        { budget: { nowMs: () => now, deadlineAtMs: 200_000 } },
+      );
+      expect(first.data).toMatchObject({ paused: true });
+      clock += 5 * 60 * 60 * 1000;
+      expect(h.store.peek(DRAFT_ID, h.chatId)).toBeUndefined();
+      now = 0;
+
+      const retry = await h.run(
+        {
+          ...ARGS,
+          create: true,
+          requirements: {
+            documents: first.data.remainingDocuments as string[],
+            ids: first.data.remainingRequirementIds as string[],
+          },
+        },
+        { budget: { nowMs: () => now, deadlineAtMs: 100_000_000 } },
+      );
+
+      expect(retry.data).toMatchObject({
+        outcome: "succeeded",
+        requirementCount: 60,
+        coveredRequirementCount: 60,
+        failedCount: 0,
+      });
+      const covered = stagedItems(h).flatMap((item) => item.requirementIds as string[]);
+      expect(new Set(covered).size).toBe(60);
+    });
+
+    it("continues a live paused draft when the retry names only its tail", async () => {
+      let now = 0;
+      const h = await harness(
+        (request) => {
+          now += 100_000;
+          return page(keysOf(request));
+        },
+        [{ capsuleId: "cap-a", text: specification(60).text }],
+      );
+      const first = await h.run(
+        { ...ARGS, create: true },
+        { budget: { nowMs: () => now, deadlineAtMs: 200_000 } },
+      );
+      expect(first.data).toMatchObject({ paused: true, draftId: DRAFT_ID });
+      now = 0;
+
+      const retry = await h.run(
+        {
+          ...ARGS,
+          create: true,
+          requirements: {
+            documents: first.data.remainingDocuments as string[],
+            ids: first.data.remainingRequirementIds as string[],
+          },
+        },
+        { budget: { nowMs: () => now, deadlineAtMs: 100_000_000 } },
+      );
+
+      expect(retry.data).toMatchObject({ outcome: "succeeded", draftId: DRAFT_ID, failedCount: 0 });
+      const covered = stagedItems(h).flatMap((item) => item.requirementIds as string[]);
+      expect(new Set(covered).size).toBe(60);
+    });
   });
 
   it("counts a documents filter that selects every requirement as the whole collection", async () => {

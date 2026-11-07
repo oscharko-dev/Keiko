@@ -20,6 +20,7 @@ export const BATCH_DRAFT_SKIP_REASONS = [
   "budget-exhausted",
   "turn-ended",
   "no-stored-result",
+  "selection-incomplete",
 ] as const;
 export type BatchDraftSkipReason = (typeof BATCH_DRAFT_SKIP_REASONS)[number];
 
@@ -78,6 +79,7 @@ export function batchDraftDecision(exchange: ChatToolExchange): BatchDraftDecisi
 function cleanBatchSkip(data: Readonly<Record<string, unknown>>): BatchDraftSkipReason | undefined {
   if (data.createRequested !== true) return "not-requested";
   if (data.paused === true) return "paused";
+  if (data.selectionIncomplete === true) return "selection-incomplete";
   if (data.failedCount !== 0) return "items-failed";
   return data.unresolvedRefCount === 0 ? undefined : "refs-unresolved";
 }
