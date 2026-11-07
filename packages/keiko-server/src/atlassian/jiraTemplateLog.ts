@@ -5,6 +5,7 @@ import type {
 import {
   type JiraFieldValidationFailure,
   type JiraMutationAttempt,
+  type JiraMutationOperation,
   type JiraTemplateRuleId,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
@@ -14,6 +15,7 @@ import {
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { jiraToolLogFields } from "./jiraOperationLogFields.js";
 
 /**
  * Customer-defined issue templates (#4177): where the active templates come from and how a
@@ -169,44 +171,9 @@ const FIELD_ADMISSION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: [
-        "jira.create",
-        "jira.edit",
-        "jira.transition",
-        "jira.assign",
-        "jira.draft",
-        "jira.create-screen-tab",
-        "jira.set-app-monitoring",
-        "jira.set-ipd-monitoring",
-        "jira.start-jmx-metrics",
-        "jira.stop-jmx-metrics",
-        "jira.rename-screen-tab",
-        "jira.delete-screen-tab",
-        "jira.create-project",
-        "jira.update-project",
-        "jira.create-component",
-        "jira.update-component",
-        "jira.create-version",
-        "jira.update-version",
-        "jira.update-comment",
-        "jira.delete-comment",
-        "jira.delete-attachment",
-        "jira.delete-worklog",
-        "jira.create-worklog",
-        "jira.update-worklog",
-        "jira.watch",
-        "jira.unwatch",
-        "jira.vote",
-        "jira.unvote",
-        "jira.board-create",
-        "jira.sprint-create",
-        "jira.sprint-update",
-        "jira.sprint-move-issues",
-        "jira.backlog-move-issues",
-        "jira.epic-update",
-        "jira.epic-move-issues",
-      ],
+      values: ["jira-write"],
     },
+    operationDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     refusedCount: { type: "integer", dataClass: "count", required: true },
     validations: {
       type: "string-array",
@@ -286,42 +253,20 @@ export function recordJiraTemplateRefusal(
 export function recordJiraFieldRefusal(
   correlationId: string | undefined,
   input: {
-    readonly operation:
-      | JiraTemplateOperation
-      | "jira.draft"
-      | "jira.create-screen-tab"
-      | "jira.set-app-monitoring"
-      | "jira.set-ipd-monitoring"
-      | "jira.start-jmx-metrics"
-      | "jira.stop-jmx-metrics"
-      | "jira.rename-screen-tab"
-      | "jira.delete-screen-tab"
-      | "jira.create-project"
-      | "jira.update-project"
-      | "jira.create-component"
-      | "jira.update-component"
-      | "jira.create-version"
-      | "jira.update-version"
-      | "jira.update-comment"
-      | "jira.delete-comment"
-      | "jira.delete-attachment"
-      | "jira.delete-worklog"
-      | "jira.create-worklog"
-      | "jira.update-worklog"
-      | "jira.watch"
-      | "jira.unwatch"
-      | "jira.vote"
-      | "jira.unvote";
+    readonly operation: JiraMutationOperation;
     readonly refusedCount: number;
     readonly validations: readonly (JiraFieldValidationFailure | undefined)[];
   },
 ): void {
+  const operation = jiraToolLogFields(input.operation);
+  if (operation.toolClass !== "jira-write") throw new TypeError("Field refusal requires a Jira mutation");
   processServerLogSink().write(
     activityLogEvent(
       FIELD_ADMISSION,
       { correlationId: correlationId ?? UNKNOWN_CORRELATION_ID, level: "info" },
       {
-        operation: input.operation,
+        operation: "jira-write",
+        operationDigest: operation.toolDigest,
         refusedCount: input.refusedCount,
         validations: [...new Set(input.validations.filter((value) => value !== undefined))],
         completeness: "complete",

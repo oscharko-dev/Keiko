@@ -3,6 +3,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   JIRA_FIELD_VALIDATION_FAILURES,
+  JIRA_MUTATION_OPERATIONS,
+  JIRA_ENTITY_PROPERTY_MUTATIONS,
   JIRA_TEMPLATE_RULE_IDS,
   parseJiraIssueTemplate,
   type JiraMutationAttempt,
@@ -181,6 +183,16 @@ describe("the model-facing refusal", () => {
     });
     expect(sink.events).toHaveLength(1);
     expect(sink.events[0]?.extra?.validations).toEqual([...JIRA_FIELD_VALIDATION_FAILURES]);
+  });
+  it("projects every closed mutation onto one body-free field-admission class and its exact tool digest", () => {
+    const sink = logs();
+    for (const operation of JIRA_MUTATION_OPERATIONS)
+      recordJiraFieldRefusal("field-digest", { operation, refusedCount: 1, validations: ["invalid-field"] });
+    expect(sink.events.map((event) => event.extra)).toEqual(JIRA_MUTATION_OPERATIONS.map((operation) => ({
+      operation: "jira-write", operationDigest: createHash("sha256").update(operation).digest("hex"),
+      refusedCount: 1, validations: ["invalid-field"], completeness: "complete", loss: "none",
+    })));
+    expect(sink.lines().join()).not.toMatch(/jira\.set-|jira\.delete-|propertyKey|valueNodes|expectedValueNodes/u);
   });
 });
 
@@ -480,6 +492,7 @@ describe("the dry run before approval", () => {
   });
 
   it.each([
+    ...JIRA_ENTITY_PROPERTY_MUTATIONS,
     "jira.create-screen-tab",
     "jira.set-app-monitoring",
     "jira.set-ipd-monitoring",
@@ -502,6 +515,62 @@ describe("the dry run before approval", () => {
       expect(f.http).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    ["jira.set-issue-property", { issueIdOrKey: "SYN-1", propertyKey: "display", expectedValueNodes: [{ path: "", kind: "null" }], valueNodes: [{ path: "", kind: "boolean", booleanValue: false }] }],
+    ["jira.delete-issue-property", { issueIdOrKey: "SYN-1", propertyKey: "display", expectedValueNodes: [{ path: "", kind: "null" }] }],
+    ["jira.set-board-property", { boardId: "7", propertyKey: "display", expectedValueNodes: [{ path: "", kind: "null" }], valueNodes: [{ path: "", kind: "boolean", booleanValue: false }] }],
+    ["jira.delete-board-property", { boardId: "7", propertyKey: "display", expectedValueNodes: [{ path: "", kind: "null" }] }],
+  ] as const)("reads the complete reviewed %s property state before approval with no effect or issue-template inference", async (operation, args) => {
+    const f = preflight(TEMPLATE, args, operation);
+    f.http.mockImplementation((request) => {
+      const path = new URL(request.url).pathname;
+      const body = path.endsWith("/properties") ? { keys: [{ key: "display" }] }
+        : path.endsWith("/properties/display") ? { key: "display", value: null }
+          : path.includes("/board/") ? { id: 7, name: "Synthetic board" }
+            : { id: "10001", key: "SYN-1", fields: { summary: "Synthetic issue" } };
+      return Promise.resolve(response(body));
+    });
+    expect(await f.run()).toBeUndefined();
+    expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "GET", "GET"]);
+    expect(f.http.mock.calls.at(-1)?.[0].url).toMatch(/\/(?:issue\/10001|board\/7)\/properties\/display$/u);
+  });
+
+  it.each([
+    ["jira.set-issue-property", { issueIdOrKey: "SYN-1", propertyKey: "display", expectedValueNodes: [{ path: "", kind: "boolean", booleanValue: false }], valueNodes: [{ path: "", kind: "null" }] }],
+    ["jira.delete-issue-property", { issueIdOrKey: "SYN-1", propertyKey: "display", expectedValueNodes: [{ path: "", kind: "boolean", booleanValue: false }] }],
+  ] as const)("refuses a changed reviewed %s value before asking a human", async (operation, args) => {
+    const f = preflight(TEMPLATE, args, operation);
+    f.http.mockImplementation((request) => Promise.resolve(response(
+      request.url.includes("/properties/display") ? { key: "display", value: null }
+        : request.url.endsWith("/properties") ? { keys: [{ key: "display" }] }
+          : { id: "10001", key: "SYN-1", fields: { summary: "Synthetic" } },
+    )));
+    expect(await f.run()).toMatchObject({ outcome: "rejected", reason: "conflict" });
+    expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "GET", "GET"]);
+  });
+
+  it.each([
+    ["jira.set-issue-property", { issueIdOrKey: "SYN-1", propertyKey: "display", expectAbsent: true, valueNodes: [{ path: "", kind: "null" }] }],
+    ["jira.create-screen-tab", { screenId: "11", expectedScreenName: "Review screen", name: "Additional" }],
+    ["jira.set-app-monitoring", { expectedEnabled: false, enabled: true }],
+  ] as const)("preserves denied %s prerequisite reads as a refusal before approval", async (operation, args) => {
+    const f = preflight(TEMPLATE, args, operation);
+    f.http.mockImplementation(() => Promise.resolve(response({ errorMessages: ["Denied"] }, 403)));
+    expect(await f.run()).toMatchObject({ outcome: "rejected", reason: "permission-denied" });
+    expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
+  });
+
+  it.each([
+    ["jira.rename-screen-tab", { screenId: "11", expectedScreenName: "Prior screen", tabId: "21", expectedName: "Fields", name: "Renamed" },
+      { startAt: 0, maxResults: 100, total: 1, isLast: true, screens: [{ id: 11, name: "Changed screen" }] }],
+    ["jira.set-app-monitoring", { expectedEnabled: false, enabled: true }, { enabled: true }],
+  ] as const)("preserves a stale %s reviewed state as a conflict before approval", async (operation, args, body) => {
+    const f = preflight(TEMPLATE, args, operation);
+    f.http.mockImplementation(() => Promise.resolve(response(body)));
+    expect(await f.run()).toMatchObject({ outcome: "rejected", reason: "conflict" });
+    expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+  });
 
   it.each([
     ["jira.create-component", { projectIdOrKey: "SYN", name: "New component" }],
@@ -773,7 +842,8 @@ describe("the dry run before approval", () => {
         const events = sink.events.filter((event) => event.op === "jira.field.admission");
         expect(events.map((event) => event.correlationId)).toEqual(["preflight-1"]);
         expect(events[0]?.extra).toMatchObject({
-          operation: "jira.draft",
+          operation: "jira-write",
+          operationDigest: createHash("sha256").update("jira.draft").digest("hex"),
           refusedCount: 2,
           validations: ["required-field"],
         });

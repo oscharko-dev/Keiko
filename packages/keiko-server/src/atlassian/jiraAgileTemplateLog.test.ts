@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, expect, it } from "vitest";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
@@ -52,7 +53,8 @@ it.each([
         op: "jira.field.admission",
         correlationId: "agile-refusal",
         extra: {
-          operation,
+          operation: "jira-write",
+          operationDigest: createHash("sha256").update(operation).digest("hex"),
           refusedCount: 1,
           validations: ["invalid-field"],
           completeness: "complete",

@@ -33,7 +33,17 @@ import {
 } from "./text-safety.js";
 
 import { JIRA_MANAGED_READ_TOOLS, type JiraManagedReadToolName } from "./jira-tool-fields.js";
-import type { JiraMutationOperation } from "./jira-tool-execution.js";
+import {
+  JIRA_ENTITY_PROPERTY_MUTATIONS,
+  type JiraEntityPropertyMutation,
+  type JiraMutationOperation,
+} from "./jira-tool-execution.js";
+
+type JiraEntityPropertyAction = JiraEntityPropertyMutation extends `jira.${infer Action}` ? Action : never;
+function jiraPropertyAction(name: JiraEntityPropertyMutation): JiraEntityPropertyAction {
+  return name.slice(5) as JiraEntityPropertyAction;
+}
+const JIRA_PROPERTY_ACTIONS = Object.freeze(JIRA_ENTITY_PROPERTY_MUTATIONS.map(jiraPropertyAction));
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
@@ -586,6 +596,7 @@ export type AtlassianSyncJobState =
 // ─── Governed action vocabulary and effect-class table (ADR-0128 D4) ──────────
 export type AtlassianConnectorActionType =
   | JiraManagedReadToolName
+  | JiraEntityPropertyAction
   | "set-app-monitoring"
   | "set-ipd-monitoring"
   | "start-jmx-metrics"
@@ -630,6 +641,7 @@ export type AtlassianConnectorActionType =
 
 export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorActionType[] =
   Object.freeze([
+    ...JIRA_PROPERTY_ACTIONS,
     "set-app-monitoring",
     "set-ipd-monitoring",
     "start-jmx-metrics",
@@ -685,6 +697,10 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
     JiraManagedReadToolName,
     JiraManagedReadToolName
   >),
+  ...(Object.fromEntries(JIRA_ENTITY_PROPERTY_MUTATIONS.map((name) => [name, jiraPropertyAction(name)])) as Record<
+    JiraEntityPropertyMutation,
+    JiraEntityPropertyAction
+  >),
   "jira.create": "create-issue",
   "jira.set-app-monitoring": "set-app-monitoring",
   "jira.set-ipd-monitoring": "set-ipd-monitoring",
@@ -725,11 +741,12 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   // An attachment changes the issue exactly as an edit does and is governed as one.
   "jira.attach": "update-issue-fields",
 });
-function jiraReadActionValues<Value extends string>(
+function jiraActionValues<Action extends AtlassianConnectorActionType, Value extends string>(
+  actions: readonly Action[],
   value: Value,
-): Record<JiraManagedReadToolName, Value> {
-  return Object.fromEntries(JIRA_MANAGED_READ_TOOLS.map((name) => [name, value])) as Record<
-    JiraManagedReadToolName,
+): Record<Action, Value> {
+  return Object.fromEntries(actions.map((name) => [name, value])) as Record<
+    Action,
     Value
   >;
 }
@@ -750,7 +767,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASSES: readonly AtlassianConnectorActi
 export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorActionClass>
 > = Object.freeze({
-  ...jiraReadActionValues("connector-access"),
+  ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "connector-access"),
+  ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "connector-write"),
   "set-app-monitoring": "connector-write",
   "set-ipd-monitoring": "connector-write",
   "start-jmx-metrics": "connector-write",
@@ -797,7 +815,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
-  ...jiraReadActionValues("jira"),
+  ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "jira"),
+  ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "jira"),
   "set-app-monitoring": "jira",
   "set-ipd-monitoring": "jira",
   "start-jmx-metrics": "jira",
@@ -844,7 +863,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
-  ...jiraReadActionValues("issue-tracker.read"),
+  ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "issue-tracker.read"),
+  ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "issue-tracker.write"),
   "set-app-monitoring": "issue-tracker.write",
   "set-ipd-monitoring": "issue-tracker.write",
   "start-jmx-metrics": "issue-tracker.write",
@@ -894,7 +914,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
-  ...jiraReadActionValues("low"),
+  ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "low"),
+  ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "high"),
   "set-app-monitoring": "high",
   "set-ipd-monitoring": "high",
   "start-jmx-metrics": "high",
@@ -1794,6 +1815,7 @@ export {
   type JiraManagedReadToolName,
 } from "./jira-tool-fields.js";
 export { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
+export { JIRA_ENTITY_PROPERTY_MUTATIONS, type JiraEntityPropertyMutation } from "./jira-tool-execution.js";
 export {
   JIRA_ATTACHMENT_MAX_BYTES,
   JIRA_ATTACHMENT_NAME_MAX_BYTES,

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK,
@@ -207,7 +208,8 @@ it.each([
         op: "jira.field.admission",
         correlationId: "structure-refusal",
         extra: {
-          operation,
+          operation: "jira-write",
+          operationDigest: createHash("sha256").update(operation).digest("hex"),
           refusedCount: 1,
           validations: ["invalid-field"],
           completeness: "complete",

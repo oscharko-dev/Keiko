@@ -22,6 +22,7 @@ import {
   type Scenario,
   type Observation,
 } from "../../../../tests/support/jira-operation-transport-contract.js";
+import { propertyTransportFixture, PROPERTY_FIXTURE_KEY, REVIEWED_PROPERTY_NODES, REQUESTED_PROPERTY_NODES } from "../../../../tests/support/jira-property-transport-fixture.js";
 
 const ISSUE_PARAMETERS = { issueIdOrKey: "SYN-1" };
 const PAGING = { startAt: "0", maxResults: "25" };
@@ -32,6 +33,18 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.set-comment-property", args: { issueIdOrKey: "SYN-1", commentId: "10002", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES, valueNodes: REQUESTED_PROPERTY_NODES }, parameters: { commentId: "10002", propertyKey: PROPERTY_FIXTURE_KEY } },
+  { tool: "jira.delete-comment-property", args: { issueIdOrKey: "SYN-1", commentId: "10002", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES }, parameters: { commentId: "10002", propertyKey: PROPERTY_FIXTURE_KEY } },
+  { tool: "jira.set-dashboard-item-property", args: { dashboardId: "71", itemId: "81", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES, valueNodes: REQUESTED_PROPERTY_NODES }, parameters: { dashboardId: "71", itemId: "81", propertyKey: PROPERTY_FIXTURE_KEY } },
+  { tool: "jira.delete-dashboard-item-property", args: { dashboardId: "71", itemId: "81", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES }, parameters: { dashboardId: "71", itemId: "81", propertyKey: PROPERTY_FIXTURE_KEY } },
+  { tool: "jira.set-issue-property", args: { issueIdOrKey: "SYN-1", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES, valueNodes: REQUESTED_PROPERTY_NODES }, parameters: { issueIdOrKey: "10001", propertyKey: PROPERTY_FIXTURE_KEY } },
+  { tool: "jira.delete-issue-property", args: { issueIdOrKey: "SYN-1", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES }, parameters: { issueIdOrKey: "10001", propertyKey: PROPERTY_FIXTURE_KEY } },
+  { tool: "jira.set-issue-type-property", args: { issueTypeId: "10001", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES, valueNodes: REQUESTED_PROPERTY_NODES }, parameters: { issueTypeId: "10001", propertyKey: PROPERTY_FIXTURE_KEY } },
+  { tool: "jira.delete-issue-type-property", args: { issueTypeId: "10001", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES }, parameters: { issueTypeId: "10001", propertyKey: PROPERTY_FIXTURE_KEY } },
+  { tool: "jira.set-project-property", args: { projectIdOrKey: "SYN", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES, valueNodes: REQUESTED_PROPERTY_NODES }, parameters: { projectIdOrKey: "10000", propertyKey: PROPERTY_FIXTURE_KEY } },
+  { tool: "jira.delete-project-property", args: { projectIdOrKey: "SYN", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES }, parameters: { projectIdOrKey: "10000", propertyKey: PROPERTY_FIXTURE_KEY } },
+  { tool: "jira.set-user-property", args: { username: "synthetic-user", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES, valueNodes: REQUESTED_PROPERTY_NODES }, parameters: { propertyKey: PROPERTY_FIXTURE_KEY }, query: { userKey: "JIRAUSER10100" } },
+  { tool: "jira.delete-user-property", args: { username: "synthetic-user", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES }, parameters: { propertyKey: PROPERTY_FIXTURE_KEY }, query: { userKey: "JIRAUSER10100" } },
   { tool: "jira.set-app-monitoring", args: { expectedEnabled: false, enabled: true } },
   { tool: "jira.set-ipd-monitoring", args: { expectedEnabled: true, enabled: false } },
   { tool: "jira.start-jmx-metrics", args: { expectedEnabled: false } },
@@ -675,7 +688,6 @@ function monitoringWrite(path: string, request: AtlassianHttpBodyRequest, state:
   const current = state.monitoring;
   if (current === undefined || !path.startsWith("monitoring/")) return undefined;
   expect(request.method).toBe("POST");
-  expect(request.expect).toBe("none");
   if (path === "monitoring/app" || path === "monitoring/ipd") {
     const enabled = path === "monitoring/app";
     expect(JSON.parse(request.bodyJson ?? "null")).toEqual({ enabled });
@@ -1252,7 +1264,17 @@ function remoteRead(
     fixtureRead(absolute, state)
   );
 }
-function remote(tool?: string): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
+const PROPERTY_WRITE_ROOTS: Readonly<Record<string, string>> = {
+  "jira.set-comment-property": "comment/10002/properties", "jira.delete-comment-property": "comment/10002/properties",
+  "jira.set-dashboard-item-property": "dashboard/71/items/81/properties", "jira.delete-dashboard-item-property": "dashboard/71/items/81/properties",
+  "jira.set-issue-property": "issue/10001/properties", "jira.delete-issue-property": "issue/10001/properties",
+  "jira.set-issue-type-property": "issuetype/10001/properties", "jira.delete-issue-type-property": "issuetype/10001/properties",
+  "jira.set-project-property": "project/10000/properties", "jira.delete-project-property": "project/10000/properties",
+  "jira.set-user-property": "user/properties", "jira.delete-user-property": "user/properties",
+};
+function remote(tool?: string, initiallyPresent = true): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
+  const propertyRoot = PROPERTY_WRITE_ROOTS[tool ?? ""];
+  const property = propertyTransportFixture(propertyRoot === undefined ? undefined : `/context/rest/api/2/${propertyRoot}`, initiallyPresent);
   const state: RemoteState = {
     monitoring: MONITORING_WRITES.has(tool ?? "") ? { app: false, ipd: true, jmx: tool === "jira.stop-jmx-metrics" } : undefined,
     screenTabs: SCREEN_TAB_WRITES.has(tool ?? "") ? [{ id: 81, name: "Details" }, { id: 82, name: "Other" }] : undefined,
@@ -1294,9 +1316,9 @@ function remote(tool?: string): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> 
     const absolute = new URL(request.url).pathname;
     const path = absolute.replace("/context/rest/api/2/", "");
     if (request.method === "GET")
-      return Promise.resolve(remoteRead(path, absolute, state, request.url));
+      return Promise.resolve(property.read(request) ?? remoteRead(path, absolute, state, request.url));
     return Promise.resolve(
-      path === "project" || path === "project/10000"
+      property.write(request) ?? (path === "project" || path === "project/10000"
         ? projectWrite(request, state)
         : (monitoringWrite(path, request, state) ??
             screenTabWrite(path, request, state) ??
@@ -1305,7 +1327,7 @@ function remote(tool?: string): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> 
             worklogWrite(path, request, state) ??
             collaborationWrite(path, request, state) ??
             structureWrite(path, request, state) ??
-            fixtureWrite(absolute, request.bodyJson, state, request.upload)),
+            fixtureWrite(absolute, request.bodyJson, state, request.upload))),
     );
   });
 }
@@ -1336,7 +1358,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(197);
+    expect(native).toHaveLength(209);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1347,6 +1369,31 @@ describe("native Jira registry and real connector transport agreement", () => {
     assertPrimary(observed, scenario);
     const writes = observed.requests.filter((request) => request.method !== "GET");
     expect(writes).toHaveLength(observed.definition.method === "GET" ? 0 : 1);
+  });
+  it.each(["jira.set-issue-property", "jira.delete-issue-property"] as const)(
+    "rebinds the canonical parent and reads keys/value after exactly one %s effect", async (tool) => {
+      const scenario = SCENARIOS.find((entry) => entry.tool === tool);
+      if (scenario === undefined) throw new TypeError("Missing property write fixture");
+      const observed = await observe(scenario);
+      const requests = observed.requests.map(({ method, url }) => [method, new URL(url).pathname]);
+      const property = "/context/rest/api/2/issue/10001/properties";
+      expect(requests).toEqual([
+        ["GET", "/context/rest/api/2/issue/SYN-1"], ["GET", property], ["GET", `${property}/view%20~settings`],
+        [tool === "jira.set-issue-property" ? "PUT" : "DELETE", `${property}/view%20~settings`],
+        ["GET", "/context/rest/api/2/issue/10001"], ["GET", property], ["GET", `${property}/view%20~settings`],
+      ]);
+      expect(observed.result.data).toMatchObject({ issueId: "10001", issueKey: "SYN-1", propertyKey: PROPERTY_FIXTURE_KEY, propertyPresent: tool === "jira.set-issue-property" });
+      const write = observed.requests.find(({ method }) => method !== "GET");
+      expect(write?.bodyJson).toBe(tool === "jira.set-issue-property" ? "false" : undefined);
+    },
+  );
+  it("sends JSON null as a literal value after independently reviewed absence", async () => {
+    const scenario: Scenario = { tool: "jira.set-user-property", args: { username: "synthetic-user", propertyKey: PROPERTY_FIXTURE_KEY,
+      expectAbsent: true, valueNodes: REVIEWED_PROPERTY_NODES }, parameters: { propertyKey: PROPERTY_FIXTURE_KEY }, query: { userKey: "JIRAUSER10100" } };
+    const observed = await observeNativeJiraOperation(scenario, connection(remote(scenario.tool, false)));
+    assertPrimary(observed, scenario);
+    expect(observed.requests.find(({ method }) => method === "PUT")?.bodyJson).toBe("null");
+    expect(observed.result.data).toMatchObject({ userKey: "JIRAUSER10100", username: "Synthetic-User", propertyPresent: true });
   });
   it.each([
     ["jira.set-app-monitoring", "monitoringEnabled", true],
@@ -1359,13 +1406,14 @@ describe("native Jira registry and real connector transport agreement", () => {
     const observed = await observe(scenario);
     expect(observed.requests.map(({ method }) => method)).toEqual(["GET", "POST", "GET"]);
     expect(observed.requests[0]?.url).toBe(observed.requests[2]?.url);
-    expect(observed.requests[0]?.expect).toBe(field === "jmxMetricsExposed" ? "json-scalar" : "json");
+    expect(observed.requests[0]?.bodyJson).toBeUndefined();
+    expect(observed.requests[2]?.bodyJson).toBeUndefined();
     expect(observed.result.data).toMatchObject({ outcome: "succeeded", [field]: target });
   });
   it("keeps a false native reorder observation and binds its parent without authorizing a write", async () => {
     const observed = await observe({ tool: "jira.subtask-move-availability", args: { issueIdOrKey: "SYN-1" } });
     expect(observed.requests).toHaveLength(2);
-    expect(observed.requests[1]?.expect).toBe("json-scalar");
+    expect(observed.requests[1]?.bodyJson).toBeUndefined();
     expect(observed.requests.every(({ method }) => method === "GET")).toBe(true);
     expect(observed.result.data).toMatchObject({ issueId: "10001", issueKey: "SYN-1", canReorderSubtasks: false });
   });
@@ -1375,7 +1423,8 @@ describe("native Jira registry and real connector transport agreement", () => {
     const observed = await observe(scenario);
     assertPrimary(observed, scenario);
     expect(observed.requests).toHaveLength(2);
-    expect(observed.requests[1]?.expect).toBe("json");
+    expect(observed.requests[1]?.method).toBe("GET");
+    expect(observed.requests[1]?.bodyJson).toBeUndefined();
     expect(observed.result.data).toMatchObject({ issueId: "10001", issueKey: "SYN-1", id: "71", resolved: false });
     expect(observed.result.data).not.toHaveProperty("items");
     expect(JSON.stringify(observed.result.data)).not.toContain("untrusted.invalid");

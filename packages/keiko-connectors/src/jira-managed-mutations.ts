@@ -1,5 +1,7 @@
 import { executeJiraScreenTabMutation, isJiraScreenTabMutation } from "./jira-managed-screen-tab-mutations.js";
 import { executeJiraMonitoringMutation, isJiraMonitoringMutation } from "./jira-managed-monitoring-mutations.js";
+import { executeJiraEntityPropertyMutation, isJiraEntityPropertyMutation } from "./jira-managed-entity-property-mutations.js";
+import { jiraAgileRequest } from "./jira-agile-request.js";
 import {
   executeJiraParticipationMutation,
   isJiraParticipationMutation,
@@ -1353,6 +1355,12 @@ function dedicatedMutation(
 ): Promise<JiraMutationAttempt> | undefined {
   const args = structuredClone(source);
   const request = requestFor(connection, context);
+  if (isJiraEntityPropertyMutation(operation))
+    return executeJiraEntityPropertyMutation(operation, args, {
+      platform: request,
+      agile: jiraAgileRequest(connection, context),
+      baseUrl: connection.baseUrl,
+    }, check);
   if (isJiraMonitoringMutation(operation))
     return executeJiraMonitoringMutation(operation, args, request, check);
   if (isJiraScreenTabMutation(operation))
@@ -1452,6 +1460,9 @@ export type JiraMutationCheckResult =
 
 function requiresSuccessfulPreflight(operation: JiraMutationOperation): boolean {
   return (
+    isJiraEntityPropertyMutation(operation) ||
+    isJiraScreenTabMutation(operation) ||
+    isJiraMonitoringMutation(operation) ||
     isJiraAgileMutation(operation) ||
     isJiraCommentMutation(operation) ||
     isJiraCommentDelete(operation) ||
@@ -1474,7 +1485,7 @@ export async function checkJiraManagedMutation(
   if (attempt.ok) return { ok: true };
   if (attempt.violations !== undefined)
     return { ok: false, reason: attempt.reason, violations: attempt.violations };
-  // Agile admission already resolved its concrete board/filter/issue prerequisites using GETs.
+  // Dedicated admission already resolved its concrete prerequisites and reviewed state using GETs.
   // A known refusal must not be turned into an approval for a write that cannot proceed.
   if (requiresSuccessfulPreflight(operation))
     return {

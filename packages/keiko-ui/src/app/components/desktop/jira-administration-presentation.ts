@@ -3,6 +3,7 @@ import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentatio
 
 import {
   jiraPresentationFact as fact,
+  jiraPresentationIdentity as receiptId,
   jiraPresentationRecord as record,
   jiraPresentationText as text,
   type JiraPresentationSource as Source,
@@ -47,10 +48,6 @@ const TAB_ARGUMENTS: Readonly<Record<string, WidgetMessageKey>> = {
 export function jiraScreenTabArgumentLabel(operation: string | undefined, field: string): WidgetMessageKey | undefined {
   return operation !== undefined && SCREEN_TAB_WRITES.has(operation.replace(/[.-]/gu, "_"))
     ? TAB_ARGUMENTS[field] : undefined;
-}
-function receiptId(value: unknown): string | undefined {
-  return typeof value === "string" && /^[1-9]\d{0,18}$/u.test(value) && BigInt(value) <= 9223372036854775807n
-    ? value : undefined;
 }
 const TAB_CONFIRMED: Readonly<Record<string, WidgetMessageKey>> = {
   jira_create_screen_tab: "chat.jira.screenTabs.created",

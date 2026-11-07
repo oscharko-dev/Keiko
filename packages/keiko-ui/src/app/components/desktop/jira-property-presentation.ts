@@ -1,8 +1,11 @@
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
+import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentation";
 import {
   jiraPresentationFact as fact,
+  jiraPresentationIdentity as identity,
   jiraPresentationRecord as record,
+  jiraPresentationText as text,
   type JiraPresentationSource as Source,
 } from "./jira-presentation-values";
 
@@ -23,14 +26,46 @@ const CONTEXT: Readonly<Record<string, WidgetMessageKey>> = {
   projectId: "chat.jira.fact.projectId", projectKey: "chat.jira.fact.projectKey",
   userKey: "chat.jira.fact.userKey", username: "chat.jira.fact.userName",
 };
+const ENTITY_CONTEXT: Readonly<Record<string, readonly string[]>> = {
+  board: ["boardId"], sprint: ["sprintId"], comment: ["issueId", "issueKey", "commentId"],
+  "dashboard-item": ["dashboardId", "selectedItemId"], issue: ["issueId", "issueKey"],
+  "issue-type": ["issueTypeId"], project: ["projectId", "projectKey"], user: ["userKey", "username"],
+};
+function contextIdentity(field: string, value: unknown): boolean {
+  if (field === "issueKey" || field === "projectKey") return isSafeAtlassianIdentifier(value);
+  if (field === "userKey" || field === "username") return text(value) !== undefined && typeof value === "string" && value.length <= 255;
+  return identity(value) !== undefined;
+}
+/** A complete matching native context is required before a saved write can claim confirmation. */
+export function jiraPropertyContextComplete(entity: string, data: Source): boolean {
+  if (!Object.hasOwn(ENTITY_CONTEXT, entity) || !Object.hasOwn(data, "propertyKey") || text(data.propertyKey) === undefined) return false;
+  const fields = ENTITY_CONTEXT[entity];
+  if (fields === undefined || !fields.every((field) => Object.hasOwn(data, field) && contextIdentity(field, data[field]))) return false;
+  return Object.keys(CONTEXT).every((field) => !Object.hasOwn(data, field) || fields.includes(field));
+}
 const KINDS: Readonly<Record<string, WidgetMessageKey>> = {
   object: "chat.jira.properties.object", array: "chat.jira.properties.array",
   string: "chat.jira.properties.text", number: "chat.jira.properties.number",
   boolean: "chat.jira.properties.boolean", null: "chat.jira.properties.null",
 };
+export function jiraPropertyContextFacts(data: Source): readonly JiraOutcomeFact[] {
+  return Object.entries(CONTEXT).flatMap(([field, label]) => fact(label, data[field]));
+}
 function countFact(label: WidgetMessageKey, value: unknown): JiraOutcomeFact[] {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? [{ label, value: String(value) }] : [];
+}
+/** Display-only escaping keeps controls distinct from literal backslash sequences. */
+function visiblePropertyText(value: string): string {
+  return Array.from(value, (character) => {
+    if (character === "\\") return "\\\\";
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || (code >= 0x7f && code <= 0x9f)
+      ? `\\u${code.toString(16).padStart(4, "0")}` : character;
+  }).join("");
+}
+function escapeLabels(original: string, displayed: string): readonly WidgetMessageKey[] {
+  return original === displayed ? [] : ["chat.jira.properties.visibleEscapes"];
 }
 function header(tool: string, data: Source): JiraAgileDetails {
   const keys = JIRA_PROPERTY_KEY_TOOLS.has(tool);
@@ -40,7 +75,7 @@ function header(tool: string, data: Source): JiraAgileDetails {
   if (!Array.isArray(data.items)) labels.push(keys ? "chat.jira.properties.keysUnknown" : "chat.jira.properties.valueUnknown");
   else if (data.items.length === 0) labels.push(keys ? "chat.jira.properties.keysEmpty" : "chat.jira.properties.valueUnknown");
   return {
-    facts: [...Object.entries(CONTEXT).flatMap(([field, label]) => fact(label, data[field])),
+    facts: [...jiraPropertyContextFacts(data),
       ...fact("chat.jira.properties.key", data.propertyKey),
       ...countFact(keys ? "chat.jira.properties.returnedKeys" : "chat.jira.properties.nodeCount", keys ? data.total : data.nodeCount)],
     labels,
@@ -50,8 +85,9 @@ function keyCard(source: Source): JiraAgileDetails {
   const key = source.key;
   if (typeof key !== "string") return { facts: [], labels: ["chat.jira.properties.keyUnknown"] };
   const unselectable = key === "." || key === ".." || /[/\\%]/u.test(key);
-  return { facts: fact("chat.jira.properties.key", key),
-    labels: unselectable ? ["chat.jira.properties.unselectableKey"] : [] };
+  const displayed = visiblePropertyText(key);
+  return { facts: fact("chat.jira.properties.key", displayed),
+    labels: [...escapeLabels(key, displayed), ...(unselectable ? ["chat.jira.properties.unselectableKey" as const] : [])] };
 }
 function valueFacts(source: Source): JiraAgileDetails {
   switch (source.kind) {
@@ -59,8 +95,9 @@ function valueFacts(source: Source): JiraAgileDetails {
     case "string": {
       if (typeof source.textValue !== "string") break;
       if (source.textValue === "") return { facts: [], labels: ["chat.jira.properties.emptyText"] };
-      return { body: source.textValue, facts: [], labels: source.textValue.trim() === ""
-        ? ["chat.jira.properties.whitespaceText"] : [] };
+      const body = visiblePropertyText(source.textValue);
+      return { body, facts: [], labels: [...escapeLabels(source.textValue, body), ...(source.textValue.trim() === ""
+        ? ["chat.jira.properties.whitespaceText" as const] : [])] };
     }
     case "number":
       if (typeof source.numberValue === "number" && Number.isFinite(source.numberValue))
@@ -80,17 +117,17 @@ function valueFacts(source: Source): JiraAgileDetails {
   }
   return { facts: [], labels: ["chat.jira.properties.valueUnknown"] };
 }
-function valueCard(source: Source): JiraAgileDetails {
+export function jiraPropertyValueDetails(source: Source): JiraAgileDetails {
   const path = source.path;
   const position: JiraAgileDetails = path === "" ? { facts: [], labels: ["chat.jira.properties.root"] }
     : typeof path === "string" && path.startsWith("/") && !/~(?![01])/u.test(path)
-      ? { facts: [{ label: "chat.jira.properties.pointer", value: path }], labels: [] }
+      ? { facts: [{ label: "chat.jira.properties.pointer", value: visiblePropertyText(path) }], labels: escapeLabels(path, visiblePropertyText(path)) }
       : { facts: [], labels: ["chat.jira.properties.pathUnknown"] };
   const kind = typeof source.kind === "string" && Object.hasOwn(KINDS, source.kind) ? KINDS[source.kind] : undefined;
   const content = valueFacts(source);
   return { ...(content.body === undefined ? {} : { body: content.body }),
     facts: [...position.facts, ...content.facts],
-    labels: [...position.labels, ...(kind === undefined ? [] : [kind]), ...content.labels] };
+    labels: [...new Set([...position.labels, ...(kind === undefined ? [] : [kind]), ...content.labels])] };
 }
 
 /** Already typed private values only: no JSON parsing, serialization, URL handling or state engine. */
@@ -99,7 +136,7 @@ export function jiraPropertyDetails(tool: string, data: Source): readonly JiraAg
   const keys = JIRA_PROPERTY_KEY_TOOLS.has(tool);
   const items = Array.isArray(data.items) ? data.items.flatMap((value: unknown) => {
     const source = record(value);
-    return source === undefined ? [] : [keys ? keyCard(source) : valueCard(source)];
+    return source === undefined ? [] : [keys ? keyCard(source) : jiraPropertyValueDetails(source)];
   }) : [];
   return [header(tool, data), ...items];
 }

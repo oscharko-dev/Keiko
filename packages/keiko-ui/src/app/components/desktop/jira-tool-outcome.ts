@@ -55,6 +55,7 @@ import { JIRA_VIEW_SETTINGS_TOOLS, jiraViewSettingsDetails } from "./jira-view-s
 import { JIRA_JOB_OBSERVATION_TOOLS, jiraJobObservationDetails } from "./jira-job-observation-presentation";
 import { JIRA_PROPERTY_TOOLS, jiraPropertyDetails } from "./jira-property-presentation";
 import { JIRA_MONITORING_WRITE_TOOLS, jiraMonitoringDetails } from "./jira-monitoring-presentation";
+import { JIRA_PROPERTY_MUTATION_TOOLS, jiraPropertyMutationDetails } from "./jira-property-mutation-presentation";
 import {
   JIRA_ISSUE_CONTEXT_METADATA_TOOLS,
   jiraIssueContextDetails,
@@ -263,6 +264,7 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
 }
 type ConfigurationPresenter = (tool: string, source: UnknownRecord) => readonly JiraAgileDetails[];
 const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, ConfigurationPresenter])[] = [
+  [JIRA_PROPERTY_MUTATION_TOOLS, jiraPropertyMutationDetails],
   [JIRA_MONITORING_WRITE_TOOLS, jiraMonitoringDetails],
   [JIRA_ISSUE_CONTEXT_METADATA_TOOLS, jiraIssueContextDetails],
   [JIRA_PROPERTY_TOOLS, jiraPropertyDetails],
@@ -355,6 +357,7 @@ function presentedDetails(details: readonly JiraAgileDetails[]): JiraOutcomeItem
     const item = metadataDetailsItem(entry);
     return item === undefined ? [] : [item];
   });
+}
 function issueContextItems(tool: string, data: UnknownRecord): JiraOutcomeItem[] | undefined {
   if (tool === "jira_issue_picker")
     return jiraIssuePickerGroups(data).flatMap((group) => [
@@ -506,7 +509,7 @@ function pageCounts(
 export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcomeView {
   const stored = record(exchange.result?.data) ?? {};
   const data =
-    (JIRA_PARTICIPATION_TOOLS.has(exchange.call.name) || JIRA_MONITORING_WRITE_TOOLS.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
+    [JIRA_PARTICIPATION_TOOLS, JIRA_MONITORING_WRITE_TOOLS, JIRA_PROPERTY_MUTATION_TOOLS].some((tools) => tools.has(exchange.call.name)) && exchange.mutationOutcome !== undefined
       ? { ...stored, outcome: exchange.mutationOutcome }
       : stored;
   return {

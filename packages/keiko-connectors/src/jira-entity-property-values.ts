@@ -8,6 +8,10 @@ import { jiraNativeText } from "./jira-native-values.js";
 // https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/rest/v2/issue/IssuePropertyResource.html
 export const JIRA_PROPERTY_KEY_MAX_BYTES = 255;
 export const JIRA_PROPERTY_VALUE_MAX_BYTES = 32768;
+/** Native username/key query text must round-trip without URLSearchParams replacing code units. */
+export function jiraPropertyUserText(value: unknown): value is string {
+  return jiraNativeText(value, 255) && !/\p{Surrogate}/u.test(value);
+}
 type Refusal = "malformed-payload" | "bounds-exceeded";
 interface Projection {
   readonly items: CatalogJsonObject[];
@@ -17,6 +21,10 @@ interface Projection {
 }
 function propertyText(value: unknown, max: number, empty = false): value is string {
   return jiraNativeText(value, max, empty) && !/\p{Surrogate}/u.test(value);
+}
+/** JSON strings and nested member names retain controls; only unpaired UTF-16 is unreadable. */
+function jsonText(value: string): boolean {
+  return !/\p{Surrogate}/u.test(value);
 }
 
 /** Native observed keys are data, including keys the transport cannot safely address. */
@@ -48,13 +56,13 @@ function pointer(parent: string, key: string): string {
 }
 function stringNode(value: string, path: string, state: Projection): boolean {
   if (value.length > JIRA_PROPERTY_VALUE_MAX_BYTES) return refuse(state, "bounds-exceeded");
-  if (!propertyText(value, JIRA_PROPERTY_VALUE_MAX_BYTES, true)) return refuse(state, "malformed-payload");
+  if (!jsonText(value)) return refuse(state, "malformed-payload");
   state.items.push({ path, kind: "string", textValue: value });
   return bytes(state, stringBytes(value));
 }
 function numberNode(value: number, path: string, state: Projection): boolean {
-  if (!Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER)
-    return refuse(state, "malformed-payload");
+  if (!Number.isFinite(value)) return refuse(state, "malformed-payload");
+  if (Math.abs(value) > Number.MAX_SAFE_INTEGER) return refuse(state, "bounds-exceeded");
   state.items.push({ path, kind: "number", numberValue: value });
   return bytes(state, Buffer.byteLength(JSON.stringify(value), "utf8"));
 }
@@ -92,7 +100,7 @@ function containerKeys(value: object, state: Projection): readonly string[] | un
 function child(value: object, key: string, path: string, depth: number, state: Projection): boolean {
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
   if (descriptor === undefined || !("value" in descriptor) ||
-    !propertyText(key, JIRA_PROPERTY_VALUE_MAX_BYTES, true))
+    !jsonText(key))
     return refuse(state, "malformed-payload");
   if (!Array.isArray(value) && !bytes(state, stringBytes(key) + 1)) return false;
   return node(descriptor.value, pointer(path, key), depth + 1, state);

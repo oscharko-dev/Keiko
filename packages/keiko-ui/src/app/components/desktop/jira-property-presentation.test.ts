@@ -35,6 +35,20 @@ it("preserves false and zero rather than replacing them with missing values", ()
   expect(cards[2]?.facts).toContainEqual({ label: "chat.jira.properties.value", value: "0" });
   expect(cards[3]?.labels).toContain("chat.jira.properties.valueUnknown");
 });
+it("visibly distinguishes controls and literal escapes in text and pointer paths without changing native nodes", () => {
+  const nodes = [
+    { path: "/a\u0000\u0085\\~1~0", kind: "string", textValue: "\u0000\n\t\u0085\\u0000" },
+    { path: "/control", kind: "string", textValue: "\u0000" },
+    { path: "/literal", kind: "string", textValue: "\\u0000" },
+  ];
+  const cards = details("jira_issue_property", { outcome: "succeeded", items: nodes });
+  expect(cards[1]?.facts).toContainEqual({ label: "chat.jira.properties.pointer", value: String.raw`/a\u0000\u0085\\~1~0` });
+  expect(cards[1]?.body).toBe(String.raw`\u0000\u000a\u0009\u0085\\u0000`);
+  expect(cards[1]?.labels.filter((label) => label === "chat.jira.properties.visibleEscapes")).toHaveLength(1);
+  expect(cards[2]?.body).toBe(String.raw`\u0000`);
+  expect(cards[3]?.body).toBe(String.raw`\\u0000`);
+  expect(nodes[0]).toEqual({ path: "/a\u0000\u0085\\~1~0", kind: "string", textValue: "\u0000\n\t\u0085\\u0000" });
+});
 it("distinguishes empty native key lists from unknown lists and preserves unselectable keys", () => {
   expect(details("jira_project_property_keys", { outcome: "succeeded", items: [], total: 0 })[0]?.labels).toContain("chat.jira.properties.keysEmpty");
   expect(details("jira_project_property_keys", { outcome: "succeeded" })[0]?.labels).toContain("chat.jira.properties.keysUnknown");

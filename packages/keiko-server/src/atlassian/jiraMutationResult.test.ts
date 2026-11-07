@@ -20,6 +20,56 @@ const PARTIAL: JiraMutationAttempt = {
   links: LINKS,
 };
 
+describe("typed entity property mutation receipts", () => {
+  it.each([
+    { set: "jira.set-board-property", remove: "jira.delete-board-property", context: { boardId: "7" } },
+    { set: "jira.set-sprint-property", remove: "jira.delete-sprint-property", context: { sprintId: "9" } },
+    { set: "jira.set-comment-property", remove: "jira.delete-comment-property", context: { issueId: "10001", issueKey: "SYN-1", commentId: "10002" } },
+    { set: "jira.set-dashboard-item-property", remove: "jira.delete-dashboard-item-property", context: { dashboardId: "71", selectedItemId: "81" } },
+    { set: "jira.set-issue-property", remove: "jira.delete-issue-property", context: { issueId: "10001", issueKey: "SYN-1" } },
+    { set: "jira.set-issue-type-property", remove: "jira.delete-issue-type-property", context: { issueTypeId: "10001" } },
+    { set: "jira.set-project-property", remove: "jira.delete-project-property", context: { projectId: "10000", projectKey: "SYN" } },
+    { set: "jira.set-user-property", remove: "jira.delete-user-property", context: { userKey: "JIRAUSER10100", username: "Synthetic-User" } },
+  ] as const)("requires the selected canonical context and property target for $set", ({ set, remove, context }) => {
+    for (const operation of [set, remove]) {
+      const propertyPresent = operation === set;
+      const receipt = { ...context, propertyKey: "view ~settings", propertyPresent };
+      expect(validJiraMutationAttempt({ ok: true, receipt }, operation)).toEqual({ ok: true, receipt });
+      const pending = validJiraMutationAttempt({ ok: false, reason: "timeout", receipt }, operation);
+      for (const outcome of ["unknown", "succeeded-unconfirmed"] as const)
+        expect(jiraAttemptToolResult(outcome, pending).data).toMatchObject({ outcome, ...receipt });
+      for (const field of [...Object.keys(context), "propertyKey", "propertyPresent"]) {
+        const partial = Object.fromEntries(Object.entries(receipt).filter(([key]) => key !== field));
+        expect(validJiraMutationAttempt({ ok: true, receipt: partial }, operation)).toEqual({ ok: false, reason: "malformed-payload" });
+        expect(validJiraMutationAttempt({ ok: false, reason: "timeout", receipt: partial }, operation)).not.toHaveProperty("receipt");
+      }
+      for (const extra of [{ propertyPresent: !propertyPresent }, { propertyKey: "" }, { browseUrl: "https://untrusted.invalid/property" },
+        { entityType: "issue" }, { valueNodes: [{ path: "", kind: "null" }] }]) {
+        const invalid = { ...receipt, ...extra };
+        expect(validJiraMutationAttempt({ ok: true, receipt: invalid }, operation)).toEqual({ ok: false, reason: "malformed-payload" });
+        expect(validJiraMutationAttempt({ ok: false, reason: "timeout", receipt: invalid }, operation)).not.toHaveProperty("receipt");
+      }
+    }
+  });
+  it("does not reinterpret an observed unchanged value as a write", () => {
+    const attempt = validJiraMutationAttempt({ ok: false, reason: "conflict", receipt: {
+      issueId: "10001", issueKey: "SYN-1", propertyKey: "view.settings", propertyPresent: true,
+    }, detail: { unchanged: true } }, "jira.set-issue-property");
+    expect(jiraAttemptToolResult("rejected", attempt).data).toMatchObject({ outcome: "rejected", unchanged: true, propertyPresent: true });
+  });
+  it("refuses an inherited required property receipt field instead of treating it as observed", () => {
+    const receipt: Record<string, unknown> = { issueKey: "SYN-1", propertyKey: "view.settings", propertyPresent: true };
+    Object.setPrototypeOf(receipt, { issueId: "10001" });
+    expect(validJiraMutationAttempt({ ok: true, receipt }, "jira.set-issue-property")).toEqual({ ok: false, reason: "malformed-payload" });
+    expect(validJiraMutationAttempt({ ok: false, reason: "timeout", receipt }, "jira.set-issue-property")).not.toHaveProperty("receipt");
+  });
+  it("refuses a user receipt with an unpaired surrogate rather than inventing a canonical username", () => {
+    const receipt = { userKey: "JIRAUSER10100", username: "synthetic\ud800", propertyKey: "view.settings", propertyPresent: true };
+    expect(validJiraMutationAttempt({ ok: true, receipt }, "jira.set-user-property")).toEqual({ ok: false, reason: "malformed-payload" });
+    expect(validJiraMutationAttempt({ ok: false, reason: "timeout", receipt }, "jira.set-user-property")).not.toHaveProperty("receipt");
+  });
+});
+
 describe("monitoring setting receipts", () => {
   it.each([
     ["jira.set-app-monitoring", "monitoringEnabled", false],

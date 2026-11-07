@@ -29,6 +29,7 @@ import { JIRA_MAINTENANCE_TOOLS } from "./jira-maintenance-presentation";
 import { JIRA_VIEW_SETTINGS_TOOLS } from "./jira-view-settings-presentation";
 import { JIRA_JOB_OBSERVATION_TOOLS } from "./jira-job-observation-presentation";
 import { JIRA_PROPERTY_KEY_TOOLS } from "./jira-property-presentation";
+import { JIRA_PROPERTY_MUTATION_TOOLS, jiraPropertyMutationIdentityComplete } from "./jira-property-mutation-presentation";
 const LOCALLY_PAGED_TOOLS = new Set([
   "jira_pinned_comments",
   "jira_subtasks",
@@ -196,9 +197,14 @@ function isMutation(exchange: ChatToolExchange): boolean {
     (name) => name.replace(/[.-]/gu, "_") === exchange.call.name,
   );
 }
+function propertyIdentityMissing(exchange: ChatToolExchange): boolean {
+  return JIRA_PROPERTY_MUTATION_TOOLS.has(exchange.call.name) &&
+    !jiraPropertyMutationIdentityComplete(exchange.call.name, plainRecord(exchange.result?.data) ?? {});
+}
 /** Only an explicit, rejected no-change receipt can soften a conflict; journal state wins. */
 export function jiraMutationUnchanged(exchange: ChatToolExchange): boolean {
   const data = plainRecord(exchange.result?.data);
+  if (propertyIdentityMissing(exchange)) return false;
   return (
     isMutation(exchange) &&
     mutationOutcome(exchange) === "rejected" &&
@@ -212,6 +218,7 @@ function managedMutationState(
   turnState: ChatTurnState | undefined,
 ): WidgetMessageKey {
   const outcome = mutationOutcome(exchange);
+  if (outcome === "succeeded" && propertyIdentityMissing(exchange)) return OUTCOME_KEYS.unknown;
   if (outcome !== undefined)
     return jiraMutationUnchanged(exchange) ? "chat.jira.write.unchanged" : OUTCOME_KEYS[outcome];
   return exchange.result === undefined && turnState === "pending"

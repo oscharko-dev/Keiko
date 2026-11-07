@@ -38,6 +38,28 @@ describe.each(["en", "de"] as const)("persisted typed Jira properties in %s", (l
     await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
     localStorage.setItem(I18N_STORAGE_KEY, locale);
   });
+  it("restores control characters and literal backslashes as distinct readable text in values and pointers", async () => {
+    const exchanges = [exchange("jira_issue_property", { issueId: "10001", issueKey: "SYN-1", propertyKey: "settings", nodeCount: 3, items: [
+      { path: "", kind: "object", childCount: 2 },
+      { path: "/control\u0000\u0085\\~1~0", kind: "string", textValue: "\u0000\n\u0085\\u0000" },
+      { path: "/markup", kind: "string", textValue: "<img src=x onerror=alert(1)>" },
+    ] })];
+    const restored = JSON.parse(JSON.stringify({ schemaVersion: 1, exchanges })) as ChatToolTranscript;
+    const show = (): ReturnType<typeof render> => render(<I18nProvider><JiraChatTools transcript={restored} turnState="completed" /></I18nProvider>);
+    const first = show();
+    const previous = first.container.textContent;
+    first.unmount();
+    const { container } = show();
+    expect(container.textContent).toBe(previous);
+    expect(container.textContent).toContain(String.raw`JSON Pointer: /control\u0000\u0085\\~1~0`);
+    expect(container.textContent).toContain(String.raw`\u0000\u000a\u0085\\u0000`);
+    expect(container.textContent).toContain(locale === "en" ? "Display escapes:" : "Sichtbare Escape-Darstellung:");
+    expect(container.textContent).toContain("<img src=x onerror=alert(1)>");
+    expect(container.textContent).not.toContain("\u0000");
+    expect(container.textContent).not.toContain("\u0085");
+    expect(container.querySelector("pre, a, img")).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
+  });
   it("restores all sixteen result groups with readable pointer positions and distinct null/empty values", async () => {
     const exchanges = ENTITIES.flatMap(([entity, context]) => [
       exchange(`jira_${entity}_property_keys`, { ...context, items: [{ key: "view.settings" }, { key: "a/b%" }], startAt: 0, total: 2 }),

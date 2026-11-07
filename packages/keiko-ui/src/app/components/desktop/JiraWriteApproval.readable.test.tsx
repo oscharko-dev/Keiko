@@ -73,6 +73,55 @@ afterEach(() => {
   window.localStorage.removeItem(I18N_STORAGE_KEY);
 });
 
+describe.each(["en", "de"] as const)("reviewed typed property changes in %s", (locale) => {
+  it.each(([
+    { set: "jira.set-board-property", remove: "jira.delete-board-property", entity: { boardId: "7" } },
+    { set: "jira.set-sprint-property", remove: "jira.delete-sprint-property", entity: { sprintId: "9" } },
+    { set: "jira.set-comment-property", remove: "jira.delete-comment-property", entity: { issueIdOrKey: "SYN-1", commentId: "10002" } },
+    { set: "jira.set-dashboard-item-property", remove: "jira.delete-dashboard-item-property", entity: { dashboardId: "71", itemId: "81" } },
+    { set: "jira.set-issue-property", remove: "jira.delete-issue-property", entity: { issueIdOrKey: "SYN-1" } },
+    { set: "jira.set-issue-type-property", remove: "jira.delete-issue-type-property", entity: { issueTypeId: "10001" } },
+    { set: "jira.set-project-property", remove: "jira.delete-project-property", entity: { projectIdOrKey: "SYN" } },
+    { set: "jira.set-user-property", remove: "jira.delete-user-property", entity: { username: "Synthetic-User" } },
+  ] as const).flatMap(({ set, remove, entity }) => [{ operation: set, entity }, { operation: remove, entity }]))(
+    "shows the complete reviewed typed value and selected entity for $operation", async ({ operation, entity }) => {
+      const expectedValueNodes = [
+        { path: "", kind: "object", childCount: 8 }, { path: "/", kind: "null" },
+        { path: "/a~1b~0c", kind: "array", childCount: 0 }, { path: "/empty-object", kind: "object", childCount: 0 },
+        { path: "/text", kind: "string", textValue: " " }, { path: "/flag", kind: "boolean", booleanValue: false },
+        { path: "/zero", kind: "number", numberValue: 0 }, { path: "/empty-text", kind: "string", textValue: "" },
+        { path: "/control\u0000\\", kind: "string", textValue: "\u0000\u0085\\u0000" },
+      ];
+      const set = operation.startsWith("jira.set-");
+      const review = await reviewed(operation, { ...entity, propertyKey: "view ~settings", expectedValueNodes,
+        ...(set ? { valueNodes: [{ path: "", kind: "null" }] } : {}),
+      }, locale);
+      for (const value of [...Object.values(entity), "view ~settings", "/a~1b~0c", "/empty-object", "/zero"])
+        expect(review.text).toContain(value);
+      const labels = locale === "en" ? ["Reviewed existing property value", "Root: the whole property value", "Value: JSON null", "Value: empty array", "Value: empty object", "Value: empty text", "Boolean: false"]
+        : ["Geprüfter bestehender Property-Wert", "Wurzel: der gesamte Property-Wert", "Wert: JSON-null", "Wert: leeres Array", "Wert: leeres Objekt", "Wert: leerer Text", "Wahrheitswert: falsch"];
+      for (const label of labels) expect(review.text).toContain(label);
+      expect(review.text).toContain(String.raw`/control\u0000\\`);
+      expect(review.text).toContain(String.raw`\u0000\u0085\\u0000`);
+      expect(review.text).toContain(locale === "en" ? "Display escapes:" : "Sichtbare Escape-Darstellung:");
+      expect(review.text.includes(locale === "en" ? "Requested new property value" : "Angeforderter neuer Property-Wert")).toBe(set);
+      expect(review.text).not.toContain("expectedValueNodes");
+      expect(review.text).not.toContain("childCount");
+      expectNoJson(review);
+      if (operation === "jira.set-issue-property") expect(await axe(review.container)).toHaveNoViolations();
+    },
+  );
+  it("distinguishes reviewed absence from a requested literal JSON null", async () => {
+    const review = await reviewed("jira.set-issue-property", { issueIdOrKey: "SYN-1", propertyKey: "view.settings", expectAbsent: true,
+      valueNodes: [{ path: "", kind: "null" }],
+    }, locale);
+    expect(review.text).toContain(locale === "en" ? "Reviewed absence" : "Geprüfte Abwesenheit");
+    expect(review.text).toContain(locale === "en" ? "Value: JSON null" : "Wert: JSON-null");
+    expect(review.text).not.toContain(locale === "en" ? "Reviewed existing property value" : "Geprüfter bestehender Property-Wert");
+    expectNoJson(review);
+  });
+});
+
 describe.each(["en", "de"] as const)("reviewed monitoring changes in %s", (locale) => {
   it.each([
     ["jira.set-app-monitoring", false, true], ["jira.set-ipd-monitoring", true, false],

@@ -52,6 +52,7 @@ import { JIRA_JOB_OBSERVATION_TOOLS } from "./jira-job-observation-presentation"
 import { JIRA_PROPERTY_TOOLS } from "./jira-property-presentation";
 import { JIRA_ISSUE_CONTEXT_TOOLS } from "./jira-issue-context-presentation";
 import { JIRA_MONITORING_WRITE_TOOLS } from "./jira-monitoring-presentation";
+import { JIRA_PROPERTY_MUTATION_TOOLS } from "./jira-property-mutation-presentation";
 import { JIRA_PARTICIPATION_TOOLS } from "./jira-participation-presentation";
 import { JIRA_FILE_METADATA_TOOLS } from "./jira-file-metadata-presentation";
 import { JIRA_SAVED_VIEW_TOOLS } from "./jira-saved-view-presentation";
@@ -312,6 +313,7 @@ function resultCardSemantics(exchange: ChatToolExchange): {
     JIRA_PROPERTY_TOOLS,
     JIRA_ISSUE_CONTEXT_TOOLS,
     JIRA_MONITORING_WRITE_TOOLS,
+    JIRA_PROPERTY_MUTATION_TOOLS,
   ].some((tools) => tools.has(exchange.call.name))
     ? { tag: "div", role: "group", label: jiraToolLabel(exchange) }
     : { tag: "section", role: undefined, label: jiraToolRegionLabel(exchange) };

@@ -1,6 +1,7 @@
-import { jiraTemplateViolationGuidance } from "@oscharko-dev/keiko-connectors";
+import { jiraPropertyUserText, jiraPropertyPathKey, jiraTemplateViolationGuidance } from "@oscharko-dev/keiko-connectors";
 import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
+  JIRA_ENTITY_PROPERTY_MUTATIONS,
   JIRA_TEMPLATE_RULE_IDS,
   JIRA_TEMPLATE_VIOLATIONS_MAX,
   isSafeAtlassianIdentifier,
@@ -13,6 +14,7 @@ import {
   type JiraMutationOperation,
   type JiraMutationOutcome,
   type JiraMutationReceipt,
+  type JiraEntityPropertyMutation,
   type JiraMutationResultState,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -31,6 +33,22 @@ const RECEIPT_KEYS: ReadonlySet<string> = new Set([
   "transitionId",
   "attachmentId",
 ]);
+const PROPERTY_CONTEXTS = [
+  ["board", ["boardId"]],
+  ["sprint", ["sprintId"]],
+  ["comment", ["issueId", "issueKey", "commentId"]],
+  ["dashboard-item", ["dashboardId", "selectedItemId"]],
+  ["issue", ["issueId", "issueKey"]],
+  ["issue-type", ["issueTypeId"]],
+  ["project", ["projectId", "projectKey"]],
+  ["user", ["userKey", "username"]],
+] as const;
+const PROPERTY_RECEIPTS = Object.fromEntries(JIRA_ENTITY_PROPERTY_MUTATIONS.map((operation) => {
+  const context = PROPERTY_CONTEXTS.find(([kind]) =>
+    operation === `jira.set-${kind}-property` || operation === `jira.delete-${kind}-property`);
+  if (context === undefined) throw new TypeError("Unsupported property receipt context");
+  return [operation, ["propertyKey", "propertyPresent", ...context[1]]];
+})) as Readonly<Record<JiraEntityPropertyMutation, readonly (keyof JiraMutationReceipt)[]>>;
 const MONITORING_RECEIPTS = {
   "jira.set-app-monitoring": ["monitoringEnabled"],
   "jira.set-ipd-monitoring": ["monitoringEnabled"],
@@ -76,6 +94,7 @@ type CollaborationOperation = keyof typeof COLLABORATION_RECEIPTS;
 const REQUIRED_RECEIPTS: Readonly<
   Record<JiraMutationOperation, readonly (keyof JiraMutationReceipt)[]>
 > = {
+  ...PROPERTY_RECEIPTS,
   ...MONITORING_RECEIPTS,
   ...SCREEN_TAB_RECEIPTS,
   ...AGILE_RECEIPTS,
@@ -96,6 +115,26 @@ const REQUIRED_RECEIPTS: Readonly<
 
 function confirmed(value: unknown): boolean {
   return value === true;
+}
+function propertyOperation(operation: JiraMutationOperation): operation is JiraEntityPropertyMutation {
+  return Object.hasOwn(PROPERTY_RECEIPTS, operation);
+}
+function propertyContextValue(key: keyof JiraMutationReceipt, value: unknown): boolean {
+  if (key === "propertyKey") return jiraPropertyPathKey(value);
+  if (key === "propertyPresent") return typeof value === "boolean";
+  if (key === "issueKey" || key === "projectKey") return isSafeAtlassianIdentifier(value);
+  if (key === "userKey" || key === "username")
+    return jiraPropertyUserText(value);
+  return int64Identity(value);
+}
+function validPropertyReceipt(receipt: JiraMutationReceipt, operation: JiraEntityPropertyMutation): boolean {
+  const keys = PROPERTY_RECEIPTS[operation];
+  return Reflect.ownKeys(receipt).length === keys.length &&
+    keys.every((key) => {
+      const field = Object.getOwnPropertyDescriptor(receipt, key);
+      return field !== undefined && "value" in field && propertyContextValue(key, field.value) &&
+        (key !== "propertyPresent" || field.value === operation.startsWith("jira.set-"));
+    });
 }
 function monitoringOperation(operation: JiraMutationOperation): operation is MonitoringOperation {
   return Object.hasOwn(MONITORING_RECEIPTS, operation);
@@ -271,6 +310,7 @@ function validProjectReceipt(receipt: JiraMutationReceipt): boolean {
   });
 }
 function validIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
+  if (propertyOperation(operation)) return validPropertyReceipt(receipt, operation);
   if (monitoringOperation(operation)) return validMonitoringReceipt(receipt, operation);
   if (screenTabOperation(operation)) return validScreenTabReceipt(receipt);
   if (projectOperation(operation)) return validProjectReceipt(receipt);
@@ -294,6 +334,7 @@ function partialReceipt(
 }
 function partialIdentity(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
   return (
+    propertyOperation(operation) ||
     monitoringOperation(operation) ||
     screenTabOperation(operation) ||
     projectOperation(operation) ||

@@ -16,6 +16,7 @@ import {
   assertNativeJiraPrimary,
   type Scenario,
 } from "../../../../tests/support/jira-operation-transport-contract.js";
+import { propertyTransportFixture, PROPERTY_FIXTURE_KEY, REVIEWED_PROPERTY_NODES, REQUESTED_PROPERTY_NODES } from "../../../../tests/support/jira-property-transport-fixture.js";
 
 const PAGING = { startAt: 2, maxResults: 5 };
 const QUERY = { startAt: "2", maxResults: "5" };
@@ -26,6 +27,10 @@ const ISSUE_QUERY = {
 const CONTEXT_ISSUE_QUERY = { ...ISSUE_QUERY, validateQuery: "true", jql: "project = SYN AND summary ~ \"A & B\"" };
 // Independent selected identities and filters: the registry supplies no fixture input or response.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.set-board-property", args: { boardId: "7", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES, valueNodes: REQUESTED_PROPERTY_NODES }, parameters: { boardId: "7", propertyKey: PROPERTY_FIXTURE_KEY } },
+  { tool: "jira.delete-board-property", args: { boardId: "7", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES }, parameters: { boardId: "7", propertyKey: PROPERTY_FIXTURE_KEY } },
+  { tool: "jira.set-sprint-property", args: { sprintId: "9", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES, valueNodes: REQUESTED_PROPERTY_NODES }, parameters: { sprintId: "9", propertyKey: PROPERTY_FIXTURE_KEY } },
+  { tool: "jira.delete-sprint-property", args: { sprintId: "9", propertyKey: PROPERTY_FIXTURE_KEY, expectedValueNodes: REVIEWED_PROPERTY_NODES }, parameters: { sprintId: "9", propertyKey: PROPERTY_FIXTURE_KEY } },
   { tool: "jira.board-property-keys", args: { boardId: "7" }, parameters: { boardId: "7" }, primaryMethodIndex: 1 },
   { tool: "jira.board-property", args: { boardId: "7", propertyKey: "view ~settings" },
     parameters: { boardId: "7", propertyKey: "view ~settings" }, primaryMethodIndex: 1 },
@@ -157,14 +162,20 @@ function agileRead(path: string, state: MutationRemoteState): AtlassianHttpBodyR
     });
   return response({}, 404);
 }
-function remote(): AtlassianHttpBodyPort {
+const PROPERTY_WRITE_ROOTS: Readonly<Record<string, string>> = {
+  "jira.set-board-property": "board/7/properties", "jira.delete-board-property": "board/7/properties",
+  "jira.set-sprint-property": "sprint/9/properties", "jira.delete-sprint-property": "sprint/9/properties",
+};
+function remote(tool?: string): AtlassianHttpBodyPort {
   const state = mutationRemoteState();
+  const root = PROPERTY_WRITE_ROOTS[tool ?? ""];
+  const property = propertyTransportFixture(root === undefined ? undefined : `/context/rest/agile/1.0/${root}`);
   return (request) => {
     const path = new URL(request.url).pathname;
     return Promise.resolve(
       request.method === "GET"
-        ? (nativeRead(path, state) ?? agileRead(path, state))
-        : (nativeWrite(path, request.bodyJson ?? "{}", state) ?? response({}, 404)),
+        ? (property.read(request) ?? nativeRead(path, state) ?? agileRead(path, state))
+        : (property.write(request) ?? nativeWrite(path, request.bodyJson ?? "{}", state) ?? response({}, 404)),
     );
   };
 }
@@ -173,7 +184,7 @@ describe("native Agile registry and actual connector transport agreement", () =>
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && definition.apiRoot === "/rest/agile/1.0",
     );
-    expect(native).toHaveLength(31);
+    expect(native).toHaveLength(35);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -185,7 +196,7 @@ describe("native Agile registry and actual connector transport agreement", () =>
       const observed = await observeNativeJiraOperation(scenario, {
         deployment: "data-center",
         baseUrl: "https://jira.example.invalid/context",
-        http: remote(),
+        http: remote(scenario.tool),
       });
       assertNativeJiraPrimary(observed, scenario);
       expect(observed.requests.filter((request) => request.method !== "GET")).toHaveLength(
@@ -203,6 +214,17 @@ describe("native Agile registry and actual connector transport agreement", () =>
     ]);
     expect(observed.result.data).toMatchObject({ boardId: "7", issueId: "10002", issueKey: "SYN-2", value: 0 });
   });
+  it.each(["jira.set-board-property", "jira.delete-sprint-property"] as const)(
+    "confirms %s on the same Agile parent without converting false to absence", async (tool) => {
+      const scenario = SCENARIOS.find((entry) => entry.tool === tool);
+      if (scenario === undefined) throw new TypeError("Missing Agile property mutation fixture");
+      const observed = await observeNativeJiraOperation(scenario, { deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http: remote(tool) });
+      expect(observed.requests.map(({ method }) => method)).toEqual(["GET", "GET", "GET", tool === "jira.set-board-property" ? "PUT" : "DELETE", "GET", "GET", "GET"]);
+      expect(observed.requests[0]?.url).toBe(observed.requests[4]?.url);
+      expect(observed.result.data).toMatchObject({ propertyKey: PROPERTY_FIXTURE_KEY, propertyPresent: tool === "jira.set-board-property" });
+      expect(observed.requests[3]?.bodyJson).toBe(tool === "jira.set-board-property" ? "false" : undefined);
+    },
+  );
   it("uses the actual Agile entity lookup and fixed property route without following self URLs", async () => {
     const observed = await observeNativeJiraOperation({ tool: "jira.board-property", args: { boardId: "7", propertyKey: "view ~settings" } }, {
       deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http: remote(),

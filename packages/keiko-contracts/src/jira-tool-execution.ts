@@ -2,8 +2,22 @@ import type { AtlassianConnectorWriteFailureReason } from "./atlassian-connector
 import type { JiraTemplateViolation } from "./jira-issue-template.js";
 import { compareStrings } from "./comparators.js";
 
+/** One immutable identity source for the uniform entity-property mutation family. */
+export const JIRA_ENTITY_PROPERTY_MUTATIONS = Object.freeze([
+  "jira.set-board-property", "jira.delete-board-property",
+  "jira.set-sprint-property", "jira.delete-sprint-property",
+  "jira.set-comment-property", "jira.delete-comment-property",
+  "jira.set-dashboard-item-property", "jira.delete-dashboard-item-property",
+  "jira.set-issue-property", "jira.delete-issue-property",
+  "jira.set-issue-type-property", "jira.delete-issue-type-property",
+  "jira.set-project-property", "jira.delete-project-property",
+  "jira.set-user-property", "jira.delete-user-property",
+] as const);
+export type JiraEntityPropertyMutation = (typeof JIRA_ENTITY_PROPERTY_MUTATIONS)[number];
+
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
+  ...JIRA_ENTITY_PROPERTY_MUTATIONS,
   "jira.set-app-monitoring",
   "jira.set-ipd-monitoring",
   "jira.start-jmx-metrics",
@@ -160,6 +174,14 @@ export type JiraMutationResultState = (typeof JIRA_MUTATION_RESULT_STATES)[numbe
 /** Validated Jira identities and closed state facts; never remote bodies or headers.
  * Monitoring booleans on unknown/unconfirmed writes are requested targets, not success evidence. */
 export interface JiraMutationReceipt {
+  readonly propertyKey?: string;
+  /** Requested target on unknown/unconfirmed writes; success requires independent readback. */
+  readonly propertyPresent?: boolean;
+  readonly dashboardId?: string;
+  readonly selectedItemId?: string;
+  readonly issueTypeId?: string;
+  readonly userKey?: string;
+  readonly username?: string;
   readonly monitoringEnabled?: boolean;
   readonly jmxMetricsExposed?: boolean;
   readonly screenId?: string;

@@ -2,6 +2,7 @@ import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asRecord } from "./atlassian-sync-classify.js";
+import { jiraPropertyUserText } from "./jira-entity-property-values.js";
 import { bindJiraCommentIssue, readJiraBoundComment } from "./jira-managed-comments.js";
 import { executeJiraCoreMetadataRead } from "./jira-managed-core-metadata.js";
 import { jiraReadFailure } from "./jira-managed-metadata.js";
@@ -10,7 +11,7 @@ import { readJiraBoundProject } from "./jira-managed-projects.js";
 import { executeJiraSavedViewRead } from "./jira-managed-saved-views.js";
 import { executeJiraUserRead } from "./jira-managed-user-reads.js";
 import { readJiraMutationIssue } from "./jira-mutation-confirmation.js";
-import { jiraNativeId, jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
+import { jiraNativeId, jiraNativeNumericId } from "./jira-native-values.js";
 
 export type JiraPropertyEntity =
   | { readonly kind: "board" | "sprint"; readonly id: string }
@@ -32,6 +33,7 @@ export type JiraPropertyBinding =
       readonly request: JiraMutationRequest;
       readonly path: string;
       readonly context: CatalogJsonObject;
+      readonly entity: JiraPropertyEntity;
       readonly query?: string;
     };
 function failed(result: ManagedMcpToolResult): JiraPropertyBinding {
@@ -50,6 +52,7 @@ async function agileEntity(
   if (response.status !== 200 || id === undefined) return malformed();
   if (id !== entity.id) return failed(jiraReadFailure("conflict"));
   return { ok: true, request, path: `${entity.kind}/${id}/properties`,
+    entity: { kind: entity.kind, id },
     context: entity.kind === "board" ? { boardId: id } : { sprintId: id } };
 }
 async function commentEntity(
@@ -62,6 +65,7 @@ async function commentEntity(
   const comment = await readJiraBoundComment(ports.platform, input, issue.binding);
   if (!comment.ok) return failed(jiraReadFailure(comment.reason, comment.detail));
   return { ok: true, request: ports.platform, path: `comment/${entity.commentId}/properties`,
+    entity: { kind: "comment", issueIdOrKey: issue.binding.issueId, commentId: entity.commentId },
     context: { issueId: issue.binding.issueId, issueKey: issue.issueKey, commentId: entity.commentId } };
 }
 async function dashboardItemEntity(
@@ -76,6 +80,7 @@ async function dashboardItemEntity(
   // Jira has no independent item-detail GET here. The property route owns item existence/access;
   // selectedItemId is explicitly requested context, never an independently observed item identity.
   return { ok: true, request,
+    entity: { kind: "dashboard-item", dashboardId: entity.dashboardId, itemId: entity.itemId },
     path: `dashboard/${entity.dashboardId}/items/${entity.itemId}/properties`,
     context: { dashboardId: entity.dashboardId, selectedItemId: entity.itemId } };
 }
@@ -87,6 +92,7 @@ async function issueEntity(
   if (!issue.ok) return failed(jiraReadFailure(issue.reason, issue.detail));
   if (!jiraNativeId(issue.id) || !isSafeAtlassianIdentifier(issue.key)) return malformed();
   return { ok: true, request, path: `issue/${issue.id}/properties`,
+    entity: { kind: "issue", issueIdOrKey: issue.id },
     context: { issueId: issue.id, issueKey: issue.key } };
 }
 async function projectEntity(target: string, request: JiraMutationRequest): Promise<JiraPropertyBinding> {
@@ -94,15 +100,29 @@ async function projectEntity(target: string, request: JiraMutationRequest): Prom
   if (!result.ok) return failed(jiraReadFailure(result.reason, result.detail));
   const project = result.project;
   return { ok: true, request, path: `project/${project.projectId}/properties`,
+    entity: { kind: "project", projectIdOrKey: project.projectId },
     context: { projectId: project.projectId, projectKey: project.projectKey } };
 }
 async function userEntity(args: CatalogJsonObject, request: JiraMutationRequest): Promise<JiraPropertyBinding> {
   const result = await executeJiraUserRead("jira.user", args, request);
   if (result.isError) return failed(result);
   const { key, name } = result.data;
-  if (!jiraNativeText(key, 255) || !jiraNativeText(name, 255)) return malformed();
+  if (!jiraPropertyUserText(key) || !jiraPropertyUserText(name)) return malformed();
   return { ok: true, request, path: "user/properties", query: new URLSearchParams({ userKey: key }).toString(),
+    entity: { kind: "user", user: { userKey: key } },
     context: { userKey: key, username: name } };
+}
+
+async function issueTypeEntity(
+  entity: Extract<JiraPropertyEntity, { readonly kind: "issue-type" }>,
+  request: JiraMutationRequest,
+): Promise<JiraPropertyBinding> {
+  const result = await executeJiraCoreMetadataRead("jira.issue-type", { issueTypeId: entity.issueTypeId }, request);
+  if (result.isError) return failed(result);
+  if (result.data.id !== entity.issueTypeId) return malformed();
+  return { ok: true, request, path: `issuetype/${entity.issueTypeId}/properties`,
+    entity: { kind: "issue-type", issueTypeId: entity.issueTypeId },
+    context: { issueTypeId: entity.issueTypeId } };
 }
 
 /** Reuse the native entity's admission owner before choosing its fixed property resource. */
@@ -118,12 +138,6 @@ export async function bindJiraPropertyEntity(
     case "issue": return issueEntity(entity.issueIdOrKey, ports.platform);
     case "project": return projectEntity(entity.projectIdOrKey, ports.platform);
     case "user": return userEntity(entity.user, ports.platform);
-    case "issue-type": {
-      const result = await executeJiraCoreMetadataRead("jira.issue-type", { issueTypeId: entity.issueTypeId }, ports.platform);
-      return result.isError ? failed(result)
-        : result.data.id !== entity.issueTypeId ? malformed()
-          : { ok: true, request: ports.platform, path: `issuetype/${entity.issueTypeId}/properties`,
-            context: { issueTypeId: entity.issueTypeId } };
-    }
+    case "issue-type": return issueTypeEntity(entity, ports.platform);
   }
 }

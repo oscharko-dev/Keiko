@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import { BASE, ISSUE, PROPERTY_CASES as CASES, type PropertyScenario } from "./jira-property-test/_support.js";
 import { jiraPropertyKey, jiraPropertyValue, JIRA_PROPERTY_VALUE_MAX_BYTES } from "./jira-entity-property-values.js";
 import {
   executeJiraEntityPropertyRead as read,
@@ -8,47 +9,13 @@ import {
   JIRA_ENTITY_PROPERTY_READS,
 } from "./jira-managed-entity-properties.js";
 
-const BASE = "https://jira.example.test/context";
-const ISSUE = { id: "10002", key: "SYN-2", fields: { summary: "Synthetic issue" } };
 type ReadName = Parameters<typeof read>[0];
-interface Scenario {
-  readonly prefix: string;
-  readonly args: CatalogJsonObject;
-  readonly admission: readonly Record<string, unknown>[];
-  readonly admissionPaths: readonly string[];
-  readonly path: string;
-  readonly context: CatalogJsonObject;
-  readonly agile?: boolean;
-}
-const CASES: readonly Scenario[] = [
-  { prefix: "board", args: { boardId: "7" }, admission: [{ id: 7, name: "Board", type: "scrum" }],
-    admissionPaths: ["board/7"], path: "board/7/properties", context: { boardId: "7" }, agile: true },
-  { prefix: "sprint", args: { sprintId: "8" }, admission: [{ id: 8, name: "Sprint", state: "future" }],
-    admissionPaths: ["sprint/8"], path: "sprint/8/properties", context: { sprintId: "8" }, agile: true },
-  { prefix: "comment", args: { issueIdOrKey: "syn-2", commentId: "9" }, admission: [ISSUE,
-      { id: "9", body: "Comment", self: `${BASE}/rest/api/2/issue/10002/comment/9` }],
-    admissionPaths: ["issue/syn-2?fields=summary", "issue/10002/comment/9"], path: "comment/9/properties",
-    context: { issueId: "10002", issueKey: "SYN-2", commentId: "9" } },
-  { prefix: "dashboard-item", args: { dashboardId: "10", itemId: "20" },
-    admission: [{ id: "10", name: "Dashboard", self: "https://untrusted.invalid/dashboard" }],
-    admissionPaths: ["dashboard/10"], path: "dashboard/10/items/20/properties",
-    context: { dashboardId: "10", selectedItemId: "20" } },
-  { prefix: "issue", args: { issueIdOrKey: "syn-2" }, admission: [ISSUE],
-    admissionPaths: ["issue/syn-2?fields=summary"], path: "issue/10002/properties", context: { issueId: "10002", issueKey: "SYN-2" } },
-  { prefix: "issue-type", args: { issueTypeId: "11" }, admission: [{ id: "11", name: "Story" }],
-    admissionPaths: ["issuetype/11"], path: "issuetype/11/properties", context: { issueTypeId: "11" } },
-  { prefix: "project", args: { projectIdOrKey: "syn" }, admission: [{ id: "10000", key: "SYN", name: "Synthetic project" }],
-    admissionPaths: ["project/syn"], path: "project/10000/properties", context: { projectId: "10000", projectKey: "SYN" } },
-  { prefix: "user", args: { username: "Synthetic User" }, admission: [{ key: "user-key", name: "synthetic user" }],
-    admissionPaths: ["user?username=Synthetic+User"], path: "user/properties?userKey=user-key",
-    context: { userKey: "user-key", username: "synthetic user" } },
-];
 function request(bodies: readonly Record<string, unknown>[]) {
   const mock = vi.fn<JiraMutationRequest>().mockResolvedValue({ ok: false, reason: "timeout" });
   for (const body of bodies) mock.mockResolvedValueOnce({ ok: true, status: 200, body });
   return mock;
 }
-function fixture(scenario: Scenario, body: Record<string, unknown>) {
+function fixture(scenario: PropertyScenario, body: Record<string, unknown>) {
   const selected = request([...scenario.admission, body]);
   const unused = request([]);
   return { selected, unused, ports: {
@@ -139,7 +106,7 @@ describe("bound native entity property reads", () => {
     expect((await read("jira.issue-property", { issueIdOrKey: "SYN-2", propertyKey: "x" },
       { platform, agile: request([]), baseUrl: BASE })).data.reason).toBe(reason);
   });
-  it.each(["", ".", "..", "a/b", "a\\b", "%2e", "%252f", "a\nb", "\ud800", "é".repeat(128)])("rejects an unsafe or oversized property key before requests: %j", async (propertyKey) => {
+  it.each(["", ".", "..", "a/b", "a\\b", "%2e", "%252f", "a\nb", "a\u0000b", "a\u001bb", "a\u0085b", "\ud800", "é".repeat(128)])("rejects an unsafe or oversized property key before requests: %j", async (propertyKey) => {
     const platform = request([]);
     const agile = request([]);
     expect((await read("jira.issue-property", { issueIdOrKey: "SYN-2", propertyKey }, { platform, agile, baseUrl: BASE })).data.reason).toBe("invalid-input");
@@ -193,6 +160,21 @@ describe("bound native entity property reads", () => {
       { platform, agile: request([]), baseUrl: BASE });
     expect(result).toEqual({ isError: true, data: { outcome: "failed", reason: "bounds-exceeded" } });
   });
+  it("preserves native control characters in nested member names and text through the read boundary", async () => {
+    const key = "control\u0000/\u0085~";
+    const text = "\u0005\u001b[0m\u009f";
+    const platform = request([ISSUE, { key: "x", value: { [key]: text } }]);
+    expect((await read("jira.issue-property", { issueIdOrKey: "SYN-2", propertyKey: "x" },
+      { platform, agile: request([]), baseUrl: BASE })).data).toMatchObject({ outcome: "succeeded", items: [
+      { path: "", kind: "object", childCount: 1 },
+      { path: "/control\u0000~1\u0085~0", kind: "string", textValue: text },
+    ] });
+  });
+  it.each([1.5e300, -1.5e300, Number.MAX_SAFE_INTEGER + 1])("reports native numeric admission limits without calling valid JSON malformed: %s", async (value) => {
+    const platform = request([ISSUE, { key: "x", value }]);
+    expect((await read("jira.issue-property", { issueIdOrKey: "SYN-2", propertyKey: "x" },
+      { platform, agile: request([]), baseUrl: BASE })).data).toEqual({ outcome: "failed", reason: "bounds-exceeded" });
+  });
   it("has exactly the sixteen fixed GET names and no mutation or proxy alias", () => {
     expect(JIRA_ENTITY_PROPERTY_READS).toHaveLength(16);
     expect(new Set(JIRA_ENTITY_PROPERTY_READS).size).toBe(16);
@@ -217,11 +199,32 @@ describe("complete typed property values", () => {
   it.each([null, false, 0, "", "  ", "[false]", [], {}])("accepts a supplied JSON root %j without substituting another value", (value) => {
     expect(jiraPropertyValue(value).ok).toBe(true);
   });
+  it.each(Array.from({ length: 65 }, (_, index) => String.fromCharCode(index < 32 ? index : index + 95)))("preserves each native C0, DEL and C1 character in strings and nested keys: %j", (character) => {
+    expect(jiraPropertyValue(character)).toEqual({ ok: true, items: [
+      { path: "", kind: "string", textValue: character },
+    ] });
+    expect(jiraPropertyValue({ [character]: character })).toEqual({ ok: true, items: [
+      { path: "", kind: "object", childCount: 1 },
+      { path: `/${character}`, kind: "string", textValue: character },
+    ] });
+  });
+  it.each([1.25, -0.125, 4_503_599_627_370_495.5, 1.5e15, -1.5e15, Number.MIN_VALUE, Number.MAX_SAFE_INTEGER, -Number.MAX_SAFE_INTEGER])("preserves finite fractional and large values within the unchanged numeric bound: %s", (value) => {
+    expect(jiraPropertyValue(value)).toEqual({ ok: true, items: [
+      { path: "", kind: "number", numberValue: value },
+    ] });
+  });
+  it.each([Number.MAX_SAFE_INTEGER + 1, -Number.MAX_SAFE_INTEGER - 1, 1.5e300, -1.5e300, Number.MAX_VALUE])("classifies finite JSON numbers outside the admission bound as bounds-exceeded: %s", (value) => {
+    expect(jiraPropertyValue(value)).toEqual({ ok: false, reason: "bounds-exceeded" });
+    expect(jiraPropertyValue({ nested: value })).toEqual({ ok: false, reason: "bounds-exceeded" });
+  });
   it("enforces serialized native UTF-8 bytes, including JSON quotes and escaping", () => {
     expect(jiraPropertyValue("x".repeat(JIRA_PROPERTY_VALUE_MAX_BYTES - 2)).ok).toBe(true);
     expect(jiraPropertyValue("x".repeat(JIRA_PROPERTY_VALUE_MAX_BYTES - 1))).toEqual({ ok: false, reason: "bounds-exceeded" });
     expect(jiraPropertyValue("é".repeat(JIRA_PROPERTY_VALUE_MAX_BYTES / 2))).toEqual({ ok: false, reason: "bounds-exceeded" });
     expect(jiraPropertyValue("\n".repeat(JIRA_PROPERTY_VALUE_MAX_BYTES / 2))).toEqual({ ok: false, reason: "bounds-exceeded" });
+    expect(jiraPropertyValue("\u0000".repeat(5461)).ok).toBe(true);
+    expect(jiraPropertyValue("\u0000".repeat(5462))).toEqual({ ok: false, reason: "bounds-exceeded" });
+    expect(jiraPropertyValue({ ["\u0000".repeat(5461)]: null })).toEqual({ ok: false, reason: "bounds-exceeded" });
     expect(jiraPropertyKey("é".repeat(127))).toBe(true);
   });
   it("refuses unpaired Unicode in values and object keys while preserving complete supplementary characters", () => {
@@ -238,7 +241,7 @@ describe("complete typed property values", () => {
     for (let i = 0; i <= TOOL_CATALOG_LIMITS.maxSchemaDepth; i++) nested = [nested];
     expect(jiraPropertyValue(nested)).toEqual({ ok: false, reason: "bounds-exceeded" });
   });
-  it.each([undefined, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, 1n, new Date(0), "\u0000"])("refuses non-JSON or unreadable values %j", (value) => {
+  it.each([undefined, Number.NaN, Infinity, -Infinity, 1n, new Date(0)])("refuses non-JSON values %j", (value) => {
     expect(jiraPropertyValue(value)).toEqual({ ok: false, reason: "malformed-payload" });
   });
   it("rejects cyclic, sparse and accessor data without executing a getter", () => {

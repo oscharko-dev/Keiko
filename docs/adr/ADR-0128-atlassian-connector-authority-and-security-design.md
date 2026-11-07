@@ -669,6 +669,19 @@ False is preserved as a real value. These endpoints add no authentication except
 atomic-error rule, and an uncertain invocation is never replayed. They do not fetch metric contents
 or start reindex, snapshot or upgrade jobs.
 
+Entity-property set and delete actions use the same high-risk authority, reviewed action digest
+and durable journal. The input reuses the existing complete typed JSON Pointer projection:
+set requires a target value and exactly one reviewed prior value or explicit expected absence;
+delete requires the reviewed prior value. Null, false and empty data remain present values.
+Admission binds the canonical entity, reads its complete property keys and the exact value, and
+accepts absence only when an unlisted key agrees with that exact value's native 404. After one
+fixed PUT or DELETE, the same parent is independently rebound and both observations are repeated.
+Dashboard item identity remains explicitly selected context because Jira exposes no independent
+item-detail read here. Property receipts retain only the exact context, key and requested presence;
+that presence is a target, not confirmation, in an unknown or unconfirmed outcome. Uncertain
+invocations reload from the existing journal without calling the provider again. No broader
+authentication exception, assumed atomic error or separate transport/receipt store is introduced.
+
 Both outbound HTTP factories capture the selected credential generation by value. The custody
 resolver checks it against current private metadata before reading ciphertext, so an old transport
 cannot silently materialize a replacement credential. The existing typed rejection event and 409
@@ -1290,7 +1303,9 @@ the approval.
   `chat.tool-authority.operation` records a repeated guard's allowed decision once per correlation
   and phase until it changes (2026-11-03: a large report's unchanged decisions were 67% of a lab's log
   bytes); every refusal is written. `jira.field.admission` records a pre-approval refusal by Keiko's own field validation: the
-  operation, the refused count and the closed validation classes, never a field or a value. The skill
+  closed operation class `jira-write`, the SHA-256 `operationDigest` of the exact tool name,
+  the refused count and the closed validation classes, never a field, property key or value.
+  This log-only projection leaves the execution and approval identity unchanged. The skill
   library lines gain the actions `jira-template-list`, `-validate` and `-propose`.
 - **Scope.** Comments carry no field state and are not governed; an assignment is an edit of the
   `assignee` field and is. Organization-wide

@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { isBoundedExternalJsonSchema } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { JIRA_ENTITY_PROPERTY_READ_DEFINITIONS, jiraEntityPropertyDeclarationForTool } from "./jiraEntityPropertyDescriptors.js";
@@ -16,7 +17,8 @@ const ENTITIES = [
 ] as const;
 it("admits all sixteen entity-property definitions through the unchanged bounded compiler", () => {
   expect(Object.keys(JIRA_ENTITY_PROPERTY_READ_DEFINITIONS)).toHaveLength(16);
-  for (const [name, definition] of Object.entries(JIRA_ENTITY_PROPERTY_READ_DEFINITIONS)) {
+  for (const name of JIRA_READ_TOOL_FAMILIES.entityProperties) {
+    const definition = JIRA_ENTITY_PROPERTY_READ_DEFINITIONS[name];
     expect(isBoundedExternalJsonSchema(definition.input), `${name} input`).toBe(true);
     expect(isBoundedExternalJsonSchema(definition.result), `${name} result`).toBe(true);
     expect(jiraEntityPropertyDeclarationForTool(name)?.name).toBe(name);

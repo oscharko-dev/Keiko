@@ -19,6 +19,7 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "entity-property-and-readback"
   | "monitoring-state-and-readback"
   | "screen-tab-create-and-readback"
   | "screen-tab-rename-and-readback"
@@ -165,6 +166,26 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...writes("entity-property-and-readback", {
+    "jira.set-board-property": ["PUT", "/board/{boardId}/properties/{propertyKey}"],
+    "jira.delete-board-property": ["DELETE", "/board/{boardId}/properties/{propertyKey}"],
+    "jira.set-sprint-property": ["PUT", "/sprint/{sprintId}/properties/{propertyKey}"],
+    "jira.delete-sprint-property": ["DELETE", "/sprint/{sprintId}/properties/{propertyKey}"],
+  }, "/rest/agile/1.0"),
+  ...writes("entity-property-and-readback", {
+    "jira.set-comment-property": ["PUT", "/comment/{commentId}/properties/{propertyKey}"],
+    "jira.delete-comment-property": ["DELETE", "/comment/{commentId}/properties/{propertyKey}"],
+    "jira.set-dashboard-item-property": ["PUT", "/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}"],
+    "jira.delete-dashboard-item-property": ["DELETE", "/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}"],
+    "jira.set-issue-property": ["PUT", "/issue/{issueIdOrKey}/properties/{propertyKey}"],
+    "jira.delete-issue-property": ["DELETE", "/issue/{issueIdOrKey}/properties/{propertyKey}"],
+    "jira.set-issue-type-property": ["PUT", "/issuetype/{issueTypeId}/properties/{propertyKey}"],
+    "jira.delete-issue-type-property": ["DELETE", "/issuetype/{issueTypeId}/properties/{propertyKey}"],
+    "jira.set-project-property": ["PUT", "/project/{projectIdOrKey}/properties/{propertyKey}"],
+    "jira.delete-project-property": ["DELETE", "/project/{projectIdOrKey}/properties/{propertyKey}"],
+    "jira.set-user-property": ["PUT", "/user/properties/{propertyKey}"],
+    "jira.delete-user-property": ["DELETE", "/user/properties/{propertyKey}"],
+  }),
   ...writes("monitoring-state-and-readback", {
     "jira.set-app-monitoring": ["POST", "/monitoring/app"],
     "jira.set-ipd-monitoring": ["POST", "/monitoring/ipd"],

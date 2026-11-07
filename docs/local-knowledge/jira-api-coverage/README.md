@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **228 native identities: 192 reads and 36 writes**. Each is mapped to
+The current registry supplies **244 native identities: 192 reads and 52 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **211 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **195 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -136,7 +136,7 @@ the C6 comment-update/link/worklog read increment; bounded C8 attachment/archive
 worklog create/update with connected-user watching/voting; fourteen C9 workflow-/issue-type-scheme
 and screen reads; three reviewed comment/attachment/worklog deletions; and eight C10 user, group and
 application-role reads; ten permission/security/notification configuration reads; and five additional
-project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; two JQL metadata/suggestion reads; nine additional Agile context reads; seven configuration metadata reads; three scalar runtime-setting observations; four maintenance-status observations; seven resource-page/link-type/accessibility/column-layout reads; nine additional job/monitoring observations; sixteen entity-property reads; three reviewed screen-tab writes; six additional issue-context reads; and four governed monitoring changes. The three existing
+project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; two JQL metadata/suggestion reads; nine additional Agile context reads; seven configuration metadata reads; three scalar runtime-setting observations; four maintenance-status observations; seven resource-page/link-type/accessibility/column-layout reads; nine additional job/monitoring observations; sixteen entity-property reads; three reviewed screen-tab writes; six additional issue-context reads; four governed monitoring changes; and sixteen reviewed entity-property set/delete operations. The three existing
 report/draft composites remain compositions, not extra native API identities. Remaining filter
 creation, ranking, other estimate-adjustment modes and destructive operations, administration and
 other inventory gaps stay open. A registered declaration is not evidence that
@@ -285,8 +285,8 @@ context before the fixed property GET; board/sprint requests retain their Agile 
 item IDs remain explicitly selected context rather than independently observed identity. Key lists
 are validated before local pagination. Values retain complete bounded JSON Pointer facts, including
 null, false, zero and empty containers; an oversized or malformed value is refused in full. Native
-text is never parsed as another JSON document, property URLs are never followed, and no property
-write or effective-permission inference is introduced.
+text is never parsed as another JSON document, property URLs are never followed, and these reads
+grant neither property-write authority nor effective-permission inference.
 
 Three screen-tab writes reuse the existing high-risk authority, approval and durable journal owners.
 The actual screen ID/name, complete current tabs and reviewed target name are bound before an effect;
@@ -314,6 +314,21 @@ unconfirmed receipts identify the requested target rather than asserting observe
 these four operation names without changing prior journal rows, ownership, durability or outcome phases.
 The V67/V68 migration test sources share actual historical-migration fixtures. No execution evidence is
 claimed during the code-only period.
+
+Sixteen property writes reuse the eight existing entity bindings and fixed Platform/Agile routes.
+The reviewed expected value is required, except that set may explicitly request independently proven
+absence. Typed JSON Pointer nodes reconstruct one complete bounded value through the existing value
+owner: exact fields, preorder child counts, canonical pointers and safe own-property construction
+preserve null, false, zero, empty values and escaped keys without another JSON parse. Native Unicode,
+number, depth/node/field and 32768-byte limits remain unchanged. Complete keys and the exact value or
+404 must agree; missing, contradictory or changed snapshots refuse before any effect, and an equal
+requested value reports an explicit no-op. After at most one PUT or DELETE, the canonical entity is
+rebound and complete key/value readback must independently establish the requested state. Bare404
+never proves absence. A failed or unconfirmed receipt retains the requested property presence, without
+claiming success or permitting replay. Dashboard item IDs remain selected context, not invented
+observed identities. V69 adds the sixteen closed operation names while preserving V68 journal data,
+columns, indexes, foreign keys, ownership and durability. Migration, decoder, adapter, policy and native
+transport regression sources are recorded; none has been executed during the code-only period.
 
 `currentRegistry` pins the existing server registry source file's SHA-256 and native declaration
 count. The reconciliation helper parses that file's literal `NATIVE` declarations and verified closed

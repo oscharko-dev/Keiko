@@ -16,6 +16,7 @@ import { jiraAgileArgumentLabel } from "./jira-agile-presentation";
 import { jiraProjectMetadataArgumentLabel } from "./jira-project-metadata-presentation";
 import { jiraScreenTabArgumentLabel } from "./jira-administration-presentation";
 import { jiraMonitoringArgumentLabel, jiraMonitoringFixedTarget } from "./jira-monitoring-presentation";
+import { jiraPropertyMutationFacts } from "./jira-property-mutation-presentation";
 
 type Raw = Readonly<Record<string, unknown>>;
 type Fact = JiraDraftField;
@@ -281,9 +282,9 @@ export function jiraActionFacts(
   const worklog = operation === "jira.create-worklog" || operation === "jira.update-worklog";
   const facts = Object.entries(raw).flatMap(([key, value]) => {
     if (!managed) return [{ id: key, value: jiraDraftValueOf(value) }];
-    const deletionPreview = deletionFacts(operation, key, value, t);
-    if (deletionPreview !== undefined) return deletionPreview;
-    const specificPreview = screenTabFacts(operation, key, value, t) ?? monitoringFacts(operation, key, value, t);
+    const specificPreview = deletionFacts(operation, key, value, t) ??
+      jiraPropertyMutationFacts(operation, key, value, t) ??
+      screenTabFacts(operation, key, value, t) ?? monitoringFacts(operation, key, value, t);
     if (specificPreview !== undefined) return specificPreview;
     const worklogPreview = worklog
       ? worklogFacts(key, value, t, operation === "jira.update-worklog")

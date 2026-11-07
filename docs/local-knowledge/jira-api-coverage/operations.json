@@ -1077,6 +1077,33 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.delete-board-property": {
+      "identity": "DELETE /rest/agile/1.0/board/{boardId}/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "The exact native board is independently bound and rebound by observed ID; requests retain the existing Agile owner. Delete requires complete reviewed expectedValueNodes; explicit JSON null and empty values remain present data. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed DELETE. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts"
+      ]
+    },
     "jira.delete-comment": {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/comment/{id}",
       "effect": "write",
@@ -1092,6 +1119,141 @@
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-comment-property": {
+      "identity": "DELETE /rest/api/2/comment/{commentId}/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Canonical issue and exact native comment identities are bound through the existing comment admission owner before the fixed comment route and again after acknowledgement. Delete requires complete reviewed expectedValueNodes; explicit JSON null and empty values remain present data. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed DELETE. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
+    "jira.delete-dashboard-item-property": {
+      "identity": "DELETE /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Dashboard identity is independently bound and rebound; selectedItemId remains requested context because the published API provides no independent item-detail GET. The property key/value reads own item visibility and existence. Delete requires complete reviewed expectedValueNodes; explicit JSON null and empty values remain present data. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed DELETE. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
+    "jira.delete-issue-property": {
+      "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "The issue is independently bound and rebound by observed native ID; a caller alias never becomes the post-write target. Delete requires complete reviewed expectedValueNodes; explicit JSON null and empty values remain present data. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed DELETE. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
+    "jira.delete-issue-type-property": {
+      "identity": "DELETE /rest/api/2/issuetype/{issueTypeId}/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "The exact issue type is independently read and rebound before and after the fixed native property effect. Delete requires complete reviewed expectedValueNodes; explicit JSON null and empty values remain present data. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed DELETE. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
+    "jira.delete-project-property": {
+      "identity": "DELETE /rest/api/2/project/{projectIdOrKey}/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "The project is independently bound and rebound by observed native ID, preserving the canonical project context. Delete requires complete reviewed expectedValueNodes; explicit JSON null and empty values remain present data. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed DELETE. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
       ]
     },
     "jira.delete-screen-tab": {
@@ -1115,6 +1277,60 @@
         "packages/keiko-server/src/store/jiraOperationMigration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-sprint-property": {
+      "identity": "DELETE /rest/agile/1.0/sprint/{sprintId}/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "The exact native sprint is independently bound and rebound by observed ID; requests retain the existing Agile owner. Delete requires complete reviewed expectedValueNodes; explicit JSON null and empty values remain present data. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed DELETE. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts"
+      ]
+    },
+    "jira.delete-user-property": {
+      "identity": "DELETE /rest/api/2/user/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "The selected user is independently read and rebound by observed canonical user key; malformed Unicode identifiers are refused before query normalization. The user selector remains a fixed typed query, never an arbitrary endpoint. Delete requires complete reviewed expectedValueNodes; explicit JSON null and empty values remain present data. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed DELETE. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
       ]
     },
     "jira.delete-worklog": {
@@ -3194,6 +3410,87 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.set-board-property": {
+      "identity": "PUT /rest/agile/1.0/board/{boardId}/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "The exact native board is independently bound and rebound by observed ID; requests retain the existing Agile owner. Set requires complete reviewed expectedValueNodes or independently proven expectAbsent=true, plus complete desired valueNodes. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed PUT. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts"
+      ]
+    },
+    "jira.set-comment-property": {
+      "identity": "PUT /rest/api/2/comment/{commentId}/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Canonical issue and exact native comment identities are bound through the existing comment admission owner before the fixed comment route and again after acknowledgement. Set requires complete reviewed expectedValueNodes or independently proven expectAbsent=true, plus complete desired valueNodes. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed PUT. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
+    "jira.set-dashboard-item-property": {
+      "identity": "PUT /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "Dashboard identity is independently bound and rebound; selectedItemId remains requested context because the published API provides no independent item-detail GET. The property key/value reads own item visibility and existence. Set requires complete reviewed expectedValueNodes or independently proven expectAbsent=true, plus complete desired valueNodes. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed PUT. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
     "jira.set-ipd-monitoring": {
       "identity": "POST /rest/api/2/monitoring/ipd",
       "effect": "write",
@@ -3213,6 +3510,141 @@
         "packages/keiko-server/src/store/jiraOperationMigration.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.set-issue-property": {
+      "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "The issue is independently bound and rebound by observed native ID; a caller alias never becomes the post-write target. Set requires complete reviewed expectedValueNodes or independently proven expectAbsent=true, plus complete desired valueNodes. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed PUT. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
+    "jira.set-issue-type-property": {
+      "identity": "PUT /rest/api/2/issuetype/{issueTypeId}/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "The exact issue type is independently read and rebound before and after the fixed native property effect. Set requires complete reviewed expectedValueNodes or independently proven expectAbsent=true, plus complete desired valueNodes. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed PUT. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
+    "jira.set-project-property": {
+      "identity": "PUT /rest/api/2/project/{projectIdOrKey}/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "The project is independently bound and rebound by observed native ID, preserving the canonical project context. Set requires complete reviewed expectedValueNodes or independently proven expectAbsent=true, plus complete desired valueNodes. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed PUT. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
+    "jira.set-sprint-property": {
+      "identity": "PUT /rest/agile/1.0/sprint/{sprintId}/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "The exact native sprint is independently bound and rebound by observed ID; requests retain the existing Agile owner. Set requires complete reviewed expectedValueNodes or independently proven expectAbsent=true, plus complete desired valueNodes. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed PUT. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAgileOperationTransport.test.ts"
+      ]
+    },
+    "jira.set-user-property": {
+      "identity": "PUT /rest/api/2/user/properties/{propertyKey}",
+      "effect": "write",
+      "permissionPolicy": "entity-property-and-readback",
+      "kind": "constrained-tool",
+      "constraints": "The selected user is independently read and rebound by observed canonical user key; malformed Unicode identifiers are refused before query normalization. The user selector remains a fixed typed query, never an arbitrary endpoint. Set requires complete reviewed expectedValueNodes or independently proven expectAbsent=true, plus complete desired valueNodes. Typed nodes reconstruct only one complete bounded JSON value with canonical pointers, exact fields and child counts, safe own properties and the existing Unicode/number/32768-byte limits. Complete unique key lists and the exact value or native 404 must agree before effect; a bare 404 never proves absence. Changed or unreadable reviewed state refuses, and an equal desired state reports an explicit no-op. Existing high-risk authority, one-use approval and durable journal govern at most one fixed PUT. After acknowledgement, canonical entity rebinding and fresh complete key/value readback must establish the desired state. Unknown/unconfirmed receipts retain requested propertyPresent only; no replay, remote URL following, generic routing or authority inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.ts",
+        "packages/keiko-connectors/src/jira-entity-property-write-admission.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.ts",
+        "packages/keiko-connectors/src/jira-entity-property-bindings.ts",
+        "packages/keiko-connectors/src/jira-entity-property-values.ts",
+        "packages/keiko-connectors/src/jira-mutation-failure.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.ts",
+        "packages/keiko-server/src/store/schema.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-entity-property-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-entity-property-input.test.ts",
+        "packages/keiko-connectors/src/jira-managed-entity-properties.test.ts",
+        "packages/keiko-server/src/atlassian/jiraEntityPropertyMutationDescriptors.test.ts",
+        "packages/keiko-server/src/store/jiraEntityPropertyMigration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
       ]
     },
     "jira.sprint": {
@@ -4210,8 +4642,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "44b27953f02eed48d70e705d95f6eded99f3748a64c445f661e1ce310fd2a1bb",
-    "nativeOperationCount": 228
+    "sha256": "5c8e9001262300d9a3a792a6bd5a4c0a7dd6b2afe2b5464d2b27f025411572f8",
+    "nativeOperationCount": 244
   },
   "operations": [
     {
@@ -4657,10 +5089,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.delete-board-property"]
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/properties/{propertyKey}",
@@ -4721,10 +5153,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.set-board-property"]
     },
     {
       "identity": "GET /rest/agile/1.0/board/{boardId}/settings/refined-velocity",
@@ -5585,10 +6017,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.delete-sprint-property"]
     },
     {
       "identity": "GET /rest/agile/1.0/sprint/{sprintId}/properties/{propertyKey}",
@@ -5649,10 +6081,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.set-sprint-property"]
     },
     {
       "identity": "POST /rest/agile/1.0/sprint/{sprintId}/swap",
@@ -6497,10 +6929,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.delete-comment-property"]
     },
     {
       "identity": "GET /rest/api/2/comment/{commentId}/properties/{propertyKey}",
@@ -6561,10 +6993,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.set-comment-property"]
     },
     {
       "identity": "POST /rest/api/2/component",
@@ -7009,10 +7441,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.delete-dashboard-item-property"]
     },
     {
       "identity": "GET /rest/api/2/dashboard/{dashboardId}/items/{itemId}/properties/{propertyKey}",
@@ -7073,10 +7505,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.set-dashboard-item-property"]
     },
     {
       "identity": "GET /rest/api/2/dashboard/{id}",
@@ -8889,10 +9321,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.delete-issue-property"]
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/properties/{propertyKey}",
@@ -8953,10 +9385,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.set-issue-property"]
     },
     {
       "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/remotelink",
@@ -10417,10 +10849,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.delete-issue-type-property"]
     },
     {
       "identity": "GET /rest/api/2/issuetype/{issueTypeId}/properties/{propertyKey}",
@@ -10481,10 +10913,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.set-issue-type-property"]
     },
     {
       "identity": "GET /rest/api/2/issuetypescheme",
@@ -12721,10 +13153,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.delete-project-property"]
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/properties/{propertyKey}",
@@ -12785,10 +13217,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.set-project-property"]
     },
     {
       "identity": "PUT /rest/api/2/project/{projectIdOrKey}/restore",
@@ -16421,10 +16853,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.delete-user-property"]
     },
     {
       "identity": "GET /rest/api/2/user/properties/{propertyKey}",
@@ -16485,10 +16917,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.set-user-property"]
     },
     {
       "identity": "GET /rest/api/2/user/search",

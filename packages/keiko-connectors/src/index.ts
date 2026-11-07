@@ -351,3 +351,4 @@ export type {
   JiraReportIssueFacts,
 } from "./jira-report-types.js";
 export { JiraAcknowledgedMutationError } from "./jira-mutation-failure.js";
+export { jiraPropertyPathKey, jiraPropertyUserText } from "./jira-entity-property-values.js";

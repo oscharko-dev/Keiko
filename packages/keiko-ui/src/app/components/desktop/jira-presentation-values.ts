@@ -7,6 +7,11 @@ export type JiraPresentationSource = Readonly<Record<string, unknown>>;
 export function jiraPresentationText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
+/** Native receipt IDs retain their exact positive int64 spelling. */
+export function jiraPresentationIdentity(value: unknown): string | undefined {
+  return typeof value === "string" && /^[1-9]\d{0,18}$/u.test(value) && BigInt(value) <= 9223372036854775807n
+    ? value : undefined;
+}
 /** Copy enumerable own fields; never inherit metadata from a supplied object's prototype. */
 export function jiraPresentationRecord(value: unknown): JiraPresentationSource | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)

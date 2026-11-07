@@ -82,14 +82,42 @@ const USER: Entity = {
   userSelector: true,
   description: "Select exactly one username or userKey, resolve the native user, then use the observed user key on the fixed property query. Returned username and userKey are observed identity, not inferred permissions.",
 };
-function input(entity: Entity, single: boolean): CatalogJsonObject {
+export const JIRA_PROPERTY_ENTITIES = {
+  board: BOARD,
+  sprint: SPRINT,
+  comment: COMMENT,
+  "dashboard-item": DASHBOARD_ITEM,
+  issue: ISSUE,
+  "issue-type": ISSUE_TYPE,
+  project: PROJECT,
+  user: USER,
+} as const;
+export {
+  VALUE_ROW as jiraPropertyValueRowSchema,
+  PROPERTY_KEY as jiraPropertyKeySchema,
+  PROPERTY_SELECTOR as jiraPropertySelectorSchema,
+};
+export type { Entity as JiraPropertyEntityDescriptor };
+/** Shared closed entity selector, including the existing exactly-one user selector. */
+export function jiraPropertyEntityInputSchema(
+  entity: Entity,
+  fields: CatalogJsonObject,
+  required: readonly string[],
+): CatalogJsonObject {
   const schema = object(
-    { ...entity.input, ...(single ? { propertyKey: PROPERTY_SELECTOR } : PAGING) },
-    [...entity.required, ...(single ? ["propertyKey"] : [])],
+    { ...entity.input, ...fields },
+    [...entity.required, ...required],
   );
   return entity.userSelector === true
     ? { ...schema, oneOf: [{ required: ["username"] }, { required: ["userKey"] }] }
     : schema;
+}
+function input(entity: Entity, single: boolean): CatalogJsonObject {
+  return jiraPropertyEntityInputSchema(
+    entity,
+    single ? { propertyKey: PROPERTY_SELECTOR } : PAGING,
+    single ? ["propertyKey"] : [],
+  );
 }
 function definition(entity: Entity, single: boolean): JiraNativeDefinition {
   const result: CatalogJsonObject = single ? {
