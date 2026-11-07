@@ -100,6 +100,15 @@ changed. No record binds capture bytes, so the existing macOS captures from 2026
 keeps one renderer across the set; the new `generatedAt` describes the three records, not the captures. No updater behavior, baseline or numerical ceiling changed. This remains
 updater fixture evidence.
 
+The MemoriaViva chain (#4213, #4206) changes Memory strings in the core and optional English and
+German message catalogs, so the freshness gate rejected those four sources' digests. On 2026-11-07
+(UTC) the complete original nine-case producer ran in the Linux gates container with an init
+process. It passed in 2.0 minutes, including the real BFF stop and restart. The three records
+rebind only the four catalog digests. As before, the Linux renderer's captures were discarded and
+the existing macOS captures kept, so one renderer draws the whole set; no record binds capture
+bytes. No updater behavior, baseline or numerical ceiling changed. This remains updater fixture
+evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
