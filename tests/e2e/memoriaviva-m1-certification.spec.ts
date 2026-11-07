@@ -42,8 +42,12 @@ const METRIC_CORPUS_LABELS = [
 // Every refusal is the learner's or the turn guard's, recorded in the Journal under its own reason.
 // The scripted model proposes each marked sentence as a fact; the product must refuse it.
 const DENIED_INPUTS = [
-  { reason: "denied-content", text: "M1_DENIED_HEALTH: I take my fixture medication every day." },
-  { reason: "third-party", text: "M1_DENIED_THIRD_PARTY: My colleague prefers fixture tables." },
+  // A protected topic and another person are refused before any model call (#2601).
+  { reason: "denied-category", text: "M1_DENIED_HEALTH: I take my fixture medication every day." },
+  {
+    reason: "denied-category",
+    text: "M1_DENIED_THIRD_PARTY: My colleague prefers fixture tables.",
+  },
   {
     reason: "credential-shape",
     text: `Use password=${["FAKE", "M1", "SECRET", "PLACEHOLDER"].join("-")} for the fixture.`,
@@ -155,11 +159,14 @@ async function setupContext(page: Page, request: APIRequestContext): Promise<Cer
   await page.goto("/");
   const chatWindow = page.getByRole("region", { name: `Chat — ${chat.title}` });
   await expect(chatWindow).toBeVisible();
+  // A new Chat starts with MemoriaViva off (#3140); the person turns it on for this Chat.
+  await expect(chatMemoryControl(chatWindow)).toHaveAttribute("aria-pressed", "false");
+  await setMemoryEnabled(chatWindow, true);
   return { page, request, chat, chatWindow, since };
 }
 
 async function openMemoryWindow(page: Page): Promise<Locator> {
-  await page.getByRole("button", { name: "MemoriaViva" }).click();
+  await page.getByRole("button", { name: "MemoriaViva", exact: true }).click();
   const window = page.getByRole("region", { name: "MemoriaViva" });
   await expect(window.getByRole("heading", { name: "MemoriaViva" })).toBeVisible();
   return window;
@@ -180,13 +187,19 @@ async function setMode(page: Page, mode: CodingWorkbenchMode): Promise<void> {
   await closeMemoryWindow(page);
 }
 
-async function setMemoryEnabled(page: Page, enabled: boolean): Promise<void> {
-  const window = await openMemoryWindow(page);
-  const control = window.getByRole("switch", { name: "Use MemoriaViva in chat requests" });
-  const current = (await control.getAttribute("aria-checked")) === "true";
+function chatMemoryControl(chatWindow: Locator): Locator {
+  return chatWindow.locator(".chat-memory-activation-toggle");
+}
+
+// MemoriaViva is switched per Chat in the Chat's own composer, the only control a person has.
+async function setMemoryEnabled(chatWindow: Locator, enabled: boolean): Promise<void> {
+  const control = chatMemoryControl(chatWindow);
+  const current = (await control.getAttribute("aria-pressed")) === "true";
   if (current !== enabled) await control.click();
-  await expect(control).toHaveAttribute("aria-checked", String(enabled));
-  await closeMemoryWindow(page);
+  await expect(control).toHaveAttribute("aria-pressed", String(enabled));
+  await expect(control).toHaveAccessibleName(
+    enabled ? "Disable MemoriaViva for this chat" : "Enable MemoriaViva for this chat",
+  );
 }
 
 async function sendTurn(chatWindow: Locator, text: string): Promise<void> {
@@ -472,13 +485,13 @@ async function certifyModeIndependentDenials(context: CertificationContext): Pro
 }
 
 async function certifyDisabledPath(context: CertificationContext): Promise<void> {
-  await setMemoryEnabled(context.page, false);
+  await setMemoryEnabled(context.chatWindow, false);
   const beforeRecent = await recent(context.request, context.since);
   const beforeStored = await storedMemoryIds(context.request);
   await sendTurn(context.chatWindow, "M1_DISABLED_CAPTURE must remain absent.");
   expect(await recent(context.request, context.since)).toEqual(beforeRecent);
   expect(await storedMemoryIds(context.request)).toEqual(beforeStored);
-  await setMemoryEnabled(context.page, true);
+  await setMemoryEnabled(context.chatWindow, true);
 }
 
 async function certifyContentFreeJournalRefusal(context: CertificationContext): Promise<void> {
@@ -486,7 +499,7 @@ async function certifyContentFreeJournalRefusal(context: CertificationContext): 
   await window.getByRole("button", { name: "Journal", exact: true }).click();
   const row = window
     .getByTestId("memory-journal-row")
-    .filter({ has: context.page.locator('[data-reason="denied-content"]') })
+    .filter({ has: context.page.locator('[data-reason="denied-category"]') })
     .first();
   await expect(row).toHaveAttribute("data-outcome", "rejected");
   await expect(row).not.toHaveAttribute("data-memory-id");
@@ -494,7 +507,7 @@ async function certifyContentFreeJournalRefusal(context: CertificationContext): 
   await expect(row.getByText("Refused", { exact: true })).toBeVisible();
   // A person reads why, not a policy code.
   await expect(row.getByText("Why: It touched a protected topic, such as health.")).toBeVisible();
-  await expect(row).not.toContainText("denied-content");
+  await expect(row).not.toContainText("denied-category");
   await expect(row.getByRole("button")).toHaveCount(0);
   const voiceRow = window
     .getByTestId("memory-journal-row")
@@ -560,7 +573,7 @@ test.afterEach(() => {
   for (const root of temporaryProjects.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-test("certifies the real default-on M1 chat, voice, Journal, denial, forget, and metric paths", async ({
+test("certifies the real M1 chat, voice, Journal, denial, forget, and metric paths", async ({
   page,
   request,
 }) => {

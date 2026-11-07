@@ -37,14 +37,32 @@ function chunkFrame(delta, finishReason) {
   })}\n\n`;
 }
 
-function streamCompletion(res) {
+// Code points per streamed delta of any answer other than the reply.
+const STREAM_SLICE_LENGTH = 16;
+
+// The answer as the deltas a provider streams: the reply keeps its fixed tokens, and any other
+// answer arrives in fixed slices of code points, so the reader must reassemble it exactly.
+function streamTokens(content) {
+  if (content === REPLY_TEXT) return REPLY_TOKENS;
+  const points = Array.from(content);
+  const tokens = [];
+  for (let index = 0; index < points.length; index += STREAM_SLICE_LENGTH) {
+    tokens.push(points.slice(index, index + STREAM_SLICE_LENGTH).join(""));
+  }
+  return tokens;
+}
+
+// The gateway streams upstream for buffered calls too (ADR-0003), so the salience-extraction call
+// arrives with `stream: true`. A stream answers the same content a buffered call would; one that
+// always streamed the chat reply answered every extraction with prose that is not JSON (#4206).
+function streamCompletion(res, content) {
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
     "cache-control": "no-cache",
     connection: "keep-alive",
   });
   res.write(chunkFrame({ role: "assistant", content: "" }));
-  for (const token of REPLY_TOKENS) res.write(chunkFrame({ content: token }));
+  for (const token of streamTokens(content)) res.write(chunkFrame({ content: token }));
   res.write(
     `data: ${JSON.stringify({
       id: "chatcmpl-m1-cert",
@@ -129,8 +147,9 @@ const server = createServer((req, res) => {
       invalidRequest(res);
       return;
     }
-    if (request.stream) streamCompletion(res);
-    else bufferedCompletion(res, completionContent(request.messages));
+    const content = completionContent(request.messages);
+    if (request.stream) streamCompletion(res, content);
+    else bufferedCompletion(res, content);
   });
 });
 
