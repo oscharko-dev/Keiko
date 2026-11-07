@@ -32,6 +32,14 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.component-related-issue-counts", args: { componentId: "71" }, parameters: { id: "71" } },
+  { tool: "jira.version-related-issue-counts", args: { versionId: "81" }, parameters: { id: "81" } },
+  { tool: "jira.version-unresolved-issue-count", args: { versionId: "81" }, parameters: { id: "81" } },
+  {
+    tool: "jira.project-version-page", args: { projectIdOrKey: "SYN", startAt: 0, maxResults: 1, orderBy: "+name" },
+    parameters: { projectIdOrKey: "10000" }, primaryMethodIndex: 1,
+    query: { startAt: "0", maxResults: "1", orderBy: "+name" },
+  },
   { tool: "jira.roles", args: { startAt: 0, maxResults: 1 } },
   { tool: "jira.role", args: { roleId: "37" }, parameters: { id: "37" } },
   { tool: "jira.role-default-actors", args: { roleId: "37", startAt: 0, maxResults: 1 }, parameters: { id: "37" } },
@@ -642,7 +650,25 @@ function structureRead(path: string, state: RemoteState): AtlassianHttpBodyResul
   if (path === "version/81") return response(state.version);
   if (path === "project/10000/components") return response([state.component]);
   if (path === "project/10000/versions") return response([state.version]);
-  return undefined;
+  return releaseRead(path);
+}
+function releaseRead(path: string): AtlassianHttpBodyResult | undefined {
+  const bodies: Readonly<Record<string, unknown>> = {
+    "component/71/relatedIssueCounts": { issueCount: 0 },
+    "version/81/relatedIssueCounts": {
+      issuesAffectedCount: 8, issuesFixedCount: 4, issueCountWithCustomFieldsShowingVersion: 2,
+      customFieldNames: [
+        { customFieldId: 10001, fieldName: "Delivery", issueCountWithVersionInCustomField: 0 },
+        { customFieldId: "9223372036854775807", fieldName: "Audit" },
+      ],
+    },
+    "version/81/unresolvedIssueCount": { issuesUnresolvedCount: 0 },
+    "project/10000/version": {
+      startAt: 0, maxResults: 1, isLast: false,
+      values: [{ id: "81", projectId: 10000, name: "Release", released: false, archived: false, releaseDate: "2026-11-07" }],
+    },
+  };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
 function structureWrite(
   path: string,
@@ -1041,7 +1067,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(129);
+    expect(native).toHaveLength(133);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

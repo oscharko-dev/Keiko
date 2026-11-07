@@ -1,4 +1,8 @@
 import {
+  jiraReleaseDeclarationForTool,
+  type JIRA_RELEASE_READ_DEFINITIONS,
+} from "./jiraReleaseDescriptors.js";
+import {
   jiraRoleDeclarationForTool,
   type JIRA_ROLE_READ_DEFINITIONS,
 } from "./jiraRoleDescriptors.js";
@@ -189,6 +193,7 @@ type CoreReadToolName = Exclude<
       | keyof typeof JIRA_CORE_METADATA_READ_DEFINITIONS
       | keyof typeof JIRA_INSTANCE_READ_DEFINITIONS
       | keyof typeof JIRA_ROLE_READ_DEFINITIONS
+      | keyof typeof JIRA_RELEASE_READ_DEFINITIONS
       | keyof typeof JIRA_DIRECTORY_READ_DEFINITIONS
       | keyof typeof JIRA_SAVED_VIEW_READ_DEFINITIONS
       | keyof typeof JIRA_ASSET_READ_DEFINITIONS
@@ -369,6 +374,7 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
     jiraCoreMetadataDeclarationForTool,
     jiraInstanceDeclarationForTool,
     jiraRoleDeclarationForTool,
+    jiraReleaseDeclarationForTool,
     jiraDirectoryDeclarationForTool,
     jiraParticipationDeclarationForTool,
     jiraIssueCollaborationDeclarationForTool,

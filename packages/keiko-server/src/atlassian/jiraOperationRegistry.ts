@@ -269,10 +269,14 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   ...reads("visible-components", {
     "jira.components": "/project/{projectIdOrKey}/components",
     "jira.component": "/component/{id}",
+    "jira.component-related-issue-counts": "/component/{id}/relatedIssueCounts",
   }),
   ...reads("visible-versions", {
     "jira.versions": "/project/{projectIdOrKey}/versions",
     "jira.version": "/version/{id}",
+    "jira.version-related-issue-counts": "/version/{id}/relatedIssueCounts",
+    "jira.version-unresolved-issue-count": "/version/{id}/unresolvedIssueCount",
+    "jira.project-version-page": "/project/{projectIdOrKey}/version",
   }),
   ...reads("visible-boards", {
     "jira.boards": "/board",

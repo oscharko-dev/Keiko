@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **147 native identities: 118 reads and 29 writes**. Each is mapped to
+The current registry supplies **151 native identities: 122 reads and 29 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **292 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **288 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -136,7 +136,7 @@ the C6 comment-update/link/worklog read increment; bounded C8 attachment/archive
 worklog create/update with connected-user watching/voting; fourteen C9 workflow-/issue-type-scheme
 and screen reads; three reviewed comment/attachment/worklog deletions; and eight C10 user, group and
 application-role reads; ten permission/security/notification configuration reads; and five additional
-project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; and seven role/priority-scheme reads. The three existing
+project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; and four release-count/project-version-page reads. The three existing
 report/draft composites remain compositions, not extra native API identities. Remaining filter
 creation, ranking, other estimate-adjustment modes and destructive operations, administration and
 other inventory gaps stay open. A registered declaration is not evidence that
@@ -202,6 +202,13 @@ unknown when omitted; matching names do not collapse distinct user/group actors.
 URI maps expose names only, never URL-derived IDs or destinations. Priority schemes reuse the existing
 project association projector and preserve the native total/page envelope without expanding or changing
 project associations.
+
+Four release reads preserve native component/version metrics as `countScope=jira-response`.
+Omitted counts remain unknown, and overlapping affected/fixed/custom-field categories are not
+summed or presented as independent JQL acceptance. Project version pages bind a canonical readable
+project, preserve the native page envelope and reuse the existing version summary without relaxing
+single-version identity checks. Existing `jira.version`/`jira.versions` keep their version owner;
+the shared summary is also referenced by the new page capability.
 
 `currentRegistry` pins the existing server registry source file's SHA-256 and native declaration
 count. The reconciliation helper parses that file's literal `NATIVE` declarations and verified closed

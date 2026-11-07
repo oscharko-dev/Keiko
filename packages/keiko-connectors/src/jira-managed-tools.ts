@@ -16,6 +16,7 @@ import { executeJiraCoreMetadataRead, isJiraCoreMetadataRead } from "./jira-mana
 import { executeJiraInstanceRead, isJiraInstanceRead } from "./jira-managed-instance-reads.js";
 import { executeJiraRoleRead, isJiraRoleRead } from "./jira-managed-role-reads.js";
 import { executeJiraPrioritySchemeRead, isJiraPrioritySchemeRead } from "./jira-managed-priority-schemes.js";
+import { executeJiraReleaseRead, isJiraReleaseRead } from "./jira-managed-release-reads.js";
 import {
   executeJiraParticipationRead,
   isJiraParticipationRead,
@@ -355,7 +356,8 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraCoreMetadataRead>[0]
   | Parameters<typeof executeJiraInstanceRead>[0]
   | Parameters<typeof executeJiraRoleRead>[0]
-  | Parameters<typeof executeJiraPrioritySchemeRead>[0];
+  | Parameters<typeof executeJiraPrioritySchemeRead>[0]
+  | Parameters<typeof executeJiraReleaseRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return [
     isJiraIssueDetailRead,
@@ -376,6 +378,7 @@ function isNativeDetailRead(name: string): name is NativeDetailRead {
     isJiraInstanceRead,
     isJiraRoleRead,
     isJiraPrioritySchemeRead,
+    isJiraReleaseRead,
   ].some((accepts) => accepts(name));
 }
 function administrationRead(
@@ -402,6 +405,7 @@ function identityAndMetadataRead(
   if (isJiraDirectoryRead(name)) return executeJiraDirectoryRead(name, args, request);
   if (isJiraCoreMetadataRead(name)) return executeJiraCoreMetadataRead(name, args, request);
   if (isJiraInstanceRead(name)) return executeJiraInstanceRead(name, args, request);
+  if (isJiraReleaseRead(name)) return executeJiraReleaseRead(name, args, request);
   return undefined;
 }
 function linkedIssueDetailRead(

@@ -240,6 +240,7 @@ export {
   ID as jiraNativeIdentitySchema,
   PROJECT as jiraNativeProjectSchema,
   PAGING as jiraNativePagingSchema,
+  VERSION_FIELDS as jiraNativeVersionFields,
   readResult as jiraNativeReadResult,
   collection as jiraNativeCollectionResult,
   writeResult as jiraNativeWriteResult,

@@ -20,6 +20,7 @@ import { JIRA_PROJECT_ASSOCIATION_TOOLS } from "./jira-project-association-prese
 import { JIRA_CORE_METADATA_TOOLS } from "./jira-core-metadata-presentation";
 import { JIRA_INSTANCE_TOOLS } from "./jira-instance-presentation";
 import { JIRA_ROLE_TOOLS } from "./jira-role-presentation";
+import { JIRA_RELEASE_TOOLS } from "./jira-release-presentation";
 const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_PROJECT_METADATA_TOOLS,
   ...JIRA_COLLABORATION_TOOLS,
@@ -33,6 +34,7 @@ const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_CORE_METADATA_TOOLS,
   ...JIRA_INSTANCE_TOOLS,
   ...JIRA_ROLE_TOOLS,
+  ...JIRA_RELEASE_TOOLS,
 ]);
 
 const OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKey>> = {

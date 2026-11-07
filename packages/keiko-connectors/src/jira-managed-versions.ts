@@ -28,6 +28,10 @@ interface VersionView extends CatalogJsonObject {
   readonly projectId: string;
   readonly name: string;
 }
+interface VersionSummary extends CatalogJsonObject {
+  readonly versionId: string;
+  readonly name: string;
+}
 type VersionReadback = Failure | { readonly ok: true; readonly version: VersionView };
 const MALFORMED: Failure = { ok: false, reason: "malformed-payload" };
 const INVALID: Failure = {
@@ -94,21 +98,27 @@ function versionMetadata(raw: Record<string, unknown>): CatalogJsonObject | unde
   }
   return values;
 }
-function versionView(value: unknown): VersionView | undefined {
+/** Shared native metadata projection; a project-scoped collection may omit per-item projectId. */
+export function jiraVersionSummary(value: unknown): VersionSummary | undefined {
   const raw = asRecord(value);
   if (
     raw === undefined ||
     !versionId(raw.id) ||
-    typeof raw.projectId !== "number" ||
-    !Number.isSafeInteger(raw.projectId) ||
-    raw.projectId <= 0 ||
     !validText(raw.name, false)
   )
     return undefined;
   const metadata = versionMetadata(raw);
   return metadata === undefined
     ? undefined
-    : { ...metadata, versionId: raw.id, projectId: String(raw.projectId), name: raw.name };
+    : { ...metadata, versionId: raw.id, name: raw.name };
+}
+function versionView(value: unknown): VersionView | undefined {
+  const projectId = asRecord(value)?.projectId;
+  const summary = jiraVersionSummary(value);
+  return summary === undefined || typeof projectId !== "number" ||
+    !Number.isSafeInteger(projectId) || projectId <= 0
+    ? undefined
+    : { ...summary, projectId: String(projectId) };
 }
 async function readVersion(request: JiraMutationRequest, id: string): Promise<VersionReadback> {
   const result = await request(`version/${id}`);

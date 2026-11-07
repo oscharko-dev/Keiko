@@ -437,6 +437,26 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-components.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-components.test.ts"]
     },
+    "jira.component-related-issue-counts": {
+      "identity": "GET /rest/api/2/component/{id}/relatedIssueCounts",
+      "effect": "read",
+      "permissionPolicy": "visible-components",
+      "kind": "constrained-tool",
+      "constraints": "Optional native issueCount for an exact selected component ID with countScope=jira-response. Missing counts remain unknown; unsafe numeric counts fail closed. Optional self is comparison-only, never followed. No independent JQL completeness or acceptance claim.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-release-reads.ts",
+        "packages/keiko-connectors/src/jira-resource-self.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraReleaseDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-release-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraReleaseDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.components": {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/components",
       "effect": "read",
@@ -1566,6 +1586,28 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.project-version-page": {
+      "identity": "GET /rest/api/2/project/{projectIdOrKey}/version",
+      "effect": "read",
+      "permissionPolicy": "visible-versions",
+      "kind": "constrained-tool",
+      "constraints": "Independent canonical project read precedes a typed native version page with closed orderBy and existing bounded page coordinates. Reuses the existing version metadata summary while keeping single-version identity validation unchanged. Native totals may be unknown; optional per-version project IDs must match when supplied. No remote continuation following.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-release-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-versions.ts",
+        "packages/keiko-connectors/src/jira-managed-projects.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraReleaseDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-release-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-versions.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraReleaseDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.project-workflow-scheme": {
       "identity": "GET /rest/api/2/project/{projectKeyOrId}/workflowscheme",
       "effect": "read",
@@ -2248,6 +2290,46 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-versions.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-versions.test.ts"]
     },
+    "jira.version-related-issue-counts": {
+      "identity": "GET /rest/api/2/version/{id}/relatedIssueCounts",
+      "effect": "read",
+      "permissionPolicy": "visible-versions",
+      "kind": "constrained-tool",
+      "constraints": "Optional native affected/fixed/custom-field counts for an exact version ID with countScope=jira-response. Bounded native custom-field identity/name/count records retain unknown values; overlapping count categories are not summed. No independent JQL or global completeness claim.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-release-reads.ts",
+        "packages/keiko-connectors/src/jira-resource-self.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraReleaseDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-release-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraReleaseDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.version-unresolved-issue-count": {
+      "identity": "GET /rest/api/2/version/{id}/unresolvedIssueCount",
+      "effect": "read",
+      "permissionPolicy": "visible-versions",
+      "kind": "constrained-tool",
+      "constraints": "Optional native unresolved issue count for an exact version ID; absent/null remains unknown rather than zero. Exact nonnegative safe counts only, countScope=jira-response and comparison-only self. No independent report acceptance claim.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-release-reads.ts",
+        "packages/keiko-connectors/src/jira-resource-self.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraReleaseDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-release-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraReleaseDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.versions": {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/versions",
       "effect": "read",
@@ -2480,8 +2562,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "70ac5c490bd87f55904c643b7d5b9915c2a1f749086a78d4b4d367f99edd0c88",
-    "nativeOperationCount": 147
+    "sha256": "69e66c8bec987e6b57148081566b4264ff812b4433329666bf82342edd1c1a8b",
+    "nativeOperationCount": 151
   },
   "operations": [
     {
@@ -5023,10 +5105,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.component-related-issue-counts"]
     },
     {
       "identity": "GET /rest/api/2/configuration",
@@ -11343,10 +11425,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-version-page"]
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/versions",
@@ -15107,10 +15189,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.version-related-issue-counts"]
     },
     {
       "identity": "POST /rest/api/2/version/{id}/removeAndSwap",
@@ -15171,10 +15253,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.version-unresolved-issue-count"]
     },
     {
       "identity": "DELETE /rest/api/2/version/{versionId}/remotelink",
