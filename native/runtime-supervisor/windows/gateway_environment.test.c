@@ -87,9 +87,43 @@ static int same_entries(const wchar_t *before, const wchar_t *after) {
          wcsncmp(before, L"D:P", 3) == 0 && wcsncmp(after, L"D:P", 3) == 0;
 }
 
-static int closed(const wchar_t *text) {
-  return text[0] != L'\0' && wcsstr(text, L";;;AC)") == NULL &&
-         wcsstr(text, REGISTRY_READ) == NULL && wcsstr(text, user_sid) != NULL;
+/* Whether one SDDL entry grants one of the three principals the guard removes. */
+static int removed_entry(const wchar_t *entry, size_t chars) {
+  static const wchar_t *const principals[] = {L";;;AC)", L";;;S-1-15-2-2)",
+                                              L";;;" REGISTRY_READ L")"};
+  size_t index;
+  for (index = 0; index < ARRAYSIZE(principals); ++index) {
+    size_t length = wcslen(principals[index]);
+    if (chars >= length && wcsncmp(entry + chars - length, principals[index], length) == 0)
+      return 1;
+  }
+  return 0;
+}
+
+/* The entries of `before` in their order, without the ones the guard removes. */
+static int without_removed(const wchar_t *before, wchar_t *out, size_t chars) {
+  const wchar_t *entry = wcschr(before, L'(');
+  out[0] = L'\0';
+  while (entry != NULL) {
+    const wchar_t *end = wcschr(entry, L')');
+    size_t length;
+    if (end == NULL) return 0;
+    length = (size_t)(end - entry) + 1;
+    if (!removed_entry(entry, length) && wcsncat_s(out, chars, entry, length) != 0) return 0;
+    entry = wcschr(end, L'(');
+  }
+  return 1;
+}
+
+/* Closed: exactly the entries before minus the removed read entries, and still protected. The
+ * comparison never spells the user's SID: SDDL writes some accounts as an alias (a machine's
+ * built-in administrator, which a CI runner may be, as `LA`), so a search for it can miss. */
+static int closed(const wchar_t *before, const wchar_t *during) {
+  wchar_t expected[1024];
+  const wchar_t *entries = wcschr(during, L'(');
+  return before[0] != L'\0' && entries != NULL && wcsncmp(during, L"D:P", 3) == 0 &&
+         without_removed(before, expected, ARRAYSIZE(expected)) &&
+         wcschr(expected, L'(') != NULL && wcscmp(entries, expected) == 0;
 }
 
 static int record_present(void) {
@@ -111,7 +145,7 @@ static int single_holder(const struct keiko_environment_holder *self) {
   dacl_text(key_object, before, ARRAYSIZE(before));
   failures += check(keiko_environment_close(&guard, self) == ERROR_SUCCESS, "single: close");
   dacl_text(key_object, during, ARRAYSIZE(during));
-  failures += check(closed(during) && record_present(), "single: closed and recorded");
+  failures += check(closed(before, during) && record_present(), "single: closed and recorded");
   /* A repeated close by the same holder is one holder, not two. */
   failures += check(keiko_environment_close(&guard, self) == ERROR_SUCCESS, "single: close again");
   failures += check(keiko_environment_reopen(&guard, self) == ERROR_SUCCESS, "single: reopen");
@@ -158,7 +192,7 @@ static int two_holders(const struct keiko_environment_holder *self) {
   failures += check(keiko_environment_close(&guard, &other) == ERROR_SUCCESS, "two: close second");
   failures += check(keiko_environment_reopen(&guard, self) == ERROR_SUCCESS, "two: reopen first");
   dacl_text(key_object, during, ARRAYSIZE(during));
-  failures += check(closed(during) && record_present(), "two: still closed for the second");
+  failures += check(closed(before, during) && record_present(), "two: still closed for the second");
   failures += check(keiko_environment_reopen(&guard, &other) == ERROR_SUCCESS, "two: reopen last");
   dacl_text(key_object, after, ARRAYSIZE(after));
   failures += check(same_entries(before, after) && !record_present(), "two: restored by the last");
@@ -181,7 +215,7 @@ static int crashed_holder(const struct keiko_environment_holder *self) {
   failures += check(keiko_environment_close(&guard, &other) == ERROR_SUCCESS, "crashed: close");
   stop(&process);
   dacl_text(key_object, during, ARRAYSIZE(during));
-  failures += check(closed(during), "crashed: left closed");
+  failures += check(closed(before, during), "crashed: left closed");
   failures += check(keiko_environment_close(&guard, self) == ERROR_SUCCESS, "crashed: next close");
   failures += check(keiko_environment_reopen(&guard, self) == ERROR_SUCCESS, "crashed: reopen");
   dacl_text(key_object, after, ARRAYSIZE(after));
@@ -218,7 +252,7 @@ static int tampered_record(const struct keiko_environment_holder *self) {
   failures += check(keiko_environment_reopen(&guard, self) == ERROR_INVALID_DATA,
                     "tampered: reopen refused");
   dacl_text(key_object, during, ARRAYSIZE(during));
-  failures += check(closed(during), "tampered: still closed");
+  failures += check(closed(before, during), "tampered: still closed");
   failures += check(keiko_environment_close(&guard, self) == ERROR_INVALID_DATA,
                     "tampered: close refused");
   if (!record_bytes(saved, &size, 1)) return failures + check(0, "tampered: repair");
