@@ -118,6 +118,7 @@ import { createCanonicalOpenCodeHandlerCoverage } from "./tool-catalog/catalogTo
 import {
   SIDECAR_RUNTIME_PURPOSE_FIELDS,
   sidecarGatewayRouteTemplate,
+  sidecarBuffersUpstream,
   sidecarPurposeField,
 } from "./review/runtime/sidecarSurface.js";
 import {
@@ -2811,6 +2812,8 @@ interface RuntimeCapabilityAuthenticator {
         modelCallId?: number,
       ) => unknown)
     | undefined;
+  // #4138: the provider-reported completion tokens of an answered call, for the run's effort.
+  readonly recordCompletionTokens?: ((runId: string, completionTokens: number) => void) | undefined;
   // #3384 wave-3 W3-1 redirect (reviewer 3941816393 / B1): the real per-run fact behind the
   // outgoing tool-catalog advertisement's readiness (#3413-AC1/#3414-AC4/AC9). `undefined` for a
   // runId this capability has no record of (or an authenticator that predates this wiring)
@@ -3584,8 +3587,7 @@ async function executeBufferedGatewayChat(
   dispatch: GatewayChatDispatchContext,
   stream: BufferedOpenAiStreamSession | undefined,
 ): Promise<RouteResult | typeof STREAMING> {
-  const { deps, binding, modelAlias, request, runId, cancellation, promptTokenReservation } =
-    dispatch;
+  const { deps, binding, modelAlias, request, cancellation, promptTokenReservation } = dispatch;
   const response = await chatFactoryFor(deps, binding.gateway)(binding.config, modelAlias)(request);
   const promptSettlement = settlePromptTokenReservation(
     deps,
@@ -3600,9 +3602,9 @@ async function executeBufferedGatewayChat(
     ...response,
     usage: { ...response.usage, completionTokens: usage.completionTokens },
   };
-  logGatewayCompletionUsage(
+  settleGatewayCompletionUsage(
     ctx,
-    runId,
+    dispatch,
     { ...metrics, ...answerShares(response) },
     usage.source,
     promptSettlement,
@@ -4143,12 +4145,12 @@ function settleStreamCompletionUsage(
   outcome: ReturnType<typeof outputMetrics>,
   promptSettlement: PromptTokenSettlement,
 ): void {
-  const { metrics, ctx, runId } = session;
+  const { metrics, ctx } = session;
   const usage = completionUsage(response, outcome.outputBytes, metrics.completionTokens);
   metrics.completionTokens = usage.completionTokens;
-  logGatewayCompletionUsage(
+  settleGatewayCompletionUsage(
     ctx,
-    runId,
+    session,
     {
       completionTokens: metrics.completionTokens,
       outputBytes: Math.max(outcome.outputBytes, metrics.outputBytes),
@@ -4240,6 +4242,25 @@ function discardedAttemptFields(shares: AnswerShares): {
     return {};
   }
   return { discardedAttemptCount, discardedPromptTokens, discardedCompletionTokens };
+}
+
+/**
+ * Adds the provider-reported completion tokens of an answered call, with those of the attempts the
+ * gateway discarded on the way, to the run's effort roll-up (#4138), then writes the usage line.
+ * An estimated output size is logged but never counted as provider output.
+ */
+function settleGatewayCompletionUsage(
+  ctx: RouteContext,
+  { deps, runId }: { readonly deps: UiHandlerDeps; readonly runId: string },
+  metrics: { readonly completionTokens: number; readonly outputBytes: number } & AnswerShares,
+  source: CompletionUsageSource,
+  promptSettlement: PromptTokenSettlement,
+): void {
+  const reported =
+    (source === "provider-reported" ? metrics.completionTokens : 0) +
+    (metrics.discardedCompletionTokens ?? 0);
+  if (reported > 0) runtimeCapabilityAuthenticator(deps)?.recordCompletionTokens?.(runId, reported);
+  logGatewayCompletionUsage(ctx, runId, metrics, source, promptSettlement);
 }
 
 function logGatewayCompletionUsage(
@@ -5194,10 +5215,9 @@ function productiveChatOptions(
     ...boundSkillProtection(ctx, deps, authentication, skillTurnMessageId),
     modelAlias: resolved.result.modelAlias,
     maxOutputTokens: admittedOutputTokens(resolved.result.runMetadata, estimatedPromptTokens),
-    upstreamStreamingSupported: upstreamGatewayStreamingSupported(
-      deps,
-      resolved.result.supportsStreaming,
-    ),
+    upstreamStreamingSupported:
+      !sidecarBuffersUpstream(ctx) &&
+      upstreamGatewayStreamingSupported(deps, resolved.result.supportsStreaming),
     ...(authentication.reasoningEffort === undefined
       ? {}
       : { reasoningEffort: authentication.reasoningEffort }),

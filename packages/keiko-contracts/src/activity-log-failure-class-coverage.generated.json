@@ -14012,6 +14012,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "completionTokensTotal",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "diagnosticByteCount",
               "type": "integer",
               "dataClass": "count",
@@ -42001,6 +42007,12 @@
           "causal": "correlation",
           "analyzerProjection": "failure-cluster",
           "safeContextFields": [
+            {
+              "name": "authorityRefusal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
             {
               "name": "layer",
               "type": "string",

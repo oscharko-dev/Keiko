@@ -221,6 +221,31 @@ regexTarget = "match"
 regexes = ['''MIIEowIBAAKCAQEAuZ9b5XyQfloorfixture''']
 
 [[allowlists]]
+description = "PR #4245: the synthetic twelve-hex gate reuse keys 0123456789ab and ba9876543210 in one immutable checkpoint of the review gate's port and resume tests. They are test metadata (the reuse key part of a synthetic client request id), not credentials; the generic-api-key rule matches the KEY name and the digit run's entropy. Later commits use the non-secret-shaped aaaaaaaaaaaa and bbbbbbbbbbbb. Only these exact historical fixture lines in this one commit are exempt."
+condition = "AND"
+commits = ["28156040aca87dc1c6e7290a911ec0c6c0b32815"]
+paths = ['''^tests/review-quality/(ports|resume)\.test\.ts$''']
+targetRules = ["generic-api-key"]
+regexTarget = "match"
+regexes = [
+  '''^REUSE_KEY = "0123456789ab"$''',
+  '''^KEY = "0123456789ab"$''',
+  '''^OTHER_KEY = "ba9876543210"$''',
+]
+
+[[allowlists]]
+description = "PR #4245: the same synthetic twelve-hex gate reuse keys in one immutable checkpoint of the review gate's argument test, where they exercise --resume-prior-keys. They are test metadata, not credentials. Later commits use aaaaaaaaaaaa, bbbbbbbbbbbb and AAAAAAAAAAAA. Only these exact historical fixture lines in this one commit are exempt."
+condition = "AND"
+commits = ["f6e3e3e567a577991223da925df56d083deaab30"]
+paths = ['''^tests/review-quality/cli\.test\.ts$''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = [
+  '''"--resume-prior-keys", "0123456789AB"\]\)\)\.toThrow\($''',
+  '''\[\["--rescore"\], \["--resume-prior-keys", "0123456789ab"\]\]''',
+]
+
+[[allowlists]]
 description = "PR #4230: a synthetic 40-character hexadecimal token in one memory-lab corpus test proved that the blueprint validator refuses long-token shapes. It is test data, not a credential; the fixture was rewritten to be assembled at runtime in the next commit, and this branch is never force-pushed, so the one history commit stays exempted by file, rule and exact line."
 condition = "AND"
 commits = ["eaf6f80a9df68298ced7c47c7bf2633e00077577"]

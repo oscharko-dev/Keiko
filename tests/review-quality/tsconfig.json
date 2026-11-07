@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "outDir": "dist",
+    "noEmit": false,
+    "declaration": false,
+    "sourceMap": false,
+    "incremental": true,
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "include": [
+    "cli.ts",
+    "evidence.ts",
+    "gate.ts",
+    "ports.ts",
+    "readiness.ts",
+    "repository.ts",
+    "resume.ts",
+    "selection.ts",
+    "server.ts"
+  ]
+}

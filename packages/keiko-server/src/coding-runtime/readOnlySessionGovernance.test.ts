@@ -108,6 +108,25 @@ describe("runGovernedReadOnlySession", () => {
     });
   });
 
+  // Node 26 CI (#4245): the deadline timer fired while Date.now() still read one millisecond before
+  // the deadline, so the clock check alone accepted a session the deadline had already stopped.
+  it("reports the deadline even when the clock has not reached it when the timer fires", async () => {
+    const frozenNow = Date.now();
+    let gateAfterAbort: unknown;
+    const result = await runGovernedReadOnlySession(
+      governance({ clock: { now: () => frozenNow }, deadlineMs: frozenNow + 20 }),
+      (gate, signal) =>
+        new Promise((resolve) => {
+          signal.addEventListener("abort", () => {
+            gateAfterAbort = gate({ toolClass: "workspace-read" });
+            resolve("late");
+          });
+        }),
+    );
+    expect(result).toMatchObject({ ok: false, terminal: "stopped", reasonCode: "timeout" });
+    expect(gateAfterAbort).toEqual({ ok: false, terminal: "stopped", reasonCode: "timeout" });
+  });
+
   it("classifies a thrown runner: trust violations are denied, other faults unavailable", async () => {
     const violation = await runGovernedReadOnlySession(governance(), () =>
       Promise.reject(new ReadOnlyChildTrustViolationError("fabricated-tool-denied")),

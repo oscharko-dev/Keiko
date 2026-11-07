@@ -11,7 +11,10 @@
 //   reservation: pairing by reservation size alone measured a released call and an answered one of
 //   the same size from each other's start (#3873 review). A settled count that differs from the
 //   reserved estimate is the provider's own report. One equal to it may be the kept estimate, so it
-//   is not counted: `promptTokensTotal` never presents an estimate as a provider count;
+//   is not counted: `promptTokensTotal` never presents an estimate as a provider count. The same
+//   boundary adds the completion tokens the provider reported for each answered call, including
+//   those of attempts the gateway discarded on its way to the answer (#4138); an estimated output
+//   size is never counted;
 // - governed tool calls at the run's tool facade, which knows each call's action and its answer;
 // - verification summaries and operator decisions at the orchestrator, which ingests and settles
 //   them, and which knows how long the run waited on a human.
@@ -34,6 +37,7 @@ export interface CodingRuntimeHostRunEffort {
   readonly modelTurnCount: number;
   readonly modelDurationMs: number;
   readonly promptTokensTotal: number;
+  readonly completionTokensTotal: number;
   readonly toolInvocationCount: number;
   readonly workspaceReadCount: number;
   readonly editCount: number;
@@ -66,6 +70,11 @@ export interface CodingRuntimeRunEffortRegistry {
     modelCallId: number | undefined,
     settledPromptTokens: number,
   ) => void;
+  /**
+   * The same capability received an answer whose completion tokens the provider reported. Only a
+   * provider count is passed; a run this registry does not track is not counted.
+   */
+  readonly modelOutputSettled: (runId: string, completionTokens: number) => void;
   /** The run's tool facade answered one call, naming its closed action when the call named one. */
   readonly toolSettled: (
     runId: string,
@@ -85,6 +94,7 @@ interface HostEffortRecord {
   modelTurnCount: number;
   modelDurationMs: number;
   promptTokensTotal: number;
+  completionTokensTotal: number;
   toolInvocationCount: number;
   workspaceReadCount: number;
   editCount: number;
@@ -114,6 +124,7 @@ function newHostRecord(): HostEffortRecord {
     modelTurnCount: 0,
     modelDurationMs: 0,
     promptTokensTotal: 0,
+    completionTokensTotal: 0,
     toolInvocationCount: 0,
     workspaceReadCount: 0,
     editCount: 0,
@@ -175,6 +186,7 @@ function hostEffort(record: HostEffortRecord): CodingRuntimeHostRunEffort {
     modelTurnCount: record.modelTurnCount,
     modelDurationMs: record.modelDurationMs,
     promptTokensTotal: record.promptTokensTotal,
+    completionTokensTotal: record.completionTokensTotal,
     toolInvocationCount: record.toolInvocationCount,
     workspaceReadCount: record.workspaceReadCount,
     editCount: record.editCount,
@@ -212,6 +224,11 @@ export function createCodingRuntimeRunEffortRegistry(
       const call = takeOpenCall(record, modelCallId);
       if (call !== undefined) settleModelCall(record, call, settledPromptTokens, nowMs());
     },
+    modelOutputSettled: (runId, completionTokens): void => {
+      const record = records.get(runId);
+      if (record === undefined || !validCount(completionTokens)) return;
+      record.completionTokensTotal = boundedSum(record.completionTokensTotal, completionTokens);
+    },
     toolSettled: (runId, action, status): void => {
       if (status !== "observed") countTool(recordFor(runId), action, status);
     },
@@ -241,6 +258,7 @@ const NO_HOST_EFFORT: CodingRuntimeHostRunEffort = {
   modelTurnCount: 0,
   modelDurationMs: 0,
   promptTokensTotal: 0,
+  completionTokensTotal: 0,
   toolInvocationCount: 0,
   workspaceReadCount: 0,
   editCount: 0,

@@ -54,7 +54,10 @@ root under `<stateDir>/review-runtime/`; it serves one review run at a time and 
 minutes (the idle stop is re-armed whenever a review releases the repository, including a review
 that ended before it reached the instance). Its workspace view names only the review worktree of D3 and is never the user's active
 task workspace pointer. Its sidecar reaches the server under `/api/review-sidecar/*`, which serves the
-same gateway and tool-facade handlers with the instance's own runtime capabilities. The review agent
+same gateway and tool-facade handlers with the instance's own runtime capabilities. The gateway
+handler buffers every upstream model call on that route, even where the provider streams: a review is
+not interactive, and a buffered answer is validated whole before any byte reaches the runtime, so a
+schema-invalid tool call that follows some text still gets its one correction (Issue #4138). The review agent
 is `keiko-reviewer` (`review` is reserved and an OpenCode command), defined in the generated
 configuration with Keiko's system prompt (`reviewPrompt.ts`, adapted from PR-Agent v0.49.0) and
 pinned as server-owned configuration. The review task carries the rules (from the base commit) and
@@ -225,7 +228,8 @@ task: location, category, condition, mechanism, consequence and evidence locatio
 untrusted data, never the Reviewer's reasoning, transcript, title, remedy, failure-mode prose or any
 other candidate. The verdict tool records the first valid `CounterCheckVerdict` (the server binds
 the fingerprint) and ends the session; free text is ignored and a missing or invalid verdict is
-`undecided/insufficient-context`. Defaults per candidate: 32 tool calls, 120 seconds, 200,000 prompt
+`undecided/insufficient-context`. Defaults per candidate: 32 tool calls, 600 seconds (raised from
+120 and then 300 seconds on the offline gate's development set, Issue #4138), 200,000 prompt
 tokens, and 1,200,000 prompt tokens for all counter-checks of a run; the harness bound, the tool
 ceiling or a refused reservation ends a session `undecided/out-of-budget` and the run
 `incomplete/budget-exhausted`, the deadline `incomplete/deadline-exceeded`, a failed or unavailable
@@ -458,6 +462,22 @@ The holdout boundary is the constant `holdoutFromPullRequest` of the review eval
 pull request #3066, fixed by Issue #4132 from the recorded baseline
 (`docs/qa/review-agent-baseline-2026-10-30.md`); the replay refuses a run that tunes on the holdout.
 Definitions and labeling rules are in `docs/qa/review-agent-measurement.md`.
+
+The offline gate runs through the root-level evaluation composition `tests/review-quality/`
+(`node scripts/testing/review-quality/run.mjs`), because the server may not import `keiko-evaluations` and
+`keiko-evaluations` may not import the server. It starts the real server composition the way the
+dev BFF does (`buildUiHandlerDeps` and `createUiServer` on loopback, with the operator's gateway
+configuration) and supplies the evaluation family's replay and seed ports, which run one review at
+a time through the composed review service. The measurement switches reach that service only
+through the `reviewEvaluationSwitches` option of `buildUiHandlerDeps`, which only this composition
+passes: no CLI flag, environment variable or configuration key sets it, so a product server always
+composes `createReviewRunService`. Each run records its configuration digest over the committed
+review code, the counter-check and presentation limits, the variant and the pair, and refuses to
+start on uncommitted review code. Cost per role comes from each review's own record: the
+counter-checker's tokens from its model calls, the Reviewer's prompt and completion tokens from the
+review runtime's effort roll-up, which counts provider-reported counts only (an estimated output size
+is never counted). The holdout run needs an explicit confirmation flag. Results and the iteration
+log are in `docs/qa/review-agent-offline-gate-<date>.md`.
 
 Offline scoring. The owner made four decisions on 2026-11-04 during the epic branch review:
 

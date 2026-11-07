@@ -45,7 +45,12 @@ import {
   targetRefusalSettlement,
   worktreeRefusalSettlement,
 } from "./mapping.js";
-import { admitReviewRoleModels, evaluateReviewRoleModels, type ReviewModelPort } from "./models.js";
+import {
+  admitReviewRoleModels,
+  ensureReviewRoleModelsReady,
+  evaluateReviewRoleModels,
+  type ReviewModelPort,
+} from "./models.js";
 import { counterCheckOrder } from "./presentation.js";
 import type { ReviewerSettlementFact } from "./settlement.js";
 import type { ReviewRunStore } from "./store.js";
@@ -269,14 +274,16 @@ async function buildPackage(
  * The role models: the policy admission first, so a refused model is never read or contacted
  * (R4130-003), then eligibility against the gateway's capability data.
  */
-function checkRoleModels(
+/** Admission first, so a refused pair never loads a model; readiness runs before eligibility. */
+async function checkRoleModels(
   deps: ReviewSequenceDeps,
   ctx: ReviewRunContext,
   state: ReviewRunState,
-): boolean {
+): Promise<boolean> {
   if (!admitReviewRoleModels(deps.models, ctx, ctx.correlationId)) {
     return stopWith(state, { kind: "skipped", reason: "policy-invalid" });
   }
+  await ensureReviewRoleModelsReady(deps.models, ctx, ctx.correlationId);
   const models = evaluateReviewRoleModels(deps.models, ctx, deps.now());
   return models.ok || stopWith(state, { kind: "skipped", reason: models.reason });
 }
@@ -287,7 +294,7 @@ export async function prepareReviewRun(
   ctx: ReviewRunContext,
   state: ReviewRunState,
 ): Promise<ReviewDiffPackage | undefined> {
-  if (!checkRoleModels(deps, ctx, state)) return undefined;
+  if (!(await checkRoleModels(deps, ctx, state))) return undefined;
   if (cancelled(ctx, state) || !(await resolveTarget(deps, ctx, state))) return undefined;
   const target = state.target;
   if (target === undefined) return undefined;
@@ -300,15 +307,16 @@ export async function prepareReviewRun(
 }
 
 /**
- * The Reviewer's totals: prompt tokens as the review runtime host accounted them; completion
- * tokens are not reported by the runtime and stay zero.
+ * The Reviewer's totals: the prompt and completion tokens the provider reported, as the review
+ * runtime host accounted them (#4138).
  */
 function reviewerTotals(
   result: Awaited<ReturnType<ReviewRuntimeService["run"]>>,
   durationMs: number,
 ): ReviewRoleTotals {
   const promptTokens = result.ok ? (result.effort?.promptTokens ?? 0) : 0;
-  return { promptTokens, completionTokens: 0, durationMs };
+  const completionTokens = result.ok ? (result.effort?.completionTokens ?? 0) : 0;
+  return { promptTokens, completionTokens, durationMs };
 }
 
 /** The `reviewing` phase: one Reviewer run; collects its accepted candidates. */

@@ -60,7 +60,7 @@ function seedReviewer(skip: readonly ReviewSeedDefectKind[] = []): RuntimeScript
     return {
       ok: true,
       outcome: "completed",
-      effort: { promptTokens: 1_000, modelTurns: 2 },
+      effort: { promptTokens: 1_000, completionTokens: 120, modelTurns: 2 },
       rules: "absent",
       candidates: intake.candidates(),
       rejections: intake.rejections(),

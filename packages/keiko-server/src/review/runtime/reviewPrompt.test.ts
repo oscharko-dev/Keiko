@@ -38,6 +38,12 @@ describe("REVIEW_SYSTEM_PROMPT", () => {
     expect(REVIEW_CONTEXT_ADDENDUM).toContain("read-only");
   });
 
+  it("asks for each finding as soon as it is confirmed, within a bounded reading budget", () => {
+    expect(REVIEW_SYSTEM_PROMPT).toContain("as soon as you have confirmed it");
+    expect(REVIEW_SYSTEM_PROMPT).toContain("only the findings you have already reported count");
+    expect(REVIEW_SYSTEM_PROMPT).toContain("about 15 read or search calls");
+  });
+
   it("is the system prompt the review configuration forwards, whatever the repository holds", () => {
     const config = createFixedOpenCodeV2Config(
       { contextWindowTokens: 32_768, maxInputTokens: 28_672, maxOutputTokens: 4_096 },

@@ -27,6 +27,8 @@
         "tests/e2e/config/**/*.ts!",
         "tests/e2e/support/**/*.{ts,mjs}!",
         "tests/e2e/servers/**/*.mts!",
+        "tests/review-quality/gate.ts",
+        "scripts/testing/review-quality/run.mjs",
         "native/**/*.test.mjs",
         "native/**/test-*.mjs",
         "docs/design-system/evidence/1300/browser/capture.mjs",

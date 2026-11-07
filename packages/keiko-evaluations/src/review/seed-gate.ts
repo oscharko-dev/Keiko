@@ -182,7 +182,9 @@ function outcomeOf(
 ): ReviewSeedOutcome {
   if (fixture.seed.cleanControl) {
     if (score.falseAlarms > 0) return "false-alarm";
-    return result.headMoved ? "stale-run" : "clean";
+    if (result.headMoved) return "stale-run";
+    // R4130-040: a control is clean only when its run finished; an unfinished run measured nothing.
+    return result.settlement.kind === "complete" ? "clean" : "incomplete";
   }
   if (score.stale > 0) return "stale-run";
   if (score.found > 0) return "found";

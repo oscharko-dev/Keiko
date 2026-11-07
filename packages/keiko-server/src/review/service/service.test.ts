@@ -147,6 +147,7 @@ describe("review run service: complete runs and presentation (AC2)", () => {
       stored.filter((finding) => !finding.presented).map((finding) => finding.verdict?.verdict),
     ).toEqual(expect.arrayContaining(["confirmed", "refuted"]));
     expect(view.totals.reviewer.promptTokens).toBe(4_321);
+    expect(view.totals.reviewer.completionTokens).toBe(612);
     expect(view.totals.counterChecker.promptTokens).toBe(2_500);
     expect(view.coverageEntries.map((entry) => entry.path).sort()).toEqual([
       "src/total.ts",
@@ -184,8 +185,28 @@ describe("review run service: every settlement of the child 1 table (AC1)", () =
     ).toEqual({ kind: "skipped", reason: "model-unavailable" });
   });
 
-  // R4130-003: the policy admission runs before anything reads a role model, so a model the
-  // policy refuses is never read, probed or called for the run.
+  // #4138: a review started more than the readiness lifetime after the model last answered was
+  // refused for a stale observation; after the policy admits the pair, the run checks each role
+  // model again before it evaluates eligibility.
+  it("checks each role model again before it evaluates eligibility", async () => {
+    const lapsed = capability("reviewer-model", { conversationReady: false });
+    const capabilities: Record<string, typeof lapsed | undefined> = { "reviewer-model": lapsed };
+    const checked: string[] = [];
+    const settlement = await settlementOf({
+      capabilities,
+      ensureReady: (modelId) => {
+        checked.push(modelId);
+        capabilities[modelId] = capability(modelId);
+        return Promise.resolve();
+      },
+    });
+
+    expect(checked).toEqual(["reviewer-model", "checker-model"]);
+    expect(settlement).toEqual({ kind: "complete" });
+  });
+
+  // R4130-003: the policy admission runs before anything reads or loads a role model, so a model
+  // the policy refuses is never read, made ready, probed or called for the run.
   it("reads no role model capability when the policy refuses the pair", async () => {
     const reads: string[] = [];
     const capabilities = new Proxy(
@@ -197,9 +218,18 @@ describe("review run service: every settlement of the child 1 table (AC1)", () =
         },
       },
     );
-    const settlement = await settlementOf({ capabilities, admit: () => false });
+    const ensured: string[] = [];
+    const settlement = await settlementOf({
+      capabilities,
+      admit: () => false,
+      ensureReady: (modelId) => {
+        ensured.push(modelId);
+        return Promise.resolve();
+      },
+    });
     expect(settlement).toEqual({ kind: "skipped", reason: "policy-invalid" });
     expect(reads).toEqual([]);
+    expect(ensured).toEqual([]);
     expect(harness?.runtimeRequests).toEqual([]);
   });
 

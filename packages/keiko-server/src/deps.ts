@@ -40,7 +40,10 @@ import {
   DEFAULT_OWN_ASSESSMENT_POLICY,
   type OwnAssessmentPolicy,
 } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
-import { stopConfiguredConversationReadiness } from "./gateway-readiness.js";
+import {
+  awaitInitializedConversationReadiness,
+  stopConfiguredConversationReadiness,
+} from "./gateway-readiness.js";
 import { createGatewayStartupChecks } from "./gateway-startup.js";
 import {
   adoptReportedContextWindow,
@@ -567,7 +570,13 @@ import {
 import type { ReviewRuntimeService } from "./review/runtime/instance.js";
 import type { ReviewRulesSettingsPort } from "./review/runtime/rulesFile.js";
 import { counterCheckCandidate } from "./review/counter-check/counterCheck.js";
-import { createReviewRunService, type ReviewRunService } from "./review/service/service.js";
+import {
+  createReviewEvaluationService,
+  createReviewRunService,
+  type ReviewEvaluationSwitches,
+  type ReviewRunService,
+  type ReviewRunServiceDeps,
+} from "./review/service/service.js";
 import { ReviewRunStore } from "./review/service/store.js";
 import {
   reportReviewOperatorConfig,
@@ -1362,6 +1371,12 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
 export interface BuildHandlerDepsOptions extends AgentAuthorityRegistryDependency {
   // Issue #4133 test seam: inject review services instead of composing them over the state dir.
   readonly reviewServices?: ReviewServices | undefined;
+  /**
+   * Issue #4138 (ADR-0182 D9): the offline gate's measurement switches. Only the evaluation
+   * composition (`tests/review-quality/`) passes them; no CLI flag, environment variable or
+   * configuration key sets them, so a product server always composes the product review service.
+   */
+  readonly reviewEvaluationSwitches?: ReviewEvaluationSwitches | undefined;
   /** Server-composed upstream seam shared by preview, provisioning and runtime intake. */
   readonly codingContextGitHubPort?: GitHubCodeContextApiPort | undefined;
   // Path to a gateway config file (`keiko ui --config`); undefined → no config inspector data.
@@ -5301,6 +5316,15 @@ function installCodingJiraPods(
   });
 }
 
+/** The product review service, or the offline gate's evaluation service when switches are set. */
+function reviewRunServiceFactory(
+  switches: ReviewEvaluationSwitches | undefined,
+): (serviceDeps: ReviewRunServiceDeps) => ReviewRunService {
+  return switches === undefined
+    ? createReviewRunService
+    : (serviceDeps): ReviewRunService => createReviewEvaluationService(serviceDeps, switches);
+}
+
 /**
  * Issue #4136 (ADR-0182 D5/D6): the review run service over the review services, the review runtime
  * and the review run records. Its counter-checks run on the generalized read-only child runner with
@@ -5315,7 +5339,7 @@ function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandler
   const budget = reviewRunBudget(args);
   if (budget === undefined) return;
   const activityLog = args.options.activityLog ?? processServerLogSink();
-  const reviewRunService = createReviewRunService({
+  const reviewRunService = reviewRunServiceFactory(args.options.reviewEvaluationSwitches)({
     store,
     reviewServices,
     reviewRuntime: deps.reviewRuntime,
@@ -5336,6 +5360,9 @@ function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandler
       generation: () => deps.gatewayConfig?.generation(),
       // Issue #4137: the operator and user policy in front of eligibility at every run start.
       admit: reviewRunAdmission(() => reviewPolicyDeps(args), activityLog),
+      // Issue #4138: a lapsed readiness observation is checked again, as for a conversation.
+      ensureReady: (modelId, correlationId) =>
+        awaitInitializedConversationReadiness(deps, modelId, correlationId),
     },
     activityLog,
     reviewerPromptBudget: budget.promptTokenBudget,

@@ -623,6 +623,7 @@ function runtimeCapabilityAuthenticatorFor(
     actualPromptTokens: number,
     modelCallId?: number,
   ) => unknown;
+  readonly recordCompletionTokens: (runId: string, completionTokens: number) => void;
   // #3384 wave-3 W3-1 redirect: the real per-run fact `coding-sidecar-gateway.ts`'s outgoing
   // tool-catalog advertisement needs, keyed by runId the same way `ciRepairBudget` already is
   // above. `undefined` (run not tracked here) preserves the advertisement's prior,
@@ -657,6 +658,9 @@ function runtimeCapabilityAuthenticatorFor(
       );
       if (settled.ok) runEffort.modelCallSettled(settled.runId, modelCallId, actualPromptTokens);
       return settled;
+    },
+    recordCompletionTokens: (runId, completionTokens): void => {
+      runEffort.modelOutputSettled(runId, completionTokens);
     },
     unavailableOptionalTools: (runId) => runs.get(runId)?.unavailableOptionalTools(),
   };

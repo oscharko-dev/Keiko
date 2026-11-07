@@ -315,6 +315,11 @@ export interface ReadOnlyChildOrchestrator {
 interface GateState {
   latched: { readonly terminal: ReadOnlyChildTerminal; readonly reasonCode: string } | undefined;
   childToolCalls: number;
+  /**
+   * Set when the deadline timer fired. A timer can fire while the wall clock still reads just before
+   * the deadline, so the clock comparison alone would accept a session the deadline already stopped.
+   */
+  deadlineFired: boolean;
 }
 
 interface PreparedChildRun {
@@ -522,13 +527,13 @@ export async function runGovernedReadOnlySession<T>(
     signal: AbortSignal,
   ) => Promise<T>,
 ): Promise<ReadOnlySessionResult<T>> {
-  const state: GateState = { latched: undefined, childToolCalls: 0 };
+  const state: GateState = { latched: undefined, childToolCalls: 0, deadlineFired: false };
   const gate = createGate(governance, state);
-  const { signal, cleanup } = composeDeadlineSignal(governance);
+  const { signal, cleanup } = composeDeadlineSignal(governance, state);
   try {
     const value = await run(gate, signal);
     if (state.latched !== undefined) return { ok: false, ...state.latched, thrown: false };
-    const stop = currentStopReason(governance);
+    const stop = currentStopReason(governance, state.deadlineFired);
     if (stop !== undefined) {
       return { ok: false, terminal: "stopped", reasonCode: stop, thrown: false };
     }
@@ -553,7 +558,10 @@ interface DeadlineSignal {
  * non-cooperative runner that never re-checks the gate is actually stopped — not just reported
  * `stopped` late once it eventually returns on its own.
  */
-function composeDeadlineSignal(governance: ReadOnlySessionGovernance): DeadlineSignal {
+function composeDeadlineSignal(
+  governance: ReadOnlySessionGovernance,
+  state: GateState,
+): DeadlineSignal {
   const controller = new AbortController();
   const onParentAbort = (): void => {
     controller.abort();
@@ -565,6 +573,7 @@ function composeDeadlineSignal(governance: ReadOnlySessionGovernance): DeadlineS
   }
   const delayMs = Math.max(0, governance.deadlineMs - governance.clock.now());
   const timer = setTimeout(() => {
+    state.deadlineFired = true;
     controller.abort();
   }, delayMs);
   timer.unref();
@@ -599,7 +608,7 @@ function evaluateAttempt(
   state: GateState,
   attempt: ReadOnlyChildToolAttempt,
 ): ReadOnlyChildGateDecision {
-  const stop = currentStopReason(governance);
+  const stop = currentStopReason(governance, state.deadlineFired);
   if (stop !== undefined) return deny("stopped", stop);
   if (attempt.toolClass === "child-agent") return deny("denied", "nested-child-denied");
   const readOnlyDenial = readOnlyDenialReason(attempt.toolClass, governance.allowedActionClasses);
@@ -629,11 +638,12 @@ function readOnlyDenialReason(
 
 function currentStopReason(
   governance: Pick<ReadOnlySessionGovernance, "signal" | "cancellation" | "clock" | "deadlineMs">,
+  deadlineFired = false,
 ): ReadOnlyChildStopReason | undefined {
   if (governance.signal.aborted) return "parent-stopped";
   const reason = governance.cancellation.stopReason();
   if (reason !== undefined) return reason;
-  if (governance.clock.now() >= governance.deadlineMs) return "timeout";
+  if (deadlineFired || governance.clock.now() >= governance.deadlineMs) return "timeout";
   return undefined;
 }
 

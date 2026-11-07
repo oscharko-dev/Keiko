@@ -336,7 +336,12 @@ describe("composeReviewRuntime", () => {
     // Unbound between reviews: no authority can be resolved, so the check refuses the start.
     expect(
       checkReviewRuntimeLayers(productionReviewRuntimeLayers(composition, "gemma-4-31b-it", "/s")),
-    ).toEqual({ ok: false, reason: "authority-missing", layer: "authority" });
+    ).toEqual({
+      ok: false,
+      reason: "authority-missing",
+      layer: "authority",
+      authorityRefusal: "no-active-workspace",
+    });
     composition.workspace.bind({
       reviewRunId: "review-run-probe",
       worktreeRoot: h.worktree,

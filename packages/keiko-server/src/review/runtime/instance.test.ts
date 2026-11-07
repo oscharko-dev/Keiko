@@ -183,6 +183,19 @@ describe("createReviewRuntimeService", () => {
       failureCode: "recovery-required",
       runtimeCleanup: "unproven",
     });
+    // #4138: a failed turn's own cause names the failure, not the recovery state.
+    await expect(
+      run({
+        reports: [],
+        terminal: "recovery-required",
+        turnFailureCode: "prompt-allowance-exhausted",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      outcome: "failed",
+      failureCode: "prompt-allowance-exhausted",
+      runtimeCleanup: "unproven",
+    });
     await expect(run({ reports: [], terminal: "failed" })).resolves.toMatchObject({
       ok: true,
       outcome: "failed",
@@ -352,6 +365,30 @@ describe("createReviewRuntimeService", () => {
     expect(observed.starts).toEqual([]);
     const refused = log.events.find((event) => event.op === "review.run.profile-refused");
     expect(refused?.extra).toMatchObject({ reason: "native-profile" });
+  });
+
+  // #4138: on the offline gate, a review started more than five minutes after the Reviewer last
+  // answered found the model's readiness lapsed; the probe's refusal settled policy-invalid.
+  it("answers runtime-unavailable when the authority probe finds the model unavailable", async () => {
+    const { repo, base, head } = headRepository();
+    const { subject, log, observed } = service(
+      { reports: [] },
+      {
+        layers: { ...reviewLayers(), authority: undefined, authorityRefusal: "model-unavailable" },
+      },
+    );
+
+    await expect(subject.run(request(repo, base, head))).resolves.toEqual({
+      ok: false,
+      reason: "runtime-unavailable",
+      rules: "absent",
+    });
+    expect(observed.starts).toEqual([]);
+    const refused = log.events.find((event) => event.op === "review.run.profile-refused");
+    expect(refused?.extra).toMatchObject({
+      reason: "authority-missing",
+      authorityRefusal: "model-unavailable",
+    });
   });
 
   // R4130-019: a composition that failed returned `undefined` without a line, so every review
