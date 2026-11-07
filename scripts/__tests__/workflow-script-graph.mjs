@@ -1,17 +1,13 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
+import ts from "typescript";
 import { parse } from "yaml";
 
 // One answer, shared by the workflow guard tests, to "which repository scripts does a workflow step
 // run, does their import graph load built workspace output, does an earlier step build it, and does
 // every relative import resolve the way plain node resolves it".
 
-// Named and namespace forms, dynamic import(), and the bare side-effect form `import "x";`.
-const IMPORT_STATEMENT =
-  /\b(?:import|export)\b([^;]*?)\bfrom\s+["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)|\bimport\s*["']([^"']+)["']/gu;
-// A .cjs module in the graph loads its neighbours through require(); node resolves those literally too.
-const REQUIRE_CALL = /\brequire\(\s*["']([^"']+)["']\s*\)/gu;
 const WORKSPACE_SPECIFIER = /^(@[^/]+\/[^/]+)(\/.+)?$/u;
 // A step provides packages/*/dist when it builds the packages itself or stages the product, which
 // runs `npm run build` on the way (stage-portable-runtime.mjs) before any later step can execute.
@@ -142,12 +138,55 @@ function isBuiltOutput(path) {
   return path.split(/[\\/]/u).includes("dist");
 }
 
-// Runtime import edges of one module; `import type` / `export type` are erased before node loads it.
+// Parse actual syntax once per module: generated source strings, comments, regular expressions
+// and template text are not edges; calls inside template expressions are still visited.
+function runtimeImportSpecifiers(file, includeRequire = false) {
+  const source = ts.createSourceFile(
+    file,
+    readFileSync(file, "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const specifiers = [];
+  const visit = (node) => {
+    const value = runtimeModuleSpecifier(node, includeRequire);
+    if (value && ts.isStringLiteral(value)) specifiers.push(value.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return specifiers;
+}
+
+function runtimeModuleSpecifier(node, includeRequire) {
+  if (ts.isImportDeclaration(node)) {
+    return node.importClause?.isTypeOnly ? undefined : node.moduleSpecifier;
+  }
+  if (ts.isExportDeclaration(node)) return node.isTypeOnly ? undefined : node.moduleSpecifier;
+  return ts.isCallExpression(node) ? runtimeCallSpecifier(node, includeRequire) : undefined;
+}
+
+function runtimeCallSpecifier(node, includeRequire) {
+  const loader = node.expression;
+  if (loader.kind === ts.SyntaxKind.ImportKeyword || (includeRequire && isCommonJsLoader(loader))) {
+    return node.arguments[0];
+  }
+  return undefined;
+}
+
+function isCommonJsLoader(loader) {
+  if (ts.isIdentifier(loader)) return loader.text === "require";
+  return (
+    ts.isPropertyAccessExpression(loader) &&
+    ts.isIdentifier(loader.expression) &&
+    loader.expression.text === "module" &&
+    loader.name.text === "require"
+  );
+}
+
+// Runtime imports of one module, resolved by the same path/workspace rules as before.
 function runtimeImportTargets(file, packages) {
   const targets = [];
-  for (const match of readFileSync(file, "utf8").matchAll(IMPORT_STATEMENT)) {
-    if (/^\s*type\b/u.test(match[1] ?? "")) continue;
-    const specifier = match[2] ?? match[3] ?? match[4];
+  for (const specifier of runtimeImportSpecifiers(file)) {
     const target = specifier.startsWith(".")
       ? resolve(dirname(file), specifier)
       : workspaceImportTarget(specifier, packages);
@@ -194,14 +233,7 @@ export function workflowEntryScripts(workflowsDir = ".github/workflows") {
 
 // Relative runtime import and require() edges of one module, exactly as written.
 function relativeImportEdges(file) {
-  const source = readFileSync(file, "utf8");
-  const specifiers = [];
-  for (const match of source.matchAll(IMPORT_STATEMENT)) {
-    if (/^\s*type\b/u.test(match[1] ?? "")) continue;
-    specifiers.push(match[2] ?? match[3] ?? match[4]);
-  }
-  for (const match of source.matchAll(REQUIRE_CALL)) specifiers.push(match[1]);
-  return specifiers
+  return runtimeImportSpecifiers(file, true)
     .filter((specifier) => specifier.startsWith("."))
     .map((specifier) => ({ specifier, target: resolve(dirname(file), specifier) }));
 }

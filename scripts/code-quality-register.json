@@ -19204,7 +19204,6 @@
       "anti-slop/no-runtime-typeof": 2
     },
     "scripts/__tests__/workflow-script-graph.mjs": {
-      "anti-slop/no-array-filter-map": 1,
       "anti-slop/no-runtime-typeof": 8
     },
     "scripts/arch-check-negative.mjs": {
