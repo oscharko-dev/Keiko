@@ -25,9 +25,12 @@ function exchange(
 }
 
 describe("a turn whose answer reports a change tool (#4292)", () => {
-  it("counts a change Keiko sent", () => {
-    expect(transcriptReportsToolAction([exchange("keiko.jira.draft", "succeeded")])).toBe(true);
-  });
+  it.each(["succeeded", "rejected", "unknown"] as const)(
+    "counts a change tool that ended %s",
+    (outcome) => {
+      expect(transcriptReportsToolAction([exchange("keiko.jira.draft", outcome)])).toBe(true);
+    },
+  );
 
   it("counts a change tool that sent nothing because every issue already existed", () => {
     const exchanges = [

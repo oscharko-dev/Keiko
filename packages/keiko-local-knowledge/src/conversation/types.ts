@@ -136,8 +136,9 @@ export interface AnswerGenerator {
    */
   readonly repairAvailable?: () => boolean;
   /**
-   * Whether this answer reports a change a tool sent on the person's behalf (a created Jira issue,
-   * a comment). Such an answer states what happened; it does not cite documents, so a repair that
+   * Whether this answer reports a change tool run on the person's behalf (a created Jira issue, a
+   * comment, or a change Keiko did not send). Such an answer states what happened; it does not cite
+   * documents, so a repair that
    * regenerates it to add citations is skipped (`skipped-tool-action`). Absent means false.
    */
   readonly reportsToolAction?: () => boolean;
