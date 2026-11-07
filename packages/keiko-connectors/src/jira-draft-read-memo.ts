@@ -136,11 +136,15 @@ export function withJiraDraftReadMemo(
 }
 
 const CREATE_METADATA_PATH =
-  /\/rest\/api\/2\/(?:issue\/createmeta\/|project\/|issuetype\/|field(?:\?|$))/u;
+  /\/rest\/api\/2\/(?:issue\/createmeta\/[^?]*|project\/[^?]*|issuetype\/[^?]*|field)$/u;
 
-/** Only the metadata identical for every item of one project and issue type. */
+/**
+ * Only the metadata identical for every item of one project and issue type. The path alone is
+ * matched, so a query string can never make another resource look like metadata.
+ */
 function isCreateMetadataUrl(url: string): boolean {
-  return CREATE_METADATA_PATH.test(url);
+  const queryAt = url.indexOf("?");
+  return CREATE_METADATA_PATH.test(queryAt === -1 ? url : url.slice(0, queryAt));
 }
 
 /**

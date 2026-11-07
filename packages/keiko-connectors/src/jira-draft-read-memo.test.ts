@@ -215,6 +215,27 @@ describe("withJiraCreateMetadataMemo", () => {
     expect(http).toHaveBeenCalledTimes(4);
   });
 
+  it("matches the path only, so a query string never makes a search look like metadata", async () => {
+    const ctx = context();
+    const scope = {};
+    const { connection: target, http } = connection();
+    const memoized = withJiraCreateMetadataMemo(target, ctx, scope, counts());
+    const disguised = `${API}search?next=/rest/api/2/project/1`;
+    await memoized.http(get(disguised));
+    await memoized.http(get(disguised));
+    await memoized.http(get(`${API}fieldset`));
+    await memoized.http(get(`${API}fieldset`));
+    expect(http).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps another transport scope of the same invocation apart", async () => {
+    const ctx = context();
+    const { connection: target, http } = connection();
+    await withJiraCreateMetadataMemo(target, ctx, {}, counts()).http(get(METADATA[1] ?? ""));
+    await withJiraCreateMetadataMemo(target, ctx, {}, counts()).http(get(METADATA[1] ?? ""));
+    expect(http).toHaveBeenCalledTimes(2);
+  });
+
   it("does not remember a non-200 metadata answer", async () => {
     const ctx = context();
     const scope = {};
