@@ -83,12 +83,22 @@ it("does not call absent bulk results nonexistent or turn them into completed ta
   });
 });
 
-it.each([[{ id: 7 }, { id: 7 }], [{ id: 8 }], [{ status: "COMPLETE" }]])(
+it.each([
+  { items: [{ id: 7 }, { id: 7 }] },
+  { items: [{ id: 8 }] },
+  { items: [{ status: "COMPLETE" }] },
+])(
   "refuses duplicated, unrelated or missing request IDs without returning a partial prefix: %#",
-  async (items) => {
+  async ({ items }) => {
     expect((await read("jira.reindex-requests", { requestIds: ["7"] }, response({ items }))).data.reason).toBe("malformed-payload");
   },
 );
+it("accepts the matching observed request ID as a positive control for identity refusals", async () => {
+  expect((await read("jira.reindex-requests", { requestIds: ["7"] }, response({ items: [{ id: 7 }] }))).data).toEqual({
+    outcome: "succeeded", requestScope: "selected-requests", requestedRequestIds: ["7"], unreturnedRequestIds: [],
+    startAt: 0, total: 1, items: [{ id: "7" }],
+  });
+});
 
 it("distinguishes execution of the read from the remote upgrade's outcome", async () => {
   const request = response({ body: {

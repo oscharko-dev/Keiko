@@ -44,7 +44,7 @@ it("renames only the reviewed native tab and reads the same parent again", async
   expect(writes(request)).toEqual([["screens/11/tabs/21", "PUT", { name: "Implementation" }, "none"]]);
 });
 
-it.each([204, 200, 202])("confirms DELETE HTTP %i only through complete same-parent absence with a remaining tab", async (status) => {
+it.each([204, 200, 202])("deletes a matching reviewed field snapshot after HTTP %i only with complete same-parent absence", async (status) => {
   const request = port([SCREEN, rows(ORIGINAL), rows([{ id: "summary", name: "Summary" }]),
     { ok: true, status, body: undefined }, SCREEN, rows([ORIGINAL[1]])]);
   expect(await mutate("jira.delete-screen-tab", {
@@ -123,13 +123,15 @@ it("refuses to delete the final native tab before looking up fields or dispatchi
 });
 
 it.each([
-  [{ id: "description", name: "Description" }],
-  [{ id: "summary", name: "Summary" }, { id: "summary", name: "Duplicate" }],
-])("refuses changed or duplicated field snapshots before deletion: %#", async (fields) => {
+  { fields: [{ id: "description", name: "Description" }], reason: "conflict", changed: true },
+  { fields: [{ id: "summary", name: "Summary" }, { id: "summary", name: "Duplicate" }], reason: "malformed-payload", changed: false },
+])("refuses changed or duplicated field snapshots before deletion: %#", async ({ fields, reason, changed }) => {
   const request = port([SCREEN, rows(ORIGINAL), rows(fields)]);
-  expect((await mutate("jira.delete-screen-tab", {
+  const result = await mutate("jira.delete-screen-tab", {
     ...SELECTED, tabId: "21", expectedName: "Fields", expectedFieldIds: ["summary"],
-  }, request)).ok).toBe(false);
+  }, request);
+  expect(result).toMatchObject({ ok: false, reason });
+  if (changed) expect(result).toMatchObject({ detail: { messages: [expect.stringContaining("field layout changed")] } });
   expect(writes(request)).toEqual([]);
 });
 

@@ -16,8 +16,7 @@ import {
   type JiraScreenTabSelection,
 } from "./jira-screen-tab-admission.js";
 
-const OPERATIONS = ["jira.create-screen-tab", "jira.rename-screen-tab", "jira.delete-screen-tab"] as const;
-type TabWrite = (typeof OPERATIONS)[number];
+type TabWrite = keyof typeof FIELDS;
 interface ScreenTabReceipt extends JiraMutationReceipt {
   readonly screenId?: string;
   readonly tabId?: string;
@@ -44,11 +43,11 @@ const INVALID: Failure = {
     "Select the exact screen ID and reviewed screen name. Rename or delete also needs the tab ID and reviewed tab name. Delete requires the complete ordered reviewed field IDs.",
   ] },
 };
-const FIELDS: Readonly<Record<TabWrite, ReadonlySet<string>>> = {
+const FIELDS = {
   "jira.create-screen-tab": new Set(["screenId", "expectedScreenName", "name"]),
   "jira.rename-screen-tab": new Set(["screenId", "expectedScreenName", "tabId", "expectedName", "name"]),
   "jira.delete-screen-tab": new Set(["screenId", "expectedScreenName", "tabId", "expectedName", "expectedFieldIds"]),
-};
+} as const satisfies Readonly<Record<string, ReadonlySet<string>>>;
 function deletionFields(value: unknown): readonly string[] | undefined {
   const values = asArray(value);
   if (values === undefined || values.length > TOOL_CATALOG_LIMITS.maxArrayItems) return undefined;
