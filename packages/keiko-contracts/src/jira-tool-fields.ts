@@ -23,6 +23,10 @@ export const JIRA_FIELD_KINDS = [
 export type JiraFieldKind = (typeof JIRA_FIELD_KINDS)[number];
 export const JIRA_MANAGED_READ_TOOLS = [
   "jira.projects",
+  "jira.project",
+  "jira.validate-project-key",
+  "jira.project-permissions",
+  "jira.project-type",
   "jira.issue-types",
   "jira.create-fields",
   "jira.edit-fields",

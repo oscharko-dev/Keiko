@@ -122,10 +122,65 @@ interface ReadDefinition {
   readonly required: readonly string[];
   readonly item: CatalogJsonObject;
   readonly paged?: boolean;
+  readonly rootResult?: CatalogJsonObject;
 }
 const DEFINITIONS: Readonly<
   Record<Exclude<JiraManagedReadToolName, "jira.report" | "jira.draft-stage">, ReadDefinition>
 > = {
+  "jira.project": {
+    description:
+      "Inspect one visible Jira project by its current id or key, including ordinary metadata and a trusted Jira link.",
+    arguments: { projectIdOrKey: text(64) },
+    required: ["projectIdOrKey"],
+    paged: false,
+    item: object({}),
+    rootResult: {
+      projectId: text(64),
+      projectKey: text(64),
+      projectName: text(255),
+      description: READ_TEXT,
+      url: text(4096),
+      lead: text(255),
+      assigneeType: { type: "string", enum: ["PROJECT_LEAD", "UNASSIGNED"] },
+      projectTypeKey: text(64),
+    },
+  },
+  "jira.validate-project-key": {
+    description:
+      "Validate a proposed project key using the connected Jira instance's configured key rules. Validation does not reserve a key or create a project.",
+    arguments: { key: text(64) },
+    required: ["key"],
+    paged: false,
+    item: object({}),
+    rootResult: { key: text(64), valid: { type: "boolean" } },
+  },
+  "jira.project-permissions": {
+    description:
+      "Read explicit current Jira permission facts globally or for one project. Missing facts do not grant permission.",
+    arguments: { projectIdOrKey: text(64) },
+    required: [],
+    paged: false,
+    item: object({}),
+    rootResult: {
+      permissions: {
+        type: "array",
+        maxItems: 100,
+        items: object({ key: text(128), name: text(255), havePermission: { type: "boolean" } }, [
+          "key",
+          "havePermission",
+        ]),
+      },
+    },
+  },
+  "jira.project-type": {
+    description:
+      "Read whether a native Jira project type is accessible to the current actor before creating a project.",
+    arguments: { projectTypeKey: text(64) },
+    required: ["projectTypeKey"],
+    paged: false,
+    item: object({}),
+    rootResult: { projectTypeKey: text(64), name: text(255) },
+  },
   "jira.projects": {
     description: "Read projects visible to the connected identity.",
     arguments: {},
@@ -251,6 +306,7 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
     ),
     resultSchema: object(
       {
+        ...definition.rootResult,
         outcome: { type: "string", enum: ["succeeded", "failed"] },
         reason: text(64),
         fieldErrors: JIRA_FAILURE_FIELD_ERRORS_SCHEMA,

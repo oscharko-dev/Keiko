@@ -45,6 +45,7 @@ import {
 } from "./jira-issue-links.js";
 import { dispatchFailure } from "./jira-mutation-failure.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
+import { executeJiraProjectMutation, isJiraProjectMutation } from "./jira-managed-projects.js";
 import {
   gateJiraMutationByTemplates,
   type JiraIssueTemplateSource,
@@ -1312,6 +1313,12 @@ export function executeJiraManagedMutation(
 ): Promise<JiraMutationAttempt> {
   if (connection.deployment !== "data-center")
     return Promise.resolve({ ok: false, reason: "unavailable" });
+  if (isJiraProjectMutation(operation))
+    return executeJiraProjectMutation(
+      operation,
+      structuredClone(source),
+      requestFor(connection, context),
+    );
   // An attachment changes no field a template describes: it takes no template check.
   if (operation === "jira.attach")
     return attachFile(requestFor(connection, context), structuredClone(source), connection);
@@ -1343,6 +1350,13 @@ function checkedAttempt(
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
 ): Promise<JiraMutationAttempt> {
+  if (connection.deployment === "data-center" && isJiraProjectMutation(operation))
+    return executeJiraProjectMutation(
+      operation,
+      structuredClone(source),
+      requestFor(connection, context),
+      true,
+    );
   // The check mode must never reach any write.
   if (connection.deployment !== "data-center" || !TEMPLATE_CHECKED.has(operation))
     return Promise.resolve({ ok: true, receipt: {} });

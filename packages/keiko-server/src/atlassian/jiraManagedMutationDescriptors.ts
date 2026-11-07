@@ -340,6 +340,9 @@ const RESULT_FIELDS = {
   commentId: text(128),
   transitionId: text(128),
   attachmentId: text(128),
+  projectId: text(64),
+  projectKey: text(64),
+  projectName: text(255),
   fieldId: text(64),
   validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },
   fieldErrors: JIRA_FAILURE_FIELD_ERRORS_SCHEMA,
@@ -373,6 +376,38 @@ const DEFINITIONS: Readonly<
     }
   >
 > = {
+  "jira.create-project": {
+    description:
+      "Create a Jira project using native supported options. Validate its key and accessible project type first; Jira administration permission is required. Return independently verified project identity. A partial or uncertain creation must never be repeated automatically.",
+    input: object(
+      {
+        key: text(64),
+        name: text(255),
+        lead: text(255),
+        projectTypeKey: text(64),
+        projectTemplateKey: text(255),
+        description: text(32768),
+        url: text(4096),
+        assigneeType: { type: "string", enum: ["PROJECT_LEAD", "UNASSIGNED"] },
+      },
+      ["key", "name", "lead", "projectTypeKey"],
+    ),
+  },
+  "jira.update-project": {
+    description:
+      "Update ordinary Jira project metadata and independently read back the requested fields. Supply at least one change. Project key, project type and scheme changes are not supported by this operation.",
+    input: object(
+      {
+        projectIdOrKey: text(64),
+        name: text(255),
+        lead: text(255),
+        description: text(32768),
+        url: text(4096),
+        assigneeType: { type: "string", enum: ["PROJECT_LEAD", "UNASSIGNED"] },
+      },
+      ["projectIdOrKey"],
+    ),
+  },
   "jira.create": {
     description:
       "Create one issue (for more, use jira.draft) with numeric project and issue-type IDs and current required fields. Fields cannot override routing identities. A child of an existing issue sets the relation field its create metadata names to that key; a parent that does not exist yet needs jira.draft.",

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { jiraMutationToolId } from "../atlassian/jiraMutationToolId.js";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatToolReadGrant, ChatToolReadGrantView } from "@oscharko-dev/keiko-contracts";
 import {
@@ -67,7 +68,7 @@ function matchesCall(
     record.userMessageId === message.id &&
     record.chatId === message.chatId &&
     record.turnRef === message.canonicalTurnRef &&
-    call.call.name === record.operation.replaceAll(".", "_") &&
+    call.call.name === record.operation.replace(/[.-]/gu, "_") &&
     record.actionDigest === action
   );
 }
@@ -98,7 +99,7 @@ function validObservation(
   const canonicalId =
     record.sourceKind === "configured-mcp"
       ? `keiko.mcp.t${sha256Hex(canonicalise({ server: record.serverName, tool: record.toolName }))}`
-      : `keiko.${record.operation}`;
+      : jiraMutationToolId(record.operation);
   if (call.result !== undefined && call.result.toolRef?.canonicalId !== canonicalId) return false;
   return mutationIntentError({ ...record, userMessageId: message.id }) === undefined;
 }

@@ -36,9 +36,9 @@ describe("server-owned Jira operation contracts", () => {
     ])
       expect(isJiraOperationBinding(invalid)).toBe(false);
   });
-  it("keeps native operations and compositions distinct without expanding the current tools", () => {
+  it("keeps executable native operations distinct from local compositions", () => {
     const entries = jiraOperationContracts();
-    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(15);
+    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(21);
     expect(entries.filter((entry) => entry.definition.kind === "composite")).toHaveLength(3);
     expect(jiraOperationForTool("jira.discover")).toBeUndefined();
     expect(jiraOperationForTool("DELETE /rest/api/2/project")).toBeUndefined();

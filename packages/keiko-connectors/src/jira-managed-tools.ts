@@ -1,4 +1,10 @@
 import { jiraBrowseUrl } from "./jira-browse-url.js";
+import { jiraProjectBrowseUrl } from "./jira-project-browse-url.js";
+import {
+  executeJiraProjectRead,
+  isJiraProjectRead,
+  isJiraProjectMutation,
+} from "./jira-managed-projects.js";
 import { jiraIssueFieldsQuery, selectedJiraReadFields } from "./jira-managed-field-reads.js";
 import {
   jiraAssignableUsersPath,
@@ -42,7 +48,7 @@ export type { JiraManagedConnection } from "./jira-managed-connection.js";
 import { asRecord, atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
 import { executeAtlassianWriteRequest } from "./atlassian-write-http.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
-import { executeJiraManagedMutation } from "./jira-managed-mutations.js";
+import { executeJiraManagedMutation, requestFor } from "./jira-managed-mutations.js";
 import { createJiraDraftStore } from "./jira-draft-store.js";
 import { executeJiraDraftStageTool, type JiraDraftToolDeps } from "./jira-draft-stage-tool.js";
 import { createJiraReportStore } from "./jira-report-store.js";
@@ -274,7 +280,17 @@ function arrayResult(
     ? projectPage(values, startAt, maxResults)
     : jiraAssignableUsersResult(values, startAt, maxResults);
 }
-async function read<Context extends ManagedMcpInvocationContext>(
+function read<Context extends ManagedMcpInvocationContext>(
+  name: JiraManagedReadToolName,
+  args: CatalogJsonObject,
+  context: Context,
+  connection: JiraManagedProviderDeps<Context>["connection"],
+): Promise<ManagedMcpToolResult> {
+  return isJiraProjectRead(name)
+    ? projectRead(name, args, context, connection)
+    : readIssueOrMetadata(name, args, context, connection);
+}
+async function readIssueOrMetadata<Context extends ManagedMcpInvocationContext>(
   name: JiraManagedReadToolName,
   args: CatalogJsonObject,
   context: Context,
@@ -313,6 +329,26 @@ async function read<Context extends ManagedMcpInvocationContext>(
       ? result
       : withIssueLink(result, baseUrl, args.issueKey),
   );
+}
+
+async function projectRead<Context extends ManagedMcpInvocationContext>(
+  name: Parameters<typeof executeJiraProjectRead>[0],
+  args: CatalogJsonObject,
+  context: Context,
+  connection: JiraManagedProviderDeps<Context>["connection"],
+): Promise<ManagedMcpToolResult> {
+  const connected = await connection(context);
+  if (connected.deployment !== "data-center") return failure("unsupported-deployment");
+  const result = await executeJiraProjectRead(name, args, requestFor(connected, context));
+  return boundJiraReadResult(withProjectLink(result, connected.baseUrl));
+}
+
+function withProjectLink(result: ManagedMcpToolResult, baseUrl: string): ManagedMcpToolResult {
+  const data = { ...result.data };
+  delete data.browseUrl;
+  const url = jiraProjectBrowseUrl(baseUrl, data.projectKey);
+  if (url !== undefined) data.browseUrl = url;
+  return { ...result, data };
 }
 
 function withIssueLink(
@@ -369,6 +405,7 @@ function managedTool<Context extends ManagedMcpInvocationContext>(
         (http, trace) =>
           executeJiraManagedMutation(operation, snapshot, context, { ...selected, http }, trace),
       );
+      if (isJiraProjectMutation(operation)) return withProjectLink(result, selected.baseUrl);
       return withIssueLink(
         result,
         selected.baseUrl,

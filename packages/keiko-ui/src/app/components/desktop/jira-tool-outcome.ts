@@ -9,6 +9,7 @@ import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 
 export interface JiraOutcomeItem {
   readonly key?: string;
+  readonly projectId?: string;
   readonly name?: string;
   readonly body?: string;
   readonly href?: string;
@@ -38,6 +39,15 @@ export interface JiraToolOutcomeView {
 
 export const JIRA_OUTCOME_ITEMS_SHOWN = 5;
 const ISSUE_KEY = /^[A-Z][A-Z0-9_]{0,63}-\d{1,12}$/u;
+const PROJECT_KEY = /^[A-Z][A-Z0-9_]{0,63}$/u;
+export const JIRA_PROJECT_TOOLS: ReadonlySet<string> = new Set([
+  "jira_project",
+  "jira_create_project",
+  "jira_update_project",
+  "jira_validate_project_key",
+  "jira_project_type",
+  "jira_project_permissions",
+]);
 type UnknownRecord = Readonly<Record<string, unknown>>;
 function record(value: unknown): UnknownRecord | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -65,18 +75,28 @@ function textMembers<Key extends string>(
 }
 
 /** Retain the saved instance/context path; never manufacture a link from a current connector. */
-function issueLink(value: unknown, key: string | undefined): string | undefined {
-  if (typeof value !== "string" || key === undefined || !ISSUE_KEY.test(key)) return undefined;
+function savedUrl(value: unknown): URL | undefined {
+  if (typeof value !== "string") return undefined;
   try {
     const url = new URL(value);
     return url.protocol === "https:" &&
-      [url.username, url.password, url.search, url.hash].every((part) => part === "") &&
-      url.pathname.endsWith(`/browse/${key}`)
-      ? url.href
+      [url.username, url.password, url.search, url.hash].every((part) => part === "")
+      ? url
       : undefined;
   } catch {
     return undefined;
   }
+}
+function issueLink(value: unknown, key: string | undefined): string | undefined {
+  if (key === undefined || !ISSUE_KEY.test(key)) return undefined;
+  const url = savedUrl(value);
+  return url?.pathname.endsWith(`/browse/${key}`) === true ? url.href : undefined;
+}
+/** Only the server-minted saved browse URL is a project destination, never its homepage or self. */
+function projectLink(value: unknown, key: string): string | undefined {
+  if (!PROJECT_KEY.test(key)) return undefined;
+  const url = savedUrl(value);
+  return url?.pathname.endsWith(`/projects/${key}/summary`) === true ? url.href : undefined;
 }
 const DRAFT_STATES: Readonly<Record<string, WidgetMessageKey>> = {
   pending: "chat.jira.outcome.state.pending",
@@ -97,14 +117,30 @@ function itemLabels(source: UnknownRecord): WidgetMessageKey[] {
     labels.push(source.required ? "chat.jira.outcome.required" : "chat.jira.outcome.optional");
   if (typeof source.active === "boolean")
     labels.push(source.active ? "chat.jira.outcome.active" : "chat.jira.outcome.inactive");
+  return [...labels, ...projectLabels(source)];
+}
+function projectLabels(source: UnknownRecord): WidgetMessageKey[] {
+  const labels: WidgetMessageKey[] = [];
+  if (typeof source.valid === "boolean")
+    labels.push(
+      source.valid ? "chat.jira.outcome.keyAvailable" : "chat.jira.outcome.keyUnavailable",
+    );
+  if (typeof source.havePermission === "boolean")
+    labels.push(
+      source.havePermission
+        ? "chat.jira.outcome.permissionGranted"
+        : "chat.jira.outcome.permissionDenied",
+    );
   return labels;
 }
 function outcomeItem(value: unknown, comments: boolean): JiraOutcomeItem | undefined {
   const source = record(value);
   if (source === undefined) return undefined;
-  const key = text(source.issueKey) ?? text(source.key);
+  const projectKey = text(source.projectKey);
+  const key = firstText([projectKey, source.issueKey, source.key, source.projectTypeKey]);
   const author = record(source.author) ?? {};
   const name = firstText([
+    source.projectName,
     source.summary,
     source.displayName,
     source.name,
@@ -115,9 +151,13 @@ function outcomeItem(value: unknown, comments: boolean): JiraOutcomeItem | undef
   const body = text(comments ? source.body : source.description);
   if (key === undefined && name === undefined && body === undefined) return undefined;
   const status = firstText([record(source.status)?.name, record(source.to)?.name]);
-  const href = issueLink(source.browseUrl, key);
+  const href =
+    projectKey === undefined
+      ? issueLink(source.browseUrl, key)
+      : projectLink(source.browseUrl, projectKey);
+  const projectId = text(source.projectId);
   return {
-    ...textMembers({ key, name, body, status, href }),
+    ...textMembers({ key, name, body, status, href, projectId }),
     labels: itemLabels(source),
   };
 }
@@ -125,10 +165,12 @@ function outcomeItems(
   exchange: ChatToolExchange,
   data: UnknownRecord | undefined,
 ): JiraOutcomeItem[] {
-  const items = Array.isArray(data?.items) ? data.items : [];
+  const candidates =
+    exchange.call.name === "jira_project_permissions" ? data?.permissions : data?.items;
+  const items = Array.isArray(candidates) ? candidates : [];
   const progress = Array.isArray(exchange.draftProgress?.items) ? exchange.draftProgress.items : [];
-  const source =
-    data?.issueKey === undefined ? [...items, ...progress] : [data, ...items, ...progress];
+  const single = data?.issueKey !== undefined || JIRA_PROJECT_TOOLS.has(exchange.call.name);
+  const source = single ? [data, ...items, ...progress] : [...items, ...progress];
   const seen = new Set<string>();
   return source.flatMap((entry) => {
     const item = outcomeItem(entry, exchange.call.name === "jira_comments");
@@ -207,15 +249,17 @@ function failureMessage(
 function pageCounts(
   data: UnknownRecord,
   comments: boolean,
+  permissions: boolean,
 ): Pick<JiraToolOutcomeView, "returnedCount" | "total" | "unreadableCount"> {
-  if (!Array.isArray(data.items))
+  const items = permissions ? data.permissions : data.items;
+  if (!Array.isArray(items))
     return { returnedCount: undefined, total: undefined, unreadableCount: 0 };
   const total = count(data.total);
-  const covered = (count(data.startAt) ?? 0) + data.items.length;
+  const covered = (count(data.startAt) ?? 0) + items.length;
   return {
-    returnedCount: data.items.length,
+    returnedCount: items.length,
     total: total !== undefined && total >= covered ? total : undefined,
-    unreadableCount: data.items.filter((item) => outcomeItem(item, comments) === undefined).length,
+    unreadableCount: items.filter((item) => outcomeItem(item, comments) === undefined).length,
   };
 }
 
@@ -224,7 +268,11 @@ export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcome
   const data = record(exchange.result?.data) ?? {};
   return {
     items: outcomeItems(exchange, data),
-    ...pageCounts(data, exchange.call.name === "jira_comments"),
+    ...pageCounts(
+      data,
+      exchange.call.name === "jira_comments",
+      exchange.call.name === "jira_project_permissions",
+    ),
     stagedCount: count(data.itemCount),
     unresolvedCount: count(data.unresolvedRefCount),
     problems: problemsOf(data),

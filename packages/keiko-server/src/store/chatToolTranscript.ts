@@ -3,6 +3,7 @@ import {
   jiraOperationActionDigest,
   type JiraOperationBinding,
 } from "../atlassian/jiraOperationRegistry.js";
+import { jiraMutationToolId } from "../atlassian/jiraMutationToolId.js";
 import type { DatabaseSync } from "node:sqlite";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
@@ -160,8 +161,8 @@ interface TranscriptIdentity {
 }
 const MUTATION_ALIASES = new Map<string, string>(
   JIRA_MUTATION_OPERATIONS.map((operation) => [
-    operation.replaceAll(".", "_"),
-    `keiko.${operation}`,
+    operation.replace(/[.-]/gu, "_"),
+    jiraMutationToolId(operation),
   ]),
 );
 function approvalActionDigest(
@@ -187,7 +188,7 @@ function matchesApprovalCall(
     approval.chatId === identity.chatId &&
     approval.invocationId ===
       sha256Hex(canonicalise({ messageId: identity.messageId, callId: call.id })) &&
-    call.name === approval.operation.replaceAll(".", "_") &&
+    call.name === approval.operation.replace(/[.-]/gu, "_") &&
     approval.actionDigest ===
       approvalActionDigest(
         approval,

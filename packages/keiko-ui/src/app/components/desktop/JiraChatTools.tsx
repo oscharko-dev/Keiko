@@ -33,6 +33,7 @@ import { useJiraResultEvidence } from "./jira-result-evidence";
 import {
   jiraToolOutcomeView,
   JIRA_OUTCOME_ITEMS_SHOWN,
+  JIRA_PROJECT_TOOLS,
   type JiraOutcomeItem,
   type JiraOutcomeRule,
   type JiraToolOutcomeView,
@@ -116,6 +117,9 @@ function JiraResultItems({ items }: { readonly items: readonly JiraOutcomeItem[]
                 </a>
               )}
             </div>
+            {item.projectId === undefined ? null : (
+              <p>{t("chat.jira.outcome.projectId", { id: item.projectId })}</p>
+            )}
             {item.status === undefined ? null : <p>{item.status}</p>}
             {item.labels.map((label) => (
               <p key={label}>{t(label)}</p>
@@ -236,6 +240,15 @@ function JiraToolOutcome({ exchange }: { readonly exchange: ChatToolExchange }):
     </>
   );
 }
+function resultCardSemantics(exchange: ChatToolExchange): {
+  readonly tag: "div" | "section";
+  readonly role: "group" | undefined;
+  readonly label: ReturnType<typeof jiraToolLabel>;
+} {
+  return JIRA_PROJECT_TOOLS.has(exchange.call.name)
+    ? { tag: "div", role: "group", label: jiraToolLabel(exchange) }
+    : { tag: "section", role: undefined, label: jiraToolRegionLabel(exchange) };
+}
 function JiraToolExchange({
   exchange,
   turnState,
@@ -254,8 +267,9 @@ function JiraToolExchange({
     (turnState === "pending" ? undefined : jiraToolOutcomeHelp(state));
   const report = jiraReportOf(exchange);
   const partial = jiraToolPartialNotice(exchange);
+  const { tag: Card, role, label } = resultCardSemantics(exchange);
   return (
-    <section className={styles.cmpCard} aria-label={t(jiraToolRegionLabel(exchange))}>
+    <Card className={styles.cmpCard} role={role} aria-label={t(label)}>
       <strong>{mcp ? exchange.call.name : t(jiraToolLabel(exchange))}</strong>
       <output>{t(state)}</output>
       {help === undefined ? null : <p>{t(help)}</p>}
@@ -268,7 +282,7 @@ function JiraToolExchange({
       ) : (
         <JiraToolResultDetails exchange={exchange} />
       )}
-    </section>
+    </Card>
   );
 }
 /** The card already says what an undecided action is waiting for. */

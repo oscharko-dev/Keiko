@@ -27,6 +27,17 @@ const ARGUMENT_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
   name: "chat.jira.fact.fileName",
   requirementIds: "chat.jira.fact.requirements",
 };
+const PROJECT_ARGUMENT_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
+  key: "chat.jira.fact.projectKey",
+  projectIdOrKey: "chat.jira.fact.projectIdOrKey",
+  name: "chat.jira.fact.projectName",
+  lead: "chat.jira.fact.projectLead",
+  projectTypeKey: "chat.jira.fact.projectType",
+  projectTemplateKey: "chat.jira.fact.projectTemplate",
+  description: "chat.jira.fact.projectDescription",
+  url: "chat.jira.fact.projectWebsite",
+  assigneeType: "chat.jira.fact.projectAssignee",
+};
 
 function record(value: unknown): Raw | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -133,15 +144,19 @@ export function jiraActionFacts(
   managed: boolean,
   t: OptionalWidgetTranslate,
   names: JiraNames = NO_JIRA_NAMES,
+  operation?: string,
 ): readonly Fact[] {
   const raw = record(args);
   if (raw === undefined)
     return [{ id: t("chat.jira.writeApproval.preview"), value: jiraDraftValueOf(args) }];
-  return Object.entries(raw).flatMap(([key, value]) =>
-    managed
+  const project = operation === "jira.create-project" || operation === "jira.update-project";
+  return Object.entries(raw).flatMap(([key, value]) => {
+    if (!managed) return [{ id: key, value: jiraDraftValueOf(value) }];
+    const label = project ? PROJECT_ARGUMENT_LABELS[key] : undefined;
+    return label === undefined
       ? managedFacts(key, value, raw, t, names)
-      : [{ id: key, value: jiraDraftValueOf(value) }],
-  );
+      : [{ id: t(label), value: jiraDraftValueOf(value) }];
+  });
 }
 /** Jira's own names where this turn read them; a field that repeats the target is said once. */
 function managedFacts(

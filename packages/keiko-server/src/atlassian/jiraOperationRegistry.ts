@@ -20,6 +20,12 @@ type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
   | "visible-projects"
+  | "current-project-metadata"
+  | "native-project-key-validation"
+  | "explicit-project-permissions"
+  | "accessible-project-type"
+  | "project-create-and-readback"
+  | "project-update-and-readback"
   | "current-create-metadata"
   | "current-edit-metadata"
   | "visible-issues"
@@ -68,6 +74,27 @@ const NATIVE: Readonly<
   >
 > = {
   "jira.projects": ["GET", "read", "/project", "visible-projects"],
+  "jira.project": ["GET", "read", "/project/{projectIdOrKey}", "current-project-metadata"],
+  "jira.validate-project-key": [
+    "GET",
+    "read",
+    "/projectvalidate/key",
+    "native-project-key-validation",
+  ],
+  "jira.project-permissions": ["GET", "read", "/mypermissions", "explicit-project-permissions"],
+  "jira.project-type": [
+    "GET",
+    "read",
+    "/project/type/{projectTypeKey}/accessible",
+    "accessible-project-type",
+  ],
+  "jira.create-project": ["POST", "write", "/project", "project-create-and-readback"],
+  "jira.update-project": [
+    "PUT",
+    "write",
+    "/project/{projectIdOrKey}",
+    "project-update-and-readback",
+  ],
   "jira.issue-types": [
     "GET",
     "read",

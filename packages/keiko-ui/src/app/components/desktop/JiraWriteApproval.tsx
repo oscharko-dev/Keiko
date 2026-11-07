@@ -96,15 +96,17 @@ function ActionDetails({
   args,
   managed,
   note,
+  operation,
 }: {
   readonly args: unknown;
   readonly managed: boolean;
   readonly note?: WidgetMessageKey;
+  readonly operation?: string;
 }): ReactNode {
   const t = useTranslate();
   const names = useContext(JiraNamesContext);
   // Not memoized: the translator keeps its identity while a late-loading catalog refreshes it.
-  const facts = jiraActionFacts(args, managed, t, names);
+  const facts = jiraActionFacts(args, managed, t, names, operation);
   return (
     <fieldset className={styles.cmpFactsGroup} aria-label={t("chat.jira.writeApproval.preview")}>
       {note === undefined ? null : <p className={styles.cmpDraftNote}>{t(note)}</p>}
@@ -248,6 +250,7 @@ function ApprovalContent({
     <ActionDetails
       args={shownArgs(approval, staged.args)}
       managed={approval.kind === "jira-chat-write"}
+      operation={approval.operation}
       {...(isDraft(approval) ? { note: "chat.jira.draft.unreadable" as const } : {})}
     />
   );

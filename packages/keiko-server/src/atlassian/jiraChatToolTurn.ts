@@ -47,6 +47,7 @@ import {
   jiraDraftRequirementRefusal,
 } from "./jiraChatDraft.js";
 import { untracedAdvisory } from "./jiraChatCatalogRuntime.js";
+import { jiraMutationToolId } from "./jiraMutationToolId.js";
 import type { TraceSession } from "../requirement-trace.js";
 import {
   createJiraChatSourcePreparation,
@@ -333,7 +334,7 @@ export function observeJiraChatMutation(
   sourceDigest?: string,
 ): JiraMutationOutcome | undefined {
   const operation = JIRA_MUTATION_OPERATIONS.find(
-    (value) => result.toolRef?.canonicalId === `keiko.${value}`,
+    (value) => result.toolRef?.canonicalId === jiraMutationToolId(value),
   );
   if (operation === undefined) return undefined;
   const contract = currentMutationContract(operation, result);

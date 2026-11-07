@@ -103,6 +103,7 @@ import {
 import { ConversationModelNotReadyError } from "./conversation-readiness-error.js";
 import { logConversationAdmission } from "./conversation-readiness-log.js";
 import type { AcceptedJiraChatTurn } from "./atlassian/jiraChatAuthority.js";
+import { jiraMutationToolId } from "./atlassian/jiraMutationToolId.js";
 
 const TOOL_TURN_RULES =
   "When the user requests an operation supported by an offered tool, invoke the matching tool. If the Chat's mode requires an action approval, Keiko presents the approval control and waits for the decision before the effect; asking for permission in prose does not replace it. Invoke modifying tools only when the user has actually requested that change. Server authority, mode, approval and budget checks remain binding.";
@@ -261,7 +262,7 @@ function startedOperationBinding(
   invocation: NonNullable<NormalizedResponse["toolCalls"][number]["invocation"]>,
 ): NonNullable<ReturnType<typeof jiraOperationForTool>>["binding"] | undefined {
   const operation = JIRA_MUTATION_OPERATIONS.find(
-    (name) => invocation.toolRef.canonicalId === `keiko.${name}`,
+    (name) => invocation.toolRef.canonicalId === jiraMutationToolId(name),
   );
   if (operation === undefined) return undefined;
   const contract = jiraOperationForTool(operation);

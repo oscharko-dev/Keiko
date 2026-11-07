@@ -1067,6 +1067,41 @@ function contractApproval(f: ReturnType<typeof fixture>): {
 }
 
 describe("persisted Jira operation approval contracts", () => {
+  it.each(["jira.create-project", "jira.update-project"] as const)(
+    "binds a hyphenated project operation to its normalized call alias: %s",
+    (operation) => {
+      const f = fixture();
+      const projectCall = {
+        id: "project-call",
+        name: operation.replace(/[.-]/gu, "_"),
+        arguments: { projectIdOrKey: "SYN", name: "Updated" },
+      };
+      const operationBinding = jiraOperationBindingForTool(operation);
+      if (operationBinding === undefined) throw new TypeError("Missing project contract");
+      const view = {
+        ...approval(f),
+        operation,
+        invocationId: sha256Hex(canonicalise({ messageId: f.id, callId: projectCall.id })),
+        actionDigest: jiraOperationActionDigest(
+          operation,
+          sha256Hex(canonicalise(projectCall.arguments)),
+          operationBinding,
+        ),
+      };
+      f.store.updateChatToolTranscript(
+        f.id,
+        { kind: "started", call: projectCall, operationBinding },
+        "project-alias",
+      );
+      f.store.updateChatToolTranscript(
+        f.id,
+        { kind: "write-approval", callId: projectCall.id, approval: view },
+        "project-alias",
+      );
+      expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.approval).toEqual(view);
+    },
+  );
+
   it("pins the prepared source before approval and keeps it private across history reads", () => {
     const f = fixture();
     const bound = contractApproval(f);
