@@ -161,8 +161,31 @@ describe("reviewed native attachment deletion", () => {
       (_, index) => ({ ...FILE, id: String(index + 1) }),
     );
     const request = fixture({ before: { ...ISSUE, fields: { attachment } } });
-    expect(await remove(request)).toMatchObject({ ok: false });
+    expect(await remove(request)).toEqual({ ok: false, reason: "bounds-exceeded" });
     expect(request).toHaveBeenCalledTimes(1);
+  });
+  it("retains the acknowledged receipt with a bounds refusal for an oversized confirmation list", async () => {
+    const attachment = Array.from(
+      { length: TOOL_CATALOG_LIMITS.maxArrayItems + 1 },
+      (_, index) => ({ ...OTHER, id: String(index + 1) }),
+    );
+    const request = fixture({ after: { ...ISSUE, fields: { attachment } } });
+    expect(await remove(request)).toEqual({
+      ok: false,
+      reason: "bounds-exceeded",
+      receipt: RECEIPT,
+    });
+    expect(request.mock.calls.filter(([, method]) => method === "DELETE")).toHaveLength(1);
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+  it("retains structural-malformation classification after acknowledgement", async () => {
+    const request = fixture({ after: { ...ISSUE, fields: { attachment: [OTHER, OTHER] } } });
+    expect(await remove(request)).toEqual({
+      ok: false,
+      reason: "malformed-payload",
+      receipt: RECEIPT,
+    });
+    expect(request.mock.calls.filter(([, method]) => method === "DELETE")).toHaveLength(1);
   });
   it.each([
     { ...FILE, id: "99" },

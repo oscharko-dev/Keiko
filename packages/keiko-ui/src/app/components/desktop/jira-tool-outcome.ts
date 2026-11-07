@@ -37,6 +37,10 @@ import {
 import { jiraMutationUnchanged } from "./jira-tool-presentation";
 import { JIRA_DIRECTORY_TOOLS, jiraDirectoryDetails } from "./jira-directory-presentation";
 import { JIRA_ACCESS_TOOLS, jiraAccessDetails } from "./jira-access-presentation";
+import {
+  JIRA_PROJECT_ASSOCIATION_TOOLS,
+  jiraProjectAssociationDetails,
+} from "./jira-project-association-presentation";
 
 export interface JiraOutcomeItem {
   readonly key?: string;
@@ -91,6 +95,7 @@ const STANDALONE_TOOLS = new Set([
   ...JIRA_ADMINISTRATION_TOOLS,
   ...JIRA_DIRECTORY_TOOLS,
   ...JIRA_ACCESS_TOOLS,
+  ...JIRA_PROJECT_ASSOCIATION_TOOLS,
 ]);
 const BOARD_READ_TOOLS = new Set(["jira_board", "jira_boards", "jira_board_configuration"]);
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -223,8 +228,15 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
     ? boardLink(source.boardBrowseUrl, source.originBoardId)
     : undefined;
 }
+function configurationDetails(tool: string, source: UnknownRecord): readonly JiraAgileDetails[] | undefined {
+  if (JIRA_ACCESS_TOOLS.has(tool)) return jiraAccessDetails(tool, source);
+  return JIRA_PROJECT_ASSOCIATION_TOOLS.has(tool)
+    ? jiraProjectAssociationDetails(tool, source)
+    : undefined;
+}
 function metadataDetails(tool: string, source: UnknownRecord): JiraAgileDetails | undefined {
-  if (JIRA_ACCESS_TOOLS.has(tool)) return jiraAccessDetails(tool, source)[0] ?? { facts: [], labels: [] };
+  const configuration = configurationDetails(tool, source);
+  if (configuration !== undefined) return configuration[0] ?? { facts: [], labels: [] };
   if (JIRA_DIRECTORY_TOOLS.has(tool)) return jiraDirectoryDetails(tool, source);
   if (JIRA_SAVED_VIEW_TOOLS.has(tool)) return jiraSavedViewDetails(tool, source);
   if (JIRA_FILE_METADATA_TOOLS.has(tool)) return jiraFileMetadataDetails(tool, source);
@@ -290,8 +302,9 @@ function outcomeItems(
   exchange: ChatToolExchange,
   data: UnknownRecord | undefined,
 ): JiraOutcomeItem[] {
-  if (JIRA_ACCESS_TOOLS.has(exchange.call.name))
-    return jiraAccessDetails(exchange.call.name, data ?? {}).flatMap((details) => {
+  const configuration = configurationDetails(exchange.call.name, data ?? {});
+  if (configuration !== undefined)
+    return configuration.flatMap((details) => {
       const item = metadataDetailsItem(details);
       return item === undefined ? [] : [item];
     });

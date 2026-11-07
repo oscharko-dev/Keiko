@@ -163,11 +163,13 @@
       "constraints": "One exact bounded native application-role key. Optional role/group/default and signed metric facts remain unknown when absent; hasUnlimitedSeats is separate observed metadata, selectedByDefault concerns user creation. No current-user role grant, account changes, inferred capacity or remote links.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-directory-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
         "packages/keiko-connectors/src/jira-directory-values.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-directory-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
@@ -181,11 +183,13 @@
       "constraints": "Validate bounded complete native role array before local pagination. Preserve optional groups/defaultGroups, native booleans and signed int32 metrics; negative metrics are not converted to zero or independently interpreted as unlimited. No role assignment, license/capacity inference or remote links.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-directory-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
         "packages/keiko-connectors/src/jira-directory-values.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-directory-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
@@ -751,11 +755,13 @@
       "constraints": "Exact group-name selector, native startAt/maxResults up to50 and optional inactive users. Native scope includes the group and subgroups; it is not direct-only membership. Preserve validated native envelope and optional total, project bounded user identities, never follow nextPage or change membership.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-directory-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
         "packages/keiko-connectors/src/jira-directory-values.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-directory-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
@@ -769,11 +775,13 @@
       "constraints": "Bounded native group query/maxResults picker; project group names and optional observed int32 total. No offset exists, so no invented continuation or silent result truncation. HTML/header/labels and undeclared exclusion/context selectors are omitted.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-directory-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
         "packages/keiko-connectors/src/jira-directory-values.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-directory-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
@@ -1028,6 +1036,25 @@
         "packages/keiko-server/src/atlassian/jiraAssetDescriptors.test.ts"
       ]
     },
+    "jira.project-issue-security-scheme": {
+      "identity": "GET /rest/api/2/project/{projectKeyOrId}/issuesecuritylevelscheme",
+      "effect": "read",
+      "permissionPolicy": "visible-security-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Independently read the selected project before its issue-security association. Reuse bounded scheme/default/level projection, retaining observed canonical project ID/key. Missing optional fields remain unknown; no assignment changes, remote links or invented access.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-associations.ts",
+        "packages/keiko-connectors/src/jira-managed-projects.ts",
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-associations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.project-notification-scheme": {
       "identity": "GET /rest/api/2/project/{projectKeyOrId}/notificationscheme",
       "effect": "read",
@@ -1047,6 +1074,25 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.project-permission-scheme": {
+      "identity": "GET /rest/api/2/project/{projectKeyOrId}/permissionscheme",
+      "effect": "read",
+      "permissionPolicy": "visible-permission-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Independently bind the selected canonical project, then read its permission scheme through the observed numeric project ID. Reuse exact scheme/grant projection and retain project context. No free expand selector, association changes, URL following or inferred current-user permission.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-associations.ts",
+        "packages/keiko-connectors/src/jira-managed-projects.ts",
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-associations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.project-permissions": {
       "identity": "GET /rest/api/2/mypermissions",
       "effect": "read",
@@ -1056,6 +1102,44 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-projects.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-projects.test.ts"]
     },
+    "jira.project-priority-scheme": {
+      "identity": "GET /rest/api/2/project/{projectKeyOrId}/priorityscheme",
+      "effect": "read",
+      "permissionPolicy": "current-project-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Read the current priority scheme after canonical project binding. Preserve precise scheme ID, name/description and optional native defaultScheme/defaultOptionId/unique optionIds. Omitted metadata remains unknown; no unsupported projectKeys expansion, remote self URL or inferred issue default.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-associations.ts",
+        "packages/keiko-connectors/src/jira-managed-projects.ts",
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-associations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.project-security-levels": {
+      "identity": "GET /rest/api/2/project/{projectKeyOrId}/securitylevel",
+      "effect": "read",
+      "permissionPolicy": "visible-security-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Bounded complete native levels wrapper is paginated locally after canonical project binding. levelsScope=accessible explicitly limits the returned count: an empty list can reflect missing Set Issue Security permission and never proves zero configured levels. No permission inference or association changes.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-associations.ts",
+        "packages/keiko-connectors/src/jira-managed-projects.ts",
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-associations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.project-type": {
       "identity": "GET /rest/api/2/project/type/{projectTypeKey}/accessible",
       "effect": "read",
@@ -1064,6 +1148,26 @@
       "constraints": "One native accessible project-type result; no template, board or workflow configuration discovery.",
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-projects.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-projects.test.ts"]
+    },
+    "jira.project-workflow-scheme": {
+      "identity": "GET /rest/api/2/project/{projectKeyOrId}/workflowscheme",
+      "effect": "read",
+      "permissionPolicy": "current-project-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Read the workflow association through the observed numeric project ID. Reuse existing workflow scheme projection, original/current mapping distinctions and local pagination. A returned draft is not accepted as the active association; unknown mapping collections remain unknown. No workflow publishing, migration or association update.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-associations.ts",
+        "packages/keiko-connectors/src/jira-managed-projects.ts",
+        "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-project-associations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAccessDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
     },
     "jira.projects": {
       "identity": "GET /rest/api/2/project",
@@ -1367,11 +1471,13 @@
       "constraints": "One native user selected by exactly one username or exact key, with optional includeDeleted. Native key/name are validated, username comparison preserves returned spelling, optional display/active/deleted fields stay unknown when absent. No email, avatar, group expansion, HTML or remote URL projection.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-user-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
         "packages/keiko-connectors/src/jira-directory-values.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-user-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
@@ -1400,11 +1506,13 @@
       "constraints": "One native streaming user page using an exact transient signed int64 cursor and bounded page size. Preserve native isLast/nextCursor; no total, numeric offset, stable cursor identity or remote nextPage following. A cursor page is returned whole or refused, never silently shortened.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-user-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
         "packages/keiko-connectors/src/jira-directory-values.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-user-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
@@ -1418,11 +1526,13 @@
       "constraints": "Bounded native query/maxResults picker with fixed showAvatar=false; documented user identity fields and optional native int32 total only. No invented offset/continuation, header/HTML/avatar/email projection or undeclared exclude selector.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-user-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
         "packages/keiko-connectors/src/jira-directory-values.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-user-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
@@ -1436,11 +1546,13 @@
       "constraints": "Native username/name search with declared active/inactive switches and offset window strictly within first100. Project bounded key/name/display/flags; no fabricated total or complete-directory claim. Existing offset result budgeting resumes at the first unreturned item.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-user-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
         "packages/keiko-connectors/src/jira-directory-values.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.ts"
       ],
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-user-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
@@ -1696,8 +1808,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "0c81c75c6d0f823f0ef6b255f2f991f05d2e3d979d57dceb1243a52bd48407b4",
-    "nativeOperationCount": 111
+    "sha256": "bc0aa1fa92331fde3a3d0e534559f562af7918deccd42dd6be2e8dcbc7fc4c1b",
+    "nativeOperationCount": 116
   },
   "operations": [
     {
@@ -10623,10 +10735,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-issue-security-scheme"]
     },
     {
       "identity": "GET /rest/api/2/project/{projectKeyOrId}/notificationscheme",
@@ -10687,10 +10799,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-permission-scheme"]
     },
     {
       "identity": "PUT /rest/api/2/project/{projectKeyOrId}/permissionscheme",
@@ -10751,10 +10863,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-priority-scheme"]
     },
     {
       "identity": "PUT /rest/api/2/project/{projectKeyOrId}/priorityscheme",
@@ -10847,10 +10959,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-security-levels"]
     },
     {
       "identity": "GET /rest/api/2/project/{projectKeyOrId}/workflowscheme",
@@ -10879,10 +10991,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-workflow-scheme"]
     },
     {
       "identity": "GET /rest/api/2/projectCategory",

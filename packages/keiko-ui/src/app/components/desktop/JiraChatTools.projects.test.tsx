@@ -53,6 +53,84 @@ function show(exchange: ChatToolExchange): ReturnType<typeof render> {
 
 afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
 
+describe.each(["en", "de"] as const)("saved Jira project configuration in %s", (locale) => {
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  it("restores five project-bound association cards with accessible-only levels and original mappings", async () => {
+    const context = { projectId: PROJECT_ID, projectKey: "SYN" };
+    const cases: readonly [string, CatalogJsonObject, string, string][] = [
+      ["jira_project_permission_scheme", { id: "37", name: "Project access", permissions: [] },
+        "Read Jira project permission scheme", "Berechtigungsschema eines Jira-Projekts lesen"],
+      ["jira_project_issue_security_scheme", { id: "38", name: "Project security" },
+        "Read Jira project issue security scheme", "Vorgangssicherheitsschema eines Jira-Projekts lesen"],
+      ["jira_project_security_levels", { levelsScope: "accessible", items: [], startAt: 0, total: 0 },
+        "Read accessible Jira project security levels", "Zugängliche Sicherheitsstufen eines Jira-Projekts lesen"],
+      ["jira_project_workflow_scheme", {
+        id: "48", schemeId: "48", name: "Project workflow", draft: false,
+        items: [{ issueTypeId: "10001", workflow: "Story live", originalWorkflow: "Story original" },
+          { issueTypeId: "10002", originalWorkflow: "Original only" }], startAt: 0, total: 2,
+      }, "Read Jira project workflow scheme", "Workflowschema eines Jira-Projekts lesen"],
+      ["jira_project_priority_scheme", {
+        id: "49", name: "Project priorities", defaultScheme: false, defaultOptionId: "3", optionIds: ["1", "3"],
+        self: "https://untrusted.invalid/priority", browseUrl: PROJECT_URL,
+      }, "Read Jira project priority scheme", "Prioritätsschema eines Jira-Projekts lesen"],
+    ];
+    const restored = JSON.parse(JSON.stringify({
+      schemaVersion: 1,
+      exchanges: cases.map(([operation, data], index) => ({
+        ...projectExchange({ outcome: "succeeded", ...context, ...data }, operation),
+        call: { id: `association-${String(index)}`, name: operation, arguments: {} },
+      })),
+    })) as ChatToolTranscript;
+    const renderReceipt = (): ReturnType<typeof render> => render(
+      <I18nProvider><JiraChatTools transcript={restored} turnState="completed" /></I18nProvider>,
+    );
+    const first = renderReceipt();
+    const before = first.container.textContent;
+    first.unmount();
+    const { container } = renderReceipt();
+    expect(container.textContent).toBe(before);
+    for (const [, , en, de] of cases) {
+      const card = screen.getByRole("group", { name: locale === "en" ? en : de });
+      expect(card).toBeVisible();
+      expect(card.textContent).toContain(PROJECT_ID);
+      expect(card.textContent).toContain("SYN");
+    }
+    expect(container.textContent).toContain(locale === "en"
+      ? "Accessible security levels: 0" : "Zugängliche Sicherheitsstufen: 0");
+    expect(container.textContent).not.toContain(locale === "en"
+      ? "Configured security levels: 0" : "Konfigurierte Sicherheitsstufen: 0");
+    expect(container.textContent).toContain(locale === "en"
+      ? "An empty result does not mean that no levels are configured"
+      : "Ein leeres Ergebnis bedeutet nicht, dass keine Stufen konfiguriert sind");
+    expect(container.textContent).toContain("Original only");
+    expect(container.textContent).toContain(locale === "en"
+      ? "The current mapping was not supplied; the original mapping is shown separately."
+      : "Die aktuelle Zuordnung wurde nicht geliefert; die ursprüngliche Zuordnung wird separat angezeigt.");
+    expect(container.textContent).toContain(locale === "en"
+      ? "Configured default priority ID: 3" : "Konfigurierte Standardprioritäts-ID: 3");
+    expect(container.textContent).toContain(locale === "en"
+      ? "This is not the default priority scheme." : "Dies ist nicht das Standardprioritätsschema.");
+    expect(container.querySelector("pre, img, a")).toBeNull();
+    expect(container.textContent).not.toContain("untrusted.invalid");
+    expect(await axe(container)).toHaveNoViolations();
+  });
+  it("restores an unknown priority configuration without a false default or zero count", () => {
+    const { container } = show(projectExchange({
+      outcome: "succeeded", projectId: PROJECT_ID, projectKey: "SYN", id: "49", name: "Unknown priorities",
+    }, "jira_project_priority_scheme"));
+    expect(container.textContent).toContain(locale === "en"
+      ? "Configured priority options were not provided."
+      : "Konfigurierte Prioritätsoptionen wurden nicht bereitgestellt.");
+    expect(container.textContent).not.toContain(locale === "en"
+      ? "Configured priority count: 0" : "Anzahl konfigurierter Prioritäten: 0");
+    expect(container.textContent).not.toContain(locale === "en"
+      ? "This is not the default priority scheme." : "Dies ist nicht das Standardprioritätsschema.");
+  });
+});
+
 describe.each(["en", "de"] as const)("saved Jira access configuration in %s", (locale) => {
   beforeEach(async () => {
     await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);

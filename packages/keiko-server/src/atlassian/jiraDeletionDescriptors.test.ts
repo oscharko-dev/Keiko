@@ -11,6 +11,13 @@ const WORKLOG = {
   issueKey: "APP-1", worklogId: "8", timeSpentSeconds: 3600,
   started: "2026-11-07T09:00:00.000Z", comment: "", visibility: null,
 } as const;
+const WORKLOG_WITHOUT_VISIBILITY = {
+  issueKey: WORKLOG.issueKey,
+  worklogId: WORKLOG.worklogId,
+  timeSpentSeconds: WORKLOG.timeSpentSeconds,
+  started: WORKLOG.started,
+  comment: WORKLOG.comment,
+};
 it.each([
   ["jira.delete-comment", { issueKey: "APP-1", commentId: "7", expectedBody: "Reviewed" }, { commentId: "7" }],
   ["jira.delete-attachment", { issueKey: "APP-1", attachmentId: "9", filename: "scope.txt", size: 20 }, { attachmentId: "9" }],
@@ -25,15 +32,17 @@ it.each([
     outcome: "succeeded", issueKey: "APP-1", issueId: "10001", ...identity,
   })).toBeUndefined();
   const connection = vi.fn();
-  expect(createJiraProviderForCatalog(connection, [name]).tools()).toHaveLength(1);
+  const executeMutation = vi.fn();
+  expect(createJiraProviderForCatalog(connection, [name], executeMutation).tools()).toHaveLength(1);
   expect(connection).not.toHaveBeenCalled();
+  expect(executeMutation).not.toHaveBeenCalled();
 });
 it.each([
   ["jira.delete-comment", { issueKey: "APP-1", commentId: "7" }],
   ["jira.delete-comment", { issueKey: "APP-1", commentId: "7", expectedBody: "", expectedVisibility: null }],
   ["jira.delete-attachment", { issueKey: "APP-1", attachmentId: "9", filename: "scope.txt", size: -1 }],
   ["jira.delete-attachment", { issueKey: "APP-1", attachmentId: "9", filename: "", size: 0 }],
-  ["jira.delete-worklog", { ...WORKLOG, visibility: undefined }],
+  ["jira.delete-worklog", WORKLOG_WITHOUT_VISIBILITY],
   ["jira.delete-worklog", { ...WORKLOG, started: "2026-11-07" }],
   ["jira.delete-worklog", { ...WORKLOG, adjustEstimate: "auto" }],
 ] as const)("refuses incomplete or unreviewed %s input before dispatch", (name, args) => {

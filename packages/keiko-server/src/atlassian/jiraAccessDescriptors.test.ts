@@ -8,7 +8,13 @@ const PERMISSION = { id: "14", name: "Synthetic permissions", permissions: [GRAN
 const LEVEL = { id: "31", name: "Synthetic level", description: "" };
 const SECURITY = { id: "24", name: "Synthetic security", levels: [LEVEL], defaultSecurityLevelId: "31" };
 const NOTIFICATION = { id: "44", name: "Synthetic notification", eventsAvailable: false };
+const PROJECT = { projectId: "7", projectKey: "SYN" };
 it.each([
+  ["jira.project-permission-scheme", { projectIdOrKey: "SYN" }, { ...PROJECT, ...PERMISSION }],
+  ["jira.project-issue-security-scheme", { projectIdOrKey: "7" }, { ...PROJECT, ...SECURITY }],
+  ["jira.project-security-levels", { projectIdOrKey: "SYN", maxResults: 10 }, { ...PROJECT, levelsScope: "accessible", items: [], startAt: 0, total: 0 }],
+  ["jira.project-workflow-scheme", { projectIdOrKey: "SYN" }, { ...PROJECT, schemeId: "51", id: "51", draft: false, items: [{ issueTypeId: "4", originalWorkflow: "Prior workflow" }], startAt: 0, total: 1 }],
+  ["jira.project-priority-scheme", { projectIdOrKey: "SYN" }, { ...PROJECT, id: "52", name: "Synthetic priorities", defaultScheme: false, defaultOptionId: "2", optionIds: [] }],
   ["jira.permission-schemes", { includePermissions: true }, { items: [PERMISSION], startAt: 0, total: 1 }],
   ["jira.permission-scheme", { schemeId: "14" }, PERMISSION],
   ["jira.permission-grants", { schemeId: "14" }, { schemeId: "14", items: [GRANT], startAt: 0, total: 1 }],
@@ -30,6 +36,11 @@ it.each([
   expect(connection).not.toHaveBeenCalled();
 });
 it.each([
+  ["jira.project-permission-scheme", { projectIdOrKey: "SYN", expand: "all" }],
+  ["jira.project-issue-security-scheme", { projectIdOrKey: "SYN", maxResults: 10 }],
+  ["jira.project-security-levels", { projectIdOrKey: "../SYN" }],
+  ["jira.project-workflow-scheme", { projectIdOrKey: "SYN", returnDraftIfExists: true }],
+  ["jira.project-priority-scheme", { projectIdOrKey: "SYN", projectId: "7" }],
   ["jira.permission-schemes", { expand: "all" }],
   ["jira.permission-scheme", { schemeId: "14", includePermissions: "true" }],
   ["jira.permission-grants", { schemeId: "14", maxResults: 101 }],
@@ -65,6 +76,9 @@ it("keeps deep native event provenance within the existing closed schema budget"
   expect(describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, tooDeep)).toBeDefined();
 });
 it.each([
+  ["jira.project-security-levels", { ...PROJECT, levelsScope: "configured", items: [], startAt: 0, total: 0 }],
+  ["jira.project-workflow-scheme", { ...PROJECT, schemeId: "51", id: "51", draft: true }],
+  ["jira.project-priority-scheme", { ...PROJECT, id: "52", name: "Synthetic priorities", defaultOptionId: 2 }],
   ["jira.permission-grant", { ...GRANT, schemeId: "14", holder: { type: "group", emailAddress: "synthetic@example.invalid" } }],
   ["jira.issue-security-scheme", { ...SECURITY, self: "https://synthetic.invalid/security" }],
   ["jira.notification-scheme", { eventsRequested: true, items: [{ ...NOTIFICATION, eventsAvailable: true, events: [{ id: "50", notifications: [{ id: "81", notificationType: "UnreviewedPluginType" }] }] }] }],

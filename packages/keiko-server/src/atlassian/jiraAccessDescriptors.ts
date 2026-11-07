@@ -4,6 +4,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { object, text } from "./jiraManagedSchemas.js";
+import { JIRA_WORKFLOW_SCHEME_RESULT_FIELDS } from "./jiraAdministrationDescriptors.js";
 import {
   jiraNativeIdentitySchema as ID,
   jiraNativeProjectSchema as KEY,
@@ -31,10 +32,18 @@ const PERMISSION_FIELDS = { ...NAMED_FIELDS, permissions: array(GRANT) };
 const SECURITY_FIELDS = { ...NAMED_FIELDS, defaultSecurityLevelId: ID, levels: array(LEVEL) };
 function localPage(item: CatalogJsonObject): CatalogJsonObject {
   return {
-    items: array(item, 100), startAt: PAGING.startAt,
-    total: { type: "integer", minimum: 0, maximum: MAX }, nextStartAt: PAGING.startAt,
+    items: array(item, 100),
+    startAt: PAGING.startAt,
+    total: { type: "integer", minimum: 0, maximum: MAX },
+    nextStartAt: PAGING.startAt,
   };
-function read(description: string, input: CatalogJsonObject, result: CatalogJsonObject, maxResultCount = 100): JiraNativeDefinition {
+}
+function read(
+  description: string,
+  input: CatalogJsonObject,
+  result: CatalogJsonObject,
+  maxResultCount = 100,
+): JiraNativeDefinition {
   return { description, input, result: jiraNativeReadResult(result), risk: "read", maxResultCount };
 }
 
@@ -76,8 +85,37 @@ const NOTIFICATION_SINGLE = {
 };
 const INCLUDE_EVENTS = { includeEvents: BOOL };
 const INCLUDE_PERMISSIONS = { includePermissions: BOOL };
+const PROJECT_CONTEXT = { projectId: ID, projectKey: KEY };
 
 export const JIRA_ACCESS_READ_DEFINITIONS = {
+  "jira.project-permission-scheme": read(
+    "Resolve an existing project's canonical identity and inspect its associated permission scheme. Return only observed native scheme/grant facts, not effective actor permissions. No expansion selector, grant mutation or association change is offered.",
+    object({ projectIdOrKey: KEY }, ["projectIdOrKey"]),
+    { ...PROJECT_CONTEXT, ...PERMISSION_FIELDS },
+    1,
+  ),
+  "jira.project-issue-security-scheme": read(
+    "Resolve an existing project's canonical identity and inspect its associated issue-security scheme. Preserve an observed default level and supplied level metadata; missing data remains unknown. This does not assign a level or establish access to any issue.",
+    object({ projectIdOrKey: KEY }, ["projectIdOrKey"]),
+    { ...PROJECT_CONTEXT, ...SECURITY_FIELDS },
+    1,
+  ),
+  "jira.project-security-levels": read(
+    "Resolve an existing project's identity and locally page security levels accessible to the current Jira actor. The accessible scope is explicit: an empty list can also reflect missing Set Issue Security permission and never proves that no levels are configured. No visibility changes.",
+    object({ projectIdOrKey: KEY, ...PAGING }, ["projectIdOrKey"]),
+    { ...PROJECT_CONTEXT, levelsScope: { type: "string", enum: ["accessible"] }, ...localPage(LEVEL) },
+  ),
+  "jira.project-workflow-scheme": read(
+    "Resolve an existing project's canonical identity and inspect its associated active workflow scheme. Locally page observed current/original issue-type mappings; absent mappings remain unknown. A draft response is refused rather than presented as the active association. No migration, draft creation or association changes.",
+    object({ projectIdOrKey: KEY, ...PAGING }, ["projectIdOrKey"]),
+    { ...PROJECT_CONTEXT, ...JIRA_WORKFLOW_SCHEME_RESULT_FIELDS, draft: { type: "boolean", enum: [false] } },
+  ),
+  "jira.project-priority-scheme": read(
+    "Resolve an existing project's canonical identity and inspect its associated native priority scheme. Preserve only supplied default-scheme state, default priority ID and priority membership IDs. Missing optional metadata is unknown; no priorities or project associations change.",
+    object({ projectIdOrKey: KEY }, ["projectIdOrKey"]),
+    { ...PROJECT_CONTEXT, ...NAMED_FIELDS, defaultScheme: BOOL, defaultOptionId: ID, optionIds: array(ID) },
+    1,
+  ),
   "jira.permission-schemes": read(
     "Inspect visible native permission schemes and locally page the bounded collection. includePermissions requests only the documented permissions expansion. Optional grants remain unknown when not supplied; configuration is not an effective-permission decision and grants no authority.",
     object({ ...PAGING, ...INCLUDE_PERMISSIONS }),

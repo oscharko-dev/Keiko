@@ -148,13 +148,16 @@ function schemeMappings(raw: Record<string, unknown>): readonly CatalogJsonObjec
 function schemeIdentityMatches(
   raw: Record<string, unknown>,
   id: string,
-  selected: Selection,
+  selected: Pick<Selection, "draft" | "returnDraft" | "schemeId">,
 ): boolean {
   if (selected.draft) return raw.draft !== false;
   if (raw.draft === true) return selected.returnDraft;
   return id === selected.schemeId;
 }
-function schemeResult(raw: Record<string, unknown>, selected: Selection): ManagedMcpToolResult {
+export function jiraWorkflowSchemeResult(
+  raw: Record<string, unknown>,
+  selected: Pick<Selection, "draft" | "returnDraft" | "schemeId" | "startAt" | "maxResults">,
+): ManagedMcpToolResult {
   const id = nativeId(raw.id);
   const text = optionalText(raw, {
     name: 255,
@@ -256,7 +259,7 @@ function projectResponse(
       ? jiraReadFailure("malformed-payload")
       : workflowsResult(response.items, selected);
   if (response.body === undefined) return jiraReadFailure("malformed-payload");
-  if (selected.kind === "scheme") return schemeResult(response.body, selected);
+  if (selected.kind === "scheme") return jiraWorkflowSchemeResult(response.body, selected);
   return selected.kind === "workflows"
     ? workflowsResult([response.body], selected)
     : scalarResult(response.body, selected);

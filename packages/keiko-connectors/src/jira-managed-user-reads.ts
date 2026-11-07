@@ -10,6 +10,7 @@ import {
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import { executeJiraSelectedRead, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeText } from "./jira-native-values.js";
 import { jiraReadbackValueMatches } from "./jira-readback-values.js";
 
@@ -146,25 +147,11 @@ function picker(body: Record<string, unknown>, selected: Selection): ManagedMcpT
     },
   });
 }
-export function isJiraUserRead(name: string): name is UserRead {
-  return READS.has(name);
-}
-/** Public Data Center directory operations; no email, HTML, avatar or remote-link projection. */
-export async function executeJiraUserRead(
+function projectResponse(
   name: UserRead,
-  args: CatalogJsonObject,
-  request: JiraMutationRequest,
-): Promise<ManagedMcpToolResult> {
-  const selected = selection(name, args);
-  if (selected === undefined) return jiraReadFailure("invalid-input");
-  const response = await request(
-    selected.path,
-    "GET",
-    undefined,
-    name === "jira.users" ? "json-array" : "json",
-  );
-  if (!response.ok) return jiraReadFailure(response.reason, response.remote);
-  if (response.status !== 200) return jiraReadFailure("malformed-payload");
+  response: JiraReadResponse,
+  selected: Selection,
+): ManagedMcpToolResult {
   if (name === "jira.users") {
     const items = jiraDirectoryUsers(response.items, selected.maxResults);
     if (items === undefined) return jiraReadFailure("malformed-payload");
@@ -184,4 +171,20 @@ export async function executeJiraUserRead(
   return name === "jira.user-directory"
     ? directory(response.body, selected)
     : picker(response.body, selected);
+}
+export function isJiraUserRead(name: string): name is UserRead {
+  return READS.has(name);
+}
+/** Public Data Center directory operations; no email, HTML, avatar or remote-link projection. */
+export function executeJiraUserRead(
+  name: UserRead,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+): Promise<ManagedMcpToolResult> {
+  return executeJiraSelectedRead(
+    selection(name, args),
+    request,
+    name === "jira.users" ? "json-array" : "json",
+    (response, selected) => projectResponse(name, response, selected),
+  );
 }

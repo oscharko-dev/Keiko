@@ -16,23 +16,30 @@ const BUILDER_FORMS = {
 // These are parsed as syntax only. Keep the reviewed helper semantics closed: no execution,
 // identifier substitution, arbitrary callbacks, or imported runtime declarations are accepted.
 const GROUP_BUILDERS = `
-function reads<const T extends Readonly<Record<string, string>>>(
+function reads<const K extends NativeTool>(
   permissionPolicy: JiraPermissionPolicy,
-  paths: T & Record<Exclude<keyof T, NativeTool>, never>,
+  paths: Readonly<Record<K, string>>,
   root: JiraApiRoot = "/rest/api/2",
-): NativeGroup<T> {
-  return Object.fromEntries(
-    Object.entries(paths).map(([tool, path]) => [tool, ["GET", "read", path, permissionPolicy, root]]),
-  ) as NativeGroup<T>;
+): NativeGroup<K> {
+  const result: Partial<Record<K, NativeSpecification>> = {};
+  for (const tool in paths) {
+    if (Object.hasOwn(paths, tool))
+      result[tool] = ["GET", "read", paths[tool], permissionPolicy, root];
+  }
+  return result as NativeGroup<K>;
 }
-function writes<const T extends Readonly<Record<string, readonly ["POST" | "PUT" | "DELETE", string]>>>(
+function writes<const K extends NativeTool>(
   permissionPolicy: JiraPermissionPolicy,
-  paths: T & Record<Exclude<keyof T, NativeTool>, never>,
+  paths: Readonly<Record<K, readonly ["POST" | "PUT" | "DELETE", string]>>,
   root: JiraApiRoot = "/rest/api/2",
-): NativeGroup<T> {
-  return Object.fromEntries(
-    Object.entries(paths).map(([tool, [method, path]]) => [tool, [method, "write", path, permissionPolicy, root]]),
-  ) as NativeGroup<T>;
+): NativeGroup<K> {
+  const result: Partial<Record<K, NativeSpecification>> = {};
+  for (const tool in paths) {
+    if (!Object.hasOwn(paths, tool)) continue;
+    const [method, path] = paths[tool];
+    result[tool] = [method, "write", path, permissionPolicy, root];
+  }
+  return result as NativeGroup<K>;
 }`;
 const GROUP_NAMES = new Set(["reads", "writes"]);
 

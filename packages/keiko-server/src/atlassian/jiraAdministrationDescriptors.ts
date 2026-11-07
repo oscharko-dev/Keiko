@@ -56,7 +56,7 @@ function page(item: CatalogJsonObject): CatalogJsonObject {
     nextStartAt: PAGING.startAt,
   };
 }
-const SCHEME_RESULT = jiraNativeReadResult({
+export const JIRA_WORKFLOW_SCHEME_RESULT_FIELDS = {
   schemeId: ID,
   id: ID,
   name: NAME,
@@ -66,7 +66,8 @@ const SCHEME_RESULT = jiraNativeReadResult({
   originalDefaultWorkflow: NAME,
   lastModified: text(128),
   ...page(SCHEME_MAPPING),
-});
+};
+const SCHEME_RESULT = jiraNativeReadResult(JIRA_WORKFLOW_SCHEME_RESULT_FIELDS);
 const DEFAULT_RESULT = jiraNativeReadResult({ schemeId: ID, workflow: NAME });
 const ISSUE_MAPPING_RESULT = jiraNativeReadResult({
   schemeId: ID,

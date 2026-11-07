@@ -11,6 +11,7 @@ import { executeJiraUserRead, isJiraUserRead } from "./jira-managed-user-reads.j
 import { executeJiraDirectoryRead, isJiraDirectoryRead } from "./jira-managed-directory-reads.js";
 import { executeJiraAccessSchemeRead, isJiraAccessSchemeRead } from "./jira-managed-access-schemes.js";
 import { executeJiraNotificationSchemeRead, isJiraNotificationSchemeRead } from "./jira-managed-notification-schemes.js";
+import { executeJiraProjectAssociationRead, isJiraProjectAssociationRead } from "./jira-managed-project-associations.js";
 import {
   executeJiraParticipationRead,
   isJiraParticipationRead,
@@ -345,7 +346,8 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraUserRead>[0]
   | Parameters<typeof executeJiraDirectoryRead>[0]
   | Parameters<typeof executeJiraAccessSchemeRead>[0]
-  | Parameters<typeof executeJiraNotificationSchemeRead>[0];
+  | Parameters<typeof executeJiraNotificationSchemeRead>[0]
+  | Parameters<typeof executeJiraProjectAssociationRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return [
     isJiraIssueDetailRead,
@@ -361,6 +363,7 @@ function isNativeDetailRead(name: string): name is NativeDetailRead {
     isJiraDirectoryRead,
     isJiraAccessSchemeRead,
     isJiraNotificationSchemeRead,
+    isJiraProjectAssociationRead,
   ].some((accepts) => accepts(name));
 }
 function administrationRead(
@@ -375,6 +378,7 @@ function administrationRead(
   if (isJiraDirectoryRead(name)) return executeJiraDirectoryRead(name, args, request);
   if (isJiraAccessSchemeRead(name)) return executeJiraAccessSchemeRead(name, args, request);
   if (isJiraNotificationSchemeRead(name)) return executeJiraNotificationSchemeRead(name, args, request);
+  if (isJiraProjectAssociationRead(name)) return executeJiraProjectAssociationRead(name, args, request);
   return undefined;
 }
 function linkedIssueDetailRead(

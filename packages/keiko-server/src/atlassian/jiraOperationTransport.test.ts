@@ -33,6 +33,36 @@ const CREATE = {
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
   {
+    tool: "jira.project-permission-scheme",
+    args: { projectIdOrKey: "SYN" },
+    parameters: { projectKeyOrId: "10000" },
+    primaryMethodIndex: 1,
+  },
+  {
+    tool: "jira.project-issue-security-scheme",
+    args: { projectIdOrKey: "SYN" },
+    parameters: { projectKeyOrId: "10000" },
+    primaryMethodIndex: 1,
+  },
+  {
+    tool: "jira.project-security-levels",
+    args: { projectIdOrKey: "SYN", startAt: 0, maxResults: 1 },
+    parameters: { projectKeyOrId: "10000" },
+    primaryMethodIndex: 1,
+  },
+  {
+    tool: "jira.project-workflow-scheme",
+    args: { projectIdOrKey: "SYN", startAt: 0, maxResults: 1 },
+    parameters: { projectKeyOrId: "10000" },
+    primaryMethodIndex: 1,
+  },
+  {
+    tool: "jira.project-priority-scheme",
+    args: { projectIdOrKey: "SYN" },
+    parameters: { projectKeyOrId: "10000" },
+    primaryMethodIndex: 1,
+  },
+  {
     tool: "jira.permission-schemes",
     args: { startAt: 0, maxResults: 1, includePermissions: true },
     query: { expand: "permissions" },
@@ -732,6 +762,18 @@ function accessRead(path: string): AtlassianHttpBodyResult | undefined {
     notificationscheme: { startAt: 0, maxResults: 1, total: 2, isLast: false, values: [notificationScheme] },
     "notificationscheme/47": notificationScheme,
     "project/10000/notificationscheme": notificationScheme,
+    "project/10000/permissionscheme": permissionScheme,
+    "project/10000/issuesecuritylevelscheme": securityScheme,
+    "project/10000/securitylevel": { levels: [level] },
+    "project/10000/workflowscheme": {
+      id: 48, name: "Project workflow", draft: false, defaultWorkflow: "Default workflow",
+      issueTypeMappings: { "10001": "Story workflow", "10002": "Task workflow" },
+      originalIssueTypeMappings: { "10001": "Original story workflow" },
+    },
+    "project/10000/priorityscheme": {
+      id: 49, name: "Project priorities", defaultScheme: false,
+      defaultOptionId: "3", optionIds: ["1", "3"],
+    },
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
@@ -884,7 +926,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(93);
+    expect(native).toHaveLength(98);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

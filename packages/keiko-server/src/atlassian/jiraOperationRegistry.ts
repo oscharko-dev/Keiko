@@ -119,33 +119,43 @@ type NativeSpecification = readonly [
   JiraPermissionPolicy,
   JiraApiRoot?,
 ];
-type NativeGroup<T> = { readonly [K in keyof T]: NativeSpecification };
-function reads<const T extends Readonly<Record<string, string>>>(
+type NativeGroup<K extends NativeTool> = Readonly<Record<K, NativeSpecification>>;
+function reads<const K extends NativeTool>(
   permissionPolicy: JiraPermissionPolicy,
-  paths: T & Record<Exclude<keyof T, NativeTool>, never>,
+  paths: Readonly<Record<K, string>>,
   root: JiraApiRoot = "/rest/api/2",
-): NativeGroup<T> {
-  return Object.fromEntries(
-    Object.entries(paths).map(([tool, path]) => [tool, ["GET", "read", path, permissionPolicy, root]]),
-  ) as NativeGroup<T>;
+): NativeGroup<K> {
+  const result: Partial<Record<K, NativeSpecification>> = {};
+  for (const tool in paths) {
+    if (Object.hasOwn(paths, tool))
+      result[tool] = ["GET", "read", paths[tool], permissionPolicy, root];
+  }
+  return result as NativeGroup<K>;
 }
-function writes<const T extends Readonly<Record<string, readonly ["POST" | "PUT" | "DELETE", string]>>>(
+function writes<const K extends NativeTool>(
   permissionPolicy: JiraPermissionPolicy,
-  paths: T & Record<Exclude<keyof T, NativeTool>, never>,
+  paths: Readonly<Record<K, readonly ["POST" | "PUT" | "DELETE", string]>>,
   root: JiraApiRoot = "/rest/api/2",
-): NativeGroup<T> {
-  return Object.fromEntries(
-    Object.entries(paths).map(([tool, [method, path]]) => [tool, [method, "write", path, permissionPolicy, root]]),
-  ) as NativeGroup<T>;
+): NativeGroup<K> {
+  const result: Partial<Record<K, NativeSpecification>> = {};
+  for (const tool in paths) {
+    if (!Object.hasOwn(paths, tool)) continue;
+    const [method, path] = paths[tool];
+    result[tool] = [method, "write", path, permissionPolicy, root];
+  }
+  return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   ...reads("visible-permission-configuration", {
+    "jira.project-permission-scheme": "/project/{projectKeyOrId}/permissionscheme",
     "jira.permission-schemes": "/permissionscheme",
     "jira.permission-scheme": "/permissionscheme/{schemeId}",
     "jira.permission-grants": "/permissionscheme/{schemeId}/permission",
     "jira.permission-grant": "/permissionscheme/{schemeId}/permission/{permissionId}",
   }),
   ...reads("visible-security-configuration", {
+    "jira.project-issue-security-scheme": "/project/{projectKeyOrId}/issuesecuritylevelscheme",
+    "jira.project-security-levels": "/project/{projectKeyOrId}/securitylevel",
     "jira.issue-security-schemes": "/issuesecurityschemes",
     "jira.issue-security-scheme": "/issuesecurityschemes/{id}",
     "jira.security-level": "/securitylevel/{id}",
@@ -245,7 +255,11 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   }, "/rest/agile/1.0"),
   ...reads("visible-filters", { "jira.filter": "/filter/{id}", "jira.favourite-filters": "/filter/favourite" }),
   ...reads("visible-projects", { "jira.projects": "/project" }),
-  ...reads("current-project-metadata", { "jira.project": "/project/{projectIdOrKey}" }),
+  ...reads("current-project-metadata", {
+    "jira.project": "/project/{projectIdOrKey}",
+    "jira.project-workflow-scheme": "/project/{projectKeyOrId}/workflowscheme",
+    "jira.project-priority-scheme": "/project/{projectKeyOrId}/priorityscheme",
+  }),
   ...reads("native-project-key-validation", { "jira.validate-project-key": "/projectvalidate/key" }),
   ...reads("explicit-project-permissions", { "jira.project-permissions": "/mypermissions" }),
   ...reads("accessible-project-type", { "jira.project-type": "/project/type/{projectTypeKey}/accessible" }),

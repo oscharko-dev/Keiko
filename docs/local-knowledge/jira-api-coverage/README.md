@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **111 native identities: 82 reads and 29 writes**. Each is mapped to
+The current registry supplies **116 native identities: 87 reads and 29 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **328 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **323 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -135,7 +135,8 @@ filter reads; versions/components; existing issue workflows; the C7 dashboard/fi
 the C6 comment-update/link/worklog read increment; bounded C8 attachment/archive and avatar metadata;
 worklog create/update with connected-user watching/voting; fourteen C9 workflow-/issue-type-scheme
 and screen reads; three reviewed comment/attachment/worklog deletions; and eight C10 user, group and
-application-role reads; and ten permission/security/notification configuration reads. The three existing
+application-role reads; ten permission/security/notification configuration reads; and five additional
+project scheme/accessible-security associations. The three existing
 report/draft composites remain compositions, not extra native API identities. Remaining filter
 creation, ranking, other estimate-adjustment modes and destructive operations, administration and
 other inventory gaps stay open. A registered declaration is not evidence that
@@ -173,6 +174,12 @@ wrappers use bounded local pagination; notification lists retain their native ma
 Optional configuration and recipient collections retain unknown versus empty states. Configured
 notification email recipients may be shown through existing user-facing content policy; no recipient
 body enters audit logs, and observing configuration never grants authority or proves delivery.
+
+Five additional project association reads bind an independently observed canonical project before
+reading permission, issue-security, accessible-security-level, workflow and priority configuration.
+They reuse existing DTO/mapping projections. Accessible security-level totals describe only the
+current user's visible result; an empty list may reflect missing Set Issue Security permission and
+never proves that no security levels are configured. No association is changed.
 
 `currentRegistry` pins the existing server registry source file's SHA-256 and native declaration
 count. The reconciliation helper parses that file's literal `NATIVE` declarations and verified closed

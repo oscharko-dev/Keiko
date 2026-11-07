@@ -29,6 +29,7 @@ interface Bound {
   readonly attachments: ReadonlyMap<string, Attachment>;
 }
 const MALFORMED: Failure = { ok: false, reason: "malformed-payload" };
+const BOUNDS: Failure = { ok: false, reason: "bounds-exceeded" };
 const CONFLICT: Failure = { ok: false, reason: "conflict" };
 const ALLOWED = new Set(["issueKey", "attachmentId", "filename", "size"]);
 export function isJiraAttachmentMutation(name: string): name is "jira.delete-attachment" {
@@ -43,9 +44,7 @@ function input(args: CatalogJsonObject): Input | undefined {
     ? { issueKey: args.issueKey, attachmentId: args.attachmentId, ...record }
     : undefined;
 }
-function attachmentList(value: unknown): ReadonlyMap<string, Attachment> | undefined {
-  const items = asArray(value);
-  if (items === undefined || items.length > TOOL_CATALOG_LIMITS.maxArrayItems) return undefined;
+function attachmentList(items: readonly unknown[]): ReadonlyMap<string, Attachment> | undefined {
   const result = new Map<string, Attachment>();
   for (const item of items) {
     const raw = asRecord(item);
@@ -62,7 +61,10 @@ async function readIssue(
   const issue = await readJiraMutationIssue(request, issueKey, ["attachment"]);
   if (!issue.ok) return issue;
   if (!jiraNativeId(issue.id) || !isSafeAtlassianIdentifier(issue.key)) return MALFORMED;
-  const attachments = attachmentList(issue.fields.attachment);
+  const items = asArray(issue.fields.attachment);
+  if (items === undefined) return MALFORMED;
+  if (items.length > TOOL_CATALOG_LIMITS.maxArrayItems) return BOUNDS;
+  const attachments = attachmentList(items);
   return attachments === undefined
     ? MALFORMED
     : { ok: true, bound: { issueKey: issue.key, issueId: issue.id, attachments } };

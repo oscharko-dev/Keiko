@@ -19,6 +19,7 @@ import {
   remoteJiraPage,
 } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import { executeJiraSelectedRead, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeText } from "./jira-native-values.js";
 
 export const JIRA_DIRECTORY_READS = [
@@ -154,25 +155,11 @@ function groups(body: Record<string, unknown>, selected: Selection): ManagedMcpT
     },
   });
 }
-export function isJiraDirectoryRead(name: string): name is DirectoryRead {
-  return READS.has(name);
-}
-/** Group visibility and application-role facts do not grant authority or imply available seats. */
-export async function executeJiraDirectoryRead(
+function projectResponse(
   name: DirectoryRead,
-  args: CatalogJsonObject,
-  request: JiraMutationRequest,
-): Promise<ManagedMcpToolResult> {
-  const selected = selection(name, args);
-  if (selected === undefined) return jiraReadFailure("invalid-input");
-  const response = await request(
-    selected.path,
-    "GET",
-    undefined,
-    name === "jira.application-roles" ? "json-array" : "json",
-  );
-  if (!response.ok) return jiraReadFailure(response.reason, response.remote);
-  if (response.status !== 200) return jiraReadFailure("malformed-payload");
+  response: JiraReadResponse,
+  selected: Selection,
+): ManagedMcpToolResult {
   if (name === "jira.application-roles") {
     const values = response.items;
     if (values === undefined) return jiraReadFailure("malformed-payload");
@@ -205,4 +192,20 @@ export async function executeJiraDirectoryRead(
           ...(selected.groupName === undefined ? {} : { groupName: selected.groupName }),
         },
       });
+}
+export function isJiraDirectoryRead(name: string): name is DirectoryRead {
+  return READS.has(name);
+}
+/** Group visibility and application-role facts do not grant authority or imply available seats. */
+export function executeJiraDirectoryRead(
+  name: DirectoryRead,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+): Promise<ManagedMcpToolResult> {
+  return executeJiraSelectedRead(
+    selection(name, args),
+    request,
+    name === "jira.application-roles" ? "json-array" : "json",
+    (response, selected) => projectResponse(name, response, selected),
+  );
 }
