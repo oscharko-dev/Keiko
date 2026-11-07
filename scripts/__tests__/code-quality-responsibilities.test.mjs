@@ -1676,6 +1676,7 @@ describe("closed public parser responsibility (#3918)", () => {
     "reasons",
     "instantiated-reasons",
     "result-alias",
+    "alias-export",
   ])("keeps %s shallow facts structural-ready and semantics pending", async (variant) => {
     const own = createPublicParserFixture(variant);
     roots.push(own.root);
@@ -1731,6 +1732,10 @@ describe("closed public parser responsibility (#3918)", () => {
     "asserted-return",
     "annotated-local",
     "counterfeit-type",
+    "alias-non-producer",
+    "alias-typed-parameter",
+    "alias-inline-result",
+    "alias-reexport",
   ])("never adapts %s forwarding", async (variant) => {
     const own = createPublicParserFixture(variant);
     roots.push(own.root);

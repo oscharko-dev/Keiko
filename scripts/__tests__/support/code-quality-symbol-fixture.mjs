@@ -149,6 +149,8 @@ export function createPublicParserFixture(variant = "direct") {
       own.put("packages/alpha/tsconfig.json", config);
       own.put("packages/alpha/src/owner.ts", publicParserOwner(variant));
       own.put("packages/alpha/src/proof.test.ts", publicParserProof(variant));
+      if (variant === "alias-reexport")
+        own.put("packages/alpha/src/forward.ts", 'export { validate } from "./owner.js";\n');
       const record = publicParserRecord();
       const policy = fixtureOwnedPolicy([record]);
       own.put("scripts/code-quality-policy.json", policy);
@@ -218,15 +220,31 @@ function publicParserOwner(variant) {
   const extra = variant === "extra-envelope" ? "; extra?: number" : "";
   const optional = variant === "optional-value" ? "?" : "";
   const result = publicParserResultType(variant, payload, extra, optional, failure);
-  const resultName = variant.startsWith("instantiated-") ? "ParseResult<number>" : "ParseResult";
-  const parameters =
-    variant === "explicit-this" ? "this: unknown, input: unknown" : "input: unknown";
+  const resultName = publicParserOwnerResult(variant);
+  const parameters = publicParserParameters(variant);
   const generics = variant === "generic" ? "<T = number>" : "";
+  const other =
+    variant === "alias-non-producer"
+      ? "export function other(input: unknown): ParseResult { return { ok: false, errors: [String(input)] }; }\n"
+      : "";
   return (
     prefix +
     result +
+    other +
     `export function validate${generics}(${parameters}): ${resultName} { return typeof input === "number" ? { ok: true, value: ${value} } : ${publicParserFailureValue(variant)}; }\n`
   );
+}
+
+function publicParserOwnerResult(variant) {
+  if (variant.startsWith("instantiated-")) return "ParseResult<number>";
+  if (variant === "alias-inline-result")
+    return "{ ok: true; value: number } | { ok: false; errors: readonly string[] }";
+  return "ParseResult";
+}
+
+function publicParserParameters(variant) {
+  if (variant === "explicit-this") return "this: unknown, input: unknown";
+  return variant === "alias-typed-parameter" ? "input: number" : "input: unknown";
 }
 
 function publicParserFailureType(variant, fallback) {
@@ -270,7 +288,18 @@ function publicParserResultType(variant, payload, extra, optional, failure) {
   return `export type ParseResult${generic} = { ok: true; value${optional}: ${output}${extra} } | { ok: false; ${field}${optionalFailure}: ${failureType}${extraFailure} };\n`;
 }
 
+// Alias consumers: `export { parse as publicParse }` of the imported producer, or refused forms.
+function publicParserAliasProof(variant) {
+  const imported = variant === "alias-non-producer" ? "other" : "validate";
+  const prefix = `import { ${imported} as parse } from "alpha/runtime";\nexport const imported = parse;\n`;
+  // The re-export forwards the actual producer `from` another module, not the local import.
+  if (variant === "alias-reexport")
+    return `${prefix}export { validate as publicParse } from "./forward.js";\n`;
+  return `${prefix}export { parse as publicParse };\n`;
+}
+
 function publicParserProof(variant) {
+  if (variant.startsWith("alias-")) return publicParserAliasProof(variant);
   const prefix = 'import { validate as parse, type ParseResult } from "alpha/runtime";\n';
   const bodies = {
     constant: "const result = parse(input); return { ok: false, errors: [] };",

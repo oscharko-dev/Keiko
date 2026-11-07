@@ -2135,7 +2135,7 @@ describe("dictionary bounded refusal controls (#3918)", () => {
 });
 
 describe("public parser symbol and runtime binding (#3918)", () => {
-  it.each(["direct", "reasons", "instantiated-reasons"])(
+  it.each(["direct", "reasons", "instantiated-reasons", "alias-export"])(
     "binds the actual %s named public subpath and unchanged runtime results",
     async (variant) => {
       const own = createPublicParserFixture(variant);
@@ -2154,6 +2154,21 @@ describe("public parser symbol and runtime binding (#3918)", () => {
       expect(runtime.publicParse(null)).toEqual({
         ok: false,
         [variant.endsWith("reasons") ? "reasons" : "errors"]: ["invalid"],
+      });
+    },
+  );
+  it.each(["alias-non-producer", "alias-typed-parameter", "alias-inline-result", "alias-reexport"])(
+    "refuses the %s alias consumer",
+    async (variant) => {
+      const own = createPublicParserFixture(variant);
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root), {}, [
+        { owner: "packages/alpha", paths: own.record.proofs },
+      ]);
+      const producer = own.resolver.resolveProofExport(own.record.input).identities[0];
+      expect(own.resolver.parserBinding(own.record.consumer, producer)).toEqual({
+        bound: false,
+        status: "incomplete",
       });
     },
   );

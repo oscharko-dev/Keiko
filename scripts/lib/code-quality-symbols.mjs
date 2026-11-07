@@ -576,7 +576,15 @@ function diagnosticLength(result) {
 }
 
 function directDiagnosticProducer(compiler, context, call, producer) {
-  const callee = context.checker.getSymbolAtLocation(call.expression);
+  return importedProducer(
+    compiler,
+    context,
+    context.checker.getSymbolAtLocation(call.expression),
+    producer,
+  );
+}
+
+function importedProducer(compiler, context, callee, producer) {
   const imported = callee?.declarations?.[0];
   if (
     !imported ||
@@ -784,7 +792,10 @@ function parserResult(callable) {
 }
 
 function parserImport(context, call, specifier) {
-  const symbol = context.checker.getSymbolAtLocation(call.expression);
+  return importedFrom(context.checker.getSymbolAtLocation(call.expression), specifier);
+}
+
+function importedFrom(symbol, specifier) {
   const imported = symbol?.declarations?.[0];
   if (!imported || !ts.isImportSpecifier(imported)) return false;
   const statement = imported.parent.parent.parent;
@@ -915,10 +926,58 @@ function producerParserResult(compiler, context, callable, signature) {
   return identity.owner === producer.owner && file?.production ? type : null;
 }
 
+// A public-api-proof consumer may also be a local alias of the imported public producer,
+// `export { validateX as parseX }`. It adds no code of its own, so the producer's own declaration
+// carries the proof: exactly one required parameter declared `unknown`, and a return annotation
+// that names the owner's checked result alias. A re-export `from` another module, a type-only
+// export, an alias of any other import and an overloaded or generic producer stay unbound.
+function parserAliasSpecifier(source, name) {
+  const matches = source.statements
+    .filter((statement) => ts.isExportDeclaration(statement) && statement.exportClause)
+    .flatMap((statement) =>
+      ts.isNamedExports(statement.exportClause)
+        ? statement.exportClause.elements.map((element) => ({ statement, element }))
+        : [],
+    )
+    .filter(({ element }) => element.name.text === name);
+  if (matches.length !== 1) return null;
+  const [{ statement, element }] = matches;
+  if (statement.moduleSpecifier || statement.isTypeOnly || element.isTypeOnly) return null;
+  return element;
+}
+
+function aliasParserProducer(compiler, context, element, request, producer) {
+  const local = context.checker.getExportSpecifierLocalTargetSymbol(element);
+  if (!importedFrom(local, request.specifier)) return null;
+  if (!importedProducer(compiler, context, local, producer)) return null;
+  const canonical = qualifiedAlias(context, local, compiler.state.limits.aliases);
+  const declaration = canonical.declarations[0];
+  if (!ts.isFunctionDeclaration(declaration) || !declaration.type) return null;
+  const signatures = context.checker.getTypeOfSymbolAtLocation(local, element).getCallSignatures();
+  if (signatures.length !== 1 || !canonicalParserSignature(context, signatures[0])) return null;
+  return { declaration, signature: signatures[0] };
+}
+
+function aliasParserBinding(compiler, context, source, request, producer) {
+  const element = parserAliasSpecifier(source, request.exportName);
+  const alias = element && aliasParserProducer(compiler, context, element, request, producer);
+  const type = alias && producerParserResult(compiler, context, alias.declaration, alias.signature);
+  if (!type) return { bound: false, status: "incomplete" };
+  const envelope = parserEnvelope(context, type, element);
+  compiler.assertCurrent();
+  return {
+    ...envelope,
+    bound: envelope.status === "ready",
+    implementation: canonicalDeclaration(compiler, element, null),
+    calls: [{ path: request.consumerPath, start: element.getStart(), end: element.end }],
+  };
+}
+
 function parserBinding(compiler, request, producer) {
   const { context, source } = ownedSource(compiler, request.consumerPath, true);
   const callable = parserCallable(context, source, request.exportName);
-  const result = callable && parserResult(callable);
+  if (!callable) return aliasParserBinding(compiler, context, source, request, producer);
+  const result = parserResult(callable);
   if (
     !result ||
     !parserImport(context, result.call, request.specifier) ||

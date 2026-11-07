@@ -2340,6 +2340,25 @@ it.each(["source", "public"])(
   },
 );
 
+// Public-api-proof consumers of the 14 memory parser responsibility records: each name is the
+// actual public `runtime/memory` validator, so the records' proofs exercise exactly that entry.
+export {
+  validatePublicMemoryRecord as parsePublicMemoryRecord,
+  validatePublicMemoryScope as parsePublicMemoryScope,
+  validatePublicMemoryStructuredPayload as parsePublicMemoryPayload,
+  validatePublicMemoryProposal as parsePublicMemoryProposal,
+  validatePublicMemoryAcceptance as parsePublicMemoryAcceptance,
+  validatePublicMemoryRejection as parsePublicMemoryRejection,
+  validatePublicMemoryUpdate as parsePublicMemoryUpdate,
+  validatePublicMemorySupersession as parsePublicMemorySupersession,
+  validatePublicMemoryPin as parsePublicMemoryPin,
+  validatePublicMemoryUnpin as parsePublicMemoryUnpin,
+  validatePublicMemoryArchive as parsePublicMemoryArchive,
+  validatePublicMemoryForget as parsePublicMemoryForget,
+  validatePublicMemoryAuditRecord as parsePublicMemoryAuditRecord,
+  validatePublicMemoryRetrievalRequest as parsePublicMemoryRetrievalRequest,
+};
+
 describe("Memory public parsers (#3918)", () => {
   it("preserves original record, scope and payload references and optional presence", () => {
     const payload = { kind: "string-list", items: ["fixture-item"] };
