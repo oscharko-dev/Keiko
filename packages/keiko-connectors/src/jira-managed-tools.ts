@@ -18,6 +18,8 @@ import { executeJiraConfigurationRead, isJiraConfigurationRead } from "./jira-ma
 import { executeJiraRuntimeSettingsRead, isJiraRuntimeSettingsRead } from "./jira-managed-runtime-settings.js";
 import { executeJiraMaintenanceRead, isJiraMaintenanceRead } from "./jira-managed-maintenance-reads.js";
 import { executeJiraJobObservationRead, isJiraJobObservationRead } from "./jira-managed-job-observations.js";
+import { executeJiraAccountDiagnosticRead, isJiraAccountDiagnosticRead } from "./jira-managed-account-diagnostics.js";
+import { executeJiraApplicationSettingsRead, isJiraApplicationSettingsRead } from "./jira-managed-application-settings.js";
 import { executeJiraEntityPropertyRead, isJiraEntityPropertyRead } from "./jira-managed-entity-properties.js";
 import { executeJiraIssueContextRead, isJiraIssueContextRead } from "./jira-managed-issue-context-reads.js";
 import { executeJiraResourceLookupRead, isJiraResourceLookupRead } from "./jira-managed-resource-lookups.js";
@@ -354,6 +356,8 @@ async function read<Context extends ManagedMcpInvocationContext>(
 }
 
 type NativeDetailRead =
+  | Parameters<typeof executeJiraApplicationSettingsRead>[0]
+  | Parameters<typeof executeJiraAccountDiagnosticRead>[0]
   | Parameters<typeof executeJiraIssueContextRead>[0]
   | Parameters<typeof executeJiraEntityPropertyRead>[0]
   | Parameters<typeof executeJiraJobObservationRead>[0]
@@ -386,6 +390,8 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraJqlMetadataRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return [
+    isJiraApplicationSettingsRead,
+    isJiraAccountDiagnosticRead,
     isJiraIssueContextRead,
     isJiraEntityPropertyRead,
     isJiraJobObservationRead,
@@ -440,6 +446,7 @@ function instanceConfigurationRead(
   args: CatalogJsonObject,
   request: ReturnType<typeof requestFor>,
 ): Promise<ManagedMcpToolResult> | undefined {
+  if (isJiraApplicationSettingsRead(name)) return executeJiraApplicationSettingsRead(name, args, request);
   if (isJiraConfigurationRead(name)) return executeJiraConfigurationRead(name, args, request);
   if (isJiraRuntimeSettingsRead(name)) return executeJiraRuntimeSettingsRead(name, args, request);
   if (isJiraMaintenanceRead(name)) return executeJiraMaintenanceRead(name, args, request);
@@ -451,6 +458,7 @@ function identityAndMetadataRead(
   args: CatalogJsonObject,
   request: ReturnType<typeof requestFor>,
 ): Promise<ManagedMcpToolResult> | undefined {
+  if (isJiraAccountDiagnosticRead(name)) return executeJiraAccountDiagnosticRead(name, args, request);
   if (isJiraUserRead(name)) return executeJiraUserRead(name, args, request);
   if (isJiraDirectoryRead(name)) return executeJiraDirectoryRead(name, args, request);
   if (isJiraCoreMetadataRead(name)) return executeJiraCoreMetadataRead(name, args, request);

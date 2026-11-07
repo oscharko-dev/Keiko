@@ -30,7 +30,11 @@ import { JIRA_VIEW_SETTINGS_TOOLS } from "./jira-view-settings-presentation";
 import { JIRA_JOB_OBSERVATION_TOOLS } from "./jira-job-observation-presentation";
 import { JIRA_PROPERTY_KEY_TOOLS } from "./jira-property-presentation";
 import { JIRA_PROPERTY_MUTATION_TOOLS, jiraPropertyMutationIdentityComplete } from "./jira-property-mutation-presentation";
+import { JIRA_ACCOUNT_DIAGNOSTIC_TOOLS } from "./jira-account-diagnostic-presentation";
+import { JIRA_APPLICATION_SETTINGS_TOOLS } from "./jira-application-settings-presentation";
 const LOCALLY_PAGED_TOOLS = new Set([
+  ...JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,
+  ...JIRA_APPLICATION_SETTINGS_TOOLS,
   "jira_pinned_comments",
   "jira_subtasks",
   "jira_remote_links",

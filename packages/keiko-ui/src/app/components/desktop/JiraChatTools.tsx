@@ -56,6 +56,8 @@ import { JIRA_PROPERTY_MUTATION_TOOLS } from "./jira-property-mutation-presentat
 import { JIRA_PARTICIPATION_TOOLS } from "./jira-participation-presentation";
 import { JIRA_FILE_METADATA_TOOLS } from "./jira-file-metadata-presentation";
 import { JIRA_SAVED_VIEW_TOOLS } from "./jira-saved-view-presentation";
+import { JIRA_ACCOUNT_DIAGNOSTIC_TOOLS } from "./jira-account-diagnostic-presentation";
+import { JIRA_APPLICATION_SETTINGS_TOOLS } from "./jira-application-settings-presentation";
 import {
   jiraToolOutcomeView,
   JIRA_OUTCOME_ITEMS_SHOWN,
@@ -287,6 +289,8 @@ function resultCardSemantics(exchange: ChatToolExchange): {
   readonly label: ReturnType<typeof jiraToolLabel>;
 } {
   return [
+    JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,
+    JIRA_APPLICATION_SETTINGS_TOOLS,
     JIRA_PROJECT_TOOLS,
     JIRA_AGILE_TOOLS,
     JIRA_PROJECT_METADATA_TOOLS,

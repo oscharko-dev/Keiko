@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **244 native identities: 192 reads and 52 writes**. Each is mapped to
+The current registry supplies **251 native identities: 199 reads and 52 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **195 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **188 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -141,6 +141,15 @@ report/draft composites remain compositions, not extra native API identities. Re
 creation, ranking, other estimate-adjustment modes and destructive operations, administration and
 other inventory gaps stay open. A registered declaration is not evidence that
 Jira grants the current person permission or that a particular installation supports the operation.
+
+Four account diagnostics add password requirement messages, cached duplicate-account count/list and current-HTTP-context stored search errors. Native204 is an explicit absent search error only at that documented route; missing200 content is unavailable. Duplicate observations never flush caches, infer a complete directory audit or grant password acceptance. Three application/preference reads expose strict values only for closed documented nonsecret keys; unknown keys retain metadata with withheld values. Defaults, examples and allowed values never leave that projection, and permissionLevel is a native filter rather than a grant. All new regression, wire, EN/DE, reload and accessibility sources are unexecuted.
+
+The source snapshot has incorrect scalar/UserBean/AvatarBean response references for password policy
+and duplicate accounts. The projections follow the primary
+[PasswordResource response contract](https://docs.atlassian.com/software/jira/docs/api/11.3.3/com/atlassian/jira/rest/v2/password/PasswordResource.html),
+[duplicate count DTO](https://docs.atlassian.com/software/jira/docs/api/11.3.3/com/atlassian/jira/rest/v2/issue/users/DuplicatedUsersCountBean.html)
+and [duplicate mapping factory](https://docs.atlassian.com/software/jira/docs/api/11.3.3/com/atlassian/jira/rest/v2/issue/users/DuplicatedUsersMapBeanFactory.html).
+The pinned source bytes and original operation identities remain unchanged.
 
 Nine instance-administration writes (four monitoring changes, three screen-tab changes and two
 global issue-type property mutations) require the explicit `issue-tracker.admin` grant. Ordinary

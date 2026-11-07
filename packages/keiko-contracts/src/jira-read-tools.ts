@@ -2,6 +2,12 @@ import { deepFreeze } from "./deep-freeze.js";
 
 /** Closed immutable read identities shared by native owners and the governed provider catalog. */
 export const JIRA_READ_TOOL_FAMILIES = deepFreeze({
+  applicationSettings: [
+    "jira.application-properties", "jira.advanced-settings", "jira.my-preference",
+  ],
+  accountDiagnostics: [
+    "jira.password-policy", "jira.duplicate-user-count", "jira.duplicate-users", "jira.search-error",
+  ],
   issueContext: [
     "jira.issue-picker", "jira.pinned-comments", "jira.subtasks",
     "jira.subtask-move-availability", "jira.remote-links", "jira.remote-link",

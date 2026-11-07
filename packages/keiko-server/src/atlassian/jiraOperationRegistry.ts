@@ -19,6 +19,8 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "observed-application-settings"
+  | "observed-account-diagnostics"
   | "entity-property-and-readback"
   | "instance-admin-entity-property-and-readback"
   | "instance-admin-monitoring-state-and-readback"
@@ -167,6 +169,17 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...reads("observed-application-settings", {
+    "jira.application-properties": "/application-properties",
+    "jira.advanced-settings": "/application-properties/advanced-settings",
+    "jira.my-preference": "/mypreferences",
+  }),
+  ...reads("observed-account-diagnostics", {
+    "jira.password-policy": "/password/policy",
+    "jira.duplicate-user-count": "/user/duplicated/count",
+    "jira.duplicate-users": "/user/duplicated/list",
+    "jira.search-error": "/search/error/lookup",
+  }),
   ...writes("entity-property-and-readback", {
     "jira.set-board-property": ["PUT", "/board/{boardId}/properties/{propertyKey}"],
     "jira.delete-board-property": ["DELETE", "/board/{boardId}/properties/{propertyKey}"],

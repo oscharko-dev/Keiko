@@ -86,6 +86,13 @@ const SCENARIOS: readonly Scenario[] = [
   { tool: "jira.user-property", args: { username: "synthetic-user", propertyKey: "view ~settings" },
     parameters: { propertyKey: "view ~settings" }, query: { userKey: "JIRAUSER10100" }, primaryMethodIndex: 1 },
   { tool: "jira.reindex-status", args: {} },
+  { tool: "jira.password-policy", args: { hasOldPassword: true, maxResults: 1 }, query: { hasOldPassword: "true" } },
+  { tool: "jira.duplicate-user-count", args: {}, query: { flush: "false" } },
+  { tool: "jira.duplicate-users", args: { maxResults: 1 }, query: { flush: "false" } },
+  { tool: "jira.search-error", args: {} },
+  { tool: "jira.application-properties", args: { key: "jira.option.voting" }, query: { key: "jira.option.voting" } },
+  { tool: "jira.advanced-settings", args: { maxResults: 1 } },
+  { tool: "jira.my-preference", args: { key: "user.issues.per.page" }, query: { key: "user.issues.per.page" } },
   { tool: "jira.reindex-progress", args: { taskId: "9223372036854775807" }, query: { taskId: "9223372036854775807" } },
   { tool: "jira.reindex-request", args: { requestId: "7" }, parameters: { requestId: "7" } },
   { tool: "jira.reindex-requests", args: { requestIds: ["7"], startAt: 0, maxResults: 1 }, query: { requestId: "7" } },
@@ -1095,6 +1102,18 @@ function jobObservationRead(path: string): AtlassianHttpBodyResult | undefined {
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
+function accountDiagnosticRead(path: string): AtlassianHttpBodyResult | undefined {
+  const bodies: Readonly<Record<string, unknown>> = {
+    "application-properties": { key: "jira.option.voting", value: "false", example: "discarded" },
+    "application-properties/advanced-settings": [{ key: "jira.clone.prefix", value: "" }],
+    mypreferences: "0",
+    "password/policy": ["Use at least eight characters."],
+    "user/duplicated/count": { count: 0 },
+    "user/duplicated/list": { sample: [{ directoryId: "9223372036854775807", directoryName: "Local directory", userActive: false }] },
+    "search/error/lookup": { errorStringI18n: "The query could not be evaluated." },
+  };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
+}
 function entityPropertyRead(path: string): AtlassianHttpBodyResult | undefined {
   const roots = new Set([
     "comment/10002/properties", "dashboard/71/items/81/properties", "issue/10001/properties",
@@ -1258,6 +1277,7 @@ function remoteRead(
     assetRead(path, state) ??
     administrationRead(path, absoluteUrl) ??
     jobObservationRead(path) ??
+    accountDiagnosticRead(path) ??
     entityPropertyRead(path) ??
     issueContextRead(path, absoluteUrl) ??
     issueMetadata(path, state) ??
@@ -1358,7 +1378,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(209);
+    expect(native).toHaveLength(216);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
