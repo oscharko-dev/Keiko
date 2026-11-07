@@ -193,10 +193,7 @@ describe("isDenied (always-on security)", () => {
     });
   }
 
-  for (const allowedAlias of [
-    "src/index.ts::$DATA",
-    "a:b.txt",
-  ]) {
+  for (const allowedAlias of ["src/index.ts::$DATA", "a:b.txt"]) {
     it(`does not over-deny the alias ${JSON.stringify(allowedAlias)}`, () => {
       expect(isDenied(allowedAlias)).toBe(false);
     });
