@@ -50,6 +50,7 @@ export default defineConfig({
       KEIKO_DAP_OPERATOR_PROVISIONING_JSON: provisioning,
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
       KEIKO_STATE_DIR: stateDir,
+      KEIKO_EVIDENCE_DIR: join(stateDir, "evidence"),
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
     },
   },

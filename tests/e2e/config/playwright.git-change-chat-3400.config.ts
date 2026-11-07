@@ -90,6 +90,7 @@ export default defineConfig({
         PATH: `${providerBin}${delimiter}${process.env.PATH ?? ""}`,
         KEIKO_GIT_CHANGE_CHAT_PROVIDER_STATE: providerStatePath,
         KEIKO_STATE_DIR: stateDir,
+        KEIKO_EVIDENCE_DIR: join(stateDir, "evidence"),
         KEIKO_E2E_UI_PORT: String(publicPort),
         KEIKO_E2E_MODEL_PORT: String(modelPort),
       },

@@ -58,6 +58,7 @@ export default defineConfig({
     env: {
       KEIKO_OS_KEYCHAIN: "off",
       KEIKO_STATE_DIR: stateDir,
+      KEIKO_EVIDENCE_DIR: join(stateDir, "evidence"),
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
       KEIKO_CONFIG_FILE: runtimeConfigPath,
