@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isJiraDataCenterCompatibilityFacts } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   verifyJiraDataCenterConnection,
   verifyJiraDataCenterCompatibility,
@@ -38,6 +39,35 @@ const version = { version: "10.3.26", versionNumbers: [10, 3, 26], deploymentTyp
 const user = { name: "synthetic-user", key: "synthetic-key", active: true };
 
 describe("bounded Jira Data Center verification", () => {
+  it.each([
+    [7, 13, 0],
+    [8, 3, 0],
+    [9, 17, 0],
+    [10, 0, 0],
+    [10, 2, 99],
+  ])(
+    "refuses release %s.%s.%s below the supported baseline before identity",
+    async (...numbers) => {
+      const { port, requests } = fixture([
+        response({ ...version, version: numbers.join("."), versionNumbers: numbers }),
+        response(user),
+      ]);
+      expect(await verifyJiraDataCenterCompatibility(port, "https://jira.example")).toEqual({
+        status: "unsupported-version",
+      });
+      expect(requests).toHaveLength(1);
+      expect(
+        isJiraDataCenterCompatibilityFacts({
+          schemaVersion: 1,
+          deploymentType: "Server",
+          versionNumbers: numbers,
+          restApi: "v2",
+          agileApi: "unverified",
+        }),
+      ).toBe(false);
+    },
+  );
+
   it.each(["Server", "Data Center"])(
     "retains only observed compatibility for %s",
     async (deploymentType) => {
@@ -111,12 +141,13 @@ describe("bounded Jira Data Center verification", () => {
   });
 
   it.each([
+    [10, 3, 0],
     [10, 3, 27],
     [10, 4, 0],
     [11, 2, 1],
     [11, 3, 13],
     [12, 0, 0],
-  ])("verifies coherent REST v2 capabilities on release %s.%s.%s", async (...numbers) => {
+  ])("verifies REST v2 identity on coherent release %s.%s.%s", async (...numbers) => {
     const { port, requests } = fixture([
       response({ ...version, version: numbers.join("."), versionNumbers: numbers }),
       response(user),

@@ -57,9 +57,12 @@ In the Knowledge Pods hub, select **Create Jira Pod**, enter a name, the HTTPS J
 (including any context path), and a PAT, then select **Create Jira Pod** once. Keiko saves the
 connection and verifies it automatically before closing the form. Verification checks
 bounded REST-v2 `serverInfo` and `myself` responses and the active identity. A successful check is
-required before Chat can use the Pod. The reported numeric release must be internally consistent;
-verification does not require one exact patch version. It privately retains the observed REST-v2
-identity compatibility and leaves Agile capability unverified. It does not grant Jira permissions
+required before Chat can use the Pod. Jira Server or Data Center must report an internally consistent
+released version of **10.3.0 or later**; verification does not require one exact patch version.
+The 10.3 minimum is the oldest supported API source baseline. Later releases, including releases
+newer than 11.3, can pass these probes but remain unqualified until their own live acceptance checks
+pass. Verification privately retains the observed REST-v2 identity compatibility and leaves Agile
+capability unverified. It does not grant Jira permissions
 or establish that every API operation is available. Reverify existing Pods to obtain these facts;
 older records do not invent them. The saved Data Center URL supplies the exact target;
 verification automatically determines and privately retains its address class. No separate
@@ -398,9 +401,11 @@ encryption at rest as described above.
 The current platform and operation boundaries below follow ADR-0128 D7. The epic evidence matrix
 separately records incomplete qualification; a passing focused test is not full production acceptance.
 
-- **Bounded Data Center support.** The REST-v2/PAT connection path checks coherent release and
-  active-identity responses rather than an exact version allow-list. Connection verification does
-  not certify all operations or replace live qualification of each Data Center baseline. Agile
+- **Bounded Data Center support.** The REST-v2/PAT connection path requires version 10.3.0 or later
+  with coherent release and active-identity responses. Versions below this supported baseline are
+  refused before the identity request. There is no exact patch allow-list or upper-version ceiling;
+  releases newer than 11.3 remain observed and unqualified until live acceptance is recorded.
+  Connection verification does not certify all operations or replace live qualification of each Data Center baseline. Agile
   capability stays unverified until its own operations are qualified. Data Center sync and
   Confluence Data Center remain unsupported. Cloud connectors and their existing records remain compatible; a Cloud connector
   is not automatically converted into a Data Center Live Pod.

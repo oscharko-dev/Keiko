@@ -1723,8 +1723,17 @@ describes is not redacted at the workspace layer.
 ### D7 — Qualified platforms and named follow-ups
 
 Cloud REST behavior remains supported. Epic #4081 added the bounded Jira Data Center REST-v2/PAT
-connection path, initially pinned to 10.3.26. Under #4287, connection admission uses coherent numeric
-release/deployment facts and an active REST-v2 identity rather than an exact version allow-list.
+connection path, initially pinned to 10.3.26. Under #4287, connection admission requires a released
+version of **10.3.0 or later**, coherent numeric release/deployment facts and an active REST-v2
+identity. The lower bound is the oldest supported
+[official API source baseline](https://developer.atlassian.com/server/jira/platform/jira_software_dc_10003_swagger.v3.json),
+not a claim that all earlier releases lack REST v2. In particular, successful identity probes alone
+cannot establish compatibility with the split create-metadata endpoints
+[introduced in Jira 8.4](https://developer.atlassian.com/server/jira/platform/jira-rest-api-examples/).
+The same baseline validation applies to privately persisted compatibility facts; lower releases
+are refused after `serverInfo`, before requesting identity. There is no exact patch allow-list or
+upper-version ceiling. Coherent later releases, including versions newer than 11.3, may pass the
+two probes as observed releases but remain unqualified until their live acceptance is recorded.
 Bounded `serverInfo` and `myself` JSON reads share one deadline; HTML, redirects, authentication,
 permission, malformed or inconsistent version evidence, TLS and network failures have closed
 outcomes. Context paths are preserved. Compatibility facts record REST-v2 identity verification

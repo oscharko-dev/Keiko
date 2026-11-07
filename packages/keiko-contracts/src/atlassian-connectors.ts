@@ -63,7 +63,7 @@ export interface AtlassianNetworkConfig {
   readonly privateTargets: readonly AtlassianPrivateTarget[];
 }
 
-/** Observed REST v2 identity compatibility; this grants no operation or Jira permission. */
+/** Observed REST v2 identity on Jira >=10.3.0; this grants no operation or Jira permission. */
 export interface JiraDataCenterCompatibilityFacts {
   readonly schemaVersion: 1;
   readonly deploymentType: "Server" | "Data Center";
@@ -88,7 +88,8 @@ function isJiraReleaseNumbers(value: unknown): value is readonly [number, number
     [value[0], value[1], value[2]].every(
       (part) => Number.isSafeInteger(part) && Number(part) >= 0,
     ) &&
-    Number(value[0]) > 0
+    // 10.3 is the oldest supported source baseline, not an exact release allow-list.
+    (Number(value[0]) > 10 || (value[0] === 10 && Number(value[1]) >= 3))
   );
 }
 

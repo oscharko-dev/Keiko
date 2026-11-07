@@ -30,6 +30,7 @@ function serverCompatibility(value: Record<string, unknown>): JiraDataCenterComp
     restApi: "v2",
     agileApi: "unverified",
   };
+  // The shared facts validator enforces the 10.3.0 floor; coherent newer releases are observations.
   // Three safe integers bound the release string; suffixes and inconsistent metadata refuse.
   if (
     !isJiraDataCenterCompatibilityFacts(compatibility) ||
