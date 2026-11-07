@@ -10,6 +10,11 @@ export const MANAGED_MCP_PROTOCOL_VERSION = "2026-07-28";
 
 /** Resolved by server composition; never serialized into MCP arguments or metadata. */
 export interface ManagedMcpInvocationContext {
+  /** Private local-provider result capture; never supplied through MCP arguments or metadata. */
+  readonly retainProviderResult?:
+    ((result: ManagedMcpToolResult) => ManagedMcpToolResult) | undefined;
+  /** Closed local authority refusal, never a provider-reported Jira response. */
+  readonly retainLocalFailure?: ((reason: "connector-scope-missing") => void) | undefined;
   /** Server-private credential floor for tokens materialized during this invocation; never serialized. */
   readonly observeCredential?: (value: string) => void;
   /** Private durable mutation admission, supplied by the composing consumer. */
@@ -18,6 +23,8 @@ export interface ManagedMcpInvocationContext {
         readonly sessionId: string | undefined;
         readonly toolName: string;
         readonly argumentsValue: CatalogJsonObject;
+        /** Composed by Keiko's local connection adapter, never protocol metadata. */
+        readonly localProvider?: "jira";
       }) => ManagedMcpMutationInvocation | undefined)
     | undefined;
   /** Server-private recovery fence; never supplied by model tool arguments. */
@@ -35,6 +42,10 @@ export interface ManagedMcpInvocationContext {
 
 export interface ManagedMcpMutationInvocation {
   readonly invocationId: string;
+  /** Persist an already validated local-provider result against this invocation's snapshot. */
+  readonly retainProviderResult?:
+    ((result: ManagedMcpToolResult) => ManagedMcpToolResult) | undefined;
+  readonly retainLocalFailure?: ((reason: "connector-scope-missing") => void) | undefined;
   /**
    * Marks the durable record dispatched. Called at the transport gate, not at admission, so a
    * failure before the frame left the process stays provably effect-free. Absent: the record was
@@ -129,6 +140,8 @@ export interface ExternalMcpTool {
   readonly annotations?: CatalogJsonObject;
 }
 export interface ExternalMcpConnection {
+  /** Server-owned adapter identity; an external server named Jira cannot set this marker. */
+  readonly localProvider?: "jira";
   /** Aborts on connection closure or schema drift; it never authorizes reconnect/replay. */
   readonly signal: AbortSignal;
   /** Server-owned guidance for the relayed server; an external server's own text never fills it. */

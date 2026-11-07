@@ -10,7 +10,7 @@ import type {
   AtlassianHttpBodyResult,
 } from "@oscharko-dev/keiko-connectors";
 import type { CodingWorkbenchConnectorScope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import type { ManagedMcpInvocationContext, ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { ManagedMcpError } from "@oscharko-dev/keiko-mcp";
 
 import {
@@ -228,6 +228,26 @@ function runAuthority(h: Harness): CodingJiraRunAuthority {
     runId: h.context.correlationId,
     currentScopes: () => ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"],
   };
+}
+
+function retainingHarness(h: Harness) {
+  const retained: ManagedMcpToolResult[] = [];
+  const localFailures: string[] = [];
+  const capture = vi.fn((result: ManagedMcpToolResult) => {
+    retained.push(result);
+    return result;
+  });
+  const context: ManagedMcpInvocationContext = {
+    ...h.context,
+    beginMutation: (request) => {
+      expect(request.localProvider).toBe("jira");
+      const permit = h.context.beginMutation?.(request);
+      if (permit === undefined) throw new Error("Expected native mutation permit");
+      return { ...permit, retainProviderResult: capture,
+        retainLocalFailure: (reason) => { localFailures.push(reason); } };
+    },
+  };
+  return { ...h, context, retained, capture, localFailures };
 }
 
 function bound(h: Harness): CodingJiraPodBinding {
@@ -572,6 +592,85 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
   const writes = (h: Harness): number =>
     h.http.mock.calls.filter(([request]) => request.method !== "GET").length;
 
+  it("hands its validated success receipt to the private capture owner before returning it", async () => {
+    const h = retainingHarness(harness());
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
+    const result = await client.call("jira.comment", { issueKey: "SYN-1", body: "Synthetic comment" });
+    expect(h.retained).toHaveLength(1);
+    expect(h.retained[0]?.data).toMatchObject({ outcome: "succeeded", issueKey: "SYN-1", commentId: "10002",
+      operationBinding: { identity: expect.any(String), contractDigest: expect.any(String) } });
+    expect(result.structuredContent).toEqual(h.retained[0]?.data);
+    expect(writes(h)).toBe(1);
+  });
+
+  it("enters recovery instead of delivering success when durable capture throws after HTTP ACK", async () => {
+    const h = retainingHarness(harness());
+    h.capture.mockImplementation(() => { throw new Error("Synthetic durable store unavailable"); });
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
+    const result = await client.call("jira.comment", { issueKey: "SYN-1", body: "Synthetic comment" });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    expect(writes(h)).toBe(1);
+    expect(h.capture).toHaveBeenCalledOnce();
+    expect(h.released).not.toHaveBeenCalled();
+    expect(h.recover).toHaveBeenCalledOnce();
+  });
+
+  it("retains a known tool's local scope refusal without inventing a native Jira permission result", async () => {
+    const h = retainingHarness(harness());
+    const client = connect(h, h.pods.connections(undefined, bound(h), {
+      runId: h.context.correlationId,
+      currentScopes: (phase) => phase === "discovery"
+        ? ["issue-tracker.read", "issue-tracker.write"] : ["issue-tracker.read"],
+    }));
+    const result = await client.call("jira.comment", { issueKey: "SYN-1", body: "Synthetic comment" });
+    expect(h.localFailures).toEqual(["connector-scope-missing"]);
+    expect(h.retained).toEqual([]);
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("connector access");
+    expect(h.http).not.toHaveBeenCalled();
+    expect(h.released).toHaveBeenCalledOnce();
+    expect(h.recover).not.toHaveBeenCalled();
+  });
+
+  it("retains known comment identity when scope is revoked after ACK and before readback", async () => {
+    const h = retainingHarness(harness());
+    let scopes: readonly CodingWorkbenchConnectorScope[] = ["issue-tracker.read", "issue-tracker.write"];
+    const transport = h.http.getMockImplementation();
+    if (transport === undefined) throw new Error("Expected Jira transport");
+    h.http.mockImplementation(async (request) => {
+      const response = await transport(request);
+      if (request.method === "POST") scopes = ["issue-tracker.read"];
+      return response;
+    });
+    const client = connect(h, h.pods.connections(undefined, bound(h), {
+      runId: h.context.correlationId, currentScopes: () => scopes,
+    }));
+    const result = await client.call("jira.comment", { issueKey: "SYN-1", body: "Synthetic comment" });
+    expect(h.retained).toMatchObject([{ isError: true, data: {
+      outcome: "succeeded-unconfirmed", issueKey: "SYN-1", commentId: "10002",
+    } }]);
+    expect(h.localFailures).toEqual([]);
+    expect(result.isError).toBe(true);
+    expect(writes(h)).toBe(1);
+    expect(h.released).not.toHaveBeenCalled();
+    expect(h.recover).toHaveBeenCalledOnce();
+  });
+
+  it("keeps template correction data readable and releases only a never-dispatched call", async () => {
+    const h = retainingHarness(harness({ template: EDIT_TEMPLATE }));
+    const client = connect(h, h.pods.connections(undefined, bound(h), runAuthority(h)));
+    const result = await client.call("jira.edit", { issueKey: "SYN-1", fields: { summary: "Updated" } });
+    expect(result.isError).toBe(true);
+    expect(h.retained).toHaveLength(1);
+    expect(result.structuredContent).toEqual(h.retained[0]?.data);
+    expect(result.structuredContent).toMatchObject({ outcome: "rejected", reason: "template-violation" });
+    expect(writes(h)).toBe(0);
+    expect(h.dispatched).not.toHaveBeenCalled();
+    expect(h.released).toHaveBeenCalledOnce();
+    expect(h.recover).not.toHaveBeenCalled();
+  });
+
   function descriptionTransport(h: Harness, refuseWrite = false): void {
     const original = h.http.getMockImplementation();
     if (original === undefined) throw new TypeError("Missing Jira transport");
@@ -859,7 +958,7 @@ describe("Coding Jira's live, explicitly selected scopes", () => {
   });
 
   it("does not repeat an acknowledged change when admin access ends before readback", async () => {
-    const h = harness();
+    const h = retainingHarness(harness());
     let scopes: readonly CodingWorkbenchConnectorScope[] = ["issue-tracker.read", "issue-tracker.write", "issue-tracker.admin"];
     h.http.mockImplementation(async (request) => {
       if (request.method === "POST") {
@@ -876,6 +975,10 @@ describe("Coding Jira's live, explicitly selected scopes", () => {
     expect(h.recover).toHaveBeenCalledOnce();
     expect(h.dispatched).toHaveBeenCalledOnce();
     expect(h.released).not.toHaveBeenCalled();
+    expect(h.localFailures).toEqual([]);
+    expect(h.retained).toMatchObject([{ isError: true, data: {
+      outcome: "succeeded-unconfirmed", monitoringEnabled: true,
+    } }]);
     expect(JSON.stringify(result)).toContain("connector access");
     expect(JSON.stringify(result)).toContain("may or may not have been applied");
   });

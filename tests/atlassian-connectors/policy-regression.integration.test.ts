@@ -75,6 +75,11 @@ const D4: Readonly<
   >
 > = {
   "governed-assist": {
+    "jira.remote-version-links": "review-required",
+    "jira.version-remote-links": "review-required",
+    "jira.version-remote-link": "review-required",
+    "jira.deleted-worklogs": "review-required",
+    "jira.updated-worklogs": "review-required",
     "jira.advanced-settings": "review-required",
     "jira.application-properties": "review-required",
     "jira.my-preference": "review-required",
@@ -338,6 +343,11 @@ const D4: Readonly<
   },
   // ADR-0138: supervised-coding internet-scope operations require approval at every risk.
   "supervised-coding": {
+    "jira.remote-version-links": "review-required",
+    "jira.version-remote-links": "review-required",
+    "jira.version-remote-link": "review-required",
+    "jira.deleted-worklogs": "review-required",
+    "jira.updated-worklogs": "review-required",
     "jira.advanced-settings": "review-required",
     "jira.application-properties": "review-required",
     "jira.my-preference": "review-required",
@@ -600,6 +610,11 @@ const D4: Readonly<
     "add-page-comment": "review-required",
   },
   "autonomous-delivery": {
+    "jira.remote-version-links": "allowed",
+    "jira.version-remote-links": "allowed",
+    "jira.version-remote-link": "allowed",
+    "jira.deleted-worklogs": "allowed",
+    "jira.updated-worklogs": "allowed",
     "jira.advanced-settings": "allowed",
     "jira.application-properties": "allowed",
     "jira.my-preference": "allowed",
@@ -865,6 +880,11 @@ const D4: Readonly<
 
 // Literal deny reason per action (reads → connector-access-denied, writes → connector-write-denied).
 const MISSING_SCOPE_REASON: Readonly<Record<AtlassianConnectorActionType, string>> = {
+  "jira.remote-version-links": "connector-access-denied",
+  "jira.version-remote-links": "connector-access-denied",
+  "jira.version-remote-link": "connector-access-denied",
+  "jira.deleted-worklogs": "connector-access-denied",
+  "jira.updated-worklogs": "connector-access-denied",
   "jira.advanced-settings": "connector-access-denied",
   "jira.application-properties": "connector-access-denied",
   "jira.my-preference": "connector-access-denied",
@@ -1129,6 +1149,11 @@ const MISSING_SCOPE_REASON: Readonly<Record<AtlassianConnectorActionType, string
 
 // Independent policy expectations: a future union member must receive an explicit risk and mode row.
 const EXPECTED_RISK: Readonly<Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>> = {
+  "jira.remote-version-links": "low",
+  "jira.version-remote-links": "low",
+  "jira.version-remote-link": "low",
+  "jira.deleted-worklogs": "low",
+  "jira.updated-worklogs": "low",
   "jira.advanced-settings": "low",
   "jira.application-properties": "low",
   "jira.my-preference": "low",

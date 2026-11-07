@@ -8,6 +8,20 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { UiStore } from "./types.js";
 import { invalidRequest, notFound } from "./errors.js";
+import { chatToolTranscriptOccupancy, type ChatToolTranscriptUpdate } from "./chatToolTranscript.js";
+
+export interface CodingNativeTurn {
+  readonly chatId: string;
+  readonly userMessageId: string;
+  readonly turnRef: string;
+}
+export interface CodingNativeToolTranscript {
+  readonly occupancy: () => { readonly bytes: number; readonly exchangeCount: number };
+  readonly capture: (
+    update: Extract<ChatToolTranscriptUpdate, { kind: "captured" }>,
+    correlationId: string,
+  ) => void;
+}
 
 export interface CodingHistoryCreateInput {
   readonly projectPath: string;
@@ -124,6 +138,8 @@ export interface CodingHistoryStore {
   ) =>
     | { readonly chatId: string; readonly userMessageId: string; readonly turnRef: string }
     | undefined;
+  /** Private run/turn-bound access; generic Chat methods remain unable to reach Coding rows. */
+  readonly nativeToolTranscript: (runId: string, expected: CodingNativeTurn) => CodingNativeToolTranscript;
   readonly bindRun: (id: string, runId: string) => void;
   readonly update: (
     id: string,
@@ -729,6 +745,35 @@ function bindNativeTurnMessage(
   return row.message_id;
 }
 
+function nativeToolTranscript(
+  db: DatabaseSync,
+  store: UiStore,
+  runId: string,
+  expected: CodingNativeTurn,
+): CodingNativeToolTranscript {
+  const bound = Object.freeze({ ...expected });
+  const requireBound = (): void => {
+    const current = nativeTurn(db, runId);
+    if (current === undefined || current.chatId !== bound.chatId ||
+        current.userMessageId !== bound.userMessageId || current.turnRef !== bound.turnRef)
+      throw invalidRequest("Coding tool result owner changed.");
+    const message = db.prepare("SELECT 1 FROM chat_messages WHERE id=? AND chat_id=? AND role='user'")
+      .get(bound.userMessageId, bound.chatId);
+    if (message === undefined) throw invalidRequest("Coding tool result owner changed.");
+  };
+  requireBound();
+  return {
+    occupancy: () => {
+      requireBound();
+      return chatToolTranscriptOccupancy(db, bound.userMessageId);
+    },
+    capture: (update, correlationId) => withImmediateTransaction(db, () => {
+      requireBound();
+      store.updateChatToolTranscript(bound.userMessageId, update, correlationId);
+    }),
+  };
+}
+
 export function createCodingHistoryStore(
   db: DatabaseSync,
   store: UiStore,
@@ -768,6 +813,7 @@ export function createCodingHistoryStore(
     bindNativeTurn: (runId, nativeMessageId, text) =>
       bindNativeTurn(db, store, now, runId, nativeMessageId, text),
     nativeTurn: (runId) => nativeTurn(db, runId),
+    nativeToolTranscript: (runId, expected) => nativeToolTranscript(db, store, runId, expected),
     bindRun: (id, runId): void => {
       bindRun(db, store, id, runId, now);
     },

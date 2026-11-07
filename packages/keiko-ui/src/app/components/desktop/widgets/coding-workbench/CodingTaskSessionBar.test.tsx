@@ -1,5 +1,10 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { axe } from "jest-axe";
+import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
+import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 import {
   CodingTaskSessionBar,
   CodingTaskTranscript,
@@ -165,6 +170,179 @@ describe("CodingTaskTranscript", () => {
 
     rerender(<CodingTaskTranscript session={sessionWith(messages, true)} shownRun={wholeRun} />);
     expect(screen.getByText("Only the most recent saved messages are shown.")).toBeVisible();
+  });
+});
+
+function savedJiraResult(
+  id: string,
+  name: string,
+  mutationOutcome: NonNullable<ChatToolExchange["mutationOutcome"]>,
+  data: CatalogJsonObject,
+): ChatToolExchange {
+  return {
+    call: { id, name, arguments: {} },
+    mutationOutcome,
+    result: {
+      schemaVersion: 1,
+      invocationId: id,
+      toolRef: null,
+      projectionDigest: null,
+      effectStarted: mutationOutcome !== "rejected",
+      metrics: { inputBytes: 10, outputBytes: 10, resultCount: 1, durationMs: 20 },
+      status: "completed",
+      reason: "none",
+      page: { truncated: false, reason: "none", cursor: null },
+      data,
+    },
+  };
+}
+
+function jiraHistoryMessage(): HistoryMessage {
+  return {
+    ...historyMessage("jira-turn", "run-7", "The live feed already carries this request"),
+    toolTranscript: {
+      schemaVersion: 1,
+      exchanges: [
+        savedJiraResult("created", "jira_create", "succeeded", {
+          outcome: "succeeded",
+          issueId: "10001",
+          issueKey: "SYN-1",
+          summary: "Saved Jira issue",
+          browseUrl: "https://jira.example.invalid/context/browse/SYN-1",
+        }),
+        savedJiraResult("invalid", "jira_comment", "rejected", {
+          outcome: "rejected",
+          reason: "field-validation",
+          fieldErrors: [
+            { fieldId: "body", fieldName: "Comment", message: "A reviewed comment is required." },
+          ],
+          guidance: "Private model guidance is not a result card",
+        }),
+        // The journal remains authoritative over an optimistic or stale result payload.
+        savedJiraResult("unknown", "jira_set_app_monitoring", "unknown", {
+          outcome: "succeeded",
+          monitoringEnabled: false,
+        }),
+        savedJiraResult("unconfirmed", "jira_edit", "succeeded-unconfirmed", {
+          outcome: "succeeded-unconfirmed",
+          reason: "unavailable",
+          issueId: "10002",
+          issueKey: "SYN-2",
+          browseUrl: "https://jira.example.invalid/context/browse/SYN-2",
+        }),
+      ],
+    },
+  };
+}
+
+describe.each(["en", "de"] as const)("stored Coding Jira results in %s", (locale) => {
+  const wholeRun: ShownRun = { runId: "run-7", overflowMessageIds: new Set() };
+  const labels = locale === "en" ? {
+    transcript: "Previous conversation",
+    you: "You",
+    confirmed: "Jira change confirmed",
+    rejected: "Jira action rejected",
+    unknown: "Jira outcome unknown",
+    unconfirmed: "Jira accepted the change; confirmation incomplete",
+    requested: "Requested target: disabled",
+    observed: "Confirmed state: disabled",
+  } : {
+    transcript: "Bisheriger Verlauf",
+    you: "Du",
+    confirmed: "Jira-Änderung bestätigt",
+    rejected: "Jira-Aktion abgelehnt",
+    unknown: "Ausgang der Jira-Aktion unbekannt",
+    unconfirmed: "Jira hat die Änderung angenommen; Bestätigung unvollständig",
+    requested: "Angeforderter Zielzustand: deaktiviert",
+    observed: "Bestätigter Zustand: deaktiviert",
+  };
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
+
+  it("keeps result cards when the live timeline already carries the user text", async () => {
+    const onFork = vi.fn();
+    const { container } = render(
+      <I18nProvider>
+        <CodingTaskTranscript
+          session={sessionWith([jiraHistoryMessage()])}
+          shownRun={wholeRun}
+          onFork={onFork}
+        />
+      </I18nProvider>,
+    );
+    const transcript = screen.getByRole("region", { name: labels.transcript });
+    expect(transcript).not.toHaveTextContent("The live feed already carries this request");
+    expect(screen.queryByText(labels.you, { exact: true })).toBeNull();
+    for (const status of [labels.confirmed, labels.rejected, labels.unknown, labels.unconfirmed])
+      expect(screen.getByText(status)).toBeVisible();
+    expect(screen.getByText("A reviewed comment is required.")).toBeVisible();
+    expect(screen.getByText(labels.requested)).toBeVisible();
+    expect(screen.queryByText(labels.observed)).toBeNull();
+    for (const key of ["SYN-1", "SYN-2"]) {
+      const link = screen.getByRole("link", { name: new RegExp(key, "u") });
+      expect(link).toHaveAttribute("href", `https://jira.example.invalid/context/browse/${key}`);
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    }
+    expect(container.querySelector("pre, button, img")).toBeNull();
+    expect(container.textContent).not.toContain("Private model guidance");
+    expect(onFork).not.toHaveBeenCalled();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("restores identical receipt cards from saved history without a visible run or replay controls", () => {
+    const saved = sessionWith([jiraHistoryMessage()]);
+    const detail = JSON.parse(JSON.stringify(saved.detail)) as NonNullable<
+      CodingTaskSession["detail"]
+    >;
+    const show = (): ReturnType<typeof render> =>
+      render(
+        <I18nProvider>
+          <CodingTaskTranscript session={{ ...session(), detail }} shownRun={undefined} />
+        </I18nProvider>,
+      );
+    const first = show();
+    const text = first.container.textContent;
+    first.unmount();
+    const second = show();
+    expect(second.container.textContent).toBe(text);
+    expect(screen.getAllByText("The live feed already carries this request")).toHaveLength(1);
+    expect(screen.getByRole("link", { name: /SYN-1/u })).toBeVisible();
+    expect(screen.getByText("A reviewed comment is required.")).toBeVisible();
+    expect(second.container.querySelector("pre, button")).toBeNull();
+  });
+
+  it("preserves text for other runs while refusing an unsafe saved receipt link", () => {
+    const unsafe: HistoryMessage = {
+      ...historyMessage("unsafe-turn", "run-7", "Another already displayed request"),
+      toolTranscript: {
+        schemaVersion: 1,
+        exchanges: [
+          savedJiraResult("unsafe", "jira_create", "succeeded", {
+            outcome: "succeeded",
+            issueId: "10003",
+            issueKey: "SYN-3",
+            browseUrl: "javascript:alert(1)",
+          }),
+        ],
+      },
+    };
+    render(
+      <I18nProvider>
+        <CodingTaskTranscript
+          session={sessionWith([historyMessage("earlier", "run-6", "Earlier request"), unsafe])}
+          shownRun={wholeRun}
+        />
+      </I18nProvider>,
+    );
+    expect(screen.getAllByText("Earlier request")).toHaveLength(1);
+    expect(screen.queryByText("Another already displayed request")).toBeNull();
+    expect(screen.getByText("SYN-3", { exact: true })).toBeVisible();
+    expect(screen.queryByRole("link", { name: /SYN-3/u })).toBeNull();
+    expect(document.querySelector("pre, img")).toBeNull();
   });
 });
 

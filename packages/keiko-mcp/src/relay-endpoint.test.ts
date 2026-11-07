@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi, type Mock } from "vitest";
 import type {
   ExternalMcpConnection,
   ManagedMcpInvocationContext,
+  ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { ManagedMcpError, noEffectError } from "./definitions.js";
 import { connectExternalMcp } from "./external-client.js";
@@ -94,7 +95,7 @@ async function legacy(
   params: unknown,
   context = f.context,
 ): Promise<{
-  result?: { content?: { text?: string }[]; isError?: boolean; instructions?: string };
+  result?: { content?: { text?: string }[]; isError?: boolean; instructions?: string; structuredContent?: unknown };
   error?: unknown;
 }> {
   const response = await f.endpoint.fetch(
@@ -117,7 +118,7 @@ async function legacy(
         .find((line) => line.startsWith("data: "))
         ?.slice(6);
   return JSON.parse(json ?? "null") as {
-    result?: { content?: { text?: string }[]; isError?: boolean; instructions?: string };
+    result?: { content?: { text?: string }[]; isError?: boolean; instructions?: string; structuredContent?: unknown };
     error?: unknown;
   };
 }
@@ -233,6 +234,115 @@ it("requires a recovery owner before dispatching a native write", async () => {
   expect(result.result?.isError).toBe(true);
   expect(f.call).not.toHaveBeenCalled();
   expect(f.recover).not.toHaveBeenCalled();
+});
+
+function retainingPermit(f: Fixture) {
+  const dispatch = vi.fn(() => true);
+  const release = vi.fn();
+  const acknowledge = vi.fn();
+  const fail = vi.fn();
+  const retained: ManagedMcpToolResult[] = [];
+  const retainProviderResult = vi.fn((result: ManagedMcpToolResult) => {
+    retained.push(result);
+    return result;
+  });
+  const context: ManagedMcpInvocationContext = { ...f.context,
+    beginMutation: () => ({ invocationId: "durable-native-call", dispatch, release,
+      acknowledge, fail, retainProviderResult }),
+  };
+  return { context, dispatch, release, acknowledge, fail, retained, retainProviderResult };
+}
+
+it("returns retained correctable Jira data only when the actual dispatch gate never opened", async () => {
+  const f = fixture("write");
+  const p = retainingPermit(f);
+  const data = { outcome: "rejected", reason: "field-validation",
+    fieldErrors: [{ fieldId: "summary", message: "Synthetic required field" }] };
+  f.call.mockImplementation(async (_name, _args, context) => {
+    context.retainProviderResult?.({ data, isError: true });
+    return { content: [{ type: "text", text: "not authoritative provider prose" }],
+      structuredContent: data, isError: true };
+  });
+  const response = await legacy(f, "tools/call", { name: "echo", arguments: { text: "value" } }, p.context);
+  expect(response.result).toMatchObject({ isError: true, structuredContent: data });
+  expect(response.result?.content?.[0]?.text).toBe(JSON.stringify(data));
+  expect(p.retained).toHaveLength(1);
+  expect(p.release).toHaveBeenCalledOnce();
+  expect(p.acknowledge).not.toHaveBeenCalled();
+  expect(p.fail).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+});
+
+it("retains an uncertain Jira receipt before recovery and never acknowledges or replays the error", async () => {
+  const f = fixture("write");
+  const p = retainingPermit(f);
+  const data = { outcome: "succeeded-unconfirmed", issueKey: "SYN-1" };
+  f.recover.mockImplementation(() => {
+    expect(p.retained).toEqual([{ data, isError: true }]);
+    f.revoke();
+  });
+  f.call.mockImplementation(async (_name, _args, context) => {
+    expect(context.beforeDispatch?.()).toBe(true);
+    context.retainProviderResult?.({ data, isError: true });
+    return { content: [], structuredContent: data, isError: true };
+  });
+  await writeText(f, p.context);
+  await expect(legacy(f, "tools/call", { name: "echo", arguments: { text: "retry" } }, p.context))
+    .rejects.toBeInstanceOf(Error);
+  expect(p.acknowledge).not.toHaveBeenCalled();
+  expect(p.fail).toHaveBeenCalledOnce();
+  expect(f.recover).toHaveBeenCalledOnce();
+  expect(f.call).toHaveBeenCalledOnce();
+});
+
+it("persists valid success before acknowledging it and suppresses late data after authority loss", async () => {
+  const f = fixture("write");
+  const p = retainingPermit(f);
+  const data = { outcome: "succeeded", issueKey: "SYN-1" };
+  p.acknowledge.mockImplementation(() => expect(p.retained).toEqual([{ data }]));
+  f.call.mockImplementation(async (_name, _args, context) => {
+    context.beforeDispatch?.();
+    context.retainProviderResult?.({ data });
+    f.revoke();
+    return { content: [{ type: "text", text: "private late result" }], structuredContent: data };
+  });
+  const response = await legacy(f, "tools/call", { name: "echo", arguments: { text: "value" } }, p.context);
+  expect(p.retained).toEqual([{ data }]);
+  expect(p.acknowledge).toHaveBeenCalledOnce();
+  expect(p.fail).toHaveBeenCalledOnce();
+  expect(f.recover).toHaveBeenCalledOnce();
+  expect(JSON.stringify(response)).not.toContain("private late result");
+});
+
+it("does not expose returned data that differs from the private captured snapshot", async () => {
+  const f = fixture("write");
+  const p = retainingPermit(f);
+  f.call.mockImplementation(async (_name, _args, context) => {
+    context.retainProviderResult?.({ data: { outcome: "rejected" }, isError: true });
+    return { content: [], structuredContent: { outcome: "succeeded", secret: "unbound-value" }, isError: true };
+  });
+  const response = await legacy(f, "tools/call", { name: "echo", arguments: { text: "value" } }, p.context);
+  expect(response.result?.isError).toBe(true);
+  expect(JSON.stringify(response)).not.toContain("unbound-value");
+  expect(p.acknowledge).not.toHaveBeenCalled();
+  expect(f.recover).toHaveBeenCalledOnce();
+});
+
+it("keeps recovery and no ACK when persistence fails after a successful upstream write", async () => {
+  const f = fixture("write");
+  const p = retainingPermit(f);
+  p.retainProviderResult.mockImplementation(() => { throw new Error("Synthetic store failure"); });
+  f.call.mockImplementation(async (_name, _args, context) => {
+    context.beforeDispatch?.();
+    context.retainProviderResult?.({ data: { outcome: "succeeded", issueKey: "SYN-1" } });
+    return { content: [], structuredContent: { outcome: "succeeded" } };
+  });
+  const response = await legacy(f, "tools/call", { name: "echo", arguments: { text: "value" } }, p.context);
+  expect(response.result?.isError).toBe(true);
+  expect(p.acknowledge).not.toHaveBeenCalled();
+  expect(p.fail).toHaveBeenCalledOnce();
+  expect(f.recover).toHaveBeenCalledOnce();
+  expect(f.call).toHaveBeenCalledOnce();
 });
 it("does not enter recovery for confirmed successful writes or failed reads", async () => {
   const write = fixture("write");

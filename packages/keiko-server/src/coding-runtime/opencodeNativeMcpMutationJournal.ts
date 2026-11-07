@@ -3,17 +3,27 @@ import { captureCatalogJson } from "@oscharko-dev/keiko-tool-catalog";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
+  type ToolDescriptor,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpMutationInvocation } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { UiStore } from "../store/types.js";
+import type { CodingNativeToolTranscript } from "../store/codingHistory.js";
 import type {
+  ChatToolMutationRecord,
   ChatToolMutationPreparation,
   ChatToolMutationStore,
 } from "../store/chatToolMutationTypes.js";
 import { journalConflict } from "../store/chatToolMutationState.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
+import { codingJiraResultCapture } from "./codingJiraResultCapture.js";
+import {
+  CHAT_TOOL_TRANSCRIPT_BASE_BYTES,
+  CHAT_TOOL_TRANSCRIPT_MAX_BYTES,
+  chatToolExchangeReservation,
+} from "../store/chatToolTranscript.js";
+import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 
 export interface NativeMcpCallIdentity {
   readonly runId: string;
@@ -37,6 +47,7 @@ export interface NativeMcpMutationJournal {
       readonly runId: string;
       readonly sessionId: string | undefined;
       readonly argumentsValue: CatalogJsonObject;
+      readonly localProvider?: "jira";
       readonly beforeEffect: (identity: NativeMcpCallIdentity) => boolean;
     },
   ) => ManagedMcpMutationInvocation | undefined;
@@ -97,6 +108,7 @@ interface NativeMcpJournalInput {
 }
 
 class NativeMutationJournal implements NativeMcpMutationJournal {
+  readonly #resultReservations = new Map<string, { readonly messageId: string; readonly bytes: number }>();
   readonly #journal: ChatToolMutationStore;
   readonly #history: NonNullable<UiStore["codingHistory"]>;
   readonly #historyOwner: CodingRuntimeHistory;
@@ -183,8 +195,14 @@ class NativeMutationJournal implements NativeMcpMutationJournal {
       return undefined;
     // Dispatch is recorded at the transport gate, not here: a failure before the frame leaves the
     // process (a stalled listing, descriptor drift, an abort) must stay provably effect-free.
+    const resultCapture = this.resultCapture(request, record);
+    const releaseReservation = resultCapture?.releaseReservation;
     return {
       invocationId: record.invocationId,
+      ...(resultCapture === undefined ? {} : {
+        retainProviderResult: resultCapture.retainProviderResult,
+        retainLocalFailure: resultCapture.retainLocalFailure,
+      }),
       dispatch: (): boolean =>
         this.#journal.beginDispatch(record.invocationId, () =>
           request.beforeEffect({
@@ -196,14 +214,59 @@ class NativeMutationJournal implements NativeMcpMutationJournal {
           }),
         ),
       release: (): void => {
-        releaseUndispatched(this.#journal, record.invocationId);
+        try { releaseUndispatched(this.#journal, record.invocationId); }
+        finally { releaseReservation?.(); }
       },
       acknowledge: (): void => {
         this.#journal.acknowledgeMcp(record.invocationId, true);
       },
       fail: (): void => {
-        retainUnconfirmed(this.#journal, record.invocationId);
+        try { retainUnconfirmed(this.#journal, record.invocationId); }
+        finally { releaseReservation?.(); }
       },
+    };
+  }
+  private resultCapture(
+    request: Parameters<NativeMcpMutationJournal["begin"]>[0],
+    record: ChatToolMutationRecord,
+  ): ReturnType<typeof codingJiraResultCapture> {
+    if (request.localProvider !== "jira") return undefined;
+    const args = capturedArguments(request.argumentsValue);
+    try {
+      if (record.userMessageId === null) throw journalConflict();
+      const transcript = this.#history.nativeToolTranscript(request.runId, {
+        chatId: record.chatId, userMessageId: record.userMessageId, turnRef: record.turnRef,
+      });
+      return codingJiraResultCapture(transcript.capture, record, args,
+        () => this.#journal.find(record.invocationId),
+        (messageId, descriptor, alias) => this.reserveResult({
+          messageId, invocationId: record.invocationId, args, descriptor, alias, transcript,
+        }));
+    } catch (error) {
+      releaseUndispatched(this.#journal, record.invocationId);
+      throw error;
+    }
+  }
+  private reserveResult(
+    input: {
+      readonly messageId: string; readonly invocationId: string; readonly args: CatalogJsonObject;
+      readonly descriptor: ToolDescriptor; readonly alias: string; readonly transcript: CodingNativeToolTranscript;
+    },
+  ): () => void {
+    const { messageId, invocationId, args, descriptor, alias, transcript } = input;
+    if (this.#resultReservations.has(invocationId)) throw journalConflict();
+    const occupancy = transcript.occupancy();
+    const held = [...this.#resultReservations.values()].filter((value) => value.messageId === messageId);
+    const bytes = chatToolExchangeReservation({ id: invocationId, name: alias, arguments: args }, descriptor);
+    const reserved = Math.max(CHAT_TOOL_TRANSCRIPT_BASE_BYTES, occupancy.bytes) +
+      held.reduce((sum, value) => sum + value.bytes, 0) + bytes;
+    if (occupancy.exchangeCount + held.length >= CHAT_TOOL_TURN_BUDGET.maxToolCalls ||
+        reserved > CHAT_TOOL_TRANSCRIPT_MAX_BYTES) throw journalConflict();
+    const reservation = { messageId, bytes };
+    this.#resultReservations.set(invocationId, reservation);
+    return () => {
+      if (this.#resultReservations.get(invocationId) === reservation)
+        this.#resultReservations.delete(invocationId);
     };
   }
   observeCompletion(
@@ -220,12 +283,15 @@ class NativeMutationJournal implements NativeMcpMutationJournal {
     for (const record of records) {
       if (confirmed) this.#journal.settle(record.invocationId, "succeeded");
       else retainUnconfirmed(this.#journal, record.invocationId);
+      this.#resultReservations.delete(record.invocationId);
     }
     return confirmed ? "confirmed" : "uncertain";
   }
   settleUnconfirmed(runId: string): void {
-    for (const record of this.#unsettledNative(runId))
+    for (const record of this.#unsettledNative(runId)) {
       retainUnconfirmed(this.#journal, record.invocationId);
+      this.#resultReservations.delete(record.invocationId);
+    }
   }
   unsettled(runId: string): boolean {
     return this.#unsettledNative(runId).length > 0;

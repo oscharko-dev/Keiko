@@ -569,6 +569,40 @@ and rechecks the current native authority immediately before dispatch. The relay
 observed MCP success before forwarding it. A lost response, restart or new model call cannot
 create a second effect while that outcome remains unconfirmed.
 
+The local Coding Jira adapter also retains validated mutation results before relay delivery or
+recovery. A private permit callback captures the admitted descriptor, operation binding and the
+existing catalog compiler's projection once before dispatch. Successful and error results are
+written atomically as one started/settled exchange in the existing Coding History user message's
+tool transcript. No receipt table, journal phase or separate history format is added. The stored
+descriptor snapshot validates later reads without resolving the installed Jira registry. The
+original argument digest remains private beside that snapshot, so credential-floor redaction of
+the displayed arguments cannot detach the result from its native journal identity. Historical
+lookup selects only the exact invocation IDs in the bounded, owned transcript. The ordinary Jira
+result cards consume these exchanges on reload. Their mutation state is projected
+from the same native journal: a stored successful payload alone never confirms delivery or clears
+an uncertainty barrier.
+Before issuing that permit, the native owner reserves the existing transcript owner's worst-case
+exchange bytes and one slot against actual stored occupancy plus concurrent outstanding captures.
+Occupancy and capture pass through the Coding History owner's private run-and-expected-turn-bound
+port; the generic Chat APIs remain unable to read or modify Coding messages. Both operations
+recheck the same stored user-message ownership, and unreadable non-null transcripts refuse.
+It uses the same transcript limits and reservation calculation as Chat. Capture or terminal permit
+settlement releases the reservation. Known lack of storage capacity therefore refuses before any
+native write; an unpredictable storage failure after a response retains the existing unknown-effect
+recovery semantics.
+
+Only the server-owned local Jira connection can supply this callback; an external server's name,
+arguments or metadata cannot enable it. An error result never acknowledges a mutation. A validated
+preflight error can remain readable without revoking the run only when the actual native dispatch
+gate never opened. After dispatch, the existing failure/recovery path remains authoritative; the
+receipt is already durable even if revocation prevents its response reaching the runtime.
+For an admitted known Jira write, a local connector-scope refusal is retained under the same
+snapshot as `denied/effect-denied` with no provider data. It is not a native Jira permission
+response; the journal still distinguishes an unopened gate from a possibly dispatched change.
+If scope loss also carries a validated provider receipt, that receipt takes precedence over the
+data-free local refusal. Known resource identities remain durable while the same scope error
+still prevents delivery, acknowledgement or replay.
+
 Confirmation comes from the existing committed producer-history tool settlement, after content
 normalization and the containing Code Mode program finish. The earlier `execute.after` hook is
 insufficient: OpenCode 2.1.4 normalizes content afterward, and inner calls share their enclosing
@@ -632,7 +666,8 @@ points; they refine D5 and the section above, they do not widen any authority.
   permit without `dispatch` keeps the old behaviour: its record was already dispatched, so the relay
   never claims "no effect" for it. Deferral needs a connection that owns such a gate and says so
   (`ExternalMcpConnection.dispatchGate`, set by `ExternalClient` and forwarded by the configured
-  connection wrapper). For any other connection, such as the Coding Jira Pod host connection, the
+  connection wrapper). The local Coding Jira connection owns the gate immediately before its first
+  native write request; metadata and preflight reads do not dispatch a mutation. For any other connection, the
   relay dispatches the record before the call starts and refuses the call when dispatch is refused,
   so an effect can never exist without a dispatched record behind it. The price is precision, not
   safety: such a connection's later effect-free refusal settles the already dispatched record as

@@ -19,6 +19,8 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "native-visible-worklog-change-window"
+  | "native-version-remote-links"
   | "admin-email-template-metadata"
   | "observed-application-settings"
   | "observed-account-diagnostics"
@@ -170,6 +172,15 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...reads("native-visible-worklog-change-window", {
+    "jira.deleted-worklogs": "/worklog/deleted",
+    "jira.updated-worklogs": "/worklog/updated",
+  }),
+  ...reads("native-version-remote-links", {
+    "jira.remote-version-links": "/version/remotelink",
+    "jira.version-remote-links": "/version/{versionId}/remotelink",
+    "jira.version-remote-link": "/version/{versionId}/remotelink/{globalId}",
+  }),
   ...reads("visible-permission-configuration", {
     "jira.permission-scheme-attribute": "/permissionscheme/{permissionSchemeId}/attribute/{attributeKey}",
   }),

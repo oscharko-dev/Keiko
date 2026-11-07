@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { jiraMutationToolId } from "../atlassian/jiraMutationToolId.js";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { JIRA_MUTATION_OPERATIONS, type JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ChatToolReadGrant, ChatToolReadGrantView } from "@oscharko-dev/keiko-contracts";
 import {
   activityLogEvent,
@@ -14,8 +15,9 @@ import {
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ChatMessage } from "./types.js";
 import type { ChatToolMutationRecord } from "./chatToolMutationTypes.js";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { observedChatToolMutationOutcome, mutationIntentError } from "./chatToolMutationState.js";
-import { readChatToolMutationTurn } from "./chatToolMutations.js";
+import { readChatToolMutationTurn, readCodingJiraMutationMessage } from "./chatToolMutations.js";
 import { readChatReadGrant } from "./chatToolReadGrants.js";
 import {
   projectChatReadGrant,
@@ -90,7 +92,10 @@ function validObservation(
   record: ChatToolMutationRecord,
   operationBinding: JiraOperationBinding | undefined,
   sourceDigest: string | undefined,
+  nativeArgumentsDigest: string | undefined,
 ): boolean {
+  if (record.consumer?.kind === "coding")
+    return validCodingObservation(message, call, record, operationBinding, nativeArgumentsDigest);
   if (
     !matchesCall(message, call, record, operationBinding, sourceDigest) ||
     !observationAvailable(message, call, record)
@@ -102,6 +107,49 @@ function validObservation(
       : jiraMutationToolId(record.operation);
   if (call.result !== undefined && call.result.toolRef?.canonicalId !== canonicalId) return false;
   return mutationIntentError({ ...record, userMessageId: message.id }) === undefined;
+}
+
+/** Native identity is the existing journal's captured run/message/call, not Chat approval identity. */
+function validCodingObservation(
+  message: ChatMessage,
+  exchange: ChatToolExchange,
+  record: ChatToolMutationRecord,
+  binding: JiraOperationBinding | undefined,
+  nativeArgumentsDigest: string | undefined,
+): boolean {
+  if (record.sourceKind !== "configured-mcp" || record.serverName !== "jira" ||
+      record.consumer?.kind !== "coding" || binding === undefined) return false;
+  const operation = JIRA_MUTATION_OPERATIONS.find((name) => name === record.toolName);
+  return operation !== undefined &&
+    codingCallMatches(message, exchange, record, nativeArgumentsDigest) &&
+    codingResultMatches(exchange, operation, binding) &&
+    mutationIntentError({ ...record, userMessageId: message.id }) === undefined;
+}
+function codingCallMatches(
+  message: ChatMessage,
+  exchange: ChatToolExchange,
+  record: ChatToolMutationRecord,
+  nativeArgumentsDigest: string | undefined,
+): boolean {
+  return record.chatId === message.chatId && record.userMessageId === message.id &&
+    record.invocationId === exchange.call.id &&
+    nativeArgumentsDigest !== undefined && nativeArgumentsDigest === record.consumer?.argumentsDigest;
+}
+function codingResultMatches(
+  exchange: ChatToolExchange,
+  operation: JiraMutationOperation,
+  binding: JiraOperationBinding,
+): boolean {
+  const result = exchange.result;
+  if (result === undefined) return false;
+  return exchange.call.name === operation.replace(/[.-]/gu, "_") &&
+    result.toolRef?.canonicalId === jiraMutationToolId(operation) &&
+    (isResultObject(result.data)
+      ? canonicalise(result.data.operationBinding) === canonicalise(binding)
+      : result.status === "denied" && result.reason === "effect-denied" && result.data === null);
+}
+function isResultObject(value: unknown): value is CatalogJsonObject {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /** The journal commits before any dispatch, so a reviewed call it never saw cannot have been sent. */
@@ -137,12 +185,20 @@ export function projectChatToolMutationHistory(
   input: ChatMessage,
   operationBindings: ReadonlyMap<string, JiraOperationBinding>,
   sourceDigests: ReadonlyMap<string, string> = new Map(),
+  nativeArgumentsDigests: ReadonlyMap<string, string> = new Map(),
 ): ChatMessage {
   const message = projectChatReadConsentHistory(db, input);
   const transcript = message.toolTranscript;
-  if (message.role !== "user" || message.canonicalTurnRef === undefined || transcript === undefined)
+  if (message.role !== "user" || transcript === undefined)
     return message;
-  const records = readChatToolMutationTurn(db, message.chatId, message.canonicalTurnRef);
+  const chatRecords = message.canonicalTurnRef === undefined ? [] :
+    readChatToolMutationTurn(db, message.chatId, message.canonicalTurnRef);
+  // This prefix only preselects a lookup; validCodingObservation proves its full stored identity.
+  const codingIds = transcript.exchanges.filter((exchange) =>
+    exchange.call.id.startsWith("mcp-") && operationBindings.has(exchange.call.id))
+    .map((exchange) => exchange.call.id);
+  const codingRecords = readCodingJiraMutationMessage(db, message.chatId, message.id, codingIds);
+  const records = [...chatRecords, ...codingRecords];
   let observationCount = 0;
   let correlationId: string | undefined;
   const exchanges = transcript.exchanges.map((exchange) => {
@@ -153,6 +209,7 @@ export function projectChatToolMutationHistory(
         candidate,
         operationBindings.get(exchange.call.id),
         sourceDigests.get(exchange.call.id),
+        nativeArgumentsDigests.get(exchange.call.id),
       ),
     );
     const mutationOutcome = observedOutcome(message, exchange, record, records);

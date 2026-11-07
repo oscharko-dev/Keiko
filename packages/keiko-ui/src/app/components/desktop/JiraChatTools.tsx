@@ -21,6 +21,7 @@ import {
   jiraToolRegionLabel,
   jiraToolState,
   jiraToolOutcomeHelp,
+  jiraLocalAccessDenialNotice,
   knowledgeReviewFailureNotice,
   jiraToolPartialNotice,
 } from "./jira-tool-presentation";
@@ -59,6 +60,8 @@ import { JIRA_FILE_METADATA_TOOLS } from "./jira-file-metadata-presentation";
 import { JIRA_SAVED_VIEW_TOOLS } from "./jira-saved-view-presentation";
 import { JIRA_ACCOUNT_DIAGNOSTIC_TOOLS } from "./jira-account-diagnostic-presentation";
 import { JIRA_APPLICATION_SETTINGS_TOOLS } from "./jira-application-settings-presentation";
+import { JIRA_REMOTE_VERSION_LINK_TOOLS } from "./jira-remote-version-link-presentation";
+import { JIRA_WORKLOG_FEED_TOOLS } from "./jira-worklog-feed-presentation";
 import {
   jiraToolOutcomeView,
   JIRA_OUTCOME_ITEMS_SHOWN,
@@ -290,6 +293,8 @@ function resultCardSemantics(exchange: ChatToolExchange): {
   readonly label: ReturnType<typeof jiraToolLabel>;
 } {
   return [
+    JIRA_REMOTE_VERSION_LINK_TOOLS,
+    JIRA_WORKLOG_FEED_TOOLS,
     JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,
     JIRA_APPLICATION_SETTINGS_TOOLS,
     JIRA_PROJECT_TOOLS,
@@ -342,12 +347,14 @@ function JiraToolExchange({
     (turnState === "pending" ? undefined : jiraToolOutcomeHelp(state));
   const report = jiraReportOf(exchange);
   const partial = jiraToolPartialNotice(exchange);
+  const localDenial = jiraLocalAccessDenialNotice(exchange);
   const { tag: Card, role, label } = resultCardSemantics(exchange);
   return (
     <Card className={styles.cmpCard} role={role} aria-label={t(label)}>
       <strong>{mcp ? exchange.call.name : t(jiraToolLabel(exchange))}</strong>
       <output>{t(state)}</output>
       {help === undefined ? null : <p>{t(help)}</p>}
+      {localDenial === undefined ? null : <p>{t(localDenial)}</p>}
       {report === undefined ? null : <JiraReportCard view={report} chatId={chatId} />}
       {report === undefined && partial !== undefined ? <p>{t(partial)}</p> : null}
       {exchange.call.name.startsWith("jira_") ? (

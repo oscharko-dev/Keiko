@@ -1,4 +1,12 @@
 import {
+  jiraRemoteVersionLinkDeclarationForTool,
+  type JIRA_REMOTE_VERSION_LINK_READ_DEFINITIONS,
+} from "./jiraRemoteVersionLinkDescriptors.js";
+import {
+  jiraWorklogFeedDeclarationForTool,
+  type JIRA_WORKLOG_FEED_READ_DEFINITIONS,
+} from "./jiraWorklogFeedDescriptors.js";
+import {
   jiraAdministrativeObservationDeclarationForTool,
   type JIRA_ADMINISTRATIVE_OBSERVATION_READ_DEFINITIONS,
 } from "./jiraAdministrativeObservationDescriptors.js";
@@ -236,6 +244,8 @@ type CoreReadToolName = Exclude<
   | "jira.draft-stage"
   | Extract<
       JiraManagedReadToolName,
+      | keyof typeof JIRA_REMOTE_VERSION_LINK_READ_DEFINITIONS
+      | keyof typeof JIRA_WORKLOG_FEED_READ_DEFINITIONS
       | keyof typeof JIRA_ADMINISTRATIVE_OBSERVATION_READ_DEFINITIONS
       | keyof typeof JIRA_APPLICATION_SETTINGS_READ_DEFINITIONS
       | keyof typeof JIRA_ACCOUNT_DIAGNOSTIC_READ_DEFINITIONS
@@ -433,6 +443,8 @@ function isCoreReadTool(name: JiraManagedReadToolName): name is CoreReadToolName
 }
 function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   for (const producer of [
+    jiraRemoteVersionLinkDeclarationForTool,
+    jiraWorklogFeedDeclarationForTool,
     jiraAdministrativeObservationDeclarationForTool,
     jiraApplicationSettingsDeclarationForTool,
     jiraAccountDiagnosticDeclarationForTool,

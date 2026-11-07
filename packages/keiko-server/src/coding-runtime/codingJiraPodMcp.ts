@@ -540,6 +540,7 @@ class CodingJiraPodService implements CodingJiraPods {
   ): ExternalMcpConnection {
     return {
       signal,
+      localProvider: "jira",
       dispatchGate: true,
       instructions: JIRA_TOOL_GUIDANCE,
       tools: host.catalog().map(({ name, descriptor }) => ({
@@ -572,6 +573,7 @@ class CodingJiraPodService implements CodingJiraPods {
       return this.refuseCall(context.correlationId, line, started);
     if (tool === undefined) return this.refuseCall(context.correlationId, line, started, "unavailable");
     const refusal = this.scopeRefusal(authority, context, tool);
+    if (refusal === "scope-missing") context.retainLocalFailure?.("connector-scope-missing");
     if (refusal !== undefined) return this.refuseCall(context.correlationId, line, started, refusal);
     const scopedContext = this.scopedContext(authority, context, tool);
     try {
@@ -582,7 +584,8 @@ class CodingJiraPodService implements CodingJiraPods {
         ...linkLineCounts(data),
         durationMs: Date.now() - started,
       });
-      return callToolResult(data, false);
+      const retained = scopedContext.retainProviderResult?.({ data }) ?? { data };
+      return callToolResult(retained.data, false);
     } catch (error) {
       return this.failedCall(error, line, started, scopedContext);
     }
@@ -604,14 +607,20 @@ class CodingJiraPodService implements CodingJiraPods {
       durationMs: Date.now() - started,
       ...(provider === undefined ? { error } : {}),
     });
-    if (scopeMissing)
+    if (scopeMissing) {
+      if (provider === undefined) context.retainLocalFailure?.("connector-scope-missing");
+      else context.retainProviderResult?.({ data: provider, isError: true });
       throw new ManagedMcpError(
         "connector-scope-missing",
         undefined,
         context.dispatch.dispatched ? "possible" : "none",
       );
+    }
     // A failure the provider reported is data for the model; any other failure stays a failure.
-    if (provider !== undefined) return callToolResult(provider, true);
+    if (provider !== undefined) {
+      const retained = context.retainProviderResult?.({ data: provider, isError: true });
+      return callToolResult(retained?.data ?? provider, true);
+    }
     throw error instanceof ManagedMcpError ? error : new ManagedMcpError("tool-error");
   }
 

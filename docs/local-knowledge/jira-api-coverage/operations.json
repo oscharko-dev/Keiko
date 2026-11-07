@@ -1531,6 +1531,22 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.deleted-worklogs": {
+      "identity": "GET /rest/api/2/worklog/deleted",
+      "effect": "read",
+      "permissionPolicy": "native-visible-worklog-change-window",
+      "kind": "constrained-tool",
+      "constraints": "One complete native visible deletion window since an exact decimal millisecond cursor. Latest minute excluded; native retention/permission limits apply, no global totals or all-history claim. Complete page or refusal, no synthetic offset or skipped prefix.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-worklog-feeds.ts",
+        "packages/keiko-server/src/atlassian/jiraWorklogFeedDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-worklog-feeds.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorklogFeedDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
     "jira.duplicate-user-count": {
       "identity": "GET /rest/api/2/user/duplicated/count",
       "effect": "read",
@@ -3398,6 +3414,22 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.remote-version-links": {
+      "identity": "GET /rest/api/2/version/remotelink",
+      "effect": "read",
+      "permissionPolicy": "native-version-remote-links",
+      "kind": "constrained-tool",
+      "constraints": "One required exact globalId query, complete bounded native links collection before local paging. selectedGlobalId is requested context, never a version identity derived from self/name.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-remote-version-links.ts",
+        "packages/keiko-server/src/atlassian/jiraRemoteVersionLinkDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-remote-version-links.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRemoteVersionLinkDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
     "jira.rename-screen-tab": {
       "identity": "PUT /rest/api/2/screens/{screenId}/tabs/{tabId}",
       "effect": "write",
@@ -4557,6 +4589,22 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.updated-worklogs": {
+      "identity": "GET /rest/api/2/worklog/updated",
+      "effect": "read",
+      "permissionPolicy": "native-visible-worklog-change-window",
+      "kind": "constrained-tool",
+      "constraints": "One complete native visible update window with exact safe native worklog IDs/timestamps. Native until cursor advances without increment; supplied continuation URL is compared only, never followed. No estimates or worklog effects.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-worklog-feeds.ts",
+        "packages/keiko-server/src/atlassian/jiraWorklogFeedDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-worklog-feeds.test.ts",
+        "packages/keiko-server/src/atlassian/jiraWorklogFeedDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
     "jira.upgrade-result": {
       "identity": "GET /rest/api/2/upgrade",
       "effect": "read",
@@ -4779,6 +4827,38 @@
         "packages/keiko-server/src/atlassian/jiraReleaseDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.version-remote-link": {
+      "identity": "GET /rest/api/2/version/{versionId}/remotelink/{globalId}",
+      "effect": "read",
+      "permissionPolicy": "native-version-remote-links",
+      "kind": "constrained-tool",
+      "constraints": "One bound native version and safely addressable exact globalId. Complete typed JSON Pointer nodes, no raw JSON display or followed remote destinations; missing value is explicitly unavailable.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-remote-version-links.ts",
+        "packages/keiko-server/src/atlassian/jiraRemoteVersionLinkDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-remote-version-links.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRemoteVersionLinkDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
+    "jira.version-remote-links": {
+      "identity": "GET /rest/api/2/version/{versionId}/remotelink",
+      "effect": "read",
+      "permissionPolicy": "native-version-remote-links",
+      "kind": "constrained-tool",
+      "constraints": "Independently bind the exact native version, then locally page the complete bounded links collection. Documented JSON-encoded link is decoded once into existing typed nodes; self references only constrain membership.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-remote-version-links.ts",
+        "packages/keiko-server/src/atlassian/jiraRemoteVersionLinkDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-remote-version-links.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRemoteVersionLinkDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
       ]
     },
     "jira.version-unresolved-issue-count": {
@@ -5066,8 +5146,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "f494ddceb735481efa7485fb3cb8673532e5309a78edf48e93de28b89f545f5b",
-    "nativeOperationCount": 253
+    "sha256": "8264dfffcbf369952eb5e690b86c9a9fc2b8f7e37948a068b29ec40d7b361232",
+    "nativeOperationCount": 258
   },
   "operations": [
     {
@@ -18843,10 +18923,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.remote-version-links"
+      ]
     },
     {
       "identity": "GET /rest/api/2/version/{id}",
@@ -19166,10 +19248,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.version-remote-links"
+      ]
     },
     {
       "identity": "POST /rest/api/2/version/{versionId}/remotelink",
@@ -19271,10 +19355,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.version-remote-link"
+      ]
     },
     {
       "identity": "POST /rest/api/2/version/{versionId}/remotelink/{globalId}",
@@ -20303,10 +20389,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.deleted-worklogs"
+      ]
     },
     {
       "identity": "POST /rest/api/2/worklog/list",
@@ -20371,10 +20459,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.updated-worklogs"
+      ]
     },
     {
       "identity": "DELETE /rest/auth/1/session",

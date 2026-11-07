@@ -192,6 +192,16 @@ export function managedCatalogToolDefinitions(
   const entries = managedCatalogEntries(routes, declarations);
   return gatewayToolDefinitions(managedToolCatalog(entries, profile, referenceTimeMs), profile);
 }
+/** The same compiler-owned projection for a private captured result; it grants no authority. */
+export function managedCatalogProjection(
+  routes: readonly RouteIdentity[],
+  declarations: readonly DeclarationIdentity[],
+  profile: CatalogVersionRef,
+  referenceTimeMs: number,
+): CompiledToolProjection {
+  const entries = managedCatalogEntries(routes, declarations);
+  return compileToolProjection(managedToolCatalog(entries, profile, referenceTimeMs), profile);
+}
 function compileManagedCatalog<Consumer extends CatalogConsumer>(
   host: ManagedMcpHost<CatalogHandlerContext<Consumer>>,
   input: ManagedProviderCatalogInput<Consumer>,

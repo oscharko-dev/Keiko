@@ -42,6 +42,16 @@ import { withImmediateTransaction } from "./transaction.js";
 
 export type ChatToolTranscriptUpdate =
   | {
+      /** An observed native Coding result: start and settlement are one existing-store transaction. */
+      readonly kind: "captured";
+      readonly call: ChatToolExchange["call"];
+      readonly operationBinding: JiraOperationBinding;
+      readonly nativeArgumentsDigest: string;
+      readonly result: ToolResultEnvelope;
+      readonly binding: ToolResultValidationBinding;
+      readonly mutationOutcome: JiraMutationOutcome;
+    }
+  | {
       readonly kind: "started";
       readonly call: ChatToolExchange["call"];
       readonly operationBinding?: JiraOperationBinding;
@@ -66,6 +76,7 @@ interface StoredExchange extends ChatToolExchange {
   /** Immutable private snapshot; history does not depend on the installed registry version. */
   readonly operationBinding?: JiraOperationBinding;
   readonly sourceDigest?: string;
+  readonly nativeArgumentsDigest?: string;
   readonly resultBinding?: ToolResultValidationBinding;
 }
 interface StoredTranscript extends ChatToolTranscript {
@@ -95,6 +106,24 @@ export function chatToolExchangeReservation(
     EXCHANGE_OVERHEAD_BYTES
   );
 }
+
+/** Body-free occupancy for the existing transcript reservation owner, before native dispatch. */
+export function chatToolTranscriptOccupancy(
+  db: DatabaseSync,
+  messageId: string,
+): { readonly bytes: number; readonly exchangeCount: number } {
+  const row = db.prepare(
+    "SELECT chat_id, tool_transcript_json, client_turn_state FROM chat_messages WHERE id=? AND role='user'",
+  ).get(messageId);
+  if (row === undefined || typeof row.chat_id !== "string") throw notFound("Message");
+  if (row.client_turn_state !== null && row.client_turn_state !== "pending")
+    throw invalidRequest("Tool turn is no longer pending.");
+  if (row.tool_transcript_json === null) return { bytes: 0, exchangeCount: 0 };
+  if (typeof row.tool_transcript_json !== "string") throw invalidTranscript();
+  const transcript = decodeStoredTranscript(row.tool_transcript_json, { chatId: row.chat_id, messageId });
+  if (transcript === undefined) throw invalidTranscript();
+  return { bytes: Buffer.byteLength(row.tool_transcript_json), exchangeCount: transcript.exchanges.length };
+}
 const UPDATE = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -108,7 +137,7 @@ const UPDATE = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["started", "write-prepared", "settled", "read-consent", "write-approval"],
+      values: ["started", "captured", "write-prepared", "settled", "read-consent", "write-approval"],
     },
     exchangeCount: { type: "integer", dataClass: "count", required: true },
     draftReceiptCount: { type: "integer", dataClass: "count", required: false },
@@ -198,6 +227,14 @@ function matchesApprovalCall(
       )
   );
 }
+function validNativeArgumentsDigest(
+  value: Record<string, unknown>,
+  call: ChatToolExchange["call"],
+  binding: unknown,
+): boolean {
+  return value.nativeArgumentsDigest === undefined ||
+    (validSourceDigest(value.nativeArgumentsDigest) && binding !== undefined && call.id.startsWith("mcp-"));
+}
 function validPrivateBindings(
   value: Record<string, unknown>,
   call: ChatToolExchange["call"],
@@ -208,6 +245,7 @@ function validPrivateBindings(
   const binding = value.operationBinding;
   if (binding !== undefined && !isJiraOperationBinding(binding)) return false;
   if (binding !== undefined && !MUTATION_ALIASES.has(call.name)) return false;
+  if (!validNativeArgumentsDigest(value, call, binding)) return false;
   if (
     value.sourceDigest !== undefined &&
     (!validSourceDigest(value.sourceDigest) ||
@@ -289,6 +327,7 @@ function validExchange(
       "approval",
       "operationBinding",
       "sourceDigest",
+      "nativeArgumentsDigest",
       "mutationOutcome",
       "draftProgress",
     ]) ||
@@ -363,6 +402,7 @@ export function decodeChatToolTranscriptForHistory(
   readonly transcript: ChatToolTranscript | undefined;
   readonly operationBindings: ReadonlyMap<string, JiraOperationBinding>;
   readonly sourceDigests: ReadonlyMap<string, string>;
+  readonly nativeArgumentsDigests: ReadonlyMap<string, string>;
 } {
   const stored = decodeStoredTranscript(json, identity);
   return {
@@ -380,6 +420,10 @@ export function decodeChatToolTranscriptForHistory(
           ? []
           : [[exchange.call.id, exchange.sourceDigest] as const],
       ) ?? [],
+    ),
+    nativeArgumentsDigests: new Map(
+      stored?.exchanges.flatMap((exchange) => exchange.nativeArgumentsDigest === undefined
+        ? [] : [[exchange.call.id, exchange.nativeArgumentsDigest] as const]) ?? [],
     ),
   };
 }
@@ -505,6 +549,21 @@ function applyUpdate(
   chatId: string,
   messageId: string,
 ): StoredTranscript {
+  if (update.kind === "captured") {
+    const existing = current.exchanges.find((exchange) => exchange.call.id === update.call.id);
+    if (existing !== undefined && existing.nativeArgumentsDigest !== update.nativeArgumentsDigest)
+      throw invalidRequest("Native tool arguments conflict.");
+    const started = applyExchange(current, {
+      kind: "started", call: update.call, operationBinding: update.operationBinding,
+    });
+    const captured = { ...started, exchanges: started.exchanges.map((exchange) =>
+      exchange.call.id === update.call.id
+        ? { ...exchange, nativeArgumentsDigest: update.nativeArgumentsDigest } : exchange) };
+    return applyExchange(captured, {
+      kind: "settled", callId: update.call.id, result: update.result,
+      binding: update.binding, mutationOutcome: update.mutationOutcome,
+    });
+  }
   if (update.kind === "write-prepared") return applyPrepared(current, update);
   if (update.kind === "write-approval") return applyApproval(current, update, chatId, messageId);
   if (update.kind !== "read-consent") return applyExchange(current, update);
@@ -627,7 +686,7 @@ function validateDraftProgress(exchange: StoredExchange): void {
   validateDraftProgressData(exchange);
 }
 function redactResult(
-  update: Extract<ChatToolTranscriptUpdate, { kind: "settled" }>,
+  update: Extract<ChatToolTranscriptUpdate, { kind: "settled" | "captured" }>,
   redact: (value: string) => string,
 ): ToolResultEnvelope {
   const verified = validateToolResultEnvelope(update.result, update.binding);
@@ -688,10 +747,10 @@ function sameStartedExchange(
   );
 }
 
-function redactStarted(
-  update: Extract<ChatToolTranscriptUpdate, { kind: "started" }>,
+function redactCall(
+  update: Extract<ChatToolTranscriptUpdate, { kind: "started" | "captured" }>,
   redact: (value: string) => string,
-): ChatToolTranscriptUpdate {
+): ChatToolExchange["call"] {
   const call = deepRedactStrings(update.call, redact);
   if (
     !validCall(call) ||
@@ -699,14 +758,15 @@ function redactStarted(
       (!isJiraOperationBinding(update.operationBinding) || !MUTATION_ALIASES.has(call.name)))
   )
     throw invalidRequest("Invalid tool call.");
-  return { ...update, call: canonicalCall(call) };
+  return canonicalCall(call);
 }
 
 function redactUpdate(
   update: ChatToolTranscriptUpdate,
   redact: (value: string) => string,
 ): ChatToolTranscriptUpdate {
-  if (update.kind === "started") return redactStarted(update, redact);
+  if (update.kind === "started") return { ...update, call: redactCall(update, redact) };
+  if (update.kind === "captured") return redactCaptured(update, redact);
   if (update.kind === "settled") return redactSettlement(update, redact);
   if (update.kind === "write-prepared") {
     if (!validSourceDigest(update.sourceDigest))
@@ -724,6 +784,21 @@ function redactUpdate(
   if (!isChatToolReadGrantView(update.grant))
     throw invalidRequest("Invalid tool consent projection.");
   return update;
+}
+
+function redactCaptured(
+  update: Extract<ChatToolTranscriptUpdate, { kind: "captured" }>,
+  redact: (value: string) => string,
+): ChatToolTranscriptUpdate {
+  if (update.nativeArgumentsDigest !== sha256Hex(canonicalise(update.call.arguments)) ||
+      !update.call.id.startsWith("mcp-") || update.result.invocationId !== update.call.id)
+    throw invalidRequest("Invalid native tool capture identity.");
+  return {
+    ...update,
+    call: redactCall(update, redact),
+    result: redactResult(update, redact),
+    binding: { ...update.binding, descriptor: verifyToolDescriptor(update.binding.descriptor) },
+  };
 }
 
 function draftReceiptLogFields(update: ChatToolTranscriptUpdate): { draftReceiptCount?: number } {

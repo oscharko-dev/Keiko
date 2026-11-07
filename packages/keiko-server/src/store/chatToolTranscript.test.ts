@@ -1,4 +1,4 @@
-import { jiraOperationBindingForTool } from "../atlassian/jiraManagedProvider.js";
+import { jiraOperationBindingForTool, jiraOperationForTool } from "../atlassian/jiraManagedProvider.js";
 import { jiraChatWriteAction } from "../atlassian/jiraChatCatalogWrite.js";
 import { jiraOperationActionDigest } from "../atlassian/jiraOperationRegistry.js";
 import { mcpChatWriteAction } from "../mcp/mcpChatCatalogAdmission.js";
@@ -17,6 +17,7 @@ import {
   CHAT_TOOL_TRANSCRIPT_BASE_BYTES,
   CHAT_TOOL_TRANSCRIPT_MAX_BYTES,
   chatToolExchangeReservation,
+  chatToolTranscriptOccupancy,
 } from "./chatToolTranscript.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { jiraMutationDeclarations } from "../atlassian/jiraManagedMutationDescriptors.js";
@@ -1069,6 +1070,39 @@ function contractApproval(f: ReturnType<typeof fixture>): {
 }
 
 describe("persisted Jira operation approval contracts", () => {
+  it("captures a native result atomically with its private snapshot and no intermediate start", () => {
+    const f = fixture();
+    const contract = jiraOperationForTool("jira.comment");
+    const prior = mutationResult();
+    if (contract === undefined || prior.projectionDigest === null) throw new Error("Expected snapshot");
+    const binding = { descriptor: contract.declaration.descriptor, projectionDigest: prior.projectionDigest };
+    const nativeCall = { ...mutationCall, id: "mcp-synthetic-native-call" };
+    const result = validateToolResultEnvelope({ ...prior, invocationId: nativeCall.id,
+      toolRef: binding.descriptor.toolRef }, binding);
+    const captured = { kind: "captured", call: nativeCall, result, binding,
+      nativeArgumentsDigest: sha256Hex(canonicalise(nativeCall.arguments)),
+      operationBinding: contract.binding, mutationOutcome: "not-dispatched" } as const;
+    f.store.updateChatToolTranscript(f.id, captured, "native-result");
+    const stored = f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0];
+    expect(stored).toMatchObject({ call: nativeCall, result, mutationOutcome: "not-dispatched" });
+    expect(stored).not.toHaveProperty("operationBinding");
+    expect(stored).not.toHaveProperty("resultBinding");
+    expect(stored).not.toHaveProperty("nativeArgumentsDigest");
+    expect(chatToolTranscriptOccupancy(f.db, f.id)).toEqual({
+      exchangeCount: 1,
+      bytes: Buffer.byteLength(String(f.db.prepare("SELECT tool_transcript_json AS json FROM chat_messages WHERE id=?")
+        .get(f.id)?.json)),
+    });
+    expect(f.logs.events.filter((event) => event.op === "chat.tool-transcript.updated")
+      .map((event) => event.extra?.phase)).toEqual(["captured"]);
+    expect(() => f.store.updateChatToolTranscript(f.id, { ...captured,
+      call: { ...mutationCall, id: "invalid-capture" },
+      result: { ...result, data: { unexpected: "private-token" } },
+    }, "native-result")).toThrow();
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges).toHaveLength(1);
+    expect(JSON.stringify(f.logs.events)).not.toContain("private-token");
+  });
+
   it.each(["jira.create-project", "jira.update-project"] as const)(
     "binds a hyphenated project operation to its normalized call alias: %s",
     (operation) => {

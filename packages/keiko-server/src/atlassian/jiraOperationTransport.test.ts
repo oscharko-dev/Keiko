@@ -90,6 +90,11 @@ const SCENARIOS: readonly Scenario[] = [
   { tool: "jira.duplicate-user-count", args: {}, query: { flush: "false" } },
   { tool: "jira.duplicate-users", args: { maxResults: 1 }, query: { flush: "false" } },
   { tool: "jira.search-error", args: {} },
+  { tool: "jira.remote-version-links", args: { globalId: "app=synthetic&id=1", maxResults: 1 }, query: { globalId: "app=synthetic&id=1" } },
+  { tool: "jira.version-remote-links", args: { versionId: "81", maxResults: 1 }, parameters: { versionId: "81" }, primaryMethodIndex: 1 },
+  { tool: "jira.version-remote-link", args: { versionId: "81", globalId: "sample~state" }, parameters: { versionId: "81", globalId: "sample~state" }, primaryMethodIndex: 1 },
+  { tool: "jira.deleted-worklogs", args: { since: "0" }, query: { since: "0" } },
+  { tool: "jira.updated-worklogs", args: { since: "0" }, query: { since: "0" } },
   { tool: "jira.permission-scheme-attribute", args: { schemeId: "37", attributeKey: "review ~state" }, parameters: { permissionSchemeId: "37", attributeKey: "review ~state" }, primaryMethodIndex: 1 },
   { tool: "jira.email-template-types", args: { maxResults: 1 } },
   { tool: "jira.application-properties", args: { key: "jira.option.voting" }, query: { key: "jira.option.voting" } },
@@ -1104,8 +1109,15 @@ function jobObservationRead(path: string): AtlassianHttpBodyResult | undefined {
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
-function accountDiagnosticRead(path: string): AtlassianHttpBodyResult | undefined {
+function ancillaryNativeRead(path: string): AtlassianHttpBodyResult | undefined {
+  const remoteLink = { name: "External reference", link: JSON.stringify({ "a/b~c": [false, 0, null, ""] }) };
   const bodies: Readonly<Record<string, unknown>> = {
+    "version/remotelink": { links: [remoteLink] },
+    "version/81/remotelink": { links: [remoteLink] },
+    "version/81/remotelink/sample~state": remoteLink,
+    "worklog/deleted": { since: 0, until: 10, lastPage: false, values: [{ worklogId: 71, updatedTime: 10 }],
+      nextPage: "https://jira.example.invalid/context/rest/api/2/worklog/deleted?since=10" },
+    "worklog/updated": { since: 0, until: 10, lastPage: true, values: [{ worklogId: 72, updatedTime: 10 }] },
     "permissionscheme/37/attribute/review%20~state": { key: "review ~state", value: "" },
     "email-templates/types": { userEmailAddress: "discarded@example.invalid", emailTypes: [
       { id: 1, eventName: "Issue created", templateName: "issuecreated.vm", active: false, batchedNotification: false, html: true, text: false },
@@ -1283,7 +1295,7 @@ function remoteRead(
     assetRead(path, state) ??
     administrationRead(path, absoluteUrl) ??
     jobObservationRead(path) ??
-    accountDiagnosticRead(path) ??
+    ancillaryNativeRead(path) ??
     entityPropertyRead(path) ??
     issueContextRead(path, absoluteUrl) ??
     issueMetadata(path, state) ??
@@ -1384,7 +1396,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(218);
+    expect(native).toHaveLength(223);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

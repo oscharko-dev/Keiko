@@ -13,7 +13,9 @@ import {
   type ManagedMcpFailure,
   type ManagedMcpInvocationContext,
   type ManagedMcpMutationInvocation,
+  type ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { boundedDescription, ManagedMcpError, noEffectError } from "./definitions.js";
 
@@ -65,6 +67,7 @@ function beginMutation(
     sessionId: typeof input.sessionId === "string" ? input.sessionId : undefined,
     toolName: input.name,
     argumentsValue: input.argumentsValue,
+    ...(input.connection.localProvider === undefined ? {} : { localProvider: input.connection.localProvider }),
   });
   if (permit === undefined) throw new ManagedMcpError("not-admitted");
   return permit;
@@ -140,28 +143,86 @@ async function settleFailedCall(
 function dispatchAdmission(
   connection: ExternalMcpConnection,
   permit: ManagedMcpMutationInvocation | undefined,
+  observation: RelayObservation,
 ): { readonly beforeDispatch?: () => boolean } {
   const dispatch = permit?.dispatch;
   if (dispatch === undefined) return {};
-  if (connection.dispatchGate === true) return { beforeDispatch: (): boolean => dispatch() };
+  if (connection.dispatchGate === true) return {
+    beforeDispatch: (): boolean => {
+      const admitted = dispatch();
+      if (admitted) observation.dispatched = true;
+      return admitted;
+    },
+  };
   if (!dispatch()) throw noEffectError("not-admitted");
+  observation.dispatched = true;
   return {};
+}
+
+interface RelayObservation {
+  dispatched: boolean;
+  retained?: ManagedMcpToolResult;
+}
+function resultCapture(
+  permit: ManagedMcpMutationInvocation | undefined,
+  observation: RelayObservation,
+): Pick<ManagedMcpInvocationContext, "retainProviderResult" | "retainLocalFailure"> {
+  const retain = permit?.retainProviderResult;
+  return {
+    retainLocalFailure: permit?.retainLocalFailure,
+    retainProviderResult: retain === undefined ? undefined : (result) => {
+      const retained = retain(result);
+      observation.retained = retained;
+      return retained;
+    },
+  };
+}
+function assertRetainedResult(result: CallToolResult, observation: RelayObservation): void {
+  const retained = observation.retained;
+  if (retained !== undefined && (
+    (result.isError === true) !== (retained.isError === true) ||
+    canonicalise(result.structuredContent) !== canonicalise(retained.data)
+  )) throw new ManagedMcpError("protocol-error");
+}
+
+function retainedPreflightFailure(
+  observation: RelayObservation,
+  permit: ManagedMcpMutationInvocation | undefined,
+): CallToolResult {
+  const retained = observation.retained;
+  if (retained === undefined) throw new ManagedMcpError("protocol-error");
+  // Only the actual private transport gate proves no dispatch. isError never proves no effect.
+  if (observation.dispatched) throw new ManagedMcpError("tool-error");
+  permit?.release?.();
+  return {
+    isError: true,
+    structuredContent: retained.data,
+    content: [{ type: "text", text: JSON.stringify(retained.data) }],
+  };
 }
 
 async function invokeRelayTool(input: RelayCall): Promise<CallToolResult> {
   const { context } = input;
   assertCurrent(context, input.active, input.signal);
   const permit = beginMutation(input, context);
+  const observation: RelayObservation = { dispatched: input.mutation && permit?.dispatch === undefined };
   try {
     const signal = AbortSignal.any([context.signal, input.signal]);
     const result = await input.connection.call(input.name, input.argumentsValue, {
       ...context,
       signal,
       invocationId: permit?.invocationId ?? context.invocationId,
-      ...dispatchAdmission(input.connection, permit),
+      ...dispatchAdmission(input.connection, permit, observation),
+      ...resultCapture(permit, observation),
     });
-    if (!isCallToolResult(result) || (input.mutation && result.isError === true))
-      throw new ManagedMcpError("protocol-error");
+    if (!isCallToolResult(result)) throw new ManagedMcpError("protocol-error");
+    assertRetainedResult(result, observation);
+    if (input.mutation && result.isError === true) {
+      assertCurrent(context, input.active, signal);
+      const failure = retainedPreflightFailure(observation, permit);
+      assertCurrent(context, input.active, signal);
+      return failure;
+    }
     permit?.acknowledge();
     assertCurrent(context, input.active, signal);
     return result;

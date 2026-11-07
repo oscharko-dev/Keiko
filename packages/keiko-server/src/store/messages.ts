@@ -190,6 +190,7 @@ function rowToMessage(db: DatabaseSync, row: MessageRow): ChatMessage {
     message,
     history.operationBindings,
     history.sourceDigests,
+    history.nativeArgumentsDigests,
   );
 }
 

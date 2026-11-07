@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **253 native identities: 201 reads and 52 writes**. Each is mapped to
+The current registry supplies **258 native identities: 206 reads and 52 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **186 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **181 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -153,6 +153,8 @@ The pinned source bytes and original operation identities remain unchanged.
 
 Two further native observations bind a permission-scheme attribute and read the documented EmailTypes notification/template metadata. Attribute keys must match after independently binding the scheme; missing and empty values remain distinct. Notification formats with repeated event IDs are retained, recipient email is omitted and template names never become file links. No email is sent or template pack exported. New native-wire, schema and EN/DE reload/accessibility regression sources remain unexecuted.
 
+Three remote-version-link readers bind native versions where selected, decode only the documented JSON-encoded native link once and reuse the complete typed-value owner. Two worklog change feeds preserve exact native time windows and cursors without totals, synthetic offsets, skipped prefixes or implied all-history coverage. Native permission/retention limits and the excluded latest minute remain explicit. All five new wire/policy/schema and readable EN/DE result regression sources remain unexecuted.
+
 Nine instance-administration writes (four monitoring changes, three screen-tab changes and two
 global issue-type property mutations) require the explicit `issue-tracker.admin` grant. Ordinary
 Jira write access, a selected credential and Full access mode do not supply that grant. Coding binds
@@ -160,10 +162,7 @@ the human's selected scope into its start confirmation and real Authority Envelo
 current exact action scope before native dispatch. Metadata reads retain `issue-tracker.read`.
 This authority repair changes no native identity or qualification status; its source regressions,
 ledger reconciliation and generated log contracts remain pending the deferred final validation.
-The separate AC9 gap remains open: the generic managed MCP relay converts a mutation's structured
-error result into a closed failure and does not yet preserve the validated Jira receipt/error payload
-for Coding presentation. This checkpoint adds specific missing-scope guidance and keeps post-dispatch
-uncertainty/no-replay; it does not claim that broader payload-preservation behavior is repaired.
+Coding mutation results now use the existing run/turn-bound History and transcript owner to retain validated success/error payloads and known receipts before recovery. Private immutable descriptor, operation and original-argument bindings survive display redaction and registry changes. Existing transcript byte/call reservations are admitted before native dispatch; unavailable capacity or unreadable stored state refuses the write. Generic Chat APIs remain isolated from Coding rows. Local scope denial is stored without fabricating a native Jira permission response, and a valid provider receipt takes precedence after post-dispatch scope loss. Error results never acknowledge a write; the existing journal remains authoritative for unknown/unconfirmed/succeeded history and no replay. The existing result cards render those exchanges in EN/DE after reload even when user text is already in the timeline. Native read-result capture is still being completed separately; AC9 acceptance and every confirming run remain open.
 
 Worklog writes depend on the existing issue-template admission owner. The post-state uses observed
 `timespent`/`timetracking` and safe create/update deltas; absent or inconsistent aggregates never

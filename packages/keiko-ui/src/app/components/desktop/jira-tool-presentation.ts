@@ -33,7 +33,9 @@ import { JIRA_PROPERTY_KEY_TOOLS } from "./jira-property-presentation";
 import { JIRA_PROPERTY_MUTATION_TOOLS, jiraPropertyMutationIdentityComplete } from "./jira-property-mutation-presentation";
 import { JIRA_ACCOUNT_DIAGNOSTIC_TOOLS } from "./jira-account-diagnostic-presentation";
 import { JIRA_APPLICATION_SETTINGS_TOOLS } from "./jira-application-settings-presentation";
+import { JIRA_REMOTE_VERSION_LINK_TOOLS } from "./jira-remote-version-link-presentation";
 const LOCALLY_PAGED_TOOLS = new Set([
+  ...JIRA_REMOTE_VERSION_LINK_TOOLS,
   ...JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,
   ...JIRA_APPLICATION_SETTINGS_TOOLS,
   "jira_pinned_comments",
@@ -134,6 +136,13 @@ export function jiraToolLabel(exchange: ChatToolExchange): WidgetMessageKey {
   return operation === undefined
     ? "chat.jira.tool"
     : jiraCallLabel(operation, exchange.call.arguments);
+}
+/** A local envelope refusal is not a Jira permission response or evidence of a remote effect. */
+export function jiraLocalAccessDenialNotice(exchange: ChatToolExchange): WidgetMessageKey | undefined {
+  const result = exchange.result;
+  return result?.status === "denied" && result.reason === "effect-denied" && result.data === null &&
+    MANAGED_TOOLS.some((name) => name.replace(/[.-]/gu, "_") === exchange.call.name)
+    ? "atlassianConnectors.denied.reason.connector-access-denied" : undefined;
 }
 export function jiraToolRegionLabel(exchange: ChatToolExchange): WidgetMessageKey {
   const knowledge = KNOWLEDGE_TOOLS[exchange.call.name];

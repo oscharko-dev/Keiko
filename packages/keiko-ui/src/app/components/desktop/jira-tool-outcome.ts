@@ -56,6 +56,8 @@ import { JIRA_JOB_OBSERVATION_TOOLS, jiraJobObservationDetails } from "./jira-jo
 import { JIRA_ACCOUNT_DIAGNOSTIC_TOOLS, jiraAccountDiagnosticDetails } from "./jira-account-diagnostic-presentation";
 import { JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS, jiraAdministrativeObservationDetails } from "./jira-administrative-observation-presentation";
 import { JIRA_APPLICATION_SETTINGS_TOOLS, jiraApplicationSettingsDetails } from "./jira-application-settings-presentation";
+import { JIRA_REMOTE_VERSION_LINK_TOOLS, jiraRemoteVersionLinkDetails } from "./jira-remote-version-link-presentation";
+import { JIRA_WORKLOG_FEED_TOOLS, jiraWorklogFeedDetails } from "./jira-worklog-feed-presentation";
 import { JIRA_PROPERTY_TOOLS, jiraPropertyDetails } from "./jira-property-presentation";
 import { JIRA_MONITORING_WRITE_TOOLS, jiraMonitoringDetails } from "./jira-monitoring-presentation";
 import { JIRA_PROPERTY_MUTATION_TOOLS, jiraPropertyMutationDetails } from "./jira-property-mutation-presentation";
@@ -267,6 +269,8 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
 }
 type ConfigurationPresenter = (tool: string, source: UnknownRecord) => readonly JiraAgileDetails[];
 const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, ConfigurationPresenter])[] = [
+  [JIRA_REMOTE_VERSION_LINK_TOOLS, jiraRemoteVersionLinkDetails],
+  [JIRA_WORKLOG_FEED_TOOLS, jiraWorklogFeedDetails],
   [JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS, jiraAdministrativeObservationDetails],
   [JIRA_APPLICATION_SETTINGS_TOOLS, jiraApplicationSettingsDetails],
   [JIRA_ACCOUNT_DIAGNOSTIC_TOOLS, jiraAccountDiagnosticDetails],
@@ -502,7 +506,7 @@ function pageCounts(
   const items = returnedEntries(data, tool);
   if (items === undefined)
     return { returnedCount: undefined, total: undefined, unreadableCount: 0 };
-  const total = count(data.total);
+  const total = JIRA_WORKLOG_FEED_TOOLS.has(tool) ? undefined : count(data.total);
   const covered = (count(data.startAt) ?? 0) + items.length;
   return {
     returnedCount: items.length,
