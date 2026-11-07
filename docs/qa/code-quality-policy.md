@@ -133,7 +133,8 @@ The ledger started empty at `7bbca2e34`; #4145 adds no entry.
 ## Responsibility qualification
 
 #3991 restores the hosted qualification that #4165 removed. The required `ci` context needs the
-`code-quality-policy` job, and Core quality waits for it. The job runs on `ubuntu-24.04-arm` once
+`code-quality-policy` job. Core quality runs beside it, not after it (owner decision 2026-11-07 on
+#3991), because the `ci` context already requires both. The job runs on `ubuntu-24.04-arm` once
 with Node 24.18.0 (and a 12288 MiB heap) and once with Node 26.8.1. Each leg runs these three
 steps in order, with no condition and no `continue-on-error`:
 
@@ -177,7 +178,7 @@ scopes its own files certainly fall in.
 
 Local `npm run lint` builds the packages, runs the same three steps and then `npm run lint:typed`,
 the per-package ESLint run from #4182 plus the keiko-ui lint. Core quality runs only
-`npm run lint:typed`, after this job, so it does not repeat the qualification.
+`npm run lint:typed`, so it does not repeat the qualification.
 
 ## Engine
 

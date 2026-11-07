@@ -510,7 +510,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
 
   // #3991 (owner decision 2026-11-07): the typed tail is the #4182 per-package lint, never one
   // `eslint .`.
-  it("retains full local lint and requires hosted policy before typed Core lint", () => {
+  it("retains full local lint and requires hosted policy beside typed Core lint", () => {
     const manifest = JSON.parse(read("package.json"));
     expect(manifest.scripts["check:code-quality-policy"]).toBe(
       "node scripts/check-code-quality-policy.mjs",
@@ -542,7 +542,12 @@ describe("production code-quality invocation wiring (#3915)", () => {
     );
     const workflow = parse(read(".github/workflows/ci.yml"));
     const core = Object.values(workflow.jobs).find((job) => job.name === "Core quality");
-    expect(core.needs).toContain("code-quality-policy");
+    // Core quality runs beside the hosted policy legs (owner decision 2026-11-07 on #3991); the
+    // aggregate ci job is what requires both before integration.
+    expect([core.needs].flat()).toEqual(["verified-tree"]);
+    expect(workflow.jobs.ci.needs).toEqual(
+      expect.arrayContaining(["core-quality", "code-quality-policy"]),
+    );
     expect(core.steps.filter((step) => step.run === "npm run lint:typed")).toHaveLength(1);
     expect(core.steps.filter((step) => step.run === "npm run lint")).toHaveLength(0);
   });

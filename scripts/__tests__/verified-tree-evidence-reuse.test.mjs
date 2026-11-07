@@ -323,8 +323,8 @@ describe("required static policy matrix", () => {
     expect(job["continue-on-error"]).toBeUndefined();
     expect(jobs["core-quality"]["runs-on"]).toBe("ubuntu-latest");
     expect(jobs["node-26-compatibility"]["runs-on"]).toBe("ubuntu-latest");
-    expect(jobs["core-quality"].needs).toContain("code-quality-policy");
-    expect(jobs.ci.needs).toContain("code-quality-policy");
+    expect([jobs["core-quality"].needs].flat()).toEqual(["verified-tree"]);
+    expect(jobs.ci.needs).toEqual(expect.arrayContaining(["core-quality", "code-quality-policy"]));
     expect(job.steps.filter((step) => step.run).map((step) => step.run)).toEqual([
       "node scripts/check-ci-merge-candidate.mjs",
       "node scripts/check-runtime-toolchain.mjs --exact",

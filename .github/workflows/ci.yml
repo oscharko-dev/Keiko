@@ -412,7 +412,9 @@ jobs:
 
   core-quality:
     name: Core quality
-    needs: [verified-tree, code-quality-policy]
+    # Runs beside the code-quality-policy legs, not after them (owner decision 2026-11-07 on #3991):
+    # the aggregate ci job requires both, so ordering would only lengthen the critical path.
+    needs: verified-tree
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     # Bounded per .coderabbit.yaml's workflow policy. Since lint runs its partitions one after
