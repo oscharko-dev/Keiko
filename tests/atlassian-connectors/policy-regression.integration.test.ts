@@ -75,6 +75,15 @@ const D4: Readonly<
   >
 > = {
   "governed-assist": {
+    "jira.advanced-settings": "review-required",
+    "jira.application-properties": "review-required",
+    "jira.my-preference": "review-required",
+    "jira.password-policy": "review-required",
+    "jira.duplicate-user-count": "review-required",
+    "jira.duplicate-users": "review-required",
+    "jira.search-error": "review-required",
+    "jira.permission-scheme-attribute": "review-required",
+    "jira.email-template-types": "review-required",
     "jira.get-comment": "review-required",
     "jira.link-types": "review-required",
     "jira.issue-link": "review-required",
@@ -329,6 +338,15 @@ const D4: Readonly<
   },
   // ADR-0138: supervised-coding internet-scope operations require approval at every risk.
   "supervised-coding": {
+    "jira.advanced-settings": "review-required",
+    "jira.application-properties": "review-required",
+    "jira.my-preference": "review-required",
+    "jira.password-policy": "review-required",
+    "jira.duplicate-user-count": "review-required",
+    "jira.duplicate-users": "review-required",
+    "jira.search-error": "review-required",
+    "jira.permission-scheme-attribute": "review-required",
+    "jira.email-template-types": "review-required",
     "jira.get-comment": "review-required",
     "jira.link-types": "review-required",
     "jira.issue-link": "review-required",
@@ -582,6 +600,15 @@ const D4: Readonly<
     "add-page-comment": "review-required",
   },
   "autonomous-delivery": {
+    "jira.advanced-settings": "allowed",
+    "jira.application-properties": "allowed",
+    "jira.my-preference": "allowed",
+    "jira.password-policy": "allowed",
+    "jira.duplicate-user-count": "allowed",
+    "jira.duplicate-users": "allowed",
+    "jira.search-error": "allowed",
+    "jira.permission-scheme-attribute": "allowed",
+    "jira.email-template-types": "allowed",
     "jira.get-comment": "allowed",
     "jira.link-types": "allowed",
     "jira.issue-link": "allowed",
@@ -838,6 +865,15 @@ const D4: Readonly<
 
 // Literal deny reason per action (reads → connector-access-denied, writes → connector-write-denied).
 const MISSING_SCOPE_REASON: Readonly<Record<AtlassianConnectorActionType, string>> = {
+  "jira.advanced-settings": "connector-access-denied",
+  "jira.application-properties": "connector-access-denied",
+  "jira.my-preference": "connector-access-denied",
+  "jira.password-policy": "connector-access-denied",
+  "jira.duplicate-user-count": "connector-access-denied",
+  "jira.duplicate-users": "connector-access-denied",
+  "jira.search-error": "connector-access-denied",
+  "jira.permission-scheme-attribute": "connector-access-denied",
+  "jira.email-template-types": "connector-access-denied",
   "jira.get-comment": "connector-access-denied",
   "jira.link-types": "connector-access-denied",
   "jira.issue-link": "connector-access-denied",
@@ -1093,6 +1129,15 @@ const MISSING_SCOPE_REASON: Readonly<Record<AtlassianConnectorActionType, string
 
 // Independent policy expectations: a future union member must receive an explicit risk and mode row.
 const EXPECTED_RISK: Readonly<Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>> = {
+  "jira.advanced-settings": "low",
+  "jira.application-properties": "low",
+  "jira.my-preference": "low",
+  "jira.password-policy": "low",
+  "jira.duplicate-user-count": "low",
+  "jira.duplicate-users": "low",
+  "jira.search-error": "low",
+  "jira.permission-scheme-attribute": "low",
+  "jira.email-template-types": "low",
   "jira.get-comment": "low",
   "jira.link-types": "low",
   "jira.issue-link": "low",

@@ -120,14 +120,8 @@ function project(response: JiraReadResponse, selected: Selection): ManagedMcpToo
   return selected.name === "jira.duplicate-users"
     ? duplicateUsers(response, selected) : passwordPolicy(response, selected);
 }
-async function searchError(request: JiraMutationRequest): Promise<ManagedMcpToolResult> {
-  const response = await request("search/error/lookup", "GET", undefined, "json");
+function storedSearchError(response: JiraReadResponse): ManagedMcpToolResult {
   const scope = "current-user-http-context";
-  // This one published resource defines 204 as no stored error. The shared strict JSON decoder
-  // still refuses empty JSON on other routes; no response-mode or transport boundary is widened.
-  const status = response.ok ? response.status : response.httpStatus;
-  if (status === 204) return { data: { outcome: "succeeded", scope, errorPresent: false } };
-  if (!response.ok) return jiraReadFailure(response.reason, response.remote);
   if (response.status !== 200) return jiraReadFailure("malformed-payload");
   const message = response.body?.errorStringI18n;
   if (message === undefined || message === null || message === "") return jiraReadFailure("unavailable");
@@ -135,6 +129,16 @@ async function searchError(request: JiraMutationRequest): Promise<ManagedMcpTool
   return jiraNativeText(message, 4096)
     ? boundJiraReadResult({ data: { outcome: "succeeded", scope, errorPresent: true, message } })
     : jiraReadFailure("malformed-payload");
+}
+async function searchError(request: JiraMutationRequest): Promise<ManagedMcpToolResult> {
+  const response = await request("search/error/lookup", "GET", undefined, "json");
+  // This one published resource defines 204 as no stored error. The shared strict JSON decoder
+  // still refuses empty JSON on other routes; no response-mode or transport boundary is widened.
+  const status = response.ok ? response.status : response.httpStatus;
+  if (status === 204) return { data: {
+    outcome: "succeeded", scope: "current-user-http-context", errorPresent: false,
+  } };
+  return response.ok ? storedSearchError(response) : jiraReadFailure(response.reason, response.remote);
 }
 export function isJiraAccountDiagnosticRead(name: string): name is DiagnosticRead {
   return READS.has(name);

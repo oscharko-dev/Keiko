@@ -219,7 +219,7 @@ describe("ChatConnectorsControl", () => {
     const livePod = POD.livePod;
     if (livePod === undefined) throw new TypeError("Missing synthetic Jira Pod");
     const unready = async (): Promise<AtlassianConnectorMetadata[]> => [{ ...POD, livePod: {
-      ...livePod, verificationStatus: "unverified",
+      ...livePod, verificationStatus: "unverified" as const,
     } }];
     const persist = vi.fn<typeof updateGroundingScopes>();
     render(<ChatConnectorsControl chat={{ ...CHAT, jiraPodBinding: binding("pod-one"), jiraAdministrationEnabled: true }}

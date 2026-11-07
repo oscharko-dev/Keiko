@@ -715,6 +715,17 @@ its [permission helper](https://docs.atlassian.com/software/jira/docs/api/11.3.0
 uses the global issue-type permission service. The retained 11.3 issue-type update contract
 requires Jira administration. Keiko classifies those two writes as administration accordingly.
 
+The classification follows the operation's effect boundary, rather than copying Jira's permission
+names. Instance runtime and shared schema configuration require the explicit administration scope.
+Project creation and ordinary project metadata updates are project lifecycle actions under
+`issue-tracker.write`; they retain their high-risk, exact approval and durable readback contracts.
+Jira Data Center independently requires the global Jira Administrators permission to create a
+project and project administration to update one. A local ordinary-write grant neither supplies
+those native permissions nor permits a privileged credential fallback. Conversely, a credential
+with native project-creation permission does not acquire Keiko's instance-administration scope.
+This keeps the accepted project-setup workflow distinct from changing instance runtime or shared
+schema configuration, while enforcing both local task authority and the actual Jira permission.
+
 The human selects administration explicitly in the existing connector menu, separately from the
 mode. `Chat.jiraAdministrationEnabled` is false when absent, is stored in the existing Chat Jira
 state and can be enabled only for the unchanged currently verified Pod. HTTP updates require the
