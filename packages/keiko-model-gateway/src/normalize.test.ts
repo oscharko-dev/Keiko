@@ -4,7 +4,7 @@ import {
   ModelRefusalError,
   ProviderOutputExhaustedError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
-import { normalizeChatResponse } from "./normalize.js";
+import { normalizeChatResponse, parseNormalizedToolCalls } from "./normalize.js";
 
 const BASE_USAGE = { requestId: "req-1", latencyMs: 12, costClass: "medium" } as const;
 
@@ -297,5 +297,63 @@ describe("normalizeChatResponse", () => {
     const result = normalizeChatResponse({ usage: {} }, "m", BASE_USAGE);
     expect(result.content).toBe("");
     expect(result.finishReason).toBe("stop");
+  });
+});
+
+// Audit 2026-11-06 finding 8: a missing, unusable or repeated provider call id used to be refused by
+// the catalog bridge as a whole batch, ending the turn for every valid sibling.
+describe("parseNormalizedToolCalls call ids", () => {
+  const call = (id: unknown, name = "read"): unknown => ({
+    id,
+    type: "function",
+    function: { name, arguments: "{}" },
+  });
+
+  it("keeps every usable, first-seen id exactly as the provider sent it", () => {
+    const calls = parseNormalizedToolCalls([call("call_1"), call("fc-2.x:3")]);
+    expect(calls.map((entry) => entry.id)).toEqual(["call_1", "fc-2.x:3"]);
+  });
+
+  const MINTED = /^keiko-call-([0-9a-f]{12})-(\d+)$/u;
+
+  it("mints an id for a missing, empty, over-long or unusable one", () => {
+    const calls = parseNormalizedToolCalls([
+      call(undefined),
+      call(""),
+      call("x".repeat(129)),
+      call("has space"),
+      call("good"),
+    ]);
+    const ids = calls.map((entry) => entry.id);
+    expect(ids[4]).toBe("good");
+    const minted = ids.slice(0, 4).map((id) => MINTED.exec(id));
+    expect(minted.map((match) => match?.[2])).toEqual(["0", "1", "2", "3"]);
+    // One response shares one response part.
+    expect(new Set(minted.map((match) => match?.[1])).size).toBe(1);
+  });
+
+  // Audit 2026-11-06 (#4271): the native bridge keys an invocation by session and call id, so a
+  // later response that minted the same id made a new edit a conflicting replay and refused it.
+  it("never mints the same id in two responses", () => {
+    const first = parseNormalizedToolCalls([call("")]).map((entry) => entry.id);
+    const second = parseNormalizedToolCalls([call("")]).map((entry) => entry.id);
+    expect(first[0]).toMatch(MINTED);
+    expect(second[0]).toMatch(MINTED);
+    expect(second[0]).not.toBe(first[0]);
+  });
+
+  it("renames only the repeat of a duplicate and never collides with a sibling's own id", () => {
+    const calls = parseNormalizedToolCalls([
+      call("same"),
+      call("same"),
+      call("keiko-call-2"),
+      call(""),
+    ]);
+    const ids = calls.map((entry) => entry.id);
+    expect(ids[0]).toBe("same");
+    expect(ids[2]).toBe("keiko-call-2");
+    expect(MINTED.exec(ids[1] ?? "")?.[2]).toBe("1");
+    expect(MINTED.exec(ids[3] ?? "")?.[2]).toBe("3");
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

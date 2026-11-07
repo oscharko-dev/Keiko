@@ -58,41 +58,34 @@ export const isDenied: (relPath: string) => boolean = memoizeByStringKey(
   isDeniedUncached,
 );
 
-// Windows names one entry by spellings that differ from the stored name: an alternate data stream
-// suffix (`.env::$DATA`, `dir::$INDEX_ALLOCATION`) and trailing dots or spaces are removed by the
-// Win32 layer before the lookup, so `.env::$DATA` and `id_rsa.` open the denied file. The deny
-// decision therefore reads the name the filesystem would resolve, in addition to the spelling given.
-// The stripping applies on every host: a colon never occurs in a Windows entry name and stripping
-// only widens the denial, so a path moved between hosts keeps one verdict (W7 of #4068).
-function windowsResolvedName(lowerPart: string): string {
-  const colon = lowerPart.indexOf(":");
-  const withoutStream = colon === -1 ? lowerPart : lowerPart.slice(0, colon);
-  let end = withoutStream.length;
-  while (
-    end > 0 &&
-    (withoutStream.codePointAt(end - 1) === 46 || withoutStream.codePointAt(end - 1) === 32)
-  ) {
-    end -= 1;
-  }
-  return withoutStream.slice(0, end);
-}
-
-function isDeniedName(lower: string): boolean {
-  return PRECOMPILED_DENY_MATCHERS.some((matcher) => matcher.regex.test(lower));
-}
-
 function isDeniedUncached(relPath: string): boolean {
   for (const part of segments(relPath)) {
     const lower = part.toLowerCase();
-    const resolved = windowsResolvedName(lower);
-    if (lower === EXAMPLE_ENV || resolved === EXAMPLE_ENV) {
+    if (lower === EXAMPLE_ENV) {
       continue;
     }
-    if (isDeniedName(lower) || isDeniedName(resolved)) {
-      return true;
+    const spellings = windowsAliasSpelling(lower);
+    for (const matcher of PRECOMPILED_DENY_MATCHERS) {
+      if (matcher.regex.test(lower) || (spellings !== lower && matcher.regex.test(spellings))) {
+        return true;
+      }
     }
   }
   return false;
+}
+
+// Windows resolves a segment with trailing dots or spaces, or an alternate-data-stream suffix
+// (`name:stream`), to the plain name. The alias is checked IN ADDITION to the literal segment, so
+// the check only ever denies more; the `.env.example` exception stays an exact, literal match.
+const WINDOWS_TRAILING_ALIAS: ReadonlySet<string> = new Set([".", " "]);
+
+function windowsAliasSpelling(segment: string): string {
+  const stream = segment.indexOf(":");
+  let end = stream > 0 ? stream : segment.length;
+  while (end > 1 && WINDOWS_TRAILING_ALIAS.has(segment.charAt(end - 1))) {
+    end -= 1;
+  }
+  return segment.slice(0, end);
 }
 
 // The one owner-approved exception to the tool-state entry `.claude` (#3903, owner decision of

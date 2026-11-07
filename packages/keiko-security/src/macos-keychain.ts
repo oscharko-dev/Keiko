@@ -142,6 +142,55 @@ export interface MacosKeychainOptions {
    * Omitted or `undefined` keeps this tier exactly as silent as before.
    */
   readonly sink?: SecurityLogSink | undefined;
+  /**
+   * Test seam. Production reads of the real `security` binary use the process memo below; a fake
+   * `executable` gets no memo unless a test hands one in.
+   */
+  readonly memo?: KeychainSecretMemo | undefined;
+}
+
+/**
+ * Secrets this process has already read from the keychain, by service and account.
+ *
+ * A key item in the login keychain does not change while Keiko runs: Keiko writes one only when
+ * none exists or the stored value cannot be decoded, and a person does not rotate it underneath a
+ * running process. Yet every vault open resolved its key again, so one Chat window or one setup
+ * step spawned `security` for the same item several times, each a fresh keychain access request.
+ * The memo answers repeats from memory. It holds only values a read actually returned: a write
+ * forgets the item instead of remembering what it wrote, so two processes racing to create the
+ * first key both read the stored winner on their next open, and a replaced undecodable value is
+ * never served again. Failures are never remembered, and the withheld check runs before the memo,
+ * so `KEIKO_OS_KEYCHAIN=off` still takes effect.
+ */
+export interface KeychainSecretMemo {
+  readonly get: (service: string, account: string) => string | undefined;
+  readonly remember: (service: string, account: string, secret: string) => void;
+  readonly forget: (service: string, account: string) => void;
+}
+
+export function createKeychainSecretMemo(): KeychainSecretMemo {
+  const secrets = new Map<string, string>();
+  const keyOf = (service: string, account: string): string => `${service}\u0000${account}`;
+  return {
+    get: (service, account) => secrets.get(keyOf(service, account)),
+    remember: (service, account, secret): void => {
+      secrets.set(keyOf(service, account), secret);
+    },
+    forget: (service, account): void => {
+      secrets.delete(keyOf(service, account));
+    },
+  };
+}
+
+/** The memo every read of the real login keychain in this process shares. */
+export const processKeychainSecretMemo: KeychainSecretMemo = createKeychainSecretMemo();
+
+function memoFor(
+  spawn: ResolvedSpawn,
+  options: MacosKeychainOptions,
+): KeychainSecretMemo | undefined {
+  if (options.memo !== undefined) return options.memo;
+  return spawn.executable === MACOS_SECURITY_EXECUTABLE ? processKeychainSecretMemo : undefined;
 }
 
 /**
@@ -274,6 +323,9 @@ export function readMacosKeychainSecret(
     emitKeychainWithheld(options.sink, spawn.withheld);
     return { kind: "unavailable" };
   }
+  const memo = memoFor(spawn, options);
+  const remembered = memo?.get(service, account);
+  if (remembered !== undefined) return { kind: "found", secret: remembered };
   const elapsedMs = startSecurityLogTimer();
   try {
     const secret = execFileSync(
@@ -286,6 +338,7 @@ export function readMacosKeychainSecret(
         killSignal: spawn.killSignal,
       },
     ).trim();
+    memo?.remember(service, account, secret);
     return { kind: "found", secret };
   } catch (error) {
     const outcome = readOutcome(error);
@@ -293,6 +346,21 @@ export function readMacosKeychainSecret(
     return outcome;
   }
 }
+
+/**
+ * Spawn options that start `security` in a session of its own, without a controlling terminal.
+ *
+ * `security` asks for a password with `getpass`, which reads the controlling terminal before
+ * stdin. Launched from a terminal in the foreground, a write would wait there for a person instead
+ * of reading the piped key, time out, and leave the caller on its weaker key tier; a later detached
+ * launch could then create a different keychain key and prefer it. On POSIX, `detached` makes the
+ * child a session leader (`setsid`), so it has no terminal to read. Node's synchronous spawns honour
+ * the option (measured on Node 24 and 26: the child leads its own process group), though their type
+ * declarations omit it, hence a spread rather than a literal property.
+ */
+export const KEYCHAIN_SPAWN_WITHOUT_TERMINAL: { readonly detached: true } = Object.freeze({
+  detached: true,
+});
 
 /**
  * Stores `secret` as the generic password for `service`/`account`. Never throws; `false` means the
@@ -306,6 +374,9 @@ export function writeMacosKeychainSecret(
 ): boolean {
   const spawn = resolveSpawn(options);
   if (!spawn.darwin || spawn.withheld !== undefined) return false;
+  // Forgotten before the write, not after: whatever the write's outcome, the next read must ask
+  // the keychain what it now holds rather than serve the value this write meant to replace.
+  memoFor(spawn, options)?.forget(service, account);
   try {
     // The secret goes over stdin, never in the argument vector: `ps` exposes a process's arguments
     // to every process of the same user, which is precisely the audience this tier exists to keep
@@ -324,6 +395,7 @@ export function writeMacosKeychainSecret(
       {
         input: `${secret}\n${secret}\n`,
         stdio: ["pipe", "ignore", "ignore"],
+        ...KEYCHAIN_SPAWN_WITHOUT_TERMINAL,
         timeout: spawn.timeout,
         killSignal: spawn.killSignal,
       },

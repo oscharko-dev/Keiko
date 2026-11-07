@@ -6,6 +6,7 @@ import type { NativeWebSearch } from "./nativeWebSearch.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
+import { nativeBuildCacheAdmitted } from "./nativeBuildSettings.js";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 
@@ -28,6 +29,10 @@ import {
   nativeHomeDeniedReadRoots,
   NATIVE_OPENSSL_ENV_NAMES,
   nativeOpenSslNodeOptions,
+  nativeBuildInheritedEnvNames,
+  nativeBuildCacheReadRoots,
+  nativeBuildToolReadRoots,
+  nativeBuildWrapperReadRoots,
   nativeOpenSslReadRoots,
   nativeToolchainReadRoots,
   planWindowsGatewayRuntimeSandbox,
@@ -1310,9 +1315,10 @@ const NATIVE_INHERITED_ENV_ALLOWLIST: readonly string[] = Object.freeze([
  * but Node's OpenSSL and FIPS switches. Its files open read-only through `nativeOpenSslReadRoots`.
  */
 function nativeInheritedEnvAllowlist(env: NodeJS.ProcessEnv): readonly string[] {
-  return nativeOpenSslNodeOptions(env.NODE_OPTIONS)
-    ? [...NATIVE_INHERITED_ENV_ALLOWLIST, "NODE_OPTIONS"]
-    : NATIVE_INHERITED_ENV_ALLOWLIST;
+  // #4271: the build-tool names (JAVA_HOME, MAVEN_*, GRADLE_*, proxy family, certificate bundle,
+  // npm registry) a standalone shell sees, each only when its value carries no credential.
+  const base = [...NATIVE_INHERITED_ENV_ALLOWLIST, ...nativeBuildInheritedEnvNames(env)];
+  return nativeOpenSslNodeOptions(env.NODE_OPTIONS) ? [...base, "NODE_OPTIONS"] : base;
 }
 
 function openCodeLaunchMaterial(
@@ -1529,6 +1535,13 @@ function nativeSupportReadRoots(
   return [
     ...nativeToolchainReadRoots(withMcpExecutableDirectories(path, mcpServers), homedir()),
     ...nativeOpenSslReadRoots(input.processEnv ?? process.env, homedir()),
+    // #4271: a JDK or build tool reached through JAVA_HOME / MAVEN_HOME / GRADLE_HOME is not on PATH.
+    ...nativeBuildToolReadRoots({ ...(input.processEnv ?? process.env), PATH: path }, homedir()),
+    // Below Full access there is no network: the user's warm Maven cache opens read-only. At Full
+    // access the run resolves into its own writable private cache instead (`nativeBuildSettings`).
+    ...(nativeBuildCacheAdmitted(run.minted.effectiveMode)
+      ? [...nativeBuildCacheReadRoots(homedir()), ...nativeBuildWrapperReadRoots(homedir())]
+      : []),
   ];
 }
 

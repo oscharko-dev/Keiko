@@ -17,6 +17,7 @@ const PERMISSION_MESSAGE_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey
   websearch: "codingWorkbench.approval.native.permission.websearch",
   execute: "codingWorkbench.approval.native.permission.execute",
   opencode_worktree_create: "codingWorkbench.approval.native.permission.worktree",
+  opencode_schedule: "codingWorkbench.approval.native.permission.schedule",
 };
 
 // What Approve does depends on the permission: a command runs in the task workspace, an edit
@@ -32,6 +33,7 @@ const HELP_MESSAGE_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>> = {
   websearch: "codingWorkbench.approval.native.help.internet",
   execute: "codingWorkbench.approval.native.help.execute",
   opencode_worktree_create: "codingWorkbench.approval.native.help.worktree",
+  opencode_schedule: "codingWorkbench.approval.native.help.schedule",
 };
 
 const NATIVE_LABEL_MESSAGE_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>> = {
@@ -40,6 +42,7 @@ const NATIVE_LABEL_MESSAGE_KEYS: Readonly<Record<string, CodingWorkbenchMessageK
   "native-egress": "codingWorkbench.approval.native.label.native-egress",
   "native-execute": "codingWorkbench.approval.native.label.native-execute",
   "native-read": "codingWorkbench.approval.native.label.native-read",
+  "native-schedule": "codingWorkbench.approval.native.label.native-schedule",
 };
 
 /**

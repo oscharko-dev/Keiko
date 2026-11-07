@@ -20,7 +20,8 @@
       "learner": [
         {
           "body": "We decided as a team to release only on Tuesdays, because support is fully staffed then.",
-          "type": "decision"
+          "type": "decision",
+          "about": "team"
         }
       ]
     }

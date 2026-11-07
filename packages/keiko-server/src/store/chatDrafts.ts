@@ -1,10 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
-  isCodingWorkbenchDraftWindowId,
   MAX_DESKTOP_CHAT_INPUT_BYTES,
   MAX_DESKTOP_CHAT_INPUT_CHARS,
   type ChatDraft,
   type ChatDraftUpdate,
+  isCodingWorkbenchDraftWindowId,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { invalidRequest, notFound, UiStoreError } from "./errors.js";
 import { withImmediateTransaction } from "./transaction.js";
@@ -78,9 +78,6 @@ export function updateChatDraft(
 }
 
 function assertCodingWorkbenchWindowId(windowId: string): void {
-  // The draft key is the Workbench window's own id, a closed bounded token, never a path or free
-  // text. #4068: the earlier shape (`coding-workbench-…`) was one the shell never mints, so every
-  // read and save of the real window was refused.
   if (!isCodingWorkbenchDraftWindowId(windowId)) throw notFound("Coding Workbench draft");
 }
 

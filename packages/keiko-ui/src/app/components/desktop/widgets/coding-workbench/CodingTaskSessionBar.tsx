@@ -185,6 +185,19 @@ function TranscriptMessages({
   );
 }
 
+// A scheduled wake's intent is the prompt the task's model scheduled (#4271), never the person's.
+function transcriptAuthor(
+  message: TranscriptMessage,
+):
+  | "codingWorkbench.history.you"
+  | "codingWorkbench.history.agent"
+  | "codingWorkbench.history.scheduled" {
+  if (message.role !== "user") return "codingWorkbench.history.agent";
+  return message.taskType === "scheduled-continuation"
+    ? "codingWorkbench.history.scheduled"
+    : "codingWorkbench.history.you";
+}
+
 function TranscriptMessageCard({
   message,
   onFork,
@@ -195,11 +208,7 @@ function TranscriptMessageCard({
   const t = useCodingWorkbenchTranslate();
   return (
     <article className={styles.cmpMessage} data-role={message.role}>
-      <strong>
-        {t(
-          message.role === "user" ? "codingWorkbench.history.you" : "codingWorkbench.history.agent",
-        )}
-      </strong>
+      <strong>{t(transcriptAuthor(message))}</strong>
       <SafeMarkdownBoundary
         source={message.content}
         diagnosticMessageId={message.id}

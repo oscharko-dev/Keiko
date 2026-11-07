@@ -13,7 +13,11 @@ import {
   contentFreeErrorClass,
   keikoStackFrames,
 } from "@oscharko-dev/keiko-activity-log";
-import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  describeError,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   activityLogEvent,
@@ -81,6 +85,20 @@ const MAX_STREAM_RECONNECTS = 16;
 const RECONNECT_BASE_DELAY_MS = 250;
 const RECONNECT_MAX_DELAY_MS = 8_000;
 const RECONNECT_BUDGET_MS = 30_000;
+// A stream that delivered a hint but dropped again within this window is "flapping": the hint
+// proves nothing about a half-dead runtime, so it must not reset the reconnect pressure.
+const TURN_POLL_BASE_MS = 250;
+const TURN_POLL_MAX_MS = 2_000;
+
+interface QuietTurnPolls {
+  readonly generation: number;
+  count: number;
+}
+const MIN_HEALTHY_STREAM_MS = 10_000;
+const MAX_STREAM_FLAPS = 32;
+const EVENTS_ENDED_MESSAGE = "opencode-events-ended";
+const EVENTS_INVALID_MESSAGE = "opencode-events-invalid";
+const HISTORY_INCOMPLETE_MESSAGE = "opencode-history-incomplete";
 // The generated client must outlive the server-owned 30 s governed tool-bridge deadline.
 const OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS = 35_000;
 
@@ -486,6 +504,9 @@ export function createOpenCodeRuntimeAdapter(
   let activeAbort: AbortController | undefined;
   let monitorTask: Promise<void> | undefined;
   let monitoring = false;
+  let turnPollFailures = 0;
+  // Status polls of the current turn generation that no live notification interrupted.
+  let turnQuietPolls: QuietTurnPolls = { generation: -1, count: 0 };
   // Aborted when the monitor is disposed, so a reconnect backoff never outlives its monitor.
   let monitorStop = new AbortController();
   let closed = false;
@@ -549,20 +570,15 @@ export function createOpenCodeRuntimeAdapter(
       };
 
       async function monitorLoop(): Promise<void> {
-        let reconnects = 0;
-        let failingSince: number | undefined;
+        const health = new StreamHealth(ports.reconnect?.now ?? Date.now);
         while (isMonitoring()) {
           try {
             await observeNextHint();
-            reconnects = 0;
-            failingSince = undefined;
-          } catch {
+            health.recordHint();
+          } catch (error) {
             if (!isMonitoring()) return;
             await cancelSubscription();
-            reconnects += 1;
-            const nowMs = (ports.reconnect?.now ?? Date.now)();
-            failingSince ??= nowMs;
-            if (!(await backOff(ports, monitorStop.signal, reconnects, nowMs - failingSince))) {
+            if (!(await backOff(ports, monitorStop.signal, health.recordDrop(), error))) {
               onFailure();
               return;
             }
@@ -573,7 +589,7 @@ export function createOpenCodeRuntimeAdapter(
       async function observeNextHint(): Promise<void> {
         const { hint, signal } = await nextHint();
         if (!(await reconcileHint(ports, state, hint, signal))) {
-          throw new Error("opencode-history-incomplete");
+          throw new Error(HISTORY_INCOMPLETE_MESSAGE);
         }
         observeControl("control" in hint ? hint.control : undefined);
       }
@@ -584,7 +600,7 @@ export function createOpenCodeRuntimeAdapter(
       }> {
         if (activeIterator === undefined) return openSubscription();
         const next = await activeIterator.next();
-        if (next.done || !validHint(next.value)) throw new Error("opencode-events-ended");
+        if (next.done || !validHint(next.value)) throw new Error(EVENTS_ENDED_MESSAGE);
         return { hint: next.value, signal: activeAbort?.signal };
       }
 
@@ -777,13 +793,27 @@ export function createOpenCodeRuntimeAdapter(
       if (turnOutcome(generation, signal) === false) return settleIfCompleted(generation, signal);
       const status = await ports.control.status(sessionId, signal);
       observeStatus(sessionId, status);
+      turnPollFailures = 0;
       const observed = observedTurnOutcome(generation, signal);
       if (observed !== undefined || (status !== "terminal" && status !== "held")) return observed;
       await reconcileHistory(ports, state, signal);
       return observedTurnOutcome(generation, signal);
-    } catch {
-      return turnCurrent(generation, signal) ? undefined : false;
+    } catch (error) {
+      if (!turnCurrent(generation, signal)) return false;
+      turnPollFailures += 1;
+      // Bounded: one line per doubling of the failure streak, never one per poll.
+      if ((turnPollFailures & (turnPollFailures - 1)) === 0) {
+        recordTurnPollFailure(ports, turnPollFailures, error);
+      }
+      return undefined;
     }
+  }
+
+  // While the live stream is healthy its hints wake the wait, so the status poll is only a
+  // safety net and backs off; without a healthy stream the poll is the only signal.
+  function turnPollDelayMs(quietPolls: number): number {
+    if (!monitoring || closed || activeIterator === undefined) return TURN_POLL_BASE_MS;
+    return Math.min(TURN_POLL_MAX_MS, TURN_POLL_BASE_MS * 2 ** Math.min(quietPolls, 3));
   }
 
   function settleIfCompleted(
@@ -838,15 +868,28 @@ export function createOpenCodeRuntimeAdapter(
     return terminalSequence !== undefined && terminalSequence > baselineSequence ? true : undefined;
   }
 
+  // The backoff counts the generation's quiet polls: a notification (or abort) that ends a wait
+  // resets it, a wait the poll delay ended extends it. A new turn generation starts at zero.
+  function quietTurnPolls(generation: number): QuietTurnPolls {
+    if (turnQuietPolls.generation !== generation) turnQuietPolls = { generation, count: 0 };
+    return turnQuietPolls;
+  }
+
   function waitForTurnChange(signal: AbortSignal, generation: number): Promise<void> {
+    const quiet = quietTurnPolls(generation);
     return new Promise((resolve) => {
+      let timedOut = false;
       const done = (): void => {
         clearTimeout(timer);
         signal.removeEventListener("abort", done);
         turnNotifications.delete(done);
+        quiet.count = timedOut ? quiet.count + 1 : 0;
         resolve();
       };
-      const timer = setTimeout(done, 250);
+      const timer = setTimeout(() => {
+        timedOut = true;
+        done();
+      }, turnPollDelayMs(quiet.count));
       timer.unref();
       signal.addEventListener("abort", done, { once: true });
       if (generation !== turnGeneration || closed) done();
@@ -865,7 +908,7 @@ export function createOpenCodeRuntimeAdapter(
     const first = await activeIterator.next();
     if (first.done || !validHint(first.value)) {
       await cancelSubscription();
-      throw new Error("opencode-events-invalid");
+      throw new Error(EVENTS_INVALID_MESSAGE);
     }
     return { hint: first.value, signal: activeAbort.signal };
   }
@@ -1150,18 +1193,71 @@ async function applyHistoryPlan(
   }
 }
 
-// Waits before the next reconnect; false when the failure budget is spent (count or time).
+interface ReconnectPressure {
+  readonly reconnects: number;
+  readonly flaps: number;
+  readonly failingForMs: number;
+}
+
+// What the monitor knows about the live stream's health. A hint resets the consecutive-failure
+// budget, but a stream that dropped again within MIN_HEALTHY_STREAM_MS of its first hint is
+// "flapping" and keeps escalating the backoff until it is declared failed.
+class StreamHealth {
+  private reconnects = 0;
+  private flaps = 0;
+  private healthySince: number | undefined;
+  private failingSince: number | undefined;
+
+  constructor(private readonly now: () => number) {}
+
+  recordHint(): void {
+    this.reconnects = 0;
+    this.failingSince = undefined;
+    this.healthySince ??= this.now();
+  }
+
+  recordDrop(): ReconnectPressure {
+    const nowMs = this.now();
+    if (this.healthySince !== undefined) {
+      this.flaps = nowMs - this.healthySince >= MIN_HEALTHY_STREAM_MS ? 0 : this.flaps + 1;
+      this.healthySince = undefined;
+    }
+    this.reconnects += 1;
+    this.failingSince ??= nowMs;
+    return {
+      reconnects: this.reconnects,
+      flaps: this.flaps,
+      failingForMs: nowMs - this.failingSince,
+    };
+  }
+}
+
+function reconnectBudgetSpent(
+  pressure: ReconnectPressure,
+  delayMs: number,
+  budgetMs: number,
+): boolean {
+  if (pressure.reconnects > MAX_STREAM_RECONNECTS || pressure.flaps > MAX_STREAM_FLAPS) {
+    return true;
+  }
+  return pressure.failingForMs + delayMs > budgetMs;
+}
+
+// Waits before the next reconnect; false when the failure budget is spent (count, time or flaps).
+// A flapping stream (hint, then drop) keeps escalating the delay instead of restarting at 250 ms.
 async function backOff(
   ports: OpenCodeRuntimeAdapterPorts,
   stop: AbortSignal,
-  attempt: number,
-  failingForMs: number,
+  pressure: ReconnectPressure,
+  cause: unknown,
 ): Promise<boolean> {
+  const attempt = pressure.reconnects + pressure.flaps;
   const delayMs = reconnectDelayMs(attempt, ports.reconnect?.random ?? Math.random);
   const budgetMs = ports.reconnect?.budgetMs ?? RECONNECT_BUDGET_MS;
-  const exhausted = attempt > MAX_STREAM_RECONNECTS || failingForMs + delayMs > budgetMs;
+  const exhausted = reconnectBudgetSpent(pressure, delayMs, budgetMs);
+  const { failingForMs } = pressure;
   const outcome = exhausted ? "budget-exhausted" : "backoff";
-  recordMonitorReconnect(ports, { attempt, outcome, delayMs, failingForMs });
+  recordMonitorReconnect(ports, { attempt, outcome, delayMs, failingForMs, cause });
   if (exhausted) return false;
   await (ports.reconnect?.delay ?? abortableDelay)(delayMs, stop);
   return true;
@@ -1174,8 +1270,10 @@ function recordMonitorReconnect(
     readonly outcome: "backoff" | "budget-exhausted";
     readonly delayMs: number;
     readonly failingForMs: number;
+    readonly cause: unknown;
   },
 ): void {
+  const { frames, causeChain } = describeError(facts.cause);
   emitServerDiagnostic(ports.diagnostics, {
     correlationId: correlationIdOrUnknown(ports.correlationId),
     timestamp: new Date().toISOString(),
@@ -1183,8 +1281,39 @@ function recordMonitorReconnect(
     source: "opencode.monitor.reconnect",
     errorClass: "OpenCodeMonitorReconnect",
     message: "runtime-lifecycle-failed",
-    code: `stage=monitor:reason=${facts.outcome}:attempt=${String(facts.attempt)}:delayMs=${String(facts.delayMs)}:failingForMs=${String(facts.failingForMs)}`,
+    code: `stage=monitor:reason=${facts.outcome}:attempt=${String(facts.attempt)}:delayMs=${String(facts.delayMs)}:failingForMs=${String(facts.failingForMs)}:cause=${monitorCauseToken(facts.cause)}`,
+    frames,
+    causeChain,
   });
+}
+
+function recordTurnPollFailure(
+  ports: Pick<OpenCodeRuntimeAdapterPorts, "diagnostics" | "correlationId">,
+  streak: number,
+  cause: unknown,
+): void {
+  const { errorClass, frames, causeChain } = describeError(cause);
+  emitServerDiagnostic(ports.diagnostics, {
+    correlationId: correlationIdOrUnknown(ports.correlationId),
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.monitor",
+    source: "opencode.turn.poll",
+    errorClass,
+    message: "runtime-lifecycle-failed",
+    code: `stage=turn-poll:reason=status-failed:streak=${String(streak)}`,
+    frames,
+    causeChain,
+  });
+}
+
+function monitorCauseToken(
+  error: unknown,
+): "events-ended" | "events-invalid" | "history-incomplete" | "stream-error" {
+  const message = error instanceof Error ? error.message : undefined;
+  if (message === EVENTS_ENDED_MESSAGE) return "events-ended";
+  if (message === EVENTS_INVALID_MESSAGE) return "events-invalid";
+  if (message === HISTORY_INCOMPLETE_MESSAGE) return "history-incomplete";
+  return "stream-error";
 }
 
 /** Equal jitter: half the exponential ceiling, plus a random share of the other half. */

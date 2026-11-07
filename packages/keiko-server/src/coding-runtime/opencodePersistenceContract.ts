@@ -16,11 +16,13 @@ type OpenCodePersistenceSchema = Readonly<Record<string, readonly string[]>>;
 /**
  * What a retained copy may hold in a table. `session-state` is the session's own record; every
  * other class must be empty, because its rows could act with authority or state a later run does
- * not have. `unknown-state` names a table whose content Keiko does not model. Each version
- * classifies every table it creates, so an upgrade cannot add one nobody looked at.
+ * not have. `unknown-state` names a table whose content Keiko does not model. `schedule-state`
+ * holds the session's own time-driven schedules: the audit admits a row only when it belongs to
+ * the retained session and carries no `if`/`until` check (`opencodeSessionRetention.ts`). Each
+ * version classifies every table it creates, so an upgrade cannot add one nobody looked at.
  */
 export type OpenCodePersistenceTableClass =
-  "grant" | "credential" | "pending-input" | "unknown-state" | "session-state";
+  "grant" | "credential" | "pending-input" | "unknown-state" | "schedule-state" | "session-state";
 
 type OpenCodePersistenceTableClasses = Readonly<Record<string, OpenCodePersistenceTableClass>>;
 
@@ -264,12 +266,15 @@ const OPENCODE_2_1_4_TABLE_CLASSES: OpenCodePersistenceTableClasses = Object.fre
   worktree: "session-state",
 });
 
-/** Which rows refuse a retained 2.2.5 copy. Rows nothing in a settled native run writes stay refused. */
+/**
+ * Which rows refuse a retained 2.2.5 copy. Rows nothing in a settled native run writes stay
+ * refused; a schedule is the session's own pending wake, which Keiko resumes (ADR-0137 D10).
+ */
 const OPENCODE_2_2_5_TABLE_CLASSES: OpenCodePersistenceTableClasses = Object.freeze({
   ...Object.fromEntries(
     Object.entries(OPENCODE_2_1_4_TABLE_CLASSES).filter(([table]) => table !== "session_pending"),
   ),
-  schedule: "pending-input",
+  schedule: "schedule-state",
   blob: "unknown-state",
   blob_ref: "unknown-state",
   job: "unknown-state",

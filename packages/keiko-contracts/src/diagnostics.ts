@@ -47,6 +47,7 @@ import {
   type SupportReportAvailabilityReason,
 } from "./support-report-policy.js";
 import { MAX_SUPPORT_REPORT_BYTES } from "./support-report.js";
+import { isInPlaceWorkspaceId } from "./task-workspace.js";
 import { isGitWireUnavailableReason, type GitWireUnavailableReason } from "./git-repository.js";
 import { SELECTED_SCOPE_KINDS } from "./connected-context.js";
 import type { ChatConnectedScope } from "./bff-wire.js";
@@ -781,9 +782,14 @@ const GIT_CHANGE_DESCRIPTION_OUTCOME_SET: ReadonlySet<string> = new Set(
   CLIENT_DIAGNOSTIC_GIT_CHANGE_DESCRIPTION_OUTCOMES,
 );
 const BODY_FREE_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/u;
-// Local checkout bindings carry a server-derived SHA-256 identity after their namespace.
-// Accept that exact grammar here without opening other diagnostic ids to arbitrary colon data.
-const WORKSPACE_DIAGNOSTIC_ID_PATTERN = /^(?:[A-Za-z0-9._-]{1,128}|local:[a-f0-9]{64})$/u;
+// In-place bindings (a local checkout or an ordinary folder) carry a server-derived SHA-256
+// identity after their namespace. Accept that exact grammar, owned by the task-workspace contract,
+// without opening other diagnostic ids to arbitrary colon data.
+function isWorkspaceDiagnosticId(value: unknown): value is string {
+  return (
+    typeof value === "string" && (BODY_FREE_ID_PATTERN.test(value) || isInPlaceWorkspaceId(value))
+  );
+}
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 function isSetMember(value: unknown, values: ReadonlySet<string>): value is string {
@@ -814,8 +820,7 @@ function isClientDiagnosticWorkspaceTrustBinding(
   return (
     typeof value.repositoryId === "string" &&
     BODY_FREE_ID_PATTERN.test(value.repositoryId) &&
-    typeof value.workspaceId === "string" &&
-    WORKSPACE_DIAGNOSTIC_ID_PATTERN.test(value.workspaceId)
+    isWorkspaceDiagnosticId(value.workspaceId)
   );
 }
 
@@ -1045,6 +1050,7 @@ export const CLIENT_STAGE_IDS = [
   "files widget chunk",
   "chat bind",
   "command palette",
+  "window palette",
   "chat history deletion",
   "files directory load",
   "files source preview",
@@ -2475,8 +2481,7 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   },
   "repository-trust-bound": {
     repositoryId: (value) => typeof value === "string" && BODY_FREE_ID_PATTERN.test(value),
-    workspaceId: (value) =>
-      typeof value === "string" && WORKSPACE_DIAGNOSTIC_ID_PATTERN.test(value),
+    workspaceId: isWorkspaceDiagnosticId,
   },
   "changeset-review-prepared": {
     fileCount: (value) =>

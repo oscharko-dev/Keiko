@@ -156,6 +156,13 @@ function toHunk(acc: HunkAccumulator): PatchHunk {
   };
 }
 
+// A header number past the safe integer range would be rounded, so it could name another line.
+function lineNumber(digits: string | undefined): number {
+  const value = Number(digits);
+  if (!Number.isSafeInteger(value)) throw new PatchParseError("hunk header number out of range");
+  return value;
+}
+
 function parseHunkHeader(
   line: string,
   source: UnifiedDiffSourceRange | undefined,
@@ -164,12 +171,12 @@ function parseHunkHeader(
   if (match === null) {
     throw new PatchParseError("malformed hunk header");
   }
-  const oldLines = match[2] === undefined ? 1 : Number(match[2]);
-  const newLines = match[4] === undefined ? 1 : Number(match[4]);
+  const oldLines = match[2] === undefined ? 1 : lineNumber(match[2]);
+  const newLines = match[4] === undefined ? 1 : lineNumber(match[4]);
   return {
-    oldStart: Number(match[1]),
+    oldStart: lineNumber(match[1]),
     oldLines,
-    newStart: Number(match[3]),
+    newStart: lineNumber(match[3]),
     newLines,
     lines: [],
     oldRemaining: oldLines,
@@ -230,6 +237,9 @@ function finishFile(
 ): void {
   finishHunk(file);
   if (file.oldPath === undefined || file.newPath === undefined) {
+    // A `--- ` line without its `+++ ` line owns nothing, unless hunks followed it: dropping those
+    // would apply the rest of the patch without this file's changes.
+    if (file.hunks.length > 0) throw new PatchParseError("file header has no +++ line");
     return;
   }
   const { kind, path } = classify(file.oldPath, file.newPath);
@@ -345,7 +355,14 @@ function handleBodyLine(
     return;
   }
   if (file.current === undefined) {
-    return; // lines outside a hunk (e.g. `diff --git`, `index …`) are ignored
+    // A change line between the `+++ ` header and the file's first hunk header has no hunk to belong
+    // to; ignoring it would drop a change. Lines after a finished hunk stay ignored, as do lines
+    // that are not change lines (`diff --git`, `index …`): prose after a diff, such as a Markdown
+    // list, is not part of it.
+    if (file.newPath !== undefined && file.hunks.length === 0 && isHunkBodyLine(line)) {
+      throw new PatchParseError("body line outside a hunk");
+    }
+    return;
   }
   // Only genuine body lines (context/add/remove) belong to the hunk. An empty trailing line
   // (the split artifact of a final newline) or any other token ends the hunk so it is not

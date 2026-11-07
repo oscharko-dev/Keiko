@@ -25,8 +25,7 @@ import { evidenceScreenshotPath } from "./support/evidence.js";
 import { openChatComposer } from "./support/chat-composer.js";
 import { fakeDictationMediaInit } from "./support/dictation-media.js";
 
-const MEMORY_CAPTURE_TRANSCRIPT =
-  "KEIKO_E2E_JOURNAL_CAPTURE: remember the deterministic release window.";
+const MEMORY_CAPTURE_TRANSCRIPT = "KEIKO_E2E_JOURNAL_CAPTURE: I dictate my release notes.";
 const GROUNDING_PARITY_TRANSCRIPT = "Where is repositoryParityStatus defined?";
 const GROUNDING_PARITY_CLAIM = "repositoryParityStatus is defined in the repository fixture";
 const GROUNDING_PARITY_ANSWER = `${GROUNDING_PARITY_CLAIM} [src/repository-parity.ts:2].`;

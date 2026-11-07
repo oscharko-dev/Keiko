@@ -1193,6 +1193,39 @@ describe("additional instruction sources in the native copy", () => {
     ]);
   });
 
+  // #4279: a slow first turn was not attributable, because the line said nothing about time.
+  it("records how long the refresh and its discovery took", async () => {
+    const tree = homeTree();
+    const { activityLog, records } = captureActivityLog();
+    const port = createCodingRuntimeRepositoryInstructionsPort({
+      enabled: true,
+      delivery: "native-instructions",
+      source: {
+        readText: async ({ relativePath }) => {
+          if (relativePath === "AGENTS.md") await new Promise((resolve) => setTimeout(resolve, 40));
+          return { ok: true, text: "ROOT-RULE\n" };
+        },
+      },
+      activityLog,
+      discovery: {
+        workspaceRoot: tree.workspace,
+        home: tree.home,
+        globalConfigDirectory: tree.config,
+      },
+    });
+
+    await port.materializeForRun(request(copyAt()));
+
+    const [line] = records.filter((record) => record.op === OP);
+    const persisted = expectActivityLogProof(
+      "coding-runtime.repository-instructions.context.emitted-line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+    expect(persisted.durationMs).toBeGreaterThanOrEqual(35);
+    expect(persisted.discoveryDurationMs).toEqual(expect.any(Number));
+    expect(persisted.discoveryDurationMs).toBeLessThanOrEqual(persisted.durationMs as number);
+  });
+
   it("discovers nothing while the operator disabled the loader", async () => {
     const tree = homeTree();
     writeFileSync(join(tree.config, "AGENTS.md"), "GLOBAL-RULE\n");

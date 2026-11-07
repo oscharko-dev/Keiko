@@ -79,6 +79,17 @@ function retainUnconfirmed(journal: ChatToolMutationStore, invocationId: string)
   journal.settle(invocationId, observed ? "succeeded-unconfirmed" : "unknown");
 }
 
+/**
+ * The call failed before its frame passed the dispatch gate, so it caused no remote effect. Only a
+ * record that never became dispatched may say so; anything else stays unconfirmed.
+ */
+function releaseUndispatched(journal: ChatToolMutationStore, invocationId: string): void {
+  const current = journal.find(invocationId);
+  if (current === undefined || current.phase === "settled") return;
+  if (current.phase === "prepared") journal.settle(invocationId, "not-dispatched");
+  else retainUnconfirmed(journal, invocationId);
+}
+
 interface NativeMcpJournalInput {
   readonly store: UiStore;
   readonly snapshots: Pick<CodingRuntimeSnapshotStore, "get">;
@@ -170,20 +181,23 @@ class NativeMutationJournal implements NativeMcpMutationJournal {
       record.configurationDigest !== request.configurationDigest
     )
       return undefined;
-    if (
-      !this.#journal.beginDispatch(record.invocationId, () =>
-        request.beforeEffect({
-          runId: consumer.runId,
-          sessionId: consumer.sessionId,
-          messageId: consumer.messageId,
-          callId: consumer.callId,
-          mcpActionDigest: consumer.mcpActionDigest,
-        }),
-      )
-    )
-      return undefined;
+    // Dispatch is recorded at the transport gate, not here: a failure before the frame leaves the
+    // process (a stalled listing, descriptor drift, an abort) must stay provably effect-free.
     return {
       invocationId: record.invocationId,
+      dispatch: (): boolean =>
+        this.#journal.beginDispatch(record.invocationId, () =>
+          request.beforeEffect({
+            runId: consumer.runId,
+            sessionId: consumer.sessionId,
+            messageId: consumer.messageId,
+            callId: consumer.callId,
+            mcpActionDigest: consumer.mcpActionDigest,
+          }),
+        ),
+      release: (): void => {
+        releaseUndispatched(this.#journal, record.invocationId);
+      },
       acknowledge: (): void => {
         this.#journal.acknowledgeMcp(record.invocationId, true);
       },

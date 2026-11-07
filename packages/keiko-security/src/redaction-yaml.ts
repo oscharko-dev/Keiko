@@ -415,18 +415,59 @@ function yamlScalarSpans(
       .map(([node]) => (yamlApi().isScalar(node) ? String(node.value) : "")),
   );
   const keys = yamlKeyNodes(nodes);
+  const headers = authorizationValueNodes(nodes);
   recordPrivateYamlValues(nodes, ports);
   const spans: RedactionSpan[] = [];
   for (const [node, sensitive] of nodes) {
     if (!yamlApi().isScalar(node)) continue;
     const value = String(node.value);
-    const safe =
-      sensitive || (!keys.has(node) && knownYamlValue(node, values, ports))
-        ? REDACTION_PLACEHOLDER
-        : ports.redactPlain(value);
+    const safe = sensitive
+      ? sensitivePlaceholder(value, headers.has(node))
+      : ordinaryScalarProjection(node, value, { keys, values, ports });
     if (safe !== value) spans.push(scalarSpan(text, node, safe, plain));
   }
   return spans;
+}
+
+/** A scalar no sensitive key holds: a known private value is masked whole, anything else as text. */
+function ordinaryScalarProjection(
+  node: Scalar,
+  value: string,
+  scope: {
+    readonly keys: ReadonlySet<Node>;
+    readonly values: ReadonlySet<string>;
+    readonly ports: ProjectionPorts;
+  },
+): string {
+  if (!scope.keys.has(node) && knownYamlValue(node, scope.values, scope.ports)) {
+    return REDACTION_PLACEHOLDER;
+  }
+  return scope.ports.redactPlain(value);
+}
+
+const AUTHORIZATION_KEY = /^(?:proxy-)?authorization$/iu;
+
+/** The values held directly by an `Authorization` or `Proxy-Authorization` key. */
+function authorizationValueNodes(nodes: ReadonlyMap<Node, boolean>): ReadonlySet<Node> {
+  const values = new Set<Node>();
+  for (const node of nodes.keys()) {
+    if (!yamlApi().isMap(node)) continue;
+    for (const pair of node.items) {
+      const key = pair.key;
+      if (yamlApi().isScalar(key) && AUTHORIZATION_KEY.test(String(key.value)))
+        if (yamlApi().isNode(pair.value)) values.add(pair.value);
+    }
+  }
+  return values;
+}
+
+/**
+ * A sensitive value is masked whole. Only an authorization header value keeps its leading scheme
+ * word, which is public; any other secret that starts with such a word loses it too.
+ */
+function sensitivePlaceholder(value: string, header: boolean): string {
+  const scheme = header ? /^(?:Bearer|Basic|Token)[ \t]+(?=\S)/iu.exec(value)?.[0] : undefined;
+  return scheme === undefined ? REDACTION_PLACEHOLDER : `${scheme}${REDACTION_PLACEHOLDER}`;
 }
 
 function recordPrivateYamlValues(nodes: ReadonlyMap<Node, boolean>, ports: ProjectionPorts): void {

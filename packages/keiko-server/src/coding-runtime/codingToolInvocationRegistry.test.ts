@@ -1,3 +1,4 @@
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -101,6 +102,14 @@ describe("CodingToolInvocationRegistry (Issue #2332)", () => {
         }),
       ).kind,
     ).toBe("invalid");
+    // Audit 2026-11-06 (#4271): eviction splits identity keys at NUL, so a part holding one is
+    // never staged.
+    expect(large.stage(stagedEdit({ actionId: "a\u0000b", idempotencyKey: "nul" })).kind).toBe(
+      "invalid",
+    );
+    expect(large.stage(stagedEdit({ actionId: "nul", idempotencyKey: "a\u0000b" })).kind).toBe(
+      "invalid",
+    );
     // A payload far above the old 256 KiB, up to the request bound, is staged.
     expect(
       large.stage(
@@ -376,37 +385,98 @@ describe("CodingToolInvocationRegistry (Issue #2332)", () => {
     expect(registry.stage(past)).toEqual({ kind: "invalid" });
   });
 
-  it("retains completed replay identities for the run lifetime without locking another run", () => {
+  it("recovers identity capacity after expiry yet never lets an evicted identity run again", () => {
     let now = 0;
-    const registry = createCodingToolInvocationRegistry({ now: () => now });
-    for (let index = 0; index < 2_048; index += 1) {
-      const expiresAt = new Date(now + 1_000).toISOString();
-      const request = stagedEdit({
+    const notices: ServerDiagnosticRecord[] = [];
+    const registry = createCodingToolInvocationRegistry({
+      now: () => now,
+      diagnostics: {
+        record: (record): void => {
+          notices.push(record);
+        },
+      },
+    });
+    const completed = (index: number): StagedEditRequest =>
+      stagedEdit({
         actionId: `completed-${String(index)}`,
         idempotencyKey: `completed-key-${String(index)}`,
-        authorityExpiresAt: expiresAt,
+        authorityExpiresAt: new Date(now + 1_000).toISOString(),
+      });
+    for (let index = 0; index < 2_048; index += 1) {
+      const request = completed(index);
+      expect(registry.stage(request)).toEqual({ kind: "staged" });
+      expect(registry.take(request).kind).toBe("ready");
+      expect(registry.settle(request)).toBe(true);
+    }
+    // Inside the life of the settled identities nothing may be evicted: still busy.
+    expect(registry.stage(stagedEdit({ actionId: "early", idempotencyKey: "early" }))).toEqual({
+      kind: "busy",
+    });
+    now += 31_001;
+    expect(registry.stage(completed(0))).toEqual({ kind: "replayed" });
+    const next = stagedEdit({ actionId: "completed-2048", idempotencyKey: "completed-key-2048" });
+    expect(registry.stage(next)).toEqual({ kind: "staged" });
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      correlationId: "run-2332",
+      operation: "coding-runtime.tool-invocation",
+      message: "tool-invocation-identities-evicted",
+      code: "evicted=2048:filtered=2048",
+    });
+    expect(JSON.stringify(notices)).not.toContain("completed-");
+    // Replay of an evicted identity is still refused, never executed, and so is a reuse of only
+    // its action id or only its idempotency key.
+    for (const index of [0, 1, 1_000, 2_047]) {
+      const replay = completed(index);
+      expect(registry.stage(replay)).toEqual({ kind: "replayed" });
+      expect(registry.take(replay)).toEqual({ kind: "replayed" });
+      expect(registry.inspect(replay)).toEqual({ kind: "terminal" });
+    }
+    expect(
+      registry.stage(stagedEdit({ actionId: "completed-0", idempotencyKey: "fresh" })),
+    ).toEqual({ kind: "conflict" });
+    expect(
+      registry.stage(stagedEdit({ actionId: "fresh", idempotencyKey: "completed-key-0" })),
+    ).toEqual({ kind: "conflict" });
+    // The same ids are fresh in another run: the filter is per run.
+    expect(
+      registry.stage(
+        stagedEdit({
+          runId: "run-elsewhere",
+          actionId: "completed-0",
+          idempotencyKey: "completed-key-0",
+        }),
+      ),
+    ).toEqual({ kind: "staged" });
+  });
+
+  it("keeps a claimed identity counting against capacity and protected after others expire", () => {
+    let now = 0;
+    const registry = createCodingToolInvocationRegistry({ now: () => now });
+    const claimed = stagedEdit({ actionId: "claimed", idempotencyKey: "claimed" });
+    expect(registry.stage(claimed)).toEqual({ kind: "staged" });
+    expect(registry.take(claimed).kind).toBe("ready");
+    for (let index = 0; index < 2_047; index += 1) {
+      const request = stagedEdit({
+        actionId: `done-${String(index)}`,
+        idempotencyKey: `done-${String(index)}`,
+        authorityExpiresAt: new Date(now + 500).toISOString(),
       });
       expect(registry.stage(request)).toEqual({ kind: "staged" });
       expect(registry.take(request).kind).toBe("ready");
       expect(registry.settle(request)).toBe(true);
     }
-    now += 31_001;
-    const first = stagedEdit({
-      actionId: "completed-0",
-      idempotencyKey: "completed-key-0",
-      authorityExpiresAt: new Date(now + 1_000).toISOString(),
+    now = 100;
+    expect(registry.stage(stagedEdit({ actionId: "x", idempotencyKey: "x" }))).toEqual({
+      kind: "busy",
     });
-    expect(registry.stage(first)).toEqual({ kind: "replayed" });
-    expect(
-      registry.stage(
-        stagedEdit({ runId: "run-elsewhere", actionId: "other-run", idempotencyKey: "other-run" }),
-      ),
-    ).toEqual({ kind: "staged" });
-    expect(
-      registry.stage(
-        stagedEdit({ actionId: "completed-overflow", idempotencyKey: "completed-overflow" }),
-      ),
-    ).toEqual({ kind: "busy" });
+    now = 600;
+    // The settled identities expired and made room; the claimed one is still in flight.
+    expect(registry.stage(stagedEdit({ actionId: "x", idempotencyKey: "x" }))).toEqual({
+      kind: "staged",
+    });
+    expect(registry.inspect(claimed)).toEqual({ kind: "in-flight" });
+    expect(registry.stage(claimed)).toEqual({ kind: "replayed" });
   });
 
   it("uses independent per-run action and idempotency indexes, including after a content-free tombstone", () => {

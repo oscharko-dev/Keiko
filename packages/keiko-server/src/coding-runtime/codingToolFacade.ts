@@ -8,6 +8,8 @@ import {
 } from "../gitDelivery/verifiedCommitTypes.js";
 import { isCodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import { emitToolHandlerFailure } from "./codingToolFacadeFailure.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import {
   isCodingRuntimeGitResult,
   type CodingRuntimeGitResult,
@@ -171,7 +173,10 @@ import type {
   CodingToolInvocationRegistry,
   CodingToolInvocationTakeResult,
 } from "./codingToolInvocationRegistry.js";
-import type { CanonicalCatalogFacadeBridge } from "../tool-catalog/catalogToolFacadeBridge.js";
+import {
+  openCodeToolMayAwaitOperator,
+  type CanonicalCatalogFacadeBridge,
+} from "../tool-catalog/catalogToolFacadeBridge.js";
 
 // F8 (#3413): an optional, additive extension of CodingToolFacadeOptions. `codingToolFacadePorts.ts`
 // stays the single owner of the base shape; this widens only the LOCAL parameter type accepted by
@@ -182,6 +187,8 @@ export interface CodingToolFacadeCreateOptions extends CodingToolFacadeOptions {
    * execution (descriptor, disposition, budget, tool-catalog.* lifecycle log lines). Actions the
    * catalog does not cover dispatch exactly as before -- no behaviour change, no log line. */
   readonly catalogBridge?: CanonicalCatalogFacadeBridge | undefined;
+  /** Where a governed handler's thrown failure is recorded; the process sink when absent. */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 export function createCodingToolFacade(
@@ -195,9 +202,11 @@ export function createCodingToolFacade(
     invocationRegistry: options.invocationRegistry,
     requireInvocationRegistryForEdits: options.requireInvocationRegistryForEdits === true,
     catalogBridge: options.catalogBridge,
+    diagnostics: options.diagnostics,
     onToolSettled: options.onToolSettled,
     observeEditOutcome: options.observeEditOutcome,
     inFlight: { count: 0 },
+    operatorLane: { count: 0 },
   };
   return {
     execute: async (input) => execute(context, input),
@@ -211,9 +220,11 @@ interface ExecutionContext {
   readonly invocationRegistry: CodingToolInvocationRegistry | undefined;
   readonly requireInvocationRegistryForEdits: boolean;
   readonly catalogBridge: CanonicalCatalogFacadeBridge | undefined;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly onToolSettled: CodingToolFacadeOptions["onToolSettled"];
   readonly observeEditOutcome: ((outcome: CodingToolEditOutcome) => void) | undefined;
   readonly inFlight: { count: number };
+  readonly operatorLane: { count: number };
 }
 
 async function executeCatalogRequest(
@@ -276,14 +287,17 @@ async function executeParsed(
   request: CodingToolActionRequest,
 ): Promise<CodingToolResult> {
   if (input.signal?.aborted === true) return empty("cancelled");
-  if (context.inFlight.count >= context.maxInFlight) return empty("busy");
-  context.inFlight.count += 1;
+  // A call that may park on a human decision counts in its own lane (same bound), so pending
+  // approvals never starve a read or a search of its slot.
+  const lane = openCodeToolMayAwaitOperator(request) ? context.operatorLane : context.inFlight;
+  if (lane.count >= context.maxInFlight) return empty("busy");
+  lane.count += 1;
   try {
     const result = await routeParsed(context, input, request);
     if (request.action === "edit") observeEditResult(context.observeEditOutcome, result);
     return result;
   } finally {
-    context.inFlight.count -= 1;
+    lane.count -= 1;
   }
 }
 
@@ -298,13 +312,7 @@ function routeParsed(
     return executeCatalogRequest(context, input, request);
   }
   context.catalogBridge?.recordUnbound(request, input);
-  return executeAdmitted(
-    context.ports,
-    input,
-    request,
-    context.invocationRegistry,
-    context.requireInvocationRegistryForEdits,
-  );
+  return executeAdmitted(context.ports, input, request, context);
 }
 
 // F5 (#3873): the run's refusal bound counts the edit as the model received it, whatever path
@@ -401,18 +409,24 @@ async function executeAdmitted(
   ports: CodingToolFacadePorts,
   input: CodingToolFacadeInput,
   request: CodingToolActionRequest,
-  invocationRegistry: CodingToolInvocationRegistry | undefined,
-  requireInvocationRegistryForEdits: boolean,
+  options: Pick<
+    ExecutionContext,
+    "invocationRegistry" | "requireInvocationRegistryForEdits" | "diagnostics"
+  >,
 ): Promise<CodingToolResult> {
+  const { invocationRegistry, requireInvocationRegistryForEdits, diagnostics } = options;
   const admission = ports.authority.admit(input.capability, request);
   if (!admission.ok) return empty("denied");
   if (input.signal?.aborted === true) return empty("cancelled");
   if (!admission.mutationGuard.check()) return empty("denied");
   if (request.action === "edit" && invocationRegistry !== undefined) {
-    return executeStagedEdit(ports, input, request, admission, invocationRegistry);
+    return executeStagedEdit(ports, input, request, admission, {
+      registry: invocationRegistry,
+      diagnostics,
+    });
   }
   if (request.action === "edit" && requireInvocationRegistryForEdits) return empty("denied");
-  return executePlainAction(ports, input, request, admission);
+  return executePlainAction(ports, input, request, admission, diagnostics);
 }
 
 // F8 (#3413): every non-edit action's delegate call, optionally resolved as a catalog binding and
@@ -423,6 +437,7 @@ async function executePlainAction(
   input: CodingToolFacadeInput,
   request: CodingToolActionRequest,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<CodingToolResult> {
   input.onDelegateStarted?.();
   const runDelegate = (): Promise<unknown> =>
@@ -430,8 +445,8 @@ async function executePlainAction(
   try {
     const outcome = await runDelegate();
     return project(request, outcome);
-  } catch {
-    return projected("failed");
+  } catch (error) {
+    return recordHandlerThrow(input.signal, request.actionId, error, diagnostics);
   }
 }
 
@@ -440,8 +455,12 @@ async function executeStagedEdit(
   input: CodingToolFacadeInput,
   request: Extract<CodingToolActionRequest, { readonly action: "edit" }>,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
-  registry: CodingToolInvocationRegistry,
+  staging: {
+    readonly registry: CodingToolInvocationRegistry;
+    readonly diagnostics: ServerDiagnosticSink | undefined;
+  },
 ): Promise<CodingToolResult> {
+  const { registry, diagnostics } = staging;
   const binding = admission.binding ?? admission.mutationGuard.binding;
   const payload = typeof input.body === "string" ? Buffer.from(input.body, "utf8") : input.body;
   if (binding === undefined) return wipeAndReturn(payload, empty("denied"));
@@ -462,7 +481,7 @@ async function executeStagedEdit(
   const claimed = registry.take(identity);
   if (claimed.kind !== "ready") return wipeAndReturn(payload, empty("denied"));
   try {
-    return await executeClaimedEdit(ports, input, request, admission, claimed);
+    return await executeClaimedEdit(ports, input, request, admission, { claimed, diagnostics });
   } finally {
     registry.settle(identity);
   }
@@ -480,8 +499,12 @@ async function executeClaimedEdit(
   input: CodingToolFacadeInput,
   request: Extract<CodingToolActionRequest, { readonly action: "edit" }>,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
-  claimed: Extract<CodingToolInvocationTakeResult, { readonly kind: "ready" }>,
+  staged: {
+    readonly claimed: Extract<CodingToolInvocationTakeResult, { readonly kind: "ready" }>;
+    readonly diagnostics: ServerDiagnosticSink | undefined;
+  },
 ): Promise<CodingToolResult> {
+  const { claimed, diagnostics } = staged;
   const signal =
     input.signal === undefined ? claimed.signal : AbortSignal.any([input.signal, claimed.signal]);
   if (isAborted(signal)) return empty("cancelled");
@@ -491,9 +514,28 @@ async function executeClaimedEdit(
   try {
     const result = await runDelegate();
     return isAborted(signal) ? empty("cancelled") : project(request, result);
-  } catch {
-    return projected("failed");
+  } catch (error) {
+    return recordHandlerThrow(signal, request.actionId, error, diagnostics);
   }
+}
+
+// A handler that threw its own abort because its caller went away was cancelled and records no
+// failure. Any other throw is recorded, also when an abort raced it, so the defect stays visible;
+// a caller that left is still answered cancelled.
+function recordHandlerThrow(
+  signal: AbortSignal | undefined,
+  actionId: string,
+  error: unknown,
+  diagnostics: ServerDiagnosticSink | undefined,
+): CodingToolResult {
+  const aborted = signal?.aborted === true;
+  const abortCaused = aborted && (error === signal.reason || isAbortError(error));
+  if (!abortCaused) emitToolHandlerFailure(diagnostics, actionId, error);
+  return aborted ? empty("cancelled") : projected("failed");
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }
 
 function isAborted(signal: AbortSignal): boolean {
@@ -825,6 +867,18 @@ const REPOSITORY_REQUIRED_GUIDANCE =
   "This workspace is a plain folder, not a Git repository, so Git tools (status, diff, stage, commit, sync, push, pull request) are unavailable here. Keep working with file edits, commands and verification, and report the result; do not try to initialize a repository or run Git another way.";
 
 const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  // A window past the read byte bound is cut to whole lines with nextStartLine, so a read refused as
+  // too large has a first line that alone exceeds the bound (audit 2026-11-06, finding 6).
+  read: {
+    "workspace-read-too-large":
+      "The first line of this window alone is larger than the read limit, so this file cannot be returned as text by this tool. Locate the part you need with keiko_repository_search (literal or regex mode) instead of retrying the same read, or report the file as unreadable.",
+    "workspace-read-not-text":
+      "This file is not readable text (binary or not valid UTF-8). Do not retry it; continue with other files or report it.",
+    "workspace-read-not-found":
+      "No such file in the allowed workspace. Check the path with keiko_workspace_discover before reading again.",
+    "workspace-read-denied":
+      "This path is outside what the run may read. Do not retry it or route around the denial.",
+  },
   verification: {
     WORKSPACE_TRUST_REQUIRED:
       "Package scripts in this workspace may not run yet: either the repository's scripts were never allowed, or this run changed package.json and the operator has to allow the rewritten scripts. Only the operator can allow them, in the Coding Workbench header. Report this blocker, do not retry verification until it has been allowed, and never run the scripts another way.",

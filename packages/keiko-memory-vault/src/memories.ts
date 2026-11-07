@@ -28,8 +28,8 @@ INSERT INTO memories (
   tags_json, source_kind, source_conversation_id, source_workflow_run_id,
   source_evidence_manifest_id, captured_at, capture_rationale, model_provider,
   model_id, model_revision, retention_policy_key, retention_retain_until,
-  retention_notes, created_at, updated_at
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  retention_notes, evidence_span, source_message_ids_json, created_at, updated_at
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 `;
 
 const SELECT_BY_ID_SQL = "SELECT * FROM memories WHERE id = ?";
@@ -87,6 +87,8 @@ UPDATE memories SET
   retention_policy_key = ?,
   retention_retain_until = ?,
   retention_notes = ?,
+  evidence_span = ?,
+  source_message_ids_json = ?,
   updated_at = ?
 WHERE id = ?
 `;
@@ -124,6 +126,8 @@ function bindValues(
     r.retention_policy_key,
     r.retention_retain_until,
     r.retention_notes,
+    r.evidence_span,
+    r.source_message_ids_json,
     r.created_at,
     r.updated_at,
   ];
@@ -187,6 +191,8 @@ export function updateMemoryRow(
     r.retention_policy_key,
     r.retention_retain_until,
     r.retention_notes,
+    r.evidence_span,
+    r.source_message_ids_json,
     r.updated_at,
     r.id,
   );

@@ -38,6 +38,8 @@ const LIFECYCLE = defineActivityLogOperation({
         "deadline-exceeded",
         "aborted",
         "closed",
+        "result-too-large",
+        "backoff",
       ],
     },
     registrySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
@@ -51,6 +53,29 @@ const LIFECYCLE = defineActivityLogOperation({
       values: ["posix-process-group", "windows-job"],
     },
     invocationId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    // Digests of the server and tool names: stable join keys that carry no name.
+    serverDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    toolDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    durationMs: { type: "integer", dataClass: "duration", required: false },
+    requestBytes: { type: "integer", dataClass: "count", required: false },
+    resultBytes: { type: "integer", dataClass: "count", required: false },
+    // Whether the tools/call frame passed the dispatch gate; false proves the call had no effect.
+    dispatched: { type: "boolean", dataClass: "closed-enum", required: false },
+    effect: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["none", "possible"],
+    },
+    // Catalog narrowing at listing: tools the registry did not allow, and descriptions cut to bound.
+    omittedToolCount: { type: "integer", dataClass: "count", required: false },
+    truncatedDescriptionCount: { type: "integer", dataClass: "count", required: false },
+    connectCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["timeout", "spawn", "aborted", "closed", "protocol", "unknown"],
+    },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -60,6 +85,45 @@ const LIFECYCLE = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
+export interface ManagedMcpLineDetails {
+  readonly invocationId?: string;
+  readonly processOwner?: "posix-process-group" | "windows-job";
+  readonly serverDigest?: string | undefined;
+  readonly toolDigest?: string;
+  readonly durationMs?: number;
+  readonly requestBytes?: number;
+  readonly resultBytes?: number;
+  readonly dispatched?: boolean;
+  readonly effect?: "none" | "possible";
+  readonly omittedToolCount?: number;
+  readonly truncatedDescriptionCount?: number;
+  readonly connectCause?: "timeout" | "spawn" | "aborted" | "closed" | "protocol" | "unknown";
+}
+
+const DETAIL_FIELDS = [
+  "invocationId",
+  "processOwner",
+  "serverDigest",
+  "toolDigest",
+  "durationMs",
+  "requestBytes",
+  "resultBytes",
+  "dispatched",
+  "effect",
+  "omittedToolCount",
+  "truncatedDescriptionCount",
+  "connectCause",
+] as const;
+
+function definedDetails(details: ManagedMcpLineDetails): Record<string, string | number | boolean> {
+  const present: Record<string, string | number | boolean> = {};
+  for (const key of DETAIL_FIELDS) {
+    const value = details[key];
+    if (value !== undefined) present[key] = value;
+  }
+  return present;
+}
+
 export function recordManagedMcp(
   log: ManagedMcpLogPort,
   correlationId: string,
@@ -67,10 +131,7 @@ export function recordManagedMcp(
   toolCount: number,
   registrySha256: string,
   reason: ManagedMcpFailure | "none" = "none",
-  details: {
-    readonly invocationId?: string;
-    readonly processOwner?: "posix-process-group" | "windows-job";
-  } = {},
+  details: ManagedMcpLineDetails = {},
 ): void {
   try {
     log.write(
@@ -84,8 +145,7 @@ export function recordManagedMcp(
           registrySha256,
           completeness: "complete",
           loss: "none",
-          ...(details.invocationId === undefined ? {} : { invocationId: details.invocationId }),
-          ...(details.processOwner === undefined ? {} : { processOwner: details.processOwner }),
+          ...definedDetails(details),
         },
       ),
     );

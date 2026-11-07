@@ -176,6 +176,11 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
     emitterPrefix: "memory-explicit-statement-log",
     surface: "memory-knowledge",
   },
+  {
+    owner: "keiko-server",
+    emitterPrefix: "memory-learned-facts-log",
+    surface: "memory-knowledge",
+  },
   { owner: "keiko-server", emitterPrefix: "native-file-dialog", surface: "ui" },
   { owner: "keiko-server", emitterPrefix: "process-log-sink", surface: "tools-workflows" },
   { owner: "keiko-server", emitterPrefix: "reference-id", surface: "bff" },

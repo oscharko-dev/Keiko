@@ -354,7 +354,9 @@ describe("retaining a settled run's session state", () => {
     ["a credential", { rows: { credential: 1 } }, "credential-present"],
     ["an account", { rows: { account: 1 } }, "credential-present"],
     ["a control account", { rows: { control_account: 1 } }, "credential-present"],
-    ["a schedule", { rows: { schedule: 1 } }, "pending-input"],
+    // #4271: a schedule is retained only as the session's own, checked row; one of no session is
+    // state Keiko never admits.
+    ["a schedule of no session", { rows: { schedule: 1 } }, "schema-unknown", "schedule-rows"],
     ["an inbox entry", { rows: { session_inbox: 1 } }, "pending-input"],
     ["a suspended session", { session: { time_suspended: 5 } }, "pending-input"],
     ["a staged undo", { session: { revert: '{"messageID":"msg_1"}' } }, "revert-staged"],

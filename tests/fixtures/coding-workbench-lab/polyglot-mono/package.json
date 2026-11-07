@@ -1,0 +1,11 @@
+{
+  "name": "polyglot-mono",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "web/*"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present"
+  }
+}

@@ -1,3 +1,9 @@
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import { createHash } from "node:crypto";
 import { posix, win32 } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -63,6 +69,11 @@ export interface PortableSecureWorkspaceReadPathEntry {
 }
 
 export interface PortableSecureWorkspaceReadPlatformInspection {
+  /**
+   * Cheap metadata of the helper file itself (no content read, no process). Optional: a platform
+   * without it never caches a verdict and verifies completely on every use.
+   */
+  statIdentity?(executable: string): Promise<PortableSecureWorkspaceReadMetadata>;
   inspectPath(
     resourceRoot: string,
     executable: string,
@@ -81,7 +92,25 @@ export interface PortableSecureWorkspaceReadPlatformInspection {
 export interface PortableSecureWorkspaceReadVerifierDeps {
   readonly proveImmutableResourceTree: (resourceRoot: string) => Promise<boolean>;
   readonly platform: PortableSecureWorkspaceReadPlatformInspection;
+  /** Test seam: the clock that bounds how long one complete verification vouches. */
+  readonly now?: (() => number) | undefined;
+  /** Where a verification that threw is recorded; the process sink when absent. */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  /** Observes the closed outcome of each point-of-use check, never a path or a digest. */
+  readonly onVerification?:
+    ((outcome: PortableSecureWorkspaceReadVerificationOutcome) => void) | undefined;
 }
+
+/** `cached`: the verdict of an earlier complete verification of this exact file identity vouched. */
+export type PortableSecureWorkspaceReadVerificationOutcome =
+  "verified-complete" | "verified-cached" | "refused";
+
+/**
+ * How long a complete verification vouches for the same unchanged helper identity. The helper's own
+ * device/inode/size/mtime/ctime/link count are re-proven on every use; this bound only limits how
+ * long the parts of the sealed tree proof that the helper's metadata cannot see are trusted.
+ */
+export const PORTABLE_SECURE_WORKSPACE_READ_VERDICT_TTL_MS = 60_000;
 
 export function resolvePortableSecureWorkspaceReadBinding(
   input: PortableSecureWorkspaceReadBindingInput,
@@ -520,42 +549,138 @@ export function createPortableSecureWorkspaceReadVerifier(
   binding: PortableSecureWorkspaceReadBinding,
   deps: PortableSecureWorkspaceReadVerifierDeps,
 ): SecureWorkspaceTextReadArtifactVerifier {
+  const verdict: { fingerprint?: string; provenAt: number } = { provenAt: 0 };
   return Object.freeze({
-    verify: (artifact: SecureWorkspaceTextReadArtifact) =>
-      verifyAtPointOfUse(binding, artifact, deps),
+    verify: async (artifact: SecureWorkspaceTextReadArtifact): Promise<boolean> => {
+      const outcome = await verifyOnce(binding, artifact, deps, verdict);
+      deps.onVerification?.(outcome);
+      return outcome !== "refused";
+    },
   });
 }
 
-async function verifyAtPointOfUse(
+// A cached verdict is only ever trusted for the exact helper identity it proved: any difference in
+// device, inode, size, mtime, ctime or link count, a missing stat, or an elapsed verdict life takes
+// the complete verification again, and a failure clears the verdict (fail closed).
+async function verifyOnce(
+  binding: PortableSecureWorkspaceReadBinding,
+  artifact: SecureWorkspaceTextReadArtifact,
+  deps: PortableSecureWorkspaceReadVerifierDeps,
+  verdict: { fingerprint?: string; provenAt: number },
+): Promise<PortableSecureWorkspaceReadVerificationOutcome> {
+  try {
+    if (!isDeepStrictEqual(binding.artifact, artifact)) return "refused";
+    if (await cachedVerdictHolds(binding, artifact, deps, verdict)) return "verified-cached";
+    delete verdict.fingerprint;
+    const proven = await verifyAtPointOfUse(binding, artifact, deps);
+    if (proven === undefined) return "refused";
+    await rememberVerdict(binding, deps, verdict, proven);
+    return "verified-complete";
+  } catch (error) {
+    delete verdict.fingerprint;
+    recordVerificationFailure(deps.diagnostics, error);
+    return "refused";
+  }
+}
+
+// The read is refused either way; this keeps the cause: error class, Keiko frames and cause chain,
+// never a path, a digest or the error's own text.
+function recordVerificationFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    diagnostics,
+    serverDiagnosticFromError({
+      correlationId: UNKNOWN_CORRELATION_ID,
+      operation: "coding-runtime.workspace-read",
+      source: "secure-workspace-text-read-portable.verify",
+      error,
+      summary: "secure-read-helper-verification-failed",
+      redact: () => "secure-read-helper-verification-failed",
+    }),
+  );
+}
+
+async function cachedVerdictHolds(
+  binding: PortableSecureWorkspaceReadBinding,
+  artifact: SecureWorkspaceTextReadArtifact,
+  deps: PortableSecureWorkspaceReadVerifierDeps,
+  verdict: { fingerprint?: string; provenAt: number },
+): Promise<boolean> {
+  const now = deps.now ?? Date.now;
+  if (verdict.fingerprint === undefined) return false;
+  if (now() - verdict.provenAt >= PORTABLE_SECURE_WORKSPACE_READ_VERDICT_TTL_MS) return false;
+  const current = await currentFingerprint(binding, deps);
+  return current === verdict.fingerprint && (await pathIsPlain(binding, artifact, deps));
+}
+
+// A verdict is kept only when the file that was hashed is still, by metadata, the file in place:
+// anything swapped in between hashing and now leaves no verdict, so the next read verifies again.
+async function rememberVerdict(
+  binding: PortableSecureWorkspaceReadBinding,
+  deps: PortableSecureWorkspaceReadVerifierDeps,
+  verdict: { fingerprint?: string; provenAt: number },
+  proven: string,
+): Promise<void> {
+  if (proven === "" || proven !== (await currentFingerprint(binding, deps))) return;
+  verdict.fingerprint = proven;
+  verdict.provenAt = (deps.now ?? Date.now)();
+}
+
+async function currentFingerprint(
+  binding: PortableSecureWorkspaceReadBinding,
+  deps: PortableSecureWorkspaceReadVerifierDeps,
+): Promise<string | undefined> {
+  if (deps.platform.statIdentity === undefined) return undefined;
+  return metadataFingerprint(await deps.platform.statIdentity(binding.executable), binding);
+}
+
+function metadataFingerprint(
+  meta: PortableSecureWorkspaceReadMetadata,
+  binding: PortableSecureWorkspaceReadBinding,
+): string | undefined {
+  if (!meta.regularFile || meta.linkCount !== 1 || meta.size !== binding.helperSizeBytes) {
+    return undefined;
+  }
+  return [meta.identity, String(meta.size), meta.modifiedNs, meta.changedNs].join("|");
+}
+
+async function pathIsPlain(
   binding: PortableSecureWorkspaceReadBinding,
   artifact: SecureWorkspaceTextReadArtifact,
   deps: PortableSecureWorkspaceReadVerifierDeps,
 ): Promise<boolean> {
+  const path = await deps.platform.inspectPath(binding.resourceRoot, binding.executable);
+  const expectedEntries = artifact.installRelativePath.split("/").length + 1;
+  return (
+    path.length === expectedEntries &&
+    !path.some((entry) => !entry.safeType || entry.symbolicLink || entry.reparsePoint)
+  );
+}
+
+/** The complete proof; resolves to the fingerprint of the file it hashed (empty when none), or
+ * `undefined` when any step refuses. */
+async function verifyAtPointOfUse(
+  binding: PortableSecureWorkspaceReadBinding,
+  artifact: SecureWorkspaceTextReadArtifact,
+  deps: PortableSecureWorkspaceReadVerifierDeps,
+): Promise<string | undefined> {
+  if (!(await deps.proveImmutableResourceTree(binding.resourceRoot))) return undefined;
+  if (!(await pathIsPlain(binding, artifact, deps))) return undefined;
+  const opened = await deps.platform.openReadSameIdentity(
+    binding.executable,
+    binding.helperSizeBytes + 1,
+  );
   try {
-    if (!isDeepStrictEqual(binding.artifact, artifact)) return false;
-    if (!(await deps.proveImmutableResourceTree(binding.resourceRoot))) return false;
-    const path = await deps.platform.inspectPath(binding.resourceRoot, binding.executable);
-    const expectedEntries = artifact.installRelativePath.split("/").length + 1;
-    if (
-      path.length !== expectedEntries ||
-      path.some((entry) => !entry.safeType || entry.symbolicLink || entry.reparsePoint)
-    )
-      return false;
-    const opened = await deps.platform.openReadSameIdentity(
+    if (!validOpenedHelper(opened, binding)) return undefined;
+    const signed = await deps.platform.verifySignature(
       binding.executable,
-      binding.helperSizeBytes + 1,
+      binding.artifact.target as TargetContract["artifactTarget"],
     );
-    try {
-      if (!validOpenedHelper(opened, binding)) return false;
-      return await deps.platform.verifySignature(
-        binding.executable,
-        binding.artifact.target as TargetContract["artifactTarget"],
-      );
-    } finally {
-      opened.bytes.fill(0);
-    }
-  } catch {
-    return false;
+    return signed ? (metadataFingerprint(opened.after, binding) ?? "") : undefined;
+  } finally {
+    opened.bytes.fill(0);
   }
 }
 

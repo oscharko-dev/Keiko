@@ -20,6 +20,11 @@ export {
   nativeOpenSslNodeOptions,
   nativeOpenSslReadRoots,
   nativeToolchainReadRoots,
+  NATIVE_BUILD_ENV_NAMES,
+  nativeBuildCacheReadRoots,
+  nativeBuildInheritedEnvNames,
+  nativeBuildToolReadRoots,
+  nativeBuildWrapperReadRoots,
 } from "./native-toolchain-roots.js";
 export {
   NATIVE_LINKED_FILES_MAX,

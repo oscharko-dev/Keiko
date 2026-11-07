@@ -7,7 +7,11 @@ import {
 import { CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  defaultServerDiagnosticSink,
+  type ServerDiagnosticRecord,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import { VERIFICATION_RUNNER_ERROR_CODES } from "../editor/verificationRunnerErrors.js";
 import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
 import {
@@ -549,6 +553,42 @@ describe("CodingToolFacade", () => {
     await expect(subject.execute({ body, capability })).resolves.toMatchObject({ status: "busy" });
     release?.();
     await expect(first).resolves.toMatchObject({ status: "completed" });
+  });
+
+  // Audit 2026-11-06 finding 9: calls that park on an operator decision held the shared slots for the
+  // whole wait, so a handful of pending approvals refused every read and search as busy.
+  it("keeps calls that may await the operator in their own in-flight lane", async () => {
+    const ports = facade();
+    const releases: (() => void)[] = [];
+    ports.delegate.execute = vi.fn(
+      (request: { readonly action: string }) =>
+        new Promise((resolve) => {
+          if (request.action === "verification") {
+            releases.push(() => {
+              resolve({ outcome: "completed" });
+            });
+          } else resolve({ outcome: "completed" });
+        }),
+    );
+    const subject = createCodingToolFacade(ports, { maxInFlight: 1 });
+    const verify = requestBody({ action: "verification", verifierId: "test" });
+    const parked = subject.execute({ body: verify, capability });
+    await vi.waitFor(() => {
+      expect(releases).toHaveLength(1);
+    });
+    // The lane of the parked verification is full: a second one is busy, as before.
+    await expect(subject.execute({ body: verify, capability })).resolves.toMatchObject({
+      status: "busy",
+    });
+    // A read is not held up by it.
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "read", relativePath: "src/example.ts" }),
+        capability,
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    releases[0]?.();
+    await expect(parked).resolves.toMatchObject({ status: "completed" });
   });
 
   it("does not delegate denied or cancelled actions", async () => {
@@ -1845,6 +1885,8 @@ describe("CodingToolFacade", () => {
       status: "failed",
       reasonCode,
       evidence: [{ kind: "governed-delegate", code: reasonCode }],
+      // Audit 2026-11-06 finding 6: every closed read refusal tells the model its next step.
+      guidance: expect.stringMatching(/\S{3,}/u) as string,
     });
   });
 
@@ -2787,4 +2829,132 @@ it("keeps an observer technical failure outside the delegate catch and never exe
     }),
   ).rejects.toBe(failure);
   expect(ports.delegate.execute).not.toHaveBeenCalled();
+});
+
+// Audit 2026-11-06 finding 12: a handler that threw was answered `failed` with no trace.
+describe("a governed handler that throws", () => {
+  class HandlerBoom extends Error {}
+  const DISCARDED = "HANDLER_SECRET_CANARY";
+
+  function recorder(): { records: ServerDiagnosticRecord[]; sink: ServerDiagnosticSink } {
+    const records: ServerDiagnosticRecord[] = [];
+    return {
+      records,
+      sink: {
+        record: (record: ServerDiagnosticRecord): void => {
+          records.push(record);
+        },
+      },
+    };
+  }
+
+  function expectRecorded(records: readonly ServerDiagnosticRecord[]): void {
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: "tool-call_throw",
+      operation: "coding-runtime.tool-bridge",
+      source: "coding-tool-facade.handler",
+      errorClass: "HandlerBoom",
+      message: "tool-facade-failed",
+    });
+    expect(JSON.stringify(records)).not.toContain(DISCARDED);
+  }
+
+  it("records a plain action failure under the call's correlation and still answers failed", async () => {
+    const { records, sink } = recorder();
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.reject(new HandlerBoom(DISCARDED)));
+    const subject = createCodingToolFacade(ports, { diagnostics: sink });
+
+    await expect(
+      subject.execute({
+        body: JSON.stringify({
+          action: "read",
+          relativePath: "src/example.ts",
+          actionId: "tool:call_throw",
+          idempotencyKey: "idempotency-throw",
+        }),
+        capability,
+      }),
+    ).resolves.toMatchObject({ status: "failed" });
+    expectRecorded(records);
+  });
+
+  // Audit 2026-11-06 (#4271): a handler that threw because its caller went away was recorded as a
+  // failure and answered failed; a real failure that raced the abort must still be recorded.
+  async function abortedRead(
+    thrown: (reason: Error) => Error,
+  ): Promise<{ readonly status: unknown; readonly records: ServerDiagnosticRecord[] }> {
+    const { records, sink } = recorder();
+    const ports = facade();
+    const controller = new AbortController();
+    ports.delegate.execute = vi.fn(() => {
+      controller.abort();
+      // An abort without a reason carries the platform's AbortError, an Error.
+      return Promise.reject(thrown(controller.signal.reason as Error));
+    });
+    const result = await createCodingToolFacade(ports, { diagnostics: sink }).execute({
+      body: JSON.stringify({
+        action: "read",
+        relativePath: "src/example.ts",
+        actionId: "tool:call_throw",
+        idempotencyKey: "idempotency-throw",
+      }),
+      capability,
+      signal: controller.signal,
+    });
+    return { status: result.status, records };
+  }
+
+  it("answers cancelled, and records no failure, when the handler threw its caller's abort", async () => {
+    const own = await abortedRead((reason) => reason);
+    expect(own).toEqual({ status: "cancelled", records: [] });
+    const named = await abortedRead(() => new DOMException("aborted", "AbortError"));
+    expect(named).toEqual({ status: "cancelled", records: [] });
+  });
+
+  it("records a real failure that raced its caller's abort, and answers cancelled", async () => {
+    const raced = await abortedRead(() => new HandlerBoom(DISCARDED));
+    expect(raced.status).toBe("cancelled");
+    expectRecorded(raced.records);
+  });
+
+  it("records a claimed edit failure and still answers failed", async () => {
+    const { records, sink } = recorder();
+    const ports = facade();
+    ports.authority.admit = vi.fn((): ReturnType<CodingToolAuthorityPort["admit"]> => ({
+      ok: true as const,
+      mutationGuard: { check: (): true => true },
+      binding: {
+        runId: "run-1",
+        envelopeDigest: "e".repeat(64),
+        workspaceId: "workspace-1",
+        workspaceRootDigest: "f".repeat(64),
+        expiresAt: "2030-01-01T00:00:00.000Z",
+      },
+    }));
+    ports.delegate.execute = vi.fn(() => Promise.reject(new HandlerBoom(DISCARDED)));
+    const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+    const subject = createCodingToolFacade(ports, {
+      invocationRegistry: registry,
+      requireInvocationRegistryForEdits: true,
+      diagnostics: sink,
+    });
+    try {
+      await expect(
+        subject.execute({
+          body: JSON.stringify({
+            action: "edit",
+            changeset,
+            actionId: "tool:call_throw",
+            idempotencyKey: "idempotency-throw",
+          }),
+          capability,
+        }),
+      ).resolves.toMatchObject({ status: "failed" });
+      expectRecorded(records);
+    } finally {
+      registry.dispose();
+    }
+  });
 });

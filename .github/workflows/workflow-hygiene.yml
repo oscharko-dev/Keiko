@@ -166,7 +166,11 @@ jobs:
           # `--config` is passed explicitly rather than relying on directory auto-discovery, so the
           # committed triage record in osv-scanner.toml is the single, reviewable source of every
           # time-boxed waiver instead of something the scanner may or may not pick up per lockfile.
+          # The Coding Workbench lab fixtures are foreign repositories the live lab copies and
+          # builds, not Keiko's dependency graph: a Maven reactor module there resolves from no
+          # public registry and stops the scan. Socket still scans their manifests (#4271).
           scan-args: |-
             --config=osv-scanner.toml
             --recursive
+            --x-exclude=g:**/tests/fixtures/coding-workbench-lab
             ./

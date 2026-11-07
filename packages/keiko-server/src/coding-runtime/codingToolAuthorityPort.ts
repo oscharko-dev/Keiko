@@ -620,6 +620,7 @@ export function createRuntimeCodingToolFacade(
       ...configuration,
       requireInvocationRegistryForEdits: true,
       catalogBridge,
+      diagnostics: configuration.catalogDiagnostics,
     },
   );
   const nativeTextRead = nativeTextReadFacet(

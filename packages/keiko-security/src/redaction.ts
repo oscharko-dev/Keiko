@@ -410,6 +410,11 @@ function contextualValueSpans(input: string, preserve: boolean): readonly Redact
 
 function redactPlain(input: string, secrets: readonly string[], preserve: boolean): string {
   const contextual = redactPrivateKeyBlocks(redactLiteralSpans(input, secrets, preserve), preserve)
+    // Plain text holds no syntax to keep, so a header value is masked as wholly as the credential
+    // floor masks it: strict redaction never shows what the floor hides (#4271).
+    .replace(AUTHORIZATION_HEADER_PATTERN, (span, prefix: string) =>
+      redactedSourceSpan(span, `${prefix}${REDACTED}`, preserve),
+    )
     .replace(BEARER_PATTERN, (span) => redactedSourceSpan(span, `Bearer ${REDACTED}`, preserve))
     .replace(BASIC_AUTH_PATTERN, (span) => redactedSourceSpan(span, `Basic ${REDACTED}`, preserve));
   return redactIdentifiedPatterns(
@@ -430,6 +435,7 @@ function redactIdentifiedPatterns(
       preserveSourceLineBreaks,
     ),
   )
+    .replace(PROJECTED_AUTHORIZATION_HEADER_PATTERN, projectedAuthorizationHeader)
     .replace(GERMAN_IBAN_PATTERN, REDACTED)
     .replace(INTERNATIONAL_GERMAN_PHONE_PATTERN, REDACTED)
     .replace(DOMESTIC_GERMAN_PHONE_PATTERN, REDACTED);
@@ -461,6 +467,31 @@ function redactIssuerTokens(input: string): string {
 // authentication" or "Basic configuration" stays readable under the content opt-out.
 const AUTHORIZATION_HEADER_PATTERN =
   /\b((?:proxy-)?authorization["']?[ \t]*[:=][ \t]*["']?(?:(?:Bearer|Basic|Token)[ \t]+)?)([^\s"',;]{4,})/gi;
+// The strict projection's header pass also runs over preserved source regions, so its value is one
+// whole token ending where a header value ends: a template literal, a call, an interpolation or a
+// value already masked is never cut, and the source keeps its syntax (#4271 audit). A scheme word
+// is never taken for the value, so `Bearer [REDACTED]` keeps its scheme. The pattern finds the
+// candidate; `projectedAuthorizationHeader` applies both boundary rules.
+const PROJECTED_AUTHORIZATION_HEADER_PATTERN =
+  /\b((?:proxy-)?authorization["']?[ \t]*[:=][ \t]*["']?(?:(?:Bearer|Basic|Token)[ \t]+)?)([^\s"'`,;(){}[\]$<>]{4,})/gi;
+const AUTHORIZATION_SCHEME_WORD = /^(?:Bearer|Basic|Token)$/i;
+// A character that continues source syntax right after the candidate: the value runs on into a
+// template literal, a call, a block, an index or an interpolation, so it is not one whole token.
+const SOURCE_CONTINUATION = new Set(["`", "(", "{", "[", "$"]);
+
+function projectedAuthorizationHeader(
+  match: string,
+  prefix: string,
+  value: string,
+  offset: number,
+  input: string,
+): string {
+  const next = input.charAt(offset + match.length);
+  if (SOURCE_CONTINUATION.has(next)) return match;
+  const schemeAlone = next === "" || next === " " || next === "\t";
+  if (schemeAlone && AUTHORIZATION_SCHEME_WORD.test(value)) return match;
+  return `${prefix}${REDACTED}`;
+}
 const AUTHORIZATION_VALUE_PATTERN = /\b(Bearer|Basic)([ \t]+)([\w.\-+/=~]{8,})/gi;
 
 function redactAuthorizationValues(input: string): string {
@@ -619,10 +650,23 @@ export function deepRedactStrings(
   return value;
 }
 
+// A structured key (JSON, YAML, source property) is sensitive by the same grammar the flat text
+// path applies: a secret label that starts at a word or camelCase boundary and ends the key, so
+// `openai_api_key`, `my_password`, `GITHUB_TOKEN` and `sessionToken` count while `max_tokens`,
+// `mypassword` and `tokenizer` do not.
+const SENSITIVE_KEY_SUFFIX = new RegExp(
+  `(?<![A-Za-z0-9])(?:${SECRET_KEY_NAMES}|x-api-key|api[_-]?key)[*_]*$`,
+  "iu",
+);
+
 function sensitiveSourceName(name: string): boolean {
   const last = name.slice(name.lastIndexOf(".") + 1);
   return (
-    isCredentialKeyName(name) || isCredentialKeyName(last) || /^(?:x-)?api[_-]?key$/iu.test(last)
+    isCredentialKeyName(name) ||
+    isCredentialKeyName(last) ||
+    /^(?:x-)?api[_-]?key$/iu.test(last) ||
+    /^(?:proxy-)?authorization$/iu.test(last) ||
+    SENSITIVE_KEY_SUFFIX.test(name.replaceAll(/(?<=[a-z0-9])(?=[A-Z])/gu, "_"))
   );
 }
 

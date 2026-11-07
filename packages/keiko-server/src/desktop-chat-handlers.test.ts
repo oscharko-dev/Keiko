@@ -100,7 +100,7 @@ function scriptedIdentityRecallModel(): ModelPort {
       const system = request.messages[0]?.content ?? "";
       const latestUser = request.messages.at(-1)?.content ?? "";
       let content = "Hallo!";
-      if (system.includes("You extract durable memories from a chat turn")) {
+      if (system.includes("You extract few durable facts")) {
         content = "[]";
       } else if (latestUser.includes("What is my name?")) {
         content = latestUser.includes("The user's name is Paul.") ? "Paul" : "unbekannt";
@@ -128,31 +128,25 @@ function scriptedOliverProfileMemoryModel(): ModelPort {
     call(request): Promise<NormalizedResponse> {
       seenRequests.push(request);
       const system = request.messages[0]?.content ?? "";
-      const content = system.includes("You extract durable memories from a chat turn")
+      const content = system.includes("You extract few durable facts")
         ? JSON.stringify([
             {
-              source: "user",
+              about: "self",
               body: "Ich heiße Oliver.",
+              evidence: "Ich heiße Oliver.",
               type: "identity",
-              confidence: 0.96,
-              scope: "user",
-              tags: ["identity", "name"],
             },
             {
-              source: "user",
+              about: "self",
               body: "Ich bin 35 Jahre alt.",
+              evidence: "Ich bin 35 Jahre alt.",
               type: "fact",
-              confidence: 0.9,
-              scope: "user",
-              tags: ["identity", "age"],
             },
             {
-              source: "user",
+              about: "self",
               body: "Ich bin Softwareentwickler.",
+              evidence: "Ich bin Softwareentwickler.",
               type: "fact",
-              confidence: 0.9,
-              scope: "user",
-              tags: ["identity", "profession"],
             },
           ])
         : "Understood.";
@@ -1964,7 +1958,7 @@ describe("desktop chat routes", () => {
       call(request): Promise<NormalizedResponse> {
         seenRequests.push(request);
         const system = request.messages[0]?.content ?? "";
-        if (system.includes("You extract durable memories from a chat turn")) {
+        if (system.includes("You extract few durable facts")) {
           return new Promise<NormalizedResponse>((_resolve) => {
             // never settles: this case asserts the caller's own timeout, not a response
           });
@@ -2023,12 +2017,8 @@ describe("desktop chat routes", () => {
     await vi.waitFor(() => {
       expect(seenRequests).toHaveLength(2);
     });
-    expect(seenRequests[0]?.messages[0]?.content).not.toContain(
-      "You extract durable memories from a chat turn",
-    );
-    expect(seenRequests[1]?.messages[0]?.content).toContain(
-      "You extract durable memories from a chat turn",
-    );
+    expect(seenRequests[0]?.messages[0]?.content).not.toContain("You extract few durable facts");
+    expect(seenRequests[1]?.messages[0]?.content).toContain("You extract few durable facts");
     memoryVault.close();
   });
 
@@ -2470,7 +2460,7 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
-  it("reinforces recalled chat memory only after the assistant uses it", async () => {
+  it("remembers that an answer used a recalled memory without strengthening it (#4212)", async () => {
     const memoryDir = join(tmp, "memory-vault-used-reinforcement");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
@@ -2504,7 +2494,8 @@ describe("desktop chat routes", () => {
 
     expect(sendRes.status).toBe(200);
     const access = memoryVault.getAccessStats([recalled.id]).get(recalled.id);
-    expect(access?.accessCount).toBe(1);
+    expect(access?.accessCount).toBe(0);
+    expect(access?.lastUsedAt).toBeGreaterThan(0);
     memoryVault.close();
   });
 
@@ -2754,9 +2745,8 @@ describe("desktop chat routes", () => {
       expect(
         seenRequests.some(
           (request) =>
-            request.messages[0]?.content.includes(
-              "You extract durable memories from a chat turn",
-            ) && request.messages.at(-1)?.content.includes("Oliver"),
+            request.messages[0]?.content.includes("You extract few durable facts") &&
+            request.messages.at(-1)?.content.includes("Oliver"),
         ),
       ).toBe(true);
     });

@@ -169,6 +169,8 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "The contract boundary converts hostile proxy access into a registration mismatch rejection.",
     "packages/keiko-sandbox/src/seatbelt-execution-root.ts:copyRuntimeGatewayFilesystem":
       "Pure filesystem capability validation returns absent data. The owning planner returns gateway-filesystem-isolation-unsupported or the confinement producer throws runtime-gateway-policy-invalid before execution.",
+    "packages/keiko-server/src/coding-runtime/opencodeScheduledWakeTurn.ts:fireVerdict":
+      "The catch returns the failed verdict with its error; settleWatch persists it on the registered coding-runtime.schedule.lease line (outcome failed, frames, causeChain), holds the lease again and cancels the wake turn (#4271).",
     "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:decodeSnapshotHelperResponse":
       "Malformed rich helper frames become the closed protocol-invalid result and transient bytes are wiped. The governed read owner persists the failed coding-runtime.workspace-read line with its purpose and path hash, never response content.",
     "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:SecureWorkspaceTextReadPortImpl.nativeRun":

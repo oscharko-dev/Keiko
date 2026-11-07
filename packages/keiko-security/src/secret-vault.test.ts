@@ -1073,6 +1073,26 @@ function itemNotFound(): Error & { status: number } {
 }
 
 describe("createKeychainCommandRunner", () => {
+  it("runs `security` without a controlling terminal, so a piped key is what it reads", () => {
+    // `getpass` prefers the controlling terminal over stdin; a foreground terminal launch would
+    // otherwise wait there and seal credentials with the fallback keyfile. The stand-in refuses
+    // unless it leads a session of its own (Linux: session id; elsewhere: process group).
+    const fakeDir = mkdtempSync(join(tmpdir(), "keiko-secret-vault-keychain-"));
+    try {
+      const leader = join(fakeDir, "security");
+      writeFileSync(
+        leader,
+        `#!/bin/sh\nif [ -r /proc/$$/stat ]; then set -- $(cat /proc/$$/stat); leader=$6; else leader=$(ps -o pgid= -p $$ | tr -d " "); fi\n[ "$leader" = "$$" ] || exit 9\ncat\n`,
+      );
+      chmodSync(leader, 0o700);
+      const run = createKeychainCommandRunner(leader, 30_000);
+
+      expect(run(["add-generic-password", "-w"], "key\nkey\n")).toBe("key\nkey\n");
+    } finally {
+      rmSync(fakeDir, { recursive: true, force: true });
+    }
+  });
+
   it("gives up on a keychain that never answers instead of waiting for it", () => {
     // Stands in for `security` blocked on a macOS unlock dialog. Against an unbounded spawn this
     // waits the full 30s and the test fails on the suite timeout.
@@ -1144,19 +1164,82 @@ describe("createKeychainVaultKeyAccess", () => {
   it("generates and stores a new key when the keychain has none (read miss → add)", () => {
     setPlatform("darwin");
     const commands: string[][] = [];
-    const runner = (args: readonly string[]): string => {
+    const inputs: (string | undefined)[] = [];
+    const runner = (args: readonly string[], input?: string): string => {
       commands.push([...args]);
+      inputs.push(input);
       if (args[0] === "find-generic-password") throw itemNotFound();
       return "";
     };
     const key = createKeychainVaultKeyAccess("svc", runner)();
     expect(key?.length).toBe(32);
     expect(commands.map((c) => c[0])).toEqual(["find-generic-password", "add-generic-password"]);
-    // The key persisted to the keychain (the `-w` value of add-generic-password) must be exactly the
-    // key returned to the caller, so a later read resolves the same vault key.
-    const addArgs = commands[1] ?? [];
-    const storedKey = addArgs[addArgs.indexOf("-w") + 1] ?? "";
-    expect(Buffer.from(storedKey, "base64")).toEqual(key);
+    // The key persisted to the keychain must be exactly the key returned to the caller, so a later
+    // read resolves the same vault key. It travels over stdin, twice, as bare `-w` asks for it;
+    // the argument vector, which every process of the same user can read, never carries it.
+    const encoded = key?.toString("base64") ?? "";
+    expect(commands[1]?.at(-1)).toBe("-w");
+    expect(commands[1]).not.toContain(encoded);
+    expect(inputs[1]).toBe(`${encoded}\n${encoded}\n`);
+  });
+
+  it("reads a stored key once per runner and serves later accesses from memory", () => {
+    setPlatform("darwin");
+    const stored = Buffer.alloc(32, 7).toString("base64");
+    const commands: string[][] = [];
+    const runner = (args: readonly string[]): string => {
+      commands.push([...args]);
+      return `${stored}\n`;
+    };
+    const first = createKeychainVaultKeyAccess("svc", runner)();
+    const second = createKeychainVaultKeyAccess("svc", runner)();
+    expect(second).toEqual(first);
+    expect(commands).toHaveLength(1);
+    createKeychainVaultKeyAccess("other-svc", runner)();
+    expect(commands).toHaveLength(2);
+  });
+
+  it("does not remember a key it generated, so the next access reads the stored winner", () => {
+    setPlatform("darwin");
+    const winner = Buffer.alloc(32, 9).toString("base64");
+    let stored: string | undefined;
+    const commands: string[][] = [];
+    const runner = (args: readonly string[]): string => {
+      commands.push([...args]);
+      if (args[0] === "add-generic-password") {
+        // Another process stored its key first; `-U` leaves the last writer's value, here the winner.
+        stored = winner;
+        return "";
+      }
+      if (stored === undefined) throw itemNotFound();
+      return `${stored}\n`;
+    };
+    createKeychainVaultKeyAccess("svc", runner)();
+    const next = createKeychainVaultKeyAccess("svc", runner)();
+    expect(next?.toString("base64")).toBe(winner);
+    expect(commands.map((c) => c[0])).toEqual([
+      "find-generic-password",
+      "add-generic-password",
+      "find-generic-password",
+    ]);
+  });
+
+  it("never serves a replaced undecodable value from memory", () => {
+    setPlatform("darwin");
+    const undecodable = Buffer.alloc(16, 2).toString("base64");
+    const commands: string[][] = [];
+    const runner = (args: readonly string[]): string => {
+      commands.push([...args]);
+      return args[0] === "find-generic-password" ? `${undecodable}\n` : "";
+    };
+    createKeychainVaultKeyAccess("svc", runner)();
+    createKeychainVaultKeyAccess("svc", runner)();
+    expect(commands.map((c) => c[0])).toEqual([
+      "find-generic-password",
+      "add-generic-password",
+      "find-generic-password",
+      "add-generic-password",
+    ]);
   });
 
   it("returns undefined when generating the key fails (add error)", () => {

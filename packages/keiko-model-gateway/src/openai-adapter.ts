@@ -45,6 +45,7 @@ import {
 import {
   gatewayFetch,
   GatewayResponseBodyValidationError,
+  MAX_RESPONSE_BYTES,
   OutboundHttpEgressError,
   readJsonCapped,
   readSseStream,
@@ -720,6 +721,28 @@ function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig)
 // retry-classified TimeoutError; its whole read stays bounded by `timeoutMs`. A read with bounds
 // uses its own silence bound instead (ADR-0003). Exported for tests.
 export const STREAM_IDLE_TIMEOUT_MS = 60_000;
+
+// The wire bytes one generated token may cost in a streamed answer: its own text plus the SSE
+// frame and JSON chunk envelope a gateway wraps around EVERY delta (a LiteLLM chunk is 250-400
+// bytes for a one-token delta). A long reasoning stream of many tiny deltas crossed the fixed
+// 10 MB response cap at about 30k tokens and ended as a final, never-retried invalid response.
+export const STREAM_WIRE_BYTES_PER_TOKEN = 1_024;
+const STREAM_WIRE_MARGIN_BYTES = 1_048_576;
+const STREAM_WIRE_CEILING_BYTES = 536_870_912;
+
+// The cumulative byte cap of one streamed read: the response cap, raised to what the call's output
+// allowance can legitimately put on the wire. A stream that overruns even that is runaway and still
+// ends as a `size-exceeded` invalid response.
+export function streamWireByteCap(maxOutputTokens: number | undefined): number {
+  if (maxOutputTokens === undefined || !Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0) {
+    return MAX_RESPONSE_BYTES;
+  }
+  const allowance = Math.ceil(maxOutputTokens) * STREAM_WIRE_BYTES_PER_TOKEN;
+  return Math.min(
+    Math.max(MAX_RESPONSE_BYTES, allowance + STREAM_WIRE_MARGIN_BYTES),
+    STREAM_WIRE_CEILING_BYTES,
+  );
+}
 
 // `include_usage` requests a final usage-only chunk so token accounting survives.
 function buildStreamBody(
@@ -1992,7 +2015,8 @@ export class OpenAiAdapter implements ProviderAdapter {
     const silenceMs = read.bounds?.silenceMs ?? STREAM_IDLE_TIMEOUT_MS;
     const completion = { sawDone: false };
     try {
-      for await (const chunk of readSseStream(response, undefined, silenceMs, read.signal, () => {
+      const wireCap = streamWireByteCap(read.request.maxOutputTokens);
+      for await (const chunk of readSseStream(response, wireCap, silenceMs, read.signal, () => {
         completion.sawDone = true;
       })) {
         recordDataEvent(report);

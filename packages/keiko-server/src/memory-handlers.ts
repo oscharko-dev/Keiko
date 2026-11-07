@@ -901,18 +901,26 @@ function parseEditInput(raw: Record<string, unknown>): EditInput | RouteResult {
   };
 }
 
+// A memory the person rewrote is their own statement: it no longer carries the words Keiko learned
+// it from, so a later learned fact cannot replace it (ADR-0146 D4c).
+function humanEditedProvenance(provenance: MemoryRecord["provenance"]): MemoryRecord["provenance"] {
+  const { evidenceSpan, ...rest } = provenance;
+  return evidenceSpan === undefined ? provenance : rest;
+}
+
 function buildEditPatch(input: EditInput, existing: MemoryRecord): Record<string, unknown> {
   const { newBody, tags, sensitivity } = input;
   const patch: Record<string, unknown> = {};
-  if (typeof newBody === "string" && newBody.trim().length > 0) {
-    patch.body = newBody.trim();
-  }
+  const bodyEdited = typeof newBody === "string" && newBody.trim().length > 0;
+  if (bodyEdited) patch.body = newBody.trim();
   if (Array.isArray(tags)) {
     patch.tags = tags.filter((t): t is string => typeof t === "string");
   }
-  if (isMemorySensitivity(sensitivity)) {
-    patch.provenance = { ...existing.provenance, sensitivity };
-  }
+  const provenance = isMemorySensitivity(sensitivity)
+    ? { ...existing.provenance, sensitivity }
+    : existing.provenance;
+  const settled = bodyEdited ? humanEditedProvenance(provenance) : provenance;
+  if (settled !== existing.provenance) patch.provenance = settled;
   return patch;
 }
 

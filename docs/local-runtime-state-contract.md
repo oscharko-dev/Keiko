@@ -66,6 +66,11 @@ remove.
 | Memory vault    | `memoryDir` → `KEIKO_MEMORY_DIR` → `KEIKO_STATE_DIR/memory/` → `~/.keiko/memory/`              |
 | Workspace index | `KEIKO_WORKSPACE_INDEX_DIR` → `KEIKO_STATE_DIR/workspace-index/` → `~/.keiko/workspace-index/` |
 
+`keiko ui` and the development runner behind `npm run dev:start` fill an absent or empty
+`KEIKO_EVIDENCE_DIR` with `<state dir>/evidence/`, so the UI server's evidence, including the memory
+audit the Journal reads, stays with its state. The `./.keiko/evidence/` fallback applies to the
+other CLI commands and to direct library use.
+
 ## Portable install state record
 
 `portable-install-state.json` persists a content-free discriminated union with shared fields

@@ -90,6 +90,10 @@ import {
 } from "./lib/portable-release-publish-helpers.mjs";
 import { proveReleaseSigningKeyBeforePublishing } from "./lib/portable-release-signing-key.mjs";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
+import {
+  CODING_RUNTIME_RELEASES_FILE,
+  selectedCodingRuntimeFailures,
+} from "./lib/coding-runtime-releases.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRegistryScope = scope.slice(0, -1);
@@ -463,6 +467,22 @@ function validateWorkspaceDependency(workspace, entry, context, failures) {
   }
 }
 
+// Same double gate as readReleaseImpactCatalog: a real publish never runs under NODE_ENV=test, so
+// the override cannot replace the reviewed runtime pins of an actual release.
+function readCodingRuntimeReleases() {
+  const override = process.env.KEIKO_CODING_RUNTIME_RELEASES_PATH;
+  if (override === undefined || override.length === 0 || process.env.NODE_ENV !== "test") {
+    return readJson(CODING_RUNTIME_RELEASES_FILE);
+  }
+  return JSON.parse(readFileSync(resolve(repoRoot, override), "utf8"));
+}
+
+function approvedOpenCodeVersion() {
+  return readJson("portable-runtime-approvals.json").sidecarRuntimes?.find(
+    (runtime) => runtime.name === "opencode-compatible",
+  )?.upstream?.version;
+}
+
 function validateReleaseManifests(rootManifest, workspaces) {
   const failures = [];
   const expectedVersion = rootManifest.version;
@@ -471,6 +491,13 @@ function validateReleaseManifests(rootManifest, workspaces) {
   );
 
   validateRootManifest(rootManifest, options, failures);
+  failures.push(
+    ...selectedCodingRuntimeFailures(
+      rootManifest,
+      readCodingRuntimeReleases(),
+      approvedOpenCodeVersion(),
+    ),
+  );
   const context = { expectedVersion, workspaceByName };
 
   for (const workspace of workspaces) {

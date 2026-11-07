@@ -22,16 +22,14 @@ import {
   loadRuntimeApproval,
   verifyCodingRuntimeNpmCandidate,
 } from "./build-coding-runtime-npm-package.mjs";
-import { compareStrings } from "./lib/compare-strings.mjs";
+import { CODING_RUNTIME_RELEASES_FILE, reviewedRelease } from "./lib/coding-runtime-releases.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { oidcTrustedPublishingAvailable } from "./lib/npm-publish-preflight.mjs";
 
-export const CODING_RUNTIME_RELEASES_FILE = "docs/release/coding-runtime-npm-packages.json";
+export { CODING_RUNTIME_RELEASES_FILE, reviewedRelease };
+
 const REGISTRY = "https://registry.npmjs.org";
-const VERSION = /^\d+\.\d+\.\d+$/u;
-const SHA256 = /^[a-f0-9]{64}$/u;
-const INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
 const VERIFY_ATTEMPTS = 30;
 const VERIFY_DELAY_MS = 30_000;
@@ -39,27 +37,6 @@ const VERIFY_DELAY_MS = 30_000;
 /** The receipt asset name beside a tarball; both receipts are called receipt.json when packed. */
 export function receiptAssetName(tarball) {
   return tarball.replace(/\.tgz$/u, ".receipt.json");
-}
-
-function checkedEntry(target, entry, version) {
-  const valid =
-    typeof entry?.name === "string" &&
-    entry.tarball === `${entry.name.slice(1).replace("/", "-")}-${version}.tgz` &&
-    SHA256.test(entry.sha256 ?? "") &&
-    INTEGRITY.test(entry.integrity ?? "") &&
-    Number.isSafeInteger(entry.sizeBytes) &&
-    entry.sizeBytes > 0;
-  if (!valid) throw new TypeError(`reviewed ${target} entry for ${version} is malformed`);
-  return { target, ...entry };
-}
-
-/** The reviewed pins of one version, by target; any other version or shape is refused. */
-export function reviewedRelease(document, version) {
-  if (!VERSION.test(version)) throw new TypeError(`runtime version ${version} is not x.y.z`);
-  const release = document?.schemaVersion === 1 ? document.releases?.[version] : undefined;
-  const targets = Object.keys(release ?? {}).sort(compareStrings);
-  if (targets.length === 0) throw new TypeError(`runtime version ${version} was never reviewed`);
-  return targets.map((target) => checkedEntry(target, release[target], version));
 }
 
 function fileFacts(path) {
@@ -95,6 +72,13 @@ export async function verifyDownloadedRuntime(entry, version, assetDir, deps = {
     packageDir: join(extractDir, "package"),
     artifactDir,
   });
+  // The builder's verifier binds the receipt to the bytes and to the approvals compiled into this
+  // checkout; the reviewed pin must name the same OpenCode, or the product release gate
+  // (lib/coding-runtime-releases.mjs) would read a version the package does not carry.
+  const receipt = JSON.parse(readFileSync(join(artifactDir, "receipt.json"), "utf8"));
+  if (receipt?.opencode?.version !== entry.opencodeVersion) {
+    throw new Error(`${entry.target} receipt does not carry the pinned OpenCode version`);
+  }
   return tarballPath;
 }
 

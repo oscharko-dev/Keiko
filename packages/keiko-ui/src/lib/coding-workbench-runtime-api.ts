@@ -454,6 +454,7 @@ export function getCodingWorkbenchRuntimeReadiness(
     { cache: "no-store" },
     {
       validator: readinessValidator,
+      shareInflight: true,
     },
   );
 }

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { Readable, Writable } from "node:stream";
@@ -463,13 +463,49 @@ function nativeSpawnOptions(helperPath: string): NativeRuntimeHelperSpawnOptions
   return { cwd: dirname(helperPath), env: {}, shell: false, windowsHide: true };
 }
 
+// The helper bytes whose digest was already verified, keyed by file identity. Every launch still
+// executes a fresh private copy written from verified bytes; the cache only spares re-reading and
+// re-hashing a binary that did not change. `ctimeMs` moves on every write and cannot be set by an
+// unprivileged process, so a replaced file is always read and verified again.
+interface VerifiedHelperBytes {
+  readonly path: string;
+  readonly sha256: string;
+  readonly signature: string;
+  readonly bytes: Buffer;
+}
+const MAX_CACHED_HELPER_BYTES = 64 * 1024 * 1024;
+let verifiedHelperBytes: VerifiedHelperBytes | undefined;
+
+function helperSignature(path: string): string {
+  const stat = statSync(path);
+  return [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(":");
+}
+
+function verifiedHelperContent(helperPath: string, expectedHelperSha256: string): Buffer {
+  const signature = helperSignature(helperPath);
+  const cached = verifiedHelperBytes;
+  if (
+    cached?.path === helperPath &&
+    cached.sha256 === expectedHelperSha256 &&
+    cached.signature === signature
+  ) {
+    return cached.bytes;
+  }
+  const bytes = readFileSync(helperPath);
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  if (actual !== expectedHelperSha256) throw new Error("native-runtime-helper-digest-mismatch");
+  verifiedHelperBytes =
+    bytes.length <= MAX_CACHED_HELPER_BYTES
+      ? { path: helperPath, sha256: expectedHelperSha256, signature, bytes }
+      : undefined;
+  return bytes;
+}
+
 function verifiedHelperExecutionCopy(
   helperPath: string,
   expectedHelperSha256: string,
 ): VerifiedHelperExecutionCopy {
-  const bytes = readFileSync(helperPath);
-  const actual = createHash("sha256").update(bytes).digest("hex");
-  if (actual !== expectedHelperSha256) throw new Error("native-runtime-helper-digest-mismatch");
+  const bytes = verifiedHelperContent(helperPath, expectedHelperSha256);
   const directory = mkdtempSync(join(tmpdir(), "keiko-native-runtime-"));
   const path = join(directory, basename(helperPath));
   try {

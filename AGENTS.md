@@ -71,7 +71,9 @@ invalid explicit values fail closed. This availability default is scoped to Codi
 its explicit deployment ceiling or `governed-assist`, including legacy requests and standing
 maintenance. See ADR-0124 D2 and ADR-0163 D7. A person's own clear "Merke dir" or "Vergiss das" in a Chat is
 their decision, not unattended learning: it acts at once in every mode, after the hard denials
-(ADR-0146 D4b). Records learned from natural conversation stay under the Memory ceiling and mode.
+(ADR-0146 D4b). Records learned from natural conversation stay under the Memory ceiling and mode;
+deterministic checks on the person's own words admit them, and they never replace a clear statement
+(ADR-0146 D4c).
 
 Hard denials remain mode-independent: invalid or expired authority, workspace escape, denied
 sensitive paths, secret exfiltration, unsupported actions, exhausted budgets, and platform
@@ -1105,6 +1107,17 @@ cause chain), a completion the source, message, omitted, skipped and redacted-me
 byte size. The file's text is untrusted, so it is redacted again before it is stored; no text,
 title or path ever enters the line (ADR-0137 D4).
 
+`coding-runtime.schedule.wake`, `coding-runtime.schedule.control` and `coding-runtime.schedule.lease`
+record scheduled continuations (#4271, ADR-0137): a schedule a native run's model created wakes its
+task at the due time while Keiko runs. The wake line records `started`, `waiting` (closed `wait`:
+`run-active`, `workspace-inactive`, `retrying`), `refused`, `fired`, `missed`, `auto-paused`,
+`removed`, `retain-lost` or `failed`, with the task and schedule digests, the wake run's id and mode,
+counts and the due lag; the control line records a human's pause, resume, delete or list, or the
+pause after three missed wakes (`initiator` `missed-wakes`); the lease line records Keiko's hold on
+the runtime's scheduler, its release in the wake run and the re-hold once the schedule fired. Lines
+of one wake run carry its run id as correlation; lines that belong to no run carry a correlation
+derived from the schedule's digest. Never a schedule id, name, cadence or prompt.
+
 `client.coding-workbench.interaction` records, at info and on the routine budget, what the human
 did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
 progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom
@@ -1437,6 +1450,15 @@ second root review-policy file.
 test:e2e:smoke`. Performance-evidence and per-feature suites have their own `test:e2e:*` scripts.
 - Cover the input space, not one happy path: empty, boundary, malformed, and hostile inputs;
   both branches of every guard you add.
+- **Pure text rules also get seeded property tests** (`*.property.test.ts`) on the repo-owned
+  harness [`tests/support/property-testing.ts`](tests/support/property-testing.ts) — no
+  third-party dependency. It draws inputs from a fixed seed, shrinks a failure and prints
+  `KEIKO_PROPERTY_SEED=<n>` to replay it; `KEIKO_PROPERTY_RUNS=<n>` widens a local or nightly run.
+  Both apply to every property in the run, so replay one with `-t "<test name>"`, and derive
+  vacuity floors from the runs actually made (`propertySettings`), never from a fixed count.
+  `measureScaling` proves linear time by comparing two input sizes, never one absolute time. Guard
+  each property against vacuity (count what it actually reached) and prove it red against the
+  defect class it names before relying on it.
 
 ---
 

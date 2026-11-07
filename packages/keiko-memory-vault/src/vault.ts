@@ -65,9 +65,12 @@ import {
 } from "./embeddings.js";
 import {
   getAccessStatsRows,
+  getConversationTouchRows,
   recordAccessRows,
+  recordUseRows,
   recordOutcomeRows,
   type MemoryAccessStat,
+  type MemoryConversationTouch,
 } from "./access.js";
 import {
   deleteTombstonesByScopeBeforeRows,
@@ -775,13 +778,21 @@ function runGraphMutation(
   db: DatabaseSync,
   mutation: MemoryGraphMutation,
   opts: ResolvedOptions,
-): { readonly memories: readonly UpdatedMemory[]; readonly edges: readonly MemoryEdge[] } {
+): {
+  readonly inserted: readonly MemoryRecord[];
+  readonly memories: readonly UpdatedMemory[];
+  readonly edges: readonly MemoryEdge[];
+} {
+  const inserted = (mutation.inserts ?? []).map((record) => preparedForWrite(record, opts));
   const edges = mutation.edges.map((edge) => preparedEdgeForWrite(edge, opts));
   const memories: UpdatedMemory[] = [];
   db.exec("BEGIN IMMEDIATE");
   try {
     for (const precondition of mutation.preconditions ?? []) {
       assertGraphPrecondition(db, precondition, opts.cipher);
+    }
+    for (const record of inserted) {
+      insertMemoryRow(db, record, opts.cipher);
     }
     for (const update of mutation.updates) {
       memories.push(updateMemoryInPlace(db, update, opts));
@@ -794,7 +805,7 @@ function runGraphMutation(
     db.exec("ROLLBACK");
     throw error;
   }
-  return { memories, edges };
+  return { inserted, memories, edges };
 }
 
 function assertGraphPrecondition(
@@ -903,6 +914,26 @@ type MemoryReadOps = Pick<
   | "countAcceptedMemoriesMissingEmbedding"
 >;
 
+function applyGraphMutationWithEvents(
+  db: DatabaseSync,
+  mutation: MemoryGraphMutation,
+  opts: ResolvedOptions,
+): MemoryGraphMutationResult {
+  const ready = runGraphMutation(db, mutation, opts);
+  for (const record of ready.inserted) {
+    opts.emit({ kind: "memory:inserted", record });
+  }
+  emitUpdatedRecords(ready.memories, opts);
+  for (const edge of ready.edges) {
+    opts.emit({ kind: "edge:inserted", edge });
+  }
+  return {
+    inserted: ready.inserted,
+    memories: ready.memories.map((updated) => updated.record),
+    edges: ready.edges,
+  };
+}
+
 function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWriteOps {
   return {
     insertMemory: (record: MemoryRecord): MemoryRecord => {
@@ -927,16 +958,8 @@ function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWri
         return ready.map((updated) => updated.record);
       });
     },
-    applyGraphMutation: (mutation: MemoryGraphMutation): MemoryGraphMutationResult => {
-      return withSidecarHardening(opts, () => {
-        const ready = runGraphMutation(db, mutation, opts);
-        emitUpdatedRecords(ready.memories, opts);
-        for (const edge of ready.edges) {
-          opts.emit({ kind: "edge:inserted", edge });
-        }
-        return { memories: ready.memories.map((updated) => updated.record), edges: ready.edges };
-      });
-    },
+    applyGraphMutation: (mutation: MemoryGraphMutation): MemoryGraphMutationResult =>
+      withSidecarHardening(opts, () => applyGraphMutationWithEvents(db, mutation, opts)),
     deleteMemory: (id: MemoryId, options: DeleteMemoryOptions): void => {
       withSidecarHardening(opts, () => {
         deleteMemoryWithEvents(db, id, options, opts);
@@ -1083,8 +1106,10 @@ type TombstoneAndAccessOps = Pick<
   | "hasSemanticallySimilarForgetTombstone"
   | "purgeTombstonesByScopeBefore"
   | "recordAccess"
+  | "recordUse"
   | "recordOutcome"
   | "getAccessStats"
+  | "getConversationTouches"
 >;
 
 // The public route requests one look-ahead row beyond its maximum 200-item response page so it can
@@ -1236,6 +1261,27 @@ function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): Edge
   };
 }
 
+function hasForgetTombstoneForBodyRow(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+  scope: MemoryScope,
+  body: string,
+): boolean {
+  gateMemoryScope(scope);
+  const currentHash = opts.bodySuppressionHash(body);
+  const legacyHash = memoryBodySuppressionHash(body);
+  // GEN-PERF-PERSISTENCE-014 — presence-only check keyed on body_hash; never decrypts the sealed
+  // reason column. Same suppression decision as scanning + decrypting every tombstone, but O(1)
+  // rows and zero reason decrypts (strengthens confidentiality on this hot path).
+  const presence = selectForgetSuppressionBodyHashPresence(db, scope, currentHash, legacyHash);
+  if (presence.current) return true;
+  if (!presence.legacy) return false;
+  withSidecarHardening(opts, () => {
+    updateTombstoneBodyHashByScopeRows(db, scope, legacyHash, currentHash);
+  });
+  return true;
+}
+
 function buildTombstoneAndAccessOps(
   db: DatabaseSync,
   opts: ResolvedOptions,
@@ -1249,21 +1295,8 @@ function buildTombstoneAndAccessOps(
       validatedTombstonePage(db, opts, scopes, limit, after),
     recordForgottenStatements: (statements): readonly MemoryTombstone[] =>
       withSidecarHardening(opts, () => recordForgottenStatementRows(db, statements, opts)),
-    hasForgetTombstoneForBody: (scope: MemoryScope, body: string): boolean => {
-      gateMemoryScope(scope);
-      const currentHash = opts.bodySuppressionHash(body);
-      const legacyHash = memoryBodySuppressionHash(body);
-      // GEN-PERF-PERSISTENCE-014 — presence-only check keyed on body_hash; never decrypts the sealed
-      // reason column. Same suppression decision as scanning + decrypting every tombstone, but O(1)
-      // rows and zero reason decrypts (strengthens confidentiality on this hot path).
-      const presence = selectForgetSuppressionBodyHashPresence(db, scope, currentHash, legacyHash);
-      if (presence.current) return true;
-      if (!presence.legacy) return false;
-      withSidecarHardening(opts, () => {
-        updateTombstoneBodyHashByScopeRows(db, scope, legacyHash, currentHash);
-      });
-      return true;
-    },
+    hasForgetTombstoneForBody: (scope: MemoryScope, body: string): boolean =>
+      hasForgetTombstoneForBodyRow(db, opts, scope, body),
     hasSemanticallySimilarForgetTombstone: (scope, candidate, threshold): boolean => {
       gateMemoryScope(scope);
       return hasSemanticallySimilarForgetTombstoneRow(db, scope, opts.cipher, candidate, threshold);
@@ -1274,9 +1307,14 @@ function buildTombstoneAndAccessOps(
         return deleteTombstonesByScopeBeforeRows(db, scope, forgottenBeforeMs);
       });
     },
-    recordAccess: (ids: readonly MemoryId[], nowMs: number): void => {
+    recordAccess: (ids: readonly MemoryId[], nowMs: number, conversationId?: string): void => {
       withSidecarHardening(opts, () => {
-        recordAccessRows(db, ids, nowMs);
+        recordAccessRows(db, ids, nowMs, conversationId);
+      });
+    },
+    recordUse: (ids: readonly MemoryId[], nowMs: number, conversationId: string): void => {
+      withSidecarHardening(opts, () => {
+        recordUseRows(db, ids, nowMs, conversationId);
       });
     },
     recordOutcome: (ids: readonly MemoryId[], utility: number, nowMs: number): void => {
@@ -1286,6 +1324,10 @@ function buildTombstoneAndAccessOps(
     },
     getAccessStats: (ids?: readonly MemoryId[]): ReadonlyMap<MemoryId, MemoryAccessStat> =>
       getAccessStatsRows(db, ids),
+    getConversationTouches: (
+      conversationId: string,
+    ): ReadonlyMap<MemoryId, MemoryConversationTouch> =>
+      getConversationTouchRows(db, conversationId),
   };
 }
 

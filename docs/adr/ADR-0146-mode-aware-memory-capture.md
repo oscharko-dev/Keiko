@@ -8,7 +8,8 @@ Amended by Issue #2864 (2026-07-31) to record that standing and opportunistic ma
 the same D2 autonomy gate before unattended promotion. Amended by Issue #2885 (2026-08-02) to make
 the mapping apply uniformly to salience, explicit chat intent, voice recap, and
 capture-from-conversation. Amended by Issue #4211 (2026-11-05) to add D4b: a person's clear statement
-in a chat acts at once in every mode.
+in a chat acts at once in every mode. Amended by Issue #4212 (2026-11-05) to add D4c: deterministic
+checks decide what is learned from conversation and when it replaces an older fact.
 
 ## Amends
 
@@ -175,28 +176,48 @@ learning, so D2's mapping does not hold it. It needs no model, no approval and n
 candidate through the same promotion lever as D4 in every mode; D3's hard denials stay first, so a
 credential is refused and a sensitive body keeps its approval. An instruction to drop the assistant's
 rules is refused as `instruction-override` on every capture path, because it would reach each later
-answer as a fact; an ordinary wish about how to answer stays a memory. Everything learned from natural
+answer as a fact; besides the shared fixed phrases, a sentence that asks to ignore, bypass or
+override the rules counts ("dass du ab jetzt deine Regeln ignorierst"). An ordinary wish about how
+to answer stays a memory. Everything learned from natural
 conversation stays under D2. Capture-from-conversation remains a review surface and also stays under D2.
 Such a statement lands in the private user scope unless it names a project or workspace, and the
 learner does not read its turn, so it cannot store the statement itself.
 
 Only a clear statement acts this way, because it changes memory with no question. "Merke dir" and
-"Remember" count, "Speichere" and "Notiere" only with "dass" or a colon, and "Lösche" only with
-"die Erinnerung an". "Speichere die Datei" and "Lösche den Cache" are tasks and never reach a memory.
-A negation ("Merke dir nicht", "Vergiss den Bericht nicht"), a question, and the idioms "Vergiss es"
-and "Forget it" state nothing to store or forget. A named forget reaches a memory only through the
-same word or an inflection of it, so "Java" does not reach "JavaScript".
+"Remember" count, "Speichere" and "Notiere" only with "dass" or a colon, and "Lösche" only with "die
+Erinnerung an". "Speichere die Datei" and "Lösche den Cache" are tasks and never reach a memory. A
+negation ("Merke dir nicht", "Vergiss den Bericht nicht"), a question, and the idioms "Vergiss es"
+and "Forget it" state nothing to store or forget. A named thing whose sentence goes on with a task
+verb ("Vergiss den alten API-Pfad, nimm den neuen") is an instruction for the task and forgets
+nothing. A thing named with an article whose sentence goes on by asking for the answer ("Forget the
+formatting, just give me the answer", "Forget the address I gave you, show me what else you have")
+forgets the memory its name alone matches ("the address", not the clause that follows) and, when
+nothing stored matches, is an ordinary request: no question about which memory was meant, and
+`memory.explicit.forget` records `not-stored` (2026-11-07, #4212); several matches are still asked
+about. The clause goes on after a comma or semicolon (also full width), a dash, or "und", "and",
+"dann", "then"; a colon introduces what is forgotten ("Forget the address: Take Street 5"). "Vergiss
+das, sag mir Bescheid", "Vergiss einfach das" and "Forget that, tell me the rest" take back what was
+just said, like "Vergiss das", and a name of articles, possessives, "own" or softening words alone
+names nothing. The person's own fact ("Forget my phone number and tell me when it is gone") is
+looked up by its name alone and keeps the question when nothing matches. Any other continuation
+("und meine Telefonnummer", ", danke") still names what to forget, and a leading softening word
+("einfach meine Telefonnummer") is no part of the name a memory is looked up by. A named forget
+reaches a memory only through the same word or an inflection of it, so "Java" does not reach
+"JavaScript".
 
-Saying a statement again confirms the existing memory through `recordAccess` instead of storing a
-second record: in the same words without an embedder, and as a paraphrase through the existing
+Saying a statement again confirms the existing memory through `recordAccess`, naming the chat,
+instead of storing a second record: in the same words without an embedder, and as a paraphrase through the existing
 novelty gate with one. A paraphrase of a forgotten fact is suppressed the same way.
 
 "Vergiss das" reaches what the last turn left behind, in any scope of the conversation and
 including a parked proposal, and goes through the one forget implementation with its audit preflight
-and tombstone. It also reaches an older memory the last turn drew on, when that turn asked a question
-or said the fact again. After any other sentence the memory an answer happened to use is not "das".
-A sentence that repeats a stored fact reaches the memory it was folded into, so the forget is not
-reported while the fact stays. Every chat path reads the last turn from the conversation, grounded
+and tombstone. A learned fact names the turn it came from (`sourceMessageIds`), so a slow capture of
+an earlier turn that finishes later is not "das"; only a record without that provenance falls back to
+its creation time. It also reaches an older memory this chat's last turn touched: one the person
+confirmed by saying it again, in any wording, or one the answer drew on (`recordUse`) when that turn
+asked a question or said a fact. Both touches name their chat, so another chat or maintenance
+touching the memory in the same window never makes it "das", and a touch without a chat never counts.
+After any other sentence the memory an answer happened to use is not "das". Every chat path reads the last turn from the conversation, grounded
 turns included; with no earlier turn nothing was left behind and no older memory is "das".
 If that turn left nothing, "das" is the statement before it, not an older memory; a question or a
 pasted document is no such statement, so the person is asked:
@@ -204,12 +225,130 @@ pasted document is no such statement, so the person is asked:
 learning pass stores nothing from it. The statement's text is never written, and a statement that
 carries a credential keeps only its hash and never reaches the embedding endpoint. When "das" could
 mean several memories, or there is nothing it could mean, the person is asked in one short sentence
-and nothing is deleted. Each decision is recorded body-free as `memory.explicit.forget` or
+and nothing is deleted. A named forget that matches no memory is asked about the same way, because a
+clear request is never ignored. Each decision is recorded body-free as `memory.explicit.forget` or
 `memory.explicit.remember`.
 
 Only such a statement gets an answer in the chat, because the person asked. `explicitStatement` on the
 candidate or rejected action carries that; what is only learned, or a refusal of an ordinary message,
 stays out of the chat even with the same status.
+
+### D4c — What is learned from conversation, and when it replaces a fact
+
+The model proposes and deterministic checks decide, on the person's own words only (Issue #4212). In
+doubt Keiko learns too little rather than too much, because nobody approves what it learns once
+D2 lets a fact through.
+
+- **Form.** A learned memory is the person's own words for one fact: the admitted span, never the
+  model's statement, which only shows which fact the span carries. A paraphrase loses the words a
+  later question uses, and a measured lab run fell below the answer-accuracy baseline when Keiko
+  stored it. A span from inside a sentence starts with a capital letter, a trailing comma or dash is
+  dropped, and a resolved leading pronoun is replaced by what it stood for. Provenance keeps the exact
+  span of the person's message it rests on (`evidenceSpan`, sealed at rest like the body) and the
+  person's turns it came from (`sourceMessageIds`). A decision keeps its reason in the key-value
+  payload, and a stated end in the future closes validity; both are parsed from the words, never
+  taken from the model. A stated end that has passed means the fact is over, so nothing is stored.
+- **Admission.** The span appears verbatim in the person's message and ends at a clause boundary.
+  A span that leaves out the first words of its clause ("decided as a team to release …" out of "We
+  decided as a team to release …") opens at the start of that clause, at most as far back as a span
+  may be long, and every check reads that whole clause, never the fragment; the end is not moved, so
+  "Ich mag Tabellen" out of "Ich mag Tabellen nicht" stays dropped. A mark with no space after it
+  sits inside a word ("Home-Office") and opens no clause; a bracket opens an aside, so "Anna mag
+  Kaffee" in "Ich mag Tee (aber Anna mag Kaffee)" is never the person's clause. The words up to the
+  person's own subject are read like the words before the clause, so "Anna says I like tables" and
+  "Stell dir vor ich nutze Excel" are dropped with or without a comma, and so is an attribution that
+  opens a later clause ("Dass ich Tabellen mag, sagt Anna"); a relative clause or a reason is no
+  attribution ("I use vim, which says nothing" stands, "weil Anna es mir sagte" is a third party's).
+  The words before the claim run up to its subject ("ich", "I", "wir", "we"); there the person
+  cannot be the speaker, so any speech verb is attribution unless the person ("ich", "I", "wir",
+  "we") stands right before it or with one adverb, modal or auxiliary between ("I always tell", "Ich
+  muss sagen", "I have told", but not the hedge "Ich würde sagen"; "Anna also says I …", "My
+  colleague says I …" are dropped, "Wie ich sagte, …" and "I always tell my colleagues that I …"
+  stand). In a later clause up to the next mark, a speech verb is attribution when another person (a
+  name, a pronoun, or a noun after an article or possessive) stands up to three words before it, or
+  right after it while the person is not the one speaking, so "I use Vim, I told Anna" and "claims
+  processing" stand; a relative clause, reason or condition ("…, wenn man sagt, …") is no
+  attribution, but a demonstrative with a speech verb right after it opens one ("Ich bin zu langsam,
+  das sagt mein Chef" is dropped, "ein Tool, das Fehler erklärt" stands). The person's own perfect
+  stands ("Wir haben unserem Kunden gesagt, dass ich …"). A condition is read only up to the first
+  word about the person ("Es hilft mir, wenn ich …" stands). Being told ("I am told …", "I'm told
+  …", "Mir wurde gesagt, …", "Das hat mir mein Chef gesagt") is never the person's own statement;
+  markers such as "laut Anna", "angeblich" or "according to" count wherever they frame the claim.
+  The clause is not a question, request, quotation, hypothesis, irony, hedge ("Ich glaube, …"),
+  denial or past statement, and not material the person passes on: a line quoted with ">", or
+  anything after a lead-in that names pasted material ("Hier die Mail von Anna:"), a mail header
+  ("Fwd:") or work on a text ("Übersetze:"), through the rest of the message; only a named material
+  followed by a single value on its line ("Meine Mail: a@b.de") covers that line alone. Tense and
+  pronouns are judged on the claim itself, not on its reason or condition, so "Ich nutze Tabellen,
+  weil sie übersichtlich sind" stands; a decision, switch or migration made in the past holds now.
+  The rest of the sentence after a span is read too, because a span that stops at a comma would
+  otherwise store the opposite: a retraction ("…, aber nicht mehr seit Mai", "…; stimmt gar nicht",
+  "…, nein, …"), a restriction ("…, außer montags", "…, aber nur wenn …") or a change ahead ("…, but
+  I'm quitting tomorrow") drops the fact, while "…, nicht Numbers" and "…, aber auch VS Code" take
+  nothing back. A trailing reason or condition stays part of the claim as before, so "Ich bevorzuge
+  Tabellen, wenn du mir Zahlen zeigst" stands; a condition the span leaves out is not stored with it.
+  A clause after "dass" holds what its main clause says of it: a main clause without the person's
+  own subject in which someone else wants or says it ("Mein Chef will, dass ich …") makes the claim
+  theirs, and a span copied with its "dass" opens at the subject.
+  The fact is about the person: labelled `self`, with a first-person word, and naming no one else:
+  a titled person, a relation behind a possessive or genitive, a family word, a role a determiner
+  points at ("dem Kunden", but not "mit Kunden" or "die Kunden-Tickets"), a partner, another
+  person's pronoun in the claim, or a reason in which someone else wants, says or recommends
+  something ("weil Anna es so will"). A fact labelled `team` ("We decided as a team to release on
+  Tuesdays") is the team's own: it needs "wir" or "we" and the person naming the group as their
+  team or project ("als Team", "in unserem Projekt", "our team"), because a bare "wir" may be a
+  couple or a household and another group's name ("The marketing team decided …") is no marker. The
+  rest of the claim passes every person check above, and the fact is stored only in the project
+  scope, never outside a project, and compared only with that scope's facts, so it never confirms or
+  replaces a private one; "X und ich" and "Wir und X" name a person and are dropped, also when the
+  span opens at "ich" or at the verb behind it ("Anna und ich nutzen Vim"). A person named
+  by their relation (Vermieterin, landlord, Eltern, Oma, "meine Leute") is a third party. A leading pronoun ("Sie beginnen immer mit einer Zusammenfassung") counts as the person's
+  own thing only when the model's statement names that thing and the person's previous message in
+  the same chat named it as theirs ("meine Berichte"); possessive and noun come from the person's
+  words. A kept pronoun or another thing leaves the pronoun unresolved, and the pronoun check drops
+  it; "Diese" and "These" open a noun phrase and are no pronoun. People behind a possessive include
+  plural roles ("meine Patienten", "my students"); that message reaches the learner as
+  context, never as a source, and a person's pronoun stays a third party. Two limits are
+  accepted: a bare first name outside these forms cannot be told from a German noun, and an English
+  role behind a determiner ("the customer database") is treated as a person, because privacy
+  outranks recall. Credentials, IBANs, phone numbers and customer identifiers are refused. A message
+  refused as a whole before extraction is the person's own words and names no team, so its
+  content-free decision is recorded in their private user scope, where what Keiko learns about them
+  lands. The Journal lists decisions only for scopes that hold memory, so the refusal is visible
+  while that private scope holds memory; a vault holding only team facts does not show it. The model's statement may paraphrase or translate the span, because the span is what is stored, but it
+  keeps the span's polarity, where a verb that rejects its object ("hasse", "avoid") and "ohne"
+  count as negation; an inverted statement shows the model misread the fact. Each drop is one closed reason.
+- **Confidence** is derived from what the checks saw, never from the model:
+  0.4, plus 0.3 for a first-person subject, plus 0.15 when the model's statement covers at least half of the
+  span. A thin fact without a subject stays below the D4 promotion gate.
+- **Relation.** The model labels `new`, `same`, `update` or `contradiction`; checks confirm it. A
+  reversal, a changed number or a changed polarity replaces the older fact on its own. A new value
+  in the same slot, or a stated change ("ab jetzt", "from now on"), replaces it only with the
+  model's label. A shared preference verb alone is no slot, so "Tabellen" and "Tee" both stand.
+  The model's label alone replaces only a one-at-a-time value: an employer ("arbeitet bei"), a home
+  ("wohnt in"), a name, or a chosen preference for the same purpose. Another tool or liking needs a
+  stated change, and a statement that only adds ("auch", "also") never replaces. A claim of sameness that neither the lexical
+  nor the semantic duplicate gate confirms stores nothing. A changed value is never a duplicate.
+- **Supersession** reuses the `supersedes` edge, the `superseded` status and the closed validity of
+  the human correction path, in one transaction with a precondition on the older fact. Where D2
+  asks for approval, the new fact waits as a `correction` with its `corrects` edge, written in the
+  same single transaction. A learned fact replaces only what Keiko learned in the person's own scope:
+  a clear statement (D4b) and anything outside that scope are fixed, so a learned fact never
+  overwrites them. A newer clear statement replaces an older learned fact, and a learned fact the
+  person rewrites is their own statement from then on. The precondition is the older fact as the
+  learner read it before the model call, not a fresh read before the write: when the person or
+  another turn changed it while the capture ran, only that replacement is refused; the turn's other
+  facts still settle. A clear statement whose learned predecessor changed while its embedding was
+  computed is stored beside it and replaces nothing.
+- **Reinforcement.** Only the person strengthens a memory: saying it again records a confirmation.
+  An answer that repeats a memory records a use for "Vergiss das" and never a reinforcement, so a
+  false memory cannot entrench itself by being repeated back.
+- **Forgotten while learning.** A capture still running when the person forgot that turn's
+  statement stores nothing from it, because each candidate is also checked against the statement's
+  own tombstone.
+- **Evidence.** `memory.learn.extraction`, `memory.learn.dropped` and `memory.learn.relation`
+  record counts, the source message count and closed reason, label, decision and basis values; no
+  words of the person or of a fact enter the Activity Log.
 
 ### D5 — Capture stays failure-contained and diagnostics stay content-free
 

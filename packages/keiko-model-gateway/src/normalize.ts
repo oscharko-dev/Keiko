@@ -1,6 +1,8 @@
 // Provider payload → NormalizedResponse. The internal contract is strict and small
 // so workflows fail closed when a provider response is unsafe or malformed.
 
+import { randomBytes } from "node:crypto";
+
 import {
   MalformedToolCallError,
   ModelRefusalError,
@@ -101,7 +103,50 @@ function parseToolCall(raw: unknown): NormalizedToolCall {
 
 /** Reused by the streaming adapter to assemble tool calls from accumulated SSE deltas. */
 export function parseNormalizedToolCalls(raw: unknown): readonly NormalizedToolCall[] {
-  return Array.isArray(raw) ? raw.map(parseToolCall) : [];
+  return Array.isArray(raw) ? normalizeToolCallIds(raw.map(parseToolCall)) : [];
+}
+
+/** Prefix of an id Keiko minted for a call whose provider id it could not use. */
+export const SYNTHESIZED_TOOL_CALL_ID_PREFIX = "keiko-call-";
+const USABLE_TOOL_CALL_ID = /^[A-Za-z0-9_.:-]{1,128}$/u;
+
+/** The one id shape the catalog bridge carries; the normalizer mints only ids of this shape. */
+export function isUsableToolCallId(id: unknown): id is string {
+  return typeof id === "string" && USABLE_TOOL_CALL_ID.test(id);
+}
+
+// A provider may omit a call id, send one the catalog bridge cannot carry (empty, over 128 characters,
+// other characters) or repeat one across parallel calls. None of that is the model's fault, and the
+// bridge refuses such a batch whole, which used to end the turn. The first layer that sees the ids
+// replaces each unusable or repeated id with `keiko-call-<response>-<position>` that no sibling holds,
+// so every valid call of the batch still runs. A usable, first-seen id is never touched. The
+// response part is random: the coding runtime keys an invocation by its session and call id, so a
+// minted id that a later response repeated would make a new call look like a replay of an old one.
+function normalizeToolCallIds(calls: readonly NormalizedToolCall[]): readonly NormalizedToolCall[] {
+  const held = new Set<string>();
+  const kept = new Set(calls.map((call) => call.id).filter((id) => isUsableToolCallId(id)));
+  let response: string | undefined;
+  return calls.map((call, position) => {
+    if (isUsableToolCallId(call.id) && !held.has(call.id)) {
+      held.add(call.id);
+      return call;
+    }
+    response ??= randomBytes(6).toString("hex");
+    const id = freeToolCallId(
+      `${SYNTHESIZED_TOOL_CALL_ID_PREFIX}${response}-${String(position)}`,
+      (candidate) => kept.has(candidate) || held.has(candidate),
+    );
+    held.add(id);
+    return { ...call, id };
+  });
+}
+
+/** The minted id itself, or the first `-<n>` suffix of it that no call of the turn already uses. */
+function freeToolCallId(minted: string, taken: (candidate: string) => boolean): string {
+  if (!taken(minted)) return minted;
+  let attempt = 1;
+  while (taken(`${minted}-${String(attempt)}`)) attempt += 1;
+  return `${minted}-${String(attempt)}`;
 }
 
 function parseToolCalls(message: Record<string, unknown>): readonly NormalizedToolCall[] {

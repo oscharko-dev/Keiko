@@ -185,9 +185,15 @@ describe("isDenied (always-on security)", () => {
     });
   }
 
+  // The `.env.example` exception is an exact, literal match: an aliased spelling of it is denied
+  // with the rest of `.env*`, which only ever denies more.
+  for (const aliasedExample of [".env.example::$DATA", ".env.example."]) {
+    it(`keeps the .env.example exception literal for ${JSON.stringify(aliasedExample)}`, () => {
+      expect(isDenied(aliasedExample)).toBe(true);
+    });
+  }
+
   for (const allowedAlias of [
-    ".env.example::$DATA",
-    ".env.example.",
     "src/index.ts::$DATA",
     "a:b.txt",
   ]) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { seededRandom } from "../../../../tests/support/seeded-property.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -22,17 +23,6 @@ import {
 const SESSION = "ses_incremental";
 
 type Message = Record<string, unknown>;
-
-/** A seeded generator: the property cases never read the wall clock or Math.random. */
-function mulberry32(seed: number): () => number {
-  let state = seed >>> 0;
-  return (): number => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let mixed = Math.imul(state ^ (state >>> 15), state | 1);
-    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
-    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4_294_967_296;
-  };
-}
 
 /**
  * The runtime's message API for one session: newest first (`order=desc`), `limit` honored, an
@@ -291,6 +281,38 @@ describe("OpenCode V2 tail message read (#4104)", () => {
     expect(window.truncated).toBe(true);
     expect(window.messages.at(-1)?.id).toBe("msg_004999");
     expect(window.messages[0]?.type).toBe("user");
+  });
+
+  /** One prompt followed by `assistants` assistant messages: one long autonomous turn. */
+  function longTurn(assistants: number): FakeSession {
+    const fake = new FakeSession();
+    fake.push({ id: "msg_prompt", type: "user" });
+    for (let index = 0; index < assistants; index += 1)
+      fake.push({ id: `msg_${String(index).padStart(6, "0")}`, type: "assistant" });
+    return fake;
+  }
+
+  // #4279: the newest window of one turn longer than the bound held no user message and was
+  // returned empty, so the run's timeline showed nothing and every later read was complete.
+  it("opens a window past the bound on the prompt its newest messages answer", async () => {
+    const fake = longTurn(10_000);
+
+    const window = await fake.client().recentMessages(SESSION);
+
+    expect(window.truncated).toBe(true);
+    expect(window.messages).toHaveLength(4_096);
+    expect(window.messages[0]).toEqual({ id: "msg_prompt", type: "user" });
+    expect(window.messages[1]?.id).toBe("msg_005905");
+    expect(window.messages.at(-1)?.id).toBe("msg_009999");
+  });
+
+  it("keeps a window past the bound empty when no prompt is within the search bound", async () => {
+    const fake = longTurn(4_096 + 64 * 100 + 200);
+
+    const window = await fake.client().recentMessages(SESSION);
+
+    expect(window.truncated).toBe(true);
+    expect(window.messages).toEqual([]);
   });
 
   it("leaves the complete read exactly as strict as before", async () => {
@@ -567,6 +589,29 @@ describe("OpenCode V2 history read plan (#4104)", () => {
       retainedMessageCount: 17,
     });
     expect(JSON.stringify(sink.events)).not.toContain("alpha");
+    expect(lines.every((line) => !("windowTruncated" in line))).toBe(true);
+  });
+
+  it("says on the projection line that a window past the read bound left messages out", async () => {
+    const sink = createBufferedServerLogSink();
+    const fake = new FakeSession();
+    fake.push(userMessage());
+    for (let index = 0; index < 4_200; index += 1)
+      fake.push(assistantMessage({ id: messageId("a"), reasoning: 0, text: 1, tool: "none" }));
+    const projection = createOpenCodeV2HistoryProjection(
+      { runId: "line-run", activityLog: sink, toolProfile: "native" },
+      undefined,
+    );
+    const window = await fake.client().recentMessages(SESSION);
+    projection.project(SESSION, window.messages, undefined, { truncated: window.truncated });
+
+    const [line] = sink.events.filter((event) => event.op === "coding-runtime.history-projection");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.history-projection.emitted-line",
+        formatActivityLogProofLine(line ?? {}),
+      ),
+    ).toMatchObject({ readMode: "full", readMessageCount: 4_096, windowTruncated: true });
   });
 });
 
@@ -622,7 +667,7 @@ describe("OpenCode V2 incremental history equals a full projection (#4104)", () 
       private readonly config: Config,
       private readonly modes: ModeCounts,
     ) {
-      this.rng = mulberry32(seed);
+      this.rng = seededRandom(seed).next;
       this.incremental = new IncrementalReader(this.session, {
         tailMargin: config.margin,
         verifyEvery: config.verifyEvery,
@@ -858,5 +903,82 @@ describe("OpenCode V2 history sync cost over a long session (#4104)", () => {
     expect(reads.reduce((sum, read) => sum + read, 0)).toBeLessThan(
       verifications * STEPS * 1.1 + STEPS * 3 * 100,
     );
+  }, 120_000);
+
+  // Audit stress case: once the backlog of a session near the 4,096-message read bound has been
+  // drained page by page, every later event reads a bounded tail again. A session past the bound is
+  // proven by the next case.
+  it("reads a bounded tail per event after a 4,000-message session has been drained", async () => {
+    const fake = new FakeSession();
+    fake.push(userMessage());
+    for (let index = 0; index < 4_000; index += 1) {
+      const id = messageId("a");
+      fake.push(assistantMessage({ id, reasoning: 0, text: 4, tool: "completed" }));
+    }
+    const reader = new IncrementalReader(fake);
+    let drained = 0;
+    for (; drained < 400; drained += 1) {
+      const before = fake.served;
+      await reader.sync();
+      if (fake.served - before <= 100) break;
+    }
+    expect(drained).toBeLessThan(400);
+
+    const reads: number[] = [];
+    let id = "";
+    await inSequence(60, async (index) => {
+      if (index % 2 === 0) {
+        id = messageId("a");
+        fake.push(assistantMessage({ id, text: 0, reasoning: 0, tool: "none" }));
+      } else {
+        const done = assistantMessage({ id, text: 4, reasoning: 0, tool: "completed" });
+        fake.replace(fake.messages.length - 1, done);
+      }
+      const before = fake.served;
+      await reader.sync();
+      reads.push(fake.served - before);
+    });
+
+    expect(Math.max(...reads)).toBeLessThanOrEqual(100);
+  }, 120_000);
+
+  // #4279: one prompt and 10,000 assistant messages read 4,100 messages on every sync, forever,
+  // and projected none of them. The window now opens on the prompt and the tail takes over.
+  it("reads a bounded tail per event after one turn longer than the bound", async () => {
+    const fake = new FakeSession();
+    fake.push(userMessage());
+    for (let index = 0; index < 10_000; index += 1) {
+      const id = messageId("a");
+      fake.push(assistantMessage({ id, reasoning: 0, text: 4, tool: "completed" }));
+    }
+    const reader = new IncrementalReader(fake);
+    let drained = 0;
+    let projected = 0;
+    for (; drained < 400; drained += 1) {
+      const before = fake.served;
+      projected += (await reader.sync()).events.length;
+      if (fake.served - before <= 100) break;
+    }
+    expect(drained).toBeLessThan(400);
+    expect(projected).toBeGreaterThan(4_000);
+    // The tail reads that follow say nothing about truncation; the first pass did.
+    expect(reader.projection.lastSync()).not.toHaveProperty("windowTruncated");
+
+    const reads: number[] = [];
+    let id = "";
+    await inSequence(60, async (index) => {
+      if (index % 2 === 0) {
+        id = messageId("a");
+        fake.push(assistantMessage({ id, text: 0, reasoning: 0, tool: "none" }));
+      } else {
+        const done = assistantMessage({ id, text: 4, reasoning: 0, tool: "completed" });
+        fake.replace(fake.messages.length - 1, done);
+      }
+      const before = fake.served;
+      await reader.sync();
+      reads.push(fake.served - before);
+    });
+
+    expect(Math.max(...reads)).toBeLessThanOrEqual(100);
   }, 120_000);
 });

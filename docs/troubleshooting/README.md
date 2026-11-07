@@ -67,6 +67,9 @@ context, instead of resuming the retained native session, are covered in
 [Coding Workbench task continues with context only](coding-workbench-session-not-resumed.md),
 including the closed reasons on the `coding-runtime.session-continuity` line.
 
+Scheduled continuations that wait or were paused after missed wakes are covered in
+[Coding Workbench scheduled continuation does not run](coding-workbench-scheduled-continuation.md).
+
 Chat answers that request a file already inside the connected folder are covered in
 [Restore connected-folder file grounding](chat-connected-folder-file-not-read.md). Use that entry
 for explicit path admission, narrowed scope, low-confidence selection, and insufficient follow-ups.

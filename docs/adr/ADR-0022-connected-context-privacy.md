@@ -826,6 +826,34 @@ receive their final monotonic sensitivity before one scalar span is emitted. Kno
 private keys and configured secret literals remain unconditional. Malformed inferred code, parser
 stack exhaustion and the existing source-size ceiling produce body-free refusals; a connected source
 with an unavailable projection is omitted through the existing read-failure/uncertainty path.
+Java parses run in a worker thread with a heap ceiling and a deadline that grows with the text
+(2026-11-06, #4212): the pinned java-parser's ALL(*) prediction grows superlinearly on some invalid
+expressions (400 characters took 21 s, 1,600 exhausted a 4 GB heap) and keeps its DFA caches across
+parses. A missed deadline or an exhausted worker heap is a budget refusal, closed like stack
+exhaustion; the worker is replaced at once in the background and only node names, token types,
+offsets and images leave it, never a library diagnostic. A worker loads its grammar on its own
+thread: the real launch starts the first one when the server listens, and a caller waits for a
+worker that is still starting at most two seconds and only once per start (a cold start measured 132
+to 236 ms). A parse without a ready worker, including one whose grammar failed to load, is answered
+as unavailable, a property of the machine rather than of the text: text that holds no double quote,
+backslash, apostrophe at a word's edge (an apostrophe inside a word, as in "it's", is prose),
+sensitive name, strict-redaction candidate or value of a private literal seen elsewhere in the same
+projection stays readable as prose, and everything else stays closed like a refused parse, which
+keeps every apostrophe closed. The first such answer per start or cooldown is recorded as
+`security.java-parser.unavailable` with a closed reason (`starting`, `start-refused`). The worker
+keeps the in-process stack size (1 MB), so nesting of roughly 150 to 200 levels parses and deeper
+nesting fails closed as a depth refusal; a tree the worker cannot pass back, or this thread cannot
+read back, is also a depth refusal. Every answer carries its request's id: an answer that lost step
+with its request is never used, retires the worker and is not reused for the text, which it says
+nothing about. The caller's wait cannot observe a worker's exit, so a worker that dies mid-parse is
+retired at its deadline and an exit between parses is found before the next one. A worker that
+cannot start, or has not answered within 15 seconds, is not started again for a minute. A refusal on
+time is reused for the same text for five seconds, so two callers of one hostile message wait out
+one deadline, and the text is parsed afresh afterwards. A worker whose heap grew past what it may
+keep is replaced after its answer as routine. `security.java-parser.worker-started`,
+`security.java-parser.worker-recycled` and `security.java-parser.worker-retired` record each start,
+routine replacement and failure on the Activity Log under one correlation per worker lifetime, with
+the worker's ordinal, parse count, age and, for a retirement, a closed reason, never text.
 Completed standalone private-key intervals are opaque whitespace only in the parser input, with
 unchanged UTF-16 offsets and CR/LF delimiters. Unconditional masking consumes their original bytes;
 public code after a closed interval remains readable. Unclosed intervals receive no parser exemption.
@@ -1548,6 +1576,23 @@ search, counts-only summaries and audit manifests retain their existing redactio
 contracts, and conversation-history compaction summaries keep the default projection. The Coding
 Workbench agent's answers follow ADR-0003 D7 independently of this switch. Already masked historic chat text
 cannot be recovered: re-read sources and generate a new answer.
+
+The default (strict) projection is a superset of that floor (#4271, found by seeded property
+tests): an `Authorization` header value is masked on the whole projection, also one without a
+Bearer/Basic scheme inside a JSON or YAML region; that pass takes one whole token and never a
+scheme word, a template literal, a call or an interpolation, so preserved source keeps its syntax.
+Plain text masks a header value as wholly as the floor does, and `Authorization` and
+`Proxy-Authorization` are sensitive structured keys: their value is masked whole, also when it holds
+`$`, `(`, `[`, `{` or a backtick, and only a leading `Bearer`, `Basic` or `Token` scheme word stays
+readable, for these keys alone. Like any secret key, such a key masks its whole subtree, so a
+schema's `authorization: { type: string }` is masked too: deliberate strict over-redaction.
+A structured key (JSON, YAML, source property) is sensitive by the same label grammar as flat text:
+a secret label that starts at a word or camelCase boundary and ends the key, so `openai_api_key`,
+`my_password`, `GITHUB_TOKEN` and `sessionToken` count and `max_tokens`, `mypassword` or
+`tokenizer` do not. Known limit: source inference re-parses the remainder at each
+line that only looks like source, so text with many such lines costs quadratic time under the strict
+projection; a work or time bound cannot separate that input from real documents without masking
+their tails, so it remains open in #4271 for an incremental classifier.
 
 The wire boundary is asserted by `grounded-qa.redaction.test.ts`: an attacker-controlled
 pack with secret-shaped strings (`sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, `Bearer …`, PEM

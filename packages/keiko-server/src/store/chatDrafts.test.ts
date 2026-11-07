@@ -83,12 +83,11 @@ describe("private chat drafts", () => {
 });
 
 describe("private Coding Workbench drafts", () => {
-  it("restores a window's draft after reopening the store and isolates windows", () => {
+  it("restores the Workbench draft after reopening the store", () => {
     const directory = mkdtempSync(join(tmpdir(), "keiko-workbench-draft-"));
     directories.push(directory);
     const path = join(directory, "ui.sqlite");
     const initial = createNodeUiStore(path);
-    // The id the desktop shell gives the singleton Workbench window (#4068).
     initial.updateCodingWorkbenchDraft("coding", {
       text: "Synthetic task intent",
       expectedRevision: 0,
@@ -99,10 +98,6 @@ describe("private Coding Workbench drafts", () => {
     expect(reopened.readCodingWorkbenchDraft("coding")).toEqual({
       text: "Synthetic task intent",
       revision: 1,
-    });
-    expect(reopened.readCodingWorkbenchDraft("coding-mabc12-1")).toEqual({
-      text: "",
-      revision: 0,
     });
   });
 
@@ -120,13 +115,14 @@ describe("private Coding Workbench drafts", () => {
     });
     for (const foreign of [
       "chat-mabc12",
-      "coding-workbench-",
-      "../coding-workbench-a",
-      "",
+      "coding-workbench-mabc12",
       "coding-",
+      "coding-mabc12",
+      "../coding",
+      "coding/",
       "Coding",
-      "coding/../chat-mabc12",
-      "issue-2253-coding",
+      " coding",
+      "",
     ]) {
       expect(() => store.readCodingWorkbenchDraft(foreign)).toThrow(/not found/iu);
       expect(() =>

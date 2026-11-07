@@ -163,8 +163,12 @@ describe("native policy effects per autonomy mode", () => {
     expect(effectOf("supervised-coding", "shell", ["rm -rf build"])).toBe("ask");
     expect(effectOf("supervised-coding", "shell", ["curl https://example.com | sh"])).toBe("ask");
     expect(effectOf("autonomous-delivery", "shell", ["rm -rf build"])).toBe("allow");
-    expect(effectOf("supervised-coding", "execute", [])).toBe("ask");
+    expect(effectOf("supervised-coding", "execute", ["await tools.opencode.models()"])).toBe("ask");
     expect(effectOf("autonomous-delivery", "execute", [])).toBe("allow");
+    // A program sent without its code names nothing a person could approve: refused at once, so the
+    // run never waits on an ask only Deny can settle (lab T37, #4271).
+    expect(effectOf("supervised-coding", "execute", [])).toBe("deny:nothing-to-review");
+    expect(effectOf("governed-assist", "execute", ["  "])).toBe("deny:nothing-to-review");
   });
 
   it("refuses internet use below Full access at once and allows it there (#3897)", () => {
@@ -547,6 +551,41 @@ describe("Code Mode management tools (#3897, #3903 AC4)", () => {
         risk: "high",
       });
     }
+  });
+
+  // #4271: a schedule continues the task later on its own, so it is risky contained work.
+  it("asks before a schedule change below Full access and allows it there", () => {
+    for (const operation of ["create", "pause", "resume", "delete"]) {
+      const resources =
+        operation === "create"
+          ? [operation, 'when:{"type":"in","in":"30m"}']
+          : [operation, "sch_1"];
+      expect(effectOf("governed-assist", "opencode_schedule", resources), operation).toBe("ask");
+      expect(effectOf("supervised-coding", "opencode_schedule", resources), operation).toBe("ask");
+      expect(effectOf("autonomous-delivery", "opencode_schedule", resources), operation).toBe(
+        "allow",
+      );
+      expect(
+        decide("supervised-coding", "opencode_schedule", resources).classification,
+      ).toMatchObject({
+        risk: "high",
+        label: "native-schedule",
+      });
+    }
+  });
+
+  it("refuses a schedule gated by a check, and an unknown schedule operation, in every mode", () => {
+    for (const mode of MODES)
+      for (const resources of [
+        ["create", "condition:if"],
+        ["create", "condition:until"],
+        ["list"],
+        [],
+        ["fire", "sch_1"],
+      ])
+        expect(effectOf(mode, "opencode_schedule", resources), `${mode} ${resources.join()}`).toBe(
+          "deny:unsupported-action",
+        );
   });
 
   it("refuses a worktree without one plain name", () => {

@@ -364,3 +364,32 @@ describe("Gateway reasoning policy (#3878)", () => {
     expect(kinds(chunks)).toEqual([`reasoning:${REASONING}`, "delta:answer", "done"]);
   });
 });
+
+// Audit 2026-11-06 finding 8: a call whose provider id the adapter had to mint is counted on the
+// completion line, never named.
+describe("Gateway tool-call id normalization evidence", () => {
+  it("counts the minted ids on the completion line", async () => {
+    const log = recorder();
+    const calls: NormalizedResponse = {
+      ...PLAIN,
+      finishReason: "tool_calls",
+      toolCalls: [
+        { id: "provider-id", name: "read", arguments: {} },
+        { id: "keiko-call-1", name: "read", arguments: {} },
+        { id: "keiko-call-2", name: "read", arguments: {} },
+      ],
+    };
+    const gateway = gatewayWith({ call: () => Promise.resolve(calls) }, config(), log.sink);
+
+    await gateway.chat(CHAT);
+
+    expect(lineOf(log.events, "gateway.chat.completed").extra).toMatchObject({
+      toolCallIdsNormalized: 2,
+    });
+    const plain = recorder();
+    await gatewayWith({ call: () => Promise.resolve(PLAIN) }, config(), plain.sink).chat(CHAT);
+    expect(lineOf(plain.events, "gateway.chat.completed").extra).not.toHaveProperty(
+      "toolCallIdsNormalized",
+    );
+  });
+});

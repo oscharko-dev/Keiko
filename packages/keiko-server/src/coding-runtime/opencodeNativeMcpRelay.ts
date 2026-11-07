@@ -30,7 +30,10 @@ import {
  * Gateway, and Keiko adds the credentials it reads from its own environment.
  */
 export interface OpenCodeMcpRelayInput {
-  readonly managed?: Pick<ConfiguredMcpConnections, "generation" | "serve"> | undefined;
+  readonly managed?:
+    | (Pick<ConfiguredMcpConnections, "generation" | "serve"> &
+        Partial<Pick<ConfiguredMcpConnections, "connect">>)
+    | undefined;
   readonly relay: McpCredentialRelay;
   /** Keiko's attested loopback origin. */
   readonly origin: string;
@@ -124,6 +127,7 @@ function bindManaged(
       },
     });
     if (binding === undefined) return "relay-unavailable";
+    prewarmManaged(manager, server, runId, log);
     return {
       url: `${input.origin}${MCP_RELAY_PATH_PREFIX}${binding.relayId}`,
       capability: binding.capability,
@@ -132,6 +136,33 @@ function bindManaged(
     recordMcpRelay(log, runId, MANAGED_BIND_REFUSAL);
     return "relay-unavailable";
   }
+}
+
+/**
+ * Starts the shared connection while the run is still being launched. The runtime fetches a bound
+ * server's tools as soon as its session opens and gives that fetch a short budget of its own; a
+ * cold stdio spawn (process start, handshake, first listing) would otherwise run inside it and the
+ * server's tools would be missing for the whole run. The same shared connection serves the first
+ * request, so this adds no second process; a failure is on the log and the first request retries.
+ */
+function prewarmManaged(
+  manager: NonNullable<OpenCodeMcpRelayInput["managed"]>,
+  server: McpServerDefinition,
+  runId: string,
+  log: ServerLogSink | undefined,
+): void {
+  if (manager.connect === undefined) return;
+  manager.connect(server.name, runId).then(
+    () => undefined,
+    (error: unknown) => {
+      recordMcpRelay(log, runId, {
+        action: "bind",
+        outcome: "failed",
+        reason: "upstream-failed",
+        error,
+      });
+    },
+  );
 }
 
 const MANAGED_BIND_REFUSAL = {

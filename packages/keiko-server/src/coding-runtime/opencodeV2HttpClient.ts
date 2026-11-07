@@ -56,6 +56,9 @@ const TAIL_PAGE_SIZE = 50;
 const MAX_MESSAGE_PAGES = 64;
 const MAX_MESSAGES = 4096;
 const MAX_TAIL_PAGES = Math.ceil(MAX_MESSAGES / TAIL_PAGE_SIZE) + 1;
+// How many older pages a window past the bound reads to find the user message its newest messages
+// answer, holding only that one message (#4279).
+const MAX_PARENT_SEARCH_PAGES = 64;
 const MAX_EVENT_FRAME_BYTES = 1024 * 1024;
 // The runtime sends a heartbeat comment every 15 s on an otherwise silent stream, so three missed
 // ones mean it stopped answering (#4271). The monitor then reconnects within its failure budget.
@@ -1271,17 +1274,35 @@ async function pagedMessages(
       signal,
     );
     const batch = arrayEnvelope(response);
-    if (rows.length + batch.length > MAX_MESSAGES) return overBound(mode, rows.concat(batch));
-    const anchorAt = anchorId === undefined ? -1 : batch.findIndex((row) => row.id === anchorId);
-    rows.push(...batch);
-    if (anchorAt >= 0) return anchoredWindow(rows, rows.length - batch.length + anchorAt);
-    if (batch.length < pageSize) {
-      rows.reverse();
-      return { messages: rows, truncated: false };
-    }
+    if (rows.length + batch.length > MAX_MESSAGES)
+      return overBound(
+        mode,
+        rows.concat(batch),
+        batch.length < pageSize ? undefined : { request, base, response, cursors, signal },
+      );
+    const settled = settledPage(rows, batch, pageSize, anchorId);
+    if (settled !== undefined) return settled;
     cursor = nextMessagesCursor(response, cursors);
   }
   return overBound(mode, rows);
+}
+
+// Adds one page (newest first) to `rows`. The read ends at the page that holds the anchor, or at a
+// short page, the oldest; `undefined` means the next page is needed.
+function settledPage(
+  rows: Readonly<Record<string, unknown>>[],
+  batch: readonly Readonly<Record<string, unknown>>[],
+  pageSize: number,
+  anchorId: string | undefined,
+): OpenCodeV2MessageWindow | undefined {
+  const anchorAt = anchorId === undefined ? -1 : batch.findIndex((row) => row.id === anchorId);
+  rows.push(...batch);
+  if (anchorAt >= 0) return anchoredWindow(rows, rows.length - batch.length + anchorAt);
+  if (batch.length < pageSize) {
+    rows.reverse();
+    return { messages: rows, truncated: false };
+  }
+  return undefined;
 }
 
 // The messages from the anchor to the newest, oldest first. `rows` run newest first.
@@ -1295,9 +1316,10 @@ function anchoredWindow(
 function overBound(
   mode: "complete" | "recent",
   newestFirst: readonly Readonly<Record<string, unknown>>[],
-): OpenCodeV2MessageWindow {
-  if (mode === "complete") throw new Error("opencode-v2-history-oversized");
-  return newestWindow(newestFirst);
+  older?: OlderPages,
+): Promise<OpenCodeV2MessageWindow> {
+  if (mode === "complete") return Promise.reject(new Error("opencode-v2-history-oversized"));
+  return newestWindow(newestFirst, older);
 }
 
 function nextMessagesCursor(
@@ -1312,14 +1334,56 @@ function nextMessagesCursor(
   return next;
 }
 
+/** Where the read past the bound stopped, so the user message before its window can be found. */
+interface OlderPages {
+  readonly request: V2Request;
+  readonly base: string;
+  readonly response: Readonly<Record<string, unknown>>;
+  readonly cursors: Set<string>;
+  readonly signal: AbortSignal | undefined;
+}
+
 // The newest messages that fit the bound, oldest first. An assistant message is projected against
-// the user message it answers, so the window opens on a user message.
-function newestWindow(
+// the user message it answers, so the window opens on a user message. When the newest messages
+// hold none (one long autonomous turn of more messages than the bound), the window opens on the
+// nearest older user message instead, followed by the newest messages: everything between them is
+// left out, which the truncation says. Without it the window was empty, so the run showed nothing
+// and every later read was a complete one again (#4279).
+async function newestWindow(
   newestFirst: readonly Readonly<Record<string, unknown>>[],
-): OpenCodeV2MessageWindow {
+  older: OlderPages | undefined,
+): Promise<OpenCodeV2MessageWindow> {
   const kept = newestFirst.slice(0, MAX_MESSAGES).reverse();
-  const firstUser = kept.findIndex((message) => message.type === "user");
-  return { messages: firstUser < 0 ? [] : kept.slice(firstUser), truncated: true };
+  const firstUser = kept.findIndex(isUserMessage);
+  if (firstUser >= 0) return { messages: kept.slice(firstUser), truncated: true };
+  const parent =
+    newestFirst.slice(MAX_MESSAGES).find(isUserMessage) ??
+    (older === undefined ? undefined : await olderUserMessage(older));
+  return { messages: parent === undefined ? [] : [parent, ...kept.slice(1)], truncated: true };
+}
+
+function isUserMessage(message: Readonly<Record<string, unknown>>): boolean {
+  return message.type === "user";
+}
+
+/** The newest user message older than the pages read so far, reading at most a bounded number. */
+async function olderUserMessage(
+  older: OlderPages,
+  page = 0,
+  response = older.response,
+): Promise<Readonly<Record<string, unknown>> | undefined> {
+  if (page >= MAX_PARENT_SEARCH_PAGES) return undefined;
+  const cursor = nextMessagesCursor(response, older.cursors);
+  const next = await older.request(
+    "GET",
+    `${older.base}?limit=${String(MESSAGE_PAGE_SIZE)}&cursor=${encodeURIComponent(cursor)}`,
+    undefined,
+    older.signal,
+  );
+  const batch = arrayEnvelope(next);
+  const parent = batch.find(isUserMessage);
+  if (parent !== undefined || batch.length < MESSAGE_PAGE_SIZE) return parent;
+  return olderUserMessage(older, page + 1, next);
 }
 
 /** Only the session API needed by a governed run is reachable from this client. */

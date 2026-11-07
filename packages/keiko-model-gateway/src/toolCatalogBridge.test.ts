@@ -850,42 +850,55 @@ describe("malformed provider tool calls", () => {
 });
 
 describe("provider invocation batch bounds", () => {
-  it.each([2, 1001])(
-    "rejects a duplicate or oversized %i-call batch before binding any call",
-    async (count) => {
-      const calls = Array.from({ length: count }, (_, index) => ({
-        id: count === 2 ? "duplicate-id" : `call-${String(index)}`,
-        type: "function",
-        function: { name: "read_file", arguments: '{"path":"src/example.ts"}' },
-      }));
-      const log: ModelGatewayLogEvent[] = [];
-      const subject = adapter(
-        () =>
-          Promise.resolve(
-            new Response(
-              JSON.stringify({
-                choices: [
-                  {
-                    finish_reason: "tool_calls",
-                    message: { content: "", tool_calls: calls },
-                  },
-                ],
-              }),
-              { status: 200 },
-            ),
-          ),
-        log,
-      );
-      let error: unknown;
-      try {
-        await subject.call({ ...request(), toolCatalog: advertisement() }, CONFIG);
-      } catch (cause) {
-        error = cause;
-      }
-      expect(error).toBeInstanceOf(GatewayToolCatalogError);
-      expect(log.some((event) => event.op === "gateway.tool-catalog.call-bound")).toBe(false);
-    },
-  );
+  // The bridge itself still refuses a repeated id (pinned directly below and in the native batch
+  // tests); the ADAPTER, the first layer that sees the provider's ids, now mints a stable id for a
+  // repeated, missing or unusable one instead (audit 2026-11-06, finding 8), so an oversized batch
+  // is the case that reaches the bridge through it.
+  it("rejects an oversized batch before binding any call", async () => {
+    const calls = Array.from({ length: 1001 }, (_, index) => ({
+      id: `call-${String(index)}`,
+      type: "function",
+      function: { name: "read_file", arguments: '{"path":"src/example.ts"}' },
+    }));
+    const log: ModelGatewayLogEvent[] = [];
+    const subject = adapter(() => Promise.resolve(toolCallsResponse(calls)), log);
+    let error: unknown;
+    try {
+      await subject.call({ ...request(), toolCatalog: advertisement() }, CONFIG);
+    } catch (cause) {
+      error = cause;
+    }
+    expect(error).toBeInstanceOf(GatewayToolCatalogError);
+    expect(log.some((event) => event.op === "gateway.tool-catalog.call-bound")).toBe(false);
+  });
+
+  it("binds every valid call of a batch whose provider ids repeat or are missing", async () => {
+    const calls = ["duplicate-id", "duplicate-id", ""].map((id) => ({
+      id,
+      type: "function",
+      function: { name: "read_file", arguments: '{"path":"src/example.ts"}' },
+    }));
+    const log: ModelGatewayLogEvent[] = [];
+    const subject = adapter(() => Promise.resolve(toolCallsResponse(calls)), log);
+    const response = await subject.call({ ...request(), toolCatalog: advertisement() }, CONFIG);
+    const ids = response.toolCalls.map((call) => call.id);
+    expect(ids[0]).toBe("duplicate-id");
+    expect(ids[1]).toMatch(/^keiko-call-[0-9a-f]{12}-1$/u);
+    expect(ids[2]).toMatch(/^keiko-call-[0-9a-f]{12}-2$/u);
+    expect(log.filter((event) => event.op === "gateway.tool-catalog.call-bound")).toHaveLength(3);
+    expect(log.some((event) => event.op === "gateway.tool-catalog.rejected")).toBe(false);
+  });
+
+  it("still refuses a repeated id handed straight to the bridge", () => {
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      (): number => NOW,
+    );
+    const call = { id: "same", name: "question", arguments: { questions: [] } };
+    expect(() => bridge.bindCalls([call, call])).toThrow(
+      expect.objectContaining({ reason: "invalid-arguments" }),
+    );
+  });
 
   // The array-level check used to reuse `TOOL_CATALOG_LIMITS.maxArgumentBytes` -- sized for ONE
   // call's arguments -- as a budget shared across the WHOLE batch, so several individually-legal
@@ -1692,6 +1705,15 @@ describe("file content in a model tool call", () => {
     ).toThrow(GatewayToolCatalogError);
   });
 });
+
+function toolCallsResponse(calls: readonly unknown[]): Response {
+  return new Response(
+    JSON.stringify({
+      choices: [{ finish_reason: "tool_calls", message: { content: "", tool_calls: calls } }],
+    }),
+    { status: 200 },
+  );
+}
 
 it("offers bounded name guidance for an unknown native alias without authorizing retry or echoing input", () => {
   const bridge = createGatewayToolCatalogBridge(

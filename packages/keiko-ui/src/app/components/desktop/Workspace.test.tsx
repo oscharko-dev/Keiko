@@ -107,6 +107,8 @@ describe("M1 — empty startup layout", () => {
   it("calls openPalette when the empty-state blob button is clicked", async () => {
     const openPalette = vi.fn();
     const user = userEvent.setup();
+    // Opening the launcher is routine evidence the palette records on its own stage; the
+    // workspace adds no warning-level note for it (#4271).
     const diagnostics: string[] = [];
     setClientDiagnosticWriter((message) => diagnostics.push(message));
     try {
@@ -121,10 +123,7 @@ describe("M1 — empty startup layout", () => {
       expect(openPalette).toHaveBeenCalledTimes(1);
       await user.click(screen.getByRole("button", { name: "New window" }));
       expect(openPalette).toHaveBeenCalledTimes(2);
-      expect(diagnostics).toEqual([
-        "Workspace window palette opened.",
-        "Workspace window palette opened.",
-      ]);
+      expect(diagnostics).not.toContain("Workspace window palette opened.");
     } finally {
       resetClientDiagnosticWriter();
     }

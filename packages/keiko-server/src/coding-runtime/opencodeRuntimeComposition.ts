@@ -32,7 +32,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import { type IncomingHttpHeaders, type IncomingMessage } from "node:http";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import {
+  nativeBuildCacheReadRoots,
+  nativeBuildWrapperReadRoots,
+} from "@oscharko-dev/keiko-sandbox";
+import {
+  nativeBuildCacheAdmitted,
+  prepareNativeBuildSettings,
+  type NativeBuildSettingsResult,
+} from "./nativeBuildSettings.js";
 import { DatabaseSync } from "node:sqlite";
 import type {
   CodingWorkbenchRuntimeEvent,
@@ -51,9 +61,10 @@ import {
   contentFreeErrorClass,
   describeError,
   emitServerDiagnostic,
+  serverDiagnosticFromError,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
-import { isValidCorrelationId } from "../correlation.js";
+import { actionCorrelationId } from "./codingToolFacadeFailure.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   createCodingRuntimeManager,
@@ -67,6 +78,7 @@ import {
   type OpenCodeLifecyclePrepareResult,
 } from "./codingRuntimeManager.js";
 import type { CodingRuntimeTurnOrigin } from "./codingRuntimeRevert.js";
+import { holdRunScheduler, startScheduledWakeTurn } from "./opencodeScheduledWakeTurn.js";
 import type { CodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
 import {
   CODING_TOOL_MAX_BODY_BYTES,
@@ -195,6 +207,7 @@ import {
 import { openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import {
   decideOpenCodeNativePolicy,
+  nativeAuthorityRefusalMessage,
   openCodeNativeEditFiles,
   openCodeNativeVerificationKind,
   parseOpenCodeNativePolicyRequest,
@@ -288,6 +301,7 @@ import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
 import { type OpenCodeToolProfile, openCodeVisibleToolNames } from "./opencodeToolSchemas.js";
 import { recordGovernedToolModelContent } from "./governedToolModelContent.js";
+import { javaToolOptions } from "./javaToolOptions.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   openCodeCatalogAliasFor,
@@ -532,6 +546,12 @@ export type McpOAuthIssuerPort = (
 
 export interface OpenCodeRuntimeCompositionInput {
   readonly mcpMutations?: NativeMcpMutationJournal | undefined;
+  /**
+   * The user's real home that a native run's sanitized build settings (`~/.m2/settings.xml`,
+   * `~/.npmrc`, `~/.gradle/gradle.properties`) are read from (#4271, `nativeBuildSettings.ts`).
+   * Absent uses the process's home; tests inject a fixture directory.
+   */
+  readonly buildSettingsHome?: string | undefined;
   /** Captured server-only observation profile. Absent retains the direct native history contract. */
   readonly toolProfile?: OpenCodeToolProfile | undefined;
   /**
@@ -1339,12 +1359,26 @@ function createSubmitTask(
     }
     if (!(await synchronizeTurnBaseline(run))) return false;
     await refreshedInstructions(run, sinks.refreshInstructions);
-    if (!run.runtimeAdapter.armTurn()) return false;
-    // A new turn: what an undo must find unchanged is recorded afresh from here on. Keiko's own
-    // continuation of the human's request keeps that request's images: its undo reaches back to it.
-    if (origin === undefined) beginOpenCodeTurnImages(run);
-    return postTurnPrompt(run, text, initialContext, inputs, sinks, origin);
+    return armAndPostTurn(run, text, initialContext, inputs, sinks, origin);
   };
+}
+
+async function armAndPostTurn(
+  run: ReadyRun,
+  text: string,
+  initialContext: string | undefined,
+  inputs: AdmittedPromptInputs | undefined,
+  sinks: Parameters<typeof postTurnPrompt>[4],
+  origin: CodingRuntimeTurnOrigin | undefined,
+): Promise<boolean> {
+  if (!run.runtimeAdapter.armTurn()) return false;
+  // A scheduled wake posts nothing: the runtime fires the due schedule into the armed turn.
+  if (origin === "schedule-wake")
+    return startScheduledWakeTurn(run, { activityLog: sinks.activityLog }) && run.ready;
+  // A new turn: what an undo must find unchanged is recorded afresh from here on. Keiko's own
+  // continuation of the human's request keeps that request's images: its undo reaches back to it.
+  if (origin === undefined) beginOpenCodeTurnImages(run);
+  return postTurnPrompt(run, text, initialContext, inputs, sinks, origin);
 }
 
 /**
@@ -1416,12 +1450,15 @@ function releaseUnsentTurnInputs(
 // What separates a turn's hidden context from the operator's own text in the sent prompt.
 const PROMPT_CONTEXT_SEPARATOR = "\n\n";
 
+/** A turn Keiko posts a prompt for; a scheduled wake posts none. */
+type PostedTurnOrigin = Exclude<CodingRuntimeTurnOrigin, "schedule-wake">;
+
 /** The sent turn's own id, origin and inputs; a hidden context moves the mentions by its length. */
 function turnPromptInputs(
   id: string,
   inputs: AdmittedPromptInputs | undefined,
   initialContext: string | undefined,
-  origin: CodingRuntimeTurnOrigin | undefined,
+  origin: PostedTurnOrigin | undefined,
 ): OpenCodeV2PromptInputs {
   const offset =
     initialContext === undefined ? 0 : initialContext.length + PROMPT_CONTEXT_SEPARATOR.length;
@@ -1442,7 +1479,7 @@ async function postTurnPrompt(
     readonly activityLog: ServerLogSink | undefined;
     readonly mcpMutations?: NativeMcpMutationJournal | undefined;
   },
-  origin?: CodingRuntimeTurnOrigin,
+  origin?: PostedTurnOrigin,
 ): Promise<boolean> {
   const { diagnostics, activityLog, mcpMutations } = sinks;
   // A turn that is not a command must never take a command's presentation.
@@ -1925,6 +1962,7 @@ function retainOnDispose(
       runRoot: run.runRoot,
       workspaceRoot: run.workspaceRoot,
       sessionId: run.sessionId,
+      mode: run.mode,
     },
     settlement?.terminalStatus,
   );
@@ -1964,6 +2002,26 @@ function recordCompositionDisposalFailure(
     errorClass: contentFreeErrorClass(error),
     message: operation === "run-dispose" ? "server-operation-failed" : operation,
     code: operation,
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  });
+}
+
+/** The run never starts; without this line its cause would leave no trace on the Activity Log. */
+function recordPrepareFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+): void {
+  const detail = describeError(error);
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.opencode-composition",
+    source: "opencode-runtime-composition.prepare",
+    errorClass: contentFreeErrorClass(error),
+    message: "runtime-start-failed",
+    code: "config-materialization-failed",
     ...(detail.frames === undefined ? {} : { frames: detail.frames }),
     ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
   });
@@ -2026,7 +2084,7 @@ async function materializePrepare(
   const result = preparedLaunch(
     input,
     bridge,
-    preparedEnvironment(profile.env, request.env, runRoot),
+    preparedRunEnvironment(input, request, profile.env, runRoot),
   );
   persistPreparedRun(runs, request, runRoot, password, configDigest, {
     continuation,
@@ -2042,6 +2100,47 @@ async function materializePrepare(
   recordAgentModelsBound(input.activityLog, request, agentModels);
   recordProviderPolicyBound(input.activityLog, request, profile, input.toolProfile ?? "direct");
   return result;
+}
+
+/** The launch environment: the profile's, the run's sanitized build settings and the inherited names. */
+function preparedRunEnvironment(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  profileEnv: Readonly<Record<string, string>>,
+  runRoot: string,
+): Readonly<Record<string, string>> {
+  const settings = admitNativeBuildSettings(input, request, runRoot);
+  return preparedEnvironment(
+    { ...profileEnv, ...settings.env },
+    request.env,
+    runRoot,
+    settings.javaProperties,
+  );
+}
+
+/**
+ * The sanitized build settings of a native run (#4271): the environment that binds them, empty for
+ * the mapped profiles. The Maven cache and the Maven wrapper's distributions are bound read-only
+ * below Full access, matching the kernel read roots the backend opens for them.
+ */
+function admitNativeBuildSettings(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+): Pick<NativeBuildSettingsResult, "env" | "javaProperties"> {
+  if (input.toolProfile !== "native") return { env: {}, javaProperties: {} };
+  const realHome = input.buildSettingsHome ?? homedir();
+  const mode = request.env.KEIKO_CODING_MODE;
+  const offline = nativeBuildCacheAdmitted(mode);
+  return prepareNativeBuildSettings({
+    runId: request.runId,
+    mode,
+    realHome,
+    stateRoot: runRoot,
+    readOnlyMavenRepository: offline ? nativeBuildCacheReadRoots(realHome)[0] : undefined,
+    readOnlyMavenWrapperDists: offline ? nativeBuildWrapperReadRoots(realHome)[0] : undefined,
+    activityLog: input.activityLog,
+  });
 }
 
 /** The run's launch profile, with the MCP servers the operator's registry admits for it. */
@@ -2188,13 +2287,12 @@ function preparedEnvironment(
   profile: Readonly<Record<string, string>>,
   inherited: Readonly<Record<string, string>>,
   runRoot: string,
+  javaProperties: Readonly<Record<string, string>> = {},
 ): Readonly<Record<string, string>> {
-  const temporary = join(runRoot, "tmp");
-  // These are JVM environment-option quotes, not a shell command; retain literal path characters.
-  const javaTemporary = "'-Djava.io.tmpdir=" + temporary.replaceAll("'", "'\"'\"'") + "'";
+  const properties = { "java.io.tmpdir": join(runRoot, "tmp"), ...javaProperties };
   return {
     ...profile,
-    JAVA_TOOL_OPTIONS: [inherited.JAVA_TOOL_OPTIONS, javaTemporary].filter(Boolean).join(" "),
+    JAVA_TOOL_OPTIONS: javaToolOptions(inherited.JAVA_TOOL_OPTIONS, properties),
   };
 }
 
@@ -2524,7 +2622,10 @@ async function prepare(
   const runRoot = join(input.stateBaseRoot, request.runId);
   try {
     return await materializePrepare(input, bridge, runs, request, runRoot);
-  } catch {
+  } catch (error) {
+    // A start the caller abandoned is no failure; the start's own outcome records it.
+    if (request.signal?.aborted !== true)
+      recordPrepareFailure(input.diagnostics, request.runId, error);
     await disposeFailedPrepare(
       bridge,
       runRoot,
@@ -3175,6 +3276,22 @@ function recordOpenCodeV2HistoryFailure(
  * replaced by a fresh one inside a database that still holds the other.
  */
 async function bindRunSession(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+  client: OpenCodeV2HttpClient,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  const sessionId = await bindRunSessionOnce(input, run, client, signal);
+  // Before the first turn can create a schedule: the runtime never fires one inside this run unless
+  // it is the wake run that releases the lease (`opencodeScheduleLease.ts`). A hold that cannot be
+  // written fails the readiness, and so does a native run whose database is missing: its runtime
+  // loads the schedule tool, so an unheld database would let it fire schedules unguarded.
+  if (sessionId !== "")
+    holdRunScheduler(input.activityLog, run, "hold", { required: input.toolProfile === "native" });
+  return sessionId;
+}
+
+async function bindRunSessionOnce(
   input: OpenCodeRuntimeCompositionInput,
   run: PreparedRun,
   client: OpenCodeV2HttpClient,
@@ -4101,18 +4218,20 @@ function handleDirectToolRequest(
   if (preflight.outcome === "rejected") {
     return Promise.resolve({ status: preflight.status, body: preflight.body });
   }
-  const read = nativeReadTransportValue(input.body);
+  // The body is parsed once; every transport recognizer below reads that one value.
+  const body = parsedToolBody(input.body, deps.diagnostics);
+  const read = nativeReadTransportValue(body);
   if (read !== undefined)
     return handleNativeReadTransport(read, input.signal, deps, runs, nativeRead);
-  const permission = parseV2PermissionRequest(input.body);
+  const permission = parseV2PermissionRequest(body);
   if (permission !== undefined) {
     return handleV2PermissionRequest(permission, input.signal, deps, approvals, runs);
   }
-  const nativePolicy = parseNativePolicyBody(input.body);
+  const nativePolicy = parseNativePolicyBody(body);
   if (nativePolicy !== undefined) {
     return handleNativePolicyRequest(nativePolicy, input.signal, deps, approvals, runs);
   }
-  const webSearch = nativeWebSearchTransportValue(input.body);
+  const webSearch = nativeWebSearchTransportValue(body);
   if (webSearch !== undefined) {
     const run = runs.get(webSearch.runId);
     return answerNativeWebSearch(
@@ -4127,16 +4246,45 @@ function handleDirectToolRequest(
   );
   if (admission === undefined) return Promise.resolve({ status: 429, body: "" });
   const detachExternalAbort = bindExternalAbort(input.signal, admission);
-  return executeToolRequest(deps, input.headers, input.body, admission).finally(
+  return executeToolRequest(deps, input.headers, input.body, body !== undefined, admission).finally(
     detachExternalAbort,
   );
 }
 
-function parseNativePolicyBody(body: string): OpenCodeNativePolicyRequest | undefined {
-  if (!validJson(body)) return undefined;
-  const parsed: unknown = JSON.parse(body);
-  return v2Record(parsed)?.action === OPENCODE_NATIVE_POLICY_ACTION
-    ? parseOpenCodeNativePolicyRequest(parsed)
+/** A request body that parsed as JSON, wrapped so a JSON `null` or `false` stays distinguishable. */
+interface ParsedToolBody {
+  readonly value: unknown;
+}
+
+// A body that is not JSON is answered 400 downstream; the record keeps that it happened, under the
+// marker correlation (no action could be read from it), never the body.
+function parsedToolBody(
+  body: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): ParsedToolBody | undefined {
+  try {
+    return { value: JSON.parse(body) as unknown };
+  } catch (error) {
+    emitServerDiagnostic(
+      diagnostics,
+      serverDiagnosticFromError({
+        correlationId: actionCorrelationId(undefined),
+        operation: "coding-runtime.tool-bridge",
+        source: "opencode-runtime-composition.request-body",
+        error,
+        summary: "tool-bridge-request-body-invalid",
+        redact: () => "tool-bridge-request-body-invalid",
+      }),
+    );
+    return undefined;
+  }
+}
+
+function parseNativePolicyBody(
+  body: ParsedToolBody | undefined,
+): OpenCodeNativePolicyRequest | undefined {
+  return v2Record(body?.value)?.action === OPENCODE_NATIVE_POLICY_ACTION
+    ? parseOpenCodeNativePolicyRequest(body?.value)
     : undefined;
 }
 
@@ -4161,20 +4309,22 @@ async function handleNativePolicyRequest(
   if (run?.ready !== true || sessionRelation === undefined) {
     return { status: 403, body: "", rejection: "approval-unavailable" };
   }
-  const decided = decideOpenCodeNativePolicy({
+  const policyInput = {
     mode: run.mode,
     workspaceRoot: run.workspaceRoot,
     planRoot: openCodePlanDirectory(run.runRoot),
     request,
-    nowMs: Date.now(),
     ...(run.mcp === undefined ? {} : { mcp: run.mcp }),
     ...(deps.externalReadRoots === undefined ? {} : { externalRoots: deps.externalReadRoots }),
     webSearch: deps.nativeWebSearch?.admitted === true,
-  });
+  };
+  const decided = decideOpenCodeNativePolicy({ ...policyInput, nowMs: Date.now() });
   const decision = admittedSessionMove(run, request, decided);
   const settled = await settleNativePolicyOutcome(run, decision, request, signal, deps, {
     approvals,
     sessionRelation,
+    // A human may take minutes to decide; the files may change meanwhile (a link swapped in).
+    recheck: () => decideOpenCodeNativePolicy({ ...policyInput, nowMs: Date.now() }),
   });
   return answerNativePolicy(run, request, decision, { ...settled, sessionRelation }, deps);
 }
@@ -4215,7 +4365,7 @@ async function answerNativePolicy(
     ...(worktree === undefined ? {} : { worktree: worktree.disposition }),
   });
   return worktree === undefined
-    ? nativePolicyResult(outcome, decision)
+    ? nativePolicyResult(settled, decision)
     : nativePolicyResponse("deny", worktree.message);
 }
 
@@ -4285,21 +4435,20 @@ function noteNativeCallRefused(
 }
 
 function nativePolicyResult(
-  outcome: OpenCodeNativePolicyOutcome,
+  settled: NativePolicySettlement,
   decision: OpenCodeNativePolicyDecision,
 ): OpenCodeToolBridgeResponse {
+  const { outcome } = settled;
   if (outcome === "allowed" || outcome === "approved") return nativePolicyResponse("allow");
   if (outcome === "authority-refused" || outcome === "cancelled")
-    return nativePolicyResponse("deny", NATIVE_AUTHORITY_REFUSED_MESSAGE);
+    return nativePolicyResponse("deny", nativeAuthorityRefusalMessage(settled.authority?.reason));
+  if (settled.refusal !== undefined) return nativePolicyResponse("deny", settled.refusal);
   if (decision.effect === "deny") return nativePolicyResponse("deny", decision.message);
   return nativePolicyResponse(
     "deny",
     humanDecisionFeedback(outcome === "denied" ? "denied" : "expired"),
   );
 }
-
-const NATIVE_AUTHORITY_REFUSED_MESSAGE =
-  "Keiko refused this action: the run's authority is no longer valid or its budget is exhausted.";
 
 /**
  * The policy's answer, revalidated against live authority before an effect is released (#3897
@@ -4354,19 +4503,17 @@ async function settleNativePolicyOutcome(
   context: {
     readonly approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>;
     readonly sessionRelation: OpenCodeNativeSessionRelation;
+    readonly recheck: () => OpenCodeNativePolicyDecision;
   },
 ): Promise<NativePolicySettlement> {
-  const { approvals, sessionRelation } = context;
+  const { sessionRelation } = context;
   if (signal?.aborted === true) return { outcome: "cancelled" };
   if (decision.effect === "deny") return { outcome: decision.reason };
   if (!hasRequiredMcpIdentity(decision.classification, request))
     return { outcome: "authority-refused", authority: { reason: "unavailable" } };
-  const outcome: OpenCodeNativePolicyOutcome =
-    decision.effect === "ask"
-      ? await nativePolicyHumanDecision(run, decision, signal, deps, approvals)
-      : "allowed";
-  noteDeniedVerification(deps, request, outcome);
-  if (outcome !== "allowed" && outcome !== "approved") return { outcome };
+  const decided = await humanDecidedOutcome(run, decision, request, signal, deps, context);
+  if (decided.outcome !== "allowed" && decided.outcome !== "approved") return decided;
+  const { outcome } = decided;
   const admission = nativeEffectAdmission(
     deps,
     decision.classification.actionClass,
@@ -4381,6 +4528,43 @@ async function settleNativePolicyOutcome(
   noteAdmittedEditEvidence(run, request, decision.classification, { deps, sessionRelation });
   noteAdmittedVerification(run, deps, request);
   return { outcome, authority: { charge: admission.charge } };
+}
+
+/**
+ * An allowed action as it is, an asked one after the human's decision and the re-check of its
+ * paths: a refusal found by the re-check, or the decision itself.
+ */
+async function humanDecidedOutcome(
+  run: PreparedRun,
+  decision: OpenCodeNativePolicyDecision,
+  request: OpenCodeNativePolicyRequest,
+  signal: AbortSignal | undefined,
+  deps: ToolBridgeExecutionDeps,
+  context: {
+    readonly approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>;
+    readonly recheck: () => OpenCodeNativePolicyDecision;
+  },
+): Promise<NativePolicySettlement> {
+  const outcome: OpenCodeNativePolicyOutcome =
+    decision.effect === "ask"
+      ? await nativePolicyHumanDecision(run, decision, signal, deps, context.approvals)
+      : "allowed";
+  noteDeniedVerification(deps, request, outcome);
+  if (outcome !== "allowed" && outcome !== "approved") return { outcome };
+  return staleAfterHumanDecision(decision, context.recheck) ?? { outcome };
+}
+
+/**
+ * The human decided on the facts at ask time; the files may have changed while they read the card
+ * (a symbolic link swapped in). The policy runs once more and a hard denial then wins.
+ */
+function staleAfterHumanDecision(
+  decision: OpenCodeNativePolicyDecision,
+  recheck: () => OpenCodeNativePolicyDecision,
+): NativePolicySettlement | undefined {
+  if (decision.effect !== "ask") return undefined;
+  const again = recheck();
+  return again.effect === "deny" ? { outcome: again.reason, refusal: again.message } : undefined;
 }
 
 /** A human refused a project check: the run's verification is blocked, as for the governed one. */
@@ -4590,6 +4774,8 @@ function recordNativeStepChanged(
 interface NativePolicySettlement {
   readonly outcome: OpenCodeNativePolicyOutcome;
   readonly authority?: OpenCodeNativeAuthorityEvidence;
+  /** The model-facing reason of a refusal found after the human's decision (a re-check). */
+  readonly refusal?: string;
 }
 
 function nativeEffectAdmission(
@@ -4761,10 +4947,10 @@ function nativePolicyResponse(
   };
 }
 
-function parseV2PermissionRequest(body: string): Readonly<Record<string, unknown>> | undefined {
-  if (!validJson(body)) return undefined;
-  const parsed: unknown = JSON.parse(body);
-  const value = v2Record(parsed);
+function parseV2PermissionRequest(
+  body: ParsedToolBody | undefined,
+): Readonly<Record<string, unknown>> | undefined {
+  const value = v2Record(body?.value);
   return value?.action === "permission-request" ? value : undefined;
 }
 
@@ -4899,32 +5085,40 @@ function toolBridgeDrainWait(signal: AbortSignal, clear: () => void): ToolBridge
 function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmissionGate {
   let pendingDrain: ToolBridgeDrainWait | undefined;
   const requests = new Set<AdmittedToolRequest>();
+  // Requests admitted under a deadline past the default may park on a human decision (verification
+  // and the proposal tools); they hold a lane of their own with the same bound.
+  const operatorRequests = new Set<AdmittedToolRequest>();
   const release = (controller: AbortController): void => {
+    for (const request of operatorRequests) {
+      if (request.controller === controller) operatorRequests.delete(request);
+    }
     for (const request of requests) {
       if (request.controller === controller) requests.delete(request);
     }
-    if (requests.size === 0) pendingDrain?.finish(true);
+    if (requests.size === 0 && operatorRequests.size === 0) pendingDrain?.finish(true);
   };
   return {
     limits,
     admit: (requestDeadlineMs): AdmittedToolRequest | undefined => {
-      if (requests.size >= limits.maxInFlight) return undefined;
+      const lane = requestDeadlineMs > limits.requestDeadlineMs ? operatorRequests : requests;
+      if (lane.size >= limits.maxInFlight) return undefined;
       const request = admittedToolRequest(new AbortController(), requestDeadlineMs, release);
-      requests.add(request);
+      lane.add(request);
       return request;
     },
     abortNativeRead: (identity): void => {
-      for (const request of requests) {
+      for (const request of [...requests, ...operatorRequests]) {
         if (sameNativeReadIdentity(request.nativeReadIdentity, identity))
           request.controller.abort(new Error(DISCONNECT_ABORT));
       }
     },
     abortAll: (): void => {
-      for (const request of requests) request.controller.abort(new Error(CLOSE_ABORT));
+      for (const request of [...requests, ...operatorRequests])
+        request.controller.abort(new Error(CLOSE_ABORT));
     },
-    drained: (): boolean => requests.size === 0,
+    drained: (): boolean => requests.size === 0 && operatorRequests.size === 0,
     drain: (signal): Promise<boolean> => {
-      if (requests.size === 0) return Promise.resolve(true);
+      if (requests.size === 0 && operatorRequests.size === 0) return Promise.resolve(true);
       if (signal.aborted) return Promise.resolve(false);
       pendingDrain ??= toolBridgeDrainWait(signal, (): void => {
         pendingDrain = undefined;
@@ -5028,10 +5222,11 @@ async function executeToolRequest(
   deps: ToolBridgeExecutionDeps,
   headers: Headers,
   body: string,
+  bodyIsJson: boolean,
   admission: AdmittedToolRequest,
 ): Promise<{ readonly status: number; readonly body: string }> {
   const { facade, capability, settleTool, diagnostics } = deps;
-  if (!validJson(body)) {
+  if (!bodyIsJson) {
     admission.release();
     return { status: 400, body: "" };
   }
@@ -5213,18 +5408,8 @@ function startFacadeExecution(
 // valid as-is (the canonical shape admits no `:`), so it is mapped onto `tool-<callId>` — a fixed,
 // documented prefix swap an analyzer joins back to the evidence's `actionId`. Prose, whitespace,
 // overlength and too-short values degrade to the marker.
-const TOOL_ACTION_ID_PREFIX = "tool:";
-const TOOL_ACTION_CORRELATION_PREFIX = "tool-";
-const UNPARSED_ACTION_CORRELATION_ID = "tool-bridge-unparsed-action";
-
-function actionCorrelationId(actionId: string | undefined): string {
-  if (actionId === undefined) return UNPARSED_ACTION_CORRELATION_ID;
-  const candidate = actionId.startsWith(TOOL_ACTION_ID_PREFIX)
-    ? `${TOOL_ACTION_CORRELATION_PREFIX}${actionId.slice(TOOL_ACTION_ID_PREFIX.length)}`
-    : actionId;
-  return isValidCorrelationId(candidate) ? candidate : UNPARSED_ACTION_CORRELATION_ID;
-}
-
+// The derivation itself lives in codingToolFacadeFailure.ts, shared with the facade's own failure
+// record.
 function emitFacadeFailureDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
   actionId: string | undefined,
@@ -5333,15 +5518,6 @@ function safeToolState(result: CodingToolResult): OpenCodeToolSettlementState {
   if (result.status === "denied") return "denied";
   if (result.status === "cancelled") return "cancelled";
   return "failed";
-}
-
-function validJson(body: string): boolean {
-  try {
-    JSON.parse(body);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -5505,14 +5681,14 @@ type NativeReadTransportPacket = Readonly<{
       }>
   );
 
-function nativeWebSearchTransportValue(body: string): NativeWebSearchRequest | undefined {
-  return validJson(body) ? parseNativeWebSearchRequest(JSON.parse(body)) : undefined;
+function nativeWebSearchTransportValue(
+  body: ParsedToolBody | undefined,
+): NativeWebSearchRequest | undefined {
+  return body === undefined ? undefined : parseNativeWebSearchRequest(body.value);
 }
 
-function nativeReadTransportValue(body: string): unknown {
-  if (!validJson(body)) return undefined;
-  const value: unknown = JSON.parse(body);
-  return v2Record(value)?.action === "native-read-invocation" ? value : undefined;
+function nativeReadTransportValue(body: ParsedToolBody | undefined): unknown {
+  return v2Record(body?.value)?.action === "native-read-invocation" ? body?.value : undefined;
 }
 
 /** Capture transport data only; the existing parent owns authority, replay and physical work. */

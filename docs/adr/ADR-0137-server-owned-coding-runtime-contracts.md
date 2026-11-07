@@ -114,9 +114,11 @@ bounded whole-file read admits ordinary large repository instructions and retain
 digest for edit preconditions. The native helper allocates only the observed file size plus one
 growth-detection byte; it still checks final file and directory identity and rejects concurrent
 changes. Model-facing read windows remain capped at 64 KiB, and the initial-turn block of the mapped
-profiles remains capped at 16 KiB and 800 lines; the native copy is not (below). An oversized requested model window returns the existing
-`workspace-read-too-large` refusal and a body-free failed-read event so the model can request a
-smaller line window. Files above 1 MiB remain refused; neither a tool argument nor this loader can
+profiles remains capped at 16 KiB and 800 lines; the native copy is not (below). A requested model window past that 64 KiB bound is cut to its largest
+whole-line prefix and reports `nextStartLine` like a window cut by `maxLines`, so "startLine 1,
+maxLines 5000" always answers; only a window whose first line alone exceeds the bound returns the
+existing `workspace-read-too-large` refusal (with model-facing guidance to search instead) and a
+body-free failed-read event. Files above 1 MiB remain refused; neither a tool argument nor this loader can
 override the pinned helper ceiling.
 
 On the native profile the same read reaches the model through the producer's own
@@ -2318,7 +2320,47 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `--openssl-config` with its file inline or as the next option, and the directories they name
   (the configuration file's directory, the include directory, the modules, an
   `--openssl-config=` file's directory) open read-only through `nativeOpenSslReadRoots`, under the
-  toolchain root rule: never the user's home or above it, a system prefix or a credential store. The launch gate that keeps a host secret out of the child compares the
+  toolchain root rule: never the user's home or above it, a system prefix or a credential store.
+  Build tools in a nested monorepo (#4271) follow the same shape. The build names `JAVA_HOME`,
+  `MAVEN_HOME`/`M2_HOME`/`GRADLE_HOME`, `MAVEN_OPTS`, `MAVEN_ARGS`, `GRADLE_OPTS`, the proxy family,
+  `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and `npm_config_registry` are inherited
+  (`nativeBuildInheritedEnvNames`) only when the value carries no credential (URL user-info, or a
+  Maven/Gradle option naming a password or token); the JDK or build tool they name, and the JDK of the
+  first `java` on `PATH`, open read-only through `nativeBuildToolReadRoots` under the toolchain root
+  rule, and only when the directory holds the tool's `bin/` executable. The private `HOME` hides the
+  user's build settings, so Keiko admits them as sanitized copies (`nativeBuildSettings.ts`, one
+  `coding-runtime.native-build-settings.admitted` line per run with closed dispositions and counts
+  only): `~/.m2/settings.xml` keeps `mirrors`, `proxies`, `profiles`, `activeProfiles` and
+  `pluginGroups` without `servers`, any credential-named element or URL user-info; `~/.npmrc` keeps
+  the registry, scoped registries, `strict-ssl`, proxy and fetch settings and none of its `_auth*`,
+  token or `//host/:` keys, written to a user-config file whose name is not `.npmrc` and bound with
+  `NPM_CONFIG_USERCONFIG` (the kernel denies the name `.npmrc` anywhere, so a sanitized `.npmrc` could
+  never be read, and the real file stays denied); `~/.gradle/gradle.properties` keeps proxy and daemon
+  keys only. Java takes `user.home` from the account database and ignores `HOME`, so the private
+  home reaches every JVM of the run as `-Duser.home` in `JAVA_TOOL_OPTIONS` and Gradle through
+  `GRADLE_USER_HOME`; without them Maven and Gradle read the real `~/.m2` and `~/.gradle` and never
+  see the sanitized copies. Maven's `localRepository` is always the run's own writable repository,
+  because Maven writes into its local repository even offline. Below Full access the sanitized
+  Maven settings run `offline`, with the user's `~/.m2/repository` opened as one READ-ONLY root
+  (`nativeBuildCacheReadRoots`) and chained behind the run's repository as its tail
+  (`-Dmaven.repo.local.tail`, Maven 3.9 and later), so a warm cache builds without a network and a
+  run can never poison the user's cache. The Maven wrapper's installed
+  distributions (`~/.m2/wrapper/dists`) open the same way (`nativeBuildWrapperReadRoots`) and are
+  linked into the private home, so `./mvnw` runs the distribution a standalone shell runs instead of
+  trying a download without a network; the Gradle wrapper is not admitted, because it takes a lock
+  file inside its installed distribution. At Full access the run resolves into its own writable
+  private cache and downloads a wrapper distribution there. Maven splits the tail at commas, so a
+  cache path with a comma is not chained (`mavenCache: refused`); Maven interpolates `${...}` in
+  settings, so a run home spelling one omits the `localRepository` element and Maven's default,
+  `${user.home}/.m2/repository`, names the same private repository. `JAVA_TOOL_OPTIONS` quotes each
+  value for HotSpot, which splits at whitespace outside quotes, expands nothing and refuses an
+  unmatched quote, so a malformed inherited value stops the JVM instead of absorbing the run's
+  options. These settings decide what a build reads and writes by default; the sandbox stays the
+  boundary: a project's `.mvn/maven.config` or `MAVEN_OPTS` naming another `user.home` or local
+  repository still meets the read-only kernel root. The admission line records the cache
+  and wrapper dispositions (`mavenCache`, `mavenWrapper`). An in-repo `.npmrc` stays kernel-denied: no sanitized view is
+  possible without rewriting a workspace read, and registry routing is available through the user
+  config instead. The launch gate that keeps a host secret out of the child compares the
   child env (allowlisted non-secret names plus Keiko's own run projection) against the host values
   whose name says they carry a credential; comparing against every host value refused each
   Full-access run on a host that also exports the deployment ceiling, because the projected mode
@@ -2672,20 +2714,67 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
 - **OpenCode 2.2.5 (2026-11-05, #4271).** Paragraphs above that name an earlier pinned version record
   when they were decided; the real-binary suites re-proved their behaviour on this pin.
   - **New built-in plugins are withheld.** `OPENCODE_WITHHELD_BUILT_IN_PLUGINS` removes the browser,
-    goal, Claude Agent provider, artifact, image generation and schedule plugins through the
-    producer's own `plugins` setting, on both profiles, and the Ollama, LM Studio and vLLM providers, which
-    would ask their default loopback ports every 30 s. Their `experimental` switches stay off, and
+    goal, Claude Agent provider, artifact and image generation plugins through the producer's own
+    `plugins` setting, on both profiles, and the Ollama, LM Studio and vLLM providers, which would
+    ask their default loopback ports every 30 s. The schedule plugin is removed on the direct
+    profile only (see Scheduled continuations below). Their `experimental` switches stay off, and
     `location_idle_timeout` is `false` so an hour of quiet does not unload a directory under a run. A
     filter behind the producer cannot do this: the browser plugin appends an agent rule after Keiko's
     and so keeps a denied native tool advertised. `/goal` starts model turns on its own and stays out
-    until it has its own proof.
+    by owner decision (2026-11-06).
   - **Changed producer contracts.** The producer repairs a model's `bash` call into `shell`, which
     the policy decides as `shell`. A Code Mode `fetch` asserts `webfetch`. `GET /api/agent` waits for
     plugins and answers 503 after five seconds: Keiko reads it again within the existing location
     bound, and `coding-runtime.location.activation-wait` records the outcome and the number of those
     answers, never a name.
   - **Persistence.** The retained-session contract binds this version's schema. `job` and `blob` rows
-    refuse retention as unknown state, and a `schedule` row as pending input.
+    refuse retention as unknown state. A `schedule` row is retained only as described below.
+  - **Scheduled continuations (owner decision 2026-11-06, "Keiko weckt die Aufgabe").** The native
+    profile admits the producer's schedule plugin and `experimental.schedules`; the direct profile
+    keeps both off.
+    - *Creation.* Creating, changing or removing a schedule is the policy action `native-schedule`
+      (risk high): asked in Ask for approval and Supervised workspace, allowed in Full access. A
+      schedule with an `if` or `until` check is refused, because a shell check runs with the runtime
+      server's whole environment outside the shell scrub, and a Code Mode check boots a runtime per
+      poll (both measured on the pinned runtime).
+    - *No fire inside a human's run.* The producer elects one scheduler per database through the
+      `kv` row `schedule:leader` and never takes over a lease of another owner that has not lapsed.
+      Keiko writes an unexpiring lease of its own into every native run's database when the run's
+      session is bound and into every checked-out copy before the runtime opens it, so the runtime
+      never leads in a run a person started. A database whose lease Keiko cannot write fails the
+      run's readiness or falls back to a fresh session. A fork removes its source's schedules.
+    - *Retention.* A retained copy carries only rows of its own session, of a status the producer
+      writes (`active`, `paused`, `done`), without check or check state, with an id of the
+      producer's alphabet, an action of at most 16384 and a name of at most 256 characters, and at
+      most 64 rows; anything else refuses the retain as `schema-unknown` (`schedule-rows`). The
+      lease row is dropped from the copy; every other `kv` row still refuses it. The manifest's
+      `scheduleModes` ledger records, per schedule id, the narrowest mode any run that held it was
+      in: a retain keeps the narrower of the recorded and the settled run's mode, a new id takes the
+      settled run's mode, and an edit through the store never widens it.
+    - *The wake.* While Keiko runs, `CodingScheduledWakes` looks at the retained schedules every 15
+      seconds. A due schedule waits while any run holds the runtime slot (live, held for undo, or to
+      be recovered), while its task's workspace is not the active one or the task is not the
+      operator's, and for at least a minute after the task's previous wake. Otherwise the server
+      starts a scheduled continuation run: the ordinary start of the task's retained session, in the
+      narrower of the schedule's consent and the requested mode of the task's latest run, clamped by
+      the deployment ceiling like every start. This is the one start the server originates; it uses
+      exactly the authority a person already accepted for the task and widens nothing. The wake run
+      posts no prompt: it re-checks the live database for rows Keiko never admits, releases its
+      lease after the turn is armed, and holds it again as soon as a schedule's run count grows, so
+      the runtime fires what was due and nothing after it. A schedule that has not fired within two
+      minutes cancels the turn; the next attempt backs off (one minute, doubling, at most an hour)
+      and three misses in a row pause the schedule.
+    - *The Workbench.* A task's schedules are listed by `GET /api/coding-workbench/runtime/schedules`
+      and paused, resumed or deleted by `POST .../schedules/:scheduleId/:action`, both on the app
+      session; the prompt never leaves the server, and no change is made while the task's run or
+      wake holds its entry. Coding History marks the wake run's message as a scheduled continuation.
+    - *Evidence.* `coding-runtime.schedule.wake`, `coding-runtime.schedule.control` and
+      `coding-runtime.schedule.lease` record closed outcomes, counts, durations and digests of the
+      task and the schedule; never an id, a name, a cadence or a prompt.
+    - *Limits.* Nothing fires while Keiko is not running. A schedule due during a person's run fires
+      after it, as its own wake run. A passed repeating slot fires once, late. A wake carries no Jira
+      Pod or MCP selection of the run that created the schedule, and it keeps the delivery authority
+      of the task it continues.
 
 What this amendment does not change: the three modes and the Authority Envelope (ADR-0124,
 ADR-0129, ADR-0138), the hard denials (ADR-0129 D3), Git delivery as a Keiko product operation
@@ -2738,3 +2827,56 @@ folder whose configuration names a work tree that does not contain it counts as 
 (`keiko-git`). The mutation lane keeps filter drivers because `git-crypt` must run on commit; it
 relies on the kernel rule for the run's repository, and a person who commits in a subfolder
 repository a run created accepts its configuration as they would in a terminal.
+
+**The native shell and path policy reads options and physical locations (#4271).** A shell command
+is vetted by its program, its subcommand and its options (`opencodeNativeShellPolicy.ts`), never by
+its first operand alone. An option that executes another command or writes a file is never vetted:
+`find -exec/-ok/-delete/-fprint*`, `rg --pre`, `sort -o/--output/--compress-program`, a second
+`uniq` operand, `tree -o`, `git -c` outside a small display-only key list, `git --config-env`,
+`--exec-path`, `git diff --output`, `--ext-diff`, `--textconv` and `git grep -O`. `npm exec`/`x`,
+`pnpm exec`/`dlx`, `yarn exec`/`dlx` and `bun x` are not vetted, like `npx` with a package or a
+command option. A value option never reads as the subcommand (`mvn -pl api -am verify`,
+`mvn -f svc/pom.xml test`, `npm -w pkg run test`, `npm --prefix web test`, `pnpm --filter web test`,
+`pnpm -C web test`, `yarn workspace web test`, Gradle task paths such as `:app:test`), and a
+path-valued option (`-f`, `-s`, `--prefix`, `-C`, `--dir`, `--cwd`, `-p`, `-b`, `--manifest-path`) must
+name a place inside the workspace, lexically and after resolving links; `cd` is vetted only into one.
+Paths are read against the workspace root, never a directory a `cd` may have moved to, so a `..` that
+leaves the root asks. The repository's own wrapper scripts (`./mvnw`, `svc/gradlew`, also through
+`bash`/`sh`) are vetted like `mvn`/`gradle`; a wrapper outside the workspace is not. A quote, escape,
+parameter or command expansion, redirection other than to `/dev/null` or a descriptor duplication,
+subshell, newline or single `&` that the reader does not interpret leaves the command unvetted
+(it asks; Full access allows it). Environment assignments are vetted only from a short display and
+locale list (`CI`, `NODE_ENV`, `TZ`, `LANG`, ...), never `PATH`, `NODE_OPTIONS`, `LD_PRELOAD` or a
+`*_OPTS` variable. Plugin goals of the Maven exec family and `-Dexec.*` properties ask.
+
+Delivery stays reserved when a runner carries it: `find -exec git push`, `xargs git push`,
+`timeout 5 git push`, `npx`/`npm exec`/`pnpm dlx git push` classify the inner command like a plain
+segment and are refused as `delivery-reserved` in every mode. The reservation reads both the
+whitespace tokens and the words a shell reads, so `git 'push'` and `g''it push` are `git push`.
+
+A read or edit path is checked where it physically resolves as well as lexically. The deepest
+existing ancestor is resolved with `realpath`, the containment and sensitive-path rules run again on
+the result, and a symbolic link whose target leaves the workspace or is a protected file (a committed
+`docs/notes.md -> ../../.ssh/id_rsa`, a link to `.env`, `.github/workflows` or `.git/hooks`, a
+dangling link whose write would create the target elsewhere, an `AGENTS.md` link the read tool would
+load) is refused as `workspace-escape`, `sensitive-path` or `linked-file`. The same check covers an
+accepted external reference. A filesystem error the policy cannot answer for (a link loop, a name that
+is too long, no permission) is the closed refusal `path-unresolvable` on
+`coding-runtime.native-policy.decided` instead of a rejected hook request. An ask that names no
+command, path, program or address (a Code Mode `execute` sent without its `code`) is refused at once
+as `nothing-to-review`, with a message naming the missing input: the Workbench cannot approve such an
+ask, so it used to wait for a human Deny (lab T37, #4271). After a human approves an
+ask, the policy runs again and a hard denial found then wins; the remaining window between that last
+check and the runtime's own use of the file is closed by the kernel sandbox, not by this policy. The
+model-facing message of an authority refusal names the cause (`patch-too-large` asks the model to
+split the edit; budget, expiry, revocation, an unauthorized class and a drifted binding each have
+their own sentence) instead of one catch-all, and the logged `authorityReason` is unchanged.
+
+**Invocation identity capacity (audit 2026-11-06).** The governed invocation registry holds at most
+2,048 identities per run. A settled or expired identity keeps its replay protection after it is
+evicted: when a run reaches the bound, identities that settled and whose life elapsed move into a
+fixed-size per-run replay filter (no false negatives), so a replay of an evicted call is still
+refused `replayed`, a reuse of only its action id or idempotency key is a `conflict`, and a false
+positive can only refuse a brand-new identity. Live and claimed identities always keep counting
+against the bound, and a run that is revoked drops its filter. A long run therefore no longer turns
+`busy` for good after its 2,048th governed edit.

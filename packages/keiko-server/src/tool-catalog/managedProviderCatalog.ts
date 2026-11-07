@@ -44,6 +44,8 @@ const MCP_FAILURES: Readonly<
   "log-unavailable": ["failed", "handler-failed"],
   "deadline-exceeded": ["timeout", "deadline-exceeded"],
   aborted: ["cancelled", "parent-cancelled"],
+  "result-too-large": ["failed", "handler-failed"],
+  backoff: ["failed", "handler-unavailable"],
 };
 function catalogFailure(error: unknown): unknown {
   if (!(error instanceof ManagedMcpError)) return error;

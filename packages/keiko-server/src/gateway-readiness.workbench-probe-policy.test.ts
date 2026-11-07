@@ -30,6 +30,7 @@ import {
   probeProvider,
   probeTimeoutEvidence,
   resetCodingWorkbenchContextWindowProbesForTests,
+  withholdRunningWorkbenchProbesForLiveRun,
 } from "./gateway-readiness.js";
 import type { UiHandlerDeps } from "./deps.js";
 
@@ -347,6 +348,81 @@ describe("automatic Workbench probes — a live run keeps the gateway", () => {
     await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
     await codingWorkbenchProbesSettledForTests();
     expect(calls()).toBe(2 * CALLS_PER_MODEL);
+  });
+
+  // A single-slot model that a background proof of an unchosen model is loading must give the slot
+  // to a run that starts: withholding only before a queued probe started left an in-flight probe
+  // (300 s floor) holding the gateway.
+  describe("a probe already in flight when a run starts", () => {
+    function hangingOtherModel(): {
+      readonly deps: UiHandlerDeps;
+      readonly events: ServerLogEvent[];
+      readonly started: Promise<void>;
+      readonly aborted: () => boolean;
+      readonly recorded: () => number;
+    } {
+      const { deps, events } = twoModelDeps();
+      let aborted = false;
+      let recorded = 0;
+      let markStarted: () => void = (): void => undefined;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const holder = deps.gatewayConfig;
+      if (holder === undefined) throw new TypeError("Missing gateway holder");
+      holder.recordVerification = (): void => {
+        recorded += 1;
+      };
+      const ok = (): Response =>
+        new Response(
+          JSON.stringify({ choices: [{ message: { content: "OK KEIKO_LONG_CONTEXT_SENTINEL" } }] }),
+          { headers: { "content-type": "application/json" } },
+        );
+      Object.assign(deps, {
+        gatewayReadinessFetch: (_url: unknown, init?: RequestInit): Promise<Response> => {
+          if (typeof init?.body !== "string" || !init.body.includes("other-chat")) {
+            return Promise.resolve(ok());
+          }
+          markStarted();
+          return new Promise<Response>((_resolve, reject) => {
+            init.signal?.addEventListener("abort", () => {
+              aborted = true;
+              reject(new DOMException("aborted", "AbortError"));
+            });
+          });
+        },
+      });
+      return { deps, events, started, aborted: () => aborted, recorded: () => recorded };
+    }
+
+    it("ends the in-flight probe of the model nobody chose, records no verdict and logs why", async () => {
+      const { deps, events, started, aborted, recorded } = hangingOtherModel();
+      await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+      await started;
+      const recordedBefore = recorded();
+      expect(withholdRunningWorkbenchProbesForLiveRun(deps)).toBe(1);
+      await codingWorkbenchProbesSettledForTests();
+      expect(aborted()).toBe(true);
+      expect(recorded()).toBe(recordedBefore);
+      const withheld = events.filter(
+        (event) => event.op === "gateway.readiness.automatic.withheld",
+      );
+      expect(withheld).toHaveLength(1);
+      expect(withheld[0]?.extra).toMatchObject({ reason: "live-run" });
+      const config = deps.gatewayConfig?.current();
+      if (config === undefined) throw new TypeError("Expected a gateway config");
+      // No verdict and no cooldown: the next read proves the model again.
+      expect(isCodingWorkbenchProbePending(config, "other-chat")).toBe(false);
+    });
+
+    it("leaves the probe of the elected model alone", async () => {
+      const { deps, aborted, started } = hangingOtherModel();
+      const waiting = ensureCodingWorkbenchContextWindows(deps, "other-chat");
+      await started;
+      expect(withholdRunningWorkbenchProbesForLiveRun(deps)).toBe(0);
+      expect(aborted()).toBe(false);
+      void waiting;
+    });
   });
 
   it("proves every model when no run is live", async () => {
