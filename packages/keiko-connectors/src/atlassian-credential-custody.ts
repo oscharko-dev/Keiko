@@ -27,6 +27,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { isChatJiraPodId } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   isAtlassianConnectionVerificationStatus,
+  isJiraDataCenterCompatibilityFacts,
+  type JiraDataCenterCompatibilityFacts,
   type JiraLivePodMetadata,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { Buffer } from "node:buffer";
@@ -175,6 +177,7 @@ const LIVE_POD_KEYS = new Set([
   "verificationRevision",
   "verificationInProgress",
   "verificationStatus",
+  "compatibility",
 ]);
 
 function ownerDigestIsValid(value: unknown): value is string {
@@ -197,8 +200,19 @@ function validLivePodVerification(value: Record<string, unknown>): boolean {
     Number(value.verificationRevision) >= 0 &&
     typeof value.verificationInProgress === "boolean" &&
     validLivePodOperation(value) &&
+    validLivePodCompatibility(value) &&
     (value.verificationStatus === "unverified" ||
       isAtlassianConnectionVerificationStatus(value.verificationStatus))
+  );
+}
+
+function validLivePodCompatibility(value: Record<string, unknown>): boolean {
+  return (
+    value.compatibility === undefined ||
+    (value.verificationStatus === "ok" &&
+      value.verificationInProgress === false &&
+      value.credentialOperation === undefined &&
+      isJiraDataCenterCompatibilityFacts(value.compatibility))
   );
 }
 
@@ -283,6 +297,7 @@ export interface AtlassianCredentialCustody {
     revision: number,
     status: JiraLivePodMetadata["verificationStatus"],
     correlationId?: string,
+    compatibility?: JiraDataCenterCompatibilityFacts,
   ) => boolean;
   /** A current authenticated request observed 401; stale responses cannot invalidate newer verification. */
   readonly observeAuthenticationFailure: (
@@ -614,6 +629,12 @@ function advanceGeneration(value: number): number {
   return next;
 }
 
+function withoutCompatibility(pod: JiraLivePodMetadata): JiraLivePodMetadata {
+  const current = { ...pod };
+  delete current.compatibility;
+  return current;
+}
+
 function beginVerification(
   deps: AtlassianCredentialCustodyDeps,
   authRef: string,
@@ -625,7 +646,11 @@ function beginVerification(
   const revision = advanceGeneration(metadata.livePod.verificationRevision);
   const next = {
     ...metadata,
-    livePod: { ...metadata.livePod, verificationRevision: revision, verificationInProgress: true },
+    livePod: {
+      ...withoutCompatibility(metadata.livePod),
+      verificationRevision: revision,
+      verificationInProgress: true,
+    },
   };
   deps.metadataStore.insert(next);
   return { metadata: next, revision };
@@ -638,6 +663,7 @@ function finishVerification(
   revision: number,
   status: JiraLivePodMetadata["verificationStatus"],
   correlationId?: string,
+  compatibility?: JiraDataCenterCompatibilityFacts,
 ): boolean {
   const metadata = livePodCredential(deps, authRef);
   if (
@@ -648,7 +674,12 @@ function finishVerification(
     return false;
   if (status !== "unverified" && !isAtlassianConnectionVerificationStatus(status))
     throw new AtlassianCredentialCustodyError("invalid-input");
-  commitVerificationStatus(deps, metadata, status, correlationId);
+  if (
+    compatibility !== undefined &&
+    (status !== "ok" || !isJiraDataCenterCompatibilityFacts(compatibility))
+  )
+    throw new AtlassianCredentialCustodyError("invalid-input");
+  commitVerificationStatus(deps, metadata, status, correlationId, compatibility);
   return true;
 }
 
@@ -657,13 +688,19 @@ function commitVerificationStatus(
   metadata: LivePodCredential,
   status: JiraLivePodMetadata["verificationStatus"],
   correlationId?: string,
+  compatibility?: JiraDataCenterCompatibilityFacts,
 ): void {
   const generation = metadata.generation;
   const nextGeneration = status === "ok" ? generation : advanceGeneration(generation);
   deps.metadataStore.insert({
     ...metadata,
     generation: nextGeneration,
-    livePod: { ...metadata.livePod, verificationInProgress: false, verificationStatus: status },
+    livePod: {
+      ...withoutCompatibility(metadata.livePod),
+      verificationInProgress: false,
+      verificationStatus: status,
+      ...(compatibility === undefined ? {} : { compatibility: structuredClone(compatibility) }),
+    },
   });
   if (nextGeneration !== generation)
     deps.onLivePodInvalidated?.(metadata.livePod.podId, nextGeneration, correlationId);
@@ -769,7 +806,7 @@ function pendingLivePodOperation(
     ...metadata,
     generation: advanceGeneration(metadata.generation),
     livePod: {
-      ...metadata.livePod,
+      ...withoutCompatibility(metadata.livePod),
       credentialOperation: operation,
       verificationRevision: advanceGeneration(metadata.livePod.verificationRevision),
       verificationStatus: "unverified",
@@ -856,8 +893,8 @@ export function createAtlassianCredentialCustody(
       updateLivePod(deps, authRef, input, correlationId),
     beginVerification: (authRef, expectedGeneration) =>
       beginVerification(deps, authRef, expectedGeneration),
-    finishVerification: (authRef, generation, revision, status, correlationId) =>
-      finishVerification(deps, authRef, generation, revision, status, correlationId),
+    finishVerification: (authRef, generation, revision, status, correlationId, compatibility) =>
+      finishVerification(deps, authRef, generation, revision, status, correlationId, compatibility),
     observeAuthenticationFailure: (authRef, generation, revision, correlationId) =>
       observeAuthenticationFailure(deps, authRef, generation, revision, correlationId),
     // Re-validated on read (KEIKO-0894), matching resolveForExecution below: an authRef that

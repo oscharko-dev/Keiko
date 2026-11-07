@@ -76,7 +76,11 @@ export {
   type AtlassianConnectionVerificationStatus,
   type VerifyAtlassianConnectionInput,
 } from "./atlassian-connection-verification.js";
-export { verifyJiraDataCenterConnection } from "./jira-connection-verification.js";
+export {
+  verifyJiraDataCenterConnection,
+  verifyJiraDataCenterCompatibility,
+  type JiraDataCenterCompatibilityResult,
+} from "./jira-connection-verification.js";
 export {
   ADF_SUPPORTED_DOC_VERSION,
   ADF_TO_TEXT_MAX_DEPTH,

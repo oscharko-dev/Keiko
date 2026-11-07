@@ -63,6 +63,51 @@ export interface AtlassianNetworkConfig {
   readonly privateTargets: readonly AtlassianPrivateTarget[];
 }
 
+/** Observed REST v2 identity compatibility; this grants no operation or Jira permission. */
+export interface JiraDataCenterCompatibilityFacts {
+  readonly schemaVersion: 1;
+  readonly deploymentType: "Server" | "Data Center";
+  readonly versionNumbers: readonly [number, number, number];
+  readonly restApi: "v2";
+  readonly agileApi: "unverified";
+}
+
+const JIRA_COMPATIBILITY_KEYS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "deploymentType",
+  "versionNumbers",
+  "restApi",
+  "agileApi",
+]);
+
+function isJiraReleaseNumbers(value: unknown): value is readonly [number, number, number] {
+  return (
+    Array.isArray(value) &&
+    value.length === 3 &&
+    Object.keys(value).length === 3 &&
+    [value[0], value[1], value[2]].every(
+      (part) => Number.isSafeInteger(part) && Number(part) >= 0,
+    ) &&
+    Number(value[0]) > 0
+  );
+}
+
+/** Exact private metadata shape: unknown fields and unverified capabilities fail closed. */
+export function isJiraDataCenterCompatibilityFacts(
+  value: unknown,
+): value is JiraDataCenterCompatibilityFacts {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).every((key) => JIRA_COMPATIBILITY_KEYS.has(key)) &&
+    record.schemaVersion === 1 &&
+    (record.deploymentType === "Server" || record.deploymentType === "Data Center") &&
+    isJiraReleaseNumbers(record.versionNumbers) &&
+    record.restApi === "v2" &&
+    record.agileApi === "unverified"
+  );
+}
+
 interface AtlassianCredentialMetadataBase {
   readonly schemaVersion: typeof ATLASSIAN_CONNECTOR_SCHEMA_VERSION;
   readonly authRef: string;
@@ -83,6 +128,8 @@ export interface JiraLivePodMetadata {
   readonly verificationRevision: number;
   readonly verificationInProgress: boolean;
   readonly verificationStatus: "unverified" | AtlassianConnectionVerificationStatus;
+  /** Bound to this credential generation and verification revision; absent on legacy records. */
+  readonly compatibility?: JiraDataCenterCompatibilityFacts;
 }
 
 /** A secret-free projection. An absent legacy deployment always means Cloud. */
