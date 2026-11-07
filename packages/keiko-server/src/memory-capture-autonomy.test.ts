@@ -1116,6 +1116,30 @@ describe("explicit forget statement in chat", () => {
     },
   );
 
+  // Review of #4285: a confirmation in another chat once overwrote this chat's touch, so "Vergiss
+  // das" answered forgotten while the memory stayed.
+  it("forgets what this chat confirmed although another chat touched it later", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const learned = await learnedFact(vault, ctx, "autonomous-delivery", "user");
+    const turnStartedAt = Date.now() + 60_000;
+    const [record] = readMemories(vault, ctx);
+    if (record === undefined) throw new Error("expected a memory");
+    vault.recordAccess([record.id], turnStartedAt + 1, ctx.conversationId);
+    vault.recordAccess([record.id], turnStartedAt + 2, "chat-other");
+    vault.recordUse([record.id], turnStartedAt + 3, "chat-other");
+    const deps = withPreviousStatement(
+      learned,
+      "Merke dir, dass ich Tabellen bevorzuge",
+      turnStartedAt,
+    );
+
+    const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
+
+    expect(actions).toEqual([expect.objectContaining({ kind: "forget", forgotten: true })]);
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
   it.each(["Wie spät ist es?", "x".repeat(4097)])(
     "asks instead of leaving a tombstone for %.20j",
     async (statement) => {

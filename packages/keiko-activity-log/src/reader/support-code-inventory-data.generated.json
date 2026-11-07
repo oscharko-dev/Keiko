@@ -828,6 +828,7 @@
     "keiko-memory-capture/classify-denied-category",
     "keiko-memory-capture/errors",
     "keiko-memory-capture/fact-admission",
+    "keiko-memory-capture/fact-admission-guards",
     "keiko-memory-capture/fact-relation",
     "keiko-memory-capture/fact-text",
     "keiko-memory-capture/index",

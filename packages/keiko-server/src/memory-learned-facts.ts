@@ -28,7 +28,7 @@ export interface SeenFact {
 }
 
 // Only what Keiko learned gives way: what the person stated or rewrote stays until they change it.
-function isReplaceable(record: MemoryRecord | undefined): record is MemoryRecord {
+export function isReplaceable(record: MemoryRecord | undefined): record is MemoryRecord {
   return (
     record !== undefined &&
     (record.status === "accepted" || record.status === "proposed") &&

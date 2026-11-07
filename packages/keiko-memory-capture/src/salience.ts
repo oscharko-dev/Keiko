@@ -473,6 +473,32 @@ function learnedCandidate(
   };
 }
 
+// The person said a known fact again. When they now name another end date, the fact is replaced by
+// one that ends then, through the same governed replacement as any other change; a repeat without a
+// new end date only confirms it. A fact the learner may not replace stays as it is (#4212).
+function confirmationOf(
+  fact: AdmittedFact,
+  factId: string,
+  turn: LearningTurn,
+): SalienceOutcome | null {
+  const known = turn.known.find((candidate) => candidate.id === factId);
+  const validUntil = statedValidUntil(fact.sentence, turn.context.nowMs);
+  const newEnd =
+    validUntil !== null &&
+    known !== undefined &&
+    known.fixed !== true &&
+    known.validUntil !== validUntil;
+  if (newEnd) {
+    const relation = {
+      kind: "supersede",
+      memoryId: factId as MemoryId,
+      basis: "validity-changed",
+    } as const;
+    return learnedCandidate(fact, relation, turn);
+  }
+  return { kind: "confirmation", memoryId: factId as MemoryId, relationLabel: fact.item.relation };
+}
+
 function outcomeForItem(
   item: RawSalienceItem,
   turn: LearningTurn,
@@ -493,13 +519,7 @@ function outcomeForItem(
     turn.drop("no-first-person");
     return null;
   }
-  if (decision.kind === "confirm") {
-    return {
-      kind: "confirmation",
-      memoryId: decision.factId as MemoryId,
-      relationLabel: item.relation,
-    };
-  }
+  if (decision.kind === "confirm") return confirmationOf(fact, decision.factId, turn);
   if (decision.kind === "supersede") {
     const relation = {
       kind: "supersede",

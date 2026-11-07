@@ -36,6 +36,7 @@ export type {
   DeleteMemoryOptions,
   ListMemoriesOptions,
   MemoryAccessStat,
+  MemoryConversationTouch,
   MemoryBatchDelete,
   MemoryBatchUpdate,
   MemoryDeleteResult,

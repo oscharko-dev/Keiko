@@ -135,6 +135,7 @@ export const MEMORY_LEARN_CHANGE_BASES = [
   "polarity-changed",
   "slot-changed",
   "stated-change",
+  "validity-changed",
 ] as const satisfies readonly FactChangeBasis[];
 
 const MEMORY_LEARN_RELATION_OPERATION = defineActivityLogOperation({

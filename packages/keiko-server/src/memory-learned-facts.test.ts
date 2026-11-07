@@ -356,6 +356,29 @@ describe("what the person repeats and what the answer repeats", () => {
     expect(vault.getAccessStats([record.id]).get(record.id)?.accessCount).toBe(1);
   });
 
+  // Review of #4285: a repeat with a new end date was taken for a plain confirmation, so the fact
+  // kept holding without end.
+  it("ends a known fact when the person repeats it with an end date", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const fact = "Ich arbeite bei Acme";
+    const bounded = "Ich arbeite bei Acme bis Dezember 2027.";
+    await say(vault, ctx, fact, [stated(fact)]);
+    const repeat = { body: fact, evidence: fact, relation: "update", related: 1 } as const;
+    await say(vault, ctx, bounded, [repeat]);
+
+    const [record] = recordsWith(vault, ctx, "accepted");
+    const validUntil = record?.validity.validUntil;
+    expect(validUntil).toBeDefined();
+    expect(new Date(validUntil ?? 0).getUTCFullYear()).toBe(2027);
+    expect(recordsWith(vault, ctx, "superseded").map((old) => old.body)).toEqual([fact]);
+
+    // The same end date said again only confirms the fact.
+    await say(vault, ctx, bounded, [repeat]);
+    expect(recordsWith(vault, ctx, "accepted").map((kept) => kept.id)).toEqual([record?.id]);
+    expect(recordsWith(vault, ctx, "superseded")).toHaveLength(1);
+  });
+
   it.each([
     ["forgot", "forget"],
     ["edited", "edit"],

@@ -771,6 +771,33 @@ export interface NoveltyInsertOptions {
   readonly replaces?: MemoryId;
   // How the record is stored. Defaults to a plain insert.
   readonly insert?: (record: MemoryRecord) => MemoryRecord;
+  // A refusal by the person that may have arrived while the embedding was computed. Checked after
+  // the last wait, immediately before anything is merged or stored.
+  readonly refusedSinceStart?: (record: MemoryRecord) => MemoryCaptureSuppressionReason | null;
+  // Replaces the semantic duplicate when the person now gives the fact another end date. Returns
+  // undefined when that duplicate may not be replaced, and the candidate then only confirms it.
+  readonly replaceDuplicate?: (
+    record: MemoryRecord,
+    duplicateOf: MemoryId,
+  ) => MemoryRecord | undefined;
+}
+
+// The person repeated a known fact with another end date than it has: a repeat that changes when the
+// fact stops holding is a change, not a confirmation (#4212).
+function endsDifferently(existing: MemoryRecord | undefined, record: MemoryRecord): boolean {
+  const end = record.validity.validUntil;
+  return end !== undefined && existing !== undefined && existing.validity.validUntil !== end;
+}
+
+function replacedDuplicate(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  duplicateOf: MemoryId,
+  options: NoveltyInsertOptions,
+): MemoryRecord | undefined {
+  if (options.replaceDuplicate === undefined) return undefined;
+  if (!endsDifferently(vault.getMemory(duplicateOf), record)) return undefined;
+  return options.replaceDuplicate(record, duplicateOf);
 }
 
 // A semantic near-duplicate that states a changed value or the opposite preference is a new fact,
@@ -882,6 +909,48 @@ function logNoveltyDecision(
   );
 }
 
+// The person's refusal since the capture started comes first, then a paraphrase of a fact they
+// already forgot or rejected.
+function noveltySuppression(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  embedding: MemoryEmbeddingInput | null,
+  dedupThreshold: number,
+  options: NoveltyInsertOptions,
+): MemoryCaptureSuppressionReason | null {
+  return (
+    options.refusedSinceStart?.(record) ??
+    semanticSuppressionReason(vault, record.scope, embedding, dedupThreshold)
+  );
+}
+
+type DuplicateSettlement =
+  | { readonly kind: "none" }
+  | { readonly kind: "merged"; readonly mergedInto: MemoryId }
+  | { readonly kind: "replaced"; readonly record: MemoryRecord };
+
+// A semantic duplicate is confirmed, or replaced when the person now gives it another end date.
+function settleDuplicate(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  duplicateOf: MemoryId | null,
+  options: NoveltyInsertOptions,
+): DuplicateSettlement {
+  if (duplicateOf === null) return { kind: "none" };
+  const replaced = replacedDuplicate(vault, record, duplicateOf, options);
+  if (replaced !== undefined) return { kind: "replaced", record: replaced };
+  vault.recordAccess([duplicateOf], Date.now(), record.provenance.sourceConversationId);
+  return { kind: "merged", mergedInto: duplicateOf };
+}
+
+function storeCandidate(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  options: NoveltyInsertOptions,
+): MemoryRecord {
+  return options.insert?.(record) ?? vault.insertMemory(record);
+}
+
 export async function insertSalienceMemoryWithNoveltyGate(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
@@ -893,7 +962,7 @@ export async function insertSalienceMemoryWithNoveltyGate(
   const scopeKind = record.scope.kind;
   const calibration = embedding === null ? {} : memoryEmbeddingCalibrationFor(deps.env, embedding);
   const dedupThreshold = calibration.semanticDedupThreshold ?? SEMANTIC_DEDUP_COSINE_THRESHOLD;
-  const suppression = semanticSuppressionReason(vault, record.scope, embedding, dedupThreshold);
+  const suppression = noveltySuppression(vault, record, embedding, dedupThreshold, options);
   if (suppression !== null) {
     logNoveltyDecision(scopeKind, embedded, {
       outcome: "suppressed",
@@ -910,17 +979,14 @@ export async function insertSalienceMemoryWithNoveltyGate(
     findSemanticDuplicate(embedding, neighbors, dedupThreshold),
     options.replaces,
   );
-  if (duplicateOf !== null) {
-    vault.recordAccess([duplicateOf], Date.now(), record.provenance.sourceConversationId);
-    logNoveltyDecision(scopeKind, embedded, {
-      outcome: "merged",
-      dedupThreshold,
-      neighborCount,
-    });
-    return { kind: "merged", mergedInto: duplicateOf };
+  const settled = settleDuplicate(vault, record, duplicateOf, options);
+  if (settled.kind === "merged") {
+    logNoveltyDecision(scopeKind, embedded, { outcome: "merged", dedupThreshold, neighborCount });
+    return settled;
   }
-  if (options.onlyConfirm === true) return { kind: "unconfirmed" };
-  const inserted = options.insert?.(record) ?? vault.insertMemory(record);
+  if (settled.kind === "none" && options.onlyConfirm === true) return { kind: "unconfirmed" };
+  const inserted =
+    settled.kind === "replaced" ? settled.record : storeCandidate(vault, record, options);
   logNoveltyDecision(scopeKind, embedded, {
     outcome: "inserted",
     dedupThreshold,

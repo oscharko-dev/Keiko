@@ -17,9 +17,9 @@ import type {
   MemoryValidityInterval,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryContentCipher } from "./cipher.js";
-import type { MemoryAccessStat } from "./access.js";
+import type { MemoryAccessStat, MemoryConversationTouch } from "./access.js";
 
-export type { MemoryAccessStat } from "./access.js";
+export type { MemoryAccessStat, MemoryConversationTouch } from "./access.js";
 export type { MemoryUpdatePreImage } from "@oscharko-dev/keiko-contracts/memory";
 
 export type MemoryEmbeddingMetric = "cosine" | "euclidean" | "dot";
@@ -320,6 +320,10 @@ export interface MemoryVaultStore {
   // proven-useful memory resists disuse-forgetting and a proven-bad one fades sooner.
   readonly recordOutcome: (ids: readonly MemoryId[], utility: number, nowMs: number) => void;
   readonly getAccessStats: (ids?: readonly MemoryId[]) => ReadonlyMap<MemoryId, MemoryAccessStat>;
+  // What one chat itself last confirmed and drew on. Another chat's touches are not in it (#4212).
+  readonly getConversationTouches: (
+    conversationId: string,
+  ) => ReadonlyMap<MemoryId, MemoryConversationTouch>;
   readonly close: () => void;
 }
 

@@ -286,6 +286,68 @@ describe("mostSimilarFacts", () => {
     ).toBeNull();
   });
 
+  it.each([
+    ["I also run 10 km", "I run 5 km"],
+    ["Ich laufe auch 10 km", "Ich laufe 5 km"],
+  ])("keeps both when %s only adds to %s (#4212)", (statement, old) => {
+    expect(factReplacedByStatement(statement, [{ id: "old", body: old }])).toBeNull();
+    for (const label of ["new", "update", "contradiction"] as const) {
+      expect(decide(statement, statement, label, old)).toEqual({ kind: "new" });
+    }
+    expect(decide(old, old, "new", old)).toEqual({
+      kind: "confirm",
+      factId: "old",
+    });
+  });
+
+  // An "also" never protects a reversed fact: only a changed value can be an addition.
+  it.each([
+    ["I also don't like tables", "I like tables"],
+    ["Ich mag auch keine Tabellen", "Ich mag Tabellen"],
+  ])("still replaces %s over %s although it says also (#4212)", (statement, old) => {
+    expect(compareFacts(statement, old)).toBe("polarity-changed");
+    expect(decide(statement, statement, "new", old)).toEqual({
+      kind: "supersede",
+      factId: "old",
+      basis: "polarity-changed",
+    });
+    expect(factReplacedByStatement(statement, [{ id: "old", body: old }])?.id).toBe("old");
+  });
+
+  it("keeps a preference in another context on a labelled stated change (#4212)", () => {
+    expect(
+      decide(
+        "Prefers light mode in the terminal",
+        "I now prefer light mode in the terminal",
+        "update",
+        "Prefers dark mode in the editor",
+      ),
+    ).toEqual({ kind: "new" });
+  });
+
+  it.each([
+    ["I use Java at home and Python at work", "I use Python at home and Java at work"],
+    ["I have 2 cats and 3 dogs", "I have 3 cats and 2 dogs"],
+  ])("never reads a reassigned clause as the same fact: %s / %s (#4212)", (a, b) => {
+    expect(compareFacts(a, b)).toBe("reassigned");
+    expect(statesSameFact(a, b)).toBe(false);
+    expect(statesChangedFact(a, b)).toBe(true);
+    expect(decide(a, a, "same", b)).not.toMatchObject({ kind: "confirm" });
+  });
+
+  it.each([
+    ["I use Java and Python", "I use Python and Java"],
+    ["I have cats and 2 dogs", "I have 2 dogs and cats"],
+    ["Tabellen und Listen", "Listen und Tabellen"],
+  ])("still reads a reordered list as the same fact: %s (#4212)", (a, b) => {
+    expect(compareFacts(a, b)).toBe("same");
+  });
+
+  it("does not let a semantic duplicate swallow another kind of predicate (#4212)", () => {
+    expect(statesChangedFact("I use Python", "I like Python")).toBe(true);
+    expect(statesChangedFact("I like Python", "I love Python")).toBe(false);
+  });
+
   it("stays linear on one long word", () => {
     const word = "a".repeat(50_000);
     const started = performance.now();

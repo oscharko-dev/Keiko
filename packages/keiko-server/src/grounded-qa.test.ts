@@ -4807,17 +4807,11 @@ describe("handleGroundedAsk", () => {
       expect(JSON.stringify(answer.uncertainty)).not.toContain("Use pnpm for package installs.");
       // The answer's use of the recalled memory is remembered for "Vergiss das" and never
       // reinforces it (ADR-0146): only the memory recalled from the question carries the use.
-      const stats = memoryVault.getAccessStats([
-        "mem-package-manager" as MemoryId,
-        "mem-production-database" as MemoryId,
-      ]);
-      expect(stats.get("mem-package-manager" as MemoryId)).toMatchObject({
-        accessCount: 0,
-        lastUsedConversationId: chatId,
-      });
-      expect(
-        stats.get("mem-production-database" as MemoryId)?.lastUsedConversationId,
-      ).toBeUndefined();
+      const stats = memoryVault.getAccessStats(["mem-package-manager" as MemoryId]);
+      expect(stats.get("mem-package-manager" as MemoryId)?.accessCount).toBe(0);
+      const touches = memoryVault.getConversationTouches(chatId);
+      expect(touches.get("mem-package-manager" as MemoryId)?.usedAt).toBeGreaterThan(0);
+      expect(touches.get("mem-production-database" as MemoryId)).toBeUndefined();
     } finally {
       memoryVault.close();
     }

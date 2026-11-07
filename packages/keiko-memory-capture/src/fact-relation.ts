@@ -21,7 +21,14 @@ export const FACT_RELATION_LABELS = ["new", "same", "update", "contradiction"] a
 export type FactRelationLabel = (typeof FACT_RELATION_LABELS)[number];
 
 export type FactComparison =
-  "same" | "reversed" | "number-changed" | "polarity-changed" | "slot-changed" | "different";
+  | "same"
+  | "reversed"
+  | "number-changed"
+  | "polarity-changed"
+  | "slot-changed"
+  // The same words, stated with their values assigned to other contexts: never a confirmation.
+  | "reassigned"
+  | "different";
 
 export const FACT_CHANGE_BASES = [
   "reversed",
@@ -29,6 +36,8 @@ export const FACT_CHANGE_BASES = [
   "polarity-changed",
   "slot-changed",
   "stated-change",
+  // The person repeated the fact with a new end date (#4212).
+  "validity-changed",
 ] as const;
 
 export type FactChangeBasis = (typeof FACT_CHANGE_BASES)[number];
@@ -42,6 +51,8 @@ export interface KnownFact {
   // Where the fact lives. A team's fact is compared only with its project's facts, so it never
   // confirms or replaces what the person keeps privately.
   readonly scopeKind?: MemoryScopeKind;
+  // When the fact stops holding. Absent means it holds without a stated end.
+  readonly validUntil?: number;
 }
 
 export type FactRelationDecision =
@@ -124,6 +135,29 @@ function keepsOrder(a: readonly string[], b: readonly string[]): boolean {
   return true;
 }
 
+const CLAUSE_SPLIT_RE = /\s(?:and|und|oder|or)\s|[,;]/u;
+const MIN_CLAUSE_WORDS = 2;
+
+// A shared verb ("use") belongs to no clause; "work" and "live" name the context of one.
+function clausesOf(text: string): readonly (readonly string[])[] {
+  return normalizeMemoryText(text)
+    .split(CLAUSE_SPLIT_RE)
+    .map((clause) =>
+      factWords(clause).filter((word) => !isPredicateWord(word) || isSingleValuePredicate(word)),
+    );
+}
+
+// "Java at home and Python at work" is not "Python at home and Java at work": the same words, with
+// each value assigned to the other context. Only coordinated clauses that each carry a value and
+// its context are judged, so a plain reordered list ("Java and Python") stays the same fact.
+function reassignsClauses(a: string, b: string): boolean {
+  const clausesA = clausesOf(a);
+  const clausesB = clausesOf(b);
+  if (clausesA.length < 2 || clausesA.length !== clausesB.length) return false;
+  if ([...clausesA, ...clausesB].some((clause) => clause.length < MIN_CLAUSE_WORDS)) return false;
+  return clausesA.some((clause) => !clausesB.some((other) => sameWords(clause, other)));
+}
+
 function equalWordsComparison(
   a: string,
   b: string,
@@ -131,6 +165,7 @@ function equalWordsComparison(
   wordsB: readonly string[],
 ): FactComparison {
   if (isNegated(a) !== isNegated(b)) return "polarity-changed";
+  if (reassignsClauses(a, b)) return "reassigned";
   return COMPARATOR_RE.test(a) && !keepsOrder(wordsA, wordsB) ? "reversed" : "same";
 }
 
@@ -250,6 +285,17 @@ function keepsPreferenceContext(a: string, b: string): boolean {
   return preferenceChanged(a, b);
 }
 
+// Two preferences that each name a context the other lacks ("dark mode in the editor", "light mode
+// in the terminal") are two preferences, whatever the statement says about change.
+function bringsOwnPreferenceContext(a: string, b: string): boolean {
+  if (!CHOSEN_PREFERENCE_RE.test(a) || !CHOSEN_PREFERENCE_RE.test(b)) return false;
+  const own = (words: readonly string[], other: readonly string[]): number =>
+    unmatched(words, other).filter((word) => !isPredicateWord(word)).length;
+  const wordsA = factWords(a);
+  const wordsB = factWords(b);
+  return own(wordsA, wordsB) >= MIN_CLAUSE_WORDS && own(wordsB, wordsA) >= MIN_CLAUSE_WORDS;
+}
+
 // Whether the value of a one-at-a-time slot differs: the new employer, not a new tool beside it.
 function singleValueChanged(a: string, b: string): boolean {
   if (preferenceChanged(a, b)) return true;
@@ -287,6 +333,17 @@ function predicateOnlyComparison(
   return equalWordsComparison(a, b, wordsA, wordsB);
 }
 
+// Whether the two bodies differ only in predicates that name another kind of fact: using a tool is
+// not liking it, and living somewhere is not working there.
+function incompatiblePredicates(a: string, b: string): boolean {
+  const wordsA = factWords(a);
+  const wordsB = factWords(b);
+  const differing = [...unmatched(wordsA, wordsB), ...unmatched(wordsB, wordsA)];
+  if (wordsA.length === 0 || wordsB.length === 0 || differing.length === 0) return false;
+  if (!differing.every((word) => isPredicateWord(word))) return false;
+  return differing.some((word) => isSingleValuePredicate(word)) || spansPredicateClasses(differing);
+}
+
 export function compareFacts(a: string, b: string): FactComparison {
   const wordsA = factWords(a);
   const wordsB = factWords(b);
@@ -314,7 +371,8 @@ export function statesSameFact(a: string, b: string): boolean {
 // Reads alike and states something else: a semantic duplicate must not swallow it.
 export function statesChangedFact(a: string, b: string): boolean {
   const comparison = compareFacts(a, b);
-  return comparison !== "same" && comparison !== "different";
+  if (comparison === "different") return incompatiblePredicates(a, b);
+  return comparison !== "same";
 }
 
 function qualifierOf(body: string): readonly string[] | null {
@@ -344,20 +402,28 @@ function sharesContentWord(a: string, b: string): boolean {
 
 function deterministicRelation(
   body: string,
+  evidence: string,
   known: readonly KnownFact[],
 ): FactRelationDecision | null {
+  const adds = addsRatherThanReplaces(evidence) || addsRatherThanReplaces(body);
   for (const fact of known) {
     const comparison = compareFacts(body, fact.body);
     if (comparison === "same") return { kind: "confirm", factId: fact.id };
-    if (
-      comparison === "reversed" ||
-      comparison === "number-changed" ||
-      comparison === "polarity-changed"
-    ) {
+    if (replacesByComparison(comparison, adds)) {
       return { kind: "supersede", factId: fact.id, basis: comparison };
     }
   }
   return null;
+}
+
+// A reversed or negated fact replaces the old one even when the person says "also". Only a changed
+// value can be an addition: "I also run 10 km" beside "I run 5 km" adds a fact.
+function replacesByComparison(
+  comparison: FactComparison,
+  adds: boolean,
+): comparison is "reversed" | "number-changed" | "polarity-changed" {
+  if (comparison === "reversed" || comparison === "polarity-changed") return true;
+  return comparison === "number-changed" && !adds;
 }
 
 function labelledChange(
@@ -376,7 +442,11 @@ function labelledChange(
   const sameKind =
     sharesWord(body, related.body) ||
     (PREFERENCE_RE.test(evidence) && PREFERENCE_RE.test(related.body));
-  if (STATED_CHANGE_RE.test(evidence) && sameKind) {
+  if (
+    STATED_CHANGE_RE.test(evidence) &&
+    sameKind &&
+    !bringsOwnPreferenceContext(body, related.body)
+  ) {
     return { kind: "supersede", factId: related.id, basis: "stated-change" };
   }
   return null;
@@ -406,7 +476,7 @@ export function decideFactRelation(input: FactRelationInput): FactRelationDecisi
 
 function relationOf(input: FactRelationInput): FactRelationDecision {
   const { body, evidence, label, related, known } = input;
-  const certain = deterministicRelation(body, known);
+  const certain = deterministicRelation(body, evidence, known);
   if (certain !== null) return certain;
   if (related === undefined) return { kind: "new" };
   if (label === "update" || label === "contradiction") {
@@ -420,13 +490,7 @@ function relationOf(input: FactRelationInput): FactRelationDecision {
 
 function statementChanges(statement: string, fact: KnownFact): boolean {
   const comparison = compareFacts(statement, fact.body);
-  if (
-    comparison === "reversed" ||
-    comparison === "number-changed" ||
-    comparison === "polarity-changed"
-  ) {
-    return true;
-  }
+  if (replacesByComparison(comparison, addsRatherThanReplaces(statement))) return true;
   return (
     comparison === "slot-changed" &&
     STATED_CHANGE_RE.test(statement) &&

@@ -630,7 +630,6 @@ describe("atomic graph mutations", () => {
     expect(vault.getAccessStats([memory.id]).get(memory.id)).toMatchObject({
       accessCount: 0,
       lastUsedAt: 1_700_000_000_500,
-      lastUsedConversationId: "chat-a",
     });
 
     vault.recordAccess([memory.id], 1_700_000_000_600, "chat-b");
@@ -638,9 +637,17 @@ describe("atomic graph mutations", () => {
     expect(vault.getAccessStats([memory.id]).get(memory.id)).toMatchObject({
       accessCount: 1,
       lastAccessedAt: 1_700_000_000_600,
-      lastAccessedConversationId: "chat-b",
       lastUsedAt: 1_700_000_000_700,
-      lastUsedConversationId: "chat-c",
+    });
+    // Each chat keeps its own touch: the later chats erase nothing of chat-a's.
+    expect(vault.getConversationTouches("chat-a").get(memory.id)).toEqual({
+      usedAt: 1_700_000_000_500,
+    });
+    expect(vault.getConversationTouches("chat-b").get(memory.id)).toEqual({
+      confirmedAt: 1_700_000_000_600,
+    });
+    expect(vault.getConversationTouches("chat-c").get(memory.id)).toEqual({
+      usedAt: 1_700_000_000_700,
     });
     vault.close();
   });
@@ -657,6 +664,7 @@ describe("atomic graph mutations", () => {
       vault.recordOutcome([gone], 1, 1_700_000_000_700);
     }).not.toThrow();
     expect([...vault.getAccessStats().keys()]).toEqual([kept.id]);
+    expect([...vault.getConversationTouches("chat-a").keys()]).toEqual([kept.id]);
     expect(vault.getAccessStats([kept.id]).get(kept.id)?.accessCount).toBe(1);
     vault.close();
   });

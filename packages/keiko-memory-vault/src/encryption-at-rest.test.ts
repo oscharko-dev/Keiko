@@ -195,6 +195,7 @@ function downgradeToLegacyPlaintext(dir: string): void {
   // the later DDL cleanly instead of colliding with already-present tables/columns.
   db.exec("ALTER TABLE memories DROP COLUMN evidence_span");
   db.exec("ALTER TABLE memories DROP COLUMN source_message_ids_json");
+  db.exec("DROP TABLE IF EXISTS memory_conversation_touches");
   db.exec("DROP TABLE IF EXISTS memory_access");
   db.exec("DROP INDEX IF EXISTS idx_tombstones_scope");
   db.exec("DROP INDEX IF EXISTS idx_tombstones_memory_id");

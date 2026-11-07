@@ -10,7 +10,7 @@ import type {
   MemoryScope,
   MemoryStatus,
 } from "@oscharko-dev/keiko-contracts/memory";
-import type { MemoryAccessStat, MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { MemoryConversationTouch, MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 const TARGETABLE_STATUSES: readonly MemoryStatus[] = [
   "accepted",
@@ -130,21 +130,18 @@ function lastTurnReachedMemory(statement: string | undefined): boolean {
   return statement.trimEnd().endsWith("?") || explicitStatementKind(statement) === "remember";
 }
 
-// Whether this conversation's last turn touched the memory. Only this chat's own latest touch
-// counts: another chat or maintenance touching it in the same window says nothing about "das". The
-// person saying the fact again counts on its own, an answer drawing on it only after a turn about
-// memory.
+// Whether this conversation's last turn touched the memory. Each chat keeps its own latest touch, so
+// another chat or maintenance touching it says nothing about "das" and cannot erase this chat's own
+// touch. The person saying the fact again counts on its own, an answer drawing on it only after a
+// turn about memory.
 function reachedInLastTurn(
-  stat: MemoryAccessStat | undefined,
-  conversationId: string,
+  touch: MemoryConversationTouch | undefined,
   startedAt: number,
   answerCounts: boolean,
 ): boolean {
-  if (stat === undefined) return false;
-  const confirmed =
-    stat.lastAccessedConversationId === conversationId && stat.lastAccessedAt >= startedAt;
-  const used =
-    stat.lastUsedConversationId === conversationId && (stat.lastUsedAt ?? 0) >= startedAt;
+  if (touch === undefined) return false;
+  const confirmed = (touch.confirmedAt ?? -1) >= startedAt;
+  const used = (touch.usedAt ?? -1) >= startedAt;
   return confirmed || (answerCounts && used);
 }
 
@@ -194,16 +191,11 @@ function referredRecords(
     leftByLastTurn(record, previousMessageId, lastTurnStartedAt),
   );
   const answerCounts = lastTurnReachedMemory(context.previousStatement());
-  const stats = vault.getAccessStats(records.map((record) => record.id));
+  const touches = vault.getConversationTouches(context.conversationId);
   const reached = records.filter(
     (record) =>
       !left.includes(record) &&
-      reachedInLastTurn(
-        stats.get(record.id),
-        context.conversationId,
-        lastTurnStartedAt,
-        answerCounts,
-      ),
+      reachedInLastTurn(touches.get(record.id), lastTurnStartedAt, answerCounts),
   );
   return [...left, ...reached];
 }

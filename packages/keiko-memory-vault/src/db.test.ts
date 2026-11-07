@@ -243,6 +243,7 @@ describe("openMemoryDatabase — memory-vault.store.encryption-migrated wiring",
     db.prepare("UPDATE memories SET body = ? WHERE id = ?").run("plaintext body", "m1");
     db.exec("ALTER TABLE memories DROP COLUMN evidence_span");
     db.exec("ALTER TABLE memories DROP COLUMN source_message_ids_json");
+    db.exec("DROP TABLE memory_conversation_touches");
     db.exec("DROP TABLE memory_access");
     db.exec("DROP TABLE memory_tombstones");
     db.exec(`

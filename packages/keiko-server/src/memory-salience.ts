@@ -73,8 +73,9 @@ import {
   resolveMemoryCaptureAutonomyMode,
   SENSITIVE_MEMORY_ACTION_BODY,
   SENSITIVE_MEMORY_REJECTION_REASON,
+  type MemoryCaptureSuppressionReason,
 } from "./memory-capture-policy.js";
-import { applyLearnedSupersession, type SeenFact } from "./memory-learned-facts.js";
+import { applyLearnedSupersession, isReplaceable, type SeenFact } from "./memory-learned-facts.js";
 import {
   logLearnedDrop,
   logLearnedExtraction,
@@ -167,6 +168,9 @@ function gatherKnownFacts(
         // Only what Keiko learned, in the person's own scope, gives way to what it learns next.
         fixed: record.provenance.evidenceSpan === undefined || record.scope.kind !== "user",
         scopeKind: record.scope.kind,
+        ...(record.validity.validUntil === undefined
+          ? {}
+          : { validUntil: record.validity.validUntil }),
       });
       if (known.length >= MAX_KNOWN_FACTS) return { facts: known, seen };
     }
@@ -447,15 +451,46 @@ function rejectedCandidate(
   return { action: { kind: "rejected", reason }, disposition: "rejected" };
 }
 
+// The person forgot or rejected the fact's words, or the statement it was learned from.
+function personRefused(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  statement: string,
+): MemoryCaptureSuppressionReason | null {
+  return (
+    exactCaptureSuppressionReason(vault, record) ??
+    exactCaptureSuppressionReason(vault, { ...record, body: statement })
+  );
+}
+
 function noveltyOptions(
   vault: MemoryVaultStore,
   relation: LearnedFactRelation,
-  seen: ReadonlyMap<MemoryId, SeenFact>,
+  trace: LearningTrace,
   onSuperseded: (decision: LearnedRelationDecision) => void,
 ): NoveltyInsertOptions {
-  if (relation.kind === "same-unconfirmed") return { onlyConfirm: true };
-  if (relation.kind === "new") return {};
+  const { seen } = trace;
+  // The person may forget the turn while its embedding is computed.
+  const refusedSinceStart = (record: MemoryRecord): MemoryCaptureSuppressionReason | null =>
+    personRefused(vault, record, trace.statement);
+  // A paraphrased repeat with another end date replaces the fact it repeats, if the learner may.
+  const replaceDuplicate = (
+    record: MemoryRecord,
+    duplicateOf: MemoryId,
+  ): MemoryRecord | undefined => {
+    const seenFact = seen.get(duplicateOf);
+    if (seenFact === undefined || !isReplaceable(vault.getMemory(duplicateOf))) return undefined;
+    const applied = applyLearnedSupersession(vault, record, duplicateOf, seenFact);
+    if (applied.pendingApproval) onSuperseded("supersession-proposed");
+    else if (applied.superseded !== undefined) onSuperseded("superseded");
+    return applied.record;
+  };
+  if (relation.kind === "same-unconfirmed") {
+    return { onlyConfirm: true, refusedSinceStart, replaceDuplicate };
+  }
+  if (relation.kind === "new") return { refusedSinceStart, replaceDuplicate };
   return {
+    refusedSinceStart,
     replaces: relation.memoryId,
     insert: (record): MemoryRecord => {
       const applied = applyLearnedSupersession(
@@ -549,9 +584,7 @@ async function persistCandidate(
   if (!isPersistableMemoryCandidate(outcome)) return refuse(SENSITIVE_MEMORY_REJECTION_REASON);
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
-  const exactSuppression =
-    exactCaptureSuppressionReason(vault, record) ??
-    exactCaptureSuppressionReason(vault, { ...record, body: trace.statement });
+  const exactSuppression = personRefused(vault, record, trace.statement);
   if (exactSuppression !== null) return refuse(exactSuppression);
   const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
     ? promoteEligibleMemoryRecord(record)
@@ -561,7 +594,7 @@ async function persistCandidate(
     deps,
     vault,
     candidate,
-    noveltyOptions(vault, outcome.relation, trace.seen, (settled) => {
+    noveltyOptions(vault, outcome.relation, trace, (settled) => {
       decision = settled;
     }),
   );

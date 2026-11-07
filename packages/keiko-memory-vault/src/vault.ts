@@ -65,10 +65,12 @@ import {
 } from "./embeddings.js";
 import {
   getAccessStatsRows,
+  getConversationTouchRows,
   recordAccessRows,
   recordUseRows,
   recordOutcomeRows,
   type MemoryAccessStat,
+  type MemoryConversationTouch,
 } from "./access.js";
 import {
   deleteTombstonesByScopeBeforeRows,
@@ -1107,6 +1109,7 @@ type TombstoneAndAccessOps = Pick<
   | "recordUse"
   | "recordOutcome"
   | "getAccessStats"
+  | "getConversationTouches"
 >;
 
 // The public route requests one look-ahead row beyond its maximum 200-item response page so it can
@@ -1321,6 +1324,10 @@ function buildTombstoneAndAccessOps(
     },
     getAccessStats: (ids?: readonly MemoryId[]): ReadonlyMap<MemoryId, MemoryAccessStat> =>
       getAccessStatsRows(db, ids),
+    getConversationTouches: (
+      conversationId: string,
+    ): ReadonlyMap<MemoryId, MemoryConversationTouch> =>
+      getConversationTouchRows(db, conversationId),
   };
 }
 

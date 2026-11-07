@@ -10,6 +10,12 @@ import {
   isNegated,
   lastWord,
 } from "./fact-text.js";
+import {
+  isFirstPersonTaskRequest,
+  isInsideCode,
+  isOtherPersonsProposition,
+  singleQuoteRole,
+} from "./fact-admission-guards.js";
 import { looksLikePersonalIdentifier } from "./secret-patterns.js";
 
 export const FACT_DROP_REASONS = [
@@ -78,6 +84,7 @@ const QUOTE_OPENERS = new Set(["„", "«", "‚"]);
 const QUOTE_CLOSERS = new Set(["”", "»"]);
 const QUOTE_TOGGLES = new Set(['"', "“"]);
 const SENTENCE_END_RE = /[.!?…\n]/u;
+const DIGIT_RE = /\p{N}/u;
 const INNER_SENTENCE_RE = /[.!?…]\s+\p{Lu}/u;
 const SUBORDINATE_LEAD_RE = /(?:^|[^\p{L}])(?:dass|that)\s*$/iu;
 const SUBORDINATE_OPENING_RE = /^(?:dass|that)\s+(?=(?:ich|i|wir|we)(?![\p{L}\p{N}]))/iu;
@@ -918,12 +925,23 @@ function asksForTextWork(lead: string): boolean {
 // How far before a verb its speaker may stand: "Anna also says", "My boss always says".
 const SPEAKER_REACH = 3;
 
+// A dot between digits ("31.12.2027", "3.5") is part of a number, not the end of a sentence.
+function endsSentenceAt(text: string, at: number): boolean {
+  const char = text.charAt(at);
+  if (!SENTENCE_END_RE.test(char)) return false;
+  return !(
+    char === "." &&
+    DIGIT_RE.test(text.charAt(at - 1)) &&
+    DIGIT_RE.test(text.charAt(at + 1))
+  );
+}
+
 function sentenceAround(text: string, start: number, end: number): { from: number; to: number } {
   let from = start;
-  while (from > 0 && !SENTENCE_END_RE.test(text.charAt(from - 1))) from -= 1;
-  if (end > start && SENTENCE_END_RE.test(text.charAt(end - 1))) return { from, to: end };
+  while (from > 0 && !endsSentenceAt(text, from - 1)) from -= 1;
+  if (end > start && endsSentenceAt(text, end - 1)) return { from, to: end };
   let to = end;
-  while (to < text.length && !SENTENCE_END_RE.test(text.charAt(to))) to += 1;
+  while (to < text.length && !endsSentenceAt(text, to)) to += 1;
   return { from, to: Math.min(text.length, to + 1) };
 }
 
@@ -933,6 +951,9 @@ function endsAtClause(text: string, end: number): boolean {
   const rest = text.slice(end).trimStart();
   const next = rest.at(0);
   if (next === undefined || CLAUSE_PUNCTUATION.has(next) || isQuote(next)) return true;
+  // A closing single quote or a code mark ends the words it encloses.
+  const nextAt = text.length - rest.length;
+  if (next === "`" || singleQuoteRole(text, nextAt) === "close") return true;
   return CLAUSE_FOLLOWER_RE.test(rest);
 }
 
@@ -940,14 +961,21 @@ function isQuote(char: string): boolean {
   return QUOTE_OPENERS.has(char) || QUOTE_CLOSERS.has(char) || QUOTE_TOGGLES.has(char);
 }
 
-function isInsideQuotes(before: string): boolean {
+function isInsideQuotes(text: string, end: number): boolean {
   let open = false;
-  for (const char of before) {
-    if (QUOTE_OPENERS.has(char)) open = true;
-    else if (QUOTE_CLOSERS.has(char)) open = false;
+  for (let at = 0; at < end; at += 1) {
+    const char = text.charAt(at);
+    const single = singleQuoteRole(text, at);
+    if (QUOTE_OPENERS.has(char) || single === "open") open = true;
+    else if (QUOTE_CLOSERS.has(char) || single === "close") open = false;
     else if (QUOTE_TOGGLES.has(char)) open = !open;
   }
   return open;
+}
+
+// Quoted, pasted as code or passed on for a task: material the person did not state as their own.
+function isForeignMaterial(text: string, start: number): boolean {
+  return isInsideQuotes(text, start) || isInsideCode(text, start) || isPassedOn(text, start);
 }
 
 function isPassedOn(text: string, start: number): boolean {
@@ -1258,6 +1286,7 @@ function claimNamesOtherPronoun(evidence: string): boolean {
 function speechActDropReason(evidence: string, sentence: string): FactDropReason | null {
   if (sentence.trimEnd().endsWith("?") || evidence.includes("?")) return "question";
   if (POLITE_REQUEST_RE.test(evidence) || IMPERATIVE_TO_ME_RE.test(evidence)) return "request";
+  if (isFirstPersonTaskRequest(evidence)) return "request";
   return null;
 }
 
@@ -1405,8 +1434,12 @@ function teamDropReason(evidence: string): FactDropReason | null {
 function subjectDropReason(about: string, evidence: string): FactDropReason | null {
   const subject = about.trim().toLowerCase();
   if (subject === "team") return teamDropReason(evidence);
-  if (subject !== "self") return "not-self";
+  return subject === "self" ? selfDropReason(evidence) : "not-self";
+}
+
+function selfDropReason(evidence: string): FactDropReason | null {
   if (TITLED_PERSON_RE.test(evidence) || RELATION_RE.test(evidence)) return "third-party";
+  if (isOtherPersonsProposition(evidence)) return "third-party";
   if (speaksForMore(evidence)) return "we-statement";
   if (!FIRST_PERSON_RE.test(evidence) && !CHANGE_WITHOUT_SUBJECT_RE.test(evidence)) {
     return "no-first-person";
@@ -1506,7 +1539,11 @@ export function admitProposedFact(
   const span = clauseSpan(userText, evidence);
   if (typeof span === "string") return dropped(span);
   const { start, from, words } = span;
-  if (isInsideQuotes(userText.slice(0, start)) || isPassedOn(userText, start)) {
+  // A span widened to its clause may open before the quote that holds the person's copied words.
+  if (
+    isForeignMaterial(userText, start) ||
+    isForeignMaterial(userText, userText.indexOf(evidence))
+  ) {
     return dropped("quoted");
   }
   const sentence = userText.slice(from, span.to);

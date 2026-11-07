@@ -590,6 +590,34 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expectInserted(await insertSalienceMemoryWithNoveltyGate(deps, vault, changed), changed.id);
   });
 
+  it("keeps using and liking one tool as two facts through the semantic gate (#4212)", async () => {
+    // One fixed vector for every input: only the predicate class can tell the two apart.
+    const deps = makeDeps();
+    const vault = makeVault();
+    const use = makeRecord("The user uses Python", "id-use");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, use);
+    const before = vault.getAccessStats([use.id]).get(use.id)?.accessCount ?? 0;
+
+    const like = makeRecord("The user likes Python", "id-like");
+    expectInserted(await insertSalienceMemoryWithNoveltyGate(deps, vault, like), like.id);
+    expect(vault.getMemory(use.id)?.status).toBe("accepted");
+    expect(vault.getMemory(like.id)?.status).toBe("accepted");
+    expect(vault.getAccessStats([use.id]).get(use.id)?.accessCount ?? 0).toBe(before);
+  });
+
+  it("does not confirm a clause whose values were reassigned (#4212)", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const known = makeRecord("The user has 2 cats and 3 dogs", "id-known");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, known);
+    const before = vault.getAccessStats([known.id]).get(known.id)?.accessCount ?? 0;
+
+    const swapped = makeRecord("The user has 3 cats and 2 dogs", "id-swapped");
+    expectInserted(await insertSalienceMemoryWithNoveltyGate(deps, vault, swapped), swapped.id);
+    expect(vault.getMemory(known.id)?.body).toBe("The user has 2 cats and 3 dogs");
+    expect(vault.getAccessStats([known.id]).get(known.id)?.accessCount ?? 0).toBe(before);
+  });
+
   it("does not take the fact a candidate replaces for its duplicate (#4212)", async () => {
     const deps = makeDeps();
     const vault = makeVault();

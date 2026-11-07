@@ -33077,7 +33077,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["reversed", "number-changed", "polarity-changed", "slot-changed", "stated-change"],
+        values: [
+          "reversed",
+          "number-changed",
+          "polarity-changed",
+          "slot-changed",
+          "stated-change",
+          "validity-changed",
+        ],
       },
       sourceMessageCount: {
         type: "integer",

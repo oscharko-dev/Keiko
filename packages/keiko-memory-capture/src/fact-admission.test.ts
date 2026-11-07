@@ -1021,3 +1021,105 @@ describe("being told with a word glued before the auxiliary", () => {
     expect(reasonOf("I use Excel, it is, said plainly, my tool.", "I use Excel")).toBeNull();
   });
 });
+
+describe("code and single-quoted material (review thread kwDOSqilAM60zkwr)", () => {
+  it.each<[string, string, string]>([
+    ["a fenced block, with its period", "```text\nIch nutze Python.\n```", "Ich nutze Python."],
+    ["a fenced block, without a period", "```\nIch nutze Python\n```", "Ich nutze Python"],
+    ["a tilde fence", "~~~\nI use Python.\n~~~", "I use Python."],
+    ["an unclosed fence", "Beispiel:\n```\nI use Python.", "I use Python."],
+    [
+      "inline code, with its period",
+      "Der Satz `Ich nutze Python.` steht im Test.",
+      "Ich nutze Python.",
+    ],
+    ["inline code", "The line `I use Python` is a sample.", "I use Python"],
+    ["single quotes, with their period", "Er sagte 'Ich nutze Python.' laut.", "Ich nutze Python."],
+    ["single quotes", "She wrote 'I use Python' in the file.", "I use Python"],
+  ])("drops a span inside %s", (_name, text, evidence) => {
+    expect(reasonOf(text, evidence)).toBe("quoted");
+  });
+
+  it.each<[string, string]>([
+    ["I don't use Python, I use Rust.", "I use Rust"],
+    ["I'm sure I use Rust.", "I use Rust"],
+    ["Don't worry: I use Rust.", "I use Rust"],
+    ["Ich nutze Python, `ls` ist mein Freund.", "Ich nutze Python"],
+    ["Ich nutze Python.\n```\ncode\n```", "Ich nutze Python."],
+    ["Dev's notes: ich nutze Rust, Anna's Tipp.", "ich nutze Rust"],
+    // An elision opens no quote, so it cannot hide the rest of the turn.
+    ["Seit den '90ern programmiere ich. Ich nutze Python.", "Ich nutze Python."],
+    ["Wie die Kids sagen: 'cause. Ich nutze Python.", "Ich nutze Python."],
+  ])("keeps %s", (text, evidence) => {
+    expect(reasonOf(text, evidence)).toBeNull();
+  });
+});
+
+describe("first-person task requests (review thread kwDOSqilAM60zkwy)", () => {
+  it.each<[string, string]>([
+    ["I need a summary.", "I need a summary."],
+    ["I need a summary of the following text.", "I need a summary of the following text."],
+    ["Ich möchte, dass du Python nutzt.", "Ich möchte, dass du Python nutzt."],
+    ["I want you to use Python.", "I want you to use Python."],
+    ["Ich brauche eine Zusammenfassung.", "Ich brauche eine Zusammenfassung."],
+    ["Ich will, dass du Tabellen nutzt.", "Ich will, dass du Tabellen nutzt."],
+    ["I'd like you to use Python.", "I'd like you to use Python."],
+    ["Ich hätte gern eine Übersicht.", "Ich hätte gern eine Übersicht."],
+    ["I would like a summary.", "I would like a summary."],
+  ])("refuses %s", (text, evidence) => {
+    expect(reasonOf(text, evidence)).toBe("request");
+  });
+
+  it.each<[string, string]>([
+    ["I prefer tables.", "I prefer tables."],
+    ["Ich möchte lieber Tabellen.", "Ich möchte lieber Tabellen."],
+    ["I want to keep my answers short.", "I want to keep my answers short."],
+    ["Ich brauche Kaffee zum Arbeiten.", "Ich brauche Kaffee zum Arbeiten."],
+    ["I need glasses to read.", "I need glasses to read."],
+    // A thing the person needs or wants in their life is no piece of work for this task.
+    ["Ich brauche eine Brille.", "Ich brauche eine Brille."],
+    ["I want a dog.", "I want a dog."],
+    ["Ich möchte einen Hund.", "Ich möchte einen Hund."],
+  ])("keeps the preference %s", (text, evidence) => {
+    expect(reasonOf(text, evidence)).toBeNull();
+  });
+});
+
+describe("a first-person wrapper around another person's fact (review thread kwDOSqilAM60zkw2)", () => {
+  it.each<[string, string]>([
+    ["I know that Anna has cancer.", "I know that Anna has cancer."],
+    ["Ich weiß, dass Anna schwanger ist.", "Ich weiß, dass Anna schwanger ist."],
+    ["Anna wohnt in meiner Wohnung.", "Anna wohnt in meiner Wohnung."],
+    ["I know Anna has cancer.", "I know Anna has cancer."],
+    ["Ich weiß, Anna ist schwanger.", "Ich weiß, Anna ist schwanger."],
+    ["I am sure that Anna has cancer.", "I am sure that Anna has cancer."],
+    ["Anna wohnt bei mir.", "Anna wohnt bei mir."],
+  ])("refuses %s", (text, evidence) => {
+    expect(reasonOf(text, evidence)).toBe("third-party");
+  });
+
+  it.each<[string, string]>([
+    ["I think that Tom lives in Berlin.", "I think that Tom lives in Berlin."],
+    ["Ich glaube, dass Anna Vim nutzt.", "Ich glaube, dass Anna Vim nutzt."],
+  ])("still refuses the hedged wrapper %s", (text, evidence) => {
+    expect(admit(text, evidence).admitted).toBe(false);
+  });
+
+  it.each<[string, string]>([
+    ["I know Rust.", "I know Rust."],
+    ["Ich wohne in Hamburg.", "Ich wohne in Hamburg."],
+    ["I know that I prefer tables.", "I know that I prefer tables."],
+    ["Ich weiß, dass ich Tabellen mag.", "Ich weiß, dass ich Tabellen mag."],
+    ["Mein Editor ist Vim.", "Mein Editor ist Vim."],
+    ["I know I have diabetes.", "I know I have diabetes."],
+  ])("keeps the self fact %s", (text, evidence) => {
+    expect(reasonOf(text, evidence)).toBeNull();
+  });
+});
+
+describe("sentence extension keeps dotted dates whole (review thread kwDOSqilAM60zkw0)", () => {
+  it("reads a dotted date inside the sentence", () => {
+    const admission = admit("Ich arbeite bei Acme bis 31.12.2027.", "Ich arbeite bei Acme");
+    expect(admission.admitted && admission.sentence).toBe("Ich arbeite bei Acme bis 31.12.2027.");
+  });
+});

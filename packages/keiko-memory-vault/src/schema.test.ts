@@ -81,6 +81,7 @@ describe("runMigrations", () => {
     // the on-disk shape a v2 DB actually has before this migration runs.
     db.exec("ALTER TABLE memories DROP COLUMN evidence_span");
     db.exec("ALTER TABLE memories DROP COLUMN source_message_ids_json");
+    db.exec("DROP TABLE memory_conversation_touches");
     db.exec("DROP TABLE memory_access");
     db.exec("DROP INDEX idx_tombstones_scope");
     db.exec("DROP INDEX idx_tombstones_memory_id");
@@ -123,6 +124,41 @@ describe("runMigrations", () => {
     db.close();
   });
 
+  // A vault created at v12 kept one shared latest touch; v13 carries it into the touching chat's row.
+  it("carries a v12 vault's latest touches into each chat's own row (#4212)", () => {
+    const db = openMemDb();
+    runMigrations(db, TEST_CIPHER);
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.exec("DROP TABLE memory_conversation_touches");
+    db.exec("ALTER TABLE memory_access ADD COLUMN last_used_conversation_id TEXT");
+    db.exec("ALTER TABLE memory_access ADD COLUMN last_accessed_conversation_id TEXT");
+    db.exec(`INSERT INTO memory_access
+      (memory_id, last_accessed_at, access_count, last_used_at, last_used_conversation_id,
+       last_accessed_conversation_id)
+      VALUES ('m1', 100, 1, 200, 'chat-b', 'chat-a'), ('m2', 300, 1, 400, 'chat-c', 'chat-c'),
+             ('m3', 0, 0, NULL, NULL, NULL)`);
+    db.exec("PRAGMA user_version = 12");
+    runMigrations(db, TEST_CIPHER);
+    expect(userVersion(db)).toBe(MEMORY_VAULT_SCHEMA_VERSION);
+    expect(
+      db
+        .prepare(
+          "SELECT memory_id, conversation_id, confirmed_at, used_at FROM memory_conversation_touches ORDER BY memory_id, conversation_id",
+        )
+        .all(),
+    ).toEqual([
+      { memory_id: "m1", conversation_id: "chat-a", confirmed_at: 100, used_at: null },
+      { memory_id: "m1", conversation_id: "chat-b", confirmed_at: null, used_at: 200 },
+      { memory_id: "m2", conversation_id: "chat-c", confirmed_at: 300, used_at: 400 },
+    ]);
+    const accessColumns = (
+      db.prepare("PRAGMA table_info(memory_access)").all() as unknown as readonly { name: string }[]
+    ).map((column) => column.name);
+    expect(accessColumns).not.toContain("last_used_conversation_id");
+    expect(accessColumns).not.toContain("last_accessed_conversation_id");
+    db.close();
+  });
+
   it("refuses to open a schema newer than this binary supports", () => {
     const db = openMemDb();
     db.exec(`PRAGMA user_version = ${String(MEMORY_VAULT_SCHEMA_VERSION + 1)}`);
@@ -132,7 +168,7 @@ describe("runMigrations", () => {
     db.close();
   });
 
-  it("creates all six tables", () => {
+  it("creates every table", () => {
     const db = openMemDb();
     runMigrations(db, TEST_CIPHER);
     const tables = db
@@ -141,6 +177,7 @@ describe("runMigrations", () => {
     expect(tables.map((t) => t.name)).toEqual([
       "memories",
       "memory_access",
+      "memory_conversation_touches",
       "memory_edges",
       "memory_embeddings",
       "memory_tombstones",
