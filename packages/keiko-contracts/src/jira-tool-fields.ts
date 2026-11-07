@@ -25,6 +25,7 @@ export const JIRA_FIELD_KINDS = [
 ] as const;
 export type JiraFieldKind = (typeof JIRA_FIELD_KINDS)[number];
 export const JIRA_MANAGED_READ_TOOLS = deepFreeze([
+  ...READS.maintenance,
   ...READS.runtimeSettings,
   ...READS.configuration,
   ...READS.jqlMetadata,

@@ -47,6 +47,14 @@ describe("native role configuration and project membership", () => {
     const result = await executeJiraRoleRead("jira.role-default-actors", { roleId: "10360" }, requestFor({ actors: [{ ...ACTOR, id: "9223372036854775807" }] }));
     expect(result.data.items).toEqual([{ ...ACTOR, id: "9223372036854775807" }]);
   });
+  it("keeps nullable optional actor facts absent across the shared optional-field projection", async () => {
+    const result = await executeJiraRoleRead("jira.role-default-actors", { roleId: "10360" }, requestFor({ actors: [{ name: "Contributor", id: null, type: null, displayName: null }] }));
+    expect(result.data.items).toEqual([{ name: "Contributor" }]);
+  });
+  it.each(["type", "displayName"] as const)("still refuses an explicitly empty actor %s", async (key) => {
+    const result = await executeJiraRoleRead("jira.role-default-actors", { roleId: "10360" }, requestFor({ actors: [{ name: "Contributor", [key]: "" }] }));
+    expect(result.data.reason).toBe("malformed-payload");
+  });
   it("reads project role names without following or deriving IDs from remote URIs", async () => {
     const request = requestFor({ Developers: "https://untrusted.invalid/other/role/999" }).mockResolvedValueOnce({ ok: true, status: 200, body: PROJECT });
     const result = await executeJiraRoleRead("jira.project-roles", { projectIdOrKey: "syn" }, request);
@@ -90,6 +98,9 @@ describe("native role configuration and project membership", () => {
     ["jira.role-default-actors", { roleId: "10360", maxResults: 101 }],
     ["jira.project-roles", { projectIdOrKey: "../SYN" }],
     ["jira.project-role", { projectIdOrKey: "SYN", roleId: 10360 }],
+    ["jira.project-role", { projectIdOrKey: "SYN" }],
+    ["jira.project-role", { roleId: "10360" }],
+    ["jira.role-default-actors", {}],
     ["jira.roles", { expand: "actors" }],
   ] as const)("refuses unsupported arguments at %s before dispatch", async (name, args) => {
     const request = requestFor({});

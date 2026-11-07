@@ -31,6 +31,10 @@ describe("global native priority scheme configuration", () => {
     { schemes: [SCHEME], startAt: 1, maxResults: 25, total: 1 },
     { schemes: [], startAt: 0, maxResults: 25, total: 1 },
     { schemes: [SCHEME], startAt: 0, maxResults: 25 },
+    { schemes: [SCHEME], startAt: 0, maxResults: 25, total: null },
+    { schemes: [SCHEME], startAt: 0, maxResults: 25, total: "1" },
+    { schemes: [SCHEME], startAt: 0, maxResults: 25, total: -1 },
+    { schemes: [SCHEME], startAt: 0, maxResults: 25, total: 1_000_001 },
     { schemes: [SCHEME, SCHEME], startAt: 0, maxResults: 25, total: 2 },
   ])("refuses malformed or contradictory native pages %j", async (body) => {
     expect((await executeJiraPrioritySchemeRead("jira.priority-schemes", {}, requestFor(body))).data.reason).toBe("malformed-payload");

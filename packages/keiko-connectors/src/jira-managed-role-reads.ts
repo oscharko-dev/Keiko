@@ -8,7 +8,7 @@ import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { jiraSecurityLevelProjection } from "./jira-managed-access-schemes.js";
 import { jiraProjectionTextFits } from "./jira-managed-field-reads.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
-import { jiraReadFailure, localJiraPage, projectJiraCollection } from "./jira-managed-metadata.js";
+import { jiraReadFailure, localJiraPage, projectJiraCollection, projectJiraOptionalFields } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { readJiraBoundProject } from "./jira-managed-projects.js";
 import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadResponse } from "./jira-managed-read-request.js";
@@ -32,34 +32,39 @@ interface Selection {
   readonly project?: string;
   readonly context?: CatalogJsonObject;
 }
+function roleSelection(args: CatalogJsonObject, page: Omit<Selection, "path">, defaults: boolean): Selection | undefined {
+  if (!jiraNativeId(args.roleId)) return undefined;
+  return { ...page, roleId: args.roleId, path: `role/${args.roleId}${defaults ? "/actors" : ""}` };
+}
+function projectSelection(args: CatalogJsonObject, page: Omit<Selection, "path">, single: boolean): Selection | undefined {
+  if (!isSafeAtlassianIdentifier(args.projectIdOrKey)) return undefined;
+  const selected = { ...page, project: args.projectIdOrKey,
+    path: `project/${encodeURIComponent(args.projectIdOrKey)}/role` };
+  if (!single) return selected;
+  return jiraNativeId(args.roleId)
+    ? { ...selected, roleId: args.roleId, path: `${selected.path}/${args.roleId}` }
+    : undefined;
+}
 function selection(name: RoleRead, args: CatalogJsonObject): Selection | undefined {
   const page = selectJiraReadPage(args, new Set(FIELDS[name]));
   if (page === undefined) return undefined;
-  const needsRole = name === "jira.role" || name === "jira.role-default-actors" || name === "jira.project-role";
-  const needsProject = name === "jira.project-roles" || name === "jira.project-role";
-  if (needsRole && !jiraNativeId(args.roleId)) return undefined;
-  if (needsProject && !isSafeAtlassianIdentifier(args.projectIdOrKey)) return undefined;
-  const roleId = typeof args.roleId === "string" ? args.roleId : undefined;
-  const project = typeof args.projectIdOrKey === "string" ? args.projectIdOrKey : undefined;
-  const root = project === undefined ? "role" : `project/${encodeURIComponent(project)}/role`;
-  return { ...page, path: `${root}${roleId === undefined ? "" : `/${roleId}`}${name === "jira.role-default-actors" ? "/actors" : ""}`,
-    ...(roleId === undefined ? {} : { roleId }), ...(project === undefined ? {} : { project }) };
+  switch (name) {
+    case "jira.roles": return { ...page, path: "role" };
+    case "jira.role": return roleSelection(args, page, false);
+    case "jira.role-default-actors": return roleSelection(args, page, true);
+    case "jira.project-roles": return projectSelection(args, page, false);
+    case "jira.project-role": return projectSelection(args, page, true);
+  }
+}
+function actorDetail(value: unknown, key: "id" | "type" | "displayName"): CatalogJsonValue | undefined {
+  if (key === "id") return jiraNativeNumericId(value);
+  return jiraNativeText(value, key === "type" ? 128 : 255) ? value : undefined;
 }
 function actor(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (raw === undefined || !jiraNativeText(raw.name, 255)) return undefined;
-  const result: Record<string, CatalogJsonValue> = { name: raw.name };
-  if (raw.id !== undefined && raw.id !== null) {
-    const id = jiraNativeNumericId(raw.id);
-    if (id === undefined) return undefined;
-    result.id = id;
-  }
-  for (const key of ["type", "displayName"] as const) {
-    if (raw[key] === undefined || raw[key] === null) continue;
-    if (!jiraNativeText(raw[key], key === "type" ? 128 : 255)) return undefined;
-    result[key] = raw[key];
-  }
-  return result;
+  const details = projectJiraOptionalFields(raw, ["id", "type", "displayName"], actorDetail);
+  return details === undefined ? undefined : { name: raw.name, ...details };
 }
 function actors(value: unknown): readonly CatalogJsonObject[] | undefined {
   const values = asArray(value);
@@ -118,23 +123,30 @@ function defaults(response: JiraReadResponse, selected: Selection): ManagedMcpTo
   const page = localJiraPage(items, selected.startAt, selected.maxResults);
   return boundJiraReadResult({ data: { ...page.data, ...context } });
 }
-function projectResponse(name: RoleRead, response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
-  if (name === "jira.project-roles") return roleNames(response, selected);
-  if (name === "jira.role-default-actors") return defaults(response, selected);
-  if (name === "jira.roles") {
-    const values = response.items;
-    if (values === undefined) return jiraReadFailure("malformed-payload");
-    if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems || values.some(exceedsBounds)) return jiraReadFailure("bounds-exceeded");
-    const items = projectJiraCollection(values, TOOL_CATALOG_LIMITS.maxArrayItems, role, "id");
-    if (items === undefined) return jiraReadFailure("malformed-payload");
-    const page = localJiraPage(items, selected.startAt, selected.maxResults);
-    return boundJiraReadResult({ data: { ...page.data, actorsScope: "role-configuration" } });
-  }
+function roleList(response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
+  const values = response.items;
+  if (values === undefined) return jiraReadFailure("malformed-payload");
+  if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems || values.some(exceedsBounds)) return jiraReadFailure("bounds-exceeded");
+  const items = projectJiraCollection(values, TOOL_CATALOG_LIMITS.maxArrayItems, role, "id");
+  if (items === undefined) return jiraReadFailure("malformed-payload");
+  const page = localJiraPage(items, selected.startAt, selected.maxResults);
+  return boundJiraReadResult({ data: { ...page.data, actorsScope: "role-configuration" } });
+}
+function roleSingle(name: RoleRead, response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
   if (exceedsBounds(response.body)) return jiraReadFailure("bounds-exceeded");
+  if (selected.roleId === undefined) return jiraReadFailure("malformed-payload");
   const item = role(response.body);
-  return item === undefined || item.id !== selected.roleId ? jiraReadFailure("malformed-payload")
+  return item?.id !== selected.roleId ? jiraReadFailure("malformed-payload")
     : boundJiraReadResult({ data: { outcome: "succeeded", ...item, ...selected.context,
       actorsScope: name === "jira.project-role" ? "project-membership" : "role-configuration" } });
+}
+function projectResponse(name: RoleRead, response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
+  switch (name) {
+    case "jira.project-roles": return roleNames(response, selected);
+    case "jira.role-default-actors": return defaults(response, selected);
+    case "jira.roles": return roleList(response, selected);
+    default: return roleSingle(name, response, selected);
+  }
 }
 export function isJiraRoleRead(name: string): name is RoleRead { return READS.has(name); }
 /** Role definitions/defaults/project membership are observations, never effective access grants. */

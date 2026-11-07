@@ -32,6 +32,10 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.cluster-nodes", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.cluster-upgrade-state", args: {} },
+  { tool: "jira.index-snapshot-status", args: {} },
+  { tool: "jira.index-summary", args: {} },
   { tool: "jira.jmx-metrics-exposed", args: {} },
   { tool: "jira.search-max-aggregation-buckets", args: {} },
   { tool: "jira.search-max-result-window", args: {} },
@@ -915,6 +919,16 @@ function roleRead(path: string): AtlassianHttpBodyResult | undefined {
 }
 function instanceRead(path: string): AtlassianHttpBodyResult | undefined {
   const bodies: Readonly<Record<string, unknown>> = {
+    "cluster/nodes": [{ nodeId: "node-A", state: "PASSIVE", alive: false, nodeBuildNumber: 0,
+      lastStateChangeTimestamp: 0, ip: "192.0.2.10", cacheListenerPort: 40001 }],
+    "cluster/zdu/state": { state: "READY_TO_UPGRADE", build: { buildNumber: 0, version: "11.3.0" } },
+    "index-snapshot/isRunning": { running: false },
+    "index/summary": { nodeId: "node-A", reportTime: "2026-11-07T22:00:00+01:00",
+      issueIndex: { indexReadable: false, countInIndex: 0 },
+      replicationQueues: {}, externalPlatformIndexReplay: { "node-B": {
+        queueSize: 0, lastConsumedOperation: { id: -1, journalWriteTime: "Journal at 21:00" },
+      } },
+    },
     "monitoring/jmx/areMetricsExposed": false,
     "searchLimits/maxAggregationBuckets": 0,
     "searchLimits/maxResultWindow": -1,
@@ -1148,7 +1162,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(152);
+    expect(native).toHaveLength(156);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1201,6 +1215,20 @@ describe("native Jira registry and real connector transport agreement", () => {
     expect(observed.requests.map(({ method, url }) => [method, url])).toEqual([
       ["GET", `https://jira.example.invalid/context/rest/api/2/${path}`],
     ]);
+  });
+  it("keeps node addresses private and maintenance observations independent", async () => {
+    const nodes = await observe({ tool: "jira.cluster-nodes", args: { startAt: 0, maxResults: 1 } });
+    expect(nodes.result.data).toMatchObject({ items: [{ nodeId: "node-A", alive: false, lastStateChangeTimestamp: 0 }] });
+    expect(JSON.stringify(nodes.result.data)).not.toMatch(/192\.0\.2\.10|40001/u);
+    const snapshot = await observe({ tool: "jira.index-snapshot-status", args: {} });
+    expect(snapshot.result.data).toMatchObject({ running: false });
+    expect(instanceRead("index-snapshot/isRunning")).toMatchObject({ bodyText: '{"running":false}' });
+    const summary = await observe({ tool: "jira.index-summary", args: {} });
+    expect(summary.result.data).toMatchObject({ issueIndex: { indexReadable: false, countInIndex: 0 }, replicationQueues: [],
+      externalPlatformIndexReplay: [{ nodeId: "node-B", queueSize: 0, lastConsumedOperation: { id: -1, journalWriteTime: "Journal at 21:00" } }],
+    });
+    expect(summary.result.data.issueIndex).not.toHaveProperty("countInArchive");
+    expect(summary.result.data.issueIndex).not.toHaveProperty("lastUpdatedInIndex");
   });
   it.each(["jira.create", "jira.edit"] as const)(
     "keeps %s's approved link continuation on POST issueLink",

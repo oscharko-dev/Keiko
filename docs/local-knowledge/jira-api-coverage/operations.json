@@ -581,6 +581,46 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.cluster-nodes": {
+      "identity": "GET /rest/api/2/cluster/nodes",
+      "effect": "read",
+      "permissionPolicy": "observed-maintenance-status",
+      "kind": "constrained-tool",
+      "constraints": "Bounded native node list with local pagination only. Required unique node IDs; optional state, alive flag, build/version and last-change values retain observed facts. Signed exact numeric metadata is preserved without sentinel inference; unsafe integers and excessive collections are refused. IP addresses and listener ports are omitted. No node mutation, remote-node targeting or cluster-availability inference.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-reads.ts",
+        "packages/keiko-connectors/src/jira-maintenance-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.cluster-upgrade-state": {
+      "identity": "GET /rest/api/2/cluster/zdu/state",
+      "effect": "read",
+      "permissionPolicy": "observed-maintenance-status",
+      "kind": "constrained-tool",
+      "constraints": "No-argument native upgrade-state observation with optional state and build metadata. Published enum/example disagreement is handled by bounded observed text, not an invented closed state or compatibility classification. Missing/null facts stay unknown; signed safe build numbers remain observations. No upgrade approval, cancellation or task execution.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-reads.ts",
+        "packages/keiko-connectors/src/jira-maintenance-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.comment": {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/comment",
       "effect": "write",
@@ -1136,6 +1176,46 @@
         "packages/keiko-connectors/src/jira-managed-directory-reads.test.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.index-snapshot-status": {
+      "identity": "GET /rest/api/2/index-snapshot/isRunning",
+      "effect": "read",
+      "permissionPolicy": "observed-maintenance-status",
+      "kind": "constrained-tool",
+      "constraints": "No-argument native object observation of optional running boolean. Missing/null remains unknown and never becomes false. No snapshot start, scheduling, polling or maintenance state change.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-reads.ts",
+        "packages/keiko-connectors/src/jira-maintenance-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.index-summary": {
+      "identity": "GET /rest/api/2/index/summary",
+      "effect": "read",
+      "permissionPolicy": "observed-maintenance-status",
+      "kind": "constrained-tool",
+      "constraints": "No-argument bounded local index summary. Independent native index counts, readability, timestamp text and per-node replication/replay queue maps are projected without arithmetic or inferred health. Omitted/null facts remain unknown; explicit empty maps remain empty arrays. Queue timestamps retain their documented replicationTime versus journalWriteTime fields. Unsafe numeric observations and excessive maps fail closed; no remote URL/node following or job start.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-reads.ts",
+        "packages/keiko-connectors/src/jira-maintenance-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-maintenance-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraMaintenanceDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -1909,6 +1989,7 @@
       "kind": "constrained-tool",
       "constraints": "Independent canonical project binding and exact observed role ID precede a bounded project membership projection. actorsScope=project-membership is distinct from default/global role configuration and never grants effective rights.",
       "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
         "packages/keiko-connectors/src/jira-managed-role-reads.ts",
         "packages/keiko-connectors/src/jira-managed-projects.ts",
         "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
@@ -1930,6 +2011,7 @@
       "kind": "constrained-tool",
       "constraints": "Canonical project identity is independently read before the project role name-to-URI map. Only bounded role names are projected and locally paginated; no role IDs are derived from URLs and no links are followed.",
       "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
         "packages/keiko-connectors/src/jira-managed-role-reads.ts",
         "packages/keiko-connectors/src/jira-managed-projects.ts",
         "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
@@ -2178,6 +2260,7 @@
       "kind": "constrained-tool",
       "constraints": "One exact native role ID with bounded name/description and optional observed actors. Actor names are not unique identities; optional native actor IDs/types/display names remain unknown when omitted. No email/avatar expansion or inferred rights.",
       "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
         "packages/keiko-connectors/src/jira-managed-role-reads.ts",
         "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.ts",
@@ -2198,6 +2281,7 @@
       "kind": "constrained-tool",
       "constraints": "Default actors for one exact role, explicitly actorsScope=role-defaults. Native omitted actors remain unknown without invented totals; explicit empty arrays are retained. Existing bounded local pagination applies only to an observed complete actor list.",
       "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
         "packages/keiko-connectors/src/jira-managed-role-reads.ts",
         "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.ts",
@@ -2218,6 +2302,7 @@
       "kind": "constrained-tool",
       "constraints": "Bounded complete global role definitions with local pagination and actorsScope=role-configuration. Missing actors remain unknown; role configuration never implies current-user membership or effective permission.",
       "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
         "packages/keiko-connectors/src/jira-managed-role-reads.ts",
         "packages/keiko-connectors/src/jira-managed-access-schemes.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.ts",
@@ -3160,8 +3245,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "a978049b3a8258f999a3b174823b30417c44b0f661e8102e11b817bee40b4ff9",
-    "nativeOperationCount": 179
+    "sha256": "13d71c74141362a79fe576ac3cc1b89c6cd620e2e115e81fe648984b83283c6a",
+    "nativeOperationCount": 183
   },
   "operations": [
     {
@@ -5223,10 +5308,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.cluster-nodes"]
     },
     {
       "identity": "POST /rest/api/2/cluster/zdu/approve",
@@ -5383,10 +5468,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.cluster-upgrade-state"]
     },
     {
       "identity": "GET /rest/api/2/comment/{commentId}/properties",
@@ -7047,10 +7132,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.index-snapshot-status"]
     },
     {
       "identity": "GET /rest/api/2/index/summary",
@@ -7079,10 +7164,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.index-summary"]
     },
     {
       "identity": "POST /rest/api/2/issue",

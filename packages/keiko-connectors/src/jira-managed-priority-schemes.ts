@@ -34,23 +34,29 @@ function project(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   return raw === undefined ? undefined : jiraPrioritySchemeProjection(raw);
 }
-function projectResponse(response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
-  const body = response.body;
-  if (body === undefined) return jiraReadFailure("malformed-payload");
-  if (selected.schemeId !== undefined) {
-    if (exceedsBounds(body)) return jiraReadFailure("bounds-exceeded");
-    const item = project(body);
-    return item === undefined || item.id !== selected.schemeId ? jiraReadFailure("malformed-payload")
-      : boundJiraReadResult({ data: { outcome: "succeeded", ...item } });
-  }
+function single(body: Record<string, unknown>, schemeId: string): ManagedMcpToolResult {
+  if (exceedsBounds(body)) return jiraReadFailure("bounds-exceeded");
+  const item = project(body);
+  return item?.id !== schemeId ? jiraReadFailure("malformed-payload")
+    : boundJiraReadResult({ data: { outcome: "succeeded", ...item } });
+}
+function total(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000;
+}
+function page(body: Record<string, unknown>, selected: Selection): ManagedMcpToolResult {
   const values = asArray(body.schemes);
-  if (values === undefined || typeof body.total !== "number" || !Number.isSafeInteger(body.total) || body.total < 0 || body.total > 1_000_000)
+  if (values === undefined || !total(body.total))
     return jiraReadFailure("malformed-payload");
   if (values.length > selected.maxResults || values.some(exceedsBounds)) return jiraReadFailure("bounds-exceeded");
   const items = projectJiraCollection(values, selected.maxResults, project, "id");
   // This native envelope supplies a total and no isLast. Retain its actual offset and page-size checks.
   return boundJiraReadResult(remoteJiraPage({ startAt: body.startAt, maxResults: body.maxResults,
     total: body.total, isLast: selected.startAt + values.length >= body.total }, items, selected.startAt, selected.maxResults));
+}
+function projectResponse(response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
+  const body = response.body;
+  if (body === undefined) return jiraReadFailure("malformed-payload");
+  return selected.schemeId === undefined ? page(body, selected) : single(body, selected.schemeId);
 }
 export function isJiraPrioritySchemeRead(name: string): name is PriorityRead { return READS.has(name); }
 /** Global scheme configuration only; no project expansion, association mutation or inferred issue defaults. */

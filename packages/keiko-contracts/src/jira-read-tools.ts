@@ -2,6 +2,9 @@ import { deepFreeze } from "./deep-freeze.js";
 
 /** Closed immutable read identities shared by native owners and the governed provider catalog. */
 export const JIRA_READ_TOOL_FAMILIES = deepFreeze({
+  maintenance: [
+    "jira.cluster-nodes", "jira.cluster-upgrade-state", "jira.index-snapshot-status", "jira.index-summary",
+  ],
   runtimeSettings: [
     "jira.jmx-metrics-exposed", "jira.search-max-aggregation-buckets", "jira.search-max-result-window",
   ],

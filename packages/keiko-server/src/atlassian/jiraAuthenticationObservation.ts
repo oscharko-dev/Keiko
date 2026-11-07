@@ -10,6 +10,9 @@ type Request = AtlassianHttpRequest | AtlassianHttpBodyRequest;
 // Retained Jira 11.3 API: these GETs document 401 for missing WebSudo or view permission
 // as well as authentication. Other resources (including issue-type schemes) remain definitive.
 const AMBIGUOUS_PATHS: readonly (readonly string[])[] = [
+  ["cluster", "nodes"],
+  ["cluster", "zdu", "state"],
+  ["index-snapshot", "isRunning"],
   ["workflow"],
   ["screens"],
   ["workflowscheme", "id"],

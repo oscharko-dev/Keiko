@@ -19,6 +19,7 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "observed-maintenance-status"
   | "admin-workflow-configuration"
   | "visible-custom-field-configuration"
   | "observed-terminology"
@@ -159,6 +160,12 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...reads("observed-maintenance-status", {
+    "jira.cluster-nodes": "/cluster/nodes",
+    "jira.cluster-upgrade-state": "/cluster/zdu/state",
+    "jira.index-snapshot-status": "/index-snapshot/isRunning",
+    "jira.index-summary": "/index/summary",
+  }),
   ...reads("admin-workflow-configuration", { "jira.workflows": "/workflow" }),
   ...reads("visible-custom-field-configuration", {
     "jira.custom-fields": "/customFields",
