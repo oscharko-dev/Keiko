@@ -17,6 +17,8 @@ import { executeJiraInstanceRead, isJiraInstanceRead } from "./jira-managed-inst
 import { executeJiraRoleRead, isJiraRoleRead } from "./jira-managed-role-reads.js";
 import { executeJiraPrioritySchemeRead, isJiraPrioritySchemeRead } from "./jira-managed-priority-schemes.js";
 import { executeJiraReleaseRead, isJiraReleaseRead } from "./jira-managed-release-reads.js";
+import { executeJiraScopedDirectoryRead, isJiraScopedDirectoryRead } from "./jira-managed-scoped-directory.js";
+import { executeJiraFieldDirectoryRead, isJiraFieldDirectoryRead } from "./jira-managed-field-directory.js";
 import {
   executeJiraParticipationRead,
   isJiraParticipationRead,
@@ -357,7 +359,9 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraInstanceRead>[0]
   | Parameters<typeof executeJiraRoleRead>[0]
   | Parameters<typeof executeJiraPrioritySchemeRead>[0]
-  | Parameters<typeof executeJiraReleaseRead>[0];
+  | Parameters<typeof executeJiraReleaseRead>[0]
+  | Parameters<typeof executeJiraScopedDirectoryRead>[0]
+  | Parameters<typeof executeJiraFieldDirectoryRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return [
     isJiraIssueDetailRead,
@@ -379,6 +383,8 @@ function isNativeDetailRead(name: string): name is NativeDetailRead {
     isJiraRoleRead,
     isJiraPrioritySchemeRead,
     isJiraReleaseRead,
+    isJiraScopedDirectoryRead,
+    isJiraFieldDirectoryRead,
   ].some((accepts) => accepts(name));
 }
 function administrationRead(
@@ -406,6 +412,8 @@ function identityAndMetadataRead(
   if (isJiraCoreMetadataRead(name)) return executeJiraCoreMetadataRead(name, args, request);
   if (isJiraInstanceRead(name)) return executeJiraInstanceRead(name, args, request);
   if (isJiraReleaseRead(name)) return executeJiraReleaseRead(name, args, request);
+  if (isJiraScopedDirectoryRead(name)) return executeJiraScopedDirectoryRead(name, args, request);
+  if (isJiraFieldDirectoryRead(name)) return executeJiraFieldDirectoryRead(name, args, request);
   return undefined;
 }
 function linkedIssueDetailRead(

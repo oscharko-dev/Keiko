@@ -32,6 +32,31 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  {
+    tool: "jira.multi-project-assignable-users",
+    args: { projectKeys: ["SYN", "OTHER"], query: "Synthetic + QA", maxResults: 1 },
+    query: { maxResults: "1", username: "Synthetic + QA", projectKeys: "SYN,OTHER" },
+  },
+  {
+    tool: "jira.permission-users",
+    args: { permissions: ["BROWSE_PROJECTS", "ASSIGN_ISSUES"], issueKey: "SYN-1", query: "Synthetic", startAt: 0, maxResults: 1 },
+    query: { maxResults: "1", username: "Synthetic", issueKey: "SYN-1", permissions: "BROWSE_PROJECTS,ASSIGN_ISSUES", startAt: "0" },
+  },
+  {
+    tool: "jira.browse-permission-users", args: { projectKey: "SYN", query: "Synthetic", maxResults: 1 },
+    query: { maxResults: "1", username: "Synthetic", projectKey: "SYN" },
+  },
+  {
+    tool: "jira.group-user-picker",
+    args: { query: "Synthetic", maxResults: 1, fieldId: "customfield_10001", projectId: "9223372036854775807", issueTypeId: "10001" },
+    query: { maxResults: "1", query: "Synthetic", showAvatar: "false", fieldId: "customfield_10001", projectId: "9223372036854775807", issueTypeId: "10001" },
+  },
+  {
+    tool: "jira.project-picker", args: { query: "Syn", maxResults: 1, allowEmptyQuery: false },
+    query: { maxResults: "1", query: "Syn", allowEmptyQuery: "false" },
+  },
+  { tool: "jira.fields", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.custom-field-option", args: { optionId: "91" }, parameters: { id: "91" } },
   { tool: "jira.component-related-issue-counts", args: { componentId: "71" }, parameters: { id: "71" } },
   { tool: "jira.version-related-issue-counts", args: { versionId: "81" }, parameters: { id: "81" } },
   { tool: "jira.version-unresolved-issue-count", args: { versionId: "81" }, parameters: { id: "81" } },
@@ -825,6 +850,19 @@ function directoryRead(path: string): AtlassianHttpBodyResult | undefined {
     applicationrole: [role],
     "applicationrole/jira-software": role,
   };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : scopedDirectoryRead(path, user);
+}
+function scopedDirectoryRead(path: string, user: Readonly<Record<string, unknown>>): AtlassianHttpBodyResult | undefined {
+  const bodies: Readonly<Record<string, unknown>> = {
+    "user/assignable/multiProjectSearch": [user],
+    "user/permission/search": [user],
+    "user/viewissue/search": [user],
+    groupuserpicker: { users: { users: [user], total: 3 }, groups: { groups: [], total: 0 } },
+    "projects/picker": { projects: [{ id: "10000", key: "SYN", name: "Synthetic" }], total: 2 },
+    field: [{ id: "customfield_10001", name: "Delivery", custom: true, searchable: false, clauseNames: ["cf[10001]", "Delivery"],
+      schema: { type: "array", items: "string", custom: "synthetic:metadata", customId: 10001 } }],
+    "customFieldOption/91": { id: 91, value: "", disabled: false, childrenIds: [] },
+  };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
 function roleRead(path: string): AtlassianHttpBodyResult | undefined {
@@ -860,7 +898,7 @@ function instanceRead(path: string): AtlassianHttpBodyResult | undefined {
 function coreMetadataRead(path: string): AtlassianHttpBodyResult | undefined {
   const type = { id: "10001", name: "Story", description: "Story metadata", subtask: false, avatarId: 71 };
   const priority = { id: "3", name: "Normal", statusColor: "#123456" };
-  const resolution = { name: "Fixed", description: "Resolution metadata" };
+  const resolution = { id: "41", name: "Fixed", description: "Resolution metadata" };
   const category = { id: 4, key: "indeterminate", name: "In progress", colorName: "yellow" };
   const status = { id: "5", name: "In Progress + QA", statusCategory: category };
   const projectCategory = { id: "51", name: "Engineering" };
@@ -1067,7 +1105,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(133);
+    expect(native).toHaveLength(140);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

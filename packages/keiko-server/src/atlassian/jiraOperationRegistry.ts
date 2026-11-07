@@ -19,6 +19,8 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "scoped-user-candidates"
+  | "visible-directory-suggestions"
   | "visible-role-configuration"
   | "visible-priority-configuration"
   | "observed-instance-metadata"
@@ -152,6 +154,14 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...reads("scoped-user-candidates", {
+    "jira.multi-project-assignable-users": "/user/assignable/multiProjectSearch",
+    "jira.permission-users": "/user/permission/search",
+    "jira.browse-permission-users": "/user/viewissue/search",
+  }),
+  ...reads("visible-directory-suggestions", {
+    "jira.group-user-picker": "/groupuserpicker",
+  }),
   ...reads("visible-role-configuration", {
     "jira.roles": "/role",
     "jira.role": "/role/{id}",
@@ -170,6 +180,8 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   ...reads("permission-definitions", { "jira.permission-definitions": "/permissions" }),
   ...reads("current-actor-metadata", { "jira.myself": "/myself" }),
   ...reads("visible-issue-metadata", {
+    "jira.fields": "/field",
+    "jira.custom-field-option": "/customFieldOption/{id}",
     "jira.global-issue-types": "/issuetype",
     "jira.issue-type": "/issuetype/{id}",
     "jira.issue-type-page": "/issuetype/page",
@@ -298,7 +310,10 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.sprint": "/sprint/{sprintId}",
   }, "/rest/agile/1.0"),
   ...reads("visible-filters", { "jira.filter": "/filter/{id}", "jira.favourite-filters": "/filter/favourite" }),
-  ...reads("visible-projects", { "jira.projects": "/project" }),
+  ...reads("visible-projects", {
+    "jira.projects": "/project",
+    "jira.project-picker": "/projects/picker",
+  }),
   ...reads("current-project-metadata", {
     "jira.project-categories": "/projectCategory",
     "jira.project-category": "/projectCategory/{id}",

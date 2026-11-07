@@ -21,6 +21,7 @@ import { JIRA_CORE_METADATA_TOOLS } from "./jira-core-metadata-presentation";
 import { JIRA_INSTANCE_TOOLS } from "./jira-instance-presentation";
 import { JIRA_ROLE_TOOLS } from "./jira-role-presentation";
 import { JIRA_RELEASE_TOOLS } from "./jira-release-presentation";
+import { JIRA_LOOKUP_TOOLS, jiraLookupNotice } from "./jira-lookup-presentation";
 const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_PROJECT_METADATA_TOOLS,
   ...JIRA_COLLABORATION_TOOLS,
@@ -35,6 +36,7 @@ const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_INSTANCE_TOOLS,
   ...JIRA_ROLE_TOOLS,
   ...JIRA_RELEASE_TOOLS,
+  ...JIRA_LOOKUP_TOOLS,
 ]);
 
 const OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKey>> = {
@@ -146,10 +148,8 @@ export function jiraToolPartialNotice(exchange: ChatToolExchange): WidgetMessage
     return requirementsCut(exchange.result) ? "chat.requirements.partial" : undefined;
   if (KNOWLEDGE_TOOLS[exchange.call.name] !== undefined)
     return exchange.result.page.truncated ? "chat.knowledge.partial" : undefined;
-  const directory = jiraDirectoryNotice(
-    exchange.call.name,
-    plainRecord(exchange.result.data) ?? {},
-  );
+  const data = plainRecord(exchange.result.data) ?? {};
+  const directory = jiraDirectoryNotice(exchange.call.name, data) ?? jiraLookupNotice(exchange.call.name, data);
   if (directory !== undefined) return directory;
   return exchange.result.page.truncated || projectMetadataPageCut(exchange)
     ? "chat.jira.partial"

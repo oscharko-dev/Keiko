@@ -16,7 +16,7 @@ describe("Jira core metadata presentation", () => {
     expect(item?.facts).toContainEqual({ label: "chat.jira.fact.avatarId", value: "19" });
     expect(JSON.stringify(item)).not.toContain("untrusted.invalid");
   });
-  it("keeps a requested resolution separate from an absent observed identity", () => {
+  it("restores a legacy requested resolution without inventing an absent observed identity", () => {
     const [item] = jiraCoreMetadataDetails("jira_resolution", {
       resolutionId: "41", name: "Fixed", description: "Resolved", self: "https://untrusted.invalid/resolution/41",
     });

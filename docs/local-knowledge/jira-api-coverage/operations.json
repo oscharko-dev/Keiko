@@ -407,6 +407,27 @@
       ],
       "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
     },
+    "jira.browse-permission-users": {
+      "identity": "GET /rest/api/2/user/viewissue/search",
+      "effect": "read",
+      "permissionPolicy": "scoped-user-candidates",
+      "kind": "constrained-tool",
+      "constraints": "Exactly one issue/project scope and nonempty username query. Native first100 bounded candidates only; no unpublished startAt/continuation, total or inferred current-user authority.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-scoped-directory.ts",
+        "packages/keiko-connectors/src/jira-directory-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-field-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-scoped-directory.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.comment": {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/comment",
       "effect": "write",
@@ -529,6 +550,26 @@
         "packages/keiko-connectors/src/jira-managed-worklog-mutations.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.custom-field-option": {
+      "identity": "GET /rest/api/2/customFieldOption/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Exact observed native option identity with bounded value, optional disabled state and exact child IDs. Empty native values remain empty, unknown flags/children remain omitted, unsafe numeric IDs fail closed and self URLs are not followed.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-field-directory.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-field-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-field-directory.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
@@ -708,6 +749,26 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-filter-reads.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-filter-reads.test.ts"]
     },
+    "jira.fields": {
+      "identity": "GET /rest/api/2/field",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Bounded complete global field array with local pagination and observed flags/clause/schema facts. Missing flags remain unknown; native schema metadata does not imply editable, required or default-value admission. No arbitrary schema expansion or field writes.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-field-directory.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-field-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-field-directory.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.filter": {
       "identity": "GET /rest/api/2/filter/{id}",
       "effect": "read",
@@ -814,6 +875,27 @@
         "packages/keiko-connectors/src/jira-managed-directory-reads.test.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.group-user-picker": {
+      "identity": "GET /rest/api/2/groupuserpicker",
+      "effect": "read",
+      "permissionPolicy": "visible-directory-suggestions",
+      "kind": "constrained-tool",
+      "constraints": "Separate observed user/group branches and optional totals; missing branches remain unknown and are never summed. Avatar/highlight/label/email fields are omitted. Only single typed project/issue-type IDs are exposed, with fixed showAvatar=false; unspecified list encoding is not invented.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-scoped-directory.ts",
+        "packages/keiko-connectors/src/jira-directory-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-field-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-scoped-directory.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -1045,6 +1127,27 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.test.ts"]
     },
+    "jira.multi-project-assignable-users": {
+      "identity": "GET /rest/api/2/user/assignable/multiProjectSearch",
+      "effect": "read",
+      "permissionPolicy": "scoped-user-candidates",
+      "kind": "constrained-tool",
+      "constraints": "Typed nonempty project key set uses the documented comma encoding and bounded username filter/maxResults. Native candidate list is restricted to the first100 search window, without an unpublished offset, total or continuation. No assignment action or effective authority grant.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-scoped-directory.ts",
+        "packages/keiko-connectors/src/jira-directory-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-field-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-scoped-directory.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.myself": {
       "identity": "GET /rest/api/2/myself",
       "effect": "read",
@@ -1194,6 +1297,27 @@
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
+      ]
+    },
+    "jira.permission-users": {
+      "identity": "GET /rest/api/2/user/permission/search",
+      "effect": "read",
+      "permissionPolicy": "scoped-user-candidates",
+      "kind": "constrained-tool",
+      "constraints": "Exactly one issue/project scope and a nonempty typed comma-separated permission set. Native first100 startAt/maxResults window is explicit; no complete-directory claim or fallback. The published endpoint is deprecated, and runtime availability remains unqualified.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-scoped-directory.ts",
+        "packages/keiko-connectors/src/jira-directory-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-field-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-scoped-directory.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.priorities": {
@@ -1432,6 +1556,27 @@
       "constraints": "Global or selected-project permissions, at most 100 entries; unavailable permissions are not fabricated as false and oversized results are refused.",
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-projects.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-projects.test.ts"]
+    },
+    "jira.project-picker": {
+      "identity": "GET /rest/api/2/projects/picker",
+      "effect": "read",
+      "permissionPolicy": "visible-projects",
+      "kind": "constrained-tool",
+      "constraints": "Bounded native project id/key/name suggestions with optional total and explicit allowEmptyQuery selector. No unpublished offset/continuation or complete-project claim. Native HTML, headers and avatar links are omitted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-scoped-directory.ts",
+        "packages/keiko-connectors/src/jira-directory-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-field-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-scoped-directory.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
     },
     "jira.project-priority-scheme": {
       "identity": "GET /rest/api/2/project/{projectKeyOrId}/priorityscheme",
@@ -2562,8 +2707,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "69e66c8bec987e6b57148081566b4264ff812b4433329666bf82342edd1c1a8b",
-    "nativeOperationCount": 151
+    "sha256": "c014f9cee55d1dee61306819e9897da6ca552ac5eebd6575be522c1785dfb063",
+    "nativeOperationCount": 158
   },
   "operations": [
     {
@@ -5169,10 +5314,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.custom-field-option"]
     },
     {
       "identity": "DELETE /rest/api/2/customFields",
@@ -5649,10 +5794,10 @@
         }
       ],
       "baselineCapabilityIds": ["field-metadata"],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.fields"]
     },
     {
       "identity": "POST /rest/api/2/field",
@@ -6353,10 +6498,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.group-user-picker"]
     },
     {
       "identity": "GET /rest/api/2/index-snapshot",
@@ -11937,10 +12082,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-picker"]
     },
     {
       "identity": "GET /rest/api/2/projectvalidate/key",
@@ -14233,10 +14378,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.multi-project-assignable-users"]
     },
     {
       "identity": "GET /rest/api/2/user/assignable/search",
@@ -14677,10 +14822,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.permission-users"]
     },
     {
       "identity": "GET /rest/api/2/user/picker",
@@ -14933,10 +15078,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.browse-permission-users"]
     },
     {
       "identity": "GET /rest/api/2/version",

@@ -24,6 +24,7 @@ const CURSOR = {
 };
 const USER_FIELDS = { key: NAME, name: NAME, displayName: NAME, active: BOOL, deleted: BOOL };
 const USER = object(USER_FIELDS, ["key", "name"]);
+export { USER as jiraDirectoryUserSchema };
 const ROLE_FIELDS = {
   key: KEY,
   name: NAME,

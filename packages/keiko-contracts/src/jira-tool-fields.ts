@@ -22,6 +22,13 @@ export const JIRA_FIELD_KINDS = [
 ] as const;
 export type JiraFieldKind = (typeof JIRA_FIELD_KINDS)[number];
 export const JIRA_MANAGED_READ_TOOLS = [
+  "jira.multi-project-assignable-users",
+  "jira.permission-users",
+  "jira.browse-permission-users",
+  "jira.group-user-picker",
+  "jira.project-picker",
+  "jira.fields",
+  "jira.custom-field-option",
   "jira.component-related-issue-counts",
   "jira.version-related-issue-counts",
   "jira.version-unresolved-issue-count",

@@ -21,7 +21,7 @@ function exchange(name: string, data: CatalogJsonObject): ChatToolExchange {
 }
 const TYPE = { id: "10001", name: "Story", description: "Story metadata", subtask: false, avatarId: "71" };
 const PRIORITY = { id: "3", name: "Normal", statusColor: "#123456" };
-const RESOLUTION = { name: "Fixed", description: "Resolution metadata" };
+const RESOLUTION = { id: "41", name: "Fixed", description: "Resolution metadata" };
 const CATEGORY = { id: "4", key: "indeterminate", name: "In progress category", colorName: "yellow" };
 const STATUS = { id: "5", name: "In progress", statusCategory: CATEGORY };
 const PROJECT_CATEGORY = { id: "51", name: "Engineering" };
@@ -80,7 +80,7 @@ describe.each(["en", "de"] as const)("saved core Jira metadata in %s", (locale) 
     for (const value of ["Story metadata", "Normal", "Fixed", "In progress category", "Engineering", "SYN", "9223372036854775807", "project.type.software.description"])
       expect(container.textContent).toContain(value);
     expect(container.textContent).toContain(locale === "en"
-      ? "The resolution ID was not supplied by Jira." : "Die Lösungs-ID wurde von Jira nicht geliefert.");
+      ? "Observed resolution ID: 41" : "Beobachtete Lösungs-ID: 41");
     expect(container.textContent).toContain(locale === "en"
       ? "Requested resolution ID: 41" : "Angeforderte Lösungs-ID: 41");
     expect(container.textContent).toContain(locale === "en"
