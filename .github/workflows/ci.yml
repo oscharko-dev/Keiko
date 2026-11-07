@@ -364,7 +364,9 @@ jobs:
     needs: verified-tree
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
+    # Measurement bound only: run 42341241444 cancelled both legs at 30 minutes while the repository
+    # qualification was still running. This is resized from the measured hosted step duration.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:

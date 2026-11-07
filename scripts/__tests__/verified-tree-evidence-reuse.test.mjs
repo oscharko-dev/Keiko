@@ -318,7 +318,8 @@ describe("required static policy matrix", () => {
       "fail-fast": false,
       matrix: { node: ["24.18.0", "26.8.1"] },
     });
-    expect(job["timeout-minutes"]).toBe(30);
+    // A measurement bound until the hosted qualification duration is known (#3991).
+    expect(job["timeout-minutes"]).toBe(60);
     expect(job["continue-on-error"]).toBeUndefined();
     expect(jobs["core-quality"]["runs-on"]).toBe("ubuntu-latest");
     expect(jobs["node-26-compatibility"]["runs-on"]).toBe("ubuntu-latest");

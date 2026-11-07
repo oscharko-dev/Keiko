@@ -684,6 +684,25 @@ describe("closed opt-in policy phase diagnostics", () => {
     expect(() => parsePolicyArguments(["--progress", "yes"], false)).toThrow("invalid-arguments");
   });
 
+  it("forwards each live progress frame and nothing else of the child's stderr (#3991)", async () => {
+    const entry = new URL("../lib/code-quality-policy.mjs", import.meta.url).href;
+    const completed = { ...progressObservation, state: "completed", elapsedMs: 12 };
+    const source = `const { policyProgressLine } = await import(${JSON.stringify(entry)});
+      process.stderr.write("fixture-private-body\\n");
+      process.stderr.write(policyProgressLine(${JSON.stringify(progressObservation)}).slice(0, 20));
+      await new Promise((settle) => setTimeout(settle, 20));
+      process.stderr.write(policyProgressLine(${JSON.stringify(progressObservation)}).slice(20));
+      process.stderr.write(policyProgressLine(${JSON.stringify(completed)}));`;
+    const frames = [];
+    await executePolicyWithDiagnostics(
+      ["--input-type=module", "-e", source],
+      { encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL" },
+      true,
+      (frame) => frames.push(frame),
+    );
+    expect(frames).toEqual([progressObservation, completed]);
+  });
+
   it("projects only the producer's complete four-field canonical frame", () => {
     const line = policyProgressLine(progressObservation);
     expect(lastPolicyProgress(line)).toEqual(progressObservation);

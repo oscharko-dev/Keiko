@@ -129,6 +129,9 @@ async function qualifyRepository() {
     [fileURLToPath(entry), "--qualify-responsibilities", "--json", "--progress"],
     { cwd: new URL("../../", import.meta.url), encoding: "utf8", maxBuffer: 32 * 1024 * 1024 },
     true,
+    // One line per phase change, so a job that times out shows how far the qualification got.
+    ({ phase, state, elapsedMs }) =>
+      console.log(`code-quality repository qualification: ${phase} ${state} at ${elapsedMs} ms`),
   );
   assert.equal(readFileSync(policyPath, "utf8"), policyBytes);
   const report = JSON.parse(stdout);
