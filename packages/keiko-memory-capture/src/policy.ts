@@ -31,33 +31,46 @@ const EMAIL_RE = /@(?<=\b[A-Za-z0-9._%+-]+@)[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
 const PHONE_RE = /(?:\+\d[\d\s.-]{6,14}\d|\b\d[\d .-]*[ .-]\d[\d .-]{4,12}\d\b)/;
 // A calendar date is not a telephone number. "bis 31.12.2027" has the digit-and-separator shape the
 // local-number pattern looks for, so a fact with an end date read as confidential and was refused
-// (#4206 audit). A standalone date, with a valid day and month and no further digit group on either
-// side, is blanked before the telephone check; a dotted number such as "01.23.45.67.89" or
-// "030.12.05.2020" is not a date and keeps every digit. The other checks see the full text.
-// A date-shaped token is "31.12.2027" or "1/2/26" (day, month, year) or "2026-11-07" (year, month,
-// day). Each pattern matches a bounded token, so each replacement reads the text once; the day and
-// month are checked in code, which keeps the patterns simple.
-const DAY_FIRST_DATE_RE = /(?<![\d./-])(\d{1,2})([./])(\d{1,2})\2(?:\d{4}|\d{2})(?![./-]?\d)/g;
-const ISO_DATE_RE = /(?<![\d./-])\d{4}-(\d{1,2})-(\d{1,2})(?![./-]?\d)/g;
+// (#4206 audit). Every telephone-shaped run of the original text is judged on its own groups: a run
+// with no calendar date is a telephone number; a run whose date follows a dialling prefix ("0171
+// 12.12.12", "+49 30 12.05.2020") is a telephone number with a date-shaped tail; otherwise the dates
+// are set aside and the rest of the run must still look like a telephone number on its own. A dotted
+// number such as "01.23.45.67.89" or "030.12.05.2020" is one group and not a date. The other checks
+// see the full text.
+// A date group is "31.12.2027" or "1/2/26" (day, month, year) or "2026-11-07" (year, month, day);
+// the day and month are checked in code, which keeps the patterns simple.
+const PHONE_RUN_RE = new RegExp(PHONE_RE.source, "g");
+const DAY_FIRST_DATE_RE = /^(\d{1,2})([./])(\d{1,2})\2(?:\d{4}|\d{2})$/;
+const ISO_DATE_RE = /^\d{4}-(\d{1,2})-(\d{1,2})$/;
+const DIALLING_PREFIX_RE = /^[+0]/;
 
-function isCalendarDay(day: string, month: string): boolean {
+function isCalendarDay(day: string | undefined, month: string | undefined): boolean {
   const dayNumber = Number(day);
   const monthNumber = Number(month);
   return dayNumber >= 1 && dayNumber <= 31 && monthNumber >= 1 && monthNumber <= 12;
 }
 
-function blankCalendarDates(body: string): string {
-  return body
-    .replace(DAY_FIRST_DATE_RE, (token: string, day: string, _separator: string, month: string) =>
-      isCalendarDay(day, month) ? " " : token,
-    )
-    .replace(ISO_DATE_RE, (token: string, month: string, day: string) =>
-      isCalendarDay(day, month) ? " " : token,
-    );
+function isCalendarDate(group: string): boolean {
+  const dayFirst = DAY_FIRST_DATE_RE.exec(group);
+  if (dayFirst !== null) return isCalendarDay(dayFirst[1], dayFirst[3]);
+  const iso = ISO_DATE_RE.exec(group);
+  return iso !== null && isCalendarDay(iso[2], iso[1]);
+}
+
+function isTelephoneRun(run: string): boolean {
+  const groups = run.split(/\s+/u).filter((group) => group !== "" && group !== "-");
+  const firstDate = groups.findIndex(isCalendarDate);
+  if (firstDate === -1) return true;
+  if (groups.slice(0, firstDate).some((group) => DIALLING_PREFIX_RE.test(group))) return true;
+  const rest = groups.filter((group) => !isCalendarDate(group)).join(" ");
+  return PHONE_RE.test(rest);
 }
 
 function looksLikeTelephoneNumber(body: string): boolean {
-  return PHONE_RE.test(blankCalendarDates(body));
+  for (const run of body.matchAll(PHONE_RUN_RE)) {
+    if (isTelephoneRun(run[0])) return true;
+  }
+  return false;
 }
 
 const CONFIDENTIAL_MARKER_PATTERNS: readonly RegExp[] = [

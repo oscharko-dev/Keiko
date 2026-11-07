@@ -91,6 +91,21 @@ describe("classifySensitivity", () => {
     expect(classifySensitivity("call 12.34.5678")).toBe("confidential");
   });
 
+  // #4206 audit: blanking every date-shaped token removed the tail of a telephone number whose
+  // subscriber part looks like a date, and the remaining prefix no longer read as a number.
+  it("keeps a telephone number with a date-shaped tail confidential", () => {
+    expect(classifySensitivity("Tel 0171 12.12.12")).toBe("confidential");
+    expect(classifySensitivity("Ruf 089 10.11.12 an")).toBe("confidential");
+    expect(classifySensitivity("Meine Nummer ist +49 30 12.05.2020")).toBe("confidential");
+    expect(classifySensitivity("Ab 31.12.2027 030 1234 5678")).toBe("confidential");
+  });
+
+  it("keeps a date next to an ordinary number or another date public", () => {
+    expect(classifySensitivity("Termin am 12.05.2026 10 Uhr")).toBe("public");
+    expect(classifySensitivity("Raum 3 12.05.2026")).toBe("public");
+    expect(classifySensitivity("Projekt vom 01.01.2026 - 31.12.2027")).toBe("public");
+  });
+
   it("keeps false-positive-near German number examples public", () => {
     expect(classifySensitivity("Wir haben 12345678901 Testfälle im synthetischen Benchmark")).toBe(
       "public",
