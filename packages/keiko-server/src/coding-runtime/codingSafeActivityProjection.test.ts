@@ -1893,3 +1893,80 @@ describe("saturated per-turn tool capacity", () => {
     expect(projection.currentContent()?.feed).toMatchObject({ droppedEventCount: 1 });
   });
 });
+
+describe("OpenCode permission rejection evidence (#4271)", () => {
+  function denial(
+    callId: string,
+    state: "running" | "denied" | "failed",
+    withMessage = true,
+    tool = "shell",
+  ): CodingSafeActivitySignal {
+    return {
+      kind: "tool",
+      ...(withMessage ? { messageId: "msg_assistant" } : {}),
+      callId,
+      tool,
+      state,
+      occurredAt: "2026-07-18T17:00:00.002Z",
+    };
+  }
+
+  function projectionWithLog(): {
+    readonly projection: Projection;
+    readonly log: ReturnType<typeof createBufferedServerLogSink>;
+  } {
+    const log = createBufferedServerLogSink();
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (): void => undefined },
+      activityLog: log,
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+    return { projection, log };
+  }
+
+  const floorLines = (
+    log: ReturnType<typeof createBufferedServerLogSink>,
+  ): ReturnType<typeof createBufferedServerLogSink>["events"] =>
+    log.events.filter((event) => event.op === "coding-runtime.native-policy.floor-denied");
+
+  it("records one body-free line per denied call, not per repeated part update", () => {
+    const { projection, log } = projectionWithLog();
+    projection.ingest(RUN_ID, denial("call_a", "running"));
+    projection.ingest(RUN_ID, denial("call_a", "denied"));
+    projection.ingest(RUN_ID, denial("call_a", "denied"));
+    projection.ingest(RUN_ID, denial("call_b", "denied", true, "mcp_private_tool"));
+    const lines = floorLines(log);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({
+      correlationId: RUN_ID,
+      extra: { tool: "shell", occurrenceCount: 1 },
+    });
+    expect(lines[1]).toMatchObject({ extra: { tool: "other", occurrenceCount: 2 } });
+    const first = lines[0];
+    if (first === undefined) throw new Error("expected a floor-denied line");
+    const line = formatActivityLogProofLine(first);
+    expect(
+      expectActivityLogProof("coding-runtime.native-policy.floor-denied.emitted-line", line),
+    ).toMatchObject({ correlationId: RUN_ID, tool: "shell", occurrenceCount: 1 });
+    expect(line).not.toContain("call_a");
+    expect(line).not.toContain("mcp_private_tool");
+  });
+
+  it("records nothing for a Keiko-settled denial, a failure or an already denied call", () => {
+    const { projection, log } = projectionWithLog();
+    projection.ingest(RUN_ID, denial("call_k", "running"));
+    projection.ingest(RUN_ID, denial("call_k", "denied", false));
+    projection.ingest(RUN_ID, denial("call_k", "denied"));
+    projection.ingest(RUN_ID, denial("call_f", "running"));
+    projection.ingest(RUN_ID, denial("call_f", "failed"));
+    expect(floorLines(log)).toEqual([]);
+  });
+});

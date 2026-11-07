@@ -11576,6 +11576,7 @@
           "coding-runtime.native-formatter.bound",
           "coding-runtime.native-narrowing.refused",
           "coding-runtime.native-policy.decided",
+          "coding-runtime.native-policy.floor-denied",
           "coding-runtime.native-step.changed",
           "coding-runtime.provider-policy.bound"
         ],
@@ -11609,6 +11610,10 @@
           "mode": "correlation"
         },
         {
+          "op": "coding-runtime.native-policy.floor-denied",
+          "mode": "correlation"
+        },
+        {
           "op": "coding-runtime.native-step.changed",
           "mode": "correlation"
         },
@@ -11625,6 +11630,7 @@
         "coding-runtime.native-formatter.bound",
         "coding-runtime.native-narrowing.refused",
         "coding-runtime.native-policy.decided",
+        "coding-runtime.native-policy.floor-denied",
         "coding-runtime.native-step.changed",
         "coding-runtime.provider-policy.bound"
       ],
@@ -11982,6 +11988,42 @@
             "causeChain": false
           },
           "proofIds": ["coding-runtime.native-policy.decided.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "coding-runtime.native-policy.floor-denied",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "callIdSha256",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "occurrenceCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "tool",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-runtime.native-policy.floor-denied.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         },

@@ -2617,6 +2617,30 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
     expect(signal).not.toHaveProperty("exitStatusCheck");
   });
 
+  // #4271: OpenCode's static permission floor refused the call before Keiko's policy hook saw it.
+  // Only the closed `permission.rejected` token marks that; the upstream message is never read.
+  it.each([
+    [
+      "the closed permission.rejected token",
+      { type: "permission.rejected", message: "PRIVATE_X" },
+      "denied",
+    ],
+    ["another error type", { type: "tool.failed", message: "PRIVATE_X" }, "failed"],
+    ["a near-miss token", { type: "permission.rejected.other", message: "PRIVATE_X" }, "failed"],
+    ["no error type", { message: "PRIVATE_X" }, "failed"],
+    ["a bare string error", "permission.rejected", "failed"],
+  ])("projects a command whose part errored with %s as %s", (_name, error, state) => {
+    const signals = toolSignals(
+      shellHistory({
+        status: "error",
+        input: { command: "cd .. && ls", workdir: "/private/workspace" },
+        error,
+      }),
+    );
+    expect(signals).toEqual([expect.objectContaining({ callId: "call_shell", state })]);
+    expect(JSON.stringify(signals)).not.toMatch(/PRIVATE_|external_directory|workspace/u);
+  });
+
   it("projects a command that exited zero as succeeded with its exit status", () => {
     expect(toolSignals(shellHistory(completed(0)))).toEqual([
       expect.objectContaining({ state: "succeeded", exitCode: 0 }),

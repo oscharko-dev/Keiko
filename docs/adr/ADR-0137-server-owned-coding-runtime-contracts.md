@@ -1229,7 +1229,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   mode-independent `external_directory` escape (admitting the run's own plan directory), keeps
   `update` and `share` off (a session is never published, and OpenCode has no share operation;
   the equivalent is the human's local export and import of a task's Coding History, D4), keeps the single `keiko-runtime` provider behind the Model
-  Gateway, and enables native snapshots. The producer appends configured rules after each built-in agent's own
+  Gateway, and enables native snapshots. The producer rejects such an escape statically, before Keiko's policy hook runs; the part's closed `permission.rejected` error token (never its message) projects as a denied card, live and in Coding History, and `coding-runtime.native-policy.floor-denied` records it once per call (#4271). The producer appends configured rules after each built-in agent's own
   rules and the last match wins, so any configured rule naming an ordinary action would replace an
   agent's own denial: the earlier blanket `allow` (and a blanket `ask`) let the Plan agent write
   project files in Full access (#3897 review). Without it every built-in agent keeps the producer's

@@ -34,6 +34,7 @@ import {
 } from "./opencodeToolSchemas.js";
 import {
   isAdmissibleOpenCodeToolName,
+  isOpenCodePermissionRejection,
   isOpenCodeToolExecutionFailure,
 } from "./opencodeNativeTools.js";
 import { openCodeNativeVerificationKind } from "./opencodeNativePolicy.js";
@@ -682,12 +683,12 @@ function shellExitCode(state: Readonly<Record<string, unknown>>): number | undef
 function displayToolState(
   name: string,
   state: Readonly<Record<string, unknown>>,
-): "pending" | "running" | "succeeded" | "failed" {
+): "pending" | "running" | "succeeded" | "failed" | "denied" {
   const status = state.status;
   if (status === "streaming") return "pending";
   if (status === "completed")
     return isOpenCodeToolExecutionFailure(name, state) ? "failed" : "succeeded";
-  if (status === "error") return "failed";
+  if (status === "error") return isOpenCodePermissionRejection(state) ? "denied" : "failed";
   if (status === "running") return "running";
   throw new Error("opencode-v2-tool-state-invalid");
 }
