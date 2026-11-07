@@ -1,5 +1,10 @@
-/** Closed read identities shared by their native owners and the governed provider catalog. */
-export const JIRA_READ_TOOL_FAMILIES = {
+import { deepFreeze } from "./deep-freeze.js";
+
+/** Closed immutable read identities shared by native owners and the governed provider catalog. */
+export const JIRA_READ_TOOL_FAMILIES = deepFreeze({
+  runtimeSettings: [
+    "jira.jmx-metrics-exposed", "jira.search-max-aggregation-buckets", "jira.search-max-result-window",
+  ],
   configuration: [
     "jira.screens", "jira.workflows", "jira.custom-fields", "jira.custom-field-options",
     "jira.terminology", "jira.terminology-entry", "jira.read-only-mode",
@@ -84,4 +89,4 @@ export const JIRA_READ_TOOL_FAMILIES = {
   issueWorkflow: ["jira.transitions", "jira.assignable-users"],
   // Staging changes only the existing server-held draft; it performs no Jira mutation.
   localCompositions: ["jira.report", "jira.draft-stage"],
-} as const;
+} as const);

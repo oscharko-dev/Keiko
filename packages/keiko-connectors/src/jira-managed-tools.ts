@@ -15,6 +15,7 @@ import { executeJiraProjectAssociationRead, isJiraProjectAssociationRead } from 
 import { executeJiraCoreMetadataRead, isJiraCoreMetadataRead } from "./jira-managed-core-metadata.js";
 import { executeJiraInstanceRead, isJiraInstanceRead } from "./jira-managed-instance-reads.js";
 import { executeJiraConfigurationRead, isJiraConfigurationRead } from "./jira-managed-configuration-reads.js";
+import { executeJiraRuntimeSettingsRead, isJiraRuntimeSettingsRead } from "./jira-managed-runtime-settings.js";
 import { executeJiraRoleRead, isJiraRoleRead } from "./jira-managed-role-reads.js";
 import { executeJiraPrioritySchemeRead, isJiraPrioritySchemeRead } from "./jira-managed-priority-schemes.js";
 import { executeJiraReleaseRead, isJiraReleaseRead } from "./jira-managed-release-reads.js";
@@ -346,6 +347,7 @@ async function read<Context extends ManagedMcpInvocationContext>(
 }
 
 type NativeDetailRead =
+  | Parameters<typeof executeJiraRuntimeSettingsRead>[0]
   | Parameters<typeof executeJiraConfigurationRead>[0]
   | Parameters<typeof executeJiraIssueDetailRead>[0]
   | "jira.get-comment"
@@ -371,6 +373,7 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraJqlMetadataRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return [
+    isJiraRuntimeSettingsRead,
     isJiraConfigurationRead,
     isJiraIssueDetailRead,
     isJiraCommentRead,
@@ -403,6 +406,7 @@ function administrationRead(
 ): Promise<ManagedMcpToolResult> | undefined {
   if (isJiraIssueTypeSchemeRead(name)) return executeJiraIssueTypeSchemeRead(name, args, request);
   if (isJiraConfigurationRead(name)) return executeJiraConfigurationRead(name, args, request);
+  if (isJiraRuntimeSettingsRead(name)) return executeJiraRuntimeSettingsRead(name, args, request);
   if (isJiraWorkflowSchemeRead(name)) return executeJiraWorkflowSchemeRead(name, args, request);
   if (isJiraScreenRead(name)) return executeJiraScreenRead(name, args, request);
   if (isJiraAccessSchemeRead(name)) return executeJiraAccessSchemeRead(name, args, request);

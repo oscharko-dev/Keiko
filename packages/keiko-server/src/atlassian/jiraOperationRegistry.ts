@@ -192,6 +192,9 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.priority-scheme": "/priorityschemes/{schemeId}",
   }),
   ...reads("observed-instance-metadata", {
+    "jira.jmx-metrics-exposed": "/monitoring/jmx/areMetricsExposed",
+    "jira.search-max-aggregation-buckets": "/searchLimits/maxAggregationBuckets",
+    "jira.search-max-result-window": "/searchLimits/maxResultWindow",
     "jira.read-only-mode": "/readonly-mode",
     "jira.server-info": "/serverInfo",
     "jira.instance-configuration": "/configuration",

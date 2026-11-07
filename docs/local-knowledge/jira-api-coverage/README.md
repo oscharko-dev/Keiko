@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **176 native identities: 147 reads and 29 writes**. Each is mapped to
+The current registry supplies **179 native identities: 150 reads and 29 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **263 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **260 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -136,7 +136,7 @@ the C6 comment-update/link/worklog read increment; bounded C8 attachment/archive
 worklog create/update with connected-user watching/voting; fourteen C9 workflow-/issue-type-scheme
 and screen reads; three reviewed comment/attachment/worklog deletions; and eight C10 user, group and
 application-role reads; ten permission/security/notification configuration reads; and five additional
-project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; two JQL metadata/suggestion reads; nine additional Agile context reads; and seven configuration metadata reads. The three existing
+project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; two JQL metadata/suggestion reads; nine additional Agile context reads; seven configuration metadata reads; and three scalar runtime-setting observations. The three existing
 report/draft composites remain compositions, not extra native API identities. Remaining filter
 creation, ranking, other estimate-adjustment modes and destructive operations, administration and
 other inventory gaps stay open. A registered declaration is not evidence that
@@ -247,6 +247,12 @@ and [native REST reference](https://docs.atlassian.com/software/jira/docs/api/RE
 and wrappers where the pinned screen description mistakenly describes a write. Workflow/screen401
 can mean missing administrative permission and retains that ambiguity. Source interpretation does not
 assert deployment qualification.
+
+Three scalar reads observe JMX exposure and native search aggregation/result-window limits. The
+existing bounded HTTP owner adds an explicit scalar expectation without changing credential routing,
+request lifetimes, retry policy or byte caps. Exposure requires a boolean; limits require exact safe
+integers and retain their signed values. No missing values become false/zero, no numeric sentinel is
+interpreted as unlimited authority, and these observations never change Keiko budgets or Jira settings.
 
 `currentRegistry` pins the existing server registry source file's SHA-256 and native declaration
 count. The reconciliation helper parses that file's literal `NATIVE` declarations and verified closed

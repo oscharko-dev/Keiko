@@ -40,6 +40,13 @@ export function parseJsonArray(bodyText: string): readonly unknown[] | undefined
   return asArray(parseAtlassianJsonValue(bodyText));
 }
 
+/** Explicit primitive mode; false, zero, empty text and null are observations, not parse failures. */
+export function parseJsonScalar(bodyText: string): string | number | boolean | null | undefined {
+  const value = parseAtlassianJsonValue(bodyText);
+  return value === null || typeof value === "string" || typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value)) ? value : undefined;
+}
+
 // ─── Single-host, API-root-scoped URL construction (ADR-0128 D3) ──────────────
 export interface AtlassianApiEndpoints {
   readonly base: URL;

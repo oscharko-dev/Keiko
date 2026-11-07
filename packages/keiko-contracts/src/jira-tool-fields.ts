@@ -1,4 +1,5 @@
 import { JIRA_READ_TOOL_FAMILIES as READS } from "./jira-read-tools.js";
+import { deepFreeze } from "./deep-freeze.js";
 
 export const JIRA_FIELD_READ_MAX = 20;
 export const JIRA_FIELD_ID_PATTERN = String.raw`^(?:[a-zA-Z][a-zA-Z0-9]*|customfield_\d{1,16})$`;
@@ -23,7 +24,8 @@ export const JIRA_FIELD_KINDS = [
   "unsupported",
 ] as const;
 export type JiraFieldKind = (typeof JIRA_FIELD_KINDS)[number];
-export const JIRA_MANAGED_READ_TOOLS = [
+export const JIRA_MANAGED_READ_TOOLS = deepFreeze([
+  ...READS.runtimeSettings,
   ...READS.configuration,
   ...READS.jqlMetadata,
   ...READS.scopedDirectory,
@@ -59,7 +61,7 @@ export const JIRA_MANAGED_READ_TOOLS = [
   ...READS.avatars,
   ...READS.issueWorkflow,
   ...READS.localCompositions,
-] as const;
+] as const);
 export type JiraManagedReadToolName = (typeof JIRA_MANAGED_READ_TOOLS)[number];
 export type JiraFieldOperation = "set" | "add" | "remove";
 export interface JiraFieldReference {

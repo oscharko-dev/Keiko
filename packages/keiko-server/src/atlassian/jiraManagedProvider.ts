@@ -1,4 +1,8 @@
 import {
+  jiraRuntimeSettingsDeclarationForTool,
+  type JIRA_RUNTIME_SETTINGS_READ_DEFINITIONS,
+} from "./jiraRuntimeSettingsDescriptors.js";
+import {
   jiraConfigurationDeclarationForTool,
   type JIRA_CONFIGURATION_READ_DEFINITIONS,
 } from "./jiraConfigurationDescriptors.js";
@@ -201,6 +205,7 @@ type CoreReadToolName = Exclude<
       JiraManagedReadToolName,
       | keyof typeof JIRA_AGILE_READ_DEFINITIONS
       | keyof typeof JIRA_CONFIGURATION_READ_DEFINITIONS
+      | keyof typeof JIRA_RUNTIME_SETTINGS_READ_DEFINITIONS
       | keyof typeof JIRA_AGILE_CONTEXT_READ_DEFINITIONS
       | keyof typeof JIRA_FILTER_READ_DEFINITIONS
       | keyof typeof JIRA_PROJECT_STRUCTURE_READ_DEFINITIONS
@@ -387,6 +392,7 @@ function isCoreReadTool(name: JiraManagedReadToolName): name is CoreReadToolName
 }
 function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   for (const producer of [
+    jiraRuntimeSettingsDeclarationForTool,
     jiraConfigurationDeclarationForTool,
     jiraAgileDeclarationForTool,
     jiraAgileContextDeclarationForTool,

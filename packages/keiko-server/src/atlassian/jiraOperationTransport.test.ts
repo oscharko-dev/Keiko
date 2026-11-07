@@ -32,6 +32,9 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.jmx-metrics-exposed", args: {} },
+  { tool: "jira.search-max-aggregation-buckets", args: {} },
+  { tool: "jira.search-max-result-window", args: {} },
   { tool: "jira.screens", args: { startAt: 0, maxResults: 1, search: "Details & QA" }, query: { startAt: "0", maxResults: "1", search: "Details & QA" } },
   { tool: "jira.workflows", args: { workflowName: "Review & QA" }, query: { workflowName: "Review & QA" } },
   { tool: "jira.custom-fields", args: { startAt: 0, maxResults: 1, search: "Delivery" }, query: { startAt: "0", maxResults: "1", search: "Delivery" } },
@@ -912,6 +915,9 @@ function roleRead(path: string): AtlassianHttpBodyResult | undefined {
 }
 function instanceRead(path: string): AtlassianHttpBodyResult | undefined {
   const bodies: Readonly<Record<string, unknown>> = {
+    "monitoring/jmx/areMetricsExposed": false,
+    "searchLimits/maxAggregationBuckets": 0,
+    "searchLimits/maxResultWindow": -1,
     serverInfo: {
       version: "11.3.13", versionNumbers: [11, 3, 13], deploymentType: "Data Center",
       serverTitle: "Synthetic Jira", buildNumber: 11030013, databaseBuildNumber: "9007199254740993",
@@ -1142,7 +1148,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(149);
+    expect(native).toHaveLength(152);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1182,6 +1188,19 @@ describe("native Jira registry and real connector transport agreement", () => {
     expect(observed.result.data).toMatchObject({ page: 2, nextPage: 3, total: 3, optionsScope: "native-context-options" });
     expect(observed.result.data).not.toHaveProperty("startAt");
     expect(observed.requests).toHaveLength(1);
+  });
+  it.each([
+    ["jira.jmx-metrics-exposed", "monitoring/jmx/areMetricsExposed", false, { exposed: false }],
+    ["jira.search-max-aggregation-buckets", "searchLimits/maxAggregationBuckets", 0, { limit: 0 }],
+    ["jira.search-max-result-window", "searchLimits/maxResultWindow", -1, { limit: -1 }],
+  ] as const)("preserves %s's scalar native body without a wrapper or sentinel interpretation", async (tool, path, scalar, projection) => {
+    const body = instanceRead(path);
+    expect(body).toMatchObject({ kind: "response", status: 200, bodyText: JSON.stringify(scalar) });
+    const observed = await observe({ tool, args: {} });
+    expect(observed.result.data).toMatchObject(projection);
+    expect(observed.requests.map(({ method, url }) => [method, url])).toEqual([
+      ["GET", `https://jira.example.invalid/context/rest/api/2/${path}`],
+    ]);
   });
   it.each(["jira.create", "jira.edit"] as const)(
     "keeps %s's approved link continuation on POST issueLink",

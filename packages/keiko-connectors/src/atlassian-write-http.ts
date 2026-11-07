@@ -32,7 +32,7 @@ import {
   type AtlassianHttpUpload,
 } from "./atlassian-http-port.js";
 import { ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS, retryDelayMs } from "./atlassian-sync-lane.js";
-import { asRecord, parseJsonArray, parseJsonRecord } from "./atlassian-sync-classify.js";
+import { asRecord, parseJsonArray, parseJsonRecord, parseJsonScalar } from "./atlassian-sync-classify.js";
 
 // ADR-0128 D3: interactive write/read actions (issue and page CRUD, transitions, comments).
 export const ATLASSIAN_WRITE_ACTION_TIMEOUT_MS = 30_000;
@@ -58,8 +58,8 @@ export interface AtlassianWriteHttpRequest {
   readonly bodyJson?: string | undefined;
   // One governed multipart upload (POST only, #4176); never combined with `bodyJson`.
   readonly upload?: AtlassianHttpUpload | undefined;
-  // Object/collection response shape, or status only. Both JSON shapes share the same byte cap.
-  readonly expect: "json" | "json-array" | "none";
+  // Closed JSON response shapes, or status only; every JSON mode shares the same byte cap.
+  readonly expect: "json" | "json-array" | "json-scalar" | "none";
 }
 
 export interface AtlassianWriteHttpDeps {
@@ -79,6 +79,8 @@ export type AtlassianWriteHttpOutcome =
       readonly status: number;
       readonly body: Record<string, unknown> | undefined;
       readonly items?: readonly unknown[];
+      /** Present only for the explicit json-scalar response mode; null, false and zero are values. */
+      readonly scalar?: string | number | boolean | null;
     }
   | {
       readonly ok: false;
@@ -166,6 +168,12 @@ function classifyResponse(
     return items === undefined
       ? { ok: false, reason: "malformed-payload", httpStatus: result.status }
       : { ok: true, status: result.status, body: undefined, items };
+  }
+  if (expect === "json-scalar") {
+    const scalar = parseJsonScalar(result.bodyText);
+    return scalar === undefined
+      ? { ok: false, reason: "malformed-payload", httpStatus: result.status }
+      : { ok: true, status: result.status, body: undefined, scalar };
   }
   const body = parseJsonRecord(result.bodyText);
   if (body === undefined) {

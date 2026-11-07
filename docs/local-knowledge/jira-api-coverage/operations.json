@@ -1360,6 +1360,27 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
       "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
     },
+    "jira.jmx-metrics-exposed": {
+      "identity": "GET /rest/api/2/monitoring/jmx/areMetricsExposed",
+      "effect": "read",
+      "permissionPolicy": "observed-instance-metadata",
+      "kind": "constrained-tool",
+      "constraints": "No-argument native JMX exposure observation. Existing bounded HTTP owner explicitly decodes scalar JSON; only an actual boolean is accepted, never a numeric/textual truthiness conversion. No monitoring activation, scheduling, setting change or inferred metric availability.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-runtime-settings.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/atlassian-write-http.ts",
+        "packages/keiko-connectors/src/atlassian-sync-classify.ts",
+        "packages/keiko-server/src/atlassian/jiraRuntimeSettingsDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-runtime-settings.test.ts",
+        "packages/keiko-connectors/src/atlassian-write-http.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRuntimeSettingsDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.jql-autocomplete": {
       "identity": "GET /rest/api/2/jql/autocompletedata",
       "effect": "read",
@@ -2297,6 +2318,48 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
       "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
     },
+    "jira.search-max-aggregation-buckets": {
+      "identity": "GET /rest/api/2/searchLimits/maxAggregationBuckets",
+      "effect": "read",
+      "permissionPolicy": "observed-instance-metadata",
+      "kind": "constrained-tool",
+      "constraints": "No-argument native aggregation-bucket limit observation. Explicit scalar JSON codec and exact safe integer projection preserve signed values. Unsafe integers fail as bounds violations; null/text/fractional values are refused. No sentinel interpretation, unlimited-access inference or change to Keiko search budgets.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-runtime-settings.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/atlassian-write-http.ts",
+        "packages/keiko-connectors/src/atlassian-sync-classify.ts",
+        "packages/keiko-server/src/atlassian/jiraRuntimeSettingsDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-runtime-settings.test.ts",
+        "packages/keiko-connectors/src/atlassian-write-http.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRuntimeSettingsDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.search-max-result-window": {
+      "identity": "GET /rest/api/2/searchLimits/maxResultWindow",
+      "effect": "read",
+      "permissionPolicy": "observed-instance-metadata",
+      "kind": "constrained-tool",
+      "constraints": "No-argument native result-window limit observation. Explicit scalar JSON codec and exact safe integer projection preserve signed values. Unsafe integers fail as bounds violations; null/text/fractional values are refused. No sentinel interpretation, unlimited-access inference or change to Keiko search budgets.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-runtime-settings.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/atlassian-write-http.ts",
+        "packages/keiko-connectors/src/atlassian-sync-classify.ts",
+        "packages/keiko-server/src/atlassian/jiraRuntimeSettingsDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-runtime-settings.test.ts",
+        "packages/keiko-connectors/src/atlassian-write-http.test.ts",
+        "packages/keiko-server/src/atlassian/jiraRuntimeSettingsDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.security-level": {
       "identity": "GET /rest/api/2/securitylevel/{id}",
       "effect": "read",
@@ -3097,8 +3160,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "ff36f91a4900eecc4e9256bff752870cfc266898221b769a4f87204569ea423f",
-    "nativeOperationCount": 176
+    "sha256": "a978049b3a8258f999a3b174823b30417c44b0f661e8102e11b817bee40b4ff9",
+    "nativeOperationCount": 179
   },
   "operations": [
     {
@@ -9944,10 +10007,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.jmx-metrics-exposed"]
     },
     {
       "identity": "GET /rest/api/2/monitoring/jmx/getAvailableMetrics",
@@ -13688,10 +13751,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.search-max-aggregation-buckets"]
     },
     {
       "identity": "GET /rest/api/2/searchLimits/maxResultWindow",
@@ -13712,10 +13775,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.search-max-result-window"]
     },
     {
       "identity": "GET /rest/api/2/securitylevel/{id}",
