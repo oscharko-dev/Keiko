@@ -131,6 +131,18 @@ async function confirm(
 export function isJiraEntityPropertyMutation(name: string): name is PropertyWrite {
   return Object.hasOwn(DEFINITIONS, name);
 }
+async function write(
+  bound: BoundJiraProperty,
+  selected: Input,
+  known: PropertyReceipt,
+): Promise<Failure | undefined> {
+  const body = selected.desired.present ? selected.desired.value : undefined;
+  const response = await bound.request(jiraPropertyResourcePath(bound, selected.propertyKey),
+    selected.desired.present ? "PUT" : "DELETE", body, "none");
+  if (!response.ok) return { ...dispatchFailure(response), receipt: known };
+  return response.status < 200 || response.status >= 300
+    ? { ...MALFORMED, receipt: known } : undefined;
+}
 /** One fixed native effect at most, inside existing authority, exact approval and durable journal. */
 export async function executeJiraEntityPropertyMutation(
   operation: PropertyWrite, args: CatalogJsonObject, ports: JiraEntityPropertyPorts, check = false,
@@ -144,10 +156,6 @@ export async function executeJiraEntityPropertyMutation(
   if (refusal !== undefined) return refusal;
   if (check) return { ok: true, receipt: {} };
   const known = receipt(bound, selected);
-  const body = selected.desired.present ? selected.desired.value : undefined;
-  const response = await bound.request(jiraPropertyResourcePath(bound, selected.propertyKey),
-    selected.desired.present ? "PUT" : "DELETE", body, "none");
-  if (!response.ok) return { ...dispatchFailure(response), receipt: known };
-  if (response.status < 200 || response.status >= 300) return { ...MALFORMED, receipt: known };
-  return confirm(ports, bound, selected, known);
+  const failure = await write(bound, selected, known);
+  return failure ?? confirm(ports, bound, selected, known);
 }

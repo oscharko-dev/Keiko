@@ -36,6 +36,7 @@ const MCP_FAILURES: Readonly<
   Record<ManagedMcpFailure, readonly [Exclude<ToolResultStatus, "completed">, ToolResultReason]>
 > = {
   "not-admitted": ["failed", "handler-unavailable"],
+  "connector-scope-missing": ["failed", "handler-unavailable"],
   closed: ["failed", "handler-unavailable"],
   "invalid-arguments": ["invalid", "invalid-arguments"],
   "descriptor-drift": ["failed", "handler-mismatch"],

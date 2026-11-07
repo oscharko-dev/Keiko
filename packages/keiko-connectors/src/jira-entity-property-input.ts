@@ -49,7 +49,7 @@ function ownFields(value: unknown): Record<string, unknown> | undefined {
 }
 function exact(raw: Record<string, unknown>): boolean {
   const expected = typeof raw.kind === "string" ? NODE_FIELDS.get(raw.kind) : undefined;
-  return expected !== undefined && Object.keys(raw).length === expected.length &&
+  return Object.keys(raw).length === expected?.length &&
     expected.every((key) => Object.hasOwn(raw, key));
 }
 function scalar(raw: Record<string, unknown>, path: string): Node | undefined {
@@ -109,7 +109,7 @@ function directObjectKey(path: string, parent: string): string | undefined {
 function arrayValue(node: Extract<Node, { readonly kind: "array" | "object" }>, state: Reader, depth: number): CatalogJsonValue | undefined {
   const output: CatalogJsonValue[] = [];
   for (let index = 0; index < node.childCount; index++) {
-    const value = readValue(state, `${node.path}/${index}`, depth + 1);
+    const value = readValue(state, `${node.path}/${String(index)}`, depth + 1);
     if (value === undefined) return undefined;
     output.push(value);
   }
@@ -119,9 +119,15 @@ function objectValue(node: Extract<Node, { readonly kind: "array" | "object" }>,
   const output: Record<string, CatalogJsonValue> = {};
   for (let index = 0; index < node.childCount; index++) {
     const next = state.nodes[state.cursor];
-    if (next === undefined) return refuse(state);
+    if (next === undefined) {
+      refuse(state);
+      return undefined;
+    }
     const key = directObjectKey(next.path, node.path);
-    if (key === undefined || Object.hasOwn(output, key)) return refuse(state);
+    if (key === undefined || Object.hasOwn(output, key)) {
+      refuse(state);
+      return undefined;
+    }
     const value = readValue(state, next.path, depth + 1);
     if (value === undefined) return undefined;
     // Define an own data field even for __proto__; never invoke Object.prototype's setter.
@@ -130,9 +136,15 @@ function objectValue(node: Extract<Node, { readonly kind: "array" | "object" }>,
   return output;
 }
 function readValue(state: Reader, expectedPath: string, depth: number): CatalogJsonValue | undefined {
-  if (depth > TOOL_CATALOG_LIMITS.maxSchemaDepth) return refuse(state, "bounds-exceeded");
+  if (depth > TOOL_CATALOG_LIMITS.maxSchemaDepth) {
+    refuse(state, "bounds-exceeded");
+    return undefined;
+  }
   const current = state.nodes[state.cursor];
-  if (current === undefined || current.path !== expectedPath) return refuse(state);
+  if (current?.path !== expectedPath) {
+    refuse(state);
+    return undefined;
+  }
   state.cursor++;
   switch (current.kind) {
     case "null": return null;

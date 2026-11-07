@@ -1,7 +1,6 @@
 import { jiraPropertyUserText, jiraPropertyPathKey, jiraTemplateViolationGuidance } from "@oscharko-dev/keiko-connectors";
 import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
-  JIRA_ENTITY_PROPERTY_MUTATIONS,
   JIRA_TEMPLATE_RULE_IDS,
   JIRA_TEMPLATE_VIOLATIONS_MAX,
   isSafeAtlassianIdentifier,
@@ -33,22 +32,24 @@ const RECEIPT_KEYS: ReadonlySet<string> = new Set([
   "transitionId",
   "attachmentId",
 ]);
-const PROPERTY_CONTEXTS = [
-  ["board", ["boardId"]],
-  ["sprint", ["sprintId"]],
-  ["comment", ["issueId", "issueKey", "commentId"]],
-  ["dashboard-item", ["dashboardId", "selectedItemId"]],
-  ["issue", ["issueId", "issueKey"]],
-  ["issue-type", ["issueTypeId"]],
-  ["project", ["projectId", "projectKey"]],
-  ["user", ["userKey", "username"]],
-] as const;
-const PROPERTY_RECEIPTS = Object.fromEntries(JIRA_ENTITY_PROPERTY_MUTATIONS.map((operation) => {
-  const context = PROPERTY_CONTEXTS.find(([kind]) =>
-    operation === `jira.set-${kind}-property` || operation === `jira.delete-${kind}-property`);
-  if (context === undefined) throw new TypeError("Unsupported property receipt context");
-  return [operation, ["propertyKey", "propertyPresent", ...context[1]]];
-})) as Readonly<Record<JiraEntityPropertyMutation, readonly (keyof JiraMutationReceipt)[]>>;
+const PROPERTY_RECEIPTS = {
+  "jira.set-board-property": ["propertyKey", "propertyPresent", "boardId"],
+  "jira.delete-board-property": ["propertyKey", "propertyPresent", "boardId"],
+  "jira.set-sprint-property": ["propertyKey", "propertyPresent", "sprintId"],
+  "jira.delete-sprint-property": ["propertyKey", "propertyPresent", "sprintId"],
+  "jira.set-comment-property": ["propertyKey", "propertyPresent", "issueId", "issueKey", "commentId"],
+  "jira.delete-comment-property": ["propertyKey", "propertyPresent", "issueId", "issueKey", "commentId"],
+  "jira.set-dashboard-item-property": ["propertyKey", "propertyPresent", "dashboardId", "selectedItemId"],
+  "jira.delete-dashboard-item-property": ["propertyKey", "propertyPresent", "dashboardId", "selectedItemId"],
+  "jira.set-issue-property": ["propertyKey", "propertyPresent", "issueId", "issueKey"],
+  "jira.delete-issue-property": ["propertyKey", "propertyPresent", "issueId", "issueKey"],
+  "jira.set-issue-type-property": ["propertyKey", "propertyPresent", "issueTypeId"],
+  "jira.delete-issue-type-property": ["propertyKey", "propertyPresent", "issueTypeId"],
+  "jira.set-project-property": ["propertyKey", "propertyPresent", "projectId", "projectKey"],
+  "jira.delete-project-property": ["propertyKey", "propertyPresent", "projectId", "projectKey"],
+  "jira.set-user-property": ["propertyKey", "propertyPresent", "userKey", "username"],
+  "jira.delete-user-property": ["propertyKey", "propertyPresent", "userKey", "username"],
+} as const satisfies Readonly<Record<JiraEntityPropertyMutation, readonly (keyof JiraMutationReceipt)[]>>;
 const MONITORING_RECEIPTS = {
   "jira.set-app-monitoring": ["monitoringEnabled"],
   "jira.set-ipd-monitoring": ["monitoringEnabled"],

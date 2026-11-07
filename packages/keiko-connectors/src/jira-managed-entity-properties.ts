@@ -74,7 +74,10 @@ export function selectJiraPropertyRead(name: PropertyRead, args: CatalogJsonObje
     return undefined;
   return { entity, ...page, ...(value && typeof args.propertyKey === "string" ? { propertyKey: args.propertyKey } : {}) };
 }
-type PropertyRefusal = { readonly ok: false; readonly reason: "malformed-payload" | "bounds-exceeded" | "conflict" };
+interface PropertyRefusal {
+  readonly ok: false;
+  readonly reason: "malformed-payload" | "bounds-exceeded" | "conflict";
+}
 export function projectJiraPropertyKeys(body: Record<string, unknown>): PropertyRefusal | {
   readonly ok: true; readonly items: readonly CatalogJsonObject[];
 } {
