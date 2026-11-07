@@ -556,6 +556,39 @@ describe("local-knowledge preview session handlers", () => {
     expect(auditKinds(fixture.capsuleId)).toEqual(["citation-preview-authorized"]);
   });
 
+  it("carries the cited passage, as the person reads it, on an authorized open", async () => {
+    const fixture = await seedPreviewFixture();
+    const selection = {
+      chatId: fixture.chatId,
+      assistantMessageId: fixture.assistantMessageId,
+      marker: "[1]",
+      stableId: fixture.previewCitation.stableId,
+    };
+
+    const plain = await handleOpenPdfCitationPreviewSession(
+      ctx("/api/local-knowledge/citation-preview/open", selection),
+      deps(),
+    );
+    const passage = (plain.body as { display: { passage?: unknown } }).display.passage;
+    expect(typeof passage).toBe("string");
+    expect(String(passage).trim().length).toBeGreaterThan(0);
+
+    // The passage goes through the person-facing redactor before it leaves the server.
+    const redacted = await handleOpenPdfCitationPreviewSession(
+      ctx("/api/local-knowledge/citation-preview/open", selection),
+      { ...deps(), redactor: (value: unknown) => (typeof value === "string" ? "[shown]" : value) },
+    );
+    expect((redacted.body as { display: { passage?: unknown } }).display.passage).toBe("[shown]");
+
+    // A redactor that yields no text leaves the open without a passage rather than failing it.
+    const withheld = await handleOpenPdfCitationPreviewSession(
+      ctx("/api/local-knowledge/citation-preview/open", selection),
+      { ...deps(), redactor: () => undefined },
+    );
+    expect(withheld.body).toMatchObject({ outcome: "authorized" });
+    expect((withheld.body as { display: object }).display).not.toHaveProperty("passage");
+  });
+
   it("serves the cited historical blob after the current document hash drifts", async () => {
     const fixture = await seedPreviewFixture();
     writePreviewFixtureBlob(fixture);

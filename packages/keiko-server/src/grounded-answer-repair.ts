@@ -40,7 +40,7 @@ export interface GroundedRepairContext {
   readonly answer: GroundedAnswerResult;
   readonly deps: Pick<
     OrchestratorDeps,
-    "signal" | "reliableCitationBehaviour" | "observeCitationBehaviour"
+    "signal" | "reliableCitationBehaviour" | "observeCitationBehaviour" | "toolTurn"
   > & {
     readonly answerer?:
       | Pick<
@@ -66,15 +66,19 @@ export interface GroundedRepairResult {
 function repairDisposition(ctx: GroundedRepairContext): CitationRepairDisposition | undefined {
   if (!hasSubstantiveEvidenceAnswer(ctx)) return "not-needed";
   if (hasParsedRepairCitations(ctx)) return "not-needed";
-  if (
-    !fitsCitationRepairTextLimit(ctx.answer.content) ||
-    !hasCitationRepairProse(groundedAnswerSourceText(ctx.answer.content))
-  )
-    return "skipped-capability";
-  if (repairInvoker(ctx) === undefined) return "skipped-capability";
+  if (ctx.deps.toolTurn?.dispatchedChange === true) return "skipped-tool-action";
+  if (!canRepairCitations(ctx)) return "skipped-capability";
   if (ctx.deps.answerer?.remainingSynthesisCalls?.() === 0) return "skipped-budget";
   if (repairBudgetExhausted(ctx)) return "skipped-budget";
   return undefined;
+}
+
+function canRepairCitations(ctx: GroundedRepairContext): boolean {
+  return (
+    fitsCitationRepairTextLimit(ctx.answer.content) &&
+    hasCitationRepairProse(groundedAnswerSourceText(ctx.answer.content)) &&
+    repairInvoker(ctx) !== undefined
+  );
 }
 
 function hasSubstantiveEvidenceAnswer(ctx: GroundedRepairContext): boolean {

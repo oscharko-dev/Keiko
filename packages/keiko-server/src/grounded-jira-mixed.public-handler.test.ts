@@ -1382,23 +1382,69 @@ function assertFailedCitationRepairActivity(deps: UiHandlerDeps): void {
   expect(analyzeLogText(raw).evidence.classification).toBe("supported");
 }
 
+async function prepareCitationRepairSource(
+  f: ReturnType<typeof runtime>,
+  source: "folder" | "multi-source" | "hybrid",
+): Promise<void> {
+  if (source === "hybrid")
+    await connectDataPod(f, "Feature returns true. Feature is a function.", true);
+  if (source !== "multi-source") return;
+  writeFileSync(join(f.root, "src", "Second.ts"), "export const second = true;\n");
+  f.deps.store.updateChat(f.chatId, {
+    connectedScopes: ["Feature.ts", "Second.ts"].map((file) => ({
+      kind: "files" as const,
+      root: f.root,
+      relativePaths: [`src/${file}`],
+      connectedAtMs: 1,
+    })),
+  });
+}
+function citationRepairDisposition(deps: UiHandlerDeps): unknown {
+  const raw = readPersistedActivityLog(dirname(deps.uiDbPath ?? ""));
+  const line = persistedActivityLogLines(raw, "search.connected-context.answer-details").at(-1);
+  return expectRegisteredActivityLogLine("search.connected-context.answer-details", line ?? "")
+    .citationRepairDisposition;
+}
+
+// The pin of a citation repair that offers no tool and refuses a write in its response, kept on
+// the turn shape that still repairs: a tool round that sent no change (#4173).
 it.each(["folder", "multi-source", "hybrid"] as const)(
-  "keeps %s citation repair tool-free after a committed write and refuses a changed write response",
+  "keeps %s citation repair tool-free after a read round and refuses a write in its response",
   async (source) => {
     const f = runtime(true);
-    if (source === "hybrid")
-      await connectDataPod(f, "Feature returns true. Feature is a function.", true);
-    if (source === "multi-source") {
-      writeFileSync(join(f.root, "src", "Second.ts"), "export const second = true;\n");
-      f.deps.store.updateChat(f.chatId, {
-        connectedScopes: ["Feature.ts", "Second.ts"].map((file) => ({
-          kind: "files" as const,
-          root: f.root,
-          relativePaths: [`src/${file}`],
-          connectedAtMs: 1,
-        })),
-      });
-    }
+    await prepareCitationRepairSource(f, source);
+    const requests = provider(["tool", "uncited", "repair-write", "answer"]);
+    const result = await handleGroundedAsk(
+      context({
+        chatId: f.chatId,
+        content: "Explain Feature and list the Jira projects.",
+        modelId: MODEL,
+      }),
+      f.deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect.soft(requests[2]?.includes('"tools":')).toBe(false);
+    expect(requests).toHaveLength(3);
+    expect(requests[0]).toContain('"tools":');
+    expect(requests[1]).toContain('"tools":');
+    expect(requests[2]).not.toContain('"tools":');
+    expect(requests[2]).not.toContain('"role":"tool"');
+    expect(outputCap(requests[2] ?? "{}")).toBeLessThan(outputCap(requests[1] ?? "{}"));
+    expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual([]);
+    expect((result.body as GroundedAnswer).content).toContain("Feature returns true.");
+    const exchanges = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges ?? [];
+    expect(exchanges.filter((exchange) => exchange.call.name === "jira_comment")).toHaveLength(0);
+    assertFailedCitationRepairActivity(f.deps);
+  },
+);
+
+// Stronger than a tool-free repair: after a committed write no repair call exists at all, so a
+// changed write can never be offered again and the answer reporting the change stays as written.
+it.each(["folder", "multi-source", "hybrid"] as const)(
+  "never repairs %s citations after a committed write, so the write reaches Jira once",
+  async (source) => {
+    const f = runtime(true);
+    await prepareCitationRepairSource(f, source);
     const requests = provider(["write", "uncited", "repair-write", "answer"]);
     const result = await handleGroundedAsk(
       context({
@@ -1409,19 +1455,13 @@ it.each(["folder", "multi-source", "hybrid"] as const)(
       f.deps,
     );
     expect(result.status, JSON.stringify(result.body)).toBe(200);
-    expect.soft(requests[2]?.includes('"tools":')).toBe(false);
-    expect.soft(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
-    expect(requests).toHaveLength(3);
-    expect(requests[0]).toContain('"tools":');
-    expect(requests[1]).toContain('"tools":');
-    expect(requests[2]).not.toContain('"tools":');
-    expect(requests[2]).not.toContain('"role":"tool"');
-    expect(outputCap(requests[2] ?? "{}")).toBeLessThan(outputCap(requests[1] ?? "{}"));
+    expect(requests).toHaveLength(2);
+    expect(requests.join("\n")).not.toContain("Changed citation repair comment");
     expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
     expect((result.body as GroundedAnswer).content).toContain("Feature returns true.");
     const exchanges = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges ?? [];
     expect(exchanges.filter((exchange) => exchange.call.name === "jira_comment")).toHaveLength(1);
-    assertFailedCitationRepairActivity(f.deps);
+    expect(citationRepairDisposition(f.deps)).toBe("skipped-tool-action");
   },
 );
 

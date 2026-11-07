@@ -3828,6 +3828,55 @@ describe("citation activation ingestion", () => {
   );
 });
 
+describe("citation highlight evidence", () => {
+  beforeEach(() => {
+    resetClientDiagnosticsIngestStateForTests();
+  });
+
+  it.each([
+    { outcome: "framed", boxCount: 2 },
+    { outcome: "not-found", boxCount: 0 },
+    { outcome: "no-passage", boxCount: 0 },
+    { outcome: "no-text", boxCount: 0 },
+  ])("persists %j as routine evidence without the passage or the note", async (highlight) => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "PDF citation highlight settled",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_citation-highlight-0001",
+      citationHighlight: highlight,
+    });
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find((candidate) => candidate.op === "client.citation.highlighted");
+    const record = expectActivityLogProof(
+      "client.citation.highlighted.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      ...highlight,
+      correlationId: "ui_citation-highlight-0001",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(event?.level).toBe("info");
+    expect(JSON.stringify(event)).not.toContain("highlight settled");
+  });
+
+  it("refuses a report that would carry passage text", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "PDF citation highlight settled",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_citation-highlight-0002",
+      citationHighlight: { outcome: "framed", boxCount: 1, passage: "Altlasten im Bestand" },
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+    expect(sink.events.some((event) => event.op === "client.citation.highlighted")).toBe(false);
+    expect(JSON.stringify(sink.events)).not.toContain("Altlasten");
+  });
+});
+
 describe("actual source reveal lifecycle", () => {
   beforeEach(() => {
     resetClientDiagnosticsIngestStateForTests();

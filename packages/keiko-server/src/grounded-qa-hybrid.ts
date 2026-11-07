@@ -3171,6 +3171,7 @@ async function repairHybridAnswer(
       signal: ctx.signal,
       reliableCitationBehaviour: citationBehaviourFor(ctx.deps, ctx.modelId),
       observeCitationBehaviour,
+      toolTurn: ctx.deps.chatToolTurn,
     },
   };
   const repaired = await repairGroundedAnswer(repairContext);

@@ -4917,6 +4917,43 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "client.citation.highlighted",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientCitationHighlight",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["framed", "not-found", "no-passage", "no-text"],
+      },
+      boxCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-citation-highlight"],
+    proofIds: ["client.citation.highlighted.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "client.coding-run.restored",
     category: "diagnostic",
     owner: "keiko-server",
@@ -5263,6 +5300,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "text-copied",
           "coding-task-submission",
           "coding-task-reset",
+          "markdown-view-changed",
+          "markdown-rich-unavailable",
         ],
       },
       focusIndicator: {
@@ -31022,6 +31061,57 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "jira.citation.markers",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "atlassian.jiraCitationMarkers.recordJiraCitationMarkers",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      callCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      labelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      resolvedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      unresolvedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      markdownDescriptionCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["atlassian-action-execution"],
+    proofIds: ["jira.citation.markers.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "jira.field.admission",
     category: "process",
     owner: "keiko-server",
@@ -35331,6 +35421,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "failed",
           "skipped-budget",
           "skipped-capability",
+          "skipped-tool-action",
         ],
       },
       repairProseAvailable: {
@@ -35563,6 +35654,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "failed",
           "skipped-budget",
           "skipped-capability",
+          "skipped-tool-action",
         ],
       },
       filesInPrompt: {

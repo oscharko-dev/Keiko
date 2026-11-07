@@ -140,6 +140,19 @@ describe("citation repair dispatch eligibility", () => {
     },
   );
 
+  it("keeps an answer that reports a sent tool change (#4173)", async () => {
+    const ctx = context("Feature is true.");
+    const repair = vi.fn((): Promise<GroundedAnswerPayload> => Promise.resolve("Unused."));
+    const result = await repairGroundedAnswer({
+      ...ctx,
+      invokeRepair: repair,
+      deps: { toolTurn: { dispatchedChange: true } },
+    });
+    expect(result.disposition).toBe("skipped-tool-action");
+    expect(repair).not.toHaveBeenCalled();
+    expect(result.answer).toBe(ctx.answer);
+  });
+
   it("propagates cancellation instead of turning it into a completed repair", async () => {
     const controller = new AbortController();
     const reason = new Error("Synthetic cancellation");

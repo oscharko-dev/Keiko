@@ -320,6 +320,7 @@ function clientMessagePostBody(
     answerCopy: meta.answerCopy,
     answerSpeech: meta.answerSpeech,
     citationActivation: meta.citationActivation,
+    citationHighlight: meta.citationHighlight,
     scopeNotice: meta.scopeNotice,
     evidenceInspection: meta.evidenceInspection,
     supportReportDelivery: meta.supportReportDelivery,
@@ -417,6 +418,7 @@ function routineSupportReportEvidence(meta: ClientDiagnosticMeta): boolean {
     meta.codingRunRestore !== undefined ||
     meta.codingWorkbenchInteraction !== undefined ||
     meta.citationActivation !== undefined ||
+    meta.citationHighlight !== undefined ||
     meta.scopeNotice !== undefined
   );
 }

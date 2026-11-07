@@ -1,10 +1,10 @@
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import { Slice } from "prosemirror-model";
-import { baseKeymap, chainCommands, toggleMark } from "prosemirror-commands";
+import { Slice, type Node as DocumentNode } from "prosemirror-model";
+import { baseKeymap, chainCommands, exitCode, toggleMark } from "prosemirror-commands";
 import { history, redo, undo } from "prosemirror-history";
 import { undoInputRule } from "prosemirror-inputrules";
 import { keymap } from "prosemirror-keymap";
-import { EditorState, Plugin } from "prosemirror-state";
+import { EditorState, Plugin, type Command } from "prosemirror-state";
 import type { EditorView } from "prosemirror-view";
 import { liftListItem, sinkListItem } from "prosemirror-schema-list";
 import {
@@ -17,14 +17,29 @@ import {
 import { composerInputRules, composerNewline } from "./composer-input-rules";
 import { clearComposerFormatting } from "./composer-format-commands";
 
-function editorKeymap(): Plugin {
+/** A document line break inside a paragraph; a code block's own editor handles its newlines. */
+const insertHardBreak: Command = (state, dispatch) => {
+  const hardBreak = composerSchema.nodes.hard_break;
+  if (!hardBreak) return false;
+  dispatch?.(state.tr.replaceSelectionWith(hardBreak.create()).scrollIntoView());
+  return true;
+};
+
+/**
+ * The chat composer sends on Enter (its owner handles the key) and starts a new block on
+ * Shift+Enter; a Markdown document starts a new block on Enter and breaks the line on Shift+Enter.
+ */
+export type ComposerEditingMode = "composer" | "document";
+
+function editorKeymap(mode: ComposerEditingMode): Plugin {
   const { strong, em, code } = composerSchema.marks;
   const item = composerSchema.nodes.list_item;
   if (!strong || !em || !code || !item) throw new TypeError("Invalid composer schema");
   return keymap({
     ...baseKeymap,
-    Enter: () => true,
-    "Shift-Enter": composerNewline(),
+    Enter: mode === "composer" ? (): boolean => true : composerNewline(),
+    "Shift-Enter":
+      mode === "composer" ? composerNewline() : chainCommands(exitCode, insertHardBreak),
     "Mod-z": undo,
     "Shift-Mod-z": redo,
     "Mod-y": redo,
@@ -39,6 +54,27 @@ function editorKeymap(): Plugin {
   });
 }
 
+function editorPlugins(
+  mode: ComposerEditingMode,
+  maxLength: number,
+  onLimit: () => void,
+  serialize: (doc: DocumentNode) => string,
+): Plugin[] {
+  return [
+    composerInputRules(),
+    editorKeymap(mode),
+    keymap(baseKeymap),
+    history(),
+    new Plugin({
+      filterTransaction: (tr): boolean => {
+        if (!tr.docChanged || serialize(tr.doc).length <= maxLength) return true;
+        onLimit();
+        return false;
+      },
+    }),
+  ];
+}
+
 export function createComposerState(
   value: string,
   maxLength: number,
@@ -46,19 +82,20 @@ export function createComposerState(
 ): EditorState {
   return EditorState.create({
     doc: parseComposerDraft(value),
-    plugins: [
-      composerInputRules(),
-      editorKeymap(),
-      keymap(baseKeymap),
-      history(),
-      new Plugin({
-        filterTransaction: (tr): boolean => {
-          if (!tr.docChanged || serializeComposerMarkdown(tr.doc).length <= maxLength) return true;
-          onLimit();
-          return false;
-        },
-      }),
-    ],
+    plugins: editorPlugins("composer", maxLength, onLimit, serializeComposerMarkdown),
+  });
+}
+
+/** The same schema, input rules, shortcuts and history for a Markdown document editor. */
+export function createMarkdownDocumentState(
+  doc: DocumentNode,
+  maxLength: number,
+  onLimit: () => void,
+  serialize: (doc: DocumentNode) => string,
+): EditorState {
+  return EditorState.create({
+    doc,
+    plugins: editorPlugins("document", maxLength, onLimit, serialize),
   });
 }
 

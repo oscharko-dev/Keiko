@@ -1279,6 +1279,32 @@ const CLIENT_CITATION_ACTIVATED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const CLIENT_CITATION_HIGHLIGHTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.citation.highlighted",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientCitationHighlight",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["framed", "not-found", "no-passage", "no-text"],
+    },
+    boxCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-citation-highlight"],
+  proofIds: ["client.citation.highlighted.line"],
+  releaseImpact: "patch",
+});
+
 const CLIENT_SCOPE_NOTICE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -2473,6 +2499,22 @@ function logClientCitationActivation(
   return true;
 }
 
+function logClientCitationHighlight(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const highlight = request.citationHighlight;
+  if (highlight === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_CITATION_HIGHLIGHTED_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      { ...highlight, completeness: "complete", loss: "none" },
+    ),
+  );
+  return true;
+}
+
 function logClientScopeNotice(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
@@ -2571,6 +2613,7 @@ function logRetrievalClientReport(
 ): boolean {
   return (
     logClientCitationActivation(request, correlationId) ||
+    logClientCitationHighlight(request, correlationId) ||
     logClientScopeNotice(request, correlationId) ||
     logClientEvidenceInspection(request, correlationId)
   );
@@ -3222,7 +3265,8 @@ function isRoutineScopedReport(report: ClientDiagnosticIngestRequest): boolean {
     report.editorLineEnding !== undefined ||
     report.codingRunRestore !== undefined ||
     report.scopeNotice !== undefined ||
-    report.citationActivation !== undefined
+    report.citationActivation !== undefined ||
+    report.citationHighlight !== undefined
   );
 }
 

@@ -2087,7 +2087,8 @@ export type CitationRepairDisposition =
   | "rejected-uncited"
   | "failed"
   | "skipped-budget"
-  | "skipped-capability";
+  | "skipped-capability"
+  | "skipped-tool-action";
 
 export interface GroundedAnswerEvidenceDeclaration {
   readonly answerKind?: GroundedAnswerKind | undefined;

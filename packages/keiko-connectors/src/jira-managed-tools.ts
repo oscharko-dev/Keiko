@@ -231,7 +231,7 @@ function objectReadResult(
   );
 }
 
-/** Machine-readable provenance for new Markdown; legacy strings remain native wiki verbatim. */
+/** Machine-readable provenance for new Markdown; native wiki strings remain verbatim (ADR-0128). */
 function createMetadataItems(value: unknown): readonly CatalogJsonObject[] | undefined {
   const items = metadataItems(value);
   return items === undefined ? undefined : descriptionMetadataItems(items);
