@@ -29,6 +29,8 @@ import {
   JIRA_ISSUE_LINKS_MAX,
   JIRA_METADATA_MAX_UPDATES,
   JIRA_REQUIREMENT_IDS_MAX,
+  JIRA_PROJECT_LEAD_MAX_CHARS,
+  JIRA_PROJECT_URL_MAX_CHARS,
 } from "@oscharko-dev/keiko-connectors";
 import { KEY_RANGE_ENTRY_CHARS } from "./jiraDraftKeyRanges.js";
 import { jiraMutationToolId } from "./jiraMutationToolId.js";
@@ -399,11 +401,11 @@ const DEFINITIONS: Readonly<
       {
         key: text(64),
         name: text(255),
-        lead: text(255),
+        lead: text(JIRA_PROJECT_LEAD_MAX_CHARS),
         projectTypeKey: text(64),
         projectTemplateKey: text(255),
         description: text(32768),
-        url: text(4096),
+        url: text(JIRA_PROJECT_URL_MAX_CHARS),
         assigneeType: { type: "string", enum: ["PROJECT_LEAD", "UNASSIGNED"] },
       },
       ["key", "name", "lead", "projectTypeKey"],
@@ -416,9 +418,9 @@ const DEFINITIONS: Readonly<
       {
         projectIdOrKey: text(64),
         name: text(255),
-        lead: text(255),
+        lead: text(JIRA_PROJECT_LEAD_MAX_CHARS),
         description: text(32768),
-        url: text(4096),
+        url: text(JIRA_PROJECT_URL_MAX_CHARS),
         assigneeType: { type: "string", enum: ["PROJECT_LEAD", "UNASSIGNED"] },
       },
       ["projectIdOrKey"],

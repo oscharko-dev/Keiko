@@ -161,6 +161,7 @@ const DEFINITIONS: Readonly<Record<CoreReadToolName, ReadDefinition>> = {
       lead: text(255),
       assigneeType: { type: "string", enum: ["PROJECT_LEAD", "UNASSIGNED"] },
       projectTypeKey: text(64),
+      omittedMetadataCount: { type: "integer", minimum: 0, maximum: 5 },
     },
   },
   "jira.validate-project-key": {

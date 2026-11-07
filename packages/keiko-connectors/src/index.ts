@@ -4,6 +4,7 @@
 // instance, the metadata store, and the gatewayFetch-backed AtlassianHttpPort adapter.
 
 export { KEIKO_CONNECTORS_VERSION } from "./version.js";
+export { JIRA_PROJECT_LEAD_MAX_CHARS, JIRA_PROJECT_URL_MAX_CHARS } from "./jira-native-values.js";
 
 export {
   ATLASSIAN_ACCOUNT_EMAIL_MAX_CHARS,

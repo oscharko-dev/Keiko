@@ -151,6 +151,45 @@ function fixture(
 }
 
 describe("native Jira project reads", () => {
+  it("retains project identity while counting unusable optional metadata without exposing it", async () => {
+    const h = fixture(() =>
+      response({
+        ...PROJECT,
+        description: { private: "invalid-description" },
+        url: "invalid-url",
+        lead: { displayName: "invalid-lead" },
+        assigneeType: "invalid-assignee",
+        projectTypeKey: "invalid type",
+      }),
+    );
+    const result = await h.read("jira.project", { projectIdOrKey: CREATE.key });
+    expect(result.data).toMatchObject({
+      outcome: "succeeded",
+      projectId: PROJECT.id,
+      projectKey: PROJECT.key,
+      projectName: PROJECT.name,
+      omittedMetadataCount: 5,
+    });
+    for (const field of [
+      "description",
+      "url",
+      "lead",
+      "assigneeType",
+      "projectTypeKey",
+      "invalidMetadataFields",
+    ])
+      expect(result.data).not.toHaveProperty(field);
+    expect(JSON.stringify(result)).not.toContain("invalid-");
+  });
+
+  it("treats explicit null descriptions and URLs as empty metadata rather than malformed data", async () => {
+    const h = fixture(() => response({ ...PROJECT, description: null, url: null }));
+    const result = await h.read("jira.project", { projectIdOrKey: CREATE.key });
+    expect(result.data.outcome).toBe("succeeded");
+    expect(result.data).not.toHaveProperty("description");
+    expect(result.data).not.toHaveProperty("url");
+    expect(result.data).not.toHaveProperty("omittedMetadataCount");
+  });
   it("reads the exact project with a bound project link and no remote self URL", async () => {
     const result = await fixture().read("jira.project", { projectIdOrKey: CREATE.key });
     expect(result).toMatchObject({
@@ -242,6 +281,76 @@ describe("native Jira project reads", () => {
 });
 
 describe("native Jira project writes", () => {
+  it("confirms the native case-insensitive lead identity after creation", async () => {
+    const h = fixture((path, method, written) =>
+      method === "GET" && written && path.startsWith("project/")
+        ? response({ ...PROJECT, lead: { name: CREATE.lead.toUpperCase() } })
+        : undefined,
+    );
+    expect(await h.mutate("jira.create-project", CREATE)).toMatchObject({
+      ok: true,
+      receipt: { projectId: PROJECT.id },
+    });
+  });
+
+  it("does not PUT a lead that differs only by case", async () => {
+    const h = fixture();
+    expect(
+      await h.mutate("jira.update-project", {
+        projectIdOrKey: CREATE.key,
+        lead: CREATE.lead.toUpperCase(),
+      }),
+    ).toMatchObject({ ok: false, reason: "conflict" });
+    expect(h.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
+  });
+
+  it.each([null, undefined])(
+    "confirms explicitly cleared fields when native readback returns %s",
+    async (empty) => {
+      const h = fixture((path, method, written) =>
+        method === "GET" && written && path.startsWith("project/")
+          ? response({ ...PROJECT, description: empty, url: empty })
+          : undefined,
+      );
+      expect(
+        await h.mutate("jira.update-project", {
+          projectIdOrKey: CREATE.key,
+          description: "",
+          url: "",
+        }),
+      ).toMatchObject({ ok: true, receipt: { projectId: PROJECT.id } });
+      expect(h.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "PUT", "GET"]);
+    },
+  );
+
+  it.each([
+    ["description", { unexpected: "private-readback" }],
+    ["url", "invalid-private-readback"],
+  ] as const)(
+    "never confirms a clear from stripped malformed %s metadata",
+    async (field, value) => {
+      const h = fixture((path, method, written) =>
+        method === "GET" && written && path.startsWith("project/")
+          ? response({ ...PROJECT, [field]: value })
+          : undefined,
+      );
+      expect(
+        await h.mutate("jira.update-project", { projectIdOrKey: CREATE.key, [field]: "" }),
+      ).toMatchObject({ ok: false, reason: "conflict", receipt: { projectId: PROJECT.id } });
+      expect(h.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(1);
+    },
+  );
+
+  it("confirms an unrelated metadata update despite an unreadable optional website", async () => {
+    const h = fixture((path, method, written) =>
+      method === "GET" && path.startsWith("project/")
+        ? response({ ...PROJECT, name: written ? "Renamed" : PROJECT.name, url: "invalid-url" })
+        : undefined,
+    );
+    expect(
+      await h.mutate("jira.update-project", { projectIdOrKey: CREATE.key, name: "Renamed" }),
+    ).toMatchObject({ ok: true, receipt: { projectName: "Renamed" } });
+  });
   it("creates once, validates key/type and independently reads the returned numeric identity", async () => {
     const h = fixture();
     expect(await h.mutate("jira.create-project", CREATE)).toEqual({

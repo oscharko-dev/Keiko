@@ -11,12 +11,20 @@ import { asRecord } from "./atlassian-sync-classify.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { jiraReadFailure } from "./jira-managed-metadata.js";
 import { dispatchFailure, type JiraHttpFailure } from "./jira-mutation-failure.js";
+import {
+  jiraNativeId as projectId,
+  jiraNativeText as boundedText,
+  JIRA_PROJECT_LEAD_MAX_CHARS,
+  JIRA_PROJECT_URL_MAX_CHARS,
+} from "./jira-native-values.js";
 
 type ProjectRead =
   "jira.project" | "jira.validate-project-key" | "jira.project-permissions" | "jira.project-type";
 type ProjectWrite = "jira.create-project" | "jira.update-project";
 type Failure = Extract<JiraMutationAttempt, { readonly ok: false }>;
 interface ProjectView {
+  /** Private readback evidence; never spread into a tool result or receipt. */
+  readonly invalidMetadataFields: ReadonlySet<string>;
   readonly projectId: string;
   readonly projectKey: string;
   readonly projectName: string;
@@ -50,26 +58,8 @@ const INVALID: Failure = {
     ],
   },
 };
-// Identifiers use the shared transport boundary; Jira's native validation decides project-key policy.
-// eslint-disable-next-line no-control-regex -- project metadata may contain line breaks, never other controls.
-const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u;
-function boundedText(value: unknown, max: number, empty = false): value is string {
-  return (
-    typeof value === "string" &&
-    value.length <= max &&
-    (empty || value.trim().length > 0) &&
-    !CONTROL.test(value)
-  );
-}
-function projectId(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    /^[1-9]\d{0,18}$/u.test(value) &&
-    BigInt(value) <= 9223372036854775807n
-  );
-}
 function projectUrl(value: unknown): value is string {
-  if (!boundedText(value, 2048, true)) return false;
+  if (!boundedText(value, JIRA_PROJECT_URL_MAX_CHARS, true)) return false;
   if (value === "") return true;
   try {
     const url = new URL(value);
@@ -87,7 +77,7 @@ function validField(key: string, value: unknown): boolean {
     case "name":
       return boundedText(value, 255);
     case "lead":
-      return boundedText(value, 128);
+      return boundedText(value, JIRA_PROJECT_LEAD_MAX_CHARS);
     case "description":
       return boundedText(value, 32768, true);
     case "url":
@@ -102,15 +92,20 @@ function validField(key: string, value: unknown): boolean {
       return false;
   }
 }
-function projectMetadata(body: Record<string, unknown>): Record<string, string> | undefined {
+function projectMetadata(body: Record<string, unknown>): {
+  readonly optional: Record<string, string>;
+  readonly invalidMetadataFields: ReadonlySet<string>;
+} {
   const optional: Record<string, string> = {};
+  const invalidMetadataFields = new Set<string>();
   for (const field of ["description", "url", "lead", "assigneeType", "projectTypeKey"]) {
     if (body[field] === undefined) continue;
+    if ((field === "description" || field === "url") && body[field] === null) continue;
     const value = field === "lead" ? asRecord(body.lead)?.name : body[field];
-    if (typeof value !== "string" || !validField(field, value)) return undefined;
-    optional[field] = value;
+    if (typeof value !== "string" || !validField(field, value)) invalidMetadataFields.add(field);
+    else optional[field] = value;
   }
-  return optional;
+  return { optional, invalidMetadataFields };
 }
 function projectView(body: Record<string, unknown> | undefined): ProjectView | undefined {
   if (
@@ -120,10 +115,14 @@ function projectView(body: Record<string, unknown> | undefined): ProjectView | u
     !boundedText(body.name, 255)
   )
     return undefined;
-  const optional = projectMetadata(body);
-  return optional === undefined
-    ? undefined
-    : { projectId: body.id, projectKey: body.key, projectName: body.name, ...optional };
+  const { optional, invalidMetadataFields } = projectMetadata(body);
+  return {
+    projectId: body.id,
+    projectKey: body.key,
+    projectName: body.name,
+    ...optional,
+    invalidMetadataFields,
+  };
 }
 function receipt(project: ProjectView): ProjectReceipt {
   return {
@@ -224,9 +223,17 @@ async function projectResult(
   target: string,
 ): Promise<ManagedMcpToolResult> {
   const result = await readProject(request, target);
-  return result.ok
-    ? { data: { outcome: "succeeded", ...result.project } }
-    : jiraReadFailure(result.reason, result.detail);
+  if (!result.ok) return jiraReadFailure(result.reason, result.detail);
+  const { invalidMetadataFields, ...project } = result.project;
+  return {
+    data: {
+      outcome: "succeeded",
+      ...project,
+      ...(invalidMetadataFields.size === 0
+        ? {}
+        : { omittedMetadataCount: invalidMetadataFields.size }),
+    },
+  };
 }
 async function keyResult(request: JiraMutationRequest, key: string): Promise<ManagedMcpToolResult> {
   const result = await validateKey(request, key);
@@ -331,14 +338,22 @@ function updateInput(
 }
 function holds(project: ProjectView, fields: Readonly<Record<string, unknown>>): boolean {
   return Object.entries(fields).every(([field, expected]) => {
+    if (project.invalidMetadataFields.has(field)) return false;
     const actual: unknown =
       field === "key"
         ? project.projectKey
         : field === "name"
           ? project.projectName
           : Reflect.get(project, field);
-    return actual === expected;
+    return nativeFieldMatches(field, actual, expected);
   });
+}
+function nativeFieldMatches(field: string, actual: unknown, expected: unknown): boolean {
+  if (field === "lead" && typeof actual === "string" && typeof expected === "string")
+    return actual.toLowerCase() === expected.toLowerCase();
+  if ((field === "description" || field === "url") && expected === "" && actual === undefined)
+    return true;
+  return actual === expected;
 }
 async function confirmProject(
   request: JiraMutationRequest,

@@ -13,6 +13,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { jiraReadFailure, localJiraPage, projectJiraCollection } from "./jira-managed-metadata.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { dispatchFailure } from "./jira-mutation-failure.js";
+import { jiraNativeId as id, jiraNativeText as text } from "./jira-native-values.js";
 
 type ComponentRead = "jira.components" | "jira.component";
 type ComponentWrite = "jira.create-component" | "jira.update-component";
@@ -48,24 +49,6 @@ const INVALID: Failure = {
   reason: "field-validation",
   detail: { validation: "invalid-field" },
 };
-// Ordinary native component text permits line breaks, never other terminal controls.
-// eslint-disable-next-line no-control-regex -- exclude control bytes from model-visible metadata.
-const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u;
-function text(value: unknown, max: number, empty = false): value is string {
-  return (
-    typeof value === "string" &&
-    value.length <= max &&
-    (empty || value.trim().length > 0) &&
-    !CONTROL.test(value)
-  );
-}
-function id(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    /^[1-9]\d{0,18}$/u.test(value) &&
-    BigInt(value) <= 9223372036854775807n
-  );
-}
 function validField(key: string, value: unknown): boolean {
   switch (key) {
     case "name":

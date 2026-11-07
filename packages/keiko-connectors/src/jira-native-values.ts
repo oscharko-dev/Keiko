@@ -1,0 +1,24 @@
+/** Native project/component text permits ordinary line breaks, never terminal controls. */
+// eslint-disable-next-line no-control-regex -- preserve tabs, LF and CR while refusing other controls.
+const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u;
+
+export const JIRA_PROJECT_LEAD_MAX_CHARS = 128;
+export const JIRA_PROJECT_URL_MAX_CHARS = 2048;
+
+export function jiraNativeText(value: unknown, max: number, empty = false): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= max &&
+    (empty || value.trim().length > 0) &&
+    !CONTROL.test(value)
+  );
+}
+
+/** Jira string int64 identifiers stay exact even beyond JavaScript's safe numeric range. */
+export function jiraNativeId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[1-9]\d{0,18}$/u.test(value) &&
+    BigInt(value) <= 9223372036854775807n
+  );
+}
