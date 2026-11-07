@@ -196,7 +196,7 @@ export const JIRA_PROJECT_STRUCTURE_WRITE_DEFINITIONS = {
       },
       ["projectId", "name"],
     ),
-    result: writeResult({ versionId: ID }),
+    result: writeResult({ versionId: ID, projectId: ID }),
     risk: "write",
     maxResultCount: 1,
   },
@@ -204,7 +204,7 @@ export const JIRA_PROJECT_STRUCTURE_WRITE_DEFINITIONS = {
     description:
       "Update a native version's name, description, dates or explicit release/archive state. Supply at least one change; omitted fields remain unchanged and the existing project is fixed. Independent readback confirms the change.",
     input: { ...object({ versionId: ID, ...VERSION_FIELDS }, ["versionId"]), minProperties: 2 },
-    result: writeResult({ versionId: ID }),
+    result: writeResult({ versionId: ID, projectId: ID }),
     risk: "write",
     maxResultCount: 1,
   },
@@ -237,6 +237,9 @@ function declaration(name: string, definition: Definition): ManagedMcpToolDeclar
 
 // The following native families use the same schema compiler and declaration bounds.
 export {
+  ID as jiraNativeIdentitySchema,
+  PROJECT as jiraNativeProjectSchema,
+  PAGING as jiraNativePagingSchema,
   readResult as jiraNativeReadResult,
   collection as jiraNativeCollectionResult,
   writeResult as jiraNativeWriteResult,

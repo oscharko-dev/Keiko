@@ -188,6 +188,81 @@
         "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts"
       ]
     },
+    "jira.attachment": {
+      "identity": "GET /rest/api/2/attachment/{id}",
+      "effect": "read",
+      "permissionPolicy": "visible-attachments",
+      "kind": "constrained-tool",
+      "constraints": "One exact attachment selector; bounded filename/size plus optional MIME/creation text. Native metadata may omit its ID; any supplied ID must match. Remote content/self/thumbnail URLs and author objects are omitted; no binary retrieval or issue association is inferred.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-attachment-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-attachment-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.test.ts"
+      ]
+    },
+    "jira.attachment-archive": {
+      "identity": "GET /rest/api/2/attachment/{id}/expand/raw",
+      "effect": "read",
+      "permissionPolicy": "visible-attachments",
+      "kind": "constrained-tool",
+      "constraints": "Published experimental raw expansion; bounded typed entries, exact entry indexes and optional sizes/text. Local pagination covers only returned entries; remote totalEntryCount and completeness remain separately explicit when known. No invented remote paging, extraction or downloads.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-attachment-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-attachment-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.test.ts"
+      ]
+    },
+    "jira.attachment-archive-summary": {
+      "identity": "GET /rest/api/2/attachment/{id}/expand/human",
+      "effect": "read",
+      "permissionPolicy": "visible-attachments",
+      "kind": "constrained-tool",
+      "constraints": "Published experimental human expansion; only validated numeric identity and optional name/media type/entry count are projected. Opaque entries remain unconsumed; no complete archive or binary-content claim.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-attachment-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-attachment-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.test.ts"
+      ]
+    },
+    "jira.attachment-settings": {
+      "identity": "GET /rest/api/2/attachment/meta",
+      "effect": "read",
+      "permissionPolicy": "attachment-availability",
+      "kind": "constrained-tool",
+      "constraints": "Native enabled flag plus optional uploadLimit and the existing local maxBytes ceiling; missing limits stay unknown. This read never grants upload authority; the established writer still requires a known bound.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-attachment-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-attachment-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.test.ts"
+      ]
+    },
+    "jira.avatars": {
+      "identity": "GET /rest/api/2/universal_avatar/type/{type}/owner/{owningObjectId}",
+      "effect": "read",
+      "permissionPolicy": "visible-avatars",
+      "kind": "constrained-tool",
+      "constraints": "Closed project/issuetype and exact owner-ID selectors; bounded system/custom metadata and local pagination. No universal-avatar upload/create/delete or image/remote URL access.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.test.ts"
+      ]
+    },
     "jira.backlog-move-issues": {
       "identity": "POST /rest/agile/1.0/backlog/issue",
       "effect": "write",
@@ -603,6 +678,21 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-projects.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-projects.test.ts"]
     },
+    "jira.project-avatars": {
+      "identity": "GET /rest/api/2/project/{projectIdOrKey}/avatars",
+      "effect": "read",
+      "permissionPolicy": "visible-avatars",
+      "kind": "constrained-tool",
+      "constraints": "One encoded project ID/key; bounded system/custom avatar metadata, complete source-array validation and local pagination. No project-avatar selection or image retrieval.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.test.ts"
+      ]
+    },
     "jira.project-permissions": {
       "identity": "GET /rest/api/2/mypermissions",
       "effect": "read",
@@ -723,6 +813,21 @@
       ],
       "testFiles": ["packages/keiko-connectors/src/jira-agile-reads.test.ts"]
     },
+    "jira.system-avatars": {
+      "identity": "GET /rest/api/2/avatar/{type}/system",
+      "effect": "read",
+      "permissionPolicy": "visible-avatars",
+      "kind": "constrained-tool",
+      "constraints": "Closed user/project/issuetype selector; bounded system-avatar identity/category and optional owner/selected metadata with local pagination. No image/remote URL following, temporary upload, crop or selection mutation.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.test.ts"
+      ]
+    },
     "jira.transition": {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/transitions",
       "effect": "write",
@@ -780,6 +885,21 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-versions.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-versions.test.ts"]
     },
+    "jira.user-avatars": {
+      "identity": "GET /rest/api/2/user/avatars",
+      "effect": "read",
+      "permissionPolicy": "visible-avatars",
+      "kind": "constrained-tool",
+      "constraints": "Optional bounded username native query, otherwise current-user lookup; bounded system/custom metadata and local pagination. No avatar mutation, image retrieval or arbitrary user API.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-avatar-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAssetDescriptors.test.ts"
+      ]
+    },
     "jira.validate-project-key": {
       "identity": "GET /rest/api/2/projectvalidate/key",
       "effect": "read",
@@ -828,8 +948,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "d19e1e3847b84927adeee6db3d6c5ea10c2b89cfe9400d4185c3c99d9b23012c",
-    "nativeOperationCount": 60
+    "sha256": "665c8dec770e7a206aaac6505f4ed7d2936752c96b72b40b81bf09fc461a5352",
+    "nativeOperationCount": 68
   },
   "operations": [
     {
@@ -2555,10 +2675,10 @@
         }
       ],
       "baselineCapabilityIds": ["attachment-metadata"],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.attachment-settings"]
     },
     {
       "identity": "DELETE /rest/api/2/attachment/{id}",
@@ -2619,10 +2739,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.attachment"]
     },
     {
       "identity": "GET /rest/api/2/attachment/{id}/expand/human",
@@ -2651,10 +2771,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.attachment-archive-summary"]
     },
     {
       "identity": "GET /rest/api/2/attachment/{id}/expand/raw",
@@ -2683,10 +2803,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.attachment-archive"]
     },
     {
       "identity": "GET /rest/api/2/avatar/{type}/system",
@@ -2715,10 +2835,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.system-avatars"]
     },
     {
       "identity": "POST /rest/api/2/avatar/{type}/temporary",
@@ -9243,10 +9363,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.project-avatars"]
     },
     {
       "identity": "GET /rest/api/2/project/{projectIdOrKey}/components",
@@ -11891,10 +12011,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.avatars"]
     },
     {
       "identity": "POST /rest/api/2/universal_avatar/type/{type}/owner/{owningObjectId}/avatar",
@@ -12691,10 +12811,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.user-avatars"]
     },
     {
       "identity": "DELETE /rest/api/2/user/columns",

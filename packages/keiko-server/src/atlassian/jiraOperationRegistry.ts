@@ -36,6 +36,9 @@ type JiraPermissionPolicy =
   | "issue-membership-and-readback"
   | "epic-update-and-readback"
   | "visible-components"
+  | "attachment-availability"
+  | "visible-attachments"
+  | "visible-avatars"
   | "visible-dashboards"
   | "visible-filter-permissions"
   | "authenticated-user-preferences"
@@ -90,194 +93,147 @@ export interface JiraOperationContract {
   readonly binding: JiraOperationBinding;
 }
 
-const NATIVE: Readonly<
-  Record<
-    NativeTool,
-    readonly [
-      "GET" | "POST" | "PUT",
-      "read" | "write",
-      string,
-      JiraPermissionPolicy,
-      ("/rest/api/2" | "/rest/agile/1.0")?,
-    ]
-  >
-> = {
-  "jira.dashboards": ["GET", "read", "/dashboard", "visible-dashboards"],
-  "jira.dashboard": ["GET", "read", "/dashboard/{id}", "visible-dashboards"],
-  "jira.filter-share-scope": [
-    "GET",
-    "read",
-    "/filter/defaultShareScope",
-    "authenticated-user-preferences",
-  ],
-  "jira.filter-permissions": [
-    "GET",
-    "read",
-    "/filter/{id}/permission",
-    "visible-filter-permissions",
-  ],
-  "jira.filter-permission": [
-    "GET",
-    "read",
+type JiraApiRoot = "/rest/api/2" | "/rest/agile/1.0";
+type NativeSpecification = readonly [
+  "GET" | "POST" | "PUT",
+  "read" | "write",
+  string,
+  JiraPermissionPolicy,
+  JiraApiRoot?,
+];
+function read(
+  path: string,
+  permissionPolicy: JiraPermissionPolicy,
+  root: JiraApiRoot = "/rest/api/2",
+): NativeSpecification {
+  return ["GET", "read", path, permissionPolicy, root];
+}
+function write(
+  method: "POST" | "PUT",
+  path: string,
+  permissionPolicy: JiraPermissionPolicy,
+  root: JiraApiRoot = "/rest/api/2",
+): NativeSpecification {
+  return [method, "write", path, permissionPolicy, root];
+}
+function issueRead(path: string, root: JiraApiRoot = "/rest/api/2"): NativeSpecification {
+  return ["GET", "read", path, "visible-issues", root];
+}
+const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  "jira.attachment-settings": read("/attachment/meta", "attachment-availability"),
+  "jira.attachment": read("/attachment/{id}", "visible-attachments"),
+  "jira.attachment-archive": read("/attachment/{id}/expand/raw", "visible-attachments"),
+  "jira.attachment-archive-summary": read("/attachment/{id}/expand/human", "visible-attachments"),
+  "jira.system-avatars": read("/avatar/{type}/system", "visible-avatars"),
+  "jira.project-avatars": read("/project/{projectIdOrKey}/avatars", "visible-avatars"),
+  "jira.user-avatars": read("/user/avatars", "visible-avatars"),
+  "jira.avatars": read("/universal_avatar/type/{type}/owner/{owningObjectId}", "visible-avatars"),
+  "jira.dashboards": read("/dashboard", "visible-dashboards"),
+  "jira.dashboard": read("/dashboard/{id}", "visible-dashboards"),
+  "jira.filter-share-scope": read("/filter/defaultShareScope", "authenticated-user-preferences"),
+  "jira.filter-permissions": read("/filter/{id}/permission", "visible-filter-permissions"),
+  "jira.filter-permission": read(
     "/filter/{id}/permission/{permissionId}",
     "visible-filter-permissions",
-  ],
-  "jira.get-comment": ["GET", "read", "/issue/{issueIdOrKey}/comment/{id}", "visible-comments"],
-  "jira.update-comment": [
+  ),
+  "jira.get-comment": read("/issue/{issueIdOrKey}/comment/{id}", "visible-comments"),
+  "jira.update-comment": write(
     "PUT",
-    "write",
     "/issue/{issueIdOrKey}/comment/{id}",
     "comment-update-and-readback",
-  ],
-  "jira.link-types": ["GET", "read", "/issueLinkType", "visible-link-types"],
-  "jira.issue-link": ["GET", "read", "/issueLink/{linkId}", "visible-issue-links"],
-  "jira.worklogs": ["GET", "read", "/issue/{issueIdOrKey}/worklog", "visible-worklogs"],
-  "jira.worklog": ["GET", "read", "/issue/{issueIdOrKey}/worklog/{id}", "visible-worklogs"],
-  "jira.components": ["GET", "read", "/project/{projectIdOrKey}/components", "visible-components"],
-  "jira.component": ["GET", "read", "/component/{id}", "visible-components"],
-  "jira.versions": ["GET", "read", "/project/{projectIdOrKey}/versions", "visible-versions"],
-  "jira.version": ["GET", "read", "/version/{id}", "visible-versions"],
-  "jira.create-component": ["POST", "write", "/component", "component-create-and-readback"],
-  "jira.update-component": ["PUT", "write", "/component/{id}", "component-update-and-readback"],
-  "jira.create-version": ["POST", "write", "/version", "version-create-and-readback"],
-  "jira.update-version": ["PUT", "write", "/version/{id}", "version-update-and-readback"],
-  "jira.boards": ["GET", "read", "/board", "visible-boards", "/rest/agile/1.0"],
-  "jira.board": ["GET", "read", "/board/{boardId}", "visible-boards", "/rest/agile/1.0"],
-  "jira.board-configuration": [
-    "GET",
-    "read",
+  ),
+  "jira.link-types": read("/issueLinkType", "visible-link-types"),
+  "jira.issue-link": read("/issueLink/{linkId}", "visible-issue-links"),
+  "jira.worklogs": read("/issue/{issueIdOrKey}/worklog", "visible-worklogs"),
+  "jira.worklog": read("/issue/{issueIdOrKey}/worklog/{id}", "visible-worklogs"),
+  "jira.components": read("/project/{projectIdOrKey}/components", "visible-components"),
+  "jira.component": read("/component/{id}", "visible-components"),
+  "jira.versions": read("/project/{projectIdOrKey}/versions", "visible-versions"),
+  "jira.version": read("/version/{id}", "visible-versions"),
+  "jira.create-component": write("POST", "/component", "component-create-and-readback"),
+  "jira.update-component": write("PUT", "/component/{id}", "component-update-and-readback"),
+  "jira.create-version": write("POST", "/version", "version-create-and-readback"),
+  "jira.update-version": write("PUT", "/version/{id}", "version-update-and-readback"),
+  "jira.boards": read("/board", "visible-boards", "/rest/agile/1.0"),
+  "jira.board": read("/board/{boardId}", "visible-boards", "/rest/agile/1.0"),
+  "jira.board-configuration": read(
     "/board/{boardId}/configuration",
     "visible-boards",
     "/rest/agile/1.0",
-  ],
-  "jira.board-backlog": [
-    "GET",
-    "read",
-    "/board/{boardId}/backlog",
-    "visible-issues",
-    "/rest/agile/1.0",
-  ],
-  "jira.board-issues": [
-    "GET",
-    "read",
-    "/board/{boardId}/issue",
-    "visible-issues",
-    "/rest/agile/1.0",
-  ],
-  "jira.board-epics": ["GET", "read", "/board/{boardId}/epic", "visible-epics", "/rest/agile/1.0"],
-  "jira.epic": ["GET", "read", "/epic/{epicIdOrKey}", "visible-epics", "/rest/agile/1.0"],
-  "jira.epic-issues": [
-    "GET",
-    "read",
-    "/epic/{epicIdOrKey}/issue",
-    "visible-issues",
-    "/rest/agile/1.0",
-  ],
-  "jira.sprints": ["GET", "read", "/board/{boardId}/sprint", "visible-sprints", "/rest/agile/1.0"],
-  "jira.sprint": ["GET", "read", "/sprint/{sprintId}", "visible-sprints", "/rest/agile/1.0"],
-  "jira.sprint-issues": [
-    "GET",
-    "read",
-    "/sprint/{sprintId}/issue",
-    "visible-issues",
-    "/rest/agile/1.0",
-  ],
-  "jira.filter": ["GET", "read", "/filter/{id}", "visible-filters"],
-  "jira.favourite-filters": ["GET", "read", "/filter/favourite", "visible-filters"],
-  "jira.board-create": ["POST", "write", "/board", "board-create-and-readback", "/rest/agile/1.0"],
-  "jira.sprint-create": [
+  ),
+  "jira.board-backlog": issueRead("/board/{boardId}/backlog", "/rest/agile/1.0"),
+  "jira.board-issues": issueRead("/board/{boardId}/issue", "/rest/agile/1.0"),
+  "jira.board-epics": read("/board/{boardId}/epic", "visible-epics", "/rest/agile/1.0"),
+  "jira.epic": read("/epic/{epicIdOrKey}", "visible-epics", "/rest/agile/1.0"),
+  "jira.epic-issues": issueRead("/epic/{epicIdOrKey}/issue", "/rest/agile/1.0"),
+  "jira.sprints": read("/board/{boardId}/sprint", "visible-sprints", "/rest/agile/1.0"),
+  "jira.sprint": read("/sprint/{sprintId}", "visible-sprints", "/rest/agile/1.0"),
+  "jira.sprint-issues": issueRead("/sprint/{sprintId}/issue", "/rest/agile/1.0"),
+  "jira.filter": read("/filter/{id}", "visible-filters"),
+  "jira.favourite-filters": read("/filter/favourite", "visible-filters"),
+  "jira.board-create": write("POST", "/board", "board-create-and-readback", "/rest/agile/1.0"),
+  "jira.sprint-create": write("POST", "/sprint", "sprint-create-and-readback", "/rest/agile/1.0"),
+  "jira.sprint-update": write(
     "POST",
-    "write",
-    "/sprint",
-    "sprint-create-and-readback",
-    "/rest/agile/1.0",
-  ],
-  "jira.sprint-update": [
-    "POST",
-    "write",
     "/sprint/{sprintId}",
     "sprint-update-and-readback",
     "/rest/agile/1.0",
-  ],
-  "jira.sprint-move-issues": [
+  ),
+  "jira.sprint-move-issues": write(
     "POST",
-    "write",
     "/sprint/{sprintId}/issue",
     "issue-membership-and-readback",
     "/rest/agile/1.0",
-  ],
-  "jira.backlog-move-issues": [
+  ),
+  "jira.backlog-move-issues": write(
     "POST",
-    "write",
     "/backlog/issue",
     "issue-membership-and-readback",
     "/rest/agile/1.0",
-  ],
-  "jira.epic-update": [
+  ),
+  "jira.epic-update": write(
     "POST",
-    "write",
     "/epic/{epicIdOrKey}",
     "epic-update-and-readback",
     "/rest/agile/1.0",
-  ],
-  "jira.epic-move-issues": [
+  ),
+  "jira.epic-move-issues": write(
     "POST",
-    "write",
     "/epic/{epicIdOrKey}/issue",
     "issue-membership-and-readback",
     "/rest/agile/1.0",
-  ],
-  "jira.projects": ["GET", "read", "/project", "visible-projects"],
-  "jira.project": ["GET", "read", "/project/{projectIdOrKey}", "current-project-metadata"],
-  "jira.validate-project-key": [
-    "GET",
-    "read",
-    "/projectvalidate/key",
-    "native-project-key-validation",
-  ],
-  "jira.project-permissions": ["GET", "read", "/mypermissions", "explicit-project-permissions"],
-  "jira.project-type": [
-    "GET",
-    "read",
-    "/project/type/{projectTypeKey}/accessible",
-    "accessible-project-type",
-  ],
-  "jira.create-project": ["POST", "write", "/project", "project-create-and-readback"],
-  "jira.update-project": [
-    "PUT",
-    "write",
-    "/project/{projectIdOrKey}",
-    "project-update-and-readback",
-  ],
-  "jira.issue-types": [
-    "GET",
-    "read",
+  ),
+  "jira.projects": read("/project", "visible-projects"),
+  "jira.project": read("/project/{projectIdOrKey}", "current-project-metadata"),
+  "jira.validate-project-key": read("/projectvalidate/key", "native-project-key-validation"),
+  "jira.project-permissions": read("/mypermissions", "explicit-project-permissions"),
+  "jira.project-type": read("/project/type/{projectTypeKey}/accessible", "accessible-project-type"),
+  "jira.create-project": write("POST", "/project", "project-create-and-readback"),
+  "jira.update-project": write("PUT", "/project/{projectIdOrKey}", "project-update-and-readback"),
+  "jira.issue-types": read(
     "/issue/createmeta/{projectIdOrKey}/issuetypes",
     "current-create-metadata",
-  ],
-  "jira.create-fields": [
-    "GET",
-    "read",
+  ),
+  "jira.create-fields": read(
     "/issue/createmeta/{projectIdOrKey}/issuetypes/{issueTypeId}",
     "current-create-metadata",
-  ],
-  "jira.edit-fields": ["GET", "read", "/issue/{issueIdOrKey}/editmeta", "current-edit-metadata"],
-  "jira.search": ["GET", "read", "/search", "visible-issues"],
-  "jira.issue": ["GET", "read", "/issue/{issueIdOrKey}", "visible-issues"],
-  "jira.comments": ["GET", "read", "/issue/{issueIdOrKey}/comment", "visible-issues"],
-  "jira.transitions": ["GET", "read", "/issue/{issueIdOrKey}/transitions", "current-transitions"],
-  "jira.assignable-users": ["GET", "read", "/user/assignable/search", "current-assignable-users"],
-  "jira.create": ["POST", "write", "/issue", "current-create-metadata"],
-  "jira.edit": ["PUT", "write", "/issue/{issueIdOrKey}", "current-edit-metadata"],
-  "jira.assign": ["PUT", "write", "/issue/{issueIdOrKey}/assignee", "current-assignable-users"],
-  "jira.comment": ["POST", "write", "/issue/{issueIdOrKey}/comment", "comment-create-and-readback"],
-  "jira.transition": ["POST", "write", "/issue/{issueIdOrKey}/transitions", "current-transitions"],
-  "jira.attach": [
+  ),
+  "jira.edit-fields": read("/issue/{issueIdOrKey}/editmeta", "current-edit-metadata"),
+  "jira.search": issueRead("/search"),
+  "jira.issue": issueRead("/issue/{issueIdOrKey}"),
+  "jira.comments": issueRead("/issue/{issueIdOrKey}/comment"),
+  "jira.transitions": read("/issue/{issueIdOrKey}/transitions", "current-transitions"),
+  "jira.assignable-users": read("/user/assignable/search", "current-assignable-users"),
+  "jira.create": write("POST", "/issue", "current-create-metadata"),
+  "jira.edit": write("PUT", "/issue/{issueIdOrKey}", "current-edit-metadata"),
+  "jira.assign": write("PUT", "/issue/{issueIdOrKey}/assignee", "current-assignable-users"),
+  "jira.comment": write("POST", "/issue/{issueIdOrKey}/comment", "comment-create-and-readback"),
+  "jira.transition": write("POST", "/issue/{issueIdOrKey}/transitions", "current-transitions"),
+  "jira.attach": write(
     "POST",
-    "write",
     "/issue/{issueIdOrKey}/attachments",
     "attachment-create-and-readback",
-  ],
+  ),
 };
 const COMPOSITES: Readonly<
   Record<

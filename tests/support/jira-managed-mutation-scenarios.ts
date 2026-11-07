@@ -169,8 +169,9 @@ export function nativeRead(
   state: MutationRemoteState,
 ): ReturnType<typeof response> | undefined {
   const resources: Readonly<Record<string, unknown>> = {
-    "/context/rest/api/2/issue/SYN-1/comment/10002": {
+    "/context/rest/api/2/issue/10001/comment/10002": {
       id: "10002",
+      self: "https://203.0.113.10/context/rest/api/2/issue/10001/comment/10002",
       body: state.comment,
       visibility: state.commentVisibility,
     },
@@ -214,7 +215,7 @@ function commentWrite(
   body: Record<string, unknown>,
   state: MutationRemoteState,
 ): ReturnType<typeof response> | undefined {
-  if (path === "/context/rest/api/2/issue/SYN-1/comment/10002") {
+  if (path === "/context/rest/api/2/issue/10001/comment/10002") {
     if (
       JSON.stringify(body.visibility) !== JSON.stringify(state.commentVisibility) ||
       typeof body.body !== "string"

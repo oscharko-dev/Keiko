@@ -1329,6 +1329,8 @@ export function executeJiraManagedMutation(
       operation,
       structuredClone(source),
       requestFor(connection, context),
+      false,
+      connection.baseUrl,
     );
   if (isJiraComponentMutation(operation))
     return executeJiraComponentMutation(
@@ -1388,6 +1390,7 @@ function checkedAttempt(
       structuredClone(source),
       requestFor(connection, context),
       true,
+      connection.baseUrl,
     );
   if (isJiraComponentMutation(operation))
     return executeJiraComponentMutation(

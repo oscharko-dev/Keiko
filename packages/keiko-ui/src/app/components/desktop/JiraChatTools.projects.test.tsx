@@ -53,6 +53,221 @@ function show(exchange: ChatToolExchange): ReturnType<typeof render> {
 
 afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
 
+describe.each(["en", "de"] as const)("file and avatar metadata in %s (C8)", (locale) => {
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  it("restores all eight metadata reads with named accessible cards and no image or download destinations", async () => {
+    const exchanges = [
+      projectExchange(
+        { outcome: "succeeded", enabled: true, uploadLimit: 1000, maxBytes: 500 },
+        "jira_attachment_settings",
+      ),
+      projectExchange(
+        {
+          outcome: "succeeded",
+          attachmentId: "9007199254740993",
+          filename: "delivery.txt",
+          size: 0,
+          mimeType: "text/plain",
+          created: "2026-11-07T10:00:00Z",
+          content: "https://untrusted.invalid/file",
+        },
+        "jira_attachment",
+      ),
+      projectExchange(
+        {
+          outcome: "succeeded",
+          attachmentId: "92",
+          items: [{ entryIndex: 0, abbreviatedName: "source…", size: 42 }],
+          startAt: 0,
+          total: 1,
+          totalEntryCount: 3,
+          entriesComplete: false,
+        },
+        "jira_attachment_archive",
+      ),
+      projectExchange(
+        {
+          outcome: "succeeded",
+          attachmentId: "93",
+          name: "release.zip",
+          mediaType: "application/zip",
+          totalEntryCount: 7,
+        },
+        "jira_attachment_archive_summary",
+      ),
+      ...["jira_system_avatars", "jira_project_avatars", "jira_user_avatars", "jira_avatars"].map(
+        (operation, index) =>
+          projectExchange(
+            {
+              outcome: "succeeded",
+              startAt: 0,
+              total: 1,
+              items: [
+                {
+                  id: String(index + 1),
+                  category: index === 0 ? "system" : "custom",
+                  ...(index === 0 ? { selected: false } : index === 1 ? { selected: true } : {}),
+                  owner: "Delivery owner",
+                  self: "https://untrusted.invalid/avatar",
+                  urls: { "48x48": "https://untrusted.invalid/image" },
+                  browseUrl: "https://untrusted.invalid/browse/SYN-7",
+                  issueKey: "SYN-7",
+                },
+              ],
+            },
+            operation,
+          ),
+      ),
+    ].map((exchange, index) => ({
+      ...exchange,
+      call: { ...exchange.call, id: `asset-${String(index)}` },
+    }));
+    const transcript = { schemaVersion: 1 as const, exchanges };
+    const initial = render(
+      <I18nProvider>
+        <JiraChatTools transcript={transcript} turnState="completed" />
+      </I18nProvider>,
+    );
+    expect(screen.getByText("delivery.txt")).toBeVisible();
+    initial.unmount();
+    const restored = JSON.parse(JSON.stringify(transcript)) as ChatToolTranscript;
+    const { container } = render(
+      <I18nProvider>
+        <JiraChatTools transcript={restored} turnState="completed" />
+      </I18nProvider>,
+    );
+    const actionNames =
+      locale === "en"
+        ? [
+            "Read Jira attachment settings",
+            "Read Jira attachment metadata",
+            "Read Jira archive entry metadata",
+            "Read Jira archive summary",
+            "Read Jira system avatar metadata",
+            "Read Jira project avatar metadata",
+            "Read Jira user avatar metadata",
+            "Read Jira avatar metadata",
+          ]
+        : [
+            "Jira-Anhangseinstellungen lesen",
+            "Jira-Anhangsmetadaten lesen",
+            "Jira-Archiveintragsmetadaten lesen",
+            "Jira-Archivübersicht lesen",
+            "Jira-Systemavatar-Metadaten lesen",
+            "Jira-Projektavatar-Metadaten lesen",
+            "Jira-Benutzeravatar-Metadaten lesen",
+            "Jira-Avatar-Metadaten lesen",
+          ];
+    for (const name of actionNames) expect(screen.getByRole("group", { name })).toBeVisible();
+    for (const value of locale === "en"
+      ? [
+          "Attachment ID: 9007199254740993",
+          "Size in bytes: 0",
+          "Archive entry index: 0",
+          "Total entries in archive: 3",
+          "Attachments enabled",
+          "System avatar",
+          "Selected",
+          "Not selected",
+          "Jira returned metadata for only part of the archive.",
+        ]
+      : [
+          "Anhang-ID: 9007199254740993",
+          "Größe in Bytes: 0",
+          "Archiveintragsindex: 0",
+          "Einträge im gesamten Archiv: 3",
+          "Anhänge aktiviert",
+          "Systemavatar",
+          "Ausgewählt",
+          "Nicht ausgewählt",
+          "Jira hat nur für einen Teil des Archivs Metadaten geliefert.",
+        ])
+      expect(screen.getByText(value, { exact: true })).toBeVisible();
+    expect(
+      screen.getAllByText(locale === "en" ? "Selection unknown" : "Auswahl unbekannt"),
+    ).toHaveLength(2);
+    expect(screen.getByText("source…")).toBeVisible();
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(container.querySelector("pre, img, video, audio")).toBeNull();
+    expect(container.textContent).not.toContain("untrusted.invalid");
+    expect(container.textContent).not.toContain("SYN-7");
+    expect(await axe(container)).toHaveNoViolations();
+  });
+  it("keeps omitted archive sizes and native totals unknown while showing the entry index", () => {
+    show(
+      projectExchange(
+        {
+          outcome: "succeeded",
+          attachmentId: "92",
+          startAt: 0,
+          total: 1,
+          items: [{ entryIndex: 4 }],
+        },
+        "jira_attachment_archive",
+      ),
+    );
+    expect(
+      screen.getByText(locale === "en" ? "Archive entry index: 4" : "Archiveintragsindex: 4"),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "The total archive size is unknown; these entries may be incomplete."
+          : "Der Gesamtumfang des Archivs ist unbekannt; diese Einträge können unvollständig sein.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(
+        /Size in bytes|Größe in Bytes|Total entries in archive|Einträge im gesamten Archiv/u,
+      ),
+    ).toBeNull();
+  });
+  it("does not turn missing upload limits into zero or disabled attachments", () => {
+    show(projectExchange({ outcome: "succeeded", enabled: true }, "jira_attachment_settings"));
+    expect(
+      screen.getByText(locale === "en" ? "Attachments enabled" : "Anhänge aktiviert"),
+    ).toBeVisible();
+    expect(screen.queryByText(/limit in bytes|limit in Bytes/u)).toBeNull();
+    expect(
+      screen.queryByText(locale === "en" ? "Attachments disabled" : "Anhänge deaktiviert"),
+    ).toBeNull();
+  });
+  it("distinguishes complete native archive metadata from the current local page", () => {
+    show(
+      projectExchange(
+        {
+          outcome: "succeeded",
+          attachmentId: "92",
+          startAt: 1,
+          total: 3,
+          nextStartAt: 2,
+          totalEntryCount: 3,
+          entriesComplete: true,
+          items: [{ entryIndex: 1, name: "middle.txt" }],
+        },
+        "jira_attachment_archive",
+      ),
+    );
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "All archive entry metadata returned by Jira. The displayed page may contain only part of it."
+          : "Jira hat die Metadaten aller Archiveinträge geliefert. Die angezeigte Seite kann nur einen Teil enthalten.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "Partial Jira result. Some available data is not included."
+          : "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
+      ),
+    ).toBeVisible();
+  });
+});
+
 describe.each(["en", "de"] as const)("changed source requirements in %s", (locale) => {
   beforeEach(async () => {
     await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);

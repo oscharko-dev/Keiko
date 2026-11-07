@@ -19,6 +19,11 @@ import {
   sameJiraCommentVisibility,
   type JiraCommentVisibility,
 } from "./jira-comment-visibility.js";
+import {
+  jiraCommentSelfMatches,
+  normalizeJiraCommentBody,
+  type JiraCommentBinding,
+} from "./jira-comment-binding.js";
 
 type Failure = Extract<JiraMutationAttempt, { ok: false }>;
 export type JiraIssueReadback =
@@ -264,22 +269,34 @@ export async function confirmJiraMutationFields(
     return CONFLICT;
   return relevantChange(input, current.fields) ? { ok: true, receipt: input.receipt } : CONFLICT;
 }
+function commentContentMatches(
+  raw: Record<string, unknown>,
+  body: string,
+  visibility: JiraCommentVisibility | null | undefined,
+): boolean {
+  return (
+    typeof raw.body === "string" &&
+    normalizeJiraCommentBody(raw.body) === normalizeJiraCommentBody(body) &&
+    (visibility === undefined ||
+      sameJiraCommentVisibility(jiraCommentVisibility(raw.visibility), visibility))
+  );
+}
 export async function confirmJiraComment(
   request: JiraMutationRequest,
   issueKey: string,
   commentId: string,
   body: string,
   visibility?: JiraCommentVisibility | null,
+  binding?: JiraCommentBinding,
 ): Promise<JiraMutationAttempt> {
   const response = await request(
-    `issue/${encodeURIComponent(issueKey)}/comment/${encodeURIComponent(commentId)}`,
+    `issue/${encodeURIComponent(binding?.issueId ?? issueKey)}/comment/${encodeURIComponent(commentId)}`,
   );
   if (!response.ok) return response;
   if (response.status !== 200 || response.body === undefined) return MALFORMED;
   return response.body.id === commentId &&
-    response.body.body === body &&
-    (visibility === undefined ||
-      sameJiraCommentVisibility(jiraCommentVisibility(response.body.visibility), visibility))
+    commentContentMatches(response.body, body, visibility) &&
+    (binding === undefined || jiraCommentSelfMatches(response.body.self, commentId, binding))
     ? { ok: true, receipt: { issueKey, commentId } }
     : CONFLICT;
 }

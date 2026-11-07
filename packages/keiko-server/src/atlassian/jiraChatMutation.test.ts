@@ -508,13 +508,17 @@ it.each([400, 401, 403, 429, 500, 503])(
   },
 );
 it.each([
-  ["jira.board-create", "/board"],
-  ["jira.sprint-create", "/sprint"],
-  ["jira.sprint-update", "/sprint/37"],
-  ["jira.epic-update", "/epic/SYN-1"],
+  ["jira.board-create", "POST", "agile/1.0/board"],
+  ["jira.sprint-create", "POST", "agile/1.0/sprint"],
+  ["jira.sprint-update", "POST", "agile/1.0/sprint/37"],
+  ["jira.epic-update", "POST", "agile/1.0/epic/SYN-1"],
+  ["jira.create-component", "POST", "api/2/component"],
+  ["jira.update-component", "PUT", "api/2/component/37"],
+  ["jira.create-version", "POST", "api/2/version"],
+  ["jira.update-version", "PUT", "api/2/version/37"],
 ] as const)(
   "allows correction after %s returns a structured 400 without effects",
-  async (operation, path) => {
+  async (operation, method, path) => {
     const f = fixture();
     if (f.input.journal === undefined) throw new TypeError("Expected mutation journal");
     const settle = vi.spyOn(f.input.journal, "settle");
@@ -530,8 +534,8 @@ it.each([
       intent: { ...f.input.intent, operation },
       execute: async (http) => {
         await http({
-          method: "POST",
-          url: `https://jira.example.invalid/rest/agile/1.0${path}`,
+          method,
+          url: `https://jira.example.invalid/rest/${path}`,
           bodyJson: "{}",
           maxBodyBytes: 1000,
           timeoutMs: 1000,

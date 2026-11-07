@@ -8,6 +8,12 @@ import { requireJiraInventory as requireValid } from "./jira-api-sources.mjs";
 export const JIRA_REGISTRY_SOURCE = "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts";
 export const JIRA_REGISTRY_FILE = new URL(`../../${JIRA_REGISTRY_SOURCE}`, import.meta.url);
 
+const BUILDER_FORMS = {
+  read: { parameters: 3, returned: ["GET", "read", 0, 1, 2] },
+  write: { parameters: 4, returned: [0, "write", 1, 2, 3] },
+  issueRead: { parameters: 2, returned: ["GET", "read", 0, "visible-issues", 1] },
+};
+
 function nativeDeclaration(ast) {
   const declarations = ast.statements
     .filter(ts.isVariableStatement)
@@ -21,19 +27,155 @@ function nativeDeclaration(ast) {
   );
   return initializer;
 }
-function nativeEntry(property) {
-  requireValid(
-    ts.isPropertyAssignment(property) && ts.isStringLiteralLike(property.name),
-    "registry-native-property",
+function hasIdentifier(node, name) {
+  if (ts.isIdentifier(node) && node.text === name) return true;
+  return ts.forEachChild(node, (child) => hasIdentifier(child, name)) === true;
+}
+function changesBuilder(ast, name) {
+  function changed(node) {
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+      hasIdentifier(node.left, name)
+    )
+      return true;
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken ||
+        node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      hasIdentifier(node.operand, name)
+    )
+      return true;
+    return ts.forEachChild(node, changed) === true;
+  }
+  return (
+    changed(ast) ||
+    ast.statements.some(
+      (node) =>
+        (ts.isVariableStatement(node) &&
+          node.declarationList.declarations.some((declaration) =>
+            hasIdentifier(declaration.name, name),
+          )) ||
+        (ts.isImportDeclaration(node) &&
+          node.importClause !== undefined &&
+          hasIdentifier(node.importClause, name)),
+    )
   );
-  requireValid(ts.isArrayLiteralExpression(property.initializer), "registry-native-tuple");
-  const tuple = property.initializer.elements;
+}
+function builderParameters(declaration, name) {
+  const parameters = declaration.parameters;
+  requireValid(
+    parameters.length === BUILDER_FORMS[name].parameters,
+    "registry-native-builder-parameters",
+  );
+  for (const [index, parameter] of parameters.entries()) {
+    requireValid(
+      ts.isIdentifier(parameter.name) &&
+        parameter.dotDotDotToken === undefined &&
+        parameter.questionToken === undefined &&
+        (parameter.modifiers?.length ?? 0) === 0,
+      "registry-native-builder-parameters",
+    );
+    const last = index === parameters.length - 1;
+    requireValid(
+      last ? nativeRootDefault(parameter.initializer) : parameter.initializer === undefined,
+      "registry-native-builder-default",
+    );
+  }
+  const names = parameters.map((parameter) => parameter.name.text);
+  requireValid(new Set(names).size === names.length, "registry-native-builder-parameters");
+  return names;
+}
+function nativeRootDefault(initializer) {
+  return (
+    initializer !== undefined &&
+    ts.isStringLiteralLike(initializer) &&
+    initializer.text === "/rest/api/2"
+  );
+}
+function builderReturn(declaration, name, parameters) {
+  const body = declaration.body;
+  requireValid(
+    body !== undefined && body.statements.length === 1 && ts.isReturnStatement(body.statements[0]),
+    "registry-native-builder-body",
+  );
+  const returned = body.statements[0].expression;
+  requireValid(
+    returned !== undefined && ts.isArrayLiteralExpression(returned),
+    "registry-native-builder-return",
+  );
+  const expected = BUILDER_FORMS[name].returned.map((slot) =>
+    typeof slot === "number" ? ["identifier", parameters[slot]] : ["literal", slot],
+  );
+  requireValid(
+    returned.elements.length === expected.length &&
+      returned.elements.every((element, index) => {
+        const [kind, value] = expected[index];
+        return (
+          (kind === "literal" ? ts.isStringLiteralLike(element) : ts.isIdentifier(element)) &&
+          element.text === value
+        );
+      }),
+    "registry-native-builder-return",
+  );
+}
+function verifyBuilder(ast, name, verified) {
+  if (verified.has(name)) return;
+  const declarations = ast.statements.filter(
+    (node) => ts.isFunctionDeclaration(node) && node.name?.text === name,
+  );
+  requireValid(
+    declarations.length === 1 && !changesBuilder(ast, name),
+    "registry-native-builder-owner",
+  );
+  const declaration = declarations[0];
+  requireValid(
+    (declaration.modifiers?.length ?? 0) === 0 &&
+      declaration.asteriskToken === undefined &&
+      (declaration.typeParameters?.length ?? 0) === 0,
+    "registry-native-builder-shape",
+  );
+  builderReturn(declaration, name, builderParameters(declaration, name));
+  verified.add(name);
+}
+function literalTuple(tuple) {
   requireValid(
     (tuple.length === 4 || tuple.length === 5) && tuple.every(ts.isStringLiteralLike),
     "registry-native-tuple",
   );
-  const [method, effect, path, permissionPolicy, root = "/rest/api/2"] = tuple.map(
-    (node) => node.text,
+  return tuple.map((node) => node.text);
+}
+function nativeTuple(initializer, ast, verified) {
+  if (ts.isArrayLiteralExpression(initializer)) return literalTuple(initializer.elements);
+  requireValid(
+    ts.isCallExpression(initializer) &&
+      ts.isIdentifier(initializer.expression) &&
+      Object.hasOwn(BUILDER_FORMS, initializer.expression.text) &&
+      initializer.typeArguments === undefined,
+    "registry-native-builder-call",
+  );
+  const name = initializer.expression.text;
+  verifyBuilder(ast, name, verified);
+  const count = BUILDER_FORMS[name].parameters - 1;
+  requireValid(
+    (initializer.arguments.length === count || initializer.arguments.length === count + 1) &&
+      initializer.arguments.every(ts.isStringLiteralLike),
+    "registry-native-builder-arguments",
+  );
+  const args = initializer.arguments.map((node) => node.text);
+  if (args.length === count) args.push("/rest/api/2");
+  return BUILDER_FORMS[name].returned.map((slot) => (typeof slot === "number" ? args[slot] : slot));
+}
+function nativeEntry(property, ast, verified) {
+  requireValid(
+    ts.isPropertyAssignment(property) && ts.isStringLiteralLike(property.name),
+    "registry-native-property",
+  );
+  const [method, effect, path, permissionPolicy, root = "/rest/api/2"] = nativeTuple(
+    property.initializer,
+    ast,
+    verified,
   );
   requireValid(
     new Set(["GET", "POST", "PUT"]).has(method) && new Set(["read", "write"]).has(effect),
@@ -52,7 +194,7 @@ function nativeEntry(property) {
     permissionPolicy,
   };
 }
-/** Parse only literal declarations. Never import/evaluate the runtime, expressions or fetched schemas. */
+/** Parse only literals and verified closed builder declarations. Never import/evaluate the runtime. */
 export function readJiraNativeRegistry(file = JIRA_REGISTRY_FILE) {
   const bytes = readFileSync(file);
   const ast = ts.createSourceFile(
@@ -62,8 +204,9 @@ export function readJiraNativeRegistry(file = JIRA_REGISTRY_FILE) {
     true,
   );
   requireValid(ast.parseDiagnostics.length === 0, "registry-native-syntax");
+  const verified = new Set();
   const entries = nativeDeclaration(ast)
-    .properties.map(nativeEntry)
+    .properties.map((property) => nativeEntry(property, ast, verified))
     .sort((a, b) => a.tool.localeCompare(b.tool, "en"));
   requireValid(
     entries.length > 0 && new Set(entries.map((entry) => entry.tool)).size === entries.length,

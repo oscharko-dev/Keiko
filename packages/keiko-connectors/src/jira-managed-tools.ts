@@ -8,6 +8,11 @@ import { executeJiraIssueDetailRead, isJiraIssueDetailRead } from "./jira-manage
 import { executeJiraCommentRead, isJiraCommentRead } from "./jira-managed-comments.js";
 import { executeJiraSavedViewRead, isJiraSavedViewRead } from "./jira-managed-saved-views.js";
 import {
+  executeJiraAttachmentRead,
+  isJiraAttachmentRead,
+} from "./jira-managed-attachment-reads.js";
+import { executeJiraAvatarRead, isJiraAvatarRead } from "./jira-managed-avatar-reads.js";
+import {
   executeJiraProjectRead,
   isJiraProjectRead,
   isJiraProjectMutation,
@@ -304,21 +309,29 @@ async function read<Context extends ManagedMcpInvocationContext>(
   }
   if (isJiraComponentRead(name) || isJiraVersionRead(name))
     return projectMetadataRead(name, args, context, connection);
-  if (isIssueOrSavedViewRead(name)) return collaborationRead(name, args, context, connection);
+  if (isNativeDetailRead(name)) return nativeDetailRead(name, args, context, connection);
   return isJiraProjectRead(name)
     ? projectRead(name, args, context, connection)
     : readIssueOrMetadata(name, args, context, connection);
 }
 
-type IssueOrSavedViewRead =
+type NativeDetailRead =
   | Parameters<typeof executeJiraIssueDetailRead>[0]
   | "jira.get-comment"
-  | Parameters<typeof executeJiraSavedViewRead>[0];
-function isIssueOrSavedViewRead(name: string): name is IssueOrSavedViewRead {
-  return isJiraIssueDetailRead(name) || isJiraCommentRead(name) || isJiraSavedViewRead(name);
+  | Parameters<typeof executeJiraSavedViewRead>[0]
+  | Parameters<typeof executeJiraAttachmentRead>[0]
+  | Parameters<typeof executeJiraAvatarRead>[0];
+function isNativeDetailRead(name: string): name is NativeDetailRead {
+  return (
+    isJiraIssueDetailRead(name) ||
+    isJiraCommentRead(name) ||
+    isJiraSavedViewRead(name) ||
+    isJiraAttachmentRead(name) ||
+    isJiraAvatarRead(name)
+  );
 }
-async function collaborationRead<Context extends ManagedMcpInvocationContext>(
-  name: IssueOrSavedViewRead,
+async function nativeDetailRead<Context extends ManagedMcpInvocationContext>(
+  name: NativeDetailRead,
   args: CatalogJsonObject,
   context: Context,
   connection: JiraManagedProviderDeps<Context>["connection"],
@@ -327,8 +340,10 @@ async function collaborationRead<Context extends ManagedMcpInvocationContext>(
   if (connected.deployment !== "data-center") return failure("unsupported-deployment");
   const request = requestFor(connected, context);
   if (isJiraSavedViewRead(name)) return executeJiraSavedViewRead(name, args, request);
+  if (isJiraAttachmentRead(name)) return executeJiraAttachmentRead(name, args, request);
+  if (isJiraAvatarRead(name)) return executeJiraAvatarRead(name, args, request);
   const result = isJiraCommentRead(name)
-    ? await executeJiraCommentRead(name, args, request)
+    ? await executeJiraCommentRead(name, args, request, connected.baseUrl)
     : await executeJiraIssueDetailRead(name, args, request);
   return boundJiraReadResult(withIssueLink(result, connected.baseUrl, args.issueKey));
 }

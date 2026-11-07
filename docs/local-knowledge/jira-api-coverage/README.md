@@ -123,22 +123,22 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **60 native identities: 40 reads and 20 writes**. Each is mapped to
+The current registry supplies **68 native identities: 48 reads and 20 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **379 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **371 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this reconciliation. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
 This snapshot includes ordinary project setup; board/backlog/Epic and sprint operations; bounded
 filter reads; versions/components; existing issue workflows; the C7 dashboard/filter-sharing reads; and the C6 comment-update/link/worklog
-read increment. The three existing report/draft composites remain compositions, not extra native
+read increment, plus bounded C8 attachment/archive and avatar metadata. The three existing report/draft composites remain compositions, not extra native
 API identities. Remaining filter creation, ranking, worklog writes, destructive operations,
 administration and other inventory gaps stay open. A registered declaration is not evidence that
 Jira grants the current person permission or that a particular installation supports the operation.
 
 `currentRegistry` pins the existing server registry source file's SHA-256 and native declaration
-count. The reconciliation helper parses that file's literal `NATIVE` tuples with TypeScript's AST;
+count. The reconciliation helper parses that file's literal `NATIVE` declarations and verified closed `read`, `write` and `issueRead` builders with TypeScript's AST;
 it does not import the runtime, evaluate source expressions, compile schemas or dispatch HTTP.
 It rejects a registry identity absent from the pinned published inventory. Paths retain the exact
 published parameter names, so even a wire-equivalent renamed placeholder must be reconciled with

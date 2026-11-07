@@ -1,5 +1,6 @@
 import {
   isSafeAtlassianIdentifier,
+  isSafeAtlassianConnectorBaseUrl,
   type JiraMutationAttempt,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -10,7 +11,12 @@ import { jiraCommentVisibility, type JiraCommentVisibility } from "./jira-commen
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { jiraReadFailure } from "./jira-managed-metadata.js";
-import { confirmJiraComment } from "./jira-mutation-confirmation.js";
+import { confirmJiraComment, readJiraMutationIssue } from "./jira-mutation-confirmation.js";
+import {
+  jiraCommentSelfMatches,
+  normalizeJiraCommentBody,
+  type JiraCommentBinding,
+} from "./jira-comment-binding.js";
 import { dispatchFailure } from "./jira-mutation-failure.js";
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
 
@@ -43,8 +49,20 @@ function target(args: CatalogJsonObject, write: boolean): CommentTarget | undefi
     ? { issueKey: args.issueKey, commentId: args.commentId }
     : undefined;
 }
-function path(input: CommentTarget): string {
-  return `issue/${encodeURIComponent(input.issueKey)}/comment/${input.commentId}`;
+function path(input: CommentTarget, binding: JiraCommentBinding): string {
+  return `issue/${binding.issueId}/comment/${input.commentId}`;
+}
+async function bindIssue(
+  request: JiraMutationRequest,
+  input: CommentTarget,
+  baseUrl: string | undefined,
+): Promise<Failure | { readonly ok: true; readonly binding: JiraCommentBinding }> {
+  if (baseUrl === undefined || !isSafeAtlassianConnectorBaseUrl(baseUrl)) return MALFORMED;
+  const current = await readJiraMutationIssue(request, input.issueKey, ["summary"]);
+  if (!current.ok) return current;
+  return jiraNativeId(current.id)
+    ? { ok: true, binding: { issueId: current.id, baseUrl } }
+    : MALFORMED;
 }
 function optionalMetadata(raw: Record<string, unknown>): CatalogJsonObject {
   const fields: Record<string, string> = {};
@@ -59,13 +77,15 @@ function optionalMetadata(raw: Record<string, unknown>): CatalogJsonObject {
 async function readComment(
   request: JiraMutationRequest,
   input: CommentTarget,
+  binding: JiraCommentBinding,
 ): Promise<Failure | { readonly ok: true; readonly comment: CommentView }> {
-  const response = await request(path(input));
+  const response = await request(path(input, binding));
   if (!response.ok) return dispatchFailure(response);
   const raw = response.body;
   if (response.status !== 200 || !jiraNativeId(raw?.id) || !jiraNativeText(raw.body, 32768, true))
     return MALFORMED;
-  if (raw.id !== input.commentId) return CONFLICT;
+  if (raw.id !== input.commentId || !jiraCommentSelfMatches(raw.self, input.commentId, binding))
+    return CONFLICT;
   const visibility = jiraCommentVisibility(raw.visibility);
   if (visibility === undefined) return MALFORMED;
   return {
@@ -87,10 +107,13 @@ export async function executeJiraCommentRead(
   _operation: "jira.get-comment",
   args: CatalogJsonObject,
   request: JiraMutationRequest,
+  baseUrl: string,
 ): Promise<ManagedMcpToolResult> {
   const input = target(args, false);
   if (input === undefined) return jiraReadFailure("invalid-input");
-  const current = await readComment(request, input);
+  const bound = await bindIssue(request, input, baseUrl);
+  if (!bound.ok) return jiraReadFailure(bound.reason, bound.detail);
+  const current = await readComment(request, input, bound.binding);
   return current.ok
     ? boundJiraReadResult({ data: { outcome: "succeeded", items: [current.comment.item] } })
     : jiraReadFailure(current.reason, current.detail);
@@ -109,13 +132,16 @@ export async function executeJiraCommentMutation(
   args: CatalogJsonObject,
   request: JiraMutationRequest,
   check = false,
+  baseUrl?: string,
 ): Promise<JiraMutationAttempt> {
   const input = target(args, true);
   if (input === undefined || typeof args.body !== "string")
     return { ok: false, reason: "field-validation", detail: { validation: "invalid-field" } };
-  const prior = await readComment(request, input);
+  const bound = await bindIssue(request, input, baseUrl);
+  if (!bound.ok) return bound;
+  const prior = await readComment(request, input, bound.binding);
   if (!prior.ok) return prior;
-  if (prior.comment.body === args.body)
+  if (normalizeJiraCommentBody(prior.comment.body) === normalizeJiraCommentBody(args.body))
     return {
       ...CONFLICT,
       receipt: input,
@@ -126,7 +152,7 @@ export async function executeJiraCommentMutation(
     };
   if (check) return { ok: true, receipt: {} };
   const visibility = prior.comment.visibility;
-  const response = await request(path(input), "PUT", {
+  const response = await request(path(input, bound.binding), "PUT", {
     body: args.body,
     ...(visibility === null ? {} : { visibility: { ...visibility } }),
   });
@@ -137,6 +163,7 @@ export async function executeJiraCommentMutation(
     input.commentId,
     args.body,
     visibility,
+    bound.binding,
   );
   return { ...(failure ?? confirmed), receipt: input };
 }

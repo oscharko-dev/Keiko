@@ -10,6 +10,7 @@ import {
   JIRA_AGILE_TOOLS,
   jiraAgileDetails,
   type JiraOutcomeFact,
+  type JiraAgileDetails,
 } from "./jira-agile-presentation";
 import {
   JIRA_PROJECT_METADATA_TOOLS,
@@ -20,6 +21,10 @@ import {
   jiraCollaborationDetails,
 } from "./jira-collaboration-presentation";
 import { JIRA_SAVED_VIEW_TOOLS, jiraSavedViewDetails } from "./jira-saved-view-presentation";
+import {
+  JIRA_FILE_METADATA_TOOLS,
+  jiraFileMetadataDetails,
+} from "./jira-file-metadata-presentation";
 import { jiraMutationUnchanged } from "./jira-tool-presentation";
 
 export interface JiraOutcomeItem {
@@ -32,7 +37,7 @@ export interface JiraOutcomeItem {
   readonly labels: readonly WidgetMessageKey[];
   readonly facts: readonly JiraOutcomeFact[];
 }
-export interface JiraOutcomeProblem {
+interface JiraOutcomeProblem {
   readonly field?: string;
   readonly message: string;
 }
@@ -69,6 +74,7 @@ const STANDALONE_TOOLS = new Set([
   ...JIRA_AGILE_TOOLS,
   ...JIRA_PROJECT_METADATA_TOOLS,
   ...JIRA_SAVED_VIEW_TOOLS,
+  ...JIRA_FILE_METADATA_TOOLS,
 ]);
 const BOARD_READ_TOOLS = new Set(["jira_board", "jira_boards", "jira_board_configuration"]);
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -174,8 +180,11 @@ function metadataOutcomeItem(source: UnknownRecord, tool: string): JiraOutcomeIt
   if (![name, body, projectId, ...facts].some((entry) => entry !== undefined)) return undefined;
   return { ...textMembers({ name, body, projectId }), facts, labels };
 }
-function savedViewOutcomeItem(source: UnknownRecord, tool: string): JiraOutcomeItem | undefined {
-  const { name, facts, labels } = jiraSavedViewDetails(tool, source);
+function metadataDetailsItem({
+  name,
+  facts,
+  labels,
+}: JiraAgileDetails): JiraOutcomeItem | undefined {
   return name === undefined && facts.length === 0 && labels.length === 0
     ? undefined
     : { ...textMembers({ name }), facts, labels };
@@ -195,7 +204,10 @@ function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined 
   const source = record(value);
   if (source === undefined) return undefined;
   if (JIRA_PROJECT_METADATA_TOOLS.has(tool)) return metadataOutcomeItem(source, tool);
-  if (JIRA_SAVED_VIEW_TOOLS.has(tool)) return savedViewOutcomeItem(source, tool);
+  if (JIRA_SAVED_VIEW_TOOLS.has(tool))
+    return metadataDetailsItem(jiraSavedViewDetails(tool, source));
+  if (JIRA_FILE_METADATA_TOOLS.has(tool))
+    return metadataDetailsItem(jiraFileMetadataDetails(tool, source));
   const agile = jiraAgileDetails(tool, source);
   const collaboration = jiraCollaborationDetails(tool, source);
   const projectKey = text(source.projectKey);

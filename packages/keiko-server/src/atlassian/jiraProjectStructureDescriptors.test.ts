@@ -100,6 +100,27 @@ it.each(CASES)(
   },
 );
 
+it.each(["jira.create-version", "jira.update-version"] as const)(
+  "preserves known project context for an uncertain %s without inventing a version identity",
+  (name) => {
+    const declaration = jiraProjectStructureDeclarationForTool(name);
+    if (declaration === undefined) throw new TypeError("Missing structure declaration");
+    expect(
+      describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
+        outcome: "unknown",
+        reason: "unavailable",
+        projectId: "10000",
+      }),
+    ).toBeUndefined();
+    expect(
+      describeCatalogSchemaMismatch(declaration.descriptor.resultSchema, {
+        outcome: "unknown",
+        projectId: "not-an-id",
+      }),
+    ).toBeDefined();
+  },
+);
+
 it.each([
   ["jira.update-component", { componentId: ID }],
   ["jira.update-version", { versionId: ID }],

@@ -32,6 +32,34 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.attachment-settings", args: {} },
+  { tool: "jira.attachment", args: { attachmentId: "71" }, parameters: { id: "71" } },
+  {
+    tool: "jira.attachment-archive",
+    args: { attachmentId: "71", startAt: 0, maxResults: 1 },
+    parameters: { id: "71" },
+  },
+  {
+    tool: "jira.attachment-archive-summary",
+    args: { attachmentId: "71" },
+    parameters: { id: "71" },
+  },
+  { tool: "jira.system-avatars", args: { avatarType: "user" }, parameters: { type: "user" } },
+  {
+    tool: "jira.project-avatars",
+    args: { projectIdOrKey: "SYN" },
+    parameters: { projectIdOrKey: "SYN" },
+  },
+  {
+    tool: "jira.user-avatars",
+    args: { username: "User name+tag" },
+    query: { username: "User name+tag" },
+  },
+  {
+    tool: "jira.avatars",
+    args: { avatarType: "project", owningObjectId: "10000" },
+    parameters: { type: "project", owningObjectId: "10000" },
+  },
   { tool: "jira.dashboards", args: { startAt: 0, maxResults: 25 }, query: PAGING },
   { tool: "jira.dashboard", args: { dashboardId: "71" }, parameters: { id: "71" } },
   { tool: "jira.filter-share-scope", args: {} },
@@ -48,12 +76,13 @@ const SCENARIOS: readonly Scenario[] = [
   {
     tool: "jira.get-comment",
     args: { issueKey: "SYN-1", commentId: "10002" },
-    parameters: { issueIdOrKey: "SYN-1", id: "10002" },
+    parameters: { issueIdOrKey: "10001", id: "10002" },
+    primaryMethodIndex: 1,
   },
   {
     tool: "jira.update-comment",
     args: { issueKey: "SYN-1", commentId: "10002", body: "Updated comment" },
-    parameters: { issueIdOrKey: "SYN-1", id: "10002" },
+    parameters: { issueIdOrKey: "10001", id: "10002" },
   },
   { tool: "jira.link-types", args: { startAt: 0, maxResults: 1 } },
   { tool: "jira.issue-link", args: { linkId: "21" }, parameters: { linkId: "21" } },
@@ -200,10 +229,15 @@ interface RemoteState extends SyntheticJira {
   component: Record<string, unknown>;
   version: Record<string, unknown>;
 }
-function collaborationRead(path: string): AtlassianHttpBodyResult | undefined {
+function collaborationRead(path: string, state: RemoteState): AtlassianHttpBodyResult | undefined {
   const type = { id: "11", name: "Relates", inward: "relates to", outward: "relates to" };
   const worklog = { id: "101", issueId: "10001", timeSpentSeconds: 3600 };
   const bodies: Readonly<Record<string, unknown>> = {
+    "issue/10001/comment/10002": {
+      id: "10002",
+      body: state.comment,
+      self: "https://jira.example.invalid/context/rest/api/2/issue/10001/comment/10002",
+    },
     issueLinkType: { issueLinkTypes: [type] },
     "issueLink/21": {
       id: "21",
@@ -221,7 +255,7 @@ function collaborationWrite(
   request: AtlassianHttpBodyRequest,
   state: RemoteState,
 ): AtlassianHttpBodyResult | undefined {
-  if (path !== "issue/SYN-1/comment/10002") return undefined;
+  if (path !== "issue/10001/comment/10002") return undefined;
   const body = JSON.parse(request.bodyJson ?? "{}") as Record<string, unknown>;
   if (request.method !== "PUT" || typeof body.body !== "string")
     throw new TypeError("Expected the selected comment update");
@@ -285,6 +319,27 @@ function savedViewRead(path: string): AtlassianHttpBodyResult | undefined {
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
+function assetRead(path: string): AtlassianHttpBodyResult | undefined {
+  const avatars = { system: [{ id: "91", selected: true }], custom: [] };
+  const bodies: Readonly<Record<string, unknown>> = {
+    "attachment/71": { id: "71", filename: "note.txt", size: 14, mimeType: "text/plain" },
+    "attachment/71/expand/raw": {
+      totalEntryCount: 1,
+      entries: [{ entryIndex: 0, name: "note.txt", size: 14, mediaType: "text/plain" }],
+    },
+    "attachment/71/expand/human": {
+      id: 71,
+      name: "notes.zip",
+      mediaType: "application/zip",
+      totalEntryCount: 1,
+    },
+    "avatar/user/system": avatars,
+    "project/SYN/avatars": avatars,
+    "user/avatars": avatars,
+    "universal_avatar/type/project/owner/10000": avatars,
+  };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
+}
 function issueMetadata(path: string): AtlassianHttpBodyResult | undefined {
   if (path.endsWith("/issuetypes"))
     return response({
@@ -337,9 +392,10 @@ function remoteRead(path: string, absolute: string, state: RemoteState): Atlassi
   return (
     projectRead(path, state) ??
     structureRead(path, state) ??
-    collaborationRead(path) ??
+    collaborationRead(path, state) ??
     filterRead(path) ??
     savedViewRead(path) ??
+    assetRead(path) ??
     issueMetadata(path) ??
     fixtureRead(absolute, state)
   );
@@ -405,7 +461,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(42);
+    expect(native).toHaveLength(50);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
