@@ -261,7 +261,15 @@ export async function executeTracedMutation(
   const tally = newTally();
   const logged = operation === "jira.create" ? "create" : "edit";
   try {
-    const resolution = session.resolve(references);
+    const fields = args.fields;
+    const description =
+      fields !== null && typeof fields === "object" && !Array.isArray(fields)
+        ? fields.description
+        : undefined;
+    const resolution = session.resolve(
+      references,
+      description === undefined ? undefined : { description },
+    );
     if (!resolution.ok) {
       tallyRefusal(tally, resolution);
       logTrace(turn.correlationId, logged, tally);
