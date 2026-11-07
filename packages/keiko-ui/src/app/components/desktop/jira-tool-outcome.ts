@@ -58,6 +58,8 @@ import { JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS, jiraAdministrativeObservationDet
 import { JIRA_APPLICATION_SETTINGS_TOOLS, jiraApplicationSettingsDetails } from "./jira-application-settings-presentation";
 import { JIRA_REMOTE_VERSION_LINK_TOOLS, jiraRemoteVersionLinkDetails } from "./jira-remote-version-link-presentation";
 import { JIRA_WORKLOG_FEED_TOOLS, jiraWorklogFeedDetails } from "./jira-worklog-feed-presentation";
+import { JIRA_IDENTITY_OBSERVATION_TOOLS, jiraIdentityObservationDetails } from "./jira-identity-observation-presentation";
+import { JIRA_SELECTED_WORKLOG_TOOLS, jiraSelectedWorklogDetails } from "./jira-selected-worklog-presentation";
 import { JIRA_SAVED_CONFIGURATION_WRITE_TOOLS, jiraSavedConfigurationDetails, jiraSavedConfigurationFilterContextComplete } from "./jira-saved-configuration-presentation";
 import { JIRA_PROPERTY_TOOLS, jiraPropertyDetails } from "./jira-property-presentation";
 import { JIRA_MONITORING_WRITE_TOOLS, jiraMonitoringDetails } from "./jira-monitoring-presentation";
@@ -278,6 +280,8 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
 }
 type ConfigurationPresenter = (tool: string, source: UnknownRecord) => readonly JiraAgileDetails[];
 const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, ConfigurationPresenter])[] = [
+  [JIRA_IDENTITY_OBSERVATION_TOOLS, jiraIdentityObservationDetails],
+  [JIRA_SELECTED_WORKLOG_TOOLS, jiraSelectedWorklogDetails],
   [JIRA_SAVED_CONFIGURATION_WRITE_TOOLS, jiraSavedConfigurationDetails],
   [JIRA_REMOTE_VERSION_LINK_TOOLS, jiraRemoteVersionLinkDetails],
   [JIRA_WORKLOG_FEED_TOOLS, jiraWorklogFeedDetails],
@@ -521,7 +525,8 @@ function pageCounts(
   const items = returnedEntries(data, tool);
   if (items === undefined)
     return { returnedCount: undefined, total: undefined, unreadableCount: 0 };
-  const total = JIRA_WORKLOG_FEED_TOOLS.has(tool) ? undefined : count(data.total);
+  const total = JIRA_WORKLOG_FEED_TOOLS.has(tool) || JIRA_SELECTED_WORKLOG_TOOLS.has(tool)
+    ? undefined : count(data.total);
   const covered = (count(data.startAt) ?? 0) + items.length;
   return {
     returnedCount: items.length,

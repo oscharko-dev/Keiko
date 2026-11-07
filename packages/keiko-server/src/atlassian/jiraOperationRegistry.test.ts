@@ -19,7 +19,8 @@ const JIRA_MUTATION_DECLARATIONS = jiraMutationDeclarations();
 describe("server-owned Jira operation contracts", () => {
   it("binds every administration write to an explicit instance-admin permission contract", () => {
     const admin = jiraOperationContracts().filter((entry) =>
-      jiraRequiredConnectorScope(entry.definition.tool) === "issue-tracker.admin");
+      jiraRequiredConnectorScope(entry.definition.tool) === "issue-tracker.admin" &&
+      entry.definition.effects.includes("remote-write"));
     expect(admin).toHaveLength(13);
     for (const contract of admin) {
       expect(contract.definition.permissionPolicy).toMatch(/^instance-admin-/);
@@ -28,6 +29,24 @@ describe("server-owned Jira operation contracts", () => {
     }
     expect(jiraOperationForTool("jira.set-issue-property")?.definition.permissionPolicy)
       .toBe("entity-property-and-readback");
+  });
+  it("keeps three explicit admin observations read-only and two POST observations outside mutation authority", () => {
+    for (const tool of ["jira.anonymization-validation", "jira.anonymization-rerun-validation", "jira.anonymization-progress"] as const) {
+      const contract = jiraOperationForTool(tool);
+      expect(jiraRequiredConnectorScope(tool)).toBe("issue-tracker.admin");
+      expect(contract?.declaration.risk).toBe("read");
+      expect(contract?.definition.effects).toEqual(["remote-read"]);
+      expect(contract?.definition.permissionPolicy).toBe("instance-admin-anonymization-observation");
+    }
+    for (const tool of ["jira.search-post", "jira.worklogs-by-id"] as const) {
+      const contract = jiraOperationForTool(tool);
+      expect(jiraRequiredConnectorScope(tool)).toBe("issue-tracker.read");
+      expect(contract?.definition).toMatchObject({ method: "POST", effects: ["remote-read"] });
+      expect(contract?.declaration.risk).toBe("read");
+    }
+    expect(jiraOperationForTool("jira.current-session")?.definition).toMatchObject({
+      identity: "GET /rest/auth/1/session", apiRoot: "/rest/auth/1", effects: ["remote-read"],
+    });
   });
   it("reads a closed historical binding without granting current execution authority", () => {
     const contract = jiraOperationForTool("jira.comment");
@@ -53,7 +72,7 @@ describe("server-owned Jira operation contracts", () => {
   });
   it("keeps executable native operations distinct from local compositions", () => {
     const entries = jiraOperationContracts();
-    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(268);
+    expect(entries.filter((entry) => entry.definition.kind === "native")).toHaveLength(274);
     expect(entries.filter((entry) => entry.definition.kind === "composite")).toHaveLength(3);
     expect(jiraOperationForTool("jira.discover")).toBeUndefined();
     expect(jiraOperationForTool("DELETE /rest/api/2/project")).toBeUndefined();

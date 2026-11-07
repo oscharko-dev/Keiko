@@ -8,6 +8,7 @@ import {
 import { CODING_WORKBENCH_MODES } from "./coding-workbench.js";
 
 const ADMIN_TOOLS = [
+  "jira.anonymization-validation", "jira.anonymization-rerun-validation", "jira.anonymization-progress",
   "jira.create-filter", "jira.set-filter-share-scope",
   "jira.add-filter-permission", "jira.delete-filter-permission",
   "jira.set-app-monitoring", "jira.set-ipd-monitoring",

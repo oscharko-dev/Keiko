@@ -32,6 +32,7 @@ import {
   stripUnsafeFormatChars,
 } from "./text-safety.js";
 
+import { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
 import { JIRA_MANAGED_READ_TOOLS, type JiraManagedReadToolName } from "./jira-tool-fields.js";
 import {
   JIRA_ENTITY_PROPERTY_MUTATIONS,
@@ -793,6 +794,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "connector-admin"),
   ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "connector-write"),
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "connector-access"),
+  ...jiraActionValues(JIRA_READ_TOOL_FAMILIES.anonymization, "connector-admin"),
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "connector-write"),
   "set-issue-type-property": "connector-admin",
   "delete-issue-type-property": "connector-admin",
@@ -894,6 +896,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   ...jiraActionValues(JIRA_SAVED_ADMIN_ACTIONS, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_SAVED_WRITE_ACTIONS, "issue-tracker.write"),
   ...jiraActionValues(JIRA_MANAGED_READ_TOOLS, "issue-tracker.read"),
+  ...jiraActionValues(JIRA_READ_TOOL_FAMILIES.anonymization, "issue-tracker.admin"),
   ...jiraActionValues(JIRA_PROPERTY_ACTIONS, "issue-tracker.write"),
   "set-issue-type-property": "issue-tracker.admin",
   "delete-issue-type-property": "issue-tracker.admin",

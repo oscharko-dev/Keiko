@@ -19,6 +19,9 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "native-visible-requested-worklogs"
+  | "instance-admin-anonymization-observation"
+  | "bound-current-session"
   | "instance-admin-filter-create-default-sharing"
   | "owned-filter-metadata-and-readback"
   | "owned-filter-delete-unconfirmed"
@@ -128,7 +131,7 @@ export type JiraOperationDefinition = OperationDefinitionBase &
     | {
         readonly kind: "native";
         readonly method: "GET" | "POST" | "PUT" | "DELETE";
-        readonly apiRoot: "/rest/api/2" | "/rest/agile/1.0";
+        readonly apiRoot: "/rest/api/2" | "/rest/agile/1.0" | "/rest/auth/1";
         readonly pathTemplate: string;
         /** Create/edit may add the already-approved bounded issue links through their owner. */
         readonly continuationPolicy: "none" | "approved-issue-links";
@@ -145,7 +148,7 @@ export interface JiraOperationContract {
   readonly binding: JiraOperationBinding;
 }
 
-type JiraApiRoot = "/rest/api/2" | "/rest/agile/1.0";
+type JiraApiRoot = "/rest/api/2" | "/rest/agile/1.0" | "/rest/auth/1";
 type NativeSpecification = readonly [
   "GET" | "POST" | "PUT" | "DELETE",
   "read" | "write",
@@ -180,6 +183,14 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  "jira.search-post": ["POST", "read", "/search", "visible-issues"],
+  "jira.worklogs-by-id": ["POST", "read", "/worklog/list", "native-visible-requested-worklogs"],
+  ...reads("instance-admin-anonymization-observation", {
+    "jira.anonymization-validation": "/user/anonymization",
+    "jira.anonymization-rerun-validation": "/user/anonymization/rerun",
+    "jira.anonymization-progress": "/user/anonymization/progress",
+  }),
+  ...reads("bound-current-session", { "jira.current-session": "/session" }, "/rest/auth/1"),
   ...writes("instance-admin-filter-create-default-sharing", {
     "jira.create-filter": ["POST", "/filter"],
   }),

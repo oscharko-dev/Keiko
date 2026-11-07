@@ -258,16 +258,23 @@ function nativeEntry(property, ast, verified) {
   );
   return entryFor(property.name.text, nativeTuple(property.initializer, ast, verified));
 }
+function nativeEffect(method, root, path) {
+  // Two documented POST observations have an explicit read contract. No other method/path may
+  // acquire a read disposition from its caller or an arbitrary registry tuple.
+  if (method === "GET") return "read";
+  return root === "/rest/api/2" && method === "POST" &&
+    new Set(["/search", "/worklog/list"]).has(path) ? "read" : "write";
+}
 function entryFor(tool, tuple) {
   const [method, effect, path, permissionPolicy, root = "/rest/api/2"] = tuple;
   requireValid(
     new Set(["GET", "POST", "PUT", "DELETE"]).has(method) &&
-      effect === (method === "GET" ? "read" : "write"),
+      effect === nativeEffect(method, root, path),
     "registry-native-effect",
   );
   requireValid(/^jira\.[a-z]+(?:-[a-z]+)*$/u.test(tool), "registry-native-tool");
   requireValid(
-    new Set(["/rest/api/2", "/rest/agile/1.0"]).has(root) &&
+    new Set(["/rest/api/2", "/rest/agile/1.0", "/rest/auth/1"]).has(root) &&
       path.startsWith("/") &&
       !path.includes("?"),
     "registry-native-path",

@@ -112,7 +112,7 @@ interface IssueBinding {
   readonly id: string;
   readonly key: string;
 }
-function worklog(value: unknown, issue: IssueBinding): CatalogJsonObject | undefined {
+export function jiraWorklogProjection(value: unknown, issue: IssueBinding): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (
     !raw ||
@@ -154,7 +154,7 @@ async function readLink(
 type BoundIssue =
   | { readonly ok: true; readonly issue: IssueBinding }
   | { readonly ok: false; readonly result: ManagedMcpToolResult };
-async function resolveIssue(request: JiraMutationRequest, target: string): Promise<BoundIssue> {
+export async function resolveJiraWorklogIssue(request: JiraMutationRequest, target: string): Promise<BoundIssue> {
   const response = await request(`issue/${encodeURIComponent(target)}?fields=summary`);
   if (!response.ok) return { ok: false, result: jiraReadFailure(response.reason, response.remote) };
   const raw = response.body;
@@ -191,7 +191,7 @@ function completeWorklogItems(
   const items = projectJiraCollection(
     raw.worklogs,
     TOOL_CATALOG_LIMITS.maxArrayItems,
-    (value) => worklog(value, issue),
+    (value) => jiraWorklogProjection(value, issue),
     "id",
   );
   return items === undefined ? { ok: false, reason: "malformed-payload" } : { ok: true, items };
@@ -225,7 +225,7 @@ async function readWorklog(
   selected: Selection,
   request: JiraMutationRequest,
 ): Promise<ManagedMcpToolResult> {
-  const bound = await resolveIssue(request, selected.target ?? "");
+  const bound = await resolveJiraWorklogIssue(request, selected.target ?? "");
   if (!bound.ok) return bound.result;
   if (selected.worklogId === undefined) {
     const collection = await readJiraCompleteWorklogs(request, bound.issue);
@@ -237,7 +237,7 @@ async function readWorklog(
   if (!response.ok) return jiraReadFailure(response.reason, response.remote);
   if (response.status !== 200) return jiraReadFailure("malformed-payload");
   return single(
-    response.body?.id === selected.worklogId ? worklog(response.body, bound.issue) : undefined,
+    response.body?.id === selected.worklogId ? jiraWorklogProjection(response.body, bound.issue) : undefined,
   );
 }
 /** Closed DC reads over the existing credential/authority-owned request, with complete collection accounting. */

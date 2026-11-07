@@ -730,6 +730,14 @@ with native project-creation permission does not acquire Keiko's instance-admini
 This keeps the accepted project-setup workflow distinct from changing instance runtime or shared
 schema configuration, while enforcing both local task authority and the actual Jira permission.
 
+Three native anonymization validation/progress observations use that same explicit admin scope
+while retaining low read risk and the existing per-Chat read grant. Their GET contracts do not
+schedule anonymization, reruns or unlock. Native task selection is separate from observed job
+identity; completion status alone does not prove an error-free job. POST search and selected
+worklog lookup are explicit remote reads, despite their HTTP method, and acquire no mutation
+approval or journal entry. The fixed auth/1 session GET reads only the bound connection after
+current-user equality; passwords, cookies and login/logout remain separate capabilities.
+
 The human selects administration explicitly in the existing connector menu, separately from the
 mode. `Chat.jiraAdministrationEnabled` is false when absent, is stored in the existing Chat Jira
 state and can be enabled only for the unchanged currently verified Pod. HTTP updates require the

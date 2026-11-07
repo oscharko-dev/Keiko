@@ -351,6 +351,10 @@ const LEGACY_D4_TABLE: readonly D4Row[] = [
   },
 ];
 
+const ADMIN_READ_ACTIONS = [
+  "jira.anonymization-validation", "jira.anonymization-rerun-validation", "jira.anonymization-progress",
+] as const;
+const ADMIN_READ_SET: ReadonlySet<string> = new Set(ADMIN_READ_ACTIONS);
 // Explicit expectations for the added native writes; no production policy table supplies values.
 const ADMIN_ACTIONS = [
   "create-screen-tab", "rename-screen-tab", "delete-screen-tab",
@@ -388,9 +392,10 @@ function expectedJiraRows(
 const legacyActions = new Set(LEGACY_D4_TABLE.map(({ action }) => action));
 const D4_TABLE: readonly D4Row[] = [
   ...LEGACY_D4_TABLE,
-  ...expectedJiraRows(JIRA_MANAGED_READ_TOOLS.filter((action) => !legacyActions.has(action)), "connector-access", "issue-tracker.read", "low"),
+  ...expectedJiraRows(JIRA_MANAGED_READ_TOOLS.filter((action) => !legacyActions.has(action) && !ADMIN_READ_SET.has(action)), "connector-access", "issue-tracker.read", "low"),
   ...expectedJiraRows(HIGH_WRITES, "connector-write", "issue-tracker.write", "high"),
   ...expectedJiraRows(MEDIUM_WRITES, "connector-write", "issue-tracker.write", "medium"),
+  ...expectedJiraRows(ADMIN_READ_ACTIONS, "connector-admin", "issue-tracker.admin", "low"),
   ...expectedJiraRows(ADMIN_ACTIONS, "connector-admin", "issue-tracker.admin", "high"),
 ];
 

@@ -58,6 +58,20 @@ function single(item: CatalogJsonObject): CatalogJsonObject {
 }
 
 export const JIRA_ISSUE_COLLABORATION_READ_DEFINITIONS = {
+  "jira.worklogs-by-id": {
+    description: "Read the accessible subset of an explicitly selected bounded set of worklog IDs through native POST. This is a read and creates no worklog. Bind each returned parent issue independently and reuse the existing worklog projection. Native permissions can omit requested IDs; unreturnedWorklogIds is not absence evidence, zero work or a complete project collection. There is no invented native total or pagination. IDs requiring inexact JSON numeric conversion are refused before transport.",
+    input: object({ worklogIds: { type: "array", minItems: 1, maxItems: 100, uniqueItems: true,
+      items: { ...ID, description: "Exact positive decimal ID no greater than Number.MAX_SAFE_INTEGER for the native numeric JSON body." } } }, ["worklogIds"]),
+    result: jiraNativeReadResult({
+      selectionScope: { type: "string", enum: ["native-visible-requested-worklogs"] },
+      requestedCount: { type: "integer", minimum: 1, maximum: 100 },
+      returnedCount: { type: "integer", minimum: 0, maximum: 100 },
+      unreturnedWorklogIds: { type: "array", maxItems: 100, uniqueItems: true, items: ID },
+      items: { type: "array", maxItems: 100, items: WORKLOG },
+    }),
+    risk: "read",
+    maxResultCount: 100,
+  },
   "jira.get-comment": {
     description:
       "Read one exact issue comment, its body and available author/time/visibility metadata. Visibility remains unknown when Jira omits it; no remote URLs are exposed.",

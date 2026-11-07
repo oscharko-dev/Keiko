@@ -62,6 +62,8 @@ import { JIRA_ACCOUNT_DIAGNOSTIC_TOOLS } from "./jira-account-diagnostic-present
 import { JIRA_APPLICATION_SETTINGS_TOOLS } from "./jira-application-settings-presentation";
 import { JIRA_REMOTE_VERSION_LINK_TOOLS } from "./jira-remote-version-link-presentation";
 import { JIRA_WORKLOG_FEED_TOOLS } from "./jira-worklog-feed-presentation";
+import { JIRA_IDENTITY_OBSERVATION_TOOLS } from "./jira-identity-observation-presentation";
+import { JIRA_SELECTED_WORKLOG_TOOLS } from "./jira-selected-worklog-presentation";
 import { JIRA_SAVED_CONFIGURATION_WRITE_TOOLS } from "./jira-saved-configuration-presentation";
 import {
   jiraToolOutcomeView,
@@ -298,6 +300,8 @@ function resultCardSemantics(exchange: ChatToolExchange): {
   readonly label: ReturnType<typeof jiraToolLabel>;
 } {
   return [
+    JIRA_IDENTITY_OBSERVATION_TOOLS,
+    JIRA_SELECTED_WORKLOG_TOOLS,
     JIRA_SAVED_CONFIGURATION_WRITE_TOOLS,
     JIRA_REMOTE_VERSION_LINK_TOOLS,
     JIRA_WORKLOG_FEED_TOOLS,

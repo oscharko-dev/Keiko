@@ -23,6 +23,7 @@ import {
   type Observation,
 } from "../../../../tests/support/jira-operation-transport-contract.js";
 import { propertyTransportFixture, PROPERTY_FIXTURE_KEY, REVIEWED_PROPERTY_NODES, REQUESTED_PROPERTY_NODES } from "../../../../tests/support/jira-property-transport-fixture.js";
+import { POST_AND_IDENTITY_READ_SCENARIOS, POST_AND_IDENTITY_READ_TOOLS, postAndIdentityReadTransport } from "../../../../tests/support/jira-post-and-identity-read-fixture.js";
 import {
   SAVED_CONFIGURATION_ARGUMENTS,
   SAVED_CONFIGURATION_RECEIPTS,
@@ -41,6 +42,7 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  ...POST_AND_IDENTITY_READ_SCENARIOS,
   { tool: "jira.create-filter", args: SAVED_CONFIGURATION_ARGUMENTS["jira.create-filter"] },
   { tool: "jira.update-filter", args: SAVED_CONFIGURATION_ARGUMENTS["jira.update-filter"], parameters: { id: "37" } },
   { tool: "jira.delete-filter", args: SAVED_CONFIGURATION_ARGUMENTS["jira.delete-filter"], parameters: { id: "37" }, expectedOutcome: "succeeded-unconfirmed", expectedReceipt: SAVED_CONFIGURATION_RECEIPTS["jira.delete-filter"] },
@@ -1329,6 +1331,7 @@ const PROPERTY_WRITE_ROOTS: Readonly<Record<string, string>> = {
   "jira.set-user-property": "user/properties", "jira.delete-user-property": "user/properties",
 };
 function remote(tool?: string, initiallyPresent = true): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
+  if (POST_AND_IDENTITY_READ_TOOLS.has(tool ?? "")) return vi.fn(postAndIdentityReadTransport);
   if (tool !== undefined && Object.hasOwn(SAVED_CONFIGURATION_ARGUMENTS, tool)) return savedConfigurationRemote(tool);
   const propertyRoot = PROPERTY_WRITE_ROOTS[tool ?? ""];
   const property = propertyTransportFixture(propertyRoot === undefined ? undefined : `/context/rest/api/2/${propertyRoot}`, initiallyPresent);
@@ -1437,12 +1440,12 @@ function observe(scenario: Scenario): Promise<Observation> {
 }
 
 describe("native Jira registry and real connector transport agreement", () => {
-  it("covers every current platform native operation exactly once", () => {
-    const platformRoots = new Set(["/rest/api/2"]);
+  it("covers every current platform and authentication native operation exactly once", () => {
+    const platformRoots = new Set(["/rest/api/2", "/rest/auth/1"]);
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(233);
+    expect(native).toHaveLength(239);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

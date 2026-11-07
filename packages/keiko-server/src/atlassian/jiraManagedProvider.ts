@@ -1,3 +1,4 @@
+import { jiraIdentityObservationDeclarationForTool, type JIRA_IDENTITY_OBSERVATION_READ_DEFINITIONS } from "./jiraIdentityObservationDescriptors.js";
 import {
   jiraRemoteVersionLinkDeclarationForTool,
   type JIRA_REMOTE_VERSION_LINK_READ_DEFINITIONS,
@@ -244,6 +245,7 @@ type CoreReadToolName = Exclude<
   | "jira.draft-stage"
   | Extract<
       JiraManagedReadToolName,
+      | keyof typeof JIRA_IDENTITY_OBSERVATION_READ_DEFINITIONS
       | keyof typeof JIRA_REMOTE_VERSION_LINK_READ_DEFINITIONS
       | keyof typeof JIRA_WORKLOG_FEED_READ_DEFINITIONS
       | keyof typeof JIRA_ADMINISTRATIVE_OBSERVATION_READ_DEFINITIONS
@@ -275,6 +277,21 @@ type CoreReadToolName = Exclude<
       | keyof typeof JIRA_ASSET_READ_DEFINITIONS
     >
 >;
+const SEARCH_DEFINITION: ReadDefinition = {
+  description: `Search Jira with bounded opaque JQL. Returns issue summaries; fetch an issue for its description and comments separately. For counts or checks across many issues use jira.report.`,
+  arguments: {
+    jql: { type: "string", minLength: 1, maxLength: ATLASSIAN_JQL_MAX_CHARS },
+    fields: FIELD_IDS,
+  },
+  required: ["jql"],
+  item: object(
+    {
+      ...ISSUE_SUMMARY,
+      fieldValues: { type: "array", maxItems: JIRA_FIELD_READ_MAX, items: FIELD_VALUE },
+    },
+    ["id", "key", "summary"],
+  ),
+};
 const DEFINITIONS: Readonly<Record<CoreReadToolName, ReadDefinition>> = {
   "jira.project": {
     description:
@@ -364,20 +381,9 @@ const DEFINITIONS: Readonly<Record<CoreReadToolName, ReadDefinition>> = {
     required: ["issueKey"],
     item: FIELD,
   },
-  "jira.search": {
-    description: `Search Jira with bounded opaque JQL. Returns issue summaries; fetch an issue for its description and comments separately. For counts or checks across many issues use jira.report.`,
-    arguments: {
-      jql: { type: "string", minLength: 1, maxLength: ATLASSIAN_JQL_MAX_CHARS },
-      fields: FIELD_IDS,
-    },
-    required: ["jql"],
-    item: object(
-      {
-        ...ISSUE_SUMMARY,
-        fieldValues: { type: "array", maxItems: JIRA_FIELD_READ_MAX, items: FIELD_VALUE },
-      },
-      ["id", "key", "summary"],
-    ),
+  "jira.search": SEARCH_DEFINITION,
+  "jira.search-post": { ...SEARCH_DEFINITION,
+    description: "Perform the same bounded opaque-JQL search through native POST with a typed JSON search request. This is a read, creates no issue or mutation receipt and grants no write authority. Follow nextStartAt for all pages; use jira.report for project totals and compliance. Native query validation stays enabled.",
   },
   "jira.issue": {
     description:
@@ -443,6 +449,7 @@ function isCoreReadTool(name: JiraManagedReadToolName): name is CoreReadToolName
 }
 function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   for (const producer of [
+    jiraIdentityObservationDeclarationForTool,
     jiraRemoteVersionLinkDeclarationForTool,
     jiraWorklogFeedDeclarationForTool,
     jiraAdministrativeObservationDeclarationForTool,

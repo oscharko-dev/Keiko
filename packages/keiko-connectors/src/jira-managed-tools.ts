@@ -1,3 +1,7 @@
+import { executeJiraSearchPostRead, isJiraSearchPostRead } from "./jira-managed-search-post.js";
+import { executeJiraWorklogsByIdRead, isJiraWorklogsByIdRead } from "./jira-managed-worklogs-by-id.js";
+import { executeJiraAnonymizationRead, isJiraAnonymizationRead } from "./jira-managed-anonymization-reads.js";
+import { executeJiraSessionRead, isJiraSessionRead } from "./jira-managed-session-read.js";
 import {
   executeJiraIssueTypeSchemeRead,
   isJiraIssueTypeSchemeRead,
@@ -359,6 +363,10 @@ async function read<Context extends ManagedMcpInvocationContext>(
 }
 
 type NativeDetailRead =
+  | "jira.search-post"
+  | "jira.worklogs-by-id"
+  | "jira.current-session"
+  | Parameters<typeof executeJiraAnonymizationRead>[0]
   | Parameters<typeof executeJiraRemoteVersionLinkRead>[0]
   | Parameters<typeof executeJiraWorklogFeedRead>[0]
   | Parameters<typeof executeJiraAdministrativeObservationRead>[0]
@@ -396,6 +404,7 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraJqlMetadataRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return [
+    isJiraSearchPostRead, isJiraWorklogsByIdRead, isJiraAnonymizationRead, isJiraSessionRead,
     isJiraRemoteVersionLinkRead,
     isJiraWorklogFeedRead,
     isJiraAdministrativeObservationRead,
@@ -506,6 +515,19 @@ function linkedIssueDetailRead(
   if (isJiraIssueDetailRead(name)) return executeJiraIssueDetailRead(name, args, request);
   throw new TypeError("Unsupported Jira detail read");
 }
+function selectedObservationRead(
+  name: NativeDetailRead,
+  args: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  request: ReturnType<typeof requestFor>,
+): Promise<ManagedMcpToolResult> | undefined {
+  if (isJiraSearchPostRead(name)) return executeJiraSearchPostRead(args, request, connection.baseUrl);
+  if (isJiraWorklogsByIdRead(name)) return executeJiraWorklogsByIdRead(args, request);
+  if (isJiraAnonymizationRead(name)) return executeJiraAnonymizationRead(name, args, request);
+  if (isJiraSessionRead(name)) return executeJiraSessionRead(args, context, connection);
+  return undefined;
+}
 async function nativeDetailRead<Context extends ManagedMcpInvocationContext>(
   name: NativeDetailRead,
   args: CatalogJsonObject,
@@ -515,6 +537,8 @@ async function nativeDetailRead<Context extends ManagedMcpInvocationContext>(
   const connected = await connection(context);
   if (connected.deployment !== "data-center") return failure("unsupported-deployment");
   const request = requestFor(connected, context);
+  const selectedObservation = selectedObservationRead(name, args, context, connected, request);
+  if (selectedObservation !== undefined) return selectedObservation;
   if (isJiraEntityPropertyRead(name)) return executeJiraEntityPropertyRead(name, args, {
     platform: request,
     agile: jiraAgileRequest(connected, context),

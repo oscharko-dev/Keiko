@@ -5382,12 +5382,128 @@
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
+    },
+    "jira.search-post": {
+      "identity": "POST /rest/api/2/search",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "Bounded opaque JQL and supported selected fields use the same summary, field metadata, byte and native paging projections as GET search. The native JSON search body always validates the query; arbitrary expand, URL, fields wildcard or validateQuery override is not accepted. It is a read despite POST, never dispatches the mutation executor, and supplies no issue creation receipt. No qualification or successful live execution is asserted; regression sources are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-search-post.ts",
+        "packages/keiko-contracts/src/jira-read-tools.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedProvider.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-details.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-search-post.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPostReadDescriptors.test.ts"
+      ]
+    },
+    "jira.worklogs-by-id": {
+      "identity": "POST /rest/api/2/worklog/list",
+      "effect": "read",
+      "permissionPolicy": "native-visible-requested-worklogs",
+      "kind": "constrained-tool",
+      "constraints": "Select a unique bounded set of exact worklog ID strings. Native numeric JSON IDs must remain safe integers before transport. Return only native visible requested rows, independently bind every returned parent once, and reuse the existing worklog projection. requestedCount, returnedCount and unreturnedWorklogIds describe only this selected read; omissions can mean access restrictions or absence, never zero work or complete project coverage. No synthetic total, offset or continuation. Oversized unpaged results fail as a whole. No qualification or successful live execution is asserted; regression sources are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-worklogs-by-id.ts",
+        "packages/keiko-contracts/src/jira-read-tools.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedProvider.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-details.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-worklogs-by-id.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraPostReadDescriptors.test.ts"
+      ]
+    },
+    "jira.anonymization-validation": {
+      "identity": "GET /rest/api/2/user/anonymization",
+      "effect": "read",
+      "permissionPolicy": "instance-admin-anonymization-observation",
+      "kind": "constrained-tool",
+      "constraints": "Explicit administration scope permits only native GET validation of one exactly bound userKey. Preserve observed validation flags and bounded native diagnostics without scheduling, changing identity, expanding affected entities, following links or implying permission from successful validation. No qualification or successful live execution is asserted; regression sources are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-anonymization-reads.ts",
+        "packages/keiko-contracts/src/jira-read-tools.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedProvider.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityObservationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-anonymization-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityObservationDescriptors.test.ts"
+      ]
+    },
+    "jira.anonymization-rerun-validation": {
+      "identity": "GET /rest/api/2/user/anonymization/rerun",
+      "effect": "read",
+      "permissionPolicy": "instance-admin-anonymization-observation",
+      "kind": "constrained-tool",
+      "constraints": "Explicit administration scope permits only native GET validation for a rerun. Bind exact userKey and optional reviewed historical key/name selectors. No rerun is scheduled, no target identity is changed and native diagnostic omissions remain unknown. No qualification or successful live execution is asserted; regression sources are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-anonymization-reads.ts",
+        "packages/keiko-contracts/src/jira-read-tools.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedProvider.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityObservationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-anonymization-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityObservationDescriptors.test.ts"
+      ]
+    },
+    "jira.anonymization-progress": {
+      "identity": "GET /rest/api/2/user/anonymization/progress",
+      "effect": "read",
+      "permissionPolicy": "instance-admin-anonymization-observation",
+      "kind": "constrained-tool",
+      "constraints": "Explicit administration scope permits one bounded native progress observation. An optional taskId selects a task; otherwise Jira selects active-or-latest. selectedTaskId is request context only because the DTO cannot independently confirm a task ID. Native progress has no invented unit, missing values remain unknown, and COMPLETED does not imply an error-free operation. No polling, scheduling, unlock or node operation. No qualification or successful live execution is asserted; regression sources are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-anonymization-reads.ts",
+        "packages/keiko-contracts/src/jira-read-tools.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedProvider.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityObservationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-anonymization-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityObservationDescriptors.test.ts"
+      ]
+    },
+    "jira.current-session": {
+      "identity": "GET /rest/auth/1/session",
+      "effect": "read",
+      "permissionPolicy": "bound-current-session",
+      "kind": "constrained-tool",
+      "constraints": "Read only the existing bound connection: current user first, then the fixed auth/1 session GET with exact observed username equality. Return actor context and only supplied login counters/native times. No credential arguments, cookies, session material, login, logout, renewal, permission grant or WebSudo change. The same custody-blind HTTP owner enforces current authority, selected instance/context containment and timeout. No qualification or successful live execution is asserted; regression sources are unexecuted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-session-read.ts",
+        "packages/keiko-contracts/src/jira-read-tools.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedProvider.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityObservationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-session-read.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIdentityObservationDescriptors.test.ts"
+      ]
     }
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "1cf9053f7c43ab2caf3b1b56a36f2dcb14bf552f8870573e6d0eababb63541a5",
-    "nativeOperationCount": 268
+    "sha256": "ba2c860a814d3db5b10af5966c5ff44a493ad71be4fc715b15fb40b46d82b31e",
+    "nativeOperationCount": 274
   },
   "operations": [
     {
@@ -17087,10 +17203,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.search-post"
+      ]
     },
     {
       "identity": "GET /rest/api/2/search/error/lookup",
@@ -18026,10 +18144,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.anonymization-validation"
+      ]
     },
     {
       "identity": "POST /rest/api/2/user/anonymization",
@@ -18094,10 +18214,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.anonymization-progress"
+      ]
     },
     {
       "identity": "GET /rest/api/2/user/anonymization/rerun",
@@ -18128,10 +18250,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.anonymization-rerun-validation"
+      ]
     },
     {
       "identity": "POST /rest/api/2/user/anonymization/rerun",
@@ -20685,10 +20809,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.worklogs-by-id"
+      ]
     },
     {
       "identity": "GET /rest/api/2/worklog/updated",
@@ -20789,10 +20915,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.current-session"
+      ]
     },
     {
       "identity": "POST /rest/auth/1/session",
