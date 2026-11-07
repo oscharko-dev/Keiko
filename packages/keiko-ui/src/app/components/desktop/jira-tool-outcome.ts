@@ -30,6 +30,10 @@ import {
   JIRA_PARTICIPATION_TOOLS,
   jiraParticipationDetails,
 } from "./jira-participation-presentation";
+import {
+  JIRA_ADMINISTRATION_TOOLS,
+  jiraAdministrationDetails,
+} from "./jira-administration-presentation";
 import { jiraMutationUnchanged } from "./jira-tool-presentation";
 
 export interface JiraOutcomeItem {
@@ -82,6 +86,7 @@ const STANDALONE_TOOLS = new Set([
   ...JIRA_SAVED_VIEW_TOOLS,
   ...JIRA_FILE_METADATA_TOOLS,
   ...JIRA_PARTICIPATION_TOOLS,
+  ...JIRA_ADMINISTRATION_TOOLS,
 ]);
 const BOARD_READ_TOOLS = new Set(["jira_board", "jira_boards", "jira_board_configuration"]);
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -188,12 +193,13 @@ function metadataOutcomeItem(source: UnknownRecord, tool: string): JiraOutcomeIt
 }
 function metadataDetailsItem({
   name,
+  body,
   facts,
   labels,
 }: JiraAgileDetails): JiraOutcomeItem | undefined {
-  return name === undefined && facts.length === 0 && labels.length === 0
+  return name === undefined && body === undefined && facts.length === 0 && labels.length === 0
     ? undefined
-    : { ...textMembers({ name }), facts, labels };
+    : { ...textMembers({ name, body }), facts, labels };
 }
 function outcomeHref(
   tool: string,
@@ -213,14 +219,17 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
     ? boardLink(source.boardBrowseUrl, source.originBoardId)
     : undefined;
 }
+function metadataDetails(tool: string, source: UnknownRecord): JiraAgileDetails | undefined {
+  if (JIRA_SAVED_VIEW_TOOLS.has(tool)) return jiraSavedViewDetails(tool, source);
+  if (JIRA_FILE_METADATA_TOOLS.has(tool)) return jiraFileMetadataDetails(tool, source);
+  return JIRA_ADMINISTRATION_TOOLS.has(tool) ? jiraAdministrationDetails(tool, source) : undefined;
+}
 function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined {
   const source = record(value);
   if (source === undefined) return undefined;
   if (JIRA_PROJECT_METADATA_TOOLS.has(tool)) return metadataOutcomeItem(source, tool);
-  if (JIRA_SAVED_VIEW_TOOLS.has(tool))
-    return metadataDetailsItem(jiraSavedViewDetails(tool, source));
-  if (JIRA_FILE_METADATA_TOOLS.has(tool))
-    return metadataDetailsItem(jiraFileMetadataDetails(tool, source));
+  const metadata = metadataDetails(tool, source);
+  if (metadata !== undefined) return metadataDetailsItem(metadata);
   const agile = jiraAgileDetails(tool, source);
   const collaboration = jiraCollaborationDetails(tool, source);
   const participation = jiraParticipationDetails(tool, source);

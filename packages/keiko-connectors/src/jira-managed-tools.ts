@@ -1,4 +1,13 @@
 import {
+  executeJiraIssueTypeSchemeRead,
+  isJiraIssueTypeSchemeRead,
+} from "./jira-managed-issue-type-schemes.js";
+import {
+  executeJiraWorkflowSchemeRead,
+  isJiraWorkflowSchemeRead,
+} from "./jira-managed-workflow-schemes.js";
+import { executeJiraScreenRead, isJiraScreenRead } from "./jira-managed-screen-reads.js";
+import {
   executeJiraParticipationRead,
   isJiraParticipationRead,
 } from "./jira-managed-participation.js";
@@ -325,7 +334,10 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraSavedViewRead>[0]
   | Parameters<typeof executeJiraAttachmentRead>[0]
   | Parameters<typeof executeJiraAvatarRead>[0]
-  | Parameters<typeof executeJiraParticipationRead>[0];
+  | Parameters<typeof executeJiraParticipationRead>[0]
+  | Parameters<typeof executeJiraIssueTypeSchemeRead>[0]
+  | Parameters<typeof executeJiraWorkflowSchemeRead>[0]
+  | Parameters<typeof executeJiraScreenRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return (
     isJiraIssueDetailRead(name) ||
@@ -333,7 +345,10 @@ function isNativeDetailRead(name: string): name is NativeDetailRead {
     isJiraSavedViewRead(name) ||
     isJiraAttachmentRead(name) ||
     isJiraAvatarRead(name) ||
-    isJiraParticipationRead(name)
+    isJiraParticipationRead(name) ||
+    isJiraIssueTypeSchemeRead(name) ||
+    isJiraWorkflowSchemeRead(name) ||
+    isJiraScreenRead(name)
   );
 }
 async function nativeDetailRead<Context extends ManagedMcpInvocationContext>(
@@ -347,6 +362,9 @@ async function nativeDetailRead<Context extends ManagedMcpInvocationContext>(
   const request = requestFor(connected, context);
   if (isJiraParticipationRead(name))
     return executeJiraParticipationRead(name, args, request, connected.baseUrl);
+  if (isJiraIssueTypeSchemeRead(name)) return executeJiraIssueTypeSchemeRead(name, args, request);
+  if (isJiraWorkflowSchemeRead(name)) return executeJiraWorkflowSchemeRead(name, args, request);
+  if (isJiraScreenRead(name)) return executeJiraScreenRead(name, args, request);
   if (isJiraSavedViewRead(name)) return executeJiraSavedViewRead(name, args, request);
   if (isJiraAttachmentRead(name)) return executeJiraAttachmentRead(name, args, request);
   if (isJiraAvatarRead(name)) return executeJiraAvatarRead(name, args, request);

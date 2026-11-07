@@ -123,16 +123,16 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **76 native identities: 50 reads and 26 writes**. Each is mapped to
+The current registry supplies **90 native identities: 64 reads and 26 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **363 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **349 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this reconciliation. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
 This snapshot includes ordinary project setup; board/backlog/Epic and sprint operations; bounded
 filter reads; versions/components; existing issue workflows; the C7 dashboard/filter-sharing reads; and the C6 comment-update/link/worklog
-read increment, bounded C8 attachment/archive and avatar metadata, and worklog create/update with connected-user watching/voting. The three existing report/draft composites remain compositions, not extra native
+read increment, bounded C8 attachment/archive and avatar metadata, worklog create/update with connected-user watching/voting, and fourteen C9 workflow-/issue-type-scheme and screen reads. The three existing report/draft composites remain compositions, not extra native
 API identities. Remaining filter creation, ranking, worklog deletion/other estimate-adjustment modes, destructive operations,
 administration and other inventory gaps stay open. A registered declaration is not evidence that
 Jira grants the current person permission or that a particular installation supports the operation.
@@ -144,6 +144,12 @@ become zero. Relevant unresolved template requirements fail closed. Both operati
 an independent GET. Watching/voting changes are restricted to the connected user, with native
 identity/state reads before effect and independent state readback afterwards. Readable people,
 native counts and current-user flags retain separate completeness/availability meanings.
+
+C9 adds eight workflow-scheme reads, three issue-type-scheme reads and three screen reads.
+Requested parent scheme IDs and returned draft IDs remain distinct. Default and workflow-mapping
+responses use their documented native DTOs; named workflow selection returns an object while the
+unfiltered endpoint returns an array. Bounded local pagination never adds unsupported remote query
+parameters. Administrative visibility and websudo failures remain native refusals, with no escalation.
 
 `currentRegistry` pins the existing server registry source file's SHA-256 and native declaration
 count. The reconciliation helper parses that file's literal `NATIVE` declarations and verified closed `read`, `write` and `issueRead` builders with TypeScript's AST;
@@ -171,6 +177,12 @@ The published schemas are retained as evidence, not blindly trusted as sufficien
 - The 10.4 `info.version` is a placeholder. It cannot serve as a runtime compatibility fact.
 - Several Agile paginated responses reference a singular item schema. Qualify their page wrappers
   and completion markers independently; do not infer completeness from an item count alone.
+- Workflow default/mapping GETs incorrectly reference `WorkflowSchemeBean` in the published
+  Swagger. Official [DefaultBean](https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/rest/v2/admin/workflowscheme/DefaultBean.html)
+  and [WorkflowMappingBean](https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/rest/v2/admin/workflowscheme/WorkflowMappingBean.html)
+  document the native fields; the [native REST reference](https://docs.atlassian.com/software/jira/docs/api/REST/9.12.2/)
+  distinguishes selected-object and unfiltered-array mappings. These sources explain constrained
+  decoding without establishing live availability or broader version compatibility.
 - Input schemas sometimes omit `required` despite documented requirements. Board creation requires
   name, type and filter ID; sprint creation requires name and origin board ID.
 - Project-key validation returns HTTP 200 for an error collection. Successful HTTP status alone

@@ -669,6 +669,57 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.test.ts"]
     },
+    "jira.issue-type-scheme": {
+      "identity": "GET /rest/api/2/issuetypescheme/{schemeId}",
+      "effect": "read",
+      "permissionPolicy": "admin-issue-type-schemes",
+      "kind": "constrained-tool",
+      "constraints": "One exact issue-type scheme GET with returned identity match and bounded optional native issue-type/default details. No association changes or guessed fields.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-type-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-type-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.issue-type-scheme-projects": {
+      "identity": "GET /rest/api/2/issuetypescheme/{schemeId}/associations",
+      "effect": "read",
+      "permissionPolicy": "admin-issue-type-schemes",
+      "kind": "constrained-tool",
+      "constraints": "Exact scheme association GET; native project array bounded and paged locally. Project identity/name/context only, no remote self URLs or association mutation.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-type-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-type-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.issue-type-schemes": {
+      "identity": "GET /rest/api/2/issuetypescheme",
+      "effect": "read",
+      "permissionPolicy": "admin-issue-type-schemes",
+      "kind": "constrained-tool",
+      "constraints": "Bounded local page of the native schemes collection; only fixed declared expand switches for issueTypes/defaultIssueType. No arbitrary expansions, fabricated missing nested data or scheme writes.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-type-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-type-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.issue-types": {
       "identity": "GET /rest/api/2/issue/createmeta/{projectIdOrKey}/issuetypes",
       "effect": "read",
@@ -737,6 +788,57 @@
       "constraints": "Validated id/key/name projection only; locally paginated after a bounded unpaginated response; no project creation or settings.",
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
       "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
+    },
+    "jira.screen-available-fields": {
+      "identity": "GET /rest/api/2/screens/{screenId}/availableFields",
+      "effect": "read",
+      "permissionPolicy": "visible-screen-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Exact screen available-fields GET with bounded local pagination and native field ID/name only. Availability metadata is not write authority; no arbitrary expansion or remote URL following.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-screen-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-screen-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.screen-tab-fields": {
+      "identity": "GET /rest/api/2/screens/{screenId}/tabs/{tabId}/fields",
+      "effect": "read",
+      "permissionPolicy": "visible-screen-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Exact screen/tab fields GET with optional published projectKey. Bounded locally paged native field IDs/names; no editability/permission assertion or field mutation.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-screen-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-screen-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.screen-tabs": {
+      "identity": "GET /rest/api/2/screens/{screenId}/tabs",
+      "effect": "read",
+      "permissionPolicy": "visible-screen-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Exact screen tabs GET with published optional projectKey, bounded local pagination and native tab identity/name. No screen changes, remote page query or privileged fallback.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-screen-reads.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-screen-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
     },
     "jira.search": {
       "identity": "GET /rest/api/2/search",
@@ -1063,6 +1165,142 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.workflow-scheme": {
+      "identity": "GET /rest/api/2/workflowscheme/{id}",
+      "effect": "read",
+      "permissionPolicy": "admin-workflow-schemes",
+      "kind": "constrained-tool",
+      "constraints": "One exact scheme GET; published optional returnDraftIfExists. Preserve returned scheme/draft ID separately from requested parent. Local page over union of present current/original mapping IDs; omitted maps/flags stay unknown. No user/self URL projection or administration writes.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.workflow-scheme-default": {
+      "identity": "GET /rest/api/2/workflowscheme/{id}/default",
+      "effect": "read",
+      "permissionPolicy": "admin-workflow-schemes",
+      "kind": "constrained-tool",
+      "constraints": "One published default-workflow GET with optional returnDraftIfExists. Validate the official DefaultBean workflow string rather than erroneous WorkflowSchemeBean response reference; do not invent returned draft state.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.workflow-scheme-draft": {
+      "identity": "GET /rest/api/2/workflowscheme/{id}/draft",
+      "effect": "read",
+      "permissionPolicy": "admin-workflow-schemes",
+      "kind": "constrained-tool",
+      "constraints": "Explicit draft GET of a parent scheme; preserve native returned draft ID and observed flags, current/original mappings and local page. Does not create/publish a draft or infer active state from a selector.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.workflow-scheme-draft-default": {
+      "identity": "GET /rest/api/2/workflowscheme/{id}/draft/default",
+      "effect": "read",
+      "permissionPolicy": "admin-workflow-schemes",
+      "kind": "constrained-tool",
+      "constraints": "One explicit draft default-workflow GET; bounded native DefaultBean workflow only, no assumed draft existence or mutation.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.workflow-scheme-draft-issue-type": {
+      "identity": "GET /rest/api/2/workflowscheme/{id}/draft/issuetype/{issueType}",
+      "effect": "read",
+      "permissionPolicy": "admin-workflow-schemes",
+      "kind": "constrained-tool",
+      "constraints": "One explicit draft/issue-type mapping GET; returned issueType must match selected ID. Bounded workflow projection, no mapping write or permission elevation.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.workflow-scheme-draft-workflows": {
+      "identity": "GET /rest/api/2/workflowscheme/{id}/draft/workflow",
+      "effect": "read",
+      "permissionPolicy": "admin-workflow-schemes",
+      "kind": "constrained-tool",
+      "constraints": "Explicit draft workflow mapping GET; selected native object or unfiltered array per published name selector. Bounded unique mappings and local paging, omitted issue-type lists/default flags remain unknown.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.workflow-scheme-issue-type": {
+      "identity": "GET /rest/api/2/workflowscheme/{id}/issuetype/{issueType}",
+      "effect": "read",
+      "permissionPolicy": "admin-workflow-schemes",
+      "kind": "constrained-tool",
+      "constraints": "One scheme/issue-type mapping GET with exact positive decimal IDs and optional published draft selector. Returned native issueType must match; bounded workflow string, no arbitrary workflow configuration.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.workflow-scheme-workflows": {
+      "identity": "GET /rest/api/2/workflowscheme/{id}/workflow",
+      "effect": "read",
+      "permissionPolicy": "admin-workflow-schemes",
+      "kind": "constrained-tool",
+      "constraints": "Published optional workflowName determines native selected-object versus unfiltered-array decoding. Exact selected name, bounded unique workflow/issue-type mappings, optional observed defaultMapping and local paging only. No arbitrary query or remote page assumption.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-workflow-schemes.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.worklog": {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/worklog/{id}",
       "effect": "read",
@@ -1084,8 +1322,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "e280a2ad4b3b5f38a60b29d2d31d951d1c30d4525f20a5d0140685982a7352dd",
-    "nativeOperationCount": 76
+    "sha256": "355cb2420f4fc4b97667c2e0762115d754b44b0cc2681acf95afb466f4f63bc0",
+    "nativeOperationCount": 90
   },
   "operations": [
     {
@@ -7387,10 +7625,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.issue-type-schemes"]
     },
     {
       "identity": "POST /rest/api/2/issuetypescheme",
@@ -7483,10 +7721,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.issue-type-scheme"]
     },
     {
       "identity": "PUT /rest/api/2/issuetypescheme/{schemeId}",
@@ -7579,10 +7817,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.issue-type-scheme-projects"]
     },
     {
       "identity": "POST /rest/api/2/issuetypescheme/{schemeId}/associations",
@@ -11243,10 +11481,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.screen-available-fields"]
     },
     {
       "identity": "GET /rest/api/2/screens/{screenId}/tabs",
@@ -11275,10 +11513,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.screen-tabs"]
     },
     {
       "identity": "POST /rest/api/2/screens/{screenId}/tabs",
@@ -11403,10 +11641,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.screen-tab-fields"]
     },
     {
       "identity": "POST /rest/api/2/screens/{screenId}/tabs/{tabId}/fields",
@@ -14095,10 +14333,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.workflow-scheme"]
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}",
@@ -14223,10 +14461,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.workflow-scheme-default"]
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}/default",
@@ -14319,10 +14557,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.workflow-scheme-draft"]
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}/draft",
@@ -14415,10 +14653,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.workflow-scheme-draft-default"]
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}/draft/default",
@@ -14511,10 +14749,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.workflow-scheme-draft-issue-type"]
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}/draft/issuetype/{issueType}",
@@ -14607,10 +14845,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.workflow-scheme-draft-workflows"]
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}/draft/workflow",
@@ -14703,10 +14941,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.workflow-scheme-issue-type"]
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}/issuetype/{issueType}",
@@ -14799,10 +15037,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.workflow-scheme-workflows"]
     },
     {
       "identity": "PUT /rest/api/2/workflowscheme/{id}/workflow",

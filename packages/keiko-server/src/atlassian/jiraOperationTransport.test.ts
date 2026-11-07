@@ -33,6 +33,75 @@ const CREATE = {
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
   {
+    tool: "jira.workflow-scheme",
+    args: { schemeId: "37", returnDraftIfExists: true },
+    parameters: { id: "37" },
+    query: { returnDraftIfExists: "true" },
+  },
+  { tool: "jira.workflow-scheme-draft", args: { schemeId: "37" }, parameters: { id: "37" } },
+  {
+    tool: "jira.workflow-scheme-default",
+    args: { schemeId: "37", returnDraftIfExists: false },
+    parameters: { id: "37" },
+    query: { returnDraftIfExists: "false" },
+  },
+  {
+    tool: "jira.workflow-scheme-draft-default",
+    args: { schemeId: "37" },
+    parameters: { id: "37" },
+  },
+  {
+    tool: "jira.workflow-scheme-issue-type",
+    args: { schemeId: "37", issueTypeId: "1", returnDraftIfExists: true },
+    parameters: { id: "37", issueType: "1" },
+    query: { returnDraftIfExists: "true" },
+  },
+  {
+    tool: "jira.workflow-scheme-draft-issue-type",
+    args: { schemeId: "37", issueTypeId: "1" },
+    parameters: { id: "37", issueType: "1" },
+  },
+  {
+    tool: "jira.workflow-scheme-workflows",
+    args: { schemeId: "37", returnDraftIfExists: false },
+    parameters: { id: "37" },
+    query: { returnDraftIfExists: "false" },
+  },
+  {
+    tool: "jira.workflow-scheme-draft-workflows",
+    args: { schemeId: "37", workflowName: "In Progress + QA" },
+    parameters: { id: "37" },
+    query: { workflowName: "In Progress + QA" },
+  },
+  {
+    tool: "jira.issue-type-schemes",
+    args: { startAt: 0, maxResults: 1, includeIssueTypes: true, includeDefaultIssueType: true },
+    query: { expand: "schemes.issueTypes,schemes.defaultIssueType" },
+  },
+  { tool: "jira.issue-type-scheme", args: { schemeId: "37" }, parameters: { schemeId: "37" } },
+  {
+    tool: "jira.issue-type-scheme-projects",
+    args: { schemeId: "37", startAt: 0, maxResults: 1 },
+    parameters: { schemeId: "37" },
+  },
+  {
+    tool: "jira.screen-tabs",
+    args: { screenId: "71", projectKey: "SYN", startAt: 0, maxResults: 1 },
+    parameters: { screenId: "71" },
+    query: { projectKey: "SYN" },
+  },
+  {
+    tool: "jira.screen-tab-fields",
+    args: { screenId: "71", tabId: "81", projectKey: "SYN" },
+    parameters: { screenId: "71", tabId: "81" },
+    query: { projectKey: "SYN" },
+  },
+  {
+    tool: "jira.screen-available-fields",
+    args: { screenId: "71" },
+    parameters: { screenId: "71" },
+  },
+  {
     tool: "jira.create-worklog",
     args: {
       issueKey: "SYN-1",
@@ -425,6 +494,42 @@ function assetRead(path: string): AtlassianHttpBodyResult | undefined {
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
+function administrationRead(
+  path: string,
+  absoluteUrl: string,
+): AtlassianHttpBodyResult | undefined {
+  const type = { id: "1", name: "Task", subtask: false };
+  const scheme = { id: "37", name: "Delivery", issueTypes: [type], defaultIssueType: type };
+  const workflowScheme = {
+    id: 37,
+    name: "Delivery",
+    draft: false,
+    defaultWorkflow: "Default",
+    issueTypeMappings: { "1": "In Progress + QA" },
+  };
+  const workflow = { workflow: "In Progress + QA", issueTypes: ["1"], defaultMapping: false };
+  const bodies: Readonly<Record<string, unknown>> = {
+    issuetypescheme: { schemes: [scheme] },
+    "issuetypescheme/37": scheme,
+    "issuetypescheme/37/associations": [
+      { id: "10000", key: "SYN", name: "Delivery", archived: false },
+    ],
+    "workflowscheme/37": workflowScheme,
+    "workflowscheme/37/draft": { ...workflowScheme, id: 38, draft: true },
+    "workflowscheme/37/default": { workflow: "Default" },
+    "workflowscheme/37/draft/default": { workflow: "Default Draft" },
+    "workflowscheme/37/issuetype/1": { issueType: "1", workflow: "In Progress + QA" },
+    "workflowscheme/37/draft/issuetype/1": { issueType: "1", workflow: "In Progress + QA" },
+    "workflowscheme/37/workflow": [workflow],
+    "workflowscheme/37/draft/workflow": new URL(absoluteUrl).searchParams.has("workflowName")
+      ? workflow
+      : [workflow],
+    "screens/71/tabs": [{ id: 81, name: "Details" }],
+    "screens/71/tabs/81/fields": [{ id: "summary", name: "Summary", showWhenEmpty: false }],
+    "screens/71/availableFields": [{ id: "description", name: "Description" }],
+  };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
+}
 function issueMetadata(path: string): AtlassianHttpBodyResult | undefined {
   if (path.endsWith("/issuetypes"))
     return response({
@@ -473,7 +578,12 @@ function projectWrite(
     ? response({ id: 10000, key: "SYN" }, 201)
     : response(state.project);
 }
-function remoteRead(path: string, absolute: string, state: RemoteState): AtlassianHttpBodyResult {
+function remoteRead(
+  path: string,
+  absolute: string,
+  state: RemoteState,
+  absoluteUrl: string,
+): AtlassianHttpBodyResult {
   return (
     projectRead(path, state) ??
     structureRead(path, state) ??
@@ -482,6 +592,7 @@ function remoteRead(path: string, absolute: string, state: RemoteState): Atlassi
     filterRead(path) ??
     savedViewRead(path) ??
     assetRead(path) ??
+    administrationRead(path, absoluteUrl) ??
     issueMetadata(path) ??
     fixtureRead(absolute, state)
   );
@@ -519,7 +630,8 @@ function remote(tool?: string): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> 
   return vi.fn<AtlassianHttpBodyPort>((request) => {
     const absolute = new URL(request.url).pathname;
     const path = absolute.replace("/context/rest/api/2/", "");
-    if (request.method === "GET") return Promise.resolve(remoteRead(path, absolute, state));
+    if (request.method === "GET")
+      return Promise.resolve(remoteRead(path, absolute, state, request.url));
     return Promise.resolve(
       path === "project" || path === "project/10000"
         ? projectWrite(request, state)
@@ -558,7 +670,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(58);
+    expect(native).toHaveLength(72);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

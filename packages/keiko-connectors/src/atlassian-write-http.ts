@@ -143,7 +143,10 @@ function classifyFailure(
       : undefined;
   return {
     ok: false,
-    reason: failureReasonForWriteStatus(result.status),
+    reason:
+      result.status === 401 && result.authentication === "confirmed"
+        ? "permission-denied"
+        : failureReasonForWriteStatus(result.status),
     httpStatus: result.status,
     ...(remote === undefined ? {} : { remote }),
   };

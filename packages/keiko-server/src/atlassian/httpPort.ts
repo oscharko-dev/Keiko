@@ -81,6 +81,8 @@ export function exceedsBodyByteCeiling(bytes: number, ceilingBytes: number): boo
 }
 
 export interface CreateAtlassianHttpPortOptions extends AtlassianHttpLifecycleOptions {
+  /** Server-owned one-shot identity observation; never a model or HTTP request option. */
+  readonly singleAttempt?: true;
   /** Derived from current saved Data Center metadata; never a request-body authority flag. */
   readonly targetAdmission?:
     ((signal: AbortSignal) => Promise<AtlassianTargetAdmission | undefined>) | undefined;
@@ -299,6 +301,7 @@ export function createGatewayAtlassianHttpPort(
       const upstream = await gatewayFetch(target.toString(), {
         method: request.method,
         prepareHeaders: lifecycle.prepareHeaders,
+        ...(options.singleAttempt === true ? { singleAttempt: true } : {}),
         signal,
         egress,
         log: processServerLogSink(),
@@ -436,7 +439,7 @@ export function createGatewayAtlassianHttpBodyPort(
       const upstream = await gatewayFetch(target.toString(), {
         method: request.method,
         prepareHeaders: lifecycle.prepareHeaders,
-        singleAttempt: request.method !== "GET",
+        singleAttempt: options.singleAttempt === true || request.method !== "GET",
         ...requestBody(request),
         signal,
         egress,

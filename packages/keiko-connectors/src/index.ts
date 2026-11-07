@@ -80,6 +80,7 @@ export {
 export {
   verifyJiraDataCenterConnection,
   verifyJiraDataCenterCompatibility,
+  verifyJiraDataCenterIdentity,
   type JiraDataCenterCompatibilityResult,
 } from "./jira-connection-verification.js";
 export {

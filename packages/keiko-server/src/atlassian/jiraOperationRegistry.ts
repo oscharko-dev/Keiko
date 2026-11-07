@@ -20,6 +20,9 @@ type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
   | "visible-projects"
+  | "admin-workflow-schemes"
+  | "admin-issue-type-schemes"
+  | "visible-screen-configuration"
   | "current-project-metadata"
   | "native-project-key-validation"
   | "explicit-project-permissions"
@@ -126,6 +129,41 @@ function issueRead(path: string, root: JiraApiRoot = "/rest/api/2"): NativeSpeci
   return ["GET", "read", path, "visible-issues", root];
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  "jira.issue-type-schemes": read("/issuetypescheme", "admin-issue-type-schemes"),
+  "jira.issue-type-scheme": read("/issuetypescheme/{schemeId}", "admin-issue-type-schemes"),
+  "jira.issue-type-scheme-projects": read(
+    "/issuetypescheme/{schemeId}/associations",
+    "admin-issue-type-schemes",
+  ),
+  "jira.workflow-scheme": read("/workflowscheme/{id}", "admin-workflow-schemes"),
+  "jira.workflow-scheme-default": read("/workflowscheme/{id}/default", "admin-workflow-schemes"),
+  "jira.workflow-scheme-draft": read("/workflowscheme/{id}/draft", "admin-workflow-schemes"),
+  "jira.workflow-scheme-draft-default": read(
+    "/workflowscheme/{id}/draft/default",
+    "admin-workflow-schemes",
+  ),
+  "jira.workflow-scheme-issue-type": read(
+    "/workflowscheme/{id}/issuetype/{issueType}",
+    "admin-workflow-schemes",
+  ),
+  "jira.workflow-scheme-draft-issue-type": read(
+    "/workflowscheme/{id}/draft/issuetype/{issueType}",
+    "admin-workflow-schemes",
+  ),
+  "jira.workflow-scheme-workflows": read("/workflowscheme/{id}/workflow", "admin-workflow-schemes"),
+  "jira.workflow-scheme-draft-workflows": read(
+    "/workflowscheme/{id}/draft/workflow",
+    "admin-workflow-schemes",
+  ),
+  "jira.screen-tabs": read("/screens/{screenId}/tabs", "visible-screen-configuration"),
+  "jira.screen-tab-fields": read(
+    "/screens/{screenId}/tabs/{tabId}/fields",
+    "visible-screen-configuration",
+  ),
+  "jira.screen-available-fields": read(
+    "/screens/{screenId}/availableFields",
+    "visible-screen-configuration",
+  ),
   "jira.watchers": read("/issue/{issueIdOrKey}/watchers", "visible-watchers"),
   "jira.votes": read("/issue/{issueIdOrKey}/votes", "visible-voters"),
   "jira.watch": write("POST", "/issue/{issueIdOrKey}/watchers", "current-user-watch-and-readback"),

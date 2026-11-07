@@ -22,6 +22,20 @@ export const JIRA_FIELD_KINDS = [
 ] as const;
 export type JiraFieldKind = (typeof JIRA_FIELD_KINDS)[number];
 export const JIRA_MANAGED_READ_TOOLS = [
+  "jira.issue-type-schemes",
+  "jira.issue-type-scheme",
+  "jira.issue-type-scheme-projects",
+  "jira.workflow-scheme",
+  "jira.workflow-scheme-default",
+  "jira.workflow-scheme-draft",
+  "jira.workflow-scheme-draft-default",
+  "jira.workflow-scheme-issue-type",
+  "jira.workflow-scheme-draft-issue-type",
+  "jira.workflow-scheme-workflows",
+  "jira.workflow-scheme-draft-workflows",
+  "jira.screen-tabs",
+  "jira.screen-tab-fields",
+  "jira.screen-available-fields",
   "jira.projects",
   "jira.project",
   "jira.validate-project-key",

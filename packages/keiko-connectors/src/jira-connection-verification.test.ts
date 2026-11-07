@@ -3,6 +3,7 @@ import { isJiraDataCenterCompatibilityFacts } from "@oscharko-dev/keiko-contract
 import {
   verifyJiraDataCenterConnection,
   verifyJiraDataCenterCompatibility,
+  verifyJiraDataCenterIdentity,
 } from "./jira-connection-verification.js";
 import type {
   AtlassianHttpBodyPort,
@@ -37,6 +38,50 @@ function fixture(results: readonly AtlassianHttpBodyResult[]): {
 
 const version = { version: "10.3.26", versionNumbers: [10, 3, 26], deploymentType: "Server" };
 const user = { name: "synthetic-user", key: "synthetic-key", active: true };
+
+describe("identity-only observation within an existing request", () => {
+  it("uses only the fixed identity path, remaining time, cancellation and existing byte cap", async () => {
+    const { port, requests } = fixture([response(user)]);
+    const signal = new AbortController().signal;
+    expect(
+      await verifyJiraDataCenterIdentity(port, "https://jira.example/context", {
+        timeoutMs: 173,
+        signal,
+      }),
+    ).toBe("ok");
+    expect(requests).toEqual([
+      {
+        method: "GET",
+        url: "https://jira.example/context/rest/api/2/myself",
+        timeoutMs: 173,
+        maxBodyBytes: 65536,
+        signal,
+      },
+    ]);
+  });
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "does not open a new budget from %s",
+    async (timeoutMs) => {
+      const { port, requests } = fixture([]);
+      expect(await verifyJiraDataCenterIdentity(port, "https://jira.example", { timeoutMs })).toBe(
+        "timeout",
+      );
+      expect(requests).toEqual([]);
+    },
+  );
+  it("never probes after cancellation", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const { port, requests } = fixture([]);
+    expect(
+      await verifyJiraDataCenterIdentity(port, "https://jira.example", {
+        timeoutMs: 1000,
+        signal: controller.signal,
+      }),
+    ).toBe("timeout");
+    expect(requests).toEqual([]);
+  });
+});
 
 describe("bounded Jira Data Center verification", () => {
   it.each([

@@ -25,7 +25,7 @@ export interface AtlassianHttpRequest {
 }
 
 export type AtlassianHttpResult =
-  | { readonly kind: "response"; readonly status: number }
+  | { readonly kind: "response"; readonly status: number; readonly authentication?: "confirmed" }
   | { readonly kind: "timeout" }
   | { readonly kind: "network-error"; readonly reason?: "tls" };
 
@@ -82,6 +82,8 @@ export type AtlassianHttpBodyResult =
   | {
       readonly kind: "response";
       readonly status: number;
+      /** Server-owned identity proof for a documented ambiguous 401; never upstream content. */
+      readonly authentication?: "confirmed";
       // Decoded UTF-8 body read up to `maxBodyBytes`. Empty for bodyless responses (e.g. 3xx —
       // which the adapter surfaces and never follows).
       readonly bodyText: string;

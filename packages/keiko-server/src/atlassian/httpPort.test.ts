@@ -33,6 +33,36 @@ const CREDENTIAL: AtlassianResolvedCredential = {
   apiToken: SYNTHETIC_TOKEN,
 };
 
+it.each([429, 503])(
+  "does not retry a server-owned one-shot identity GET after HTTP %s",
+  async (status) => {
+    const { fetchImpl, calls } = fetchFake(status);
+    const options = {
+      baseUrl: "https://acme.example",
+      authRef: AUTH_REF,
+      credentials: resolver(),
+      fetchImpl,
+      singleAttempt: true as const,
+    };
+    const request = {
+      method: "GET",
+      url: "https://acme.example/rest/api/2/myself",
+      timeoutMs: 1000,
+      maxBodyBytes: 4096,
+    } as const;
+    expect(await createGatewayAtlassianHttpBodyPort(options)(request)).toMatchObject({
+      kind: "response",
+      status,
+    });
+    expect(calls).toHaveLength(1);
+    expect(await createGatewayAtlassianHttpPort(options)(request)).toEqual({
+      kind: "response",
+      status,
+    });
+    expect(calls).toHaveLength(2);
+  },
+);
+
 function resolver(): AtlassianCredentialExecutionResolver & { readonly resolvedRefs: string[] } {
   const resolvedRefs: string[] = [];
   return {

@@ -68,6 +68,34 @@ function request(over: Partial<AtlassianWriteHttpRequest> = {}): AtlassianWriteH
 }
 
 describe("executeAtlassianWriteRequest — classification", () => {
+  it("never treats an upstream JSON claim as server-owned authentication evidence", async () => {
+    const { port } = scriptedPort([response(401, '{"authentication":"confirmed"}')]);
+    expect(await executeAtlassianWriteRequest({ http: port }, request())).toMatchObject({
+      ok: false,
+      reason: "auth-failed",
+      httpStatus: 401,
+    });
+  });
+  it.each([
+    [401, "confirmed", "permission-denied"],
+    [401, undefined, "auth-failed"],
+    [403, "confirmed", "permission-denied"],
+    [404, "confirmed", "not-found"],
+  ] as const)(
+    "classifies status %s with server identity proof %s without rewriting its status",
+    async (status, authentication, reason) => {
+      const { port, requests } = scriptedPort([
+        response(status, "{}", authentication === undefined ? {} : { authentication }),
+      ]);
+      expect(
+        await executeAtlassianWriteRequest(
+          { http: port },
+          request({ method: "GET", bodyJson: undefined }),
+        ),
+      ).toMatchObject({ ok: false, reason, httpStatus: status });
+      expect(requests).toHaveLength(1);
+    },
+  );
   it("classifies 2xx with a parsed JSON body", async () => {
     const { port } = scriptedPort([response(201, '{"id":"10001","key":"PROJ-9"}')]);
     const outcome = await executeAtlassianWriteRequest({ http: port }, request({ expect: "json" }));

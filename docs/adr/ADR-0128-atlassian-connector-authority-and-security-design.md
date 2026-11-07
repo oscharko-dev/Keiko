@@ -622,14 +622,26 @@ coverage, including restart cases, remains explicit in the epic evidence matrix.
 Both outbound HTTP factories forward the private dispatch/response hooks so the same current
 policy guard can run after transport preparation and before credential materialization. A
 response observer captures the selected Live Pod generation and verification revision by value.
-An observed 401 invalidates only that still-current verified credential, advances its generation
+An ordinary observed 401 invalidates only that still-current verified credential, advances its generation
 and notifies the existing dependent-Chat lifecycle owner. A newer/pending verification, rotation,
 deletion or 403 permission denial cannot revoke another/current credential. Response acknowledgement
 runs before invalidation and body consumption; the existing Activity Log distinguishes observed
-request status from an explicit verification probe. Probe construction marks its server-owned
-purpose explicitly and omits the observed-request handler; its existing verification owner records
+request status from explicit connection verification. Connection-verification probes mark their server-owned
+purpose explicitly and omit the observed-request handler; the existing verification owner records
 the result once. This classification does not depend on a possibly stale metadata snapshot.
 This does not introduce credential polling.
+
+The retained native API also documents 401 for missing WebSudo or view permission on specific
+workflow-scheme and screen GETs. Only those server-owned method/path identities await one bounded
+same-target `myself` read before deciding whether the credential failed. The original status and
+synchronous response acknowledgement remain unchanged. The identity read retains ordinary saved
+target admission, the original authority guard, signal, remaining deadline and captured credential
+generation/verification revision; it neither retries nor begins connection verification. A current,
+active identity adds the closed port observation `authentication: "confirmed"`, which classifies
+the original 401 as an operation permission denial without granting authority or changing stored
+compatibility. An explicit authentication failure still invalidates through the existing custody
+owner. Timeout, malformed data, revoked authority, cancellation or stale observations are not proof
+of credential failure. Upstream JSON cannot supply this port-owned observation.
 
 Both outbound HTTP factories capture the selected credential generation by value. The custody
 resolver checks it against current private metadata before reading ciphertext, so an old transport

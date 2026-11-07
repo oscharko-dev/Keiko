@@ -1,4 +1,8 @@
 import {
+  jiraAdministrationDeclarationForTool,
+  type JIRA_ADMINISTRATION_READ_DEFINITIONS,
+} from "./jiraAdministrationDescriptors.js";
+import {
   jiraParticipationDeclarationForTool,
   type JIRA_PARTICIPATION_READ_DEFINITIONS,
 } from "./jiraParticipationDescriptors.js";
@@ -160,6 +164,7 @@ type CoreReadToolName = Exclude<
       | keyof typeof JIRA_PROJECT_STRUCTURE_READ_DEFINITIONS
       | keyof typeof JIRA_ISSUE_COLLABORATION_READ_DEFINITIONS
       | keyof typeof JIRA_PARTICIPATION_READ_DEFINITIONS
+      | keyof typeof JIRA_ADMINISTRATION_READ_DEFINITIONS
       | keyof typeof JIRA_SAVED_VIEW_READ_DEFINITIONS
       | keyof typeof JIRA_ASSET_READ_DEFINITIONS
     >
@@ -331,18 +336,18 @@ function isCoreReadTool(name: JiraManagedReadToolName): name is CoreReadToolName
   return Object.hasOwn(DEFINITIONS, name);
 }
 function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
-  const agile = jiraAgileDeclarationForTool(name);
-  if (agile !== undefined) return agile;
-  const structure = jiraProjectStructureDeclarationForTool(name);
-  if (structure !== undefined) return structure;
-  const participation = jiraParticipationDeclarationForTool(name);
-  if (participation !== undefined) return participation;
-  const collaboration = jiraIssueCollaborationDeclarationForTool(name);
-  if (collaboration !== undefined) return collaboration;
-  const savedView = jiraSavedViewDeclarationForTool(name);
-  if (savedView !== undefined) return savedView;
-  const asset = jiraAssetDeclarationForTool(name);
-  if (asset !== undefined) return asset;
+  for (const producer of [
+    jiraAgileDeclarationForTool,
+    jiraProjectStructureDeclarationForTool,
+    jiraAdministrationDeclarationForTool,
+    jiraParticipationDeclarationForTool,
+    jiraIssueCollaborationDeclarationForTool,
+    jiraSavedViewDeclarationForTool,
+    jiraAssetDeclarationForTool,
+  ]) {
+    const selected = producer(name);
+    if (selected !== undefined) return selected;
+  }
   if (name === "jira.report") return JIRA_REPORT_DECLARATION;
   if (name === "jira.draft-stage") return JIRA_DRAFT_STAGE_DECLARATION;
   if (!isCoreReadTool(name)) throw new TypeError("Unsupported Jira read tool");

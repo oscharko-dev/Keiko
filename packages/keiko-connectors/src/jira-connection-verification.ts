@@ -57,17 +57,41 @@ async function probe(
   url: string,
   deadline: number,
   now: () => number,
+  signal?: AbortSignal,
 ): Promise<ReturnType<typeof parseAtlassianVerificationProbe>> {
   const remaining = deadline - now();
-  if (remaining <= 0) return { failure: "timeout" };
+  if (remaining <= 0 || signal?.aborted) return { failure: "timeout" };
   return parseAtlassianVerificationProbe(
     await port({
       method: "GET",
       url,
       timeoutMs: remaining,
       maxBodyBytes: ATLASSIAN_VERIFY_MAX_BYTES,
+      ...(signal === undefined ? {} : { signal }),
     }),
   );
+}
+
+function jiraRestRoot(baseUrl: string): string {
+  if (!isSafeAtlassianConnectorBaseUrl(baseUrl))
+    throw new AtlassianCredentialCustodyError("invalid-input");
+  const base = new URL(baseUrl);
+  return `${base.origin}${base.pathname.replace(/\/$/, "")}/rest/api/2/`;
+}
+
+/** Observe identity only, without beginning verification or changing stored compatibility facts. */
+export async function verifyJiraDataCenterIdentity(
+  port: AtlassianHttpBodyPort,
+  baseUrl: string,
+  options: { readonly timeoutMs: number; readonly signal?: AbortSignal | undefined },
+  now: () => number = Date.now,
+): Promise<AtlassianConnectionVerificationStatus> {
+  const prefix = jiraRestRoot(baseUrl);
+  if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) return "timeout";
+  const timeoutMs = Math.min(options.timeoutMs, ATLASSIAN_VERIFY_CONNECTION_TIMEOUT_MS);
+  const identity = await probe(port, `${prefix}myself`, now() + timeoutMs, now, options.signal);
+  if ("failure" in identity) return identity.failure;
+  return validIdentity(identity.value) ? "ok" : "invalid-response";
 }
 
 function failedProbe(
@@ -82,18 +106,19 @@ export async function verifyJiraDataCenterCompatibility(
   baseUrl: string,
   now: () => number = Date.now,
 ): Promise<JiraDataCenterCompatibilityResult> {
-  if (!isSafeAtlassianConnectorBaseUrl(baseUrl))
-    throw new AtlassianCredentialCustodyError("invalid-input");
-  const base = new URL(baseUrl);
-  const prefix = `${base.origin}${base.pathname.replace(/\/$/, "")}/rest/api/2/`;
+  const prefix = jiraRestRoot(baseUrl);
   const deadline = now() + ATLASSIAN_VERIFY_CONNECTION_TIMEOUT_MS;
   const server = await probe(port, `${prefix}serverInfo`, deadline, now);
   if ("failure" in server) return failedProbe(server.failure);
   const result = serverCompatibility(server.value);
   if (result.status !== "ok") return result;
-  const identity = await probe(port, `${prefix}myself`, deadline, now);
-  if ("failure" in identity) return failedProbe(identity.failure);
-  return validIdentity(identity.value) ? result : { status: "invalid-response" };
+  const identity = await verifyJiraDataCenterIdentity(
+    port,
+    baseUrl,
+    { timeoutMs: deadline - now() },
+    now,
+  );
+  return identity === "ok" ? result : failedProbe(identity);
 }
 
 /** Preserve the status-only API for callers that do not retain capability facts. */

@@ -16,7 +16,17 @@ import {
   type AtlassianCredentialVaultPort,
   type AtlassianCredentialCustodyDeps,
   type AtlassianCredentialExecutionResolver,
+  type AtlassianHttpRequest,
+  type AtlassianHttpBodyRequest,
+  type AtlassianHttpResult,
+  AtlassianCredentialCustodyError,
+  verifyJiraDataCenterIdentity,
 } from "@oscharko-dev/keiko-connectors";
+import {
+  ambiguousJiraAuthenticationResponse,
+  currentJiraAuthenticationObservation,
+  withJiraAuthenticationObservation,
+} from "./jiraAuthenticationObservation.js";
 // Composition-root wiring for Atlassian connector credential custody (Issue #2241, ADR-0128 D1).
 //
 // keiko-server assembles the concrete pieces the keiko-connectors domain logic declares as ports:
@@ -101,6 +111,7 @@ export function buildAtlassianConnectorCredentialDeps(
     metadataStore,
     onLivePodInvalidated: options.onLivePodInvalidated,
   });
+  const owner = { options, listenerPorts, executionResolver, custody, metadataStore };
   return {
     custody,
     registerListener: (port): (() => void) => {
@@ -109,24 +120,10 @@ export function buildAtlassianConnectorCredentialDeps(
         listenerPorts.delete(port);
       };
     },
-    httpPortFactory: (metadata, correlationId, lifecycle) =>
-      createGatewayAtlassianHttpPort(
-        credentialTransportOptions(
-          { options, listenerPorts, executionResolver, custody, metadataStore },
-          metadata,
-          correlationId,
-          lifecycle,
-        ),
-      ),
-    httpBodyPortFactory: (metadata, correlationId, lifecycle) =>
-      createGatewayAtlassianHttpBodyPort(
-        credentialTransportOptions(
-          { options, listenerPorts, executionResolver, custody, metadataStore },
-          metadata,
-          correlationId,
-          lifecycle,
-        ),
-      ),
+    httpPortFactory: (metadata, correlationId, lifecycle = {}) =>
+      observedPort(owner, metadata, correlationId, lifecycle, createGatewayAtlassianHttpPort),
+    httpBodyPortFactory: (metadata, correlationId, lifecycle = {}) =>
+      observedPort(owner, metadata, correlationId, lifecycle, createGatewayAtlassianHttpBodyPort),
     ...(options.activityLog === undefined ? {} : { activityLog: options.activityLog }),
   };
 }
@@ -144,6 +141,57 @@ interface CredentialTransportOwner {
   readonly executionResolver: AtlassianCredentialExecutionResolver;
   readonly custody: AtlassianCredentialCustody;
   readonly metadataStore: AtlassianCredentialMetadataStore;
+}
+
+function identityObservation(
+  owner: CredentialTransportOwner,
+  metadata: AtlassianCredentialMetadata,
+  correlationId: string,
+  lifecycle: AtlassianCredentialHttpOptions,
+): (timeoutMs: number, signal: AbortSignal | undefined) => Promise<boolean> {
+  const current = (): boolean =>
+    currentJiraAuthenticationObservation(metadata, owner.custody.getMetadata(metadata.authRef));
+  const port = createGatewayAtlassianHttpBodyPort({
+    ...credentialTransportOptions(owner, metadata, correlationId, {
+      beforeDispatch: (request): boolean => {
+        if (!current()) throw new AtlassianCredentialCustodyError("credential-changed");
+        return lifecycle.beforeDispatch === undefined || lifecycle.beforeDispatch(request);
+      },
+    }),
+    // This direct port owns its awaited identity observation and retains normal target admission.
+    onResponse: (): boolean => true,
+    singleAttempt: true,
+  });
+  return async (timeoutMs, signal): Promise<boolean> => {
+    const status = await verifyJiraDataCenterIdentity(port, metadata.baseUrl, {
+      timeoutMs,
+      signal,
+    });
+    if (status === "auth-failed") observedAuthentication(owner, metadata, correlationId)(401);
+    else recordConnectionCheck(owner.options, correlationId, status, undefined, "request");
+    return status === "ok";
+  };
+}
+
+function observedPort<
+  TRequest extends AtlassianHttpRequest | AtlassianHttpBodyRequest,
+  TResult extends AtlassianHttpResult,
+>(
+  owner: CredentialTransportOwner,
+  metadata: AtlassianCredentialMetadata,
+  correlationId: string | undefined,
+  lifecycle: AtlassianCredentialHttpOptions,
+  create: (options: CreateAtlassianHttpPortOptions) => (request: TRequest) => Promise<TResult>,
+): (request: TRequest) => Promise<TResult> {
+  const port = create(credentialTransportOptions(owner, metadata, correlationId, lifecycle));
+  if (lifecycle.purpose === "verification") return port;
+  return withJiraAuthenticationObservation(
+    metadata,
+    port,
+    () =>
+      currentJiraAuthenticationObservation(metadata, owner.custody.getMetadata(metadata.authRef)),
+    identityObservation(owner, metadata, correlationId ?? UNKNOWN_CORRELATION_ID, lifecycle),
+  );
 }
 
 function observedAuthentication(
@@ -215,7 +263,7 @@ function credentialTransportOptions(
       try {
         return onResponse === undefined || onResponse(request, status);
       } finally {
-        observe(status);
+        if (!ambiguousJiraAuthenticationResponse(metadata, request)) observe(status);
       }
     },
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),

@@ -53,6 +53,303 @@ function show(exchange: ChatToolExchange): ReturnType<typeof render> {
 
 afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
 
+describe.each(["en", "de"] as const)("screen and scheme inspection in %s (C9)", (locale) => {
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  it("restores all fourteen configuration reads with named cards, mappings and no invented links", async () => {
+    const scheme = {
+      id: "21",
+      name: "Delivery types",
+      issueTypes: [
+        { id: "10001", name: "Story", subtask: false },
+        { id: "10002", name: "Child", subtask: true },
+        { id: "10003", name: "Unspecified" },
+      ],
+      defaultIssueType: { id: "10001", name: "Story" },
+    };
+    const cases: readonly [string, CatalogJsonObject, string, string][] = [
+      [
+        "jira_screen_tabs",
+        {
+          screenId: "7",
+          items: [{ id: "10", name: "Main", self: "https://untrusted.invalid/tab" }],
+          startAt: 0,
+          total: 1,
+        },
+        "Read Jira screen tabs",
+        "Jira-Masken-Tabs lesen",
+      ],
+      [
+        "jira_screen_tab_fields",
+        {
+          screenId: "7",
+          tabId: "10",
+          items: [
+            {
+              id: "customfield_10010",
+              name: "Acceptance criteria",
+              type: "custom",
+              showWhenEmpty: false,
+              required: true,
+            },
+          ],
+          startAt: 0,
+          total: 1,
+        },
+        "Read Jira screen tab fields",
+        "Felder eines Jira-Masken-Tabs lesen",
+      ],
+      [
+        "jira_screen_available_fields",
+        { screenId: "7", items: [], startAt: 0, total: 0 },
+        "Read available Jira screen fields",
+        "Verfügbare Jira-Maskenfelder lesen",
+      ],
+      [
+        "jira_issue_type_schemes",
+        { items: [scheme], startAt: 0, total: 1 },
+        "Read Jira issue type schemes",
+        "Jira-Vorgangstyp-Schemata lesen",
+      ],
+      [
+        "jira_issue_type_scheme",
+        { schemeId: "22", items: [{ id: "22", name: "Other types" }] },
+        "Read Jira issue type scheme",
+        "Jira-Vorgangstyp-Schema lesen",
+      ],
+      [
+        "jira_issue_type_scheme_projects",
+        {
+          schemeId: "21",
+          items: [
+            {
+              id: "71",
+              key: "SYN",
+              name: "Delivery project",
+              archived: false,
+              browseUrl: "https://untrusted.invalid/project",
+            },
+          ],
+          startAt: 0,
+          total: 1,
+        },
+        "Read projects using a Jira issue type scheme",
+        "Projekte eines Jira-Vorgangstyp-Schemas lesen",
+      ],
+      [
+        "jira_workflow_scheme",
+        {
+          schemeId: "44",
+          id: "44",
+          name: "Delivery flow",
+          draft: false,
+          defaultWorkflow: "Default live",
+          items: [
+            { issueTypeId: "10001", workflow: "Story live", originalWorkflow: "Story original" },
+          ],
+          startAt: 0,
+          total: 1,
+        },
+        "Read Jira workflow scheme",
+        "Jira-Workflow-Schema lesen",
+      ],
+      [
+        "jira_workflow_scheme_draft",
+        {
+          schemeId: "44",
+          id: "45",
+          name: "Delivery draft",
+          draft: true,
+          originalDefaultWorkflow: "Original default",
+          items: [],
+          startAt: 0,
+          total: 0,
+        },
+        "Read Jira workflow scheme draft",
+        "Jira-Workflow-Schemaentwurf lesen",
+      ],
+      [
+        "jira_workflow_scheme_default",
+        { schemeId: "44", workflow: "Default live" },
+        "Read Jira default workflow mapping",
+        "Jira-Standardworkflow-Zuordnung lesen",
+      ],
+      [
+        "jira_workflow_scheme_draft_default",
+        { schemeId: "44", workflow: "Default draft" },
+        "Read Jira draft default workflow mapping",
+        "Jira-Standardworkflow-Zuordnung im Entwurf lesen",
+      ],
+      [
+        "jira_workflow_scheme_issue_type",
+        { schemeId: "44", issueTypeId: "10001", workflow: "Story live" },
+        "Read Jira issue type workflow mapping",
+        "Jira-Vorgangstyp-Workflow-Zuordnung lesen",
+      ],
+      [
+        "jira_workflow_scheme_draft_issue_type",
+        { schemeId: "44", issueTypeId: "10001", workflow: "Story draft" },
+        "Read Jira draft issue type workflow mapping",
+        "Jira-Vorgangstyp-Workflow-Zuordnung im Entwurf lesen",
+      ],
+      [
+        "jira_workflow_scheme_workflows",
+        {
+          schemeId: "44",
+          items: [{ workflow: "Live mapping", issueTypeIds: ["10001"], defaultMapping: false }],
+          startAt: 0,
+          total: 1,
+        },
+        "Read Jira workflow mappings",
+        "Jira-Workflow-Zuordnungen lesen",
+      ],
+      [
+        "jira_workflow_scheme_draft_workflows",
+        {
+          schemeId: "44",
+          items: [{ workflow: "Draft mapping", issueTypeIds: [], defaultMapping: true }],
+          startAt: 0,
+          total: 1,
+        },
+        "Read Jira draft workflow mappings",
+        "Jira-Workflow-Zuordnungen im Entwurf lesen",
+      ],
+    ];
+    const exchanges = cases.map(([operation, data], index) => {
+      const exchange = projectExchange({ outcome: "succeeded", ...data }, operation);
+      return { ...exchange, call: { ...exchange.call, id: `administration-${String(index)}` } };
+    });
+    const transcript = { schemaVersion: 1 as const, exchanges };
+    const initial = render(
+      <I18nProvider>
+        <JiraChatTools transcript={transcript} turnState="completed" />
+      </I18nProvider>,
+    );
+    initial.unmount();
+    const restored = JSON.parse(JSON.stringify(transcript)) as ChatToolTranscript;
+    const { container } = render(
+      <I18nProvider>
+        <JiraChatTools transcript={restored} turnState="completed" />
+      </I18nProvider>,
+    );
+    for (const [, , en, de] of cases)
+      expect(screen.getByRole("group", { name: locale === "en" ? en : de })).toBeVisible();
+    for (const value of locale === "en"
+      ? [
+          "Field ID: customfield_10010",
+          "Hidden when empty",
+          "Default issue type: Story (10001)",
+          "Standard issue types: Story (10001)",
+          "Subtask issue types: Child (10002)",
+          "Issue types with unspecified kind: Unspecified (10003)",
+          "Returned scheme ID: 45",
+          "Draft scheme",
+          "Original workflow: Story original",
+          "Mapped issue types returned: 0",
+        ]
+      : [
+          "Feld-ID: customfield_10010",
+          "Wird leer ausgeblendet",
+          "Standardvorgangstyp: Story (10001)",
+          "Standardvorgangstypen: Story (10001)",
+          "Unteraufgabentypen: Child (10002)",
+          "Vorgangstypen ohne angegebene Art: Unspecified (10003)",
+          "Zurückgegebene Schema-ID: 45",
+          "Schemaentwurf",
+          "Ursprünglicher Workflow: Story original",
+          "Gelieferte zugeordnete Vorgangstypen: 0",
+        ])
+      expect(screen.getByText(value, { exact: true })).toBeVisible();
+    expect(
+      screen.queryByText(locale === "en" ? "Required" : "Erforderlich", { exact: true }),
+    ).toBeNull();
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(container.querySelector("pre")).toBeNull();
+    expect(container.textContent).not.toContain("untrusted.invalid");
+    expect(await axe(container)).toHaveNoViolations();
+  });
+  it("keeps an original-only mapping distinct from an unknown current mapping", () => {
+    show(
+      projectExchange(
+        {
+          outcome: "succeeded",
+          schemeId: "44",
+          id: "45",
+          items: [{ issueTypeId: "10001", originalWorkflow: "Original flow" }],
+          startAt: 0,
+          total: 1,
+        },
+        "jira_workflow_scheme_draft",
+      ),
+    );
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "Original workflow: Original flow"
+          : "Ursprünglicher Workflow: Original flow",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "The current mapping was not supplied; the original mapping is shown separately."
+          : "Die aktuelle Zuordnung wurde nicht geliefert; die ursprüngliche Zuordnung wird separat angezeigt.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText("Workflow: Original flow", { exact: true })).toBeNull();
+  });
+  it("keeps unreturned mappings unknown rather than claiming an empty scheme", () => {
+    show(
+      projectExchange(
+        { outcome: "succeeded", schemeId: "44", id: "45", name: "Draft without mapping data" },
+        "jira_workflow_scheme_draft",
+      ),
+    );
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "Issue type mappings were not supplied; their contents are unknown."
+          : "Vorgangstypzuordnungen wurden nicht geliefert; ihr Inhalt ist unbekannt.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(/Mapped issue types returned|Gelieferte zugeordnete Vorgangstypen/u),
+    ).toBeNull();
+    expect(
+      screen.queryByText(locale === "en" ? "Draft scheme" : "Schemaentwurf", { exact: true }),
+    ).toBeNull();
+  });
+  it("preserves local page incompleteness for screen fields", () => {
+    show(
+      projectExchange(
+        {
+          outcome: "succeeded",
+          screenId: "7",
+          startAt: 1,
+          total: 3,
+          nextStartAt: 2,
+          items: [{ id: "summary", name: "Summary" }],
+        },
+        "jira_screen_available_fields",
+      ),
+    );
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "Partial Jira result. Some available data is not included."
+          : "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(
+        /Shown when empty|Hidden when empty|Wird leer angezeigt|Wird leer ausgeblendet/u,
+      ),
+    ).toBeNull();
+  });
+});
+
 describe.each(["en", "de"] as const)("worklog and participation results in %s", (locale) => {
   beforeEach(async () => {
     await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
