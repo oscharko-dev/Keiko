@@ -641,7 +641,7 @@ describe("production OpenCode backend composition", () => {
         }),
       );
       const facts = windowsGatewayServiceFacts({ activityLog: { write: vi.fn() } }, portable);
-      // The fixture's helper is no executable, so the status read runs to no exit at all.
+      // The fixture supervisor answers no known broker state, on Windows and on a POSIX host alike.
       expect(facts.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
     } finally {
       rmSync(root, { force: true, recursive: true });
@@ -788,7 +788,7 @@ describe("production OpenCode backend composition", () => {
       };
       const facts = windowsGatewayServiceFacts({ activityLog: { write: vi.fn() } }, portable);
 
-      // The fixture's helper is no executable, so the status read runs to no exit at all.
+      // The fixture supervisor answers no known broker state, on Windows and on a POSIX host alike.
       expect(facts.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
     } finally {
       rmSync(root, { force: true, recursive: true });

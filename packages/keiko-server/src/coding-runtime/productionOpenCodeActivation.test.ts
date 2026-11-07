@@ -377,7 +377,7 @@ describe("production OpenCode activation", () => {
       ),
     );
 
-    // The fixture's helper is no executable, so the status read runs to no exit at all.
+    // The fixture supervisor answers no known broker state, on Windows and on a POSIX host alike.
     expect(result.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
   });
 
