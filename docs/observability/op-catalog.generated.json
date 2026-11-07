@@ -112308,7 +112308,7 @@
     {
       "op": "chat.tool-turn.batch-progress",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-turn.ts:313",
+      "site": "packages/keiko-server/src/chat-tool-turn.ts:312",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

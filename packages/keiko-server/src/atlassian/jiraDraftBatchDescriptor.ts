@@ -93,6 +93,7 @@ export const JIRA_DRAFT_BATCH_DECLARATION: ManagedMcpToolDeclaration = Object.fr
         failedCount: COUNT,
         requirementCount: COUNT,
         coveredRequirementCount: COUNT,
+        wholeCollection: { type: "boolean" },
         failedRequirementRefs: {
           type: "array",
           maxItems: JIRA_DRAFT_BATCH_FAILED_REFS_MAX,

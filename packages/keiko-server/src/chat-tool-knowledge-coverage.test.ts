@@ -6,7 +6,6 @@ import type {
   CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
-  draftBatchCoveredRequirements,
   knowledgeTurnCoverage,
   knowledgeCoverageCorrection,
   knowledgeCoverageIssues,
@@ -329,44 +328,48 @@ it("retains unreadable search documents even when metadata reports extraction su
 describe("a completed draft batch covers the requirements it drafted (#4292)", () => {
   const batch = (data: object): ChatToolExchange =>
     exchange(
-      { outcome: "succeeded", requirementCount: 370, coveredRequirementCount: 370, ...data },
+      {
+        outcome: "succeeded",
+        requirementCount: 370,
+        coveredRequirementCount: 370,
+        wholeCollection: true,
+        ...data,
+      },
       {},
       "keiko.jira.draft.batch",
     );
   const partialRead = exchange(units(["doc:REQ-1"], "next"));
 
-  it("asks for no further Knowledge pages once a batch drafted every selected requirement", () => {
-    const exchanges = [partialRead, batch({})];
-    const coverage = requiredCoverage(exchanges);
-    expect(coverage.pendingPageCount).toBe(1);
+  it("leaves no page chain pending once a new, unfiltered batch drafted the whole collection", () => {
+    expect(requiredCoverage([partialRead]).pendingPageCount).toBe(1);
 
-    expect(draftBatchCoveredRequirements(exchanges)).toBe(370);
-    expect(knowledgeCoverageCorrection(coverage, draftBatchCoveredRequirements(exchanges))).toBe(
-      undefined,
+    const coverage = requiredCoverage([partialRead, batch({})]);
+
+    expect(coverage).toMatchObject({ pendingPageCount: 0, draftBatchCoveredRequirementCount: 370 });
+    expect(knowledgeCoverageCorrection(coverage)).toBeUndefined();
+    expect(knowledgeCoverageIssues(coverage)).not.toContainEqual(
+      expect.objectContaining({ kind: "pending-reads" }),
     );
   });
 
-  it("still asks when the batch paused, failed, covered fewer or selected nothing", () => {
+  it("keeps the chain pending for a filtered, continued, paused, failed or partial batch", () => {
     for (const data of [
+      { wholeCollection: false },
       { paused: true },
       { outcome: "failed" },
       { coveredRequirementCount: 369 },
       { requirementCount: 0, coveredRequirementCount: 0 },
     ]) {
-      const exchanges = [partialRead, batch(data)];
-      expect(draftBatchCoveredRequirements(exchanges)).toBeUndefined();
-      expect(
-        knowledgeCoverageCorrection(
-          requiredCoverage(exchanges),
-          draftBatchCoveredRequirements(exchanges),
-        ),
-      ).toContain("same selection");
+      const coverage = requiredCoverage([partialRead, batch(data)]);
+      expect(coverage.pendingPageCount).toBe(1);
+      expect(coverage.draftBatchCoveredRequirementCount).toBeUndefined();
+      expect(knowledgeCoverageCorrection(coverage)).toContain("same selection");
     }
-    const knowledgeOnly = exchange(
-      { outcome: "succeeded", requirementCount: 3, coveredRequirementCount: 3 },
-      {},
-      "keiko.knowledge.requirements",
-    );
-    expect(draftBatchCoveredRequirements([knowledgeOnly])).toBeUndefined();
+  });
+
+  it("judges the latest batch, and a batch alone is no Knowledge read", () => {
+    const later = batch({ coveredRequirementCount: 12 });
+    expect(requiredCoverage([partialRead, batch({}), later]).pendingPageCount).toBe(1);
+    expect(knowledgeTurnCoverage([batch({})])).toBeUndefined();
   });
 });

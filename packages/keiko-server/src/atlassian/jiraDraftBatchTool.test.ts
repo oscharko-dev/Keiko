@@ -320,6 +320,7 @@ describe("jira.draft-batch (#4173)", () => {
       failedCount: 0,
       requirementCount: 5,
       coveredRequirementCount: 5,
+      wholeCollection: true,
       failedRequirementRefs: [],
       createRequested: true,
       unresolvedRefCount: 0,
@@ -503,7 +504,12 @@ describe("jira.draft-batch (#4173)", () => {
 
     const result = await h.run({ ...ARGS, requirements: { ids: ["LH-008", "LH-009"] } });
 
-    expect(result.data).toMatchObject({ outcome: "succeeded", draftedCount: 2 });
+    // A filtered selection never stands for the whole collection (#4292).
+    expect(result.data).toMatchObject({
+      outcome: "succeeded",
+      draftedCount: 2,
+      wholeCollection: false,
+    });
     expect(promptOf(firstRequest(h))).toContain('Also write the sections ["Acceptance criteria"]');
     const [first, second] = stagedItems(h);
     expect(descriptionOf(first)).toContain("- Thema 8 ist verfügbar.");

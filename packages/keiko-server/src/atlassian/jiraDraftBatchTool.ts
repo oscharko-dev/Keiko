@@ -427,6 +427,11 @@ function failedRefs(run: BatchRun, result: DraftBatchResult): readonly string[] 
   return [...new Set([...run.duplicateRefs, ...result.failedRequirementRefs])];
 }
 
+/** A new, unfiltered draft read the Pods' whole requirement collection itself (#4292). */
+function readWholeCollection(run: BatchRun): boolean {
+  return !run.args.filtered && run.args.draftId === undefined;
+}
+
 function resultData(run: BatchRun, result: DraftBatchResult): CatalogJsonObject {
   const { progress } = result;
   const failedCount =
@@ -448,6 +453,7 @@ function resultData(run: BatchRun, result: DraftBatchResult): CatalogJsonObject 
     failedCount,
     requirementCount: progress.requirementCount + run.duplicateRefs.length,
     coveredRequirementCount: progress.coveredRequirementCount,
+    wholeCollection: readWholeCollection(run),
     failedRequirementRefs: failedRefs(run, result).slice(0, JIRA_DRAFT_BATCH_FAILED_REFS_MAX),
     createRequested: run.args.create,
     ...(result.stopReason === "deadline"
