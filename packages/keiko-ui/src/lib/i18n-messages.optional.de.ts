@@ -3056,7 +3056,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Adresse lieferte keine gültige Atlassian-JSON-Antwort. Prüfe die Adresse und das Anmelde-Gateway.",
   "atlassianConnectors.verify.unsupported-version.label": "Jira-Version nicht unterstützt",
   "atlassianConnectors.verify.unsupported-version.copy":
-    "Diese Verbindung unterstützt Jira Data Center 10.3.26. Prüfe Bereitstellung und Version.",
+    "Jira meldet eine nicht unterstützte Bereitstellung oder Version oder widersprüchliche Versionsangaben. Prüfe die Adresse und den REST-v2-Zugriff auf Jira Server oder Data Center ab Version 10.3 und verifiziere erneut.",
   "atlassianConnectors.verify.tls-failed.label": "Zertifikatsprüfung fehlgeschlagen",
   "atlassianConnectors.verify.tls-failed.copy":
     "Prüfe Gültigkeit, Hostname und vertrauenswürdige Zertifizierungsstelle.",

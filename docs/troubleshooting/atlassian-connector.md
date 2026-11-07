@@ -35,8 +35,13 @@ when a lifecycle request's response is uncertain. Removing the Pod deletes its c
 bindings. See the [Live Pod guide](../local-knowledge/atlassian-connector-guide.md#jira-live-pods-in-chat)
 for the first-read disclosure, per-action write approvals and current platform limits.
 
-Data Center verification additionally reports `unsupported-version` for a version other than the
-supported 10.3.26, `invalid-response` for malformed JSON or a browser login page,
+Data Center verification additionally reports `unsupported-version` for a deployment other than
+Server or Data Center, a release below 10.3.0, or inconsistent numeric release information from
+REST-v2 `serverInfo`. Later coherent releases can pass the REST-v2 and identity probes; this does
+not qualify every operation or release. Verification does not require one exact patch version.
+Older Keiko builds reject the new stored compatibility facts; follow the
+[offline downgrade runbook](jira-compatibility-rollback.md) before reverting to an older build.
+It reports `invalid-response` for malformed JSON or a browser login page,
 `redirect-refused` for a redirect, and `tls-failed` for certificate validation failure. Check the
 canonical HTTPS base URL/context path, reverse proxy and trusted CA. Private destinations need
 exact operator admission. Do not disable TLS verification or broaden the target policy to clear

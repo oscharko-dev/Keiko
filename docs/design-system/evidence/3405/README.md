@@ -325,3 +325,17 @@ real-BFF outage case. All 14 PNGs differ in bytes from the preceding macOS set b
 rendering; their dimensions are unchanged and they were visually inspected. The three JSON records
 bind the current sources and harness inputs, and `npm run check:update-ui-evidence` passes. The
 update window itself did not change.
+
+## Jira compatibility guidance — 2026-11-07 (#4289)
+
+The unsupported-version guidance now names the minimum Jira 10.3 release and changed both optional
+message catalogs, so the original nine-case producer ran with tracked evidence enabled in the
+Linux arm64 gates container, using an init
+process, Node 24.18.0, npm 11.16.0, Playwright 1.64.1, Chromium build 1248 and Liberation fonts.
+All nine cases passed in 1.6 minutes, including the real-BFF outage case. The producer regenerated
+all 17 artifacts; all 14 PNGs differ from the preceding macOS captures and were visually inspected.
+The three JSON records rebind only the two optional-catalog digests, and the unchanged updater
+freshness gate passes. The original Editor evidence producer and its freshness gate also pass
+against the same Linux production export; its committed record remains byte-identical. This
+qualifies updater presentation and the declared BFF recovery fixture, not real Jira compatibility
+or native update installation.

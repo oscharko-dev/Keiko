@@ -287,9 +287,11 @@ describe("Atlassian browser client through the real credential route (#4082)", (
   });
 });
 
-function verifiedDataCenterResponses(): Response[] {
+function verifiedDataCenterResponses(
+  versionNumbers: readonly [number, number, number] = [10, 3, 26],
+): Response[] {
   return [
-    Response.json({ version: "10.3.26", versionNumbers: [10, 3, 26], deploymentType: "Server" }),
+    Response.json({ version: versionNumbers.join("."), versionNumbers, deploymentType: "Server" }),
     Response.json({ name: "fixture-user", key: "fixture-key", active: true }),
   ];
 }
@@ -392,6 +394,32 @@ async function mountedDataCenterHub(locale: "en" | "de"): Promise<{
 }
 
 describe.each(["en", "de"] as const)("Data Center verification in the real %s Hub", (locale) => {
+  it.each([
+    [10, 3, 0],
+    [10, 4, 4],
+    [11, 2, 1],
+    [11, 3, 13],
+  ] as const)("shows a verified connection for Jira %i.%i.%i", async (major, minor, patch) => {
+    const { metadata, card } = await mountedDataCenterHub(locale);
+    responses.push(...verifiedDataCenterResponses([major, minor, patch]));
+    await userEvent.click(
+      within(card).getByRole("button", {
+        name: locale === "en" ? "Verify connection" : "Verbindung prüfen",
+      }),
+    );
+    const notice = within(card).getByTestId("acx-verify-status");
+    await waitFor(() => expect(notice).toHaveAttribute("data-status", "ok"));
+    expect(notice).toHaveTextContent(
+      locale === "en" ? "Connection verified" : "Verbindung geprüft",
+    );
+    const stored = (await listAtlassianConnectors()).find(
+      (item) => item.authRef === metadata.authRef,
+    );
+    assert(stored?.deployment === "data-center");
+    expect(stored.livePod?.verificationStatus).toBe("ok");
+    expect(outbound).toHaveLength(2);
+  });
+
   it.each(hubVerificationCases)(
     "carries $status through the client, route, custody and card",
     async (scenario) => {
@@ -409,6 +437,7 @@ describe.each(["en", "de"] as const)("Data Center verification in the real %s Hu
       expect(within(card).getByRole("status")).toBe(notice);
       if (scenario.status === "auth-failed") expect(notice).not.toHaveTextContent(/e-?mail/iu);
       if (scenario.status === "forbidden") expect(notice).toHaveTextContent(/licen[cs]e|lizenz/iu);
+      if (scenario.status === "unsupported-version") expect(notice).toHaveTextContent("10.3");
       expect(card).not.toHaveTextContent(privateProviderDetail);
       expect(card).not.toHaveTextContent(syntheticToken());
       const stored = (await listAtlassianConnectors()).find(
