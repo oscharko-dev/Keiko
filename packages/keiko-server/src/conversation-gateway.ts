@@ -1,5 +1,6 @@
 import { chatMessagePromptContent, conversationSystemPrompt } from "./conversation-prompt.js";
 import { isLegacyEmptyAssistantPlaceholder } from "./assistant-response.js";
+import { jiraDraftModelData, jiraDraftRowsForModel } from "./atlassian/jiraDraftModelData.js";
 import type { ChatMessage } from "./store/index.js";
 import type { ChatMessageContentPart, ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -37,7 +38,7 @@ function modelToolResult(
     reason: result.reason,
     effectStarted: result.effectStarted,
     page: result.page,
-    data: result.data,
+    data: jiraDraftModelData(result.toolRef?.canonicalId, result.data),
   };
 }
 
@@ -69,7 +70,7 @@ export function gatewayMessagesForToolExchange(
               mutationOutcome: exchange.mutationOutcome,
               ...(exchange.draftProgress === undefined
                 ? {}
-                : { draftProgress: exchange.draftProgress }),
+                : { draftProgress: jiraDraftRowsForModel(exchange.draftProgress) }),
             },
       ),
     },

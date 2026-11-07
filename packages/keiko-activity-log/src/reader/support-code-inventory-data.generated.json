@@ -1168,6 +1168,7 @@
     "keiko-server/atlassian/jiraDraftBatchTool",
     "keiko-server/atlassian/jiraDraftDescriptor",
     "keiko-server/atlassian/jiraDraftKeyRanges",
+    "keiko-server/atlassian/jiraDraftModelData",
     "keiko-server/atlassian/jiraDraftRoutes",
     "keiko-server/atlassian/jiraManagedMutationDescriptors",
     "keiko-server/atlassian/jiraManagedProvider",

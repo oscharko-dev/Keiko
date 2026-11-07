@@ -41,7 +41,7 @@ import type {
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
 import { jiraDraftProblemGuidance } from "./jiraChatDraftArguments.js";
-import { listIssueKeys } from "./jiraDraftKeyRanges.js";
+import { JIRA_DRAFT_UNLISTED_GUIDANCE, listIssueKeys } from "./jiraDraftKeyRanges.js";
 import {
   JIRA_ALREADY_REFUSED_GUIDANCE,
   JIRA_REJECTED_GUIDANCE,
@@ -552,13 +552,6 @@ export const JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE =
   "Correct the fields named in each failed item's fieldErrors or messages, then send the corrected draft once: " +
   "issues already in Jira are recognised, so nothing is created twice. " +
   "Tell the user in plain language which issues were created and which item Jira refused and why.";
-/**
- * Created or found issues whose keys the bounded result could not list: the model states the counts
- * and only the keys shown, never a guessed one.
- */
-export const JIRA_DRAFT_UNLISTED_GUIDANCE =
-  "Not every created or found key fits this result: createdRanges and existingRanges list the keys that fit and unlistedKeyCount counts the rest. " +
-  "Tell the user in plain language how many issues were created (createdCount) and name only the keys shown; never guess a key. Do not show this message.";
 /** What failed items without Jira's own words need: why, or that the same request cannot help. */
 function refusedAgainGuidance(failed: readonly DraftItemResult[]): string | undefined {
   if (failed.some((item) => item.detail?.replayed === true)) return JIRA_ALREADY_REFUSED_GUIDANCE;
