@@ -451,6 +451,31 @@ describe("jira.draft-batch (#4173)", () => {
     expect(description.match(/Thema 1 ist verfügbar/gu)).toHaveLength(1);
   });
 
+  it("keeps the criteria out of the page prompt so a description lists each one once", async () => {
+    // A model shown the criteria copied them into its own text, above Keiko's verbatim list.
+    const echo = (request: GatewayCallRequest): string =>
+      JSON.stringify({
+        items: keysOf(request).map((key) => ({
+          key,
+          summary: `Summary ${key}`,
+          sections: {
+            Context: promptOf(request).includes("ist verfügbar")
+              ? "Thema 1 ist verfügbar."
+              : "Context",
+          },
+        })),
+      });
+    const h = await harness(echo, [{ capsuleId: "cap-a", text: specification(2).text }]);
+
+    const result = await h.run(ARGS, { templates: CONTEXT_TEMPLATE });
+
+    expect(result.data).toMatchObject({ outcome: "succeeded", draftedCount: 2 });
+    const prompt = promptOf(firstRequest(h));
+    expect(prompt).toContain("Keiko appends each requirement's acceptance criteria verbatim");
+    expect(prompt).not.toContain("ist verfügbar");
+    expect(descriptionOf(stagedItems(h)[0]).match(/Thema 1 ist verfügbar/gu)).toHaveLength(1);
+  });
+
   it("accepts a German acceptance-criteria section from a model that wrote no sections", async () => {
     const h = await harness(
       (request) =>

@@ -152,12 +152,11 @@ function selectedRequirements(
       duplicateRefs.add(ref);
       continue;
     }
-    const criteria = entry.acceptanceCriteria.map((item) => `- ${item.id}: ${item.text}`);
     byRef.set(ref, {
       ref,
       title: clip(redact(entry.title), TITLE_CHARS_MAX),
       section: clip(entry.sectionPath.map(redact).join(" > "), SECTION_CHARS_MAX),
-      text: clip(redact([entry.statement, ...criteria].join("\n")), REQUIREMENT_TEXT_CHARS_MAX),
+      text: clip(redact(entry.statement), REQUIREMENT_TEXT_CHARS_MAX),
       criteria: entry.acceptanceCriteria.map((item) => redact(item.text)),
     });
   }
