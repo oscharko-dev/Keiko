@@ -1095,6 +1095,44 @@ describe("explicit forget statement in chat", () => {
     expect(readMemories(vault, ctx)).toHaveLength(0);
   });
 
+  // A telephone number stated today is refused (#4206), but one kept before that change is still the
+  // person's to forget by its name, with the clause that goes on asking for the answer.
+  it("forgets a telephone number kept before #4206 by its name", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    const now = Date.now();
+    vault.insertMemory({
+      id: "mem-legacy-telephone" as MemoryRecord["id"],
+      schemaVersion: "1",
+      scope: { kind: "user", userId: ctx.userId },
+      type: "semantic-fact",
+      body: "Meine Telefonnummer ist 0301234.",
+      provenance: {
+        sourceKind: "explicit-user-instruction",
+        capturedAt: now,
+        confidence: 0.9,
+        sensitivity: "confidential",
+      },
+      validity: { validFrom: now },
+      status: "accepted",
+      pinned: false,
+      tags: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+
+    const actions = await collectMemoryActions(
+      deps,
+      turnRequest("Vergiss einfach meine Telefonnummer; sag mir Bescheid, wenn sie weg ist"),
+      ctx,
+    );
+
+    expect(actions).toEqual([expect.objectContaining({ kind: "forget", forgotten: true })]);
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
   it.each([
     "Vergiss den alten API-Pfad, nimm den neuen",
     "Was ist das Wetter morgen?",
