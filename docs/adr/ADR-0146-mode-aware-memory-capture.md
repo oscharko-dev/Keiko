@@ -411,6 +411,11 @@ bodies or user text.
 - The Journal shows a forget only when a person asked for it (Memory Center, a clear statement in a
   Chat). The `memory:forgotten` audit event carries the tombstone's `forgetterSurface`, so retention
   and maintenance tombstones never read as the person's decision.
+- Every capture decision the Journal shows is also one registered `memory.capture.decision`
+  Activity Log line under the deciding turn's or request's correlation, written by the same
+  writer: closed outcome, reason, effective mode, surface, scope kind and source kind, never a
+  body, memory id or scope identity. A turn refused before the learner's model call (a secret, a
+  protected category) is no longer visible in the Journal only.
 - A calendar date is not read as a telephone number: dates are blanked before the telephone-shape
   check, so a fact with an end date ("bis 31.12.2027") is learned rather than refused as
   confidential.

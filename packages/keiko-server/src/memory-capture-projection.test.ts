@@ -1,19 +1,34 @@
 import { describe, expect, it } from "vitest";
+import { CODING_WORKBENCH_MODES } from "@oscharko-dev/keiko-contracts";
 import type {
   MemoryAuditEvent,
   MemoryId,
   MemoryRecord,
   MemoryScope,
 } from "@oscharko-dev/keiko-contracts";
-import type { UserId } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  MEMORY_SCOPE_KINDS,
+  MEMORY_SOURCE_KINDS,
+  type UserId,
+} from "@oscharko-dev/keiko-contracts/memory";
 import { createAuditRedactor, createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
+  MEMORY_CAPTURE_DECISION_LOG_MODES,
+  MEMORY_CAPTURE_DECISION_LOG_OUTCOMES,
+  MEMORY_CAPTURE_DECISION_LOG_REASONS,
+  MEMORY_CAPTURE_DECISION_LOG_SCOPE_KINDS,
+  MEMORY_CAPTURE_DECISION_LOG_SOURCE_KINDS,
+} from "./memory-capture-decision-log.js";
+import {
   buildMemoryCaptureDecisionAuditEvent,
+  CAPTURE_DECISION_OUTCOMES,
+  CAPTURE_DECISION_REASONS,
   MemoryCaptureProjectionReadError,
   projectMemoryCaptureDecisions,
   replayMemoryCaptureAuditLedger,
 } from "./memory-capture-projection.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
+import { sanitizeMemoryScope } from "./memory-scope-sanitizer.js";
 
 function userId(value: string): UserId {
   return value as UserId;
@@ -104,6 +119,18 @@ function permutations<T>(values: readonly T[]): readonly (readonly T[])[] {
 }
 
 describe("memory capture projection", () => {
+  // The decision line names exactly what a capture decision can carry (#4206): the catalog generator
+  // reads its closed values from the log module, so they are written out there and pinned here.
+  it("logs every value a capture decision can carry, and nothing else", () => {
+    expect(MEMORY_CAPTURE_DECISION_LOG_OUTCOMES).toEqual(CAPTURE_DECISION_OUTCOMES);
+    expect(MEMORY_CAPTURE_DECISION_LOG_REASONS).toEqual(
+      CAPTURE_DECISION_REASONS.filter((reason) => reason !== "forgotten-by-person"),
+    );
+    expect(MEMORY_CAPTURE_DECISION_LOG_MODES).toEqual(CODING_WORKBENCH_MODES);
+    expect(MEMORY_CAPTURE_DECISION_LOG_SCOPE_KINDS).toEqual(MEMORY_SCOPE_KINDS);
+    expect(MEMORY_CAPTURE_DECISION_LOG_SOURCE_KINDS).toEqual(MEMORY_SOURCE_KINDS);
+  });
+
   it("replays capture decisions with deterministic newest-first ordering and stable ties", () => {
     const events = [
       captureEvent("older", 100),
@@ -188,11 +215,13 @@ describe("memory capture projection", () => {
       ],
       { since: 100, order: "desc", authorizedScopes: [OWN_SCOPE], liveRecords: [] },
     );
+    // The Journal shows the scope the projection publishes, never the raw user id.
+    const shownScope = sanitizeMemoryScope(OWN_SCOPE, (value) => value);
     expect(projected).toEqual([
       {
         eventId: "forgot-forgotten-250",
         outcome: "forgotten",
-        scope: OWN_SCOPE,
+        scope: shownScope,
         provenance: { initiatorSurface: "system", sourceKind: "explicit-user-instruction" },
         occurredAt: 250,
         reason: "forgotten-by-person",
@@ -200,12 +229,13 @@ describe("memory capture projection", () => {
       {
         eventId: "forgot-said-in-chat-240",
         outcome: "forgotten",
-        scope: OWN_SCOPE,
+        scope: shownScope,
         provenance: { initiatorSurface: "system", sourceKind: "explicit-user-instruction" },
         occurredAt: 240,
         reason: "forgotten-by-person",
       },
     ]);
+    expect(JSON.stringify(projected)).not.toContain("operator-a");
   });
 
   it("drops absent persisted records but keeps record-free rejections content-free", () => {

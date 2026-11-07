@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import type { ConversationMemoryCaptureSurfaceWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
+  MemoryId,
   MemoryRecord,
   MemoryScope,
   MemorySourceKind,
@@ -9,7 +10,12 @@ import type {
 import type { RejectionReason } from "@oscharko-dev/keiko-memory-capture";
 import { currentAuditRedactString, type UiHandlerDeps } from "./deps.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
-import { buildMemoryCaptureDecisionAuditEvent } from "./memory-capture-projection.js";
+import { logMemoryCaptureDecision } from "./memory-capture-decision-log.js";
+import {
+  buildMemoryCaptureDecisionAuditEvent,
+  type MemoryCaptureDecisionOutcome,
+  type MemoryCaptureDecisionReason,
+} from "./memory-capture-projection.js";
 
 function auditSurface(
   surface: ConversationMemoryCaptureSurfaceWire,
@@ -17,12 +23,26 @@ function auditSurface(
   return surface === "voice" ? "voice" : "conversation-center";
 }
 
-export function recordAutoAcceptedMemoryCaptureDecision(
+/** One capture decision as the Journal and the Activity Log both record it (#4206). */
+export interface MemoryCaptureDecisionInput {
+  readonly mode: CodingWorkbenchMode;
+  readonly surface: ConversationMemoryCaptureSurfaceWire;
+  readonly outcome: MemoryCaptureDecisionOutcome;
+  readonly scope: MemoryScope;
+  readonly sourceKind: MemorySourceKind;
+  readonly reason: Exclude<MemoryCaptureDecisionReason, "forgotten-by-person">;
+  readonly occurredAt: number;
+  readonly memoryId?: MemoryId;
+}
+
+// The one writer of a capture decision: the body-free audit event the Journal projects and the
+// registered Activity Log line, under the correlation of the turn or request that decided it.
+export function recordMemoryCaptureDecision(
   deps: UiHandlerDeps,
-  mode: CodingWorkbenchMode,
-  surface: ConversationMemoryCaptureSurfaceWire,
-  memory: MemoryRecord,
+  decision: MemoryCaptureDecisionInput,
+  correlationId: string,
 ): void {
+  const { mode, surface, ...evidence } = decision;
   recordMemoryAudit(
     {
       evidenceStore: deps.evidenceStore,
@@ -31,15 +51,44 @@ export function recordAutoAcceptedMemoryCaptureDecision(
     },
     buildMemoryCaptureDecisionAuditEvent({
       eventId: randomUUID(),
-      occurredAt: memory.updatedAt,
-      outcome: "auto-accepted",
-      scope: memory.scope,
       mode,
       initiatorSurface: auditSurface(surface),
+      ...evidence,
+    }),
+  );
+  logMemoryCaptureDecision(
+    {
+      outcome: decision.outcome,
+      reason: decision.reason,
+      mode,
+      surface: auditSurface(surface),
+      scopeKind: decision.scope.kind,
+      sourceKind: decision.sourceKind,
+    },
+    correlationId,
+  );
+}
+
+export function recordAutoAcceptedMemoryCaptureDecision(
+  deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
+  surface: ConversationMemoryCaptureSurfaceWire,
+  memory: MemoryRecord,
+  correlationId: string,
+): void {
+  recordMemoryCaptureDecision(
+    deps,
+    {
+      mode,
+      surface,
+      outcome: "auto-accepted",
+      scope: memory.scope,
       sourceKind: memory.provenance.sourceKind,
       reason: "governance-auto-accepted",
+      occurredAt: memory.updatedAt,
       memoryId: memory.id,
-    }),
+    },
+    correlationId,
   );
 }
 
@@ -84,26 +133,23 @@ export interface RefusedCaptureDecision {
 export function recordRefusedCaptureDecision(
   deps: UiHandlerDeps,
   refusal: RefusedCaptureDecision,
+  correlationId: string,
 ): void {
   if (!isJournaledRefusalReason(refusal.reason)) return;
   const scope = statementScope(refusal.scopes);
   if (scope === undefined) return;
-  recordMemoryAudit(
+  recordMemoryCaptureDecision(
+    deps,
     {
-      evidenceStore: deps.evidenceStore,
-      redactString: currentAuditRedactString(deps),
-      ...(deps.diagnostics === undefined ? {} : { diagnostics: deps.diagnostics }),
-    },
-    buildMemoryCaptureDecisionAuditEvent({
-      eventId: randomUUID(),
-      occurredAt: Date.now(),
+      mode: refusal.mode,
+      surface: refusal.surface,
       outcome: "rejected",
       scope,
-      mode: refusal.mode,
-      initiatorSurface: auditSurface(refusal.surface),
       sourceKind: refusal.sourceKind,
       reason: refusal.reason,
-    }),
+      occurredAt: Date.now(),
+    },
+    correlationId,
   );
 }
 
@@ -115,12 +161,11 @@ export function recordRefusedStatementCaptureDecision(
   surface: ConversationMemoryCaptureSurfaceWire,
   scopes: readonly MemoryScope[],
   reason: RejectionReason,
+  correlationId: string,
 ): void {
-  recordRefusedCaptureDecision(deps, {
-    mode,
-    surface,
-    scopes,
-    sourceKind: "explicit-user-instruction",
-    reason,
-  });
+  recordRefusedCaptureDecision(
+    deps,
+    { mode, surface, scopes, sourceKind: "explicit-user-instruction", reason },
+    correlationId,
+  );
 }

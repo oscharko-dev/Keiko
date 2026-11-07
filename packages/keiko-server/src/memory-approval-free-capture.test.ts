@@ -31,6 +31,10 @@ import {
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 
@@ -104,6 +108,10 @@ function fixture(sentence: string, overrides: Partial<UiHandlerDeps> = {}): Fixt
     modelPortFactory: () => proposing(sentence),
     store: createInMemoryUiStore(),
     memoryVault: vault,
+    // An operator ceiling of Full access lets each requested mode take effect, so every mode below
+    // is the mode the learner actually ran in rather than a clamp to Ask for approval.
+    memoryDeploymentCeiling: "autonomous-delivery",
+    memoryDeploymentCeilingConfigured: true,
     ...overrides,
   };
   return {
@@ -132,6 +140,15 @@ async function learn(
   );
 }
 
+// The registered decision line a capture writes beside its Journal entry (#4206).
+function decisionLine(sink: ReturnType<typeof createBufferedServerLogSink>): unknown {
+  const lines = sink.events.filter(({ op }) => op === "memory.capture.decision");
+  expect(lines).toHaveLength(1);
+  const [line] = lines;
+  if (line === undefined) throw new Error("expected a memory.capture.decision line");
+  return expectActivityLogProof("memory.capture.decision.line", formatActivityLogProofLine(line));
+}
+
 function stored({ vault, context }: Fixture): readonly MemoryRecord[] {
   return conversationMemoryScopes(context).flatMap((scope) => vault.listMemoriesByScope(scope));
 }
@@ -148,9 +165,19 @@ function journal({ deps, vault, context }: Fixture): readonly MemoryCaptureDecis
 
 describe("a routine fact needs no approval (#4206)", () => {
   it.each(MODES)("is accepted at once in %s and shown as accepted in the Journal", async (mode) => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     const sentence = "I keep my release notes in the team wiki.";
     const learner = fixture(sentence);
     await learn(learner, sentence, mode);
+    expect(decisionLine(sink)).toMatchObject({
+      outcome: "auto-accepted",
+      reason: "governance-auto-accepted",
+      mode,
+      surface: "conversation-center",
+      scopeKind: "user",
+      sourceKind: "system-default",
+    });
     const [record] = stored(learner);
     expect(record?.status).toBe("accepted");
     expect(journal(learner)).toEqual([
@@ -214,8 +241,8 @@ describe("refusals are mode-independent and visible (#4206)", () => {
     ["an IBAN", "I pay from DE89 3704 0044 0532 0130 00.", "personal-identifier"],
     ["a phone number", "I am reachable on +49 30 1234 5678.", "personal-identifier"],
     ["a customer number", "I am customer Kundennummer 4711-0815.", "personal-identifier"],
-    ["a customer name", "My customer prefers fixture tables.", "third-party"],
-    ["a protected topic", "I take my fixture medication every day.", "denied-content"],
+    ["a customer name", "My customer prefers fixture tables.", "denied-category"],
+    ["a protected topic", "I take my fixture medication every day.", "denied-category"],
   ] as const;
 
   it.each(refusals)(
@@ -238,8 +265,14 @@ describe("refusals are mode-independent and visible (#4206)", () => {
           expect(evidence).not.toContain(sentence);
           expect(evidence).not.toMatch(/example\.com|DE89|4711|1234 5678|medication/u);
         }
-        const learnedLines = sink.events.filter(({ op }) => op.startsWith("memory.learn."));
-        expect(learnedLines.length).toBeGreaterThan(0);
+        expect(decisionLine(sink)).toMatchObject({
+          outcome: "rejected",
+          reason,
+          mode,
+          surface: "conversation-center",
+          scopeKind: "user",
+          sourceKind: "system-default",
+        });
       }
     },
   );

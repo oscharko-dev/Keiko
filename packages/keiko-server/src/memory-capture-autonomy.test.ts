@@ -1076,9 +1076,11 @@ describe("explicit forget statement in chat", () => {
       "Merke dir, dass meine Adresse Hauptstraße 5 ist",
       "Vergiss meine Adresse und sag mir Bescheid",
     ],
+    // A telephone number is confidential and refused since #4206, so the clause shape is pinned
+    // with a routine fact.
     [
-      "Merke dir, dass meine Telefonnummer 0301234 ist",
-      "Vergiss einfach meine Telefonnummer; sag mir Bescheid, wenn sie weg ist",
+      "Merke dir, dass meine Lieblingsfarbe Blau ist",
+      "Vergiss einfach meine Lieblingsfarbe; sag mir Bescheid, wenn sie weg ist",
     ],
   ])("forgets the person's own fact after %j when %j goes on", async (stated, forget) => {
     const vault = makeVault();

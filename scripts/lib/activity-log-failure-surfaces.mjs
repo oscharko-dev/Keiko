@@ -169,6 +169,11 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   },
   { owner: "keiko-server", emitterPrefix: "harness-context-compactor", surface: "tools-workflows" },
   { owner: "keiko-server", emitterPrefix: "local-knowledge-handlers", surface: "memory-knowledge" },
+  {
+    owner: "keiko-server",
+    emitterPrefix: "memory-capture-decision-log",
+    surface: "memory-knowledge",
+  },
   { owner: "keiko-server", emitterPrefix: "memory-embedding", surface: "memory-knowledge" },
   {
     owner: "keiko-server",

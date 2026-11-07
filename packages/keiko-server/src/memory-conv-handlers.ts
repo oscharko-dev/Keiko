@@ -22,6 +22,7 @@
 //
 // File budget: keep under 400 LOC per coordinator quality rules.
 
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { IncomingMessage } from "node:http";
 import { randomUUID } from "node:crypto";
 import {
@@ -433,7 +434,12 @@ export async function handleMemoryCaptureFromConversation(
   // /api/memory/proposals/:id/accept route can find it by the returned proposalId. Uses the
   // shared `buildMemoryRecordFromProposal` builder for parity with chat-handlers.ts.
   const persistableOutcomes = outcomes.map(enforcePersistableMemoryOutcome);
-  const persistedOutcomes = persistCandidateOutcomes(deps, vault, persistableOutcomes);
+  const persistedOutcomes = persistCandidateOutcomes(
+    deps,
+    vault,
+    persistableOutcomes,
+    ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+  );
   // Redact every outcome (proposal bodies may carry user text that needs scrubbing).
   return {
     status: 200,
@@ -445,17 +451,21 @@ function persistCandidateOutcomes(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   outcomes: readonly CaptureOutcome[],
+  correlationId: string,
 ): readonly PersistedCaptureOutcome[] {
   const mode = resolvePersistedMemoryAutonomyMode(deps);
-  return outcomes.map((outcome) => persistCandidateOutcome(deps, vault, mode, outcome));
+  return outcomes.map((outcome) =>
+    persistCandidateOutcome(deps, vault, { mode, correlationId }, outcome),
+  );
 }
 
 function persistCandidateOutcome(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
-  mode: CodingWorkbenchMode,
+  decision: { readonly mode: CodingWorkbenchMode; readonly correlationId: string },
   outcome: CaptureOutcome,
 ): PersistedCaptureOutcome {
+  const { mode, correlationId } = decision;
   if (outcome.kind === "rejected") return { kind: "rejected", reason: outcome.reason };
   if (outcome.kind !== "candidate") return outcome;
   if (!isPersistableMemoryCandidate(outcome)) {
@@ -472,7 +482,7 @@ function persistCandidateOutcome(
   const persisted = persistCapturedMemory(vault, candidate, true);
   const accepted = persisted.memory.status === "accepted";
   if ((persisted.inserted || persisted.promoted) && accepted) {
-    recordAutoAcceptedMemoryCaptureDecision(deps, mode, "desktop", persisted.memory);
+    recordAutoAcceptedMemoryCaptureDecision(deps, mode, "desktop", persisted.memory, correlationId);
   }
   return {
     ...outcome,

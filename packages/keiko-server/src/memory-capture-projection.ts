@@ -32,7 +32,7 @@ const TURN_CAPTURE_INITIATOR_SURFACES: ReadonlySet<MemoryAuditInitiatorSurface> 
 
 export type MemoryCaptureDecisionOutcome = "captured" | "proposed" | "auto-accepted" | "rejected";
 
-const CAPTURE_DECISION_OUTCOMES: readonly MemoryCaptureDecisionOutcome[] = [
+export const CAPTURE_DECISION_OUTCOMES: readonly MemoryCaptureDecisionOutcome[] = [
   "captured",
   "proposed",
   "auto-accepted",
@@ -86,7 +86,7 @@ export type LearnedRefusalReason = (typeof LEARNED_REFUSAL_REASONS)[number];
 export type MemoryCaptureDecisionReason =
   RejectionReason | LearnedRefusalReason | (typeof CAPTURE_SETTLEMENT_REASONS)[number];
 
-const CAPTURE_DECISION_REASONS: readonly MemoryCaptureDecisionReason[] = [
+export const CAPTURE_DECISION_REASONS: readonly MemoryCaptureDecisionReason[] = [
   ...CAPTURE_REJECTION_REASONS,
   ...LEARNED_REFUSAL_REASONS,
   ...CAPTURE_SETTLEMENT_REASONS,

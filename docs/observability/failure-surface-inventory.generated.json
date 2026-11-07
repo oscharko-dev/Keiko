@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "79f4e0de15624874862dbdf6cc6f1979829be96d3e503ab656607e2e47c62e60"
+    "catalogDigest": "e00a7a2bcdc3a5a8bf094b880c80372927c0516028c891a6ed67d0564a2dd896"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -66,15 +66,19 @@
       {
         "op": "coding-runtime.tool-authority.denied",
         "field": "effectiveMode"
+      },
+      {
+        "op": "memory.capture.decision",
+        "field": "mode"
       }
     ]
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 655,
-    "proofCount": 677,
-    "resolvedProofCount": 677,
-    "failureClassCount": 393,
+    "operationCount": 656,
+    "proofCount": 678,
+    "resolvedProofCount": 678,
+    "failureClassCount": 394,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -577,6 +581,7 @@
         "memory-vault.store.encryption-migrated",
         "memory-vault.store.opened",
         "memory-vault.store.quarantined",
+        "memory.capture.decision",
         "memory.capture.novelty-gate",
         "memory.embedding.invalidated",
         "memory.embedding.invalidation-failed",
@@ -1127,6 +1132,7 @@
     "memory-audit-state-cache": ["lifecycle-crash.dependency-failure"],
     "memory-capture-novelty": ["memory-knowledge.dependency-failure"],
     "memory-explicit-statement": ["memory-knowledge.dependency-failure"],
+    "memory-capture-decision": ["memory-knowledge.dependency-failure"],
     "memory-learned-facts": ["memory-knowledge.loss"],
     "memory-learning-pass": ["memory-knowledge.dependency-failure"],
     "memory-embedding-invalidation": ["memory-knowledge.dependency-failure"],
@@ -2658,6 +2664,9 @@
     "memory-vault.store.opened.key-source": ["packages/keiko-memory-vault/src/vault.test.ts"],
     "memory-vault.store.quarantined.recovery": ["packages/keiko-memory-vault/src/db.test.ts"],
     "memory.audit.state-cache.seeded.count": ["packages/keiko-server/src/deps-activity.test.ts"],
+    "memory.capture.decision.line": [
+      "packages/keiko-server/src/memory-approval-free-capture.test.ts"
+    ],
     "memory.capture.novelty-gate.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
     "memory.embedding.invalidated.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
     "memory.embedding.invalidation-failed.line": [

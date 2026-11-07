@@ -254,7 +254,13 @@ describe("recent memory capture journey", () => {
     expect(forgotten.status).toBe(200);
 
     const afterForget = recentCaptures(autonomous, since);
-    expect(afterForget.map((capture) => capture.outcome)).toEqual(["rejected", "auto-accepted"]);
+    // The forgotten capture never returns as a proposal; the person's forget is its own row (#4206).
+    expect(afterForget.map((capture) => capture.outcome)).toEqual([
+      "forgotten",
+      "rejected",
+      "auto-accepted",
+    ]);
+    expect(afterForget[0]).not.toHaveProperty("bodyExcerpt");
     expect(recentCaptures(autonomous, since)).toEqual(afterForget);
   });
 

@@ -8004,6 +8004,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "memory-capture-decision",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["memory.capture.decision"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: [],
+    requiredLossOperations: [],
+    requiredProofOperations: ["memory.capture.decision"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["memory.capture.decision"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "memory-learned-facts",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

@@ -26,6 +26,7 @@
 //  - Only the user's committed spoken text is an extraction input; assistant response text is never
 //    submitted (ADR-0109 D5). The response and audit are content-free: counts + ids, never text.
 
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { IncomingMessage } from "node:http";
 import { randomUUID } from "node:crypto";
 import {
@@ -306,6 +307,12 @@ interface RecapPersistResult {
   readonly rejected: number;
 }
 
+// The mode a recap decides in and the correlation of the request that asked for it.
+interface RecapDecision {
+  readonly mode: CodingWorkbenchMode;
+  readonly correlationId: string;
+}
+
 interface RecapPersistedMemory {
   readonly id: MemoryId;
   readonly scope: MemoryScope;
@@ -316,9 +323,10 @@ async function persistRecapOutcome(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   outcome: CaptureOutcome,
-  mode: ReturnType<typeof resolvePersistedMemoryAutonomyMode>,
+  decision: RecapDecision,
   autoAcceptEligible: boolean,
 ): Promise<RecapPersistedMemory | null> {
+  const { mode, correlationId } = decision;
   if (!isPersistableMemoryCandidate(outcome)) return null;
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
@@ -332,7 +340,7 @@ async function persistRecapOutcome(
   const inserted = result.memory;
   if (result.inserted) await embedAndStoreMemory(deps, vault, inserted.id, inserted.body);
   if (inserted.status === "accepted")
-    recordAutoAcceptedMemoryCaptureDecision(deps, mode, "voice", inserted);
+    recordAutoAcceptedMemoryCaptureDecision(deps, mode, "voice", inserted, correlationId);
   return { id: inserted.id, scope: inserted.scope, accepted: inserted.status === "accepted" };
 }
 
@@ -358,13 +366,17 @@ function recapRefusal(
 
 function journalRecapRefusal(
   deps: UiHandlerDeps,
-  mode: CodingWorkbenchMode,
+  decision: RecapDecision,
   scopes: readonly MemoryScope[],
   outcome: CaptureOutcome,
 ): void {
   const refusal = recapRefusal(outcome);
   if (refusal === null) return;
-  recordRefusedCaptureDecision(deps, { mode, surface: "voice", scopes, ...refusal });
+  recordRefusedCaptureDecision(
+    deps,
+    { mode: decision.mode, surface: "voice", scopes, ...refusal },
+    decision.correlationId,
+  );
 }
 
 async function persistRecapOutcomes(
@@ -373,16 +385,17 @@ async function persistRecapOutcomes(
   outcomes: readonly CaptureOutcome[],
   autoAcceptEligible: boolean,
   scopes: readonly MemoryScope[],
+  correlationId: string,
 ): Promise<RecapPersistResult> {
   const proposed: { id: MemoryId; scope: MemoryScope }[] = [];
   const accepted: { id: MemoryId; scope: MemoryScope }[] = [];
-  const mode = resolvePersistedMemoryAutonomyMode(deps);
+  const decision: RecapDecision = { mode: resolvePersistedMemoryAutonomyMode(deps), correlationId };
   let rejected = 0;
   for (const outcome of outcomes) {
-    const persisted = await persistRecapOutcome(deps, vault, outcome, mode, autoAcceptEligible);
+    const persisted = await persistRecapOutcome(deps, vault, outcome, decision, autoAcceptEligible);
     if (persisted === null) {
       rejected += 1;
-      journalRecapRefusal(deps, mode, scopes, outcome);
+      journalRecapRefusal(deps, decision, scopes, outcome);
       continue;
     }
     const memory = { id: persisted.id, scope: persisted.scope };
@@ -444,6 +457,7 @@ async function buildRecapResponse(
   request: RecapRequest,
   runtime: ConversationMemoryRuntimeContext,
   provenance: RecapResponseBody["provenance"],
+  correlationId: string,
 ): Promise<RecapResponseBody> {
   const startedAtMs = Date.now();
   const captureContext = buildCaptureContext(runtime);
@@ -461,6 +475,7 @@ async function buildRecapResponse(
     outcomes,
     autoAcceptEligible,
     conversationMemoryScopes(runtime),
+    correlationId,
   );
   recordRecapAudits(deps, profile, request, persisted, startedAtMs);
   return {
@@ -532,6 +547,11 @@ function unavailableVoiceRecapResponse(): RouteResult {
   };
 }
 
+// The request's correlation, or the sanctioned unknown id when the route carried none.
+function recapCorrelationId(ctx: RouteContext): string {
+  return ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+}
+
 export async function handleBuildVoiceRecap(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -575,6 +595,7 @@ export async function handleBuildVoiceRecap(
       { ...request, projectPath },
       runtime,
       provenance,
+      recapCorrelationId(ctx),
     );
     return { status: 200, body: response };
   } catch (error) {

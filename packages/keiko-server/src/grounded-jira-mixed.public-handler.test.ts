@@ -2554,7 +2554,11 @@ it("keeps Memory capture governed when an empty-pack Jira turn has Full access",
         },
       },
     }),
-    { ...f.deps, memoryDeploymentCeiling: "governed-assist" },
+    {
+      ...f.deps,
+      memoryDeploymentCeiling: "governed-assist",
+      memoryDeploymentCeilingConfigured: true,
+    },
   );
   expect(result.status, JSON.stringify(result.body)).toBe(200);
   expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);

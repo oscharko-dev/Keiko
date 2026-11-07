@@ -9,10 +9,7 @@
 // vault hiccup, or any other failure can NEVER throw into the chat path — it logs and returns [].
 
 import { randomUUID } from "node:crypto";
-import type {
-  CodingWorkbenchMode,
-  MemoryAuditInitiatorSurface,
-} from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import type {
   ConversationMemoryActionWire,
   ConversationMemoryCaptureSurfaceWire,
@@ -22,9 +19,7 @@ import type {
   MemoryProposalId,
   MemoryRecord,
   MemoryScope,
-  MemorySourceKind,
 } from "@oscharko-dev/keiko-contracts/memory";
-import { redact } from "@oscharko-dev/keiko-security";
 import { findConfiguredCapability, type ResponseFormat } from "@oscharko-dev/keiko-model-gateway";
 import {
   extractSalientMemories,
@@ -43,7 +38,7 @@ import {
   type MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
+import { currentGatewayConfig } from "./deps.js";
 import { deploymentContentPolicy, strictRedactor } from "./content-redactor.js";
 import {
   conversationMemoryScopes,
@@ -54,19 +49,16 @@ import {
   insertSalienceMemoryWithNoveltyGate,
   type NoveltyInsertOptions,
 } from "./memory-embedding.js";
-import { recordMemoryAudit } from "./memory-audit-handler.js";
+import {
+  recordMemoryCaptureDecision,
+  type MemoryCaptureDecisionInput,
+} from "./memory-capture-audit.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
   type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
-import {
-  buildMemoryCaptureDecisionAuditEvent,
-  LEARNED_REFUSAL_REASONS,
-  type LearnedRefusalReason,
-  type MemoryCaptureDecisionOutcome,
-  type MemoryCaptureDecisionReason,
-} from "./memory-capture-projection.js";
+import { LEARNED_REFUSAL_REASONS, type LearnedRefusalReason } from "./memory-capture-projection.js";
 import {
   isPersistableMemoryCandidate,
   memoryCaptureAutoAcceptEligible,
@@ -364,33 +356,20 @@ interface PersistedCandidate {
   readonly disposition: CaptureDisposition;
 }
 
-interface CaptureDecisionEvidence {
-  readonly outcome: MemoryCaptureDecisionOutcome;
-  readonly scope: MemoryScope;
-  readonly sourceKind: MemorySourceKind;
-  readonly reason: MemoryCaptureDecisionReason;
-  readonly occurredAt: number;
-  readonly memoryId?: MemoryId;
-}
+// Who decided, in which mode, under which correlation: what every capture decision of one turn shares.
+type DecisionTrace = Pick<LearningTrace, "mode" | "surface" | "correlationId">;
+
+type CaptureDecisionEvidence = Omit<MemoryCaptureDecisionInput, "mode" | "surface">;
 
 function recordCaptureDecision(
   deps: UiHandlerDeps,
-  mode: CodingWorkbenchMode,
-  surface: SalienceCaptureSurface,
+  trace: DecisionTrace,
   decision: CaptureDecisionEvidence,
 ): void {
-  const event = buildMemoryCaptureDecisionAuditEvent({
-    eventId: randomUUID(),
-    mode,
-    initiatorSurface: captureAuditInitiatorSurface(surface),
-    ...decision,
-  });
-  recordMemoryAudit(
-    {
-      evidenceStore: deps.evidenceStore,
-      redactString: (input) => redact(input, currentRedactionSecrets(deps)),
-    },
-    event,
+  recordMemoryCaptureDecision(
+    deps,
+    { mode: trace.mode, surface: trace.surface, ...decision },
+    trace.correlationId,
   );
 }
 
@@ -401,7 +380,7 @@ function proposedDecisionReason(
   deps: UiHandlerDeps,
   mode: CodingWorkbenchMode,
   inserted: MemoryRecord,
-): MemoryCaptureDecisionReason {
+): CaptureDecisionEvidence["reason"] {
   if (memoryOperatorRestrictsAcceptance(deps)) return "operator-requires-approval";
   if (inserted.scope.kind !== "user" && !memoryUnattendedAcceptanceAllowed(mode)) {
     return "mode-requires-approval";
@@ -411,16 +390,17 @@ function proposedDecisionReason(
 
 function recordPersistedCandidateDecision(
   deps: UiHandlerDeps,
-  mode: CodingWorkbenchMode,
-  surface: SalienceCaptureSurface,
+  trace: DecisionTrace,
   inserted: MemoryRecord,
 ): void {
   const accepted = inserted.status === "accepted";
-  recordCaptureDecision(deps, mode, surface, {
+  recordCaptureDecision(deps, trace, {
     outcome: accepted ? "auto-accepted" : "proposed",
     scope: inserted.scope,
     sourceKind: inserted.provenance.sourceKind,
-    reason: accepted ? "governance-auto-accepted" : proposedDecisionReason(deps, mode, inserted),
+    reason: accepted
+      ? "governance-auto-accepted"
+      : proposedDecisionReason(deps, trace.mode, inserted),
     occurredAt: inserted.createdAt,
     memoryId: inserted.id,
   });
@@ -428,12 +408,11 @@ function recordPersistedCandidateDecision(
 
 function recordRejectedCandidateDecision(
   deps: UiHandlerDeps,
-  mode: CodingWorkbenchMode,
-  surface: SalienceCaptureSurface,
+  trace: DecisionTrace,
   outcome: LearnedCandidate,
   reason: RejectionReason,
 ): void {
-  recordCaptureDecision(deps, mode, surface, {
+  recordCaptureDecision(deps, trace, {
     outcome: "rejected",
     scope: outcome.proposal.scope,
     sourceKind: outcome.proposal.provenance.sourceKind,
@@ -463,12 +442,11 @@ function candidateWireAction(
 // by both rejection branches of persistCandidate.
 function rejectedCandidate(
   deps: UiHandlerDeps,
-  mode: CodingWorkbenchMode,
-  surface: SalienceCaptureSurface,
+  trace: DecisionTrace,
   outcome: LearnedCandidate,
   reason: RejectionReason,
 ): PersistedCandidate {
-  recordRejectedCandidateDecision(deps, mode, surface, outcome, reason);
+  recordRejectedCandidateDecision(deps, trace, outcome, reason);
   return { action: { kind: "rejected", reason }, disposition: "rejected" };
 }
 
@@ -641,10 +619,10 @@ async function persistCandidate(
   trace: LearningTrace,
 ): Promise<PersistedCandidate> {
   if (outcome.kind === "confirmation") return confirmKnownFact(vault, outcome, trace);
-  const { mode, surface } = trace;
+  const { mode } = trace;
   const refuse = (reason: RejectionReason): PersistedCandidate => {
     recordRelation(outcome, "refused", trace);
-    return rejectedCandidate(deps, mode, surface, outcome, reason);
+    return rejectedCandidate(deps, trace, outcome, reason);
   };
   if (!isPersistableMemoryCandidate(outcome)) return refuse(SENSITIVE_MEMORY_REJECTION_REASON);
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
@@ -681,7 +659,7 @@ async function persistCandidate(
   }
   const inserted = outcomeOfInsert.record;
   recordRelation(outcome, decision, trace);
-  recordPersistedCandidateDecision(deps, mode, surface, inserted);
+  recordPersistedCandidateDecision(deps, trace, inserted);
   return {
     action: candidateWireAction(outcome, inserted),
     disposition: inserted.status === "accepted" ? "accepted" : "proposed",
@@ -710,7 +688,7 @@ async function settleCandidate(
       error,
     );
     recordRelation(outcome, "refused", trace);
-    return rejectedCandidate(deps, trace.mode, trace.surface, outcome, "ambiguous-update");
+    return rejectedCandidate(deps, trace, outcome, "ambiguous-update");
   }
 }
 
@@ -723,17 +701,9 @@ export interface SalienceTurnRequest {
 }
 
 // The capture surface vocabulary is the wire contract's, not a server-local twin (ADR-0019): the UI
-// declares the originating surface on the memory request and the server only maps it to the audit
-// envelope below.
+// declares the originating surface on the memory request and the shared capture-decision writer
+// maps it to the audit envelope.
 type SalienceCaptureSurface = ConversationMemoryCaptureSurfaceWire;
-
-// Maps the scheduler's capture surface to the audit envelope's initiatorSurface vocabulary so the
-// Memory Journal projection (#2547) can distinguish a voice-originated capture from desktop chat.
-function captureAuditInitiatorSurface(
-  surface: SalienceCaptureSurface,
-): MemoryAuditInitiatorSurface {
-  return surface === "voice" ? "voice" : "conversation-center";
-}
 
 // #4098: the Chat content opt-out preserves an answer for the person reading it, not for memory.
 // Memory proposals keep the default projection, so a preserved answer is projected again here.
@@ -919,13 +889,12 @@ async function persistSalienceActions(
 // memories would hide the content-free refusal from the Journal.
 function recordTurnCaptureRefusal(
   deps: UiHandlerDeps,
-  mode: CodingWorkbenchMode,
-  surface: SalienceCaptureSurface,
+  trace: DecisionTrace,
   context: ConversationMemoryRuntimeContext,
   occurredAt: number,
   reason: RejectionReason | LearnedRefusalReason,
 ): void {
-  recordCaptureDecision(deps, mode, surface, {
+  recordCaptureDecision(deps, trace, {
     outcome: "rejected",
     scope: { kind: "user", userId: context.userId },
     sourceKind: "system-default",
@@ -976,6 +945,7 @@ async function runSalienceCapture(
 ): Promise<SalienceCaptureRun> {
   const { surface, correlationId } = inputs;
   const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory?.mode);
+  const decisionTrace: DecisionTrace = { mode, surface, correlationId };
   const captureContext = buildSalienceContext(context);
   const extraction = await extractTurnSalienceOutcomes(
     deps,
@@ -987,12 +957,12 @@ async function runSalienceCapture(
   );
   if (extraction.kind === "unavailable") return { kind: "unavailable" };
   if (extraction.kind === "refused") {
-    recordTurnCaptureRefusal(deps, mode, surface, context, captureContext.nowMs, extraction.reason);
+    recordTurnCaptureRefusal(deps, decisionTrace, context, captureContext.nowMs, extraction.reason);
     return { kind: "captured", actions: [] };
   }
   const { outcomes, seen, refusals } = extraction;
   for (const reason of refusals) {
-    recordTurnCaptureRefusal(deps, mode, surface, context, captureContext.nowMs, reason);
+    recordTurnCaptureRefusal(deps, decisionTrace, context, captureContext.nowMs, reason);
   }
   const { actions, summary } = await persistSalienceActions(deps, vault, outcomes, {
     surface,

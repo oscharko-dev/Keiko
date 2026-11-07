@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 393,
-  "completeClassCount": 393,
+  "supportedClassCount": 394,
+  "completeClassCount": 394,
   "completeness": "complete",
   "classes": [
     {
@@ -37817,6 +37817,86 @@
           },
           "proofIds": ["memory.audit.state-cache.seeded.count"],
           "replayReferences": ["memory.audit.state-cache.seeded.count"],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "memory-capture-decision",
+      "requirementContract": "memory-capture-decision",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["memory.capture.decision"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "memory.capture.decision",
+          "mode": "none"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["memory.capture.decision"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "memory.capture.decision",
+          "owner": "keiko-server",
+          "category": "memory",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "mode",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "scopeKind",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "sourceKind",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "surface",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory.capture.decision.line"],
+          "replayReferences": [],
           "missingObligations": []
         }
       ],

@@ -1620,7 +1620,7 @@ function refusedSensitiveCandidate(
   const { mode, surface, scope, explicit, correlationId } = refusal;
   if (explicit) {
     const reason = SENSITIVE_MEMORY_REJECTION_REASON;
-    recordRefusedStatementCaptureDecision(deps, mode, surface, [scope], reason);
+    recordRefusedStatementCaptureDecision(deps, mode, surface, [scope], reason, correlationId);
   }
   return refusedCandidateAction(SENSITIVE_MEMORY_REJECTION_REASON, explicit, correlationId);
 }
@@ -1663,7 +1663,7 @@ async function candidateActionFromOutcome(
   const { persisted } = result;
   const inserted = persisted.memory;
   if ((persisted.inserted || persisted.promoted) && inserted.status === "accepted") {
-    recordAutoAcceptedMemoryCaptureDecision(deps, mode, surface, inserted);
+    recordAutoAcceptedMemoryCaptureDecision(deps, mode, surface, inserted, correlationId);
   }
   return {
     kind: "candidate",
@@ -1710,6 +1710,7 @@ async function captureActionFromOutcome(
           surface,
           statement.scopes,
           outcome.reason,
+          statement.correlationId,
         );
       }
       return rejectedActionFromOutcome(outcome, deps, statement);
