@@ -40,9 +40,48 @@ function clipboardText(event: ClipboardEvent): string | undefined {
 
 /** A marker the document does not contain, standing where the paste goes while it serializes. */
 function pasteMarker(body: string): string {
-  let marker = "KEIKOPASTEMARKER";
-  while (body.includes(marker)) marker += "X";
-  return marker;
+  const base = "KEIKOPASTEMARKER";
+  // The base cannot overlap itself, so the X runs that follow its occurrences are disjoint and one
+  // pass bounds them all: a run one longer than the longest cannot occur in the body.
+  let longestRun = 0;
+  for (let at = body.indexOf(base); at >= 0; at = body.indexOf(base, at + base.length)) {
+    let end = at + base.length;
+    while (body.charCodeAt(end) === 88) end += 1;
+    longestRun = Math.max(longestRun, end - at - base.length);
+  }
+  return base + "X".repeat(longestRun + 1);
+}
+
+/**
+ * The document serialized with the marker as its own paragraph where the selection is. A text
+ * block is split at the selection (its halves keep their inline marks, so strong, emphasis and
+ * links close before the marker and reopen after it) instead of cutting delimiters apart.
+ */
+function bodyWithMarkerBlock(view: EditorView, marker: string): string {
+  const { schema } = view.state;
+  const paragraph = schema.nodes["paragraph"];
+  const tr = view.state.tr.deleteSelection();
+  const $at = tr.doc.resolve(tr.selection.from);
+  if (paragraph === undefined || !$at.parent.isTextblock) return "";
+  const block = paragraph.create(null, schema.text(marker));
+  if ($at.parentOffset === 0) tr.insert($at.before(), block);
+  else if ($at.parentOffset === $at.parent.content.size) tr.insert($at.after(), block);
+  else {
+    tr.split($at.pos, 1, [{ type: paragraph }]);
+    tr.insert($at.pos + 1, block);
+  }
+  return serializeMarkdownDocument(tr.doc);
+}
+
+/** The pieces around a marker, joined by blank lines when they are not empty. */
+function joinAroundMarker(body: string, marker: string, text: string): string {
+  const at = body.indexOf(marker);
+  const parts = [
+    body.slice(0, at).trimEnd(),
+    text.replace(/\s+$/u, ""),
+    body.slice(at + marker.length).trimStart(),
+  ];
+  return parts.filter((part) => part.length > 0).join("\n\n");
 }
 
 const CONTAINER_PREFIX = /^(?:[ \t]*(?:>|[-*+][ \t]|\d+[.)][ \t]))*[ \t]*/u;
@@ -85,6 +124,8 @@ function bodyWithPaste(view: EditorView, text: string): string {
   if (indent.length > 0) return pasteInContainer(before, text, after, indent);
   if (linePrefix.trim() === "" && after.startsWith("\n")) return `${before}${text}${after}`;
   if (!BLOCK_START.test(text)) return `${before}${text}${after}`;
+  const blocks = bodyWithMarkerBlock(view, marker);
+  if (blocks.includes(marker)) return joinAroundMarker(blocks, marker, text);
   const parts = [before.trimEnd(), text.replace(/\s+$/u, ""), after.trimStart()];
   return parts.filter((part) => part.length > 0).join("\n\n");
 }
