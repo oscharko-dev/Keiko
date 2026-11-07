@@ -364,9 +364,9 @@ jobs:
     needs: verified-tree
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-24.04-arm
-    # Measurement bound only: run 42341241444 cancelled both legs at 30 minutes while the repository
-    # qualification was still running. This is resized from the measured hosted step duration.
-    timeout-minutes: 60
+    # Run 42347905776 measured the jobs at 38:41 (Node 26) and 47:03 (Node 24); the repository
+    # qualification step alone took 35:39 and 43:52. The bound is about twice the slowest job.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
