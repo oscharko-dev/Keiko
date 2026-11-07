@@ -608,6 +608,9 @@ export type AtlassianConnectorActionType =
   | "transition-issue"
   | "add-issue-comment"
   | "update-issue-comment"
+  | "delete-issue-comment"
+  | "delete-attachment"
+  | "delete-worklog"
   | "create-worklog"
   | "update-worklog"
   | "watch-issue"
@@ -628,6 +631,9 @@ export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorAction
     "transition-issue",
     "add-issue-comment",
     "update-issue-comment",
+    "delete-issue-comment",
+    "delete-attachment",
+    "delete-worklog",
     "create-worklog",
     "update-worklog",
     "watch-issue",
@@ -683,6 +689,9 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   "jira.assign": "assign-issue",
   "jira.comment": "add-issue-comment",
   "jira.update-comment": "update-issue-comment",
+  "jira.delete-comment": "delete-issue-comment",
+  "jira.delete-attachment": "delete-attachment",
+  "jira.delete-worklog": "delete-worklog",
   "jira.create-worklog": "create-worklog",
   "jira.update-worklog": "update-worklog",
   "jira.watch": "watch-issue",
@@ -743,6 +752,9 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   "transition-issue": "connector-write",
   "add-issue-comment": "connector-write",
   "update-issue-comment": "connector-write",
+  "delete-issue-comment": "connector-write",
+  "delete-attachment": "connector-write",
+  "delete-worklog": "connector-write",
   "create-worklog": "connector-write",
   "update-worklog": "connector-write",
   "watch-issue": "connector-write",
@@ -780,6 +792,9 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   "transition-issue": "jira",
   "add-issue-comment": "jira",
   "update-issue-comment": "jira",
+  "delete-issue-comment": "jira",
+  "delete-attachment": "jira",
+  "delete-worklog": "jira",
   "create-worklog": "jira",
   "update-worklog": "jira",
   "watch-issue": "jira",
@@ -817,6 +832,9 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   "transition-issue": "issue-tracker.write",
   "add-issue-comment": "issue-tracker.write",
   "update-issue-comment": "issue-tracker.write",
+  "delete-issue-comment": "issue-tracker.write",
+  "delete-attachment": "issue-tracker.write",
+  "delete-worklog": "issue-tracker.write",
   "create-worklog": "issue-tracker.write",
   "update-worklog": "issue-tracker.write",
   "watch-issue": "issue-tracker.write",
@@ -857,6 +875,9 @@ export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   "transition-issue": "high",
   "add-issue-comment": "low",
   "update-issue-comment": "medium",
+  "delete-issue-comment": "high",
+  "delete-attachment": "high",
+  "delete-worklog": "high",
   "create-worklog": "medium",
   "update-worklog": "medium",
   "watch-issue": "medium",

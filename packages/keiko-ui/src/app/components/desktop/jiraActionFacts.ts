@@ -48,6 +48,62 @@ const WORKLOG_ARGUMENT_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
   started: "chat.jira.fact.workStarted",
   comment: "chat.jira.fact.worklogComment",
 };
+const DELETE_OPERATIONS = new Set([
+  "jira.delete-comment",
+  "jira.delete-attachment",
+  "jira.delete-worklog",
+]);
+const DELETE_ARGUMENT_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
+  expectedBody: "chat.jira.fact.reviewedComment",
+  attachmentId: "chat.jira.fact.attachmentId",
+  filename: "chat.jira.fact.fileName",
+  size: "chat.jira.fact.sizeBytes",
+};
+function deletionFacts(
+  operation: string | undefined,
+  key: string,
+  value: unknown,
+  t: OptionalWidgetTranslate,
+): readonly Fact[] | undefined {
+  if (operation === undefined || !DELETE_OPERATIONS.has(operation)) return undefined;
+  if (key === "expectedVisibility" || key === "visibility")
+    return operation === "jira.delete-worklog" && value === null
+      ? unrestrictedVisibility(t)
+      : worklogVisibility(value, t);
+  const label = DELETE_ARGUMENT_LABELS[key] ?? WORKLOG_ARGUMENT_LABELS[key];
+  if (label === undefined) return undefined;
+  return [
+    {
+      id: t(label),
+      value:
+        value === "" ? textValue(t("chat.jira.fact.reviewedEmptyText")) : jiraDraftValueOf(value),
+    },
+  ];
+}
+function unrestrictedVisibility(t: OptionalWidgetTranslate): readonly Fact[] {
+  return [
+    {
+      id: t("chat.jira.fact.visibility"),
+      value: textValue(t("chat.jira.fact.unrestrictedVisibility")),
+    },
+  ];
+}
+function deletionContextFacts(
+  raw: Raw,
+  operation: string | undefined,
+  t: OptionalWidgetTranslate,
+): readonly Fact[] {
+  if (operation === "jira.delete-comment" && !Object.hasOwn(raw, "expectedVisibility"))
+    return unrestrictedVisibility(t);
+  return operation === "jira.delete-worklog"
+    ? [
+        {
+          id: t("chat.jira.fact.remainingEstimate"),
+          value: textValue(t("chat.jira.fact.preserveRemainingEstimate")),
+        },
+      ]
+    : [];
+}
 function worklogFacts(
   key: string,
   value: unknown,
@@ -200,8 +256,10 @@ export function jiraActionFacts(
     return [{ id: t("chat.jira.writeApproval.preview"), value: jiraDraftValueOf(args) }];
   const project = operation === "jira.create-project" || operation === "jira.update-project";
   const worklog = operation === "jira.create-worklog" || operation === "jira.update-worklog";
-  return Object.entries(raw).flatMap(([key, value]) => {
+  const facts = Object.entries(raw).flatMap(([key, value]) => {
     if (!managed) return [{ id: key, value: jiraDraftValueOf(value) }];
+    const deletionPreview = deletionFacts(operation, key, value, t);
+    if (deletionPreview !== undefined) return deletionPreview;
     const worklogPreview = worklog
       ? worklogFacts(key, value, t, operation === "jira.update-worklog")
       : undefined;
@@ -214,6 +272,7 @@ export function jiraActionFacts(
       ? managedFacts(key, value, raw, t, names)
       : [{ id: t(label), value: jiraDraftValueOf(value) }];
   });
+  return managed ? [...facts, ...deletionContextFacts(raw, operation, t)] : facts;
 }
 /** Jira's own names where this turn read them; a field that repeats the target is said once. */
 function managedFacts(

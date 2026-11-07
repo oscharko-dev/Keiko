@@ -30,6 +30,7 @@ import {
   mutationRemoteState,
   nativeRead,
   nativeParticipationWrite,
+  nativeDeletionWrite,
   nativeWrite,
   type MutationRemoteState,
   type SingleMutation,
@@ -232,6 +233,8 @@ async function fixtureWriteResult(
   path: string,
   state: MutationRemoteState,
 ): Promise<ReturnType<typeof fixtureWrite>> {
+  const deletion = nativeDeletionWrite(request, state);
+  if (deletion !== undefined) return deletion;
   const participation = nativeParticipationWrite(request, state);
   if (participation !== undefined) return participation;
   if (
@@ -314,6 +317,12 @@ async function fixture(
   });
   jira.state.isWatching = initialOperation === "jira.unwatch";
   jira.state.hasVoted = initialOperation === "jira.unvote";
+  if (initialOperation === "jira.delete-comment") jira.state.comment = "Original";
+  if (initialOperation === "jira.delete-attachment") jira.state.fields.attachment = [{ id: "10300", filename: "report.txt", size: ATTACHED.length }];
+  if (initialOperation === "jira.delete-worklog") {
+    jira.state.fields.timespent = 3600;
+    jira.state.fields.timetracking = { originalEstimateSeconds: 7200, remainingEstimateSeconds: 3600, timeSpentSeconds: 3600 };
+  }
   const { credentials, metadata } = await mutationCredentials(jira.fetch, db.logs);
   const executeMutation: JiraManagedMutationExecutor<
     CatalogHandlerContext<ConversationConsumer>

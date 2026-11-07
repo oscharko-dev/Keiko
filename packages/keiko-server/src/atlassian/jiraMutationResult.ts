@@ -51,6 +51,9 @@ type StructureOperation = keyof typeof STRUCTURE_RECEIPTS;
 const COLLABORATION_RECEIPTS = {
   "jira.create-worklog": ["issueKey", "issueId", "worklogId"],
   "jira.update-worklog": ["issueKey", "issueId", "worklogId"],
+  "jira.delete-worklog": ["issueKey", "issueId", "worklogId"],
+  "jira.delete-comment": ["issueKey", "issueId", "commentId"],
+  "jira.delete-attachment": ["issueKey", "issueId", "attachmentId"],
   "jira.watch": ["issueKey", "issueId", "isWatching"],
   "jira.unwatch": ["issueKey", "issueId", "isWatching"],
   "jira.vote": ["issueKey", "issueId", "hasVoted"],

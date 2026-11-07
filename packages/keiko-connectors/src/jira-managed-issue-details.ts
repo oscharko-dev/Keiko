@@ -1,4 +1,7 @@
-import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  isSafeAtlassianIdentifier,
+  type JiraMutationAttempt,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -161,33 +164,37 @@ async function resolveIssue(request: JiraMutationRequest, target: string): Promi
     return { ok: false, result: jiraReadFailure("conflict") };
   return { ok: true, issue: { id: raw.id, key: raw.key } };
 }
-function worklogPage(
+type CompleteWorklogs =
+  | Extract<JiraMutationAttempt, { readonly ok: false }>
+  | { readonly ok: true; readonly items: readonly CatalogJsonObject[] };
+function completeWorklogItems(
   raw: Record<string, unknown> | undefined,
-  selected: Selection,
   issue: IssueBinding,
-): ManagedMcpToolResult {
+): CompleteWorklogs {
   if (
     !Array.isArray(raw?.worklogs) ||
     !Number.isSafeInteger(raw.total) ||
     !Number.isSafeInteger(raw.maxResults)
   )
-    return jiraReadFailure("malformed-payload");
+    return { ok: false, reason: "malformed-payload" };
   // The published DC GET has no paging parameters: only a complete native envelope can be paged locally.
   if (!completeWorklogs(raw, raw.worklogs))
-    return jiraReadFailure("bounds-exceeded", {
-      messages: [
-        "Jira did not return the complete native worklog collection. No complete time total is available.",
-      ],
-    });
+    return {
+      ok: false,
+      reason: "bounds-exceeded",
+      detail: {
+        messages: [
+          "Jira did not return the complete native worklog collection. No complete time total is available.",
+        ],
+      },
+    };
   const items = projectJiraCollection(
     raw.worklogs,
     TOOL_CATALOG_LIMITS.maxArrayItems,
     (value) => worklog(value, issue),
     "id",
   );
-  return items === undefined
-    ? jiraReadFailure("malformed-payload")
-    : boundJiraReadResult(localJiraPage(items, selected.startAt, selected.maxResults));
+  return items === undefined ? { ok: false, reason: "malformed-payload" } : { ok: true, items };
 }
 function completeWorklogs(raw: Record<string, unknown>, items: readonly unknown[]): boolean {
   return (
@@ -198,17 +205,37 @@ function completeWorklogs(raw: Record<string, unknown>, items: readonly unknown[
     items.length <= TOOL_CATALOG_LIMITS.maxArrayItems
   );
 }
+/** One native unpaged envelope, shared by readable pages and exact deletion membership proof. */
+export async function readJiraCompleteWorklogs(
+  request: JiraMutationRequest,
+  issue: IssueBinding,
+): Promise<CompleteWorklogs> {
+  const response = await request(`issue/${issue.id}/worklog`);
+  if (!response.ok)
+    return {
+      ok: false,
+      reason: response.reason,
+      ...(response.remote === undefined ? {} : { detail: response.remote }),
+    };
+  return response.status === 200
+    ? completeWorklogItems(response.body, issue)
+    : { ok: false, reason: "malformed-payload" };
+}
 async function readWorklog(
   selected: Selection,
   request: JiraMutationRequest,
 ): Promise<ManagedMcpToolResult> {
   const bound = await resolveIssue(request, selected.target ?? "");
   if (!bound.ok) return bound.result;
-  const suffix = selected.worklogId === undefined ? "" : `/${selected.worklogId}`;
-  const response = await request(`issue/${bound.issue.id}/worklog${suffix}`);
+  if (selected.worklogId === undefined) {
+    const collection = await readJiraCompleteWorklogs(request, bound.issue);
+    return collection.ok
+      ? boundJiraReadResult(localJiraPage(collection.items, selected.startAt, selected.maxResults))
+      : jiraReadFailure(collection.reason, collection.detail);
+  }
+  const response = await request(`issue/${bound.issue.id}/worklog/${selected.worklogId}`);
   if (!response.ok) return jiraReadFailure(response.reason, response.remote);
   if (response.status !== 200) return jiraReadFailure("malformed-payload");
-  if (selected.worklogId === undefined) return worklogPage(response.body, selected, bound.issue);
   return single(
     response.body?.id === selected.worklogId ? worklog(response.body, bound.issue) : undefined,
   );

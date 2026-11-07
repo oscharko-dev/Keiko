@@ -328,11 +328,14 @@ describe("version and component identities", () => {
   });
 });
 
-describe("worklog, watching and voting receipts", () => {
+describe("collaboration mutation receipts", () => {
   const context = { issueKey: "SYN-1", issueId: "10001" };
   it.each([
     { operation: "jira.create-worklog", receipt: { ...context, worklogId: "9223372036854775807" } },
     { operation: "jira.update-worklog", receipt: { ...context, worklogId: "10002" } },
+    { operation: "jira.delete-worklog", receipt: { ...context, worklogId: "10002" } },
+    { operation: "jira.delete-comment", receipt: { ...context, commentId: "10002" } },
+    { operation: "jira.delete-attachment", receipt: { ...context, attachmentId: "10300" } },
     { operation: "jira.watch", receipt: { ...context, isWatching: true } },
     { operation: "jira.unwatch", receipt: { ...context, isWatching: false } },
     { operation: "jira.vote", receipt: { ...context, hasVoted: true } },
@@ -371,6 +374,9 @@ describe("worklog, watching and voting receipts", () => {
     { operation: "jira.vote", receipt: { ...context, hasVoted: true, worklogId: "10002" } },
     { operation: "jira.create-worklog", receipt: { ...context, worklogId: "9223372036854775808" } },
     { operation: "jira.update-worklog", receipt: { ...context, worklogId: "1.5" } },
+    { operation: "jira.delete-worklog", receipt: { ...context, worklogId: "00" } },
+    { operation: "jira.delete-comment", receipt: { ...context, commentId: "-1" } },
+    { operation: "jira.delete-attachment", receipt: { ...context, commentId: "10300" } },
     { operation: "jira.watch", receipt: { ...context, isWatching: true, issueId: "not-an-id" } },
     { operation: "jira.vote", receipt: { ...context, hasVoted: true, issueKey: "../foreign" } },
   ] as const)(

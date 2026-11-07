@@ -53,6 +53,101 @@ function show(exchange: ChatToolExchange): ReturnType<typeof render> {
 
 afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
 
+describe.each(["en", "de"] as const)("persistent Jira deletion receipts in %s", (locale) => {
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  it.each(["succeeded", "succeeded-unconfirmed", "unknown"] as const)(
+    "restores exact delete targets with the authoritative %s journal state",
+    async (state) => {
+      const cases: readonly [string, string, string, string][] = [
+        ["jira_delete_comment", "commentId", "Comment ID", "Kommentar-ID"],
+        ["jira_delete_attachment", "attachmentId", "Attachment ID", "Anhang-ID"],
+        ["jira_delete_worklog", "worklogId", "Worklog ID", "Arbeitsprotokoll-ID"],
+      ];
+      const exchanges = cases.map(([operation, field], index): ChatToolExchange => ({
+        ...projectExchange(
+          {
+            outcome: "succeeded",
+            issueKey: `SYN-${String(index + 1)}`,
+            issueId: String(10000 + index),
+            [field]: "9007199254740993",
+            browseUrl: `https://jira.example.test/context/browse/SYN-${String(index + 1)}`,
+            self: "https://untrusted.invalid/deleted-resource",
+            content: "https://untrusted.invalid/download",
+          },
+          operation,
+        ),
+        call: { id: `delete-${String(index)}`, name: operation, arguments: {} },
+        mutationOutcome: state,
+      }));
+      const restored = JSON.parse(
+        JSON.stringify({ schemaVersion: 1, exchanges }),
+      ) as ChatToolTranscript;
+      const renderReceipt = (): ReturnType<typeof render> =>
+        render(
+          <I18nProvider>
+            <JiraChatTools transcript={restored} turnState="completed" />
+          </I18nProvider>,
+        );
+      const first = renderReceipt();
+      const priorText = first.container.textContent;
+      first.unmount();
+      const { container } = renderReceipt();
+      expect(container.textContent).toBe(priorText);
+      for (const [, , en, de] of cases)
+        expect(screen.getByText(`${locale === "en" ? en : de}: 9007199254740993`)).toBeVisible();
+      const labels =
+        locale === "en"
+          ? {
+              succeeded: "Jira change confirmed",
+              "succeeded-unconfirmed": "Jira accepted the change; confirmation incomplete",
+              unknown: "Jira outcome unknown",
+            }
+          : {
+              succeeded: "Jira-Änderung bestätigt",
+              "succeeded-unconfirmed": "Jira hat die Änderung angenommen; Bestätigung unvollständig",
+              unknown: "Ausgang der Jira-Aktion unbekannt",
+            };
+      expect(screen.getAllByText(labels[state])).toHaveLength(3);
+      if (state !== "succeeded") expect(screen.queryByText(labels.succeeded)).toBeNull();
+      const links = screen.getAllByRole("link");
+      expect(links).toHaveLength(3);
+      for (const [index, link] of links.entries())
+        expect(link).toHaveAttribute(
+          "href",
+          `https://jira.example.test/context/browse/SYN-${String(index + 1)}`,
+        );
+      expect(container.querySelector("pre, img, a[download]")).toBeNull();
+      expect(container.textContent).not.toContain("untrusted.invalid");
+      expect(await axe(container)).toHaveNoViolations();
+    },
+  );
+  it.each([
+    ["jira_delete_comment", { worklogId: "92", attachmentId: "93" }],
+    ["jira_delete_attachment", { commentId: "91", worklogId: "92" }],
+    ["jira_delete_worklog", { commentId: "91", attachmentId: "93" }],
+  ] as const)(
+    "does not invent %s identity from another entity or the issue ID",
+    (operation, other) => {
+      const { container } = show(
+        projectExchange(
+          { outcome: "unknown", issueKey: "SYN-7", issueId: "10007", id: "10007", ...other },
+          operation,
+        ),
+      );
+      for (const value of ["91", "92", "93", "10007"])
+        expect(container.textContent).not.toContain(`: ${value}`);
+      expect(
+        screen.getByText(
+          locale === "en" ? "Jira outcome unknown" : "Ausgang der Jira-Aktion unbekannt",
+        ),
+      ).toBeVisible();
+    },
+  );
+});
+
 describe.each(["en", "de"] as const)("screen and scheme inspection in %s (C9)", (locale) => {
   beforeEach(async () => {
     await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);

@@ -123,27 +123,36 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **90 native identities: 64 reads and 26 writes**. Each is mapped to
+The current registry supplies **93 native identities: 64 reads and 29 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **349 operations remain `not-implemented`**. No row is marked fully implemented,
-executable, owner-deferred or excluded by this reconciliation. All 439 source/version IDs, cluster
+The other **346 operations remain `not-implemented`**. No row is marked fully implemented,
+executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
 This snapshot includes ordinary project setup; board/backlog/Epic and sprint operations; bounded
-filter reads; versions/components; existing issue workflows; the C7 dashboard/filter-sharing reads; and the C6 comment-update/link/worklog
-read increment, bounded C8 attachment/archive and avatar metadata, worklog create/update with connected-user watching/voting, and fourteen C9 workflow-/issue-type-scheme and screen reads. The three existing report/draft composites remain compositions, not extra native
-API identities. Remaining filter creation, ranking, worklog deletion/other estimate-adjustment modes, destructive operations,
-administration and other inventory gaps stay open. A registered declaration is not evidence that
+filter reads; versions/components; existing issue workflows; the C7 dashboard/filter-sharing reads;
+the C6 comment-update/link/worklog read increment; bounded C8 attachment/archive and avatar metadata;
+worklog create/update with connected-user watching/voting; fourteen C9 workflow-/issue-type-scheme
+and screen reads; and three reviewed comment/attachment/worklog deletions. The three existing
+report/draft composites remain compositions, not extra native API identities. Remaining filter
+creation, ranking, other estimate-adjustment modes and destructive operations, administration and
+other inventory gaps stay open. A registered declaration is not evidence that
 Jira grants the current person permission or that a particular installation supports the operation.
 
 Worklog writes depend on the existing issue-template admission owner. The post-state uses observed
 `timespent`/`timetracking` and safe create/update deltas; absent or inconsistent aggregates never
-become zero. Relevant unresolved template requirements fail closed. Both operations fix
+become zero. Relevant unresolved template requirements fail closed. Create and update fix
 `adjustEstimate=leave`, preserve visibility on update and confirm the bound exact worklog through
 an independent GET. Watching/voting changes are restricted to the connected user, with native
 identity/state reads before effect and independent state readback afterwards. Readable people,
 native counts and current-user flags retain separate completeness/availability meanings.
+
+Reviewed comment, attachment and worklog deletions bind the current native resource and canonical
+parent before one DELETE. After acknowledgement they confirm absence only through a complete, bounded
+native collection belonging to the same still-readable issue. Bare404, permission loss and incomplete
+readback never prove removal. Worklog deletion fixes `adjustEstimate=leave` and reuses saved-template
+admission with the observed negative aggregate delta; unknown time never becomes zero.
 
 C9 adds eight workflow-scheme reads, three issue-type-scheme reads and three screen reads.
 Requested parent scheme IDs and returned draft IDs remain distinct. Default and workflow-mapping
@@ -163,7 +172,12 @@ not claims that those tests ran on the current head. `verificationReferences` re
 actual operation-level qualification is recorded. The registry digest is source accounting, not a
 replacement for the runtime's immutable operation contract digest or one-use approval binding.
 
-Run `node scripts/reconcile-jira-api-inventory.mjs` after a reviewed registry change. A new native
+The current three-delete metadata delta was edited directly during the explicit code-only period.
+Its registry digest is source-file bookkeeping, not a validation result. Inventory reconciliation,
+checks and final current-head verification remain pending until the permitted final verification
+phase tomorrow morning; no runtime qualification was added.
+
+Run `node scripts/reconcile-jira-api-inventory.mjs` after a reviewed registry change in that phase. A new native
 tool first needs explicit constraints and code/test references in `currentCapabilities`; missing or
 extra notes fail closed. The generator refreshes identities and row mappings and advances a
 recorded constrained tool only from `not-implemented` to `partial`. It preserves historical baseline

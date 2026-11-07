@@ -56,6 +56,9 @@ type JiraPermissionPolicy =
   | "worklog-create-and-readback"
   | "worklog-update-and-readback"
   | "comment-update-and-readback"
+  | "comment-delete-and-absence"
+  | "attachment-delete-and-absence"
+  | "worklog-delete-and-absence"
   | "visible-versions"
   | "component-create-and-readback"
   | "component-update-and-readback"
@@ -184,6 +187,12 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "/issue/{issueIdOrKey}/worklog/{id}",
     "worklog-update-and-readback",
   ),
+  "jira.delete-worklog": write(
+    "DELETE",
+    "/issue/{issueIdOrKey}/worklog/{id}",
+    "worklog-delete-and-absence",
+  ),
+  "jira.delete-attachment": write("DELETE", "/attachment/{id}", "attachment-delete-and-absence"),
   "jira.attachment-settings": read("/attachment/meta", "attachment-availability"),
   "jira.attachment": read("/attachment/{id}", "visible-attachments"),
   "jira.attachment-archive": read("/attachment/{id}/expand/raw", "visible-attachments"),
@@ -205,6 +214,11 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "PUT",
     "/issue/{issueIdOrKey}/comment/{id}",
     "comment-update-and-readback",
+  ),
+  "jira.delete-comment": write(
+    "DELETE",
+    "/issue/{issueIdOrKey}/comment/{id}",
+    "comment-delete-and-absence",
   ),
   "jira.link-types": read("/issueLinkType", "visible-link-types"),
   "jira.issue-link": read("/issueLink/{linkId}", "visible-issue-links"),

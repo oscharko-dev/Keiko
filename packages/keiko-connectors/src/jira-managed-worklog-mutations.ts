@@ -32,7 +32,7 @@ interface Input {
   readonly fields: WorklogFields;
   readonly visibility: JiraCommentVisibility | null;
 }
-interface Worklog extends Required<WorklogFields> {
+export interface JiraBoundWorklog extends Required<WorklogFields> {
   readonly visibility: JiraCommentVisibility | null;
 }
 const MALFORMED: Failure = { ok: false, reason: "malformed-payload" };
@@ -102,7 +102,7 @@ function input(operation: Operation, args: CatalogJsonObject): Input | undefined
     ...(typeof args.worklogId === "string" ? { worklogId: args.worklogId } : {}),
   };
 }
-function worklogFields(raw: Readonly<Record<string, unknown>>): Worklog | undefined {
+function worklogFields(raw: Readonly<Record<string, unknown>>): JiraBoundWorklog | undefined {
   const visibility = jiraCommentVisibility(raw.visibility);
   const comment = raw.comment ?? "";
   if (
@@ -116,11 +116,11 @@ function worklogFields(raw: Readonly<Record<string, unknown>>): Worklog | undefi
     return undefined;
   return { comment, started: raw.started, timeSpentSeconds: raw.timeSpentSeconds, visibility };
 }
-async function readWorklog(
+export async function readJiraBoundWorklog(
   request: JiraMutationRequest,
   issueId: string,
   worklogId: string,
-): Promise<Failure | { readonly ok: true; readonly worklog: Worklog }> {
+): Promise<Failure | { readonly ok: true; readonly worklog: JiraBoundWorklog }> {
   const response = await request(`issue/${issueId}/worklog/${worklogId}`);
   if (!response.ok) return dispatchFailure(response);
   const raw = response.body;
@@ -135,8 +135,8 @@ async function readWorklog(
   const worklog = worklogFields(raw);
   return worklog === undefined ? MALFORMED : { ok: true, worklog };
 }
-function matches(
-  current: Worklog,
+export function matchesJiraWorklog(
+  current: JiraBoundWorklog,
   desired: WorklogFields,
   visibility: JiraCommentVisibility | null,
 ): boolean {
@@ -157,9 +157,13 @@ async function confirm(
   visibility: JiraCommentVisibility | null,
 ): Promise<JiraMutationAttempt> {
   try {
-    const read = await readWorklog(request, receipt.issueId, receipt.worklogId);
+    const read = await readJiraBoundWorklog(request, receipt.issueId, receipt.worklogId);
     return {
-      ...(read.ok ? (matches(read.worklog, desired, visibility) ? { ok: true } : CONFLICT) : read),
+      ...(read.ok
+        ? matchesJiraWorklog(read.worklog, desired, visibility)
+          ? { ok: true }
+          : CONFLICT
+        : read),
       receipt,
     };
   } catch (error) {
@@ -194,7 +198,7 @@ async function update(
   selected: Input,
   issueId: string,
   worklogId: string,
-  prior: Worklog,
+  prior: JiraBoundWorklog,
 ): Promise<JiraMutationAttempt> {
   const receipt = { issueKey: selected.issueKey, issueId, worklogId };
   const response = await request(
@@ -222,7 +226,7 @@ interface Prepared {
   readonly issueId: string;
   readonly issueKey: string;
   readonly fields: Readonly<Record<string, unknown>>;
-  readonly prior: Worklog | undefined;
+  readonly prior: JiraBoundWorklog | undefined;
 }
 async function prepare(request: JiraMutationRequest, selected: Input): Promise<Failure | Prepared> {
   const issue = await readJiraMutationIssue(request, selected.issueKey, [
@@ -235,7 +239,7 @@ async function prepare(request: JiraMutationRequest, selected: Input): Promise<F
   const before =
     selected.worklogId === undefined
       ? undefined
-      : await readWorklog(request, issue.id, selected.worklogId);
+      : await readJiraBoundWorklog(request, issue.id, selected.worklogId);
   if (before !== undefined && !before.ok) return before;
   return {
     ok: true,
@@ -250,7 +254,7 @@ function unchanged(selected: Input, prepared: Prepared): Failure | undefined {
   if (
     prior !== undefined &&
     selected.worklogId !== undefined &&
-    matches(prior, selected.fields, prior.visibility)
+    matchesJiraWorklog(prior, selected.fields, prior.visibility)
   )
     return {
       ...CONFLICT,
@@ -262,10 +266,10 @@ function unchanged(selected: Input, prepared: Prepared): Failure | undefined {
     };
   return undefined;
 }
-function priorSeconds(prior: Worklog | undefined): number {
+function priorSeconds(prior: JiraBoundWorklog | undefined): number {
   return prior?.timeSpentSeconds ?? 0;
 }
-function deltaSeconds(selected: Input, prior: Worklog | undefined): number {
+function deltaSeconds(selected: Input, prior: JiraBoundWorklog | undefined): number {
   return selected.fields.timeSpentSeconds === undefined
     ? 0
     : selected.fields.timeSpentSeconds - priorSeconds(prior);

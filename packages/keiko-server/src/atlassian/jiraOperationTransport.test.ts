@@ -119,6 +119,19 @@ const SCENARIOS: readonly Scenario[] = [
     query: { adjustEstimate: "leave" },
   },
   {
+    tool: "jira.delete-worklog",
+    args: {
+      issueKey: "SYN-1",
+      worklogId: "101",
+      timeSpentSeconds: 3600,
+      started: "2026-11-07T09:00:00.000+0000",
+      comment: "Original",
+      visibility: null,
+    },
+    parameters: { issueIdOrKey: "10001", id: "101" },
+    query: { adjustEstimate: "leave" },
+  },
+  {
     tool: "jira.watchers",
     args: { issueKey: "SYN-1", startAt: 0, maxResults: 25 },
     parameters: { issueIdOrKey: "10001" },
@@ -141,6 +154,11 @@ const SCENARIOS: readonly Scenario[] = [
   { tool: "jira.unvote", args: { issueKey: "SYN-1" }, parameters: { issueIdOrKey: "10001" } },
   { tool: "jira.attachment-settings", args: {} },
   { tool: "jira.attachment", args: { attachmentId: "71" }, parameters: { id: "71" } },
+  {
+    tool: "jira.delete-attachment",
+    args: { issueKey: "SYN-1", attachmentId: "71", filename: "note.txt", size: 14 },
+    parameters: { id: "71" },
+  },
   {
     tool: "jira.attachment-archive",
     args: { attachmentId: "71", startAt: 0, maxResults: 1 },
@@ -189,6 +207,11 @@ const SCENARIOS: readonly Scenario[] = [
   {
     tool: "jira.update-comment",
     args: { issueKey: "SYN-1", commentId: "10002", body: "Updated comment" },
+    parameters: { issueIdOrKey: "10001", id: "10002" },
+  },
+  {
+    tool: "jira.delete-comment",
+    args: { issueKey: "SYN-1", commentId: "10002", expectedBody: "Reviewed comment" },
     parameters: { issueIdOrKey: "10001", id: "10002" },
   },
   { tool: "jira.link-types", args: { startAt: 0, maxResults: 1 } },
@@ -333,6 +356,9 @@ const SCENARIOS: readonly Scenario[] = [
 ];
 interface RemoteState extends SyntheticJira {
   worklog: Record<string, unknown>;
+  worklogDeleted: boolean;
+  commentDeleted: boolean;
+  attachmentDeleted: boolean;
   isWatching: boolean;
   hasVoted: boolean;
   project: Record<string, unknown>;
@@ -342,13 +368,19 @@ interface RemoteState extends SyntheticJira {
 function collaborationRead(path: string, state: RemoteState): AtlassianHttpBodyResult | undefined {
   const type = { id: "11", name: "Relates", inward: "relates to", outward: "relates to" };
   const worklog = state.worklog;
-  if (path === `issue/10001/worklog/${String(worklog.id)}`) return response(worklog);
+  if (path === `issue/10001/worklog/${String(worklog.id)}`)
+    return state.worklogDeleted ? response({}, 404) : response(worklog);
+  if (path === "issue/10001/comment/10002" && state.commentDeleted) return response({}, 404);
+  const comment = {
+    id: "10002",
+    body: state.comment,
+    self: "https://jira.example.invalid/context/rest/api/2/issue/10001/comment/10002",
+  };
+  const comments = state.commentDeleted ? [] : [comment];
+  const worklogs = state.worklogDeleted ? [] : [worklog];
   const bodies: Readonly<Record<string, unknown>> = {
-    "issue/10001/comment/10002": {
-      id: "10002",
-      body: state.comment,
-      self: "https://jira.example.invalid/context/rest/api/2/issue/10001/comment/10002",
-    },
+    "issue/10001/comment/10002": comment,
+    "issue/10001/comment": { startAt: 0, maxResults: 1, total: comments.length, comments },
     issueLinkType: { issueLinkTypes: [type] },
     "issueLink/21": {
       id: "21",
@@ -356,7 +388,7 @@ function collaborationRead(path: string, state: RemoteState): AtlassianHttpBodyR
       inwardIssue: { key: "SYN-1" },
       outwardIssue: { key: "SYN-2" },
     },
-    "issue/10001/worklog": { startAt: 0, maxResults: 1, total: 1, worklogs: [worklog] },
+    "issue/10001/worklog": { startAt: 0, maxResults: 1, total: worklogs.length, worklogs },
     "issue/10001/worklog/101": worklog,
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
@@ -367,6 +399,10 @@ function collaborationWrite(
   state: RemoteState,
 ): AtlassianHttpBodyResult | undefined {
   if (path !== "issue/10001/comment/10002") return undefined;
+  if (request.method === "DELETE") {
+    state.commentDeleted = true;
+    return response(undefined, 204);
+  }
   const body = JSON.parse(request.bodyJson ?? "{}") as Record<string, unknown>;
   if (request.method !== "PUT" || typeof body.body !== "string")
     throw new TypeError("Expected the selected comment update");
@@ -379,6 +415,11 @@ function worklogWrite(
   state: RemoteState,
 ): AtlassianHttpBodyResult | undefined {
   if (path !== "issue/10001/worklog" && path !== "issue/10001/worklog/101") return undefined;
+  if (request.method === "DELETE") {
+    expect(path).toBe("issue/10001/worklog/101");
+    state.worklogDeleted = true;
+    return response(undefined, 204);
+  }
   const create = path.endsWith("/worklog");
   const body = JSON.parse(request.bodyJson ?? "{}") as Record<string, unknown>;
   state.worklog = {
@@ -473,7 +514,8 @@ function savedViewRead(path: string): AtlassianHttpBodyResult | undefined {
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
-function assetRead(path: string): AtlassianHttpBodyResult | undefined {
+function assetRead(path: string, state: RemoteState): AtlassianHttpBodyResult | undefined {
+  if (path === "attachment/71" && state.attachmentDeleted) return response({}, 404);
   const avatars = { system: [{ id: "91", selected: true }], custom: [] };
   const bodies: Readonly<Record<string, unknown>> = {
     "attachment/71": { id: "71", filename: "note.txt", size: 14, mimeType: "text/plain" },
@@ -493,6 +535,16 @@ function assetRead(path: string): AtlassianHttpBodyResult | undefined {
     "universal_avatar/type/project/owner/10000": avatars,
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
+}
+function assetWrite(
+  path: string,
+  request: AtlassianHttpBodyRequest,
+  state: RemoteState,
+): AtlassianHttpBodyResult | undefined {
+  if (path !== "attachment/71" || request.method !== "DELETE") return undefined;
+  state.attachmentDeleted = true;
+  state.fields.attachment = [];
+  return response(undefined, 204);
 }
 function administrationRead(
   path: string,
@@ -530,7 +582,9 @@ function administrationRead(
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
-function issueMetadata(path: string): AtlassianHttpBodyResult | undefined {
+function issueMetadata(path: string, state: RemoteState): AtlassianHttpBodyResult | undefined {
+  // The resolved numeric identity reads the same existing issue fixture, including current members.
+  if (path === "issue/10001") return fixtureRead("/issue/SYN-1", state);
   if (path.endsWith("/issuetypes"))
     return response({
       values: [{ id: "10001", name: "Story", subtask: false }],
@@ -591,9 +645,9 @@ function remoteRead(
     participationRead(path, state) ??
     filterRead(path) ??
     savedViewRead(path) ??
-    assetRead(path) ??
+    assetRead(path, state) ??
     administrationRead(path, absoluteUrl) ??
-    issueMetadata(path) ??
+    issueMetadata(path, state) ??
     fixtureRead(absolute, state)
   );
 }
@@ -605,9 +659,15 @@ function remote(tool?: string): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> 
       status: { id: "1" },
       labels: [],
       issuelinks: [],
-      attachment: [],
+      attachment:
+        tool === "jira.delete-attachment"
+          ? [{ id: "71", filename: "note.txt", size: 14 }]
+          : [],
     },
-    comment: "",
+    comment: tool === "jira.delete-comment" ? "Reviewed comment" : "",
+    commentDeleted: false,
+    worklogDeleted: false,
+    attachmentDeleted: false,
     worklog: {
       id: "101",
       issueId: "10001",
@@ -636,6 +696,7 @@ function remote(tool?: string): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> 
       path === "project" || path === "project/10000"
         ? projectWrite(request, state)
         : (participationWrite(path, request.method, state) ??
+            assetWrite(path, request, state) ??
             worklogWrite(path, request, state) ??
             collaborationWrite(path, request, state) ??
             structureWrite(path, request, state) ??
@@ -670,7 +731,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(72);
+    expect(native).toHaveLength(75);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

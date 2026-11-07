@@ -73,6 +73,104 @@ afterEach(() => {
   window.localStorage.removeItem(I18N_STORAGE_KEY);
 });
 
+describe.each(["en", "de"] as const)("reviewed Jira deletion snapshots in %s", (locale) => {
+  it.each(["role", "group"] as const)(
+    "names the exact comment body and %s restriction before deleting it",
+    async (type) => {
+      const review = await reviewed(
+        "jira.delete-comment",
+        {
+          issueKey: "SYN-7",
+          commentId: "9007199254740993",
+          expectedBody: "Reviewed comment to remove",
+          expectedVisibility: { type, value: "Developers" },
+        },
+        locale,
+      );
+      for (const value of ["SYN-7", "9007199254740993", "Reviewed comment to remove", "Developers"])
+        expect(review.text).toContain(value);
+      expect(review.text).toContain(
+        locale === "en" ? "Delete Jira comment" : "Jira-Kommentar löschen",
+      );
+      expect(review.text).toContain(
+        locale === "en" ? "Reviewed comment text" : "Geprüfter Kommentartext",
+      );
+      const visibilityLabels = locale === "en"
+        ? { group: "Visible to group", role: "Visible to role" }
+        : { group: "Sichtbar für Gruppe", role: "Sichtbar für Rolle" };
+      expect(review.text).toContain(visibilityLabels[type]);
+      expectNoJson(review);
+      expect(await axe(review.container)).toHaveNoViolations();
+    },
+  );
+  it("states an empty reviewed unrestricted comment explicitly", async () => {
+    const review = await reviewed(
+      "jira.delete-comment",
+      { issueKey: "SYN-7", commentId: "91", expectedBody: "" },
+      locale,
+    );
+    expect(review.text).toContain(
+      locale === "en" ? "Reviewed text is empty" : "Der geprüfte Text ist leer",
+    );
+    expect(review.text).toContain(
+      locale === "en" ? "No group or role restriction" : "Keine Gruppen- oder Rollenbeschränkung",
+    );
+    expectNoJson(review);
+  });
+  it("names the reviewed attachment filename, exact ID and valid zero-byte size", async () => {
+    const review = await reviewed(
+      "jira.delete-attachment",
+      { issueKey: "SYN-8", attachmentId: "9007199254740993", filename: "empty.txt", size: 0 },
+      locale,
+    );
+    for (const value of ["SYN-8", "9007199254740993", "empty.txt", "0"])
+      expect(review.text).toContain(value);
+    expect(review.text).toContain(
+      locale === "en" ? "Delete Jira attachment" : "Jira-Anhang löschen",
+    );
+    expect(review.text).toContain(locale === "en" ? "Size in bytes" : "Größe in Bytes");
+    expectNoJson(review);
+    expect(await axe(review.container)).toHaveNoViolations();
+  });
+  it.each([null, { type: "role", value: "Developers" }])(
+    "names the entire reviewed worklog and keeps the remaining estimate unchanged",
+    async (visibility) => {
+      const review = await reviewed(
+        "jira.delete-worklog",
+        {
+          issueKey: "SYN-9",
+          worklogId: "9007199254740993",
+          timeSpentSeconds: 0,
+          started: "2026-11-07T12:30:00.000+0000",
+          comment: "",
+          visibility,
+        },
+        locale,
+      );
+      for (const value of ["SYN-9", "9007199254740993", "2026-11-07T12:30:00.000+0000", "0"])
+        expect(review.text).toContain(value);
+      expect(review.text).toContain(
+        locale === "en" ? "Delete Jira worklog" : "Jira-Arbeitsprotokoll löschen",
+      );
+      expect(review.text).toContain(
+        locale === "en" ? "Reviewed text is empty" : "Der geprüfte Text ist leer",
+      );
+      expect(review.text).toContain(locale === "en" ? "Remaining estimate" : "Restaufwand");
+      expect(review.text).toContain(locale === "en" ? "Keep unchanged" : "Unverändert lassen");
+      const unrestricted = locale === "en"
+        ? "No group or role restriction"
+        : "Keine Gruppen- oder Rollenbeschränkung";
+      expect(review.text).toContain(visibility === null ? unrestricted : "Developers");
+      expect(review.text).not.toContain(
+        locale === "en" ? "Clear the existing comment" : "Vorhandenen Kommentar leeren",
+      );
+      expect(review.text).not.toContain("adjustEstimate");
+      expectNoJson(review);
+      expect(await axe(review.container)).toHaveNoViolations();
+    },
+  );
+});
+
 describe.each(["en", "de"] as const)(
   "readable worklog and self-account approvals in %s",
   (locale) => {

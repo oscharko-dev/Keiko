@@ -3,6 +3,10 @@ import {
   type JIRA_PARTICIPATION_WRITE_DEFINITIONS,
 } from "./jiraParticipationDescriptors.js";
 import {
+  jiraDeletionDeclarationForTool,
+  type JIRA_DELETION_DEFINITIONS,
+} from "./jiraDeletionDescriptors.js";
+import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
   JIRA_ATTACHMENT_NAME_MAX_BYTES,
   JIRA_ATTACHMENT_SOURCE_KINDS,
@@ -389,6 +393,7 @@ type CoreMutationToolName = Exclude<
     | keyof typeof JIRA_PROJECT_STRUCTURE_WRITE_DEFINITIONS
     | keyof typeof JIRA_ISSUE_COLLABORATION_WRITE_DEFINITIONS
     | keyof typeof JIRA_PARTICIPATION_WRITE_DEFINITIONS
+    | keyof typeof JIRA_DELETION_DEFINITIONS
   >
 >;
 const DEFINITIONS: Readonly<
@@ -563,6 +568,8 @@ function declaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
   if (structure !== undefined) return structure;
   const participation = jiraParticipationDeclarationForTool(name);
   if (participation !== undefined) return participation;
+  const deletion = jiraDeletionDeclarationForTool(name);
+  if (deletion !== undefined) return deletion;
   const collaboration = jiraIssueCollaborationDeclarationForTool(name);
   if (collaboration !== undefined) return collaboration;
   if (!isCoreMutationTool(name)) throw new TypeError("Unsupported Jira mutation tool");

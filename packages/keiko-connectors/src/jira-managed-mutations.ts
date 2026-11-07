@@ -6,6 +6,12 @@ import {
   executeJiraWorklogMutation,
   isJiraWorklogMutation,
 } from "./jira-managed-worklog-mutations.js";
+import { executeJiraCommentDelete, isJiraCommentDelete } from "./jira-managed-comment-delete.js";
+import {
+  executeJiraAttachmentMutation,
+  isJiraAttachmentMutation,
+} from "./jira-managed-attachment-mutations.js";
+import { executeJiraWorklogDelete, isJiraWorklogDelete } from "./jira-managed-worklog-delete.js";
 import {
   isSafeAtlassianIdentifier,
   type AtlassianConnectorWriteFailureReason,
@@ -1320,6 +1326,22 @@ function untracedReferences(
   );
 }
 
+function deletionMutation(
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  request: JiraMutationRequest,
+  connection: JiraManagedConnection,
+  check: boolean,
+): Promise<JiraMutationAttempt> | undefined {
+  if (isJiraCommentDelete(operation))
+    return executeJiraCommentDelete(operation, args, request, check, connection.baseUrl);
+  if (isJiraAttachmentMutation(operation))
+    return executeJiraAttachmentMutation(operation, args, request, check);
+  if (isJiraWorklogDelete(operation))
+    return executeJiraWorklogDelete(operation, args, request, check, connection.issueTemplates);
+  return undefined;
+}
+
 function dedicatedMutation(
   operation: JiraMutationOperation,
   source: CatalogJsonObject,
@@ -1329,6 +1351,8 @@ function dedicatedMutation(
 ): Promise<JiraMutationAttempt> | undefined {
   const args = structuredClone(source);
   const request = requestFor(connection, context);
+  const deletion = deletionMutation(operation, args, request, connection, check);
+  if (deletion !== undefined) return deletion;
   if (isJiraParticipationMutation(operation))
     return executeJiraParticipationMutation(operation, args, request, check, connection.baseUrl);
   if (isJiraWorklogMutation(operation))
@@ -1419,6 +1443,16 @@ export type JiraMutationCheckResult =
       readonly violations?: readonly JiraTemplateViolation[];
       readonly detail?: JiraMutationFailureDetail;
     };
+
+function requiresSuccessfulPreflight(operation: JiraMutationOperation): boolean {
+  return (
+    isJiraAgileMutation(operation) ||
+    isJiraCommentMutation(operation) ||
+    isJiraCommentDelete(operation) ||
+    isJiraAttachmentMutation(operation) ||
+    isJiraWorklogDelete(operation)
+  );
+}
 /**
  * What a human would otherwise approve in vain: the templates, and Keiko's own validation of the
  * proposed fields (S05 of #4173), which decides the same way when the write runs. Every other
@@ -1436,7 +1470,7 @@ export async function checkJiraManagedMutation(
     return { ok: false, reason: attempt.reason, violations: attempt.violations };
   // Agile admission already resolved its concrete board/filter/issue prerequisites using GETs.
   // A known refusal must not be turned into an approval for a write that cannot proceed.
-  if (isJiraAgileMutation(operation) || isJiraCommentMutation(operation))
+  if (requiresSuccessfulPreflight(operation))
     return {
       ok: false,
       reason: attempt.reason,

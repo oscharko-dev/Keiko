@@ -87,7 +87,7 @@ export function withJiraAuthenticationObservation<
   metadata: AtlassianCredentialMetadata,
   port: (request: TRequest) => Promise<TResult>,
   current: () => boolean,
-  probe: (timeoutMs: number, signal: AbortSignal | undefined) => Promise<boolean>,
+  probe: (deadlineAt: number, signal: AbortSignal | undefined) => Promise<boolean>,
 ): (request: TRequest) => Promise<TResult> {
   return async (input): Promise<TResult> => {
     const request: TRequest = { ...input };
@@ -96,9 +96,8 @@ export function withJiraAuthenticationObservation<
     const result = await port(request);
     if (!ambiguousFailure(metadata, request, result) || !current()) return result;
     const signal = "signal" in request ? request.signal : undefined;
-    const remaining = deadline - Date.now();
     if (!withinOriginalRequest(deadline, signal)) return result;
-    const confirmed = await probe(remaining, signal);
+    const confirmed = await probe(deadline, signal);
     if (confirmed && current() && withinOriginalRequest(deadline, signal))
       return { ...result, authentication: "confirmed" };
     return result;

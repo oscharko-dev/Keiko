@@ -502,6 +502,62 @@
         "packages/keiko-server/src/atlassian/jiraSavedViewDescriptors.test.ts"
       ]
     },
+    "jira.delete-attachment": {
+      "identity": "DELETE /rest/api/2/attachment/{id}",
+      "effect": "write",
+      "permissionPolicy": "attachment-delete-and-absence",
+      "kind": "constrained-tool",
+      "constraints": "One exact issue-bound attachment DELETE after matching reviewed native filename/byte size and independently readable attachment metadata. One effect only; after acknowledged success require the same readable canonical issue and complete valid attachment-list absence. Bare404, permission loss or incomplete readback never confirms deletion; known resource receipts survive uncertainty. No binary retrieval, source-path input or upload changes.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-attachment-mutations.ts",
+        "packages/keiko-server/src/atlassian/jiraDeletionDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-attachment-mutations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-comment": {
+      "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/comment/{id}",
+      "effect": "write",
+      "permissionPolicy": "comment-delete-and-absence",
+      "kind": "constrained-tool",
+      "constraints": "One exact issue-bound comment DELETE after matching the reviewed native body and visibility. Omitted reviewed visibility explicitly means unrestricted. Same canonical parent remains readable; only bounded complete native comment-list absence after acknowledgement confirms removal. Bare404, unreadable or contradictory response remains uncertain, without replay. No bulk deletion or arbitrary issue/comment relocation.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-comment-delete.ts",
+        "packages/keiko-server/src/atlassian/jiraDeletionDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-comment-delete.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.delete-worklog": {
+      "identity": "DELETE /rest/api/2/issue/{issueIdOrKey}/worklog/{id}",
+      "effect": "write",
+      "permissionPolicy": "worklog-delete-and-absence",
+      "kind": "constrained-tool",
+      "constraints": "One exact issue-bound worklog DELETE after matching reviewed native seconds, start instant, comment and explicit visibility (null means unrestricted). Fixed adjustEstimate=leave; saved-template admission uses observed negative time delta and never defaults missing aggregate to zero. Reuse the bounded complete collection owner before effect and for same-parent absence after acknowledgement. Known receipt survives uncertain readback; no bare404 confirmation, replay, arbitrary estimate adjustment or author changes.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-worklog-delete.ts",
+        "packages/keiko-connectors/src/jira-managed-worklog-mutations.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-details.ts",
+        "packages/keiko-connectors/src/jira-worklog-templates.ts",
+        "packages/keiko-server/src/atlassian/jiraDeletionDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-worklog-delete.test.ts",
+        "packages/keiko-connectors/src/jira-managed-worklog-mutations.test.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-details.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "packages/keiko-server/src/atlassian/jiraManagedMutationIntegration.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.edit": {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}",
       "effect": "write",
@@ -1322,8 +1378,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "355cb2420f4fc4b97667c2e0762115d754b44b0cc2681acf95afb466f4f63bc0",
-    "nativeOperationCount": 90
+    "sha256": "4c9b4f582bd5dfc24459bffc774b06882ac2c2982d4fa2708d5590a7c5be8c8b",
+    "nativeOperationCount": 93
   },
   "operations": [
     {
@@ -3081,10 +3137,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.delete-attachment"]
     },
     {
       "identity": "GET /rest/api/2/attachment/{id}",
@@ -5745,10 +5801,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.delete-comment"]
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/comment/{id}",
@@ -6737,10 +6793,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.delete-worklog"]
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/worklog/{id}",

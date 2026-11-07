@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isJiraDataCenterCompatibilityFacts } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   verifyJiraDataCenterConnection,
@@ -42,12 +42,15 @@ const user = { name: "synthetic-user", key: "synthetic-key", active: true };
 describe("identity-only observation within an existing request", () => {
   it("uses only the fixed identity path, remaining time, cancellation and existing byte cap", async () => {
     const { port, requests } = fixture([response(user)]);
-    const signal = new AbortController().signal;
+    const controller = new AbortController();
+    const signal = controller.signal;
     expect(
-      await verifyJiraDataCenterIdentity(port, "https://jira.example/context", {
-        timeoutMs: 173,
-        signal,
-      }),
+      await verifyJiraDataCenterIdentity(
+        port,
+        "https://jira.example/context",
+        { deadlineAt: 1173, signal },
+        () => 1000,
+      ),
     ).toBe("ok");
     expect(requests).toEqual([
       {
@@ -55,15 +58,17 @@ describe("identity-only observation within an existing request", () => {
         url: "https://jira.example/context/rest/api/2/myself",
         timeoutMs: 173,
         maxBodyBytes: 65536,
-        signal,
+        signal: expect.any(AbortSignal),
       },
     ]);
+    controller.abort();
+    expect(requests[0]?.signal?.aborted).toBe(true);
   });
   it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
     "does not open a new budget from %s",
-    async (timeoutMs) => {
+    async (deadlineAt) => {
       const { port, requests } = fixture([]);
-      expect(await verifyJiraDataCenterIdentity(port, "https://jira.example", { timeoutMs })).toBe(
+      expect(await verifyJiraDataCenterIdentity(port, "https://jira.example", { deadlineAt })).toBe(
         "timeout",
       );
       expect(requests).toEqual([]);
@@ -75,11 +80,52 @@ describe("identity-only observation within an existing request", () => {
     const { port, requests } = fixture([]);
     expect(
       await verifyJiraDataCenterIdentity(port, "https://jira.example", {
-        timeoutMs: 1000,
+        deadlineAt: Date.now() + 1000,
         signal: controller.signal,
       }),
     ).toBe("timeout");
     expect(requests).toEqual([]);
+  });
+  it("never restarts an absolute deadline while preparing the identity request", async () => {
+    const { port, requests } = fixture([response(user)]);
+    const times = [1100, 1300];
+    expect(
+      await verifyJiraDataCenterIdentity(
+        port,
+        "https://jira.example",
+        { deadlineAt: 1500 },
+        () => times.shift() ?? 1500,
+      ),
+    ).toBe("ok");
+    expect(requests[0]?.timeoutMs).toBe(200);
+  });
+  it("aborts probe I/O at the ten-millisecond remainder despite a one-second port timeout floor", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("deadline", "TimeoutError")), milliseconds);
+      return controller.signal;
+    });
+    try {
+      let settled = false;
+      const port: AtlassianHttpBodyPort = (request) => new Promise((resolve) => {
+        const floorTimer = setTimeout(() => resolve(response(user)), Math.max(1000, request.timeoutMs));
+        request.signal?.addEventListener("abort", () => {
+          clearTimeout(floorTimer);
+          settled = true;
+          resolve({ kind: "timeout" });
+        }, { once: true });
+      });
+      const pending = verifyJiraDataCenterIdentity(port, "https://jira.example", { deadlineAt: 1010 }, () => 1000);
+      await vi.advanceTimersByTimeAsync(9);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      expect(await pending).toBe("timeout");
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
   });
 });
 

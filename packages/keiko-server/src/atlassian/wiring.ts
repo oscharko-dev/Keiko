@@ -148,7 +148,7 @@ function identityObservation(
   metadata: AtlassianCredentialMetadata,
   correlationId: string,
   lifecycle: AtlassianCredentialHttpOptions,
-): (timeoutMs: number, signal: AbortSignal | undefined) => Promise<boolean> {
+): (deadlineAt: number, signal: AbortSignal | undefined) => Promise<boolean> {
   const current = (): boolean =>
     currentJiraAuthenticationObservation(metadata, owner.custody.getMetadata(metadata.authRef));
   const port = createGatewayAtlassianHttpBodyPort({
@@ -162,9 +162,9 @@ function identityObservation(
     onResponse: (): boolean => true,
     singleAttempt: true,
   });
-  return async (timeoutMs, signal): Promise<boolean> => {
+  return async (deadlineAt, signal): Promise<boolean> => {
     const status = await verifyJiraDataCenterIdentity(port, metadata.baseUrl, {
-      timeoutMs,
+      deadlineAt,
       signal,
     });
     if (status === "auth-failed") observedAuthentication(owner, metadata, correlationId)(401);

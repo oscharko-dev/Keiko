@@ -103,6 +103,7 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
         "jira.create",
         "jira.create-worklog",
         "jira.update-worklog",
+        "jira.delete-worklog",
         "jira.edit",
         "jira.transition",
         "jira.assign",
@@ -181,6 +182,9 @@ const FIELD_ADMISSION = defineActivityLogOperation({
         "jira.create-version",
         "jira.update-version",
         "jira.update-comment",
+        "jira.delete-comment",
+        "jira.delete-attachment",
+        "jira.delete-worklog",
         "jira.create-worklog",
         "jira.update-worklog",
         "jira.watch",
@@ -226,6 +230,7 @@ const TEMPLATE_OPERATIONS = [
   "jira.create",
   "jira.create-worklog",
   "jira.update-worklog",
+  "jira.delete-worklog",
   "jira.edit",
   "jira.transition",
   "jira.assign",
@@ -284,6 +289,9 @@ export function recordJiraFieldRefusal(
       | "jira.create-version"
       | "jira.update-version"
       | "jira.update-comment"
+      | "jira.delete-comment"
+      | "jira.delete-attachment"
+      | "jira.delete-worklog"
       | "jira.create-worklog"
       | "jira.update-worklog"
       | "jira.watch"

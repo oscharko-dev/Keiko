@@ -23,6 +23,9 @@ export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject
     visibility: { type: "role", value: "Developers" },
   },
   "jira.update-worklog": { issueKey: "SYN-1", worklogId: "101", comment: "Updated" },
+  "jira.delete-attachment": { issueKey: "SYN-1", attachmentId: "10300", filename: "report.txt", size: ATTACHED.length },
+  "jira.delete-comment": { issueKey: "SYN-1", commentId: "10002", expectedBody: "Original", expectedVisibility: { type: "role", value: "Developers" } },
+  "jira.delete-worklog": { issueKey: "SYN-1", worklogId: "101", timeSpentSeconds: 3600, started: "2026-11-07T09:00:00Z", comment: "Original", visibility: { type: "role", value: "Developers" } },
   "jira.watch": { issueKey: "SYN-1" },
   "jira.unwatch": { issueKey: "SYN-1" },
   "jira.vote": { issueKey: "SYN-1" },
@@ -84,6 +87,9 @@ export const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
     worklog: { id: "102", issueId: "10001", timeSpentSeconds: 1200, comment: "Investigated" },
   },
   "jira.update-worklog": { worklog: { id: "101", issueId: "10001", comment: "Updated" } },
+  "jira.delete-attachment": { fields: { attachment: [] } },
+  "jira.delete-comment": { commentDeleted: true },
+  "jira.delete-worklog": { worklogDeleted: true, fields: { timespent: 0, timetracking: { originalEstimateSeconds: 7200, remainingEstimateSeconds: 3600, timeSpentSeconds: 0 } } },
   "jira.watch": { isWatching: true },
   "jira.unwatch": { isWatching: false },
   "jira.vote": { hasVoted: true },
@@ -128,6 +134,9 @@ export const SUCCESS_RECEIPTS: Readonly<Record<SingleMutation, CatalogJsonObject
   "jira.update-comment": { ...ISSUE_RECEIPT, commentId: "10002" },
   "jira.create-worklog": { ...ISSUE_RECEIPT, issueId: "10001", worklogId: "102" },
   "jira.update-worklog": { ...ISSUE_RECEIPT, issueId: "10001", worklogId: "101" },
+  "jira.delete-attachment": { ...ISSUE_RECEIPT, issueId: "10001", attachmentId: "10300" },
+  "jira.delete-comment": { ...ISSUE_RECEIPT, issueId: "10001", commentId: "10002" },
+  "jira.delete-worklog": { ...ISSUE_RECEIPT, issueId: "10001", worklogId: "101" },
   "jira.watch": { ...ISSUE_RECEIPT, issueId: "10001", isWatching: true },
   "jira.unwatch": { ...ISSUE_RECEIPT, issueId: "10001", isWatching: false },
   "jira.vote": { ...ISSUE_RECEIPT, issueId: "10001", hasVoted: true },
@@ -150,6 +159,8 @@ export const SUCCESS_RECEIPTS: Readonly<Record<SingleMutation, CatalogJsonObject
 };
 
 export interface MutationRemoteState extends SyntheticJira {
+  commentDeleted: boolean;
+  worklogDeleted: boolean;
   worklog: Record<string, unknown>;
   isWatching: boolean;
   hasVoted: boolean;
@@ -179,6 +190,8 @@ export function mutationRemoteState(): MutationRemoteState {
       comment: "Original",
       visibility: { type: "role", value: "Developers" },
     },
+    commentDeleted: false,
+    worklogDeleted: false,
     isWatching: false,
     hasVoted: false,
     commentVisibility: { type: "role", value: "Developers" },
@@ -203,12 +216,51 @@ export function mutationRemoteState(): MutationRemoteState {
     agileFields: { sprint: { id: 8 }, epic: null },
   };
 }
+function nativeAttachmentRead(state: MutationRemoteState): ReturnType<typeof response> {
+  const attachments = state.fields.attachment;
+  const found = Array.isArray(attachments)
+    ? attachments.find((item: unknown) =>
+        typeof item === "object" && item !== null && "id" in item && item.id === "10300",
+      )
+    : undefined;
+  return found === undefined ? response({}, 404) : response(found);
+}
+function nativeDeletionRead(
+  path: string,
+  state: MutationRemoteState,
+): ReturnType<typeof response> | undefined {
+  if (path === "/context/rest/api/2/attachment/10300") return nativeAttachmentRead(state);
+  if (path === "/context/rest/api/2/issue/10001/comment/10002" && state.commentDeleted)
+    return response({}, 404);
+  const comment = {
+    id: "10002",
+    body: state.comment,
+    visibility: state.commentVisibility,
+    self: "https://203.0.113.10/context/rest/api/2/issue/10001/comment/10002",
+  };
+  const resources: Readonly<Record<string, unknown>> = {
+    "/context/rest/api/2/issue/10001": { id: "10001", key: "SYN-1", fields: state.fields },
+    "/context/rest/api/2/issue/10001/worklog": {
+      startAt: 0, maxResults: 1000,
+      total: state.worklogDeleted ? 0 : 1,
+      worklogs: state.worklogDeleted ? [] : [state.worklog],
+    },
+    "/context/rest/api/2/issue/10001/comment": {
+      startAt: 0, maxResults: 1000,
+      total: state.commentDeleted ? 0 : 1,
+      comments: state.commentDeleted ? [] : [comment],
+    },
+  };
+  return Object.hasOwn(resources, path) ? response(resources[path]) : undefined;
+}
 export function nativeRead(
   path: string,
   state: MutationRemoteState,
 ): ReturnType<typeof response> | undefined {
+  const deletion = nativeDeletionRead(path, state);
+  if (deletion !== undefined) return deletion;
   if (path === `/context/rest/api/2/issue/10001/worklog/${String(state.worklog.id)}`)
-    return response(state.worklog);
+    return state.worklogDeleted ? response({}, 404) : response(state.worklog);
   const person = { name: "synthetic-user", active: true };
   const resources: Readonly<Record<string, unknown>> = {
     "/context/rest/api/2/issue/10001/watchers": {
@@ -331,6 +383,30 @@ function agileWrite(
     case "/context/rest/agile/1.0/epic/SYN-11/issue":
       requireMembershipBody(body);
       state.agileFields.epic = { id: 11, key: "SYN-11" };
+      return response(undefined, 204);
+    default:
+      return undefined;
+  }
+}
+export function nativeDeletionWrite(
+  request: Pick<Request, "method" | "url">,
+  state: MutationRemoteState,
+): ReturnType<typeof response> | undefined {
+  if (request.method !== "DELETE") return undefined;
+  const url = new URL(request.url);
+  switch (url.pathname) {
+    case "/context/rest/api/2/attachment/10300":
+      state.fields.attachment = [];
+      return response(undefined, 204);
+    case "/context/rest/api/2/issue/10001/comment/10002":
+      state.commentDeleted = true;
+      return response(undefined, 204);
+    case "/context/rest/api/2/issue/10001/worklog/101":
+      if (url.searchParams.get("adjustEstimate") !== "leave")
+        throw new TypeError("Worklog deletion must preserve the remaining estimate");
+      state.worklogDeleted = true;
+      state.fields.timespent = 0;
+      state.fields.timetracking = { originalEstimateSeconds: 7200, remainingEstimateSeconds: 3600, timeSpentSeconds: 0 };
       return response(undefined, 204);
     default:
       return undefined;

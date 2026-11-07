@@ -729,6 +729,16 @@ identity does not establish Software availability or operation permission. Backl
 Epic collection are distinct reads. Filter inspection preserves explicit sharing facts; no filter
 creation or default-sharing change is inferred from board creation.
 
+Comment, attachment and worklog deletion are distinct high-risk actions. Approval binds the
+reviewed native content/visibility or attachment filename/size, as well as the exact issue and
+resource identity. Execution revalidates that snapshot before its single DELETE. The native
+endpoints provide no conditional-delete guarantee; Keiko does not claim compare-and-swap behavior.
+Acknowledgement alone or a bare 404 never confirms removal: the same parent must remain readable
+and its complete bounded native collection must omit the exact target. Worklog deletion preserves
+the remaining estimate and admits the observed time-spent change through the existing saved-rule
+gate. Lost responses and incomplete readback retain known identities and never cause an automatic
+retry. Forward journal migration V66 preserves existing records while admitting these actions.
+
 Planning changes to issue fields reuse the existing edit-template gate before approval and
 again before effects. Native partial Sprint updates preserve omitted fields, and state transitions
 are checked against the current Sprint. Success requires independent readback; unavailable

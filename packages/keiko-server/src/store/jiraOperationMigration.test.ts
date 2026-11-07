@@ -8,7 +8,7 @@ afterEach(() => {
   for (const db of databases.splice(0)) db.close();
 });
 
-function priorDatabase(version: 61 | 62 | 63 | 64 = 61): DatabaseSync {
+function priorDatabase(version: 61 | 62 | 63 | 64 | 65 = 61): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   databases.push(db);
   db.exec("PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;");
@@ -226,8 +226,8 @@ it("V64 admits only native comment updates while retaining V63 metadata journals
     insertMutation(db, "jira.update-comment", "after");
   }).not.toThrow();
   for (const invalid of [
-    "jira.delete-comment",
-    "jira.delete-worklog",
+    "jira.delete-unknown-comment",
+    "jira.delete-unknown-worklog",
     "jira.draft",
     "jira.unknown",
   ]) {
@@ -266,11 +266,41 @@ it.each([
   expect(() => {
     insertMutation(db, operation, "after");
   }).not.toThrow();
-  for (const invalid of ["jira.draft", "jira.delete-worklog", "jira.unknown"])
+  for (const invalid of ["jira.draft", "jira.delete-unknown-worklog", "jira.unknown"])
     expect(() => {
       insertMutation(db, invalid, invalid);
     }).toThrow(/CHECK/u);
 });
+
+it.each(["jira.delete-comment", "jira.delete-attachment", "jira.delete-worklog"])(
+  "V66 admits %s after preserving V65 records and every journal ownership constraint",
+  (operation) => {
+    const db = priorDatabase(65);
+    insertMutation(db, "jira.create-worklog", "worklog");
+    db.exec("UPDATE chat_tool_mutations SET phase = 'acknowledged', http_status = 201;");
+    insertCodingMutation(db);
+    const before = db.prepare("SELECT * FROM chat_tool_mutations ORDER BY invocation_id").all();
+    const shape = journalShape(db);
+    expect(() => { insertMutation(db, operation, "before"); }).toThrow(/CHECK/u);
+    runMigrations(db);
+    runMigrations(db);
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(66);
+    expect(db.prepare("SELECT * FROM chat_tool_mutations ORDER BY invocation_id").all()).toEqual(before);
+    expect(journalShape(db)).toEqual(shape);
+    expect(db.prepare("PRAGMA synchronous").get()).toEqual({ synchronous: 2 });
+    expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    insertMutation(db, operation, "after");
+    for (const sql of [
+      "UPDATE chat_tool_mutations SET http_status = 204 WHERE invocation_id = 'after'",
+      "UPDATE chat_tool_mutations SET protocol_outcome = 'success' WHERE invocation_id = 'after'",
+      "UPDATE chat_tool_mutations SET source_kind = 'configured-mcp' WHERE invocation_id = 'after'",
+      "UPDATE chat_tool_mutations SET consumer_kind = 'coding' WHERE invocation_id = 'after'",
+    ]) expect(() => { db.exec(sql); }).toThrow(/CHECK/u);
+    for (const invalid of ["jira.draft", "jira.delete-unknown", "jira.unknown"])
+      expect(() => { insertMutation(db, invalid, invalid); }).toThrow(/CHECK/u);
+  },
+);
 
 it("keeps the migrated native Jira vocabulary exactly aligned with every current write operation", () => {
   const db = priorDatabase(63);

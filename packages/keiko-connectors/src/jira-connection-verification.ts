@@ -61,15 +61,17 @@ async function probe(
 ): Promise<ReturnType<typeof parseAtlassianVerificationProbe>> {
   const remaining = deadline - now();
   if (remaining <= 0 || signal?.aborted) return { failure: "timeout" };
-  return parseAtlassianVerificationProbe(
-    await port({
-      method: "GET",
-      url,
-      timeoutMs: remaining,
-      maxBodyBytes: ATLASSIAN_VERIFY_MAX_BYTES,
-      ...(signal === undefined ? {} : { signal }),
-    }),
-  );
+  // The inherited absolute budget also owns I/O cancellation, independently of a port's timeout floor.
+  const deadlineSignal = AbortSignal.timeout(Math.floor(remaining));
+  const cancellation = signal === undefined ? deadlineSignal : AbortSignal.any([signal, deadlineSignal]);
+  const result = await port({
+    method: "GET",
+    url,
+    timeoutMs: remaining,
+    maxBodyBytes: ATLASSIAN_VERIFY_MAX_BYTES,
+    signal: cancellation,
+  });
+  return cancellation.aborted ? { failure: "timeout" } : parseAtlassianVerificationProbe(result);
 }
 
 function jiraRestRoot(baseUrl: string): string {
@@ -83,13 +85,13 @@ function jiraRestRoot(baseUrl: string): string {
 export async function verifyJiraDataCenterIdentity(
   port: AtlassianHttpBodyPort,
   baseUrl: string,
-  options: { readonly timeoutMs: number; readonly signal?: AbortSignal | undefined },
+  options: { readonly deadlineAt: number; readonly signal?: AbortSignal | undefined },
   now: () => number = Date.now,
 ): Promise<AtlassianConnectionVerificationStatus> {
   const prefix = jiraRestRoot(baseUrl);
-  if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) return "timeout";
-  const timeoutMs = Math.min(options.timeoutMs, ATLASSIAN_VERIFY_CONNECTION_TIMEOUT_MS);
-  const identity = await probe(port, `${prefix}myself`, now() + timeoutMs, now, options.signal);
+  if (!Number.isFinite(options.deadlineAt)) return "timeout";
+  const deadline = Math.min(options.deadlineAt, now() + ATLASSIAN_VERIFY_CONNECTION_TIMEOUT_MS);
+  const identity = await probe(port, `${prefix}myself`, deadline, now, options.signal);
   if ("failure" in identity) return identity.failure;
   return validIdentity(identity.value) ? "ok" : "invalid-response";
 }
@@ -115,7 +117,7 @@ export async function verifyJiraDataCenterCompatibility(
   const identity = await verifyJiraDataCenterIdentity(
     port,
     baseUrl,
-    { timeoutMs: deadline - now() },
+    { deadlineAt: deadline },
     now,
   );
   return identity === "ok" ? result : failedProbe(identity);
