@@ -62,6 +62,9 @@ function configure(deps: UiHandlerDeps): void {
     modelId: MODEL,
     baseUrl: "https://model.example.invalid/v1",
     apiKey: "synthetic-unused",
+    timeoutMs: 120_000,
+    maxRetries: 2,
+    retryBaseDelayMs: 100,
   };
   const runtime = deps.gatewayConfig;
   if (runtime === undefined) throw new TypeError("Missing gateway configuration");
@@ -207,7 +210,7 @@ function verifiedCredential(deps: UiHandlerDeps, root: string): JiraLivePodCrede
   const ticket = credentials.custody.beginVerification(created.authRef);
   if (ticket === undefined) throw new TypeError("Missing verification ticket");
   credentials.custody.finishVerification(created.authRef, 1, ticket.revision, "ok");
-  return created;
+  return { ...created, livePod: created.livePod };
 }
 
 function connectedChat(
