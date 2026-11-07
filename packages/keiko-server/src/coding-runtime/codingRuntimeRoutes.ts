@@ -16,7 +16,15 @@ import type {
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchScheduleControlResponse,
+  CodingWorkbenchSchedulesResponse,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  isCodingWorkbenchScheduleAction,
+  isCodingWorkbenchScheduleId,
+  isCodingWorkbenchTaskIdForSchedules,
+  parseCodingWorkbenchScheduleControlRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-schedules";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { parseCodingWorkbenchRuntimeReadinessRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
@@ -58,6 +66,7 @@ import type {
   CodingRuntimeOrchestrator,
   CodingRuntimeOrchestratorResult,
 } from "./codingRuntimeOrchestrator.js";
+import type { ScheduleControlReason } from "./codingScheduledWakes.js";
 import { openCodeSelectableAgents } from "./opencodeAgents.js";
 import { openCodePromptInputs } from "./opencodePromptInputs.js";
 
@@ -1189,7 +1198,96 @@ export function openCodingRuntimeSse(
   req.once("aborted", close);
 }
 
+function scheduleError(
+  status: number,
+  code: string,
+  correlationId: string | undefined,
+): RouteResult {
+  return { status, body: errorBody(code, "Schedule request was rejected.", correlationId) };
+}
+
+const SCHEDULE_REFUSAL_STATUS: Readonly<Record<ScheduleControlReason, number>> = {
+  "not-found": 404,
+  "not-applicable": 409,
+  "run-active": 409,
+  "no-retained-state": 404,
+  "integrity-failed": 409,
+  "schema-unknown": 409,
+  unavailable: 503,
+};
+
+function scheduleRefusal(reason: ScheduleControlReason, correlationId?: string): RouteResult {
+  return scheduleError(
+    SCHEDULE_REFUSAL_STATUS[reason],
+    `CODING_SCHEDULE_${reason.replaceAll("-", "_").toUpperCase()}`,
+    correlationId,
+  );
+}
+
+/**
+ * A task's scheduled continuations (#4271, ADR-0137 D10): the retained schedules of the task's
+ * native session, as the Workbench shows them. The scheduled prompt never leaves the server. A task
+ * that is not the operator's reads as not found.
+ */
+export function handleCodingRuntimeSchedules(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined)
+    return scheduleError(403, "CODING_SCHEDULE_AUTHORITY_RESOLUTION_FAILED", ctx.correlationId);
+  const taskId = ctx.url.searchParams.get("taskId");
+  if (ctx.url.searchParams.size !== 1 || !isCodingWorkbenchTaskIdForSchedules(taskId))
+    return scheduleError(400, "CODING_SCHEDULE_INVALID_REQUEST", ctx.correlationId);
+  const wakes = deps.codingScheduledWakes;
+  if (wakes === undefined) {
+    const empty: CodingWorkbenchSchedulesResponse = { taskId, schedules: [] };
+    return { status: 200, body: empty };
+  }
+  const listed = wakes.list(taskId, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
+  if (!listed.ok) return scheduleRefusal(listed.reason, ctx.correlationId);
+  const body: CodingWorkbenchSchedulesResponse = { taskId, schedules: listed.schedules };
+  return { status: 200, body };
+}
+
+/** A human's pause, resume or delete of one scheduled continuation of a task. */
+export function handleCodingRuntimeScheduleControl(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined)
+    return Promise.resolve(
+      scheduleError(403, "CODING_SCHEDULE_AUTHORITY_RESOLUTION_FAILED", ctx.correlationId),
+    );
+  const { scheduleId, action } = ctx.params;
+  const wakes = deps.codingScheduledWakes;
+  if (!isCodingWorkbenchScheduleId(scheduleId) || !isCodingWorkbenchScheduleAction(action))
+    return Promise.resolve(scheduleError(404, "CODING_SCHEDULE_NOT_FOUND", ctx.correlationId));
+  if (wakes === undefined)
+    return Promise.resolve(scheduleRefusal("unavailable", ctx.correlationId));
+  return withBody(async () => {
+    const request = parseCodingWorkbenchScheduleControlRequest(await readBody(ctx.req));
+    if (request === undefined)
+      return scheduleError(400, "CODING_SCHEDULE_INVALID_REQUEST", ctx.correlationId);
+    const outcome = await wakes.control(
+      request.taskId,
+      scheduleId,
+      action,
+      ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    );
+    if (!outcome.ok) return scheduleRefusal(outcome.reason, ctx.correlationId);
+    const body: CodingWorkbenchScheduleControlResponse = { status: outcome.status };
+    return { status: 200, body };
+  }, ctx.correlationId);
+}
+
 export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/schedules",
+    handler: handleCodingRuntimeSchedules,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/schedules/:scheduleId/:action",
+    handler: handleCodingRuntimeScheduleControl,
+  },
   {
     method: "POST",
     pattern: "/api/coding-workbench/runtime/runs",

@@ -27,6 +27,7 @@ const CLIENT_CONTEXT_VALUES: ReadonlySet<string> = new Set([
   "stage:files-widget-chunk",
   "stage:chat-bind",
   "stage:command-palette",
+  "stage:window-palette",
   "stage:chat-history-deletion",
 ]);
 

@@ -780,4 +780,20 @@ describe("runMigrations", () => {
     };
     expect(row.task_type).toBeNull();
   });
+
+  // #4271: the retention sweep probes `predecessor_run_id` with NOT EXISTS for every settled run.
+  it("indexes coding_runtime_snapshots.predecessor_run_id for the successor probe", () => {
+    const db = openMem();
+    runMigrations(db);
+
+    const plan = db
+      .prepare(
+        "EXPLAIN QUERY PLAN SELECT parent.run_id FROM coding_runtime_snapshots parent WHERE parent.terminal_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM coding_runtime_snapshots child WHERE child.predecessor_run_id = parent.run_id)",
+      )
+      .all() as { detail: string }[];
+
+    expect(plan.map((row) => row.detail).join("\n")).toContain(
+      "USING COVERING INDEX idx_coding_runtime_predecessor",
+    );
+  });
 });

@@ -15,10 +15,14 @@ import {
   CircuitBreaker,
   executeWithRetry,
   GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
+  GATEWAY_STREAM_BUDGET_FLOOR_MS,
   providerRequestBudgetMs,
   providerRetryConfig,
   retryAnnouncer,
   steeredAnswerRepair,
+  streamedCallBudgetMs,
+  streamOutputAllowanceMs,
+  streamRequestBudgetMs,
   type GatewayRetryNotice,
   type GatewayRetryObserver,
   type RetryAnnouncer,
@@ -544,6 +548,28 @@ describe("executeWithRetry", () => {
     ).rejects.toBeInstanceOf(CancelledError);
     expect(calls).toBe(1);
     expect(sleeps).toEqual([120_000]);
+  });
+});
+
+describe("streamRequestBudgetMs: the output allowance sizes the budget of a live stream", () => {
+  const provider = { timeoutMs: 30_000 };
+
+  it("keeps the thirty-minute floor for a call without an allowance or with a small one", () => {
+    expect(streamRequestBudgetMs(provider)).toBe(GATEWAY_STREAM_BUDGET_FLOOR_MS);
+    expect(streamRequestBudgetMs(provider, 4_096)).toBe(GATEWAY_STREAM_BUDGET_FLOOR_MS);
+  });
+
+  it("grants a 32k-token answer the time it needs at the slowest granted rate", () => {
+    const needed = streamOutputAllowanceMs(32_768);
+    // 8 tok/s for 32k tokens is 68 minutes: more than the old fixed 30 minutes.
+    expect(32_768 / 8).toBeGreaterThan(GATEWAY_STREAM_BUDGET_FLOOR_MS / 1000);
+    expect(needed).toBeGreaterThan((32_768 / 8) * 1000);
+    expect(streamRequestBudgetMs(provider, 32_768)).toBe(needed);
+    expect(streamedCallBudgetMs(provider, 0, 32_768)).toBe(needed);
+  });
+
+  it("never exceeds the timer ceiling", () => {
+    expect(streamRequestBudgetMs(provider, Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_DELAY_MS);
   });
 });
 

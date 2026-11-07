@@ -1,6 +1,8 @@
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 import {
   recordSessionContinuity,
@@ -11,6 +13,7 @@ import {
   type SessionContinuityRecord,
 } from "./codingSessionContinuity.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./opencodeLaunchProfile.js";
+import { holdSchedulerLease, removeInheritedSchedules } from "./opencodeScheduleLease.js";
 import type {
   CheckoutResult,
   RetainedSessionBinding,
@@ -161,6 +164,14 @@ export function seedContinuation(
     recordFallBack(context, location, intent, checkout.reason);
     return undefined;
   }
+  try {
+    holdRetainedSchedules(runtimeDatabasePath(location.runRoot), intent);
+  } catch (error) {
+    // A copy whose schedules Keiko cannot hold could fire one at the runtime's boot: it never runs.
+    rmSync(runtimeDatabasePath(location.runRoot), { force: true });
+    recordFallBack(context, location, intent, "copy-failed", error);
+    return undefined;
+  }
   const { sessionId, databaseBytes, messageCount, ageMs, sourceDirectory } = checkout;
   return {
     intent,
@@ -171,6 +182,15 @@ export function seedContinuation(
     ageMs,
     ...(sourceDirectory === undefined ? {} : { sourceDirectory }),
   };
+}
+
+/**
+ * Before the runtime opens a retained copy, which fires a due schedule at its boot: the copy carries
+ * Keiko's scheduler lease (`opencodeScheduleLease.ts`), and a fork drops its source's schedules.
+ */
+function holdRetainedSchedules(database: string, intent: ContinuityIntent): void {
+  holdSchedulerLease(database);
+  if (intent.kind === "fork") removeInheritedSchedules(database);
 }
 
 /** What a run asks the store for: its own binding, and for a fork the provisioning source too. */
@@ -432,6 +452,8 @@ export interface SettledContinuedRun {
   readonly runRoot: string;
   readonly workspaceRoot: string;
   readonly sessionId: string | undefined;
+  /** The run's effective mode when it settled: the consent its new schedules are recorded with. */
+  readonly mode?: string | undefined;
 }
 
 /**
@@ -521,6 +543,7 @@ function attemptRetain(
       sessionId: run.sessionId ?? "",
       directory: run.workspaceRoot,
       sourceDatabase: runtimeDatabasePath(run.runRoot),
+      ...(isCodingWorkbenchMode(run.mode) ? { scheduleConsentMode: run.mode } : {}),
     });
     if (result.ok) {
       recordSessionContinuity(context.activityLog, {

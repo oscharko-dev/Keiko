@@ -186,6 +186,44 @@ describe("Coding History on the existing conversation store", () => {
     ]);
   });
 
+  // #4271: a scheduled wake's intent is the prompt the task's model scheduled, not the operator's.
+  it("marks a scheduled wake's intent and shows it once beside the runtime's own copy", () => {
+    const history = codingHistory();
+    const task = history.create({
+      projectPath: root,
+      title: "Scheduled",
+      modelId: "coding",
+      workspaceId: "ws_sched",
+      taskId: "task_sched",
+      branch: "keiko/task/sched",
+      operatorDigest: "a".repeat(64),
+    });
+    history.begin({
+      projectPath: root,
+      title: "Scheduled",
+      modelId: "coding",
+      workspaceId: "ws_sched",
+      taskId: "task_sched",
+      branch: "keiko/task/sched",
+      operatorDigest: "a".repeat(64),
+      conversationId: task.id,
+      runId: "run-wake",
+      intent: "Check the build",
+      intentKind: "scheduled",
+    });
+    history.append(task.id, "run-wake", "msg_native_user", "user", "Check the build");
+    history.append(task.id, "run-wake", "msg_native_answer", "assistant", "Green.");
+    history.bindRun(task.id, "run-human");
+    history.append(task.id, "run-human", "intent", "user", "Thanks");
+
+    const messages = history.detail(task.id, "a".repeat(64))?.messages ?? [];
+    expect(messages.map(({ role, content, taskType }) => [role, content, taskType])).toEqual([
+      ["user", "Check the build", "scheduled-continuation"],
+      ["assistant", "Green.", undefined],
+      ["user", "Thanks", undefined],
+    ]);
+  });
+
   // The 1.1.x echo is the first repeat of the intent, before the model answered in that run. The
   // operator sending the same words again after an answer (the model stalled, say) is a real
   // message and must stay in the transcript and in continuation context.

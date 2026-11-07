@@ -1,18 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { seededRandom } from "../../../../tests/support/seeded-property.js";
 import { SequenceNumberSet } from "./sequence-number-set.js";
-
-// Deterministic PRNG (mulberry32): the property runs are reproducible from their seed.
-function random(seed: number): () => number {
-  let state = seed >>> 0;
-  return (): number => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
-  };
-}
 
 // The probes on which the subject and a plain Set disagree. One assertion per state keeps the
 // property run cheap while a failure still names every disagreeing probe.
@@ -32,7 +21,7 @@ function addBoth(subject: SequenceNumberSet, reference: Set<number>, value: numb
 describe("SequenceNumberSet", () => {
   it("answers exactly like a Set for random orders, gaps, duplicates and resets", () => {
     for (let seed = 1; seed <= 400; seed += 1) {
-      const next = random(seed);
+      const next = seededRandom(seed).next;
       const subject = new SequenceNumberSet();
       const reference = new Set<number>();
       // Integer probes plus half-steps: a value between two members of the run was never added.

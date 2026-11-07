@@ -483,6 +483,87 @@ describe("Gateway.chatStream — activity log", () => {
     expect(persisted).toMatchObject({ chunkCount: 2, promptTokens: 1, completionTokens: 1 });
   });
 
+  // A stream whose first output is not answer text still has a time to first output: forwarded
+  // reasoning, or a tool call (assembled whole, so it arrives with the terminal answer).
+  it.each([
+    ["content", { type: "delta", token: "a" }, "answer"],
+    ["reasoning", { type: "reasoning", token: "thinking" }, ""],
+    ["tool-call", undefined, "tool"],
+  ] as const)("records the first output of kind %s", async (kind, first, flavor) => {
+    const log = recorder();
+    const adapter: ProviderAdapter = {
+      call: () => Promise.resolve(okResponse("example-chat-model")),
+      callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+        if (first !== undefined) yield first;
+        const response = await Promise.resolve(okResponse("example-chat-model"));
+        yield {
+          type: "done",
+          response:
+            flavor === "tool"
+              ? {
+                  ...response,
+                  content: "",
+                  finishReason: "tool_calls",
+                  toolCalls: [{ id: "call-1", name: "keiko_read", arguments: {} }],
+                }
+              : response,
+        };
+      },
+    };
+    await drainStream(
+      gatewayWith(adapter, log).chatStream({ ...REQUEST, reasoningDelivery: "forward" }),
+    ).catch(() => undefined);
+    const streamCompleted = eventFor(log.events, "gateway.stream.completed");
+    expect(typeof streamCompleted.extra?.firstTokenMs).toBe("number");
+    expect(streamCompleted.extra?.firstTokenKind).toBe(kind);
+    const persisted = expectActivityLogProof(
+      "gateway.stream.completed.emitted-line",
+      formatActivityLogProofLine(streamCompleted),
+    );
+    expect(persisted).toMatchObject({ firstTokenKind: kind });
+  });
+
+  // `keiko support analyze --correlation-id <runId>` must show the model calls of a run: the lines of
+  // a call carry the enclosing run as their parent, through the real registered formatter.
+  it("stamps the enclosing run as parentCorrelationId on every line of a call", async () => {
+    const log = recorder();
+    const adapter: ProviderAdapter = {
+      call: () => Promise.resolve(okResponse("example-chat-model")),
+      callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+        yield { type: "delta", token: "a" };
+        yield { type: "done", response: await Promise.resolve(okResponse("example-chat-model")) };
+      },
+    };
+    const request = {
+      ...REQUEST,
+      logContext: { correlationId: "request-0001", parentCorrelationId: "run-00000001" },
+    };
+    await drainStream(gatewayWith(adapter, log).chatStream(request));
+    const lines = log.events
+      .filter((event) => event.op.startsWith("gateway.stream."))
+      .map((event) => JSON.parse(formatActivityLogProofLine(event)) as Record<string, unknown>);
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+    for (const line of lines) {
+      expect(line).toMatchObject({
+        correlationId: "request-0001",
+        parentCorrelationId: "run-00000001",
+      });
+    }
+  });
+
+  it("leaves a call without an enclosing run unparented", async () => {
+    const log = recorder();
+    const adapter: ProviderAdapter = {
+      call: () => Promise.resolve(okResponse("example-chat-model")),
+    };
+    await drainStream(gatewayWith(adapter, log).chatStream(REQUEST));
+    for (const event of log.events) {
+      expect(JSON.parse(formatActivityLogProofLine(event))).not.toHaveProperty(
+        "parentCorrelationId",
+      );
+    }
+  });
+
   it("skips a leading empty delta and times firstTokenMs off the first real one", async () => {
     const log = recorder();
     const adapter: ProviderAdapter = {

@@ -45,7 +45,10 @@ import {
 import {
   answerGates,
   chooseOption,
+  describeSchedules,
   operateRun as operateUiRun,
+  readSchedules,
+  scheduleOptions,
   selectCheckout as selectUiCheckout,
 } from "../testing/coding-workbench-lab/wb-ui.mjs";
 
@@ -1015,5 +1018,54 @@ describe("pairing as the local operator", () => {
     await expect(openApiSession("http://127.0.0.1:1983", env)).rejects.toThrow(
       /pairing failed \(HTTP 401\); is the dev server running with the same launcher secret\?/u,
     );
+  });
+});
+
+describe("wb-ui.mjs: a task's scheduled continuations (T33 to T36)", () => {
+  it("takes no schedule step unless asked, and defaults the wake wait to ten minutes", () => {
+    expect(scheduleOptions({})).toBeUndefined();
+    expect(scheduleOptions({ "await-wake": "4" })).toEqual({ awaitWakeMs: 240_000 });
+    expect(scheduleOptions({ "schedule-control": "pause-delete" })).toEqual({
+      awaitWakeMs: 600_000,
+      control: "pause-delete",
+    });
+  });
+
+  it("refuses a schedule control it does not know", () => {
+    expect(() => scheduleOptions({ "schedule-control": "delete" })).toThrow(UsageError);
+  });
+
+  it("describes schedules by status, cadence, runs and wait, never by their prompt", () => {
+    expect(describeSchedules([])).toBe("schedules: none");
+    expect(
+      describeSchedules([
+        { id: "sch_a", status: "active", cadence: "in", runCount: 0, wait: "run-active" },
+        { id: "sch_b", status: "paused", cadence: "every", runCount: 2 },
+      ]),
+    ).toBe("schedules: active in runs=0 run-active; paused every runs=2");
+  });
+
+  it("reads the task's schedules through the Workbench route", async () => {
+    const requested = [];
+    const page = {
+      request: {
+        get: async (url) => {
+          requested.push(url);
+          return {
+            status: () => 200,
+            json: async () => ({ taskId: "task 1", schedules: [{ id: "sch_a" }] }),
+          };
+        },
+      },
+    };
+
+    await expect(readSchedules(page, "task 1")).resolves.toEqual([{ id: "sch_a" }]);
+    expect(requested).toEqual(["/api/coding-workbench/runtime/schedules?taskId=task%201"]);
+  });
+
+  it("fails loudly when the schedule route refuses", async () => {
+    const page = { request: { get: async () => ({ status: () => 403, json: async () => ({}) }) } };
+
+    await expect(readSchedules(page, "task-1")).rejects.toThrow("schedules: HTTP 403");
   });
 });

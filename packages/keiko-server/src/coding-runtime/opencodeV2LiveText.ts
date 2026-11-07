@@ -241,8 +241,21 @@ class LiveTextOverlay implements OpenCodeV2LiveText {
     if (!oldest.done) this.retired.delete(oldest.value);
   }
 
+  // A frozen part is never extended again, so at capacity it is the one to give way: the oldest
+  // frozen part is evicted and the history alone decides its text. A refused start needs no count
+  // of its own, because every delta of the untracked part is counted dropped.
+  private makeRoom(): boolean {
+    if (this.parts.size < MAX_LIVE_PARTS) return true;
+    for (const [key, part] of this.parts) {
+      if (!part.frozen) continue;
+      this.parts.delete(key);
+      return true;
+    }
+    return false;
+  }
+
   private start(key: string): void {
-    if (this.parts.has(key) || this.retired.has(key) || this.parts.size >= MAX_LIVE_PARTS) return;
+    if (this.parts.has(key) || this.retired.has(key) || !this.makeRoom()) return;
     this.parts.set(key, {
       text: "",
       bytes: 0,

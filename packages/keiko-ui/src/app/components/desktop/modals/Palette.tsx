@@ -17,6 +17,7 @@ import {
   type WindowType,
 } from "../windows/WindowsRegistry";
 import { useTranslate } from "@/lib/i18n";
+import { useWindowStageEvidence } from "../hooks/useWindowStageEvidence";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const AddIcon = Icons.add;
@@ -68,6 +69,8 @@ function nextCardIndex(key: string, current: number, count: number, columns: 2 |
 }
 
 export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNode {
+  // Opening and closing the launcher is routine evidence on its own closed stage, never a warning.
+  useWindowStageEvidence("window palette");
   const t = useTranslate();
   const columns = paletteGridColumns(order.length);
   // Match design palette.jsx behaviour: focus the first card on mount and

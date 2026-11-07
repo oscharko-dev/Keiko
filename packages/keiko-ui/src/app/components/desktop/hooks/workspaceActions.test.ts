@@ -3,6 +3,7 @@
 // Epic #710 #718 — linkedConnectorCapsuleIds reader.
 
 import { afterEach, describe, expect, it } from "vitest";
+import { isCodingWorkbenchDraftWindowId } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatConnectorSelection } from "@/lib/types";
 import { reportConnectionUnbindFailure } from "./useWorkspace";
 import { ApiError } from "@/lib/api-shared-primitives";
@@ -1855,6 +1856,11 @@ describe("makeMutations.add — visible initial geometry", () => {
       expect(created.max).toBe(false);
     },
   );
+
+  it("mints a Coding Workbench id that keys its private composer draft (#4271)", () => {
+    const created = allocate("coding", { x: 0, y: 0, w: 1400, h: 1000 });
+    expect(isCodingWorkbenchDraftWindowId(created.id)).toBe(true);
+  });
 
   it("retains registry defaults when the workspace has room", () => {
     const created = allocate("coding", { x: 0, y: 0, w: 1400, h: 1000 });

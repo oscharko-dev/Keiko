@@ -13,6 +13,7 @@ import {
   logTaskWorkspaceManifestReconnected,
   logTaskWorkspaceRepositoryRegistration,
 } from "./deps-activity.js";
+import { stopRuntimeThenMcp } from "./deps.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -157,6 +158,54 @@ describe("logTaskWorkspaceManifestReconnected — Activity Log proof", () => {
       formatActivityLogProofLine(line ?? {}),
     );
     expect(proven).toMatchObject({ workspaceId: "ws_test", trustRevoked: true });
+  });
+});
+
+// #4279 (lifecycle audit): MCP connections closed first, and a close that threw left the coding
+// runtime's process running with nothing left to stop it.
+describe("stopRuntimeThenMcp", () => {
+  it("stops the runtime first, and still stops it when closing MCP fails", async () => {
+    const order: string[] = [];
+    const stopped = await stopRuntimeThenMcp(
+      () => {
+        order.push("runtime");
+        return Promise.resolve("ended");
+      },
+      () => {
+        order.push("mcp");
+        return Promise.reject(new Error("close fault"));
+      },
+    );
+
+    expect(order).toEqual(["runtime", "mcp"]);
+    expect(stopped.outcome).toBe("ended");
+    expect(stopped.failure?.message).toBe("close fault");
+  });
+
+  it("still closes MCP when the runtime stop throws, and reports the runtime as faulted", async () => {
+    let closed = false;
+    const stopped = await stopRuntimeThenMcp(
+      () => Promise.reject(new Error("stop fault")),
+      () => {
+        closed = true;
+        return Promise.resolve();
+      },
+    );
+
+    expect(closed).toBe(true);
+    expect(stopped).toMatchObject({ outcome: "faulted", failure: { message: "stop fault" } });
+  });
+
+  it("wraps a non-error rejection with its cause", async () => {
+    const stopped = await stopRuntimeThenMcp(
+      () => Promise.resolve("not-applicable"),
+      // A rejection that is not an Error, as a third-party close may produce.
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- the case under test
+      () => Promise.reject("plain"),
+    );
+
+    expect(stopped.outcome).toBe("not-applicable");
+    expect(stopped.failure?.cause).toBe("plain");
   });
 });
 

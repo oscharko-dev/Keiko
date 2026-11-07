@@ -204,6 +204,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "completeness-state",
       "count",
       "digest",
+      "duration",
       "loss-state",
       "opaque-id",
     ],
@@ -2515,6 +2516,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "completeness-state",
       "count",
       "digest",
+      "duration",
       "error-kind",
       "loss-state",
       "opaque-id",
@@ -3225,6 +3227,60 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "coding-runtime-scheduled-wake",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [
+        "coding-runtime.schedule.control",
+        "coding-runtime.schedule.lease",
+        "coding-runtime.schedule.wake",
+      ],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: [
+      "coding-runtime.schedule.control",
+      "coding-runtime.schedule.lease",
+      "coding-runtime.schedule.wake",
+    ],
+    requiredLossOperations: [],
+    requiredProofOperations: [
+      "coding-runtime.schedule.control",
+      "coding-runtime.schedule.lease",
+      "coding-runtime.schedule.wake",
+    ],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: [
+      "coding-runtime.schedule.control",
+      "coding-runtime.schedule.lease",
+      "coding-runtime.schedule.wake",
+    ],
+    requiredEvidenceClasses: [
+      "closed-enum",
+      "completeness-state",
+      "count",
+      "digest",
+      "duration",
+      "error-kind",
+      "loss-state",
+      "opaque-id",
+    ],
+    requiredFrameOperations: [
+      "coding-runtime.schedule.control",
+      "coding-runtime.schedule.lease",
+      "coding-runtime.schedule.wake",
+    ],
+    requiredCauseOperations: [
+      "coding-runtime.schedule.control",
+      "coding-runtime.schedule.lease",
+      "coding-runtime.schedule.wake",
+    ],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "coding-runtime-session-continuity",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
@@ -3387,6 +3443,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLifecycleOperations: {
       start: [],
       state: [
+        "coding-runtime.native-build-settings.admitted",
         "coding-runtime.native-external-roots.resolved",
         "coding-runtime.native-formatter.bound",
         "coding-runtime.native-narrowing.refused",
@@ -3399,6 +3456,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       loss: [],
     },
     requiredCausalOperations: [
+      "coding-runtime.native-build-settings.admitted",
       "coding-runtime.native-external-roots.resolved",
       "coding-runtime.native-formatter.bound",
       "coding-runtime.native-narrowing.refused",
@@ -3408,6 +3466,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
+      "coding-runtime.native-build-settings.admitted",
       "coding-runtime.native-external-roots.resolved",
       "coding-runtime.native-formatter.bound",
       "coding-runtime.native-narrowing.refused",
@@ -3417,6 +3476,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
+      "coding-runtime.native-build-settings.admitted",
       "coding-runtime.native-external-roots.resolved",
       "coding-runtime.native-formatter.bound",
       "coding-runtime.native-narrowing.refused",

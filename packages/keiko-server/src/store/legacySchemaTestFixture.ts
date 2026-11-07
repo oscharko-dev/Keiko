@@ -29,6 +29,7 @@ interface VersionRollback {
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
+  { version: 61, sql: "DROP INDEX idx_coding_runtime_predecessor;" },
   { version: 60, sql: "DROP TABLE coding_workbench_drafts;" },
   {
     version: 59,

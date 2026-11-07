@@ -5,6 +5,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { SecurityLogEvent, SecurityLogSink } from "./log-port.js";
 import {
   KEYCHAIN_SPAWN_TIMEOUT_MS,
+  createKeychainSecretMemo,
   emitKeychainFallback,
   readMacosKeychainSecret,
   writeMacosKeychainSecret,
@@ -164,6 +165,81 @@ describe("readMacosKeychainSecret", () => {
   }, 20_000);
 });
 
+// A key item does not change while Keiko runs, yet every vault open used to spawn `security` for it
+// again. The release-install walk-through counted the same item read twice within 24 ms.
+describe("keychain secret memo", () => {
+  function countingSecurity(): { readonly executable: string; readonly count: () => number } {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-keychain-count-"));
+    fakeDirs.push(dir);
+    const executable = join(dir, "security");
+    writeFileSync(
+      executable,
+      `#!/bin/sh\necho "$1" >> "${dir}/calls"\ncase "$1" in\n` +
+        "  find-generic-password) printf %s STORED ;;\n" +
+        "  add-generic-password) cat > /dev/null ;;\nesac\n",
+    );
+    chmodSync(executable, 0o700);
+    const count = (): number => {
+      try {
+        return readFileSync(join(dir, "calls"), "utf8").trim().split("\n").length;
+      } catch {
+        return 0;
+      }
+    };
+    return { executable, count };
+  }
+
+  it("answers a repeated read of the same item without spawning the keychain again", () => {
+    const security = countingSecurity();
+    const options = {
+      executable: security.executable,
+      platform: "darwin" as const,
+      timeoutMs: 30_000,
+      memo: createKeychainSecretMemo(),
+    };
+    expect(readMacosKeychainSecret("svc", "acct", options)).toEqual({
+      kind: "found",
+      secret: "STORED",
+    });
+    expect(readMacosKeychainSecret("svc", "acct", options)).toEqual({
+      kind: "found",
+      secret: "STORED",
+    });
+    expect(security.count()).toBe(1);
+    readMacosKeychainSecret("other", "acct", options);
+    expect(security.count()).toBe(2);
+  });
+
+  it("asks the keychain again after a write instead of serving the replaced value", () => {
+    const security = countingSecurity();
+    const options = {
+      executable: security.executable,
+      platform: "darwin" as const,
+      timeoutMs: 30_000,
+      memo: createKeychainSecretMemo(),
+    };
+    readMacosKeychainSecret("svc", "acct", options);
+    expect(writeMacosKeychainSecret("svc", "acct", "NEW", options)).toBe(true);
+    readMacosKeychainSecret("svc", "acct", options);
+    expect(security.count()).toBe(3);
+  });
+
+  it("never remembers a keychain that did not answer", () => {
+    const memo = createKeychainSecretMemo();
+    const options = { executable: DENIES, platform: "darwin" as const, timeoutMs: 30_000, memo };
+    expect(readMacosKeychainSecret("svc", "acct", options)).toEqual({ kind: "unavailable" });
+    expect(memo.get("svc", "acct")).toBeUndefined();
+  });
+
+  it("keeps a fake executable without a memo of its own uncached", () => {
+    const security = countingSecurity();
+    const options = { executable: security.executable, platform: "darwin" as const };
+    readMacosKeychainSecret("svc", "acct", options);
+    readMacosKeychainSecret("svc", "acct", options);
+    expect(security.count()).toBe(2);
+  });
+});
+
 describe("writeMacosKeychainSecret", () => {
   it("gives up on a keychain that never answers instead of waiting for it", () => {
     const started = process.hrtime.bigint();
@@ -219,6 +295,23 @@ describe("writeMacosKeychainSecret", () => {
 
     expect(readFileSync(join(dir, "argv"), "utf8")).not.toContain(secret);
     expect(readFileSync(join(dir, "stdin"), "utf8")).toContain(secret);
+  });
+
+  it("writes from a session without a controlling terminal, so the piped key is what it reads", () => {
+    // `security` asks with `getpass`, which prefers the controlling terminal over stdin: under a
+    // foreground terminal launch it would wait there and time out. The stand-in refuses unless it
+    // leads a session of its own (Linux: session id; elsewhere: process group).
+    const executable = fakeSecurity(
+      `if [ -r /proc/$$/stat ]; then set -- $(cat /proc/$$/stat); leader=$6; else leader=$(ps -o pgid= -p $$ | tr -d " "); fi\n[ "$leader" = "$$" ] || exit 9\ncat > /dev/null`,
+    );
+
+    expect(
+      writeMacosKeychainSecret("svc", "acct", "secret", {
+        executable,
+        platform: "darwin",
+        timeoutMs: 30_000,
+      }),
+    ).toBe(true);
   });
 
   it("updates an existing item rather than being refused as a duplicate", () => {

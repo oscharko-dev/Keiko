@@ -456,6 +456,7 @@ import {
 } from "./coding-runtime/codingRuntimeEvidenceAggregator.js";
 import type { CodingRuntimeEventHub } from "./coding-runtime/codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./coding-runtime/codingRuntimeOrchestrator.js";
+import type { CodingScheduledWakes } from "./coding-runtime/codingScheduledWakes.js";
 import {
   createCodingRuntimeProjectMemoryPort,
   type CodingRuntimeProjectMemoryPort,
@@ -969,6 +970,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly codingRuntimeEvidenceAggregator?: CodingRuntimeEvidenceAggregator | undefined;
   /** Optional singleton lifecycle aggregate; runtime routes fail closed when it is not composed. */
   readonly codingRuntimeOrchestrator?: CodingRuntimeOrchestrator | undefined;
+  /** Scheduled continuations of Coding History tasks (#4271); absent without retained sessions. */
+  readonly codingScheduledWakes?: CodingScheduledWakes | undefined;
   /** Server-owned bounded replay/fan-out source for the runtime SSE route. */
   readonly codingRuntimeEventHub?: CodingRuntimeEventHub | undefined;
   /**
@@ -5997,7 +6000,41 @@ async function thenSealActivityLog(
   }
 }
 
-type RuntimeShutdownOutcome = "not-applicable" | "ended" | "refused" | "faulted";
+export type RuntimeShutdownOutcome = "not-applicable" | "ended" | "refused" | "faulted";
+
+/**
+ * The live run stops first, while the MCP connections it may still call are open. Closing them is
+ * attempted whatever the run's stop did, so a failed close never leaves a runtime running and a
+ * failed stop never leaves connections open. The caller rethrows the first failure after both ran;
+ * the outcome names the runtime's own result, never the connections'.
+ */
+export async function stopRuntimeThenMcp(
+  stopRuntime: () => Promise<RuntimeShutdownOutcome>,
+  closeMcp: () => Promise<void>,
+): Promise<{ readonly outcome: RuntimeShutdownOutcome; readonly failure?: Error }> {
+  const [runtime] = await Promise.allSettled([stopRuntime()]);
+  const [mcp] = await Promise.allSettled([closeMcp()]);
+  if (runtime.status === "rejected")
+    return { outcome: "faulted", failure: asTeardownError(runtime.reason) };
+  if (mcp.status === "rejected")
+    return { outcome: runtime.value, failure: asTeardownError(mcp.reason) };
+  return { outcome: runtime.value };
+}
+
+function stopForDispose(
+  services: UiHandlerRuntimeServices,
+  mcpConnections: ConfiguredMcpConnections,
+  correlationId: string,
+): ReturnType<typeof stopRuntimeThenMcp> {
+  return stopRuntimeThenMcp(
+    () => shutdownCodingRuntime(services, correlationId),
+    () => mcpConnections.close(),
+  );
+}
+
+function asTeardownError(reason: unknown): Error {
+  return reason instanceof Error ? reason : new Error("Teardown failed.", { cause: reason });
+}
 
 async function shutdownCodingRuntime(
   services: UiHandlerRuntimeServices,
@@ -6048,11 +6085,9 @@ async function disposeUiHandler(
   // there was nothing to stop, which is not the same as stopping cleanly.
   let runtimeShutdown: RuntimeShutdownOutcome = "not-applicable";
   try {
-    await mcpConnections.close();
-    runtimeShutdown = await shutdownCodingRuntime(services, correlationId);
-  } catch (error) {
-    runtimeShutdown = "faulted";
-    throw error;
+    const stopped = await stopForDispose(services, mcpConnections, correlationId);
+    runtimeShutdown = stopped.outcome;
+    if (stopped.failure !== undefined) throw stopped.failure;
   } finally {
     await thenSealActivityLog(args.options, () =>
       disposeRuntimeServicesRecorded(
@@ -6126,6 +6161,7 @@ interface CodingRuntimeControlPlaneDeps {
   mintDescriptionAuthority?: UiHandlerDeps["mintDescriptionAuthority"];
   openCodeGatewayReadinessRegistry?: UiHandlerDeps["openCodeGatewayReadinessRegistry"];
   toolFacadeBridge?: UiHandlerDeps["toolFacadeBridge"];
+  codingScheduledWakes?: UiHandlerDeps["codingScheduledWakes"];
 }
 
 // Same-named pass-throughs from `CodingRuntimeControlPlane` onto `CodingRuntimeControlPlaneDeps`:
@@ -6143,6 +6179,7 @@ const CODING_RUNTIME_CONTROL_PLANE_PASSTHROUGH_KEYS = [
   "mintDescriptionAuthority",
   "openCodeGatewayReadinessRegistry",
   "toolFacadeBridge",
+  "codingScheduledWakes",
 ] as const;
 
 type CodingRuntimeControlPlanePassthroughDeps = Pick<

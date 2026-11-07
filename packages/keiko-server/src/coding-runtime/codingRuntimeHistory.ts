@@ -457,6 +457,7 @@ export class CodingRuntimeHistory {
     request: CodingWorkbenchRuntimeStartRequest,
     active: ActiveWorkspaceView,
     runId: string,
+    options: { readonly scheduled?: boolean } = {},
   ): void {
     const history = this.store.codingHistory;
     const operatorDigest = this.operator();
@@ -476,6 +477,7 @@ export class CodingRuntimeHistory {
       operatorDigest,
       runId,
       intent: request.taskIntent,
+      ...(options.scheduled === true ? { intentKind: "scheduled" as const } : {}),
     });
     recordHistory(this.log, request.conversationId === undefined ? "created" : "continued", {
       correlationId: runId,

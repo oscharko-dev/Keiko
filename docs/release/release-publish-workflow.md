@@ -322,7 +322,9 @@ Publication order is explicit:
 3. Only then change both optional dependency pins and `package-lock.json` together. Run the
    assembled npm and Yarn installation qualification against the resulting product and native
    artifacts, then publish the corrected product under a new unpublished version through the
-   existing release workflow. A published product version cannot be replaced.
+   existing release workflow. A published product version cannot be replaced. `release:publish`
+   enforces this order: it refuses a product release while a selected runtime package carries
+   another OpenCode than `portable-runtime-approvals.json` approves (#4271).
 
 ### Publishing the npm coding-runtime packages
 
@@ -331,9 +333,10 @@ publishes the product: through npm Trusted Publishing with provenance, without a
 publishes only reviewed bytes.
 
 1. Pin the release. A reviewed change adds the version to
-   `docs/release/coding-runtime-npm-packages.json`: for each target, the package name, the tarball
-   name, its size, SHA-256 and npm integrity, all from the `--pack` receipt. Only a change merged to
-   `dev` extends this file.
+   `docs/release/coding-runtime-npm-packages.json`: for each target, the package name, the OpenCode
+   version it carries (`opencodeVersion`), the tarball name, its size, SHA-256 and npm integrity, all
+   from the `--pack` receipt. Only a change merged to `dev` extends this file. The publisher refuses a
+   tarball whose verified receipt names another OpenCode than its pin.
 2. Attach the bytes. Create the GitHub prerelease `coding-runtime-<version>` (never marked latest)
    and upload both tarballs and their receipts, each receipt renamed to `<tarball>.receipt.json`.
    The prerelease is a transport only and grants no trust.

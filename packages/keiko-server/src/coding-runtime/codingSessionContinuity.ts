@@ -292,6 +292,7 @@ const SESSION_CONTINUITY_OPERATION = defineActivityLogOperation({
         "audit-unreadable",
         "count-invalid",
         "schema-drift",
+        "schedule-rows",
       ],
     },
     sourceTaskDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },

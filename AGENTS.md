@@ -1105,6 +1105,17 @@ cause chain), a completion the source, message, omitted, skipped and redacted-me
 byte size. The file's text is untrusted, so it is redacted again before it is stored; no text,
 title or path ever enters the line (ADR-0137 D4).
 
+`coding-runtime.schedule.wake`, `coding-runtime.schedule.control` and `coding-runtime.schedule.lease`
+record scheduled continuations (#4271, ADR-0137): a schedule a native run's model created wakes its
+task at the due time while Keiko runs. The wake line records `started`, `waiting` (closed `wait`:
+`run-active`, `workspace-inactive`, `retrying`), `refused`, `fired`, `missed`, `auto-paused`,
+`removed`, `retain-lost` or `failed`, with the task and schedule digests, the wake run's id and mode,
+counts and the due lag; the control line records a human's pause, resume, delete or list, or the
+pause after three missed wakes (`initiator` `missed-wakes`); the lease line records Keiko's hold on
+the runtime's scheduler, its release in the wake run and the re-hold once the schedule fired. Lines
+of one wake run carry its run id as correlation; lines that belong to no run carry a correlation
+derived from the schedule's digest. Never a schedule id, name, cadence or prompt.
+
 `client.coding-workbench.interaction` records, at info and on the routine budget, what the human
 did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
 progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom

@@ -52,6 +52,7 @@ import {
   type ClientDiagnosticSessionRepairReport,
 } from "./client-diagnostics";
 import { clientErrorSummary } from "./client-error-summary";
+import { coalescedFetch, mayJoinInflightRead } from "./inflight-reads";
 
 // Re-exported for the consumers that import these from "./http" (SelectionAwareWorkspaceHosts.tsx,
 // coding-app-session-channel-api.ts, GitClientWindow.tsx, AddRepositoryDialog.tsx). The
@@ -107,6 +108,13 @@ export interface BffFetchOptions<T> {
    * repair's own request, a replay that joins the denied request's timeline). Minted otherwise.
    */
   readonly correlationId?: string;
+  /**
+   * A mount-time read that several panes issue at once may share one network request with an
+   * identical read still in flight (`inflight-reads.ts`). Opt in only for an idempotent read where
+   * a response a few milliseconds old is as good as a fresh one; a deliberate refresh never opts
+   * in. Ignored when the caller names its correlation id or owns the abort signal.
+   */
+  readonly shareInflight?: boolean;
 }
 
 function defaultParseFailureMessage(status: number): string {
@@ -159,16 +167,32 @@ async function parseBffErrorBody<T>(
   }
 }
 
+function sendBffRequest<T>(
+  path: string,
+  init: RequestInit | undefined,
+  opts: BffFetchOptions<T> | undefined,
+  correlationId: string,
+): Promise<Response> {
+  return coalescedFetch(
+    path,
+    { ...init, headers: buildBffHeaders(init, correlationId) },
+    {
+      joinable: mayJoinInflightRead({
+        shareInflight: opts?.shareInflight,
+        correlationId: opts?.correlationId,
+        signal: init?.signal,
+      }),
+    },
+  );
+}
+
 async function performBffFetch<T>(
   path: string,
   init: RequestInit | undefined,
   opts: BffFetchOptions<T> | undefined,
 ): Promise<T> {
   const correlationId = opts?.correlationId ?? newClientCorrelationId();
-  const res = await fetch(path, {
-    ...init,
-    headers: buildBffHeaders(init, correlationId),
-  });
+  const res = await sendBffRequest(path, init, opts, correlationId);
   const receivedAtMs = performance.now();
 
   if (!res.ok) {

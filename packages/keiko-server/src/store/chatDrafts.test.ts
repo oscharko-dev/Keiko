@@ -83,32 +83,28 @@ describe("private chat drafts", () => {
 });
 
 describe("private Coding Workbench drafts", () => {
-  it("restores a window's draft after reopening the store and isolates windows", () => {
+  it("restores the Workbench draft after reopening the store", () => {
     const directory = mkdtempSync(join(tmpdir(), "keiko-workbench-draft-"));
     directories.push(directory);
     const path = join(directory, "ui.sqlite");
     const initial = createNodeUiStore(path);
-    initial.updateCodingWorkbenchDraft("coding-workbench-mabc12", {
+    initial.updateCodingWorkbenchDraft("coding", {
       text: "Synthetic task intent",
       expectedRevision: 0,
     });
     initial.close();
     const reopened = createNodeUiStore(path);
     stores.push(reopened);
-    expect(reopened.readCodingWorkbenchDraft("coding-workbench-mabc12")).toEqual({
+    expect(reopened.readCodingWorkbenchDraft("coding")).toEqual({
       text: "Synthetic task intent",
       revision: 1,
-    });
-    expect(reopened.readCodingWorkbenchDraft("coding-workbench-mabc12-1")).toEqual({
-      text: "",
-      revision: 0,
     });
   });
 
   it("rejects stale writes, keeps a clear tombstone and refuses foreign keys", () => {
     const store = createInMemoryUiStore();
     stores.push(store);
-    const windowId = "coding-workbench-mabc12";
+    const windowId = "coding";
     store.updateCodingWorkbenchDraft(windowId, { text: "First", expectedRevision: 0 });
     expect(() =>
       store.updateCodingWorkbenchDraft(windowId, { text: "Stale", expectedRevision: 0 }),
@@ -117,7 +113,17 @@ describe("private Coding Workbench drafts", () => {
       text: "",
       revision: 2,
     });
-    for (const foreign of ["chat-mabc12", "coding-workbench-", "../coding-workbench-a", ""]) {
+    for (const foreign of [
+      "chat-mabc12",
+      "coding-workbench-mabc12",
+      "coding-",
+      "coding-mabc12",
+      "../coding",
+      "coding/",
+      "Coding",
+      " coding",
+      "",
+    ]) {
       expect(() => store.readCodingWorkbenchDraft(foreign)).toThrow(/not found/iu);
       expect(() =>
         store.updateCodingWorkbenchDraft(foreign, { text: "x", expectedRevision: 0 }),

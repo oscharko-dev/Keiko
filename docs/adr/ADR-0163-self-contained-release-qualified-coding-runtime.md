@@ -463,6 +463,12 @@ notarization and platform-attestation gates. It waives nothing else:
 | the closed 12-key secure-read helper shape, its KSR1/KSS1 protocol pin, source commit/path/tree pin, size ceiling and SBOM bom-ref binding |
 | the point-of-use same-identity open, link-count and metadata equality, and full re-hash of every byte read |
 
+A complete point-of-use verification vouches for the helper's exact file identity (device, inode,
+size, mtime, ctime, link count; one `lstat`, no read) for at most 60 seconds. Every governed read
+re-proves that identity and the symlink-free path; any difference, an elapsed verdict, a platform
+without the stat, or any refusal takes the complete verification again and clears the verdict, so a
+replaced helper is never served from a cache. The proof itself is unchanged.
+
 The waived platform booleans are **asserted present and FALSE**, never skipped. A signing or
 security block that omits `verificationChecks`, or asserts any single platform check, or claims
 `signatureVerified`, is refused — a half-truthful mix is not a lane.

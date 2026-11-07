@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  isActivityLogCorrelationId,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
@@ -32,7 +33,7 @@ import {
 import type { GatewayOutputRepairOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { GatewayPromptAdmission, ProviderPromptCounter } from "./gateway-prompt-admission.js";
 import { findConfiguredCapability } from "./model-selection.js";
-import { carriedReasoning } from "./normalize.js";
+import { carriedReasoning, SYNTHESIZED_TOOL_CALL_ID_PREFIX } from "./normalize.js";
 import { GatewayReasoningHistory } from "./reasoning-history.js";
 import {
   activityLogErrorKind,
@@ -42,6 +43,7 @@ import {
   logTimer,
   resolveLogSink,
   withCorrelationId,
+  withParentCorrelationLookup,
   type ModelGatewayLogContext,
   type ModelGatewayLogSink,
 } from "./observability.js";
@@ -288,10 +290,29 @@ export interface GatewayCallRequest extends GatewayRequest {
 interface CallIds {
   readonly requestId: string;
   readonly correlationId: string;
+  readonly parentCorrelationId?: string;
 }
 
 function callIds(requestId: string, request: GatewayCallRequest): CallIds {
-  return { requestId, correlationId: request.logContext?.correlationId ?? requestId };
+  const parent = request.logContext?.parentCorrelationId;
+  return {
+    requestId,
+    correlationId: request.logContext?.correlationId ?? requestId,
+    // A parent the log contract would refuse must not turn every line of the call into a rejection.
+    ...(isActivityLogCorrelationId(parent) ? { parentCorrelationId: parent } : {}),
+  };
+}
+
+// Calls with an enclosing run, by the correlation id their lines carry: bounded, oldest evicted.
+const MAX_BOUND_PARENT_CORRELATIONS = 1_024;
+function bindParentCorrelation(parents: Map<string, string>, ids: CallIds): void {
+  if (ids.parentCorrelationId === undefined) return;
+  parents.delete(ids.correlationId);
+  parents.set(ids.correlationId, ids.parentCorrelationId);
+  if (parents.size > MAX_BOUND_PARENT_CORRELATIONS) {
+    const oldest = parents.keys().next().value;
+    if (oldest !== undefined) parents.delete(oldest);
+  }
 }
 
 function callIdFields(ids: CallIds): { readonly requestId?: string } {
@@ -452,6 +473,8 @@ const REASONING_COMPLETION_FIELDS = {
     required: false,
     values: ["none", "forwarded", "discarded"],
   },
+  // Calls whose provider id was missing, unusable or repeated and which got a minted id instead.
+  toolCallIdsNormalized: { type: "integer", dataClass: "count", required: false },
 } as const;
 
 const GATEWAY_CHAT_STARTED_OPERATION = defineActivityLogOperation({
@@ -534,7 +557,15 @@ const GATEWAY_STREAM_COMPLETED_OPERATION = defineActivityLogOperation({
       values: ["low", "medium", "high"],
     },
     chunkCount: { type: "integer", dataClass: "count", required: true },
+    // The first output of ANY kind the caller saw, and which kind it was: answer text, forwarded
+    // reasoning, or a tool call (assembled whole, so it arrives with the terminal answer).
     firstTokenMs: { type: "number", dataClass: "duration", required: false },
+    firstTokenKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["content", "tool-call", "reasoning"],
+    },
     promptTokens: { type: "integer", dataClass: "count", required: false },
     completionTokens: { type: "integer", dataClass: "count", required: false },
     ...REASONING_COMPLETION_FIELDS,
@@ -932,7 +963,11 @@ function streamStartupBudget(
   now: number,
 ): { readonly remainingMs: number; readonly elapsedMs: number } {
   const elapsedMs = now - state.start;
-  const budgetMs = streamedCallBudgetMs(state.route.provider, state.outageWindowMs);
+  const budgetMs = streamedCallBudgetMs(
+    state.route.provider,
+    state.outageWindowMs,
+    state.prepared.maxOutputTokens,
+  );
   return { remainingMs: Math.max(0, budgetMs - elapsedMs), elapsedMs };
 }
 
@@ -1171,8 +1206,14 @@ function effectiveBufferedAttemptMs(provider: ModelProviderConfig): number {
 // Coding-Workbench-raised) `timeoutMs`: the silence bound floored to the silence floor, the budget
 // through `streamRequestBudgetMs` — the one derivation the route deadline behind a streamed call
 // shares (PR #3602 review).
-function chatStreamBounds(provider: ModelProviderConfig): StreamReadBounds {
-  return { silenceMs: effectiveSilenceMs(provider), budgetMs: streamRequestBudgetMs(provider) };
+function chatStreamBounds(
+  provider: ModelProviderConfig,
+  maxOutputTokens?: number,
+): StreamReadBounds {
+  return {
+    silenceMs: effectiveSilenceMs(provider),
+    budgetMs: streamRequestBudgetMs(provider, maxOutputTokens),
+  };
 }
 
 // One attempt's answer: over the provider's stream when the attempt has read bounds, whole
@@ -1245,11 +1286,18 @@ function providerEndpointHost(baseUrl: string): string | undefined {
 // whole answer, and a provider's own stream can open with a role-only or empty delta before real
 // content arrives. Called on every chunk; returns undefined once a non-empty one has already fired
 // so the caller's `??=` never re-times a later chunk.
-function firstNonEmptyDeltaMs(
-  chunk: GatewayStreamChunk,
-  elapsed: () => number,
-): number | undefined {
-  return chunk.type === "delta" && chunk.token.length > 0 ? elapsed() : undefined;
+type FirstTokenKind = "content" | "tool-call" | "reasoning";
+interface FirstOutput {
+  readonly ms: number;
+  readonly kind: FirstTokenKind;
+}
+
+function firstOutputOf(chunk: GatewayStreamChunk, elapsed: () => number): FirstOutput | undefined {
+  if (chunk.type === "done") {
+    return chunk.response.toolCalls.length > 0 ? { ms: elapsed(), kind: "tool-call" } : undefined;
+  }
+  if (chunk.token.length === 0) return undefined;
+  return { ms: elapsed(), kind: chunk.type === "delta" ? "content" : "reasoning" };
 }
 
 // A minimal usage projection carried on the stream-completed line — never the full UsageMetadata,
@@ -1274,6 +1322,7 @@ function streamUsageIfSupplied(usage: UsageMetadata | undefined): StreamTerminal
 type ReasoningDisposition = "none" | "forwarded" | "discarded";
 
 interface ReasoningCompletion {
+  readonly toolCallIdsNormalized?: number;
   readonly reasoningBytes: number;
   readonly reasoningTokens?: number;
   readonly reasoningDisposition: ReasoningDisposition;
@@ -1290,7 +1339,11 @@ function reasoningDisposition(
 // The body-free reasoning share a completion line records (#3878).
 function reasoningCompletion(response: NormalizedResponse, forwards: boolean): ReasoningCompletion {
   const { reasoningBytes, reasoningTokens } = response.usage;
+  const normalized = response.toolCalls.filter((call) =>
+    call.id.startsWith(SYNTHESIZED_TOOL_CALL_ID_PREFIX),
+  ).length;
   return {
+    ...(normalized === 0 ? {} : { toolCallIdsNormalized: normalized }),
     reasoningBytes: reasoningBytes ?? 0,
     ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
     reasoningDisposition: reasoningDisposition(response, forwards),
@@ -1327,6 +1380,7 @@ export class Gateway {
   private readonly reasoningHistory: GatewayReasoningHistory;
   private readonly breakers = new Map<string, CircuitBreaker>();
   private readonly log: ModelGatewayLogSink;
+  private readonly parentCorrelations = new Map<string, string>();
   private readonly configurationCorrelationId: string | undefined;
   private readonly onContextWindowReported: GatewayDeps["onContextWindowReported"];
 
@@ -1340,7 +1394,9 @@ export class Gateway {
     this.random = deps.random ?? Math.random;
     this.adapter = deps.adapter;
     this.fetchImpl = deps.fetchImpl;
-    this.log = resolveLogSink(deps.log);
+    this.log = withParentCorrelationLookup(resolveLogSink(deps.log), (id) =>
+      this.parentCorrelations.get(id),
+    );
     this.reasoningHistory =
       deps.reasoningHistorySource?.reasoningHistory ??
       new GatewayReasoningHistory(this.log, () => this.clock.now());
@@ -1444,6 +1500,7 @@ export class Gateway {
     request = this.prepareRequest(request, route.capability);
     const requestId = randomUUID();
     const ids = callIds(requestId, request);
+    bindParentCorrelation(this.parentCorrelations, ids);
     const start = this.clock.now();
     const elapsed = logTimer();
     const adapter = this.adapterFor(requestId, route, ids.correlationId);
@@ -1675,7 +1732,7 @@ export class Gateway {
     let chunkCount = 0;
     // The moment the caller saw its first actual content, timed off the same `elapsed()` as every
     // other stream outcome. `??=` locks it in on the first non-empty delta and leaves it alone.
-    let firstTokenMs: number | undefined;
+    let firstOutput: FirstOutput | undefined;
     let terminalResponse: NormalizedResponse | undefined;
     // EVERY started stream needs exactly one outcome line. Set the moment an outcome is written,
     // so the `finally` can tell "the consumer walked away" from the two paths that already spoke.
@@ -1683,7 +1740,7 @@ export class Gateway {
     try {
       for await (const chunk of this.streamFrom(state)) {
         chunkCount += 1;
-        firstTokenMs ??= firstNonEmptyDeltaMs(chunk, elapsed);
+        firstOutput ??= firstOutputOf(chunk, elapsed);
         if (chunk.type === "done") {
           terminalResponse = chunk.response;
           break;
@@ -1710,7 +1767,7 @@ export class Gateway {
     // Outside the try on purpose: a sink that throws here must not be caught above and reported as
     // a mid-stream provider failure — which would also trip the circuit breaker on a logging fault.
     this.logStreamCompleted(ids, route, chunkCount, elapsed(), {
-      firstTokenMs,
+      firstOutput,
       usage: streamUsageIfSupplied(terminalResponse?.usage),
       reasoning:
         terminalResponse === undefined
@@ -1762,6 +1819,7 @@ export class Gateway {
     const route = this.routeForCall(request);
     const prepared = this.prepareRequest(request, route.capability);
     const ids = callIds(randomUUID(), prepared);
+    bindParentCorrelation(this.parentCorrelations, ids);
     const start = this.clock.now();
     const elapsed = logTimer();
     const adapter = this.adapterFor(ids.requestId, route, ids.correlationId);
@@ -1773,7 +1831,7 @@ export class Gateway {
     // and the window, not the stream budget, is what bounds that wait (#3873 review).
     const admissionBudgetMs = admissionBudgetFor(
       callRetryConfig(route.provider, outageWindowMs),
-      streamedCallBudgetMs(route.provider, outageWindowMs),
+      streamedCallBudgetMs(route.provider, outageWindowMs, prepared.maxOutputTokens),
       (): number => this.clock.now() - start,
     );
     const { admission } = await this.initialStreamAdmission(
@@ -1957,7 +2015,7 @@ export class Gateway {
     chunkCount: number,
     durationMs: number,
     terminal: {
-      readonly firstTokenMs: number | undefined;
+      readonly firstOutput: FirstOutput | undefined;
       readonly usage: StreamTerminalUsage | undefined;
       readonly reasoning: ReasoningCompletion | undefined;
     },
@@ -1971,7 +2029,9 @@ export class Gateway {
           modelId: logModelId(route.provider.modelId),
           costClass: route.capability.costClass,
           chunkCount,
-          ...(terminal.firstTokenMs === undefined ? {} : { firstTokenMs: terminal.firstTokenMs }),
+          ...(terminal.firstOutput === undefined
+            ? {}
+            : { firstTokenMs: terminal.firstOutput.ms, firstTokenKind: terminal.firstOutput.kind }),
           ...terminal.usage,
           ...terminal.reasoning,
         },
@@ -2161,7 +2221,7 @@ export class Gateway {
     remainingMs: number | undefined,
     admission: CircuitBreakerAdmission,
   ): Promise<{ first: GatewayStreamChunk; iterator: AsyncGenerator<GatewayStreamChunk> }> {
-    const bounds = chatStreamBounds(state.route.provider);
+    const bounds = chatStreamBounds(state.route.provider, request.maxOutputTokens);
     const budgetMs = Math.min(bounds.budgetMs, remainingMs ?? bounds.budgetMs);
     const iterator = this.reservedStreamAttempt(
       state,

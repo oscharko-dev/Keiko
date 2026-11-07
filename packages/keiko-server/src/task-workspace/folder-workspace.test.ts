@@ -18,6 +18,7 @@ import {
   folderWorkspaceHead,
   validateWorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import { isClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import { createInMemoryUiStore } from "../store/index.js";
 import { runMigrations } from "../store/schema.js";
@@ -120,6 +121,25 @@ describe("folder workspace selection (owner decision 2026-10-30)", () => {
     // The stored row reads back as a folder, so a restart keeps the kind.
     expect(instances.getById(instance.workspaceId)?.workspaceKind).toBe("folder");
     expect(service.getActive()?.instance.workspaceId).toBe(instance.workspaceId);
+  });
+
+  it("names the folder in a Workbench trust-binding report the diagnostics intake admits (#4271)", () => {
+    const { service } = fixture();
+    const { instance } = service.selectFolder({ root, requestedBy: "test" });
+    const report = {
+      message: "[keiko] coding workbench interaction: repository-trust-bound",
+      clientTs: "2026-11-06T11:42:17.185Z",
+      codingWorkbenchInteraction: {
+        interaction: "repository-trust-bound",
+        repositoryId: instance.repositoryId,
+        workspaceId: instance.workspaceId,
+      },
+    };
+    expect(isClientDiagnosticIngestRequest(report)).toBe(true);
+    const forged = { ...report.codingWorkbenchInteraction, workspaceId: "folder:../x" };
+    expect(isClientDiagnosticIngestRequest({ ...report, codingWorkbenchInteraction: forged })).toBe(
+      false,
+    );
   });
 
   it("keeps the folder out of the managed worktree inventory", () => {

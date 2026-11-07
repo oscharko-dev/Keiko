@@ -703,6 +703,7 @@ type FixtureSafeActivity = NonNullable<
 type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
+  readonly buildSettingsHome?: string;
   readonly ripgrepVerified?: boolean;
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   /** Extra sessions the runtime's session list reports (native child sessions, #3897). */
@@ -1272,6 +1273,25 @@ function fixtureContextGeometry(control: StartBridgeControl | undefined): Fixtur
   };
 }
 
+/**
+ * The pinned runtime creates its database when it starts, before a session is bound; a native run
+ * holds its scheduler there and fails readiness without it (#4271). An inherited database is kept.
+ */
+function createRuntimeDatabase(runRoot: string): void {
+  const database = join(runRoot, "state", "opencode.db");
+  if (existsSync(database)) return;
+  mkdirSync(join(runRoot, "state"), { recursive: true });
+  new DatabaseSync(database).close();
+}
+
+function buildSettingsHomeOption(control: StartBridgeControl | undefined): {
+  readonly buildSettingsHome?: string;
+} {
+  return control?.buildSettingsHome === undefined
+    ? {}
+    : { buildSettingsHome: control.buildSettingsHome };
+}
+
 async function startBridgeFixture(
   facade: CodingToolFacade,
   toolBridge: { readonly requestDeadlineMs: number; readonly maxInFlight: number } = {
@@ -1299,6 +1319,7 @@ async function startBridgeFixture(
       spawnOwnedTree: (request): RuntimeProcessTree => {
         capturedLaunch = request;
         control?.onSpawn?.();
+        createRuntimeDatabase(join(root, "state", FIXTURE_RUN_ID));
         stdout.end(fixtureStartupLine(request, control));
         return {
           treeId: "tool-bridge-tree",
@@ -1520,6 +1541,7 @@ async function startBridgeFixture(
     get toolProfile(): "direct" | "code-mode" | "native" | undefined {
       return control?.readToolProfile?.();
     },
+    ...buildSettingsHomeOption(control),
     // #3897: the host environment is offered to every profile; only the native profile's
     // allowlist copies anything from it, so a mapped launch must still carry no PATH.
     processEnv: { PATH: "/host/toolchain/bin", HOME: "/host/home" },
@@ -2967,7 +2989,8 @@ describe("private OpenCode run control", () => {
           source: "opencode.turn",
           errorClass: "OpenCodeTurnFailure",
           message: "runtime-turn-failed",
-          code: "stage=terminal:db=missing",
+          // The fixture runtime creates its database without message tables, as at a fresh start.
+          code: "stage=terminal:db=unavailable",
         }),
       ]);
       const serialized = JSON.stringify(records);
@@ -3755,6 +3778,90 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     }
   });
 
+  // #4271 A4: every admission reason used to read as "authority no longer valid or budget exhausted",
+  // so a model whose edit was merely too large could not tell it should split the edit.
+  it.each([
+    ["patch-too-large", /smaller edits/u],
+    ["authority-budget-exceeded", /budget/u],
+    ["authority-expired", /expired/u],
+    ["revoked", /revoked/u],
+    ["action-not-authorized", /Authority Envelope/u],
+    ["workspace-drift", /changed after its authority/u],
+  ] as const)(
+    "tells the model what to do next when the authority refuses with %s",
+    async (reason, expected) => {
+      const fixture = await startBridgeFixture(
+        facadeWith(admitWith({ ok: false, reason })),
+        undefined,
+        { mode: "supervised-coding" },
+      );
+      try {
+        const response = await fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: nativeAsk("ses_tool", "edit", { messageID: "msg_1", id: "call_1" }),
+        });
+        const answer = JSON.parse(response.body) as {
+          readonly effect: string;
+          readonly message: string;
+        };
+        expect(answer.effect).toBe("deny");
+        expect(answer.message).toMatch(expected);
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+
+  // #4271 A2: the human may take minutes; a link swapped in meanwhile must not ride the approval.
+  it("re-checks the paths after the human approved, so a link swapped in while waiting is refused", async () => {
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const admit = admitWith(CHARGED);
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "governed-assist",
+      runtimeEvents,
+      activityLog,
+    });
+    const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+    const outside = mkdtempSync(join(tmpdir(), "keiko-recheck-outside-"));
+    try {
+      const ask = JSON.parse(
+        nativeAsk("ses_tool", "edit", { messageID: "msg_1", id: "call_1" }),
+      ) as Record<string, unknown>;
+      const answer = fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({ ...ask, resources: ["swapped.md"] }),
+      });
+      await vi.waitFor(() => {
+        expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(true);
+      });
+      const permission = runtimeEvents.find(
+        (event) => event.kind === "permission-requested",
+      )?.permissionRequest;
+      if (permission === undefined || Array.isArray(permission)) throw new Error("expected ask");
+      writeFileSync(join(outside, "target.md"), "outside\n");
+      symlinkSync(join(outside, "target.md"), join(workspaceRoot, "swapped.md"));
+      await expect(
+        fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, permission.requestId, "once"),
+      ).resolves.toBe(true);
+      const response = await answer;
+      expect(JSON.parse(response.body)).toMatchObject({
+        effect: "deny",
+        message: expect.stringContaining("symbolic link") as string,
+      });
+      expect(admit).not.toHaveBeenCalled();
+      const decided = activityLog.events.find(
+        (event) => event.op === "coding-runtime.native-policy.decided",
+      )?.extra;
+      expect(decided).toMatchObject({ effect: "ask", outcome: "workspace-escape" });
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+      await fixture.stop();
+    }
+  });
+
   it("cancels an already-aborted ask without consulting authority", async () => {
     const admit = admitWith(CHARGED);
     const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
@@ -4330,6 +4437,77 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       }
     },
   );
+
+  // #4271: a native launch carries the user's mirror and registry as sanitized copies in its private
+  // home, never a credential, and records the admission body-free. The mapped profiles carry none.
+  it("admits sanitized build settings into a native run's private home and not a mapped one", async () => {
+    const realHome = tempDir("keiko-build-settings-home-");
+    mkdirSync(join(realHome, ".m2", "repository"), { recursive: true });
+    writeFileSync(
+      join(realHome, ".m2", "settings.xml"),
+      "<settings><servers><server><id>c</id><password>PLANTED-SECRET</password></server></servers>" +
+        "<mirrors><mirror><id>c</id><mirrorOf>*</mirrorOf><url>https://nexus.corp/m</url></mirror></mirrors></settings>",
+    );
+    writeFileSync(
+      join(realHome, ".npmrc"),
+      "registry=https://registry.corp/\n_authToken=PLANTED\n",
+    );
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "supervised-coding",
+      readToolProfile: () => "native",
+      buildSettingsHome: realHome,
+      activityLog,
+    });
+    try {
+      const userConfig = fixture.preparation.env.NPM_CONFIG_USERCONFIG ?? "";
+      expect(readFileSync(userConfig, "utf8")).toBe("registry=https://registry.corp/\n");
+      const settings = readFileSync(
+        join(dirname(dirname(userConfig)), "home", ".m2", "settings.xml"),
+        "utf8",
+      );
+      expect(settings).toContain("https://nexus.corp/m");
+      expect(JSON.stringify([settings, fixture.preparation.env])).not.toContain("PLANTED");
+      // Java ignores HOME: every JVM of the run gets the private user.home, Gradle its private
+      // user home, and Maven the user's read-only cache only as the tail of its own repository.
+      const home = join(dirname(dirname(userConfig)), "home");
+      const javaOptions = fixture.preparation.env.JAVA_TOOL_OPTIONS ?? "";
+      expect(javaOptions).toContain(`'-Duser.home=${home}'`);
+      expect(javaOptions).toContain(
+        `'-Dmaven.repo.local.tail=${realpathSync(join(realHome, ".m2", "repository"))}'`,
+      );
+      expect(fixture.preparation.env.GRADLE_USER_HOME).toBe(join(home, ".gradle"));
+      const admitted = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.native-build-settings.admitted",
+      );
+      expect(admitted).toHaveLength(1);
+      expect(admitted[0]).toMatchObject({ correlationId: FIXTURE_RUN_ID });
+      expect(admitted[0]?.extra).toMatchObject({
+        launchMode: "supervised-coding",
+        mavenSettings: "sanitized",
+        npmConfig: "sanitized",
+      });
+    } finally {
+      await fixture.stop();
+    }
+    const mapped = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      readToolProfile: () => "direct",
+      buildSettingsHome: realHome,
+      activityLog,
+    });
+    try {
+      expect(mapped.preparation.env).not.toHaveProperty("NPM_CONFIG_USERCONFIG");
+      expect(mapped.preparation.env).not.toHaveProperty("GRADLE_USER_HOME");
+      expect(mapped.preparation.env.JAVA_TOOL_OPTIONS).not.toContain("user.home");
+      expect(
+        activityLog.events.filter(
+          (event) => event.op === "coding-runtime.native-build-settings.admitted",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await mapped.stop();
+    }
+  });
 
   // #3903 AC1: the further gateway models and the configured per-agent overrides reach the binding,
   // and one body-free line records their counts.
@@ -5505,6 +5683,64 @@ describe("private OpenCode tool bridge", () => {
     }
   });
 
+  // Audit 2026-11-06 (#4271): a failed preparation ended the start with no trace of its cause on
+  // the Activity Log, so the defect behind it could not be located from the log.
+  it("records why a native run's preparation failed, body-free", async () => {
+    const diagnostics = persistedDiagnostics();
+    const failure = new Error("PRIVATE_PREPARE", { cause: new TypeError("PRIVATE_CAUSE") });
+    failure.stack =
+      "Error: PRIVATE_PREPARE\n    at read (/private/packages/keiko-server/dist/coding-runtime/opencodeRuntimeComposition.js:12:3)";
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        readToolProfile: () => "native",
+        configDocuments: () => Promise.reject(failure),
+        expectedStart: expect.objectContaining({ ok: false }) as Readonly<Record<string, unknown>>,
+      },
+    );
+    try {
+      expect(
+        expectPersistedDiagnostic(diagnostics.read(), "opencode-runtime-composition.prepare"),
+      ).toMatchObject({
+        diagnosticSummary: "runtime-start-failed",
+        code: "config-materialization-failed",
+        frames: ["packages/keiko-server/dist/coding-runtime/opencodeRuntimeComposition.js:12:3"],
+        causeChain: ["TypeError"],
+      });
+      expect(diagnostics.read()).not.toContain("PRIVATE_");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("records no preparation failure for a start its caller abandoned", async () => {
+    const diagnostics = persistedDiagnostics();
+    const controller = new AbortController();
+    const configDocuments = vi.fn((): Promise<readonly Readonly<Record<string, unknown>>[]> => {
+      controller.abort();
+      return Promise.reject(new Error("PRIVATE_ABANDONED"));
+    });
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        readToolProfile: () => "native",
+        signal: controller.signal,
+        configDocuments,
+        expectedStart: expect.objectContaining({ ok: false }) as Readonly<Record<string, unknown>>,
+      },
+    );
+    try {
+      expect(configDocuments).toHaveBeenCalledTimes(1);
+      expect(diagnostics.read()).not.toContain("opencode-runtime-composition.prepare");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("does not diagnose a history read cancelled by normal run disposal", async () => {
     const diagnostics = persistedDiagnostics();
     const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
@@ -6013,6 +6249,110 @@ describe("private OpenCode tool bridge", () => {
       await expect(first).resolves.toMatchObject({ status: 200 });
     } finally {
       for (const release of releases) release();
+      await fixture.stop();
+    }
+  });
+
+  // Audit 2026-11-06 finding 9: a request that may park on an operator decision is admitted in a lane
+  // of its own, so pending approvals never turn a read away.
+  it("admits a read while the lane of operator-awaiting requests is full", async () => {
+    const releases: (() => void)[] = [];
+    const facade: CodingToolFacade = {
+      execute: vi.fn(
+        () =>
+          new Promise<typeof completed>((resolve) => {
+            releases.push((): void => {
+              resolve(completed);
+            });
+          }),
+      ),
+    };
+    const fixture = await startBridgeFixture(facade, { requestDeadlineMs: 1_000, maxInFlight: 1 });
+    const handle = (body: string): Promise<{ readonly status: number }> =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body,
+      });
+    const verification = JSON.stringify({
+      action: "verification",
+      verifierId: "test",
+      targetPath: "",
+      actionId: "tool:call_verify",
+      idempotencyKey: "idempotency-verify",
+    });
+    try {
+      const parked = handle(verification);
+      await vi.waitFor(() => {
+        expect(facade.execute).toHaveBeenCalledOnce();
+      });
+      await expect(handle(verification)).resolves.toMatchObject({ status: 429 });
+      const read = handle('{"action":"read"}');
+      await vi.waitFor(() => {
+        expect(facade.execute).toHaveBeenCalledTimes(2);
+      });
+      for (const release of releases) release();
+      await expect(read).resolves.toMatchObject({ status: 200 });
+      await expect(parked).resolves.toMatchObject({ status: 200 });
+    } finally {
+      for (const release of releases) release();
+      await fixture.stop();
+    }
+  });
+
+  // Audit 2026-11-06 finding 12: every transport recognizer parsed the same body again (twice each).
+  it("parses a governed tool request body once for all transport recognizers", async () => {
+    const facade: CodingToolFacade = {
+      execute: vi.fn(() => Promise.resolve(completed)),
+    };
+    const fixture = await startBridgeFixture(facade);
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      const bodyText = toolBody("call_parse_once");
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: bodyText,
+        }),
+      ).resolves.toMatchObject({ status: 200 });
+      const bodyParses = parse.mock.calls.filter(([text]) => text === bodyText).length;
+      // One generic parse, the request parse of the admission deadline and of the dispatch.
+      expect(bodyParses).toBeLessThanOrEqual(1 + 2);
+    } finally {
+      parse.mockRestore();
+      await fixture.stop();
+    }
+  });
+
+  it("answers a body that is not JSON with 400 and records only that it happened", async () => {
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+    });
+    try {
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: "{not json PRIVATE_BODY_CANARY",
+        }),
+      ).resolves.toMatchObject({ status: 400 });
+      expect(facade.execute).not.toHaveBeenCalled();
+      expect(records).toEqual([
+        expect.objectContaining({
+          correlationId: "tool-bridge-unparsed-action",
+          operation: "coding-runtime.tool-bridge",
+          message: "tool-bridge-request-body-invalid",
+        }),
+      ]);
+      expect(JSON.stringify(records)).not.toContain("PRIVATE_BODY_CANARY");
+    } finally {
       await fixture.stop();
     }
   });
@@ -11105,6 +11445,9 @@ describe.each(["native", "direct", "code-mode"] as const)("%s session continuity
         calls.removed.push(taskId);
       },
       prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, entryCount: 0 }),
+      readEntry: () => undefined,
+      editEntry: () => ({ ok: false, reason: "no-retained-state" }),
+      listTaskIds: () => [],
     };
     const service = createCodingSessionContinuity({
       store,

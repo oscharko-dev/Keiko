@@ -86,6 +86,9 @@ export default defineConfig(
       // project with its own strict ESLint bar, deliberately carrying the findings the lint-bar
       // task asks the agent to fix. It is data the lab edits inside a scratch copy, not product code.
       "tests/fixtures/coding-workbench-lab/ledger-lab/**",
+      // The nested-monorepo baseline of the same lab (#4271, T37 to T41): a polyglot Maven and npm
+      // workspace whose plain JavaScript the lab runs and edits in a scratch copy; data, not product.
+      "tests/fixtures/coding-workbench-lab/polyglot-mono/**",
       // Design-system evidence reproduction harnesses (e.g. the #1293 computed-value equivalence
       // harness): standalone Node + Playwright scripts that mix Node and in-browser (page.evaluate)
       // globals and live outside any TypeScript program. They are committed evidence/repro artifacts,

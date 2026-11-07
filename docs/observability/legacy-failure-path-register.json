@@ -2606,18 +2606,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-server/src/coding-runtime/codingToolFacade.ts",
-      "owner": "executeClaimedEdit",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingToolFacade.ts",
-      "owner": "executePlainAction",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-server/src/coding-runtime/codingToolIpc.ts",
       "owner": "parseJson",
       "kind": "unregistered-catch",
@@ -2781,12 +2769,6 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
-      "owner": "pollTurnOnce",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
       "owner": "reconcile",
       "kind": "unregistered-catch",
       "count": 1
@@ -2823,19 +2805,7 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
-      "owner": "prepare",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
       "owner": "projectOpenCodeRuntimeDatabase",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
-      "owner": "validJson",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -3082,12 +3052,6 @@
     {
       "path": "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadPortable.ts",
       "owner": "resolvePortableSecureWorkspaceReadBinding",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadPortable.ts",
-      "owner": "verifyAtPointOfUse",
       "kind": "unregistered-catch",
       "count": 1
     },
