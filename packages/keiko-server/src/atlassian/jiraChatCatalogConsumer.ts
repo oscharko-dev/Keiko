@@ -373,7 +373,12 @@ export function createJiraChatCatalogAdmission(options: JiraChatAdmissionOptions
 }
 
 /** Only the running invocation's guard renews, and only after the full current-state check passed. */
-function keepReadGrantCurrent(options: JiraChatAdmissionOptions): void {
+function keepReadGrantCurrent(
+  options: JiraChatAdmissionOptions,
+  action: JiraChatCatalogAction,
+): void {
+  // A Knowledge Pod read never consulted the Jira grant, so it does not keep it alive.
+  if (isKnowledgeTool(action.tool)) return;
   const context = options.context();
   const nowMs = options.now();
   const current = resolveCurrentJiraChatAuthority(
@@ -387,6 +392,7 @@ function keepReadGrantCurrent(options: JiraChatAdmissionOptions): void {
     renewRunningReadGrant(
       options.deps.atlassianActionApprovalRegistry,
       current.envelope,
+      context.authorityReference,
       nowMs,
       context.correlationId,
     );
@@ -400,7 +406,7 @@ function mutationGuard(
   let claim: ChatWriteApprovalClaim | undefined;
   const check = (): boolean => {
     const ok = preview(options, capability, action, claim).ok;
-    if (ok) keepReadGrantCurrent(options);
+    if (ok) keepReadGrantCurrent(options, action);
     return ok;
   };
   return READ_TOOLS.has(action.tool)

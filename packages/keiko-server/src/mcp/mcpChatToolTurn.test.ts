@@ -498,7 +498,7 @@ it("revokes a pending write approval when its actual connection closes without a
   ).toBe("revoked");
 });
 
-it("renews the automatic read grant when a later read runs near the end of its lifetime", async () => {
+it("does not renew a read grant issued under another turn's authority", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   try {
     const f = fixture();
@@ -510,11 +510,9 @@ it("renews the automatic read grant when a later read runs near the end of its l
     f.calls.length = 0;
     vi.setSystemTime(Date.now() + Math.floor(ATLASSIAN_ACTION_APPROVAL_TTL_MS * 0.7));
     expect((await send(f, "mcp-second-turn")).status).toBe(200);
-    // The guard of the running read restarted the same grant; no second consent was accepted.
+    // The grant belongs to the first turn's authority: the second turn reuses it but cannot extend it.
     expect(f.acceptedReadGrants).toEqual([first.grantId]);
-    expect(registry?.getChatReadGrant(first.grantId)?.grant.expiresAt).toBe(
-      Date.now() + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
-    );
+    expect(registry?.getChatReadGrant(first.grantId)?.grant.expiresAt).toBe(first.expiresAt);
     expect(f.effects).toEqual(["get_status", "get_status"]);
   } finally {
     vi.useRealTimers();

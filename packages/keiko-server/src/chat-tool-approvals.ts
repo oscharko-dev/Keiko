@@ -16,6 +16,7 @@ import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./atlassian/actionApprovals.js
 import {
   type ChatReadGrantEntry,
   projectChatReadGrant,
+  sameReadGrantAuthority,
   sameReadGrantSubject,
 } from "./atlassian/chatReadGrantState.js";
 import {
@@ -219,6 +220,7 @@ const READ_GRANT_RENEWAL_MIN_ELAPSED_MS = 30_000;
 export function renewRunningReadGrant(
   registry: ApprovalRegistry,
   envelope: Pick<ChatToolAuthorityEnvelope, "subject" | "expiresAt">,
+  authority: EditorAgentGovernedAuthorityReference,
   now: number,
   correlationId: string,
 ): void {
@@ -226,10 +228,16 @@ export function renewRunningReadGrant(
   const granted = registry.findGrantedChatReadGrant(envelope.subject, correlationId);
   if (granted === undefined || now - granted.requestedAt < READ_GRANT_RENEWAL_MIN_ELAPSED_MS)
     return;
-  const expiresAt = Math.min(
-    Date.parse(envelope.expiresAt),
-    now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
-  );
+  // Only the grant this invocation's own authority issued is kept alive.
+  const entry = registry.getChatReadGrant(granted.grantId, correlationId);
+  const envelopeEnd = Date.parse(envelope.expiresAt);
+  if (
+    entry === undefined ||
+    !sameReadGrantAuthority(entry, authority) ||
+    !Number.isFinite(envelopeEnd)
+  )
+    return;
+  const expiresAt = Math.min(envelopeEnd, now + ATLASSIAN_ACTION_APPROVAL_TTL_MS);
   registry.renewChatReadGrant(envelope.subject, now, expiresAt, correlationId);
 }
 function chatWriteApprovalWithinBounds(

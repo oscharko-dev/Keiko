@@ -256,6 +256,7 @@ function keepReadGrantCurrent(options: McpChatAdmissionOptions): void {
     renewRunningReadGrant(
       options.deps.atlassianActionApprovalRegistry,
       current.envelope,
+      options.context().authorityReference,
       options.now(),
       options.context().correlationId,
     );

@@ -1186,6 +1186,52 @@ describe("ordinary Chat catalog read admission", () => {
     expect(grants.findGrantedChatReadGrant(grantSubject())).toBeUndefined();
   });
 
+  it("renews only the grant the invocation's own authority issued", async () => {
+    registerCurrentAuthority({
+      expiresAt: new Date(start + 3_600_000).toISOString(),
+      budget: {
+        maxRuntimeMs: 7_200_000,
+        maxToolCalls: 20,
+        maxPromptTokens: 10_000,
+        maxPatchBytes: 0,
+      },
+    });
+    const f = await catalogFixture(5);
+    expect(await dispatch(f, "issue")).toMatchObject({ result: { status: "completed" } });
+    const issued = grants.findGrantedChatReadGrant(grantSubject());
+    const other = { ...reference, envelopeDigest: "b".repeat(64) };
+    now += 120_000;
+    renewRunningReadGrant(grants, grantEnvelope(), other, now, "authority-b");
+    expect(grants.findGrantedChatReadGrant(grantSubject())?.expiresAt).toBe(issued?.expiresAt);
+    renewRunningReadGrant(grants, grantEnvelope(), reference, now, "authority-a");
+    expect(grants.findGrantedChatReadGrant(grantSubject())?.expiresAt).toBe(
+      now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+    );
+  });
+
+  it("does not keep the Jira grant alive for a Knowledge Pod read", async () => {
+    registerCurrentAuthority({
+      expiresAt: new Date(start + 3_600_000).toISOString(),
+      budget: {
+        maxRuntimeMs: 7_200_000,
+        maxToolCalls: 20,
+        maxPromptTokens: 10_000,
+        maxPatchBytes: 0,
+      },
+    });
+    deadlineSpan = 3_000_000;
+    const f = await catalogFixture(5, undefined, true);
+    const offered = f.binder.offer();
+    expect(await dispatch(f, "jira", {}, "keiko.jira.projects", offered)).toMatchObject({
+      result: { status: "completed" },
+    });
+    const before = grants.findGrantedChatReadGrant(grantSubject())?.expiresAt;
+    now = start + 120_000;
+    await dispatch(f, "pod", {}, "keiko.knowledge.requirements", offered);
+    expect(grants.findGrantedChatReadGrant(grantSubject())?.expiresAt).toBe(before);
+    expect(f.handlers.some((handler) => handler.execute.mock.calls.length > 1)).toBe(false);
+  });
+
   it("leaves a pending grant to expire", () => {
     registerCurrentAuthority({ expiresAt: new Date(start + 3_600_000).toISOString() });
     const pending = requestJiraChatReadGrant(
@@ -1196,7 +1242,7 @@ describe("ordinary Chat catalog read admission", () => {
       "pending-proof",
     );
     if (pending.kind !== "review-required") throw new Error("Expected a pending grant");
-    renewRunningReadGrant(grants, grantEnvelope(), now + 400_000, "pending-proof");
+    renewRunningReadGrant(grants, grantEnvelope(), reference, now + 400_000, "pending-proof");
     expect(grants.getChatReadGrant(pending.grant.grantId)?.grant.expiresAt).toBe(
       start + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
     );
