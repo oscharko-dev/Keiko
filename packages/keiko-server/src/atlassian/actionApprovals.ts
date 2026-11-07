@@ -585,13 +585,15 @@ export class AtlassianActionApprovalRegistry {
   /**
    * Restarts the time of a granted read. The grant is the turn's automatic evidence, not a human's
    * decision, so its remainder must not shorten the time a human has to decide a write bound to it.
-   * It keeps its proof and only ever gets longer, within the approval lifetime.
+   * It keeps its proof and only ever gets longer, within the approval lifetime. A running invocation
+   * may re-bind it to its own current authority: the subject stays, the issuer becomes the caller's.
    */
   public renewChatReadGrant(
     subject: ChatToolAuthoritySubject,
     requestedAt: number,
     expiresAt: number,
     correlationId?: string,
+    authority?: EditorAgentGovernedAuthorityReference,
   ): ChatToolReadGrant | undefined {
     const current = this.findGrantedChatReadGrant(subject, correlationId);
     const entry =
@@ -604,7 +606,11 @@ export class AtlassianActionApprovalRegistry {
     )
       return undefined;
     return this.retainReadGrant(
-      { ...entry, grant: { ...entry.grant, requestedAt, expiresAt } },
+      {
+        ...entry,
+        ...(authority === undefined ? {} : { authority }),
+        grant: { ...entry.grant, requestedAt, expiresAt },
+      },
       correlationId,
     );
   }

@@ -259,8 +259,9 @@ recheck grant/authority at each HTTP effect and again before publishing the read
 A server-accepted read grant, in every mode, is the connection's consent, not a human decision: while
 a running invocation's effect guard proves the current authority, binding generations, subject and
 mode, a granted grant restarts its time on every passing check once 30 s have elapsed since its last start (sliding
-window), forward only, capped by the envelope expiry, and only for the grant the invocation's own
-authority issued (`renewRunningReadGrant`). A long tool such as a requirements batch therefore
+window), forward only, capped by the envelope expiry of the invocation's current authority, to which the
+grant is re-bound (a grant issued under the previous turn's authority follows the running turn;
+the subject never changes) (`renewRunningReadGrant`). A long tool such as a requirements batch therefore
 outlives the ten-minute approval lifetime. A pending, rejected, revoked or expired grant is never
 renewed, and every hard denial still ends the invocation.
 A successful response arriving after access loss is discarded without exposing its data; its

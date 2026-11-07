@@ -1186,7 +1186,41 @@ describe("ordinary Chat catalog read admission", () => {
     expect(grants.findGrantedChatReadGrant(grantSubject())).toBeUndefined();
   });
 
-  it("renews only the grant the invocation's own authority issued", async () => {
+  it("re-binds a previous turn's grant to the running turn's authority and keeps it current", async () => {
+    const long = {
+      expiresAt: new Date(start + 3_600_000).toISOString(),
+      budget: {
+        maxRuntimeMs: 7_200_000,
+        maxToolCalls: 20,
+        maxPromptTokens: 10_000,
+        maxPatchBytes: 0,
+      },
+    };
+    deadlineSpan = 3_000_000;
+    registerCurrentAuthority({ ...long, runId: "turn-a" });
+    const authorityA = reference;
+    const turnA = await catalogFixture(5);
+    expect(await dispatch(turnA, "issue")).toMatchObject({ result: { status: "completed" } });
+    const issued = grants.findGrantedChatReadGrant(grantSubject());
+    registerCurrentAuthority({ ...long, runId: "turn-b" });
+    const authorityB = reference;
+    expect(authorityB).not.toEqual(authorityA);
+    const turnB = await catalogFixture(5);
+    const offered = turnB.binder.offer();
+    const again = (suffix: string): ReturnType<typeof dispatch> =>
+      dispatch(turnB, suffix, {}, "keiko.jira.projects", offered);
+    expect(await again("t0")).toMatchObject({ result: { status: "completed" } });
+    for (const minutes of [9, 18]) {
+      now = start + minutes * 60_000;
+      expect(await again(`t${String(minutes)}`)).toMatchObject({ result: { status: "completed" } });
+    }
+    const current = grants.findGrantedChatReadGrant(grantSubject());
+    expect(current?.grantId).toBe(issued?.grantId);
+    expect(grants.getChatReadGrant(issued?.grantId ?? "")?.authority).toEqual(authorityB);
+    expect(notifications).toBe(1);
+  });
+
+  it("does not renew a grant of another subject", async () => {
     registerCurrentAuthority({
       expiresAt: new Date(start + 3_600_000).toISOString(),
       budget: {
@@ -1198,15 +1232,12 @@ describe("ordinary Chat catalog read admission", () => {
     });
     const f = await catalogFixture(5);
     expect(await dispatch(f, "issue")).toMatchObject({ result: { status: "completed" } });
-    const issued = grants.findGrantedChatReadGrant(grantSubject());
-    const other = { ...reference, envelopeDigest: "b".repeat(64) };
+    const subject = grantSubject();
+    const before = grants.findGrantedChatReadGrant(subject)?.expiresAt;
     now += 120_000;
-    renewRunningReadGrant(grants, grantEnvelope(), other, now, "authority-b");
-    expect(grants.findGrantedChatReadGrant(grantSubject())?.expiresAt).toBe(issued?.expiresAt);
-    renewRunningReadGrant(grants, grantEnvelope(), reference, now, "authority-a");
-    expect(grants.findGrantedChatReadGrant(grantSubject())?.expiresAt).toBe(
-      now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
-    );
+    const other = { ...grantEnvelope(), subject: { ...subject, bindingGeneration: 99 } };
+    renewRunningReadGrant(grants, other, reference, now, "other-subject");
+    expect(grants.findGrantedChatReadGrant(subject)?.expiresAt).toBe(before);
   });
 
   it("does not keep the Jira grant alive for a Knowledge Pod read", async () => {
