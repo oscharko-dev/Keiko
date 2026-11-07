@@ -420,7 +420,8 @@ process.exit(41);
   $boundaryTestOut = Join-Path $scratch "runtime-boundary-test.exe"
   $boundaryScratch = Join-Path $scratch "boundary-test"
   New-Item -ItemType Directory -Force -Path $boundaryScratch | Out-Null
-  & cl.exe @c11Flags $productionMTFlag "/Fo:$boundaryScratch\" "/Fe:$boundaryTestOut" $boundaryTest
+  # The B1 section applies the production grants from a real `KGG1` frame, so it links the module.
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$boundaryScratch\" "/Fe:$boundaryTestOut" (Join-Path (Split-Path $supervisor) "gateway_grants.c") $boundaryTest
   if ($LASTEXITCODE -ne 0) { throw "MSVC runtime boundary test analysis failed" }
   & $boundaryTestOut
   if ($LASTEXITCODE -ne 0) { throw "Windows runtime boundary proof failed" }

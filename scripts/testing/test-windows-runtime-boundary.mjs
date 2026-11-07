@@ -25,6 +25,8 @@ function build(root, scratch, executable) {
     "/D_CRT_SECURE_NO_WARNINGS",
     `/Fe:${executable}`,
     `/Fo:${scratch}${sep}`,
+    // The B1 section applies the production grants from a real `KGG1` frame (#4068).
+    join(root, "native/runtime-supervisor/windows/gateway_grants.c"),
     join(root, "native/runtime-supervisor/windows/runtime_boundary.test.c"),
   ];
   return spawnSync(windowsToolFromPath(env.PATH, "cl.exe"), args, {
