@@ -2665,7 +2665,8 @@
     "memory-vault.store.quarantined.recovery": ["packages/keiko-memory-vault/src/db.test.ts"],
     "memory.audit.state-cache.seeded.count": ["packages/keiko-server/src/deps-activity.test.ts"],
     "memory.capture.decision.line": [
-      "packages/keiko-server/src/memory-approval-free-capture.test.ts"
+      "packages/keiko-server/src/memory-approval-free-capture.test.ts",
+      "packages/keiko-server/src/voice-recap.test.ts"
     ],
     "memory.capture.novelty-gate.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
     "memory.embedding.invalidated.line": ["packages/keiko-server/src/memory-embedding.test.ts"],

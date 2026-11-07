@@ -21,6 +21,13 @@ import type { RouteContext } from "./routes.js";
 import { createInMemoryUiStore, type Chat, type UiStore } from "./store/index.js";
 import { handleBuildVoiceRecap, type RecapResponseBody } from "./voice-recap.js";
 import { replayMemoryCaptureAuditLedger } from "./memory-capture-projection.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import {
   createVoiceRecapContentAttestationStore,
   type VoiceRecapContentAttestationStore,
@@ -47,6 +54,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetServerLogger();
   vault.close();
   store.close();
   rmSync(tmp, { recursive: true, force: true });
@@ -522,13 +530,18 @@ describe("handleBuildVoiceRecap", () => {
   });
 
   it("rejects a secret in committed text before it reaches the vault (AC6)", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     const chat = createChat();
     const result = await handleBuildVoiceRecap(
-      ctx(
-        recapBody(chat, [
-          "remember that our provider base URL is https://llm.internal.example.com/v1",
-        ]),
-      ),
+      {
+        ...ctx(
+          recapBody(chat, [
+            "remember that our provider base URL is https://llm.internal.example.com/v1",
+          ]),
+        ),
+        correlationId: "voice-recap-request",
+      },
       deps(),
     );
     expect(result.status).toBe(200);
@@ -544,6 +557,22 @@ describe("handleBuildVoiceRecap", () => {
     expect(refusals).toHaveLength(1);
     expect(refusals[0]?.summary).toMatch(/\|none\|provider-base-url$/u);
     expect(JSON.stringify(ledger)).not.toContain("llm.internal");
+    // The same refusal on the Activity Log, under the recap request's correlation (#4206).
+    const decisions = sink.events.filter(({ op }) => op === "memory.capture.decision");
+    expect(decisions).toHaveLength(1);
+    const [decision] = decisions;
+    if (decision === undefined) throw new Error("expected a memory.capture.decision line");
+    expect(decision.correlationId).toBe("voice-recap-request");
+    expect(
+      expectActivityLogProof("memory.capture.decision.line", formatActivityLogProofLine(decision)),
+    ).toMatchObject({
+      outcome: "rejected",
+      reason: "provider-base-url",
+      surface: "voice",
+      scopeKind: "user",
+      sourceKind: "explicit-user-instruction",
+    });
+    expect(JSON.stringify(sink.events)).not.toContain("llm.internal");
   });
 
   it("journals no refusal for a recap that only had nothing to keep", async () => {
