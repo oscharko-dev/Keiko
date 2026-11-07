@@ -53,6 +53,221 @@ function show(exchange: ChatToolExchange): ReturnType<typeof render> {
 
 afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
 
+describe.each(["en", "de"] as const)(
+  "saved version and component results in %s (#4297)",
+  (locale) => {
+    beforeEach(async () => {
+      await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+      localStorage.setItem(I18N_STORAGE_KEY, locale);
+    });
+    it("restores distinct entity IDs, names, states and calendar dates accessibly without URLs or JSON", async () => {
+      const exchanges = [
+        projectExchange(
+          {
+            outcome: "succeeded",
+            versionId: "9223372036854775807",
+            projectId: "10000",
+            name: "Delivery release",
+            released: true,
+            archived: false,
+            startDate: "2028-02-29",
+            releaseDate: "2028-03-01",
+            browseUrl: "https://jira.example.test/browse/SYN-7",
+            issueKey: "SYN-7",
+          },
+          "jira_version",
+        ),
+        projectExchange(
+          {
+            outcome: "succeeded",
+            items: [
+              {
+                id: "12001",
+                name: "Delivery component",
+                project: "SYN",
+                leadUserName: "component-owner",
+                assigneeType: "COMPONENT_LEAD",
+                archived: true,
+                self: "https://untrusted.invalid",
+              },
+            ],
+          },
+          "jira_components",
+        ),
+      ].map((entry, index) => ({
+        ...entry,
+        call: { ...entry.call, id: `metadata-${String(index)}` },
+      }));
+      const transcript = { schemaVersion: 1 as const, exchanges };
+      const first = render(
+        <I18nProvider>
+          <JiraChatTools transcript={transcript} turnState="completed" />
+        </I18nProvider>,
+      );
+      expect(screen.getByText("Delivery release", { exact: true })).toBeVisible();
+      first.unmount();
+      const restored = JSON.parse(JSON.stringify(transcript)) as ChatToolTranscript;
+      const { container } = render(
+        <I18nProvider>
+          <JiraChatTools transcript={restored} turnState="completed" />
+        </I18nProvider>,
+      );
+      for (const value of ["Delivery release", "Delivery component"])
+        expect(screen.getByText(value, { exact: true })).toBeVisible();
+      expect(
+        screen.getByText(
+          locale === "en" ? "Version ID: 9223372036854775807" : "Versions-ID: 9223372036854775807",
+        ),
+      ).toBeVisible();
+      expect(
+        screen.getByText(locale === "en" ? "Component ID: 12001" : "Komponenten-ID: 12001"),
+      ).toBeVisible();
+      expect(
+        screen.getByText(locale === "en" ? "Project key: SYN" : "Projektschlüssel: SYN"),
+      ).toBeVisible();
+      expect(
+        screen.getByText(
+          locale === "en" ? "Release date: 2028-03-01" : "Veröffentlichungsdatum: 2028-03-01",
+        ),
+      ).toBeVisible();
+      expect(
+        screen.getByText(locale === "en" ? "Released version" : "Veröffentlichte Version"),
+      ).toBeVisible();
+      expect(
+        screen.getByText(
+          locale === "en" ? "Assignee: component lead" : "Zuständigkeit: Komponentenleitung",
+        ),
+      ).toBeVisible();
+      expect(screen.queryByText("SYN-7", { exact: true })).toBeNull();
+      expect(screen.queryByRole("link")).toBeNull();
+      expect(container.querySelector("pre")).toBeNull();
+      expect(await axe(container)).toHaveNoViolations();
+    });
+
+    it("keeps missing version state and totals unknown", () => {
+      show(
+        projectExchange(
+          {
+            outcome: "succeeded",
+            items: [{ versionId: "12000", projectId: "10000", name: "State unknown" }],
+          },
+          "jira_versions",
+        ),
+      );
+      expect(
+        screen.getByText(
+          locale === "en" ? "Release state unavailable" : "Veröffentlichungsstatus nicht verfügbar",
+        ),
+      ).toBeVisible();
+      expect(
+        screen.getByText(
+          locale === "en" ? "Archive state unavailable" : "Archivierungsstatus nicht verfügbar",
+        ),
+      ).toBeVisible();
+      expect(
+        screen.getByText(
+          locale === "en" ? "Returned results: 1." : "Zurückgegebene Ergebnisse: 1.",
+        ),
+      ).toBeVisible();
+      expect(
+        screen.queryByText(locale === "en" ? "Unreleased version" : "Unveröffentlichte Version"),
+      ).toBeNull();
+      expect(screen.queryByText(locale === "en" ? "Not archived" : "Nicht archiviert")).toBeNull();
+    });
+
+    it.each([0, 2])("keeps local collection page at offset %s explicitly partial", (startAt) => {
+      show(
+        projectExchange(
+          {
+            outcome: "succeeded",
+            items: [{ versionId: "12000", projectId: "10000", name: "One page" }],
+            startAt,
+            total: 3,
+            ...(startAt === 0 ? { nextStartAt: 1 } : {}),
+          },
+          "jira_versions",
+        ),
+      );
+      expect(
+        screen.getByText(
+          locale === "en" ? "1 of 3 results returned." : "1 von 3 Ergebnissen zurückgegeben.",
+        ),
+      ).toBeVisible();
+      expect(
+        screen.getByText(
+          locale === "en"
+            ? "Partial Jira result. Some available data is not included."
+            : "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
+        ),
+      ).toBeVisible();
+    });
+
+    it.each(["jira_create_version", "jira_create_component"])(
+      "keeps unknown %s with only project context distinct from a created entity",
+      (operation) => {
+        const exchange = projectExchange(
+          {
+            outcome: "unknown",
+            projectId: "10000",
+            projectKey: "SYN",
+            projectName: "Context only",
+            browseUrl: PROJECT_URL,
+            reason: "timeout",
+          },
+          operation,
+        );
+        const { container } = show({ ...exchange, mutationOutcome: "unknown" });
+        expect(
+          screen.getByText(
+            locale === "en" ? "Jira outcome unknown" : "Ausgang der Jira-Aktion unbekannt",
+          ),
+        ).toBeVisible();
+        expect(
+          screen.getByText(locale === "en" ? "Project ID: 10000" : "Projekt-ID: 10000"),
+        ).toBeVisible();
+        expect(screen.queryByText("Context only", { exact: true })).toBeNull();
+        expect(container.textContent).not.toMatch(
+          /(?:Version ID|Versions-ID|Component ID|Komponenten-ID):/u,
+        );
+        expect(screen.queryByRole("link")).toBeNull();
+        expect(
+          screen.queryByText(locale === "en" ? "Jira change confirmed" : "Jira-Änderung bestätigt"),
+        ).toBeNull();
+      },
+    );
+
+    it.each([
+      ["jira_create_version", { versionId: "12000" }, "Version ID: 12000", "Versions-ID: 12000"],
+      ["jira_update_version", { versionId: "12000" }, "Version ID: 12000", "Versions-ID: 12000"],
+      [
+        "jira_create_component",
+        { componentId: "12001", projectId: "10000", projectKey: "SYN" },
+        "Component ID: 12001",
+        "Komponenten-ID: 12001",
+      ],
+      [
+        "jira_update_component",
+        { componentId: "12001", projectId: "10000", projectKey: "SYN" },
+        "Component ID: 12001",
+        "Komponenten-ID: 12001",
+      ],
+    ] as const)(
+      "retains %s identity without inventing a confirmed state",
+      (operation, receipt, en, de) => {
+        show({
+          ...projectExchange({ outcome: "succeeded-unconfirmed", ...receipt }, operation),
+          mutationOutcome: "succeeded-unconfirmed",
+        });
+        expect(screen.getByText(locale === "en" ? en : de)).toBeVisible();
+        expect(
+          screen.queryByText(locale === "en" ? "Released version" : "Veröffentlichte Version"),
+        ).toBeNull();
+        expect(screen.queryByRole("link")).toBeNull();
+      },
+    );
+  },
+);
+
 describe.each(["en", "de"] as const)("saved Agile results in %s (AC6)", (locale) => {
   beforeEach(async () => {
     await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);

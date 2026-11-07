@@ -1713,3 +1713,37 @@ it("never reconciles a create with links", async () => {
   });
   expect(f.searches()).toEqual([]);
 });
+
+it.each([
+  ["jira.create-component", { projectIdOrKey: "SYN", name: "New component" }, "component", "20000"],
+  ["jira.update-component", { componentId: "20000", name: "New component" }, "component", "20000"],
+  ["jira.create-version", { projectId: "10000", name: "New version" }, "version", "30000"],
+  ["jira.update-version", { versionId: "30000", name: "New version" }, "version", "30000"],
+] as const)(
+  "routes %s through one native effect and independent readback",
+  async (operation, args, entity, id) => {
+    const f = fixture();
+    let written = false;
+    f.http.mockImplementation((request) => {
+      if (request.method !== "GET") written = true;
+      const path = new URL(request.url).pathname;
+      const body = path.includes("/project/")
+        ? { id: "10000", key: "SYN" }
+        : { id, project: "SYN", projectId: 10000, name: written ? args.name : "Old name" };
+      return Promise.resolve(response(body, request.method === "POST" ? 201 : 200));
+    });
+    expect(await f.run(operation, args)).toMatchObject({
+      ok: true,
+      receipt: { [`${entity}Id`]: id },
+    });
+    const writes = f.http.mock.calls.filter(([request]) => request.method !== "GET");
+    expect(writes).toHaveLength(1);
+    expect(new URL(writes[0]?.[0].url ?? "").pathname).toBe(
+      `/context/rest/api/2/${entity}${operation.startsWith("jira.create-") ? "" : `/${id}`}`,
+    );
+    expect(f.http.mock.calls.at(-1)?.[0].method).toBe("GET");
+    expect(new URL(f.http.mock.calls.at(-1)?.[0].url ?? "").pathname).toBe(
+      `/context/rest/api/2/${entity}/${id}`,
+    );
+  },
+);

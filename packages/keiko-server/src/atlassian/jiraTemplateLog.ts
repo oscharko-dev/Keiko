@@ -172,6 +172,12 @@ const FIELD_ADMISSION = defineActivityLogOperation({
         "jira.transition",
         "jira.assign",
         "jira.draft",
+        "jira.create-project",
+        "jira.update-project",
+        "jira.create-component",
+        "jira.update-component",
+        "jira.create-version",
+        "jira.update-version",
         "jira.board-create",
         "jira.sprint-create",
         "jira.sprint-update",
@@ -257,7 +263,15 @@ export function recordJiraTemplateRefusal(
 export function recordJiraFieldRefusal(
   correlationId: string | undefined,
   input: {
-    readonly operation: JiraTemplateOperation | "jira.draft";
+    readonly operation:
+      | JiraTemplateOperation
+      | "jira.draft"
+      | "jira.create-project"
+      | "jira.update-project"
+      | "jira.create-component"
+      | "jira.update-component"
+      | "jira.create-version"
+      | "jira.update-version";
     readonly refusedCount: number;
     readonly validations: readonly (JiraFieldValidationFailure | undefined)[];
   },

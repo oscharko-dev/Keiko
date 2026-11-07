@@ -7,16 +7,16 @@ afterEach(() => {
   for (const db of databases.splice(0)) db.close();
 });
 
-function v61Database(): DatabaseSync {
+function priorDatabase(version: 61 | 62 = 61): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   databases.push(db);
   db.exec("PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;");
   for (const migration of MIGRATIONS) {
-    if (migration.version > 61) break;
+    if (migration.version > version) break;
     db.exec(migration.sql);
     migration.apply?.(db);
   }
-  db.exec(`PRAGMA user_version = 61;
+  db.exec(`PRAGMA user_version = ${String(version)};
     INSERT INTO projects (path, name, created_at, last_opened_at) VALUES ('/fixture','Fixture',1,1);
     INSERT INTO chats (id, project_path, title, selected_model, created_at, updated_at)
       VALUES ('chat-1','/fixture','Fixture','model',1,1);
@@ -77,7 +77,7 @@ describe("V62 journals the closed project and Agile operations", () => {
     "jira.epic-update",
     "jira.epic-move-issues",
   ])("admits %s only after the forward migration", (operation) => {
-    const db = v61Database();
+    const db = priorDatabase();
     expect(() => {
       insertMutation(db, operation, "before");
     }).toThrow(/CHECK/u);
@@ -89,7 +89,7 @@ describe("V62 journals the closed project and Agile operations", () => {
   });
 
   it("retains every journal column, row, index, foreign key and FULL durability on repeat migration", () => {
-    const db = v61Database();
+    const db = priorDatabase();
     insertMutation(db, "jira.attach", "kept");
     db.exec("UPDATE chat_tool_mutations SET phase = 'acknowledged', http_status = 201;");
     insertCodingMutation(db);
@@ -108,7 +108,7 @@ describe("V62 journals the closed project and Agile operations", () => {
   });
 
   it("keeps the closed vocabulary and the existing journal constraints", () => {
-    const db = v61Database();
+    const db = priorDatabase();
     runMigrations(db);
     for (const operation of [
       "jira.unknown",
@@ -140,7 +140,7 @@ describe("V62 journals the closed project and Agile operations", () => {
   });
 
   it("preserves message nullification and coding/chat cascade ownership", () => {
-    const db = v61Database();
+    const db = priorDatabase();
     insertMutation(db, "jira.create", "chat");
     insertCodingMutation(db);
     runMigrations(db);
@@ -156,5 +156,47 @@ describe("V62 journals the closed project and Agile operations", () => {
     db.exec("DELETE FROM chats WHERE id = 'chat-1'");
     expect(db.prepare("SELECT * FROM chat_tool_mutations").all()).toEqual([]);
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+});
+
+describe("V63 journals the closed component and version operations", () => {
+  it.each([
+    "jira.create-component",
+    "jira.update-component",
+    "jira.create-version",
+    "jira.update-version",
+  ])("admits %s after preserving existing V62 project and Agile journals", (operation) => {
+    const db = priorDatabase(62);
+    insertMutation(db, "jira.create-project", "project");
+    insertMutation(db, "jira.sprint-update", "sprint");
+    insertCodingMutation(db);
+    const before = db.prepare("SELECT * FROM chat_tool_mutations ORDER BY invocation_id").all();
+    const shape = journalShape(db);
+    expect(() => {
+      insertMutation(db, operation, "before");
+    }).toThrow(/CHECK/u);
+    runMigrations(db);
+    runMigrations(db);
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(63);
+    expect(db.prepare("SELECT * FROM chat_tool_mutations ORDER BY invocation_id").all()).toEqual(
+      before,
+    );
+    expect(journalShape(db)).toEqual(shape);
+    expect(db.prepare("PRAGMA synchronous").get()).toEqual({ synchronous: 2 });
+    expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(() => {
+      insertMutation(db, operation, "after");
+    }).not.toThrow();
+    for (const invalid of [
+      "jira.delete-version",
+      "jira.delete-component",
+      "jira.draft",
+      "jira.unknown",
+    ]) {
+      expect(() => {
+        insertMutation(db, invalid, invalid);
+      }).toThrow(/CHECK/u);
+    }
   });
 });

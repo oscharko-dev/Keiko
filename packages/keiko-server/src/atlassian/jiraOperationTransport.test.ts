@@ -34,6 +34,7 @@ interface Scenario {
   readonly args: CatalogJsonObject;
   readonly parameters?: Readonly<Record<string, string>>;
   readonly query?: Readonly<Record<string, string>>;
+  readonly primaryMethodIndex?: number;
 }
 const ISSUE_PARAMETERS = { issueIdOrKey: "SYN-1" };
 const PAGING = { startAt: "0", maxResults: "25" };
@@ -47,6 +48,32 @@ const SCENARIOS: readonly Scenario[] = [
   { tool: "jira.projects", args: {} },
   { tool: "jira.filter", args: { filterId: "37" }, parameters: { filterId: "37" } },
   { tool: "jira.favourite-filters", args: { startAt: 0, maxResults: 25 } },
+  {
+    tool: "jira.components",
+    args: { projectIdOrKey: "SYN" },
+    parameters: { projectIdOrKey: "10000" },
+    primaryMethodIndex: 1,
+  },
+  { tool: "jira.component", args: { componentId: "71" }, parameters: { id: "71" } },
+  {
+    tool: "jira.versions",
+    args: { projectIdOrKey: "SYN" },
+    parameters: { projectIdOrKey: "10000" },
+    primaryMethodIndex: 1,
+  },
+  { tool: "jira.version", args: { versionId: "81" }, parameters: { id: "81" } },
+  { tool: "jira.create-component", args: { projectIdOrKey: "SYN", name: "After" } },
+  {
+    tool: "jira.update-component",
+    args: { componentId: "71", name: "After" },
+    parameters: { id: "71" },
+  },
+  { tool: "jira.create-version", args: { projectId: "10000", name: "After" } },
+  {
+    tool: "jira.update-version",
+    args: { versionId: "81", name: "After" },
+    parameters: { id: "81" },
+  },
   { tool: "jira.project", args: { projectIdOrKey: "SYN" }, parameters: { projectIdOrKey: "SYN" } },
   { tool: "jira.validate-project-key", args: { key: "SYN" }, query: { key: "SYN" } },
   {
@@ -146,6 +173,31 @@ const SCENARIOS: readonly Scenario[] = [
 ];
 interface RemoteState extends SyntheticJira {
   project: Record<string, unknown>;
+  component: Record<string, unknown>;
+  version: Record<string, unknown>;
+}
+function structureRead(path: string, state: RemoteState): AtlassianHttpBodyResult | undefined {
+  if (path === "component/71") return response(state.component);
+  if (path === "version/81") return response(state.version);
+  if (path === "project/10000/components") return response([state.component]);
+  if (path === "project/10000/versions") return response([state.version]);
+  return undefined;
+}
+function structureWrite(
+  path: string,
+  request: AtlassianHttpBodyRequest,
+  state: RemoteState,
+): AtlassianHttpBodyResult | undefined {
+  const body = JSON.parse(request.bodyJson ?? "{}") as Record<string, unknown>;
+  if (path === "component" || path === "component/71") {
+    state.component = { ...state.component, ...body };
+    return response(state.component, request.method === "POST" ? 201 : 200);
+  }
+  if (path === "version" || path === "version/81") {
+    state.version = { ...state.version, ...body };
+    return response(state.version, request.method === "POST" ? 201 : 200);
+  }
+  return undefined;
 }
 function projectRead(path: string, state: RemoteState): AtlassianHttpBodyResult | undefined {
   if (path === "project") return response([state.project]);
@@ -228,6 +280,8 @@ function remote(): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
       attachment: [],
     },
     comment: "",
+    component: { id: "71", project: "SYN", name: "Before" },
+    version: { id: "81", projectId: 10000, name: "Before" },
     project: {
       id: "10000",
       key: "SYN",
@@ -242,6 +296,7 @@ function remote(): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
     if (request.method === "GET")
       return Promise.resolve(
         projectRead(path, state) ??
+          structureRead(path, state) ??
           filterRead(path) ??
           issueMetadata(path) ??
           fixtureRead(absolute, state),
@@ -249,7 +304,8 @@ function remote(): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
     return Promise.resolve(
       path === "project" || path === "project/10000"
         ? projectWrite(request, state)
-        : fixtureWrite(absolute, request.bodyJson, state, request.upload),
+        : (structureWrite(path, request, state) ??
+            fixtureWrite(absolute, request.bodyJson, state, request.upload)),
     );
   });
 }
@@ -311,7 +367,9 @@ async function observe(scenario: Scenario): Promise<Observation> {
 }
 function assertPrimary(observation: Observation, scenario: Scenario): void {
   const { definition, requests } = observation;
-  const primary = requests.find((request) => request.method === definition.method);
+  const primary = requests
+    .filter((request) => request.method === definition.method)
+    .at(scenario.primaryMethodIndex ?? 0);
   if (primary === undefined) throw new TypeError("No native operation was dispatched");
   const expectedPath =
     definition.apiRoot +
@@ -338,7 +396,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(23);
+    expect(native).toHaveLength(31);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

@@ -126,6 +126,34 @@ it("commits before sending, records acknowledgement, and never repeats a complet
 });
 it.each([
   {
+    operation: "jira.create-component",
+    path: "api/2/component",
+    method: "POST",
+    status: 201,
+    receipt: { componentId: "37", projectId: "10000", projectKey: "SYN" },
+  },
+  {
+    operation: "jira.update-component",
+    path: "api/2/component/37",
+    method: "PUT",
+    status: 200,
+    receipt: { componentId: "37", projectId: "10000", projectKey: "SYN" },
+  },
+  {
+    operation: "jira.create-version",
+    path: "api/2/version",
+    method: "POST",
+    status: 201,
+    receipt: { versionId: "37" },
+  },
+  {
+    operation: "jira.update-version",
+    path: "api/2/version/37",
+    method: "PUT",
+    status: 200,
+    receipt: { versionId: "37" },
+  },
+  {
     operation: "jira.create-project",
     path: "api/2/project",
     method: "POST",

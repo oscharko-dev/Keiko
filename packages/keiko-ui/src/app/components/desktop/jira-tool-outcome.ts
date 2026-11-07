@@ -11,6 +11,10 @@ import {
   jiraAgileDetails,
   type JiraOutcomeFact,
 } from "./jira-agile-presentation";
+import {
+  JIRA_PROJECT_METADATA_TOOLS,
+  jiraProjectMetadataDetails,
+} from "./jira-project-metadata-presentation";
 
 export interface JiraOutcomeItem {
   readonly key?: string;
@@ -139,9 +143,18 @@ function projectLabels(source: UnknownRecord): WidgetMessageKey[] {
     );
   return labels;
 }
+function metadataOutcomeItem(source: UnknownRecord, tool: string): JiraOutcomeItem | undefined {
+  const { facts, labels } = jiraProjectMetadataDetails(tool, source);
+  const name = firstText([source.versionName, source.componentName, source.name]);
+  const body = text(source.description);
+  const projectId = text(source.projectId);
+  if (![name, body, projectId, ...facts].some((entry) => entry !== undefined)) return undefined;
+  return { ...textMembers({ name, body, projectId }), facts, labels };
+}
 function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined {
   const source = record(value);
   if (source === undefined) return undefined;
+  if (JIRA_PROJECT_METADATA_TOOLS.has(tool)) return metadataOutcomeItem(source, tool);
   const agile = jiraAgileDetails(tool, source);
   const projectKey = text(source.projectKey);
   const key = firstText([
@@ -195,7 +208,8 @@ function outcomeItems(
   const single =
     data?.issueKey !== undefined ||
     JIRA_PROJECT_TOOLS.has(exchange.call.name) ||
-    JIRA_AGILE_TOOLS.has(exchange.call.name);
+    JIRA_AGILE_TOOLS.has(exchange.call.name) ||
+    JIRA_PROJECT_METADATA_TOOLS.has(exchange.call.name);
   const source = single ? [data, ...items, ...progress] : [...items, ...progress];
   const seen = new Set<string>();
   return source.flatMap((entry) => {

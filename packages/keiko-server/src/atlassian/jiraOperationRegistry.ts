@@ -35,6 +35,12 @@ type JiraPermissionPolicy =
   | "sprint-update-and-readback"
   | "issue-membership-and-readback"
   | "epic-update-and-readback"
+  | "visible-components"
+  | "visible-versions"
+  | "component-create-and-readback"
+  | "component-update-and-readback"
+  | "version-create-and-readback"
+  | "version-update-and-readback"
   | "current-create-metadata"
   | "current-edit-metadata"
   | "visible-issues"
@@ -88,6 +94,14 @@ const NATIVE: Readonly<
     ]
   >
 > = {
+  "jira.components": ["GET", "read", "/project/{projectIdOrKey}/components", "visible-components"],
+  "jira.component": ["GET", "read", "/component/{id}", "visible-components"],
+  "jira.versions": ["GET", "read", "/project/{projectIdOrKey}/versions", "visible-versions"],
+  "jira.version": ["GET", "read", "/version/{id}", "visible-versions"],
+  "jira.create-component": ["POST", "write", "/component", "component-create-and-readback"],
+  "jira.update-component": ["PUT", "write", "/component/{id}", "component-update-and-readback"],
+  "jira.create-version": ["POST", "write", "/version", "version-create-and-readback"],
+  "jira.update-version": ["PUT", "write", "/version/{id}", "version-update-and-readback"],
   "jira.boards": ["GET", "read", "/board", "visible-boards", "/rest/agile/1.0"],
   "jira.board": ["GET", "read", "/board/{boardId}", "visible-boards", "/rest/agile/1.0"],
   "jira.board-configuration": [

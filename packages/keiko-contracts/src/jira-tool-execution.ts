@@ -7,6 +7,10 @@ export const JIRA_MUTATION_OPERATIONS = [
   "jira.create",
   "jira.create-project",
   "jira.update-project",
+  "jira.create-component",
+  "jira.update-component",
+  "jira.create-version",
+  "jira.update-version",
   "jira.board-create",
   "jira.sprint-create",
   "jira.sprint-update",
@@ -141,6 +145,8 @@ export interface JiraMutationReceipt {
   readonly projectId?: string;
   readonly projectKey?: string;
   readonly projectName?: string;
+  readonly componentId?: string;
+  readonly versionId?: string;
   readonly browseUrl?: string;
   readonly boardId?: string;
   readonly sprintId?: string;

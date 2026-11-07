@@ -212,6 +212,18 @@ export {
   type AgileMutationInput,
 } from "./jira-agile-inputs.js";
 export { executeJiraFilterRead, JIRA_FILTER_READ_OPERATIONS } from "./jira-filter-reads.js";
+export {
+  executeJiraComponentRead,
+  executeJiraComponentMutation,
+  isJiraComponentRead,
+  isJiraComponentMutation,
+} from "./jira-managed-components.js";
+export {
+  executeJiraVersionRead,
+  executeJiraVersionMutation,
+  isJiraVersionRead,
+  isJiraVersionMutation,
+} from "./jira-managed-versions.js";
 export { JIRA_METADATA_MAX_UPDATES } from "./jira-field-metadata.js";
 export {
   JIRA_ISSUE_LINKS_MAX,

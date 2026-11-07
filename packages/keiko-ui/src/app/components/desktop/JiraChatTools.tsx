@@ -31,6 +31,7 @@ import { ChatProcessingPipeline } from "./ChatProcessingPipeline";
 import { chatProcessingSteps } from "./chat-processing-pipeline";
 import { useJiraResultEvidence } from "./jira-result-evidence";
 import { JIRA_AGILE_TOOLS } from "./jira-agile-presentation";
+import { JIRA_PROJECT_METADATA_TOOLS } from "./jira-project-metadata-presentation";
 import {
   jiraToolOutcomeView,
   JIRA_OUTCOME_ITEMS_SHOWN,
@@ -251,7 +252,9 @@ function resultCardSemantics(exchange: ChatToolExchange): {
   readonly role: "group" | undefined;
   readonly label: ReturnType<typeof jiraToolLabel>;
 } {
-  return JIRA_PROJECT_TOOLS.has(exchange.call.name) || JIRA_AGILE_TOOLS.has(exchange.call.name)
+  return JIRA_PROJECT_TOOLS.has(exchange.call.name) ||
+    JIRA_AGILE_TOOLS.has(exchange.call.name) ||
+    JIRA_PROJECT_METADATA_TOOLS.has(exchange.call.name)
     ? { tag: "div", role: "group", label: jiraToolLabel(exchange) }
     : { tag: "section", role: undefined, label: jiraToolRegionLabel(exchange) };
 }

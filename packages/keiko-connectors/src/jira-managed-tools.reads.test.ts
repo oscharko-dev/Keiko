@@ -754,3 +754,39 @@ it("names a comment beyond the catalog byte limit a bounds failure, not a malfor
   expect(result.isError).toBe(true);
   expect(result.data).toMatchObject({ outcome: "failed", reason: "bounds-exceeded" });
 });
+
+it.each([
+  ["jira.components", { projectIdOrKey: "SYN" }, "component", "20000"],
+  ["jira.component", { componentId: "20000" }, "component", "20000"],
+  ["jira.versions", { projectIdOrKey: "SYN" }, "version", "30000"],
+  ["jira.version", { versionId: "30000" }, "version", "30000"],
+] as const)(
+  "routes advertised %s through the fixed REST v2 metadata read",
+  async (name, args, entity, id) => {
+    const f = fixture(undefined);
+    f.http.mockImplementation((request) => {
+      const path = new URL(request.url).pathname;
+      const item = { id, project: "SYN", projectId: 10000, name: "Metadata" };
+      const body = path.endsWith(`/${entity}s`)
+        ? [item]
+        : path.includes("/project/")
+          ? { id: "10000", key: "SYN" }
+          : item;
+      return Promise.resolve(response(body));
+    });
+    const tool = f.provider.tools().find((entry) => entry.name === name);
+    expect(tool).toBeDefined();
+    const result = await tool?.execute(args, {
+      invocationId: "metadata-read",
+      correlationId: "metadata-read",
+      signal: f.controller.signal,
+      beforeEffect: f.beforeEffect,
+    });
+    expect(result?.data.outcome).toBe("succeeded");
+    expect(f.http).toHaveBeenCalled();
+    for (const [request] of f.http.mock.calls) {
+      expect(request.method).toBe("GET");
+      expect(new URL(request.url).pathname.startsWith("/context/rest/api/2/")).toBe(true);
+    }
+  },
+);

@@ -46,6 +46,11 @@ import {
 import { dispatchFailure } from "./jira-mutation-failure.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 import { executeJiraProjectMutation, isJiraProjectMutation } from "./jira-managed-projects.js";
+import {
+  executeJiraComponentMutation,
+  isJiraComponentMutation,
+} from "./jira-managed-components.js";
+import { executeJiraVersionMutation, isJiraVersionMutation } from "./jira-managed-versions.js";
 import { isJiraAgileMutation } from "./jira-agile-inputs.js";
 import { checkJiraAgileMutation, executeJiraAgileMutation } from "./jira-agile-mutations.js";
 import {
@@ -1317,6 +1322,18 @@ export function executeJiraManagedMutation(
     return Promise.resolve({ ok: false, reason: "unavailable" });
   if (isJiraAgileMutation(operation))
     return executeJiraAgileMutation(operation, structuredClone(source), context, connection);
+  if (isJiraComponentMutation(operation))
+    return executeJiraComponentMutation(
+      operation,
+      structuredClone(source),
+      requestFor(connection, context),
+    );
+  if (isJiraVersionMutation(operation))
+    return executeJiraVersionMutation(
+      operation,
+      structuredClone(source),
+      requestFor(connection, context),
+    );
   if (isJiraProjectMutation(operation))
     return executeJiraProjectMutation(
       operation,
@@ -1356,6 +1373,20 @@ function checkedAttempt(
 ): Promise<JiraMutationAttempt> {
   if (isJiraAgileMutation(operation))
     return checkJiraAgileMutation(operation, structuredClone(source), context, connection);
+  if (connection.deployment === "data-center" && isJiraComponentMutation(operation))
+    return executeJiraComponentMutation(
+      operation,
+      structuredClone(source),
+      requestFor(connection, context),
+      true,
+    );
+  if (connection.deployment === "data-center" && isJiraVersionMutation(operation))
+    return executeJiraVersionMutation(
+      operation,
+      structuredClone(source),
+      requestFor(connection, context),
+      true,
+    );
   if (connection.deployment === "data-center" && isJiraProjectMutation(operation))
     return executeJiraProjectMutation(
       operation,

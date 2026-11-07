@@ -36,17 +36,24 @@ import {
   recordJiraTemplateRefusal,
 } from "./jiraTemplateLog.js";
 
-/** The writes that change issue fields, which is what an issue template describes. */
-type JiraFieldOperation =
-  "jira.create" | "jira.edit" | "jira.transition" | "jira.assign" | JiraAgileMutation;
+/** Field and metadata writes share read-only validation; templates apply only to issue fields. */
+const FIELD_OPERATIONS = [
+  "jira.create",
+  "jira.edit",
+  "jira.transition",
+  "jira.assign",
+  "jira.create-project",
+  "jira.update-project",
+  "jira.create-component",
+  "jira.update-component",
+  "jira.create-version",
+  "jira.update-version",
+] as const;
+type JiraFieldOperation = (typeof FIELD_OPERATIONS)[number] | JiraAgileMutation;
 function fieldOperation(tool: string): JiraFieldOperation | undefined {
-  if (isJiraAgileMutation(tool)) return tool;
-  return tool === "jira.create" ||
-    tool === "jira.edit" ||
-    tool === "jira.transition" ||
-    tool === "jira.assign"
+  return isJiraAgileMutation(tool)
     ? tool
-    : undefined;
+    : FIELD_OPERATIONS.find((operation) => operation === tool);
 }
 
 type PreflightDeps = JiraChatAdmissionOptions["deps"] &

@@ -2,6 +2,8 @@ import { jiraBrowseUrl } from "./jira-browse-url.js";
 import { JIRA_AGILE_READ_OPERATIONS, executeJiraAgileRead } from "./jira-agile-reads.js";
 import { JIRA_FILTER_READ_OPERATIONS, executeJiraFilterRead } from "./jira-filter-reads.js";
 import { jiraProjectBrowseUrl } from "./jira-project-browse-url.js";
+import { executeJiraComponentRead, isJiraComponentRead } from "./jira-managed-components.js";
+import { executeJiraVersionRead, isJiraVersionRead } from "./jira-managed-versions.js";
 import {
   executeJiraProjectRead,
   isJiraProjectRead,
@@ -297,9 +299,27 @@ async function read<Context extends ManagedMcpInvocationContext>(
       ? executeJiraAgileRead(agile, args, context, connected)
       : executeJiraFilterRead(name, args, context, connected);
   }
+  if (isJiraComponentRead(name) || isJiraVersionRead(name))
+    return projectMetadataRead(name, args, context, connection);
   return isJiraProjectRead(name)
     ? projectRead(name, args, context, connection)
     : readIssueOrMetadata(name, args, context, connection);
+}
+
+async function projectMetadataRead<Context extends ManagedMcpInvocationContext>(
+  name:
+    Parameters<typeof executeJiraComponentRead>[0] | Parameters<typeof executeJiraVersionRead>[0],
+  args: CatalogJsonObject,
+  context: Context,
+  connection: JiraManagedProviderDeps<Context>["connection"],
+): Promise<ManagedMcpToolResult> {
+  const connected = await connection(context);
+  if (connected.deployment !== "data-center") return failure("unsupported-deployment");
+  const request = requestFor(connected, context);
+  const result = isJiraComponentRead(name)
+    ? await executeJiraComponentRead(name, args, request)
+    : await executeJiraVersionRead(name, args, request);
+  return boundJiraReadResult(result);
 }
 async function readIssueOrMetadata<Context extends ManagedMcpInvocationContext>(
   name: JiraManagedReadToolName,

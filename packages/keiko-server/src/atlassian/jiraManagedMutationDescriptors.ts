@@ -36,6 +36,10 @@ import {
   jiraAgileDeclarationForTool,
   type JIRA_AGILE_WRITE_DEFINITIONS,
 } from "./jiraAgileDescriptors.js";
+import {
+  jiraProjectStructureDeclarationForTool,
+  type JIRA_PROJECT_STRUCTURE_WRITE_DEFINITIONS,
+} from "./jiraProjectStructureDescriptors.js";
 
 /** Conjunction preserves the native lowercase UUID grammar within the safe schema dialect. */
 export const JIRA_DRAFT_ID_SCHEMA = { ...text(36), format: "uuid", pattern: "^[0-9a-f-]{36}$" };
@@ -367,7 +371,11 @@ const TRACED_RESULT_SCHEMA = object(
 );
 type CoreMutationToolName = Exclude<
   JiraMutationOperation,
-  Extract<JiraMutationOperation, keyof typeof JIRA_AGILE_WRITE_DEFINITIONS>
+  Extract<
+    JiraMutationOperation,
+    | keyof typeof JIRA_AGILE_WRITE_DEFINITIONS
+    | keyof typeof JIRA_PROJECT_STRUCTURE_WRITE_DEFINITIONS
+  >
 >;
 const DEFINITIONS: Readonly<
   Record<
@@ -537,7 +545,12 @@ function isCoreMutationTool(name: JiraMutationOperation): name is CoreMutationTo
 function declaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
   const agile = jiraAgileDeclarationForTool(name);
   if (agile !== undefined) return agile;
+  const structure = jiraProjectStructureDeclarationForTool(name);
+  if (structure !== undefined) return structure;
   if (!isCoreMutationTool(name)) throw new TypeError("Unsupported Jira mutation tool");
+  return coreDeclaration(name);
+}
+function coreDeclaration(name: CoreMutationToolName): ManagedMcpToolDeclaration {
   const definition = DEFINITIONS[name];
   return Object.freeze({
     name,

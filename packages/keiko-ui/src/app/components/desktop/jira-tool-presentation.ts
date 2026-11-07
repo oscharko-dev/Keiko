@@ -8,6 +8,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import { actionTypeLabelKey } from "./widgets/connectors/connector-labels";
+import { JIRA_PROJECT_METADATA_TOOLS } from "./jira-project-metadata-presentation";
 
 const OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKey>> = {
   "not-dispatched": "chat.jira.write.notDispatched",
@@ -118,7 +119,19 @@ export function jiraToolPartialNotice(exchange: ChatToolExchange): WidgetMessage
     return requirementsCut(exchange.result) ? "chat.requirements.partial" : undefined;
   if (KNOWLEDGE_TOOLS[exchange.call.name] !== undefined)
     return exchange.result.page.truncated ? "chat.knowledge.partial" : undefined;
-  return exchange.result.page.truncated ? "chat.jira.partial" : undefined;
+  return exchange.result.page.truncated || projectMetadataPageCut(exchange)
+    ? "chat.jira.partial"
+    : undefined;
+}
+function projectMetadataPageCut(exchange: ChatToolExchange): boolean {
+  if (!JIRA_PROJECT_METADATA_TOOLS.has(exchange.call.name)) return false;
+  const data = plainRecord(exchange.result?.data);
+  const startAt = data?.startAt;
+  const next = data?.nextStartAt;
+  return (
+    (typeof startAt === "number" && Number.isSafeInteger(startAt) && startAt > 0) ||
+    (typeof next === "number" && Number.isSafeInteger(next) && next > 0)
+  );
 }
 function mutationOutcome(exchange: ChatToolExchange): JiraMutationResultState | undefined {
   const data = exchange.result?.data;

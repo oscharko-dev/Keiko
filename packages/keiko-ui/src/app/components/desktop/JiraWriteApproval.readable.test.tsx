@@ -73,6 +73,63 @@ afterEach(() => {
   window.localStorage.removeItem(I18N_STORAGE_KEY);
 });
 
+describe.each(["en", "de"] as const)(
+  "readable project metadata approvals in %s (#4297)",
+  (locale) => {
+    it.each([
+      [
+        "jira.create-version",
+        {
+          projectId: "10000",
+          name: "Delivery release",
+          description: "Scoped release",
+          startDate: "2028-02-29",
+          releaseDate: "2028-03-01",
+          released: false,
+          archived: false,
+        },
+        "Version name",
+        "Versionsname",
+      ],
+      [
+        "jira.update-version",
+        { versionId: "12000", released: true, releaseDate: "2028-03-01" },
+        "Version ID",
+        "Versions-ID",
+      ],
+      [
+        "jira.create-component",
+        {
+          projectIdOrKey: "SYN",
+          name: "Delivery component",
+          description: "Scoped component",
+          leadUserName: "component-owner",
+          assigneeType: "COMPONENT_LEAD",
+        },
+        "Component name",
+        "Komponentenname",
+      ],
+      [
+        "jira.update-component",
+        { componentId: "12001", leadUserName: "component-owner" },
+        "Component ID",
+        "Komponenten-ID",
+      ],
+    ] as const)(
+      "shows every %s argument under the correct entity labels",
+      async (operation, args, en, de) => {
+        const review = await reviewed(operation, args, locale);
+        expect(review.text).toContain(locale === "en" ? en : de);
+        expect(review.text).not.toContain(locale === "en" ? "File name" : "Dateiname");
+        for (const value of Object.values(args))
+          if (typeof value === "string") expect(review.text).toContain(value);
+        expectNoJson(review);
+        expect(await axe(review.container)).toHaveNoViolations();
+      },
+    );
+  },
+);
+
 describe.each(["en", "de"] as const)("readable project approvals in %s (#4293)", (locale) => {
   it.each(["jira.create-project", "jira.update-project"] as const)(
     "shows every %s argument with project-specific labels and keeps the website as a value",

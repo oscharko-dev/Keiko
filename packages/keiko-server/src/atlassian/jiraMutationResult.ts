@@ -41,10 +41,18 @@ const AGILE_RECEIPTS = {
   "jira.epic-move-issues": ["epicKey", "issueKeys"],
 } as const;
 type AgileOperation = keyof typeof AGILE_RECEIPTS;
+const STRUCTURE_RECEIPTS = {
+  "jira.create-component": ["componentId"],
+  "jira.update-component": ["componentId"],
+  "jira.create-version": ["versionId"],
+  "jira.update-version": ["versionId"],
+} as const;
+type StructureOperation = keyof typeof STRUCTURE_RECEIPTS;
 const REQUIRED_RECEIPTS: Readonly<
   Record<JiraMutationOperation, readonly (keyof JiraMutationReceipt)[]>
 > = {
   ...AGILE_RECEIPTS,
+  ...STRUCTURE_RECEIPTS,
   "jira.create-project": ["projectId", "projectKey"],
   "jira.update-project": ["projectId", "projectKey"],
   "jira.create": ["issueKey", "issueId"],
@@ -67,6 +75,35 @@ function projectOperation(operation: JiraMutationOperation): boolean {
 }
 function agileOperation(operation: JiraMutationOperation): operation is AgileOperation {
   return Object.hasOwn(AGILE_RECEIPTS, operation);
+}
+function structureOperation(operation: JiraMutationOperation): operation is StructureOperation {
+  return Object.hasOwn(STRUCTURE_RECEIPTS, operation);
+}
+function int64Identity(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[1-9][0-9]{0,18}$/u.test(value) &&
+    BigInt(value) <= 9223372036854775807n
+  );
+}
+function validStructureReceipt(
+  receipt: JiraMutationReceipt,
+  operation: StructureOperation,
+): boolean {
+  const keys: ReadonlySet<string> = new Set([
+    ...STRUCTURE_RECEIPTS[operation],
+    "projectId",
+    "projectKey",
+  ]);
+  const entries = Object.entries(receipt);
+  return (
+    entries.length > 0 &&
+    entries.every(
+      ([key, value]) =>
+        keys.has(key) &&
+        (key === "projectKey" ? isSafeAtlassianIdentifier(value) : int64Identity(value)),
+    )
+  );
 }
 function issueKey(value: unknown): value is string {
   return typeof value === "string" && /^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,15}$/u.test(value);
@@ -133,6 +170,7 @@ function validProjectReceipt(receipt: JiraMutationReceipt): boolean {
 function validIdentities(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
   if (projectOperation(operation)) return validProjectReceipt(receipt);
   if (agileOperation(operation)) return validAgileReceipt(receipt, operation);
+  if (structureOperation(operation)) return validStructureReceipt(receipt, operation);
   return Object.entries(receipt).every(
     ([key, id]) => RECEIPT_KEYS.has(key) && isSafeAtlassianIdentifier(id),
   );
@@ -143,12 +181,18 @@ function partialReceipt(
   operation: JiraMutationOperation,
 ): JiraMutationReceipt | undefined {
   return receipt !== undefined &&
-    (projectOperation(operation) ||
-      agileOperation(operation) ||
-      isSafeAtlassianIdentifier(receipt.issueKey)) &&
+    partialIdentity(receipt, operation) &&
     validIdentities(receipt, operation)
     ? snapshotReceipt(receipt)
     : undefined;
+}
+function partialIdentity(receipt: JiraMutationReceipt, operation: JiraMutationOperation): boolean {
+  return (
+    projectOperation(operation) ||
+    agileOperation(operation) ||
+    structureOperation(operation) ||
+    isSafeAtlassianIdentifier(receipt.issueKey)
+  );
 }
 function snapshotReceipt(receipt: JiraMutationReceipt): JiraMutationReceipt {
   return Object.freeze({

@@ -25,7 +25,8 @@ interface VersionRollback {
 //
 // V48 only conservatively repairs mutation outcomes; no structural rollback applies. V57 only
 // widens the journal operation CHECK (no column added), as does V62 for project/Agile writes;
-// a rewind keeps the wider table. V62 also preserves the existing V58 batch digest.
+// V63 admits component/version metadata writes without a structural change. A rewind keeps
+// the wider table; both rebuilds preserve the existing V58 batch digest.
 // V20/V30/V33/V37/V40 have no fragments: they only widen a `failure_code` CHECK on
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.

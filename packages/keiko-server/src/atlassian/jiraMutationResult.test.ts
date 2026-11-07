@@ -127,6 +127,73 @@ describe("project mutation receipts", () => {
   });
 });
 
+describe("version and component identities", () => {
+  it.each([
+    {
+      operation: "jira.create-component",
+      receipt: { componentId: "9223372036854775807", projectId: "10000", projectKey: "SYN" },
+    },
+    {
+      operation: "jira.update-component",
+      receipt: { componentId: "37", projectId: "10000", projectKey: "SYN" },
+    },
+    {
+      operation: "jira.create-version",
+      receipt: { versionId: "9223372036854775807", projectId: "10000" },
+    },
+    { operation: "jira.update-version", receipt: { versionId: "37" } },
+  ] as const)(
+    "preserves precise $operation identity on success and uncertain effects",
+    ({ operation, receipt }) => {
+      expect(validJiraMutationAttempt({ ok: true, receipt }, operation)).toEqual({
+        ok: true,
+        receipt,
+      });
+      const partial = validJiraMutationAttempt(
+        { ok: false, reason: "unavailable", receipt },
+        operation,
+      );
+      expect(jiraAttemptToolResult("unknown", partial).data).toMatchObject({
+        ...receipt,
+        outcome: "unknown",
+      });
+    },
+  );
+  it.each(["jira.create-component", "jira.create-version"] as const)(
+    "does not confuse known project context with a created resource for %s",
+    (operation) => {
+      const receipt = { projectId: "10000", projectKey: "SYN" };
+      const partial = validJiraMutationAttempt(
+        { ok: false, reason: "unavailable", receipt },
+        operation,
+      );
+      expect(jiraAttemptToolResult("unknown", partial).data).toMatchObject({
+        ...receipt,
+        outcome: "unknown",
+      });
+      expect(partial.receipt).not.toHaveProperty("componentId");
+      expect(partial.receipt).not.toHaveProperty("versionId");
+      expect(validJiraMutationAttempt({ ok: true, receipt }, operation)).toEqual({
+        ok: false,
+        reason: "malformed-payload",
+      });
+    },
+  );
+  it.each([
+    { componentId: "37", versionId: "37" },
+    { componentId: "37", issueKey: "SYN-1" },
+    { componentId: "9223372036854775808" },
+    { componentId: "3.7" },
+    { componentId: "37", projectId: "not-an-id" },
+    { componentId: "37", browseUrl: "https://foreign.example.invalid/component/37" },
+  ])("refuses mixed or untrusted component identity %#", (receipt) => {
+    expect(validJiraMutationAttempt({ ok: true, receipt }, "jira.create-component")).toEqual({
+      ok: false,
+      reason: "malformed-payload",
+    });
+  });
+});
+
 describe("internal description formatting evidence", () => {
   it("keeps body-only Markdown projection evidence private and drops foreign values", () => {
     const attempt: JiraMutationAttempt = {

@@ -6,6 +6,7 @@ import {
   JIRA_TEMPLATE_RULE_IDS,
   parseJiraIssueTemplate,
   type JiraMutationAttempt,
+  type JiraMutationOperation,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
@@ -37,7 +38,10 @@ import {
   type SyntheticJira,
 } from "../../../../tests/support/jira-managed-remote.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
-import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
+import {
+  createJiraProviderForCatalog,
+  jiraOperationBindingForTool,
+} from "./jiraManagedProvider.js";
 import {
   JIRA_ALREADY_REFUSED_GUIDANCE,
   JIRA_UNCERTAIN_GUIDANCE,
@@ -385,7 +389,7 @@ describe("the dry run before approval", () => {
   function preflight(
     templateText: string,
     args: Record<string, unknown> | undefined,
-    tool: "jira.create" | "jira.draft" = "jira.create",
+    tool: JiraMutationOperation = "jira.create",
     jira: {
       readonly fields?: readonly unknown[];
       readonly existing?: readonly unknown[];
@@ -474,6 +478,47 @@ describe("the dry run before approval", () => {
     const events = sink.events.filter((event) => event.op === "jira.template.admission");
     expect(events.map((event) => event.extra?.stage)).toEqual(["pre-approval"]);
   });
+
+  it.each([
+    "jira.create-project",
+    "jira.update-project",
+    "jira.create-component",
+    "jira.update-component",
+    "jira.create-version",
+    "jira.update-version",
+  ] as const)(
+    "refuses invalid %s metadata before approval without a Jira write",
+    async (operation) => {
+      logs();
+      const f = preflight(TEMPLATE, {}, operation);
+      expect(await f.run()).toMatchObject({ outcome: "rejected", reason: "field-validation" });
+      expect(f.http).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["jira.create-component", { projectIdOrKey: "SYN", name: "New component" }],
+    ["jira.update-component", { componentId: "20000", name: "New component" }],
+    ["jira.create-version", { projectId: "10000", name: "New version" }],
+    ["jira.update-version", { versionId: "30000", released: true }],
+  ] as const)(
+    "checks %s metadata without applying an issue template or dispatching",
+    async (operation, args) => {
+      const f = preflight(TEMPLATE, args, operation);
+      f.http.mockImplementation((request) => {
+        const path = new URL(request.url).pathname;
+        const body = path.includes("/component/")
+          ? { id: "20000", project: "SYN", name: "Old component" }
+          : path.includes("/version/")
+            ? { id: "30000", projectId: 10000, name: "Old version", released: false }
+            : { id: "10000", key: "SYN" };
+        return Promise.resolve(response(body));
+      });
+      expect(await f.run()).toBeUndefined();
+      expect(f.http).toHaveBeenCalled();
+      expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+    },
+  );
 
   it("lets a conforming proposal through to the human's approval", async () => {
     const f = preflight(TEMPLATE, {
@@ -905,6 +950,7 @@ describe("a violating write never reaches Jira under Full access (#4177)", () =>
     const f = fullAccessWrite(VIOLATING);
     const result = await f.run();
     expect(result.data).toEqual({
+      operationBinding: jiraOperationBindingForTool("jira.create"),
       outcome: "rejected",
       reason: "field-validation",
       guidance: SECTION_GUIDANCE,
@@ -952,7 +998,7 @@ describe("a violating write never reaches Jira under Full access (#4177)", () =>
     const f = fullAccessWrite(wrapped, trace);
     const result = await f.run();
     expect(result.data).toMatchObject({ outcome: "succeeded" });
-    expect(f.writtenDescription()).toBe(`h2. Acceptance criteria\n* works\n\n${footer}`);
+    expect(f.writtenDescription()).toBe(`h2. Acceptance criteria\n\n* works\n\n${footer}`);
     expect(JSON.stringify(wrapped)).toBe(before);
     const serialized = f.mutationLog.events.filter(
       (event) => event.extra?.descriptionConvertedHeadingCount !== undefined,

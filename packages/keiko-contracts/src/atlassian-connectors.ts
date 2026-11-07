@@ -588,6 +588,10 @@ export type AtlassianConnectorActionType =
   | JiraManagedReadToolName
   | "create-project"
   | "update-project"
+  | "create-component"
+  | "update-component"
+  | "create-version"
+  | "update-version"
   | "create-board"
   | "create-sprint"
   | "update-sprint"
@@ -623,6 +627,10 @@ export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorAction
     "assign-issue",
     "create-project",
     "update-project",
+    "create-component",
+    "update-component",
+    "create-version",
+    "update-version",
     "create-board",
     "create-sprint",
     "update-sprint",
@@ -646,6 +654,10 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   "jira.create": "create-issue",
   "jira.create-project": "create-project",
   "jira.update-project": "update-project",
+  "jira.create-component": "create-component",
+  "jira.update-component": "update-component",
+  "jira.create-version": "create-version",
+  "jira.update-version": "update-version",
   "jira.board-create": "create-board",
   "jira.sprint-create": "create-sprint",
   "jira.sprint-update": "update-sprint",
@@ -690,6 +702,10 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   ...jiraReadActionValues("connector-access"),
   "create-project": "connector-write",
   "update-project": "connector-write",
+  "create-component": "connector-write",
+  "update-component": "connector-write",
+  "create-version": "connector-write",
+  "update-version": "connector-write",
   "create-board": "connector-write",
   "create-sprint": "connector-write",
   "update-sprint": "connector-write",
@@ -716,6 +732,10 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   ...jiraReadActionValues("jira"),
   "create-project": "jira",
   "update-project": "jira",
+  "create-component": "jira",
+  "update-component": "jira",
+  "create-version": "jira",
+  "update-version": "jira",
   "create-board": "jira",
   "create-sprint": "jira",
   "update-sprint": "jira",
@@ -742,6 +762,10 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   ...jiraReadActionValues("issue-tracker.read"),
   "create-project": "issue-tracker.write",
   "update-project": "issue-tracker.write",
+  "create-component": "issue-tracker.write",
+  "update-component": "issue-tracker.write",
+  "create-version": "issue-tracker.write",
+  "update-version": "issue-tracker.write",
   "create-board": "issue-tracker.write",
   "create-sprint": "issue-tracker.write",
   "update-sprint": "issue-tracker.write",
@@ -771,6 +795,10 @@ export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   ...jiraReadActionValues("low"),
   "create-project": "high",
   "update-project": "medium",
+  "create-component": "high",
+  "update-component": "medium",
+  "create-version": "high",
+  "update-version": "high",
   "create-board": "high",
   "create-sprint": "high",
   "update-sprint": "high",
