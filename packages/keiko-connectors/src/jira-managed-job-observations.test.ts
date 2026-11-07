@@ -3,17 +3,23 @@ import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import {
   executeJiraJobObservationRead as read,
   isJiraJobObservationRead,
 } from "./jira-managed-job-observations.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 
-function response(
-  payload: Pick<Extract<AtlassianWriteHttpOutcome, { ok: true }>, "body" | "items" | "scalar">,
-): ReturnType<typeof vi.fn<JiraMutationRequest>> {
-  return vi.fn<JiraMutationRequest>().mockResolvedValue({ ok: true, status: 200, ...payload });
+interface FixturePayload {
+  readonly body?: Record<string, unknown> | undefined;
+  readonly items?: readonly unknown[] | undefined;
+  readonly scalar?: string | number | boolean | null | undefined;
+}
+function response(payload: FixturePayload): ReturnType<typeof vi.fn<JiraMutationRequest>> {
+  return vi.fn<JiraMutationRequest>().mockResolvedValue({
+    ok: true, status: 200, body: payload.body,
+    ...(payload.items === undefined ? {} : { items: payload.items }),
+    ...(payload.scalar === undefined ? {} : { scalar: payload.scalar }),
+  });
 }
 
 it.each([

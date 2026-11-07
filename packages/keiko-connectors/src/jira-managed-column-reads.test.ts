@@ -3,17 +3,21 @@ import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
 import {
   executeJiraColumnRead as read,
   isJiraColumnRead,
 } from "./jira-managed-column-reads.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 
-function response(
-  payload: Pick<Extract<AtlassianWriteHttpOutcome, { ok: true }>, "body" | "items">,
-): ReturnType<typeof vi.fn<JiraMutationRequest>> {
-  return vi.fn<JiraMutationRequest>().mockResolvedValue({ ok: true, status: 200, ...payload });
+interface FixturePayload {
+  readonly body?: Record<string, unknown> | undefined;
+  readonly items?: readonly unknown[] | undefined;
+}
+function response(payload: FixturePayload): ReturnType<typeof vi.fn<JiraMutationRequest>> {
+  return vi.fn<JiraMutationRequest>().mockResolvedValue({
+    ok: true, status: 200, body: payload.body,
+    ...(payload.items === undefined ? {} : { items: payload.items }),
+  });
 }
 
 it("retains native layout order and repeated fields without inventing positions", async () => {
