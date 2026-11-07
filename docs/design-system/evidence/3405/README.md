@@ -96,8 +96,8 @@ freshness gate reject that source's old digest. On 2026-11-07 (UTC) the complete
 producer ran in the Linux gates container, with `--init` and Node 24.18.0. It passed in 1.6 minutes,
 including the real BFF stop and restart. The three records rebind only the `api.ts` digest.
 That host's Chromium renderer drew all 14 captures with fallback fonts. No visible updater state
-changed. No record binds capture bytes, so the existing macOS captures are kept, which keeps one
-renderer across the set. No updater behavior, baseline or numerical ceiling changed. This remains
+changed. No record binds capture bytes, so the existing macOS captures from 2026-11-06 are kept, which
+keeps one renderer across the set; the new `generatedAt` describes the three records, not the captures. No updater behavior, baseline or numerical ceiling changed. This remains
 updater fixture evidence.
 
 ## Reproduce
