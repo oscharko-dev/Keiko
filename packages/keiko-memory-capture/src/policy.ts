@@ -42,7 +42,9 @@ const PHONE_RE = /(?:\+\d[\d\s.-]{6,14}\d|\b\d[\d .-]*[ .-]\d[\d .-]{4,12}\d\b)/
 const PHONE_RUN_RE = new RegExp(PHONE_RE.source, "g");
 const DAY_FIRST_DATE_RE = /^(\d{1,2})([./])(\d{1,2})\2(?:\d{4}|\d{2})$/;
 const ISO_DATE_RE = /^\d{4}-(\d{1,2})-(\d{1,2})$/;
-const DIALLING_PREFIX_RE = /^[+0]/;
+// A dialling prefix is a group of digits only, "0171" or "+49"; "01.03." opening a date range or
+// "09.30" giving a time is not one.
+const DIALLING_PREFIX_RE = /^(?:\+\d+|0\d+)$/;
 
 function isCalendarDay(day: string | undefined, month: string | undefined): boolean {
   const dayNumber = Number(day);

@@ -1121,7 +1121,12 @@ describe("explicit forget statement in chat", () => {
       createdAt: now,
       updatedAt: now,
     });
-    expect(readMemories(vault, ctx)).toHaveLength(1);
+    await collectMemoryActions(
+      deps,
+      turnRequest("Merke dir, dass meine Lieblingsfarbe Blau ist"),
+      ctx,
+    );
+    expect(readMemories(vault, ctx)).toHaveLength(2);
 
     const actions = await collectMemoryActions(
       deps,
@@ -1130,7 +1135,11 @@ describe("explicit forget statement in chat", () => {
     );
 
     expect(actions).toEqual([expect.objectContaining({ kind: "forget", forgotten: true })]);
-    expect(readMemories(vault, ctx)).toHaveLength(0);
+    // Only the telephone number goes; the other fact stays.
+    expect(readMemories(vault, ctx).map(({ id }) => String(id))).not.toContain(
+      "mem-legacy-telephone",
+    );
+    expect(readMemories(vault, ctx)).toHaveLength(1);
   });
 
   it.each([

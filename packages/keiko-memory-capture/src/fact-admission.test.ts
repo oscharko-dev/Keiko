@@ -64,6 +64,25 @@ describe("admitProposedFact", () => {
       "evidence-not-verbatim",
     ],
     [
+      "a quote ending in a masked IBAN",
+      "Mein Konto: Ich zahle von DE89 3704 0044 0532 0130 00. Danke.",
+      "Ich zahle von [REDACTED]",
+      "personal-identifier",
+    ],
+    // A made-up quote cannot borrow an identifier said in another sentence of the message.
+    [
+      "a masked quote opening a sentence after an IBAN elsewhere",
+      "Meine IBAN ist DE89 3704 0044 0532 0130 00. Ich mag Tee.",
+      "[REDACTED] mag Tee",
+      "evidence-not-verbatim",
+    ],
+    [
+      "a masked quote closing a sentence before an IBAN elsewhere",
+      "Ich mag Tee. Meine IBAN ist DE89 3704 0044 0532 0130 00.",
+      "Ich mag [REDACTED]",
+      "evidence-not-verbatim",
+    ],
+    [
       "a masked quote whose other parts the person never said",
       "Ich zahle von DE89 3704 0044 0532 0130 00.",
       "Ich zahle gern von [REDACTED]",

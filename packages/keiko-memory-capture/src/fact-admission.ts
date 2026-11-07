@@ -1473,20 +1473,60 @@ function derivedConfidence(body: string, evidence: string, subjectless: boolean)
 // such as an IBAN. Its quote then holds the placeholder where the person wrote the identifier and
 // is not verbatim, though what the person said was an identifier Keiko never keeps (#4206). The
 // quote's other parts are found in order in the person's words; a masked span between them that
-// is an identifier names the real reason. No pattern is built from the quote.
-function maskedSpans(evidence: string, text: string): readonly string[] {
-  const parts = evidence.split(REDACTION_PLACEHOLDER);
-  let end = text.indexOf(parts[0] ?? "");
-  if (end === -1) return [];
-  end += (parts[0] ?? "").length;
+// is an identifier names the real reason. A span stays inside its own sentence and is short, so a
+// quote the model made up cannot borrow an identifier from elsewhere in the message. No pattern is
+// built from the quote.
+const MASKED_SPAN_MAX_CHARS = 64;
+const MASK_SENTENCE_END_RE = /[.!?](?=\s|$)/u;
+const MASK_SENTENCE_ENDS_RE = /[.!?](?=\s|$)/gu;
+
+function sentenceHead(text: string, to: number): string {
+  const head = text.slice(0, to);
+  let from = 0;
+  for (const end of head.matchAll(MASK_SENTENCE_ENDS_RE)) from = end.index + 1;
+  return head.slice(from).trimStart();
+}
+
+function sentenceTail(text: string, from: number): string {
+  const tail = text.slice(from);
+  const end = MASK_SENTENCE_END_RE.exec(tail);
+  return end === null ? tail : tail.slice(0, end.index);
+}
+
+function middleSpans(parts: readonly string[], text: string, end: number): string[] | null {
   const spans: string[] = [];
-  for (const part of parts.slice(1)) {
-    const start = part.length === 0 ? text.length : text.indexOf(part, end + 1);
-    if (start === -1) return [];
-    spans.push(text.slice(end, start));
-    end = start + part.length;
+  let cursor = end;
+  for (const [index, part] of parts.entries()) {
+    if (part.length === 0) {
+      if (index !== parts.length - 1) return null;
+      spans.push(sentenceTail(text, cursor));
+      continue;
+    }
+    const start = text.indexOf(part, cursor + 1);
+    if (start === -1) return null;
+    spans.push(text.slice(cursor, start));
+    cursor = start + part.length;
   }
   return spans;
+}
+
+function maskedSpans(evidence: string, text: string): readonly string[] {
+  const [first = "", second = "", ...rest] = evidence.split(REDACTION_PLACEHOLDER);
+  const anchor = first.length > 0 ? first : second;
+  const at = text.indexOf(anchor);
+  if (anchor.length === 0 || at === -1) return [];
+  const head = first.length > 0 ? [] : [sentenceHead(text, at)];
+  const tail = first.length > 0 ? [second, ...rest] : rest;
+  const spans = middleSpans(tail, text, at + anchor.length);
+  if (spans === null) return [];
+  const all = [...head, ...spans];
+  const bounded = all.every(
+    (span) =>
+      span.trim().length > 0 &&
+      span.length <= MASKED_SPAN_MAX_CHARS &&
+      !MASK_SENTENCE_END_RE.test(span),
+  );
+  return bounded ? all : [];
 }
 
 function quotesMaskedIdentifier(evidence: string, text: string): boolean {

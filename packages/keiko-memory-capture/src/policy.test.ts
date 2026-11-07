@@ -104,6 +104,10 @@ describe("classifySensitivity", () => {
     expect(classifySensitivity("Termin am 12.05.2026 10 Uhr")).toBe("public");
     expect(classifySensitivity("Raum 3 12.05.2026")).toBe("public");
     expect(classifySensitivity("Projekt vom 01.01.2026 - 31.12.2027")).toBe("public");
+    // A short date opening a range, or a time, is no dialling prefix.
+    expect(classifySensitivity("Urlaub 01.03. - 31.03.2026")).toBe("public");
+    expect(classifySensitivity("Kurs 09.30 12.03.2026")).toBe("public");
+    expect(classifySensitivity("Sitzung am 05. 12.03.2026")).toBe("public");
   });
 
   it("keeps false-positive-near German number examples public", () => {
