@@ -19,6 +19,7 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "visible-jql-metadata"
   | "scoped-user-candidates"
   | "visible-directory-suggestions"
   | "visible-role-configuration"
@@ -154,6 +155,10 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...reads("visible-jql-metadata", {
+    "jira.jql-autocomplete": "/jql/autocompletedata",
+    "jira.jql-suggestions": "/jql/autocompletedata/suggestions",
+  }),
   ...reads("scoped-user-candidates", {
     "jira.multi-project-assignable-users": "/user/assignable/multiProjectSearch",
     "jira.permission-users": "/user/permission/search",

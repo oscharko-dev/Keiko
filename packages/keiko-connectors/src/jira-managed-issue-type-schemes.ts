@@ -1,4 +1,7 @@
-import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_READ_TOOL_FAMILIES,
+  isSafeAtlassianIdentifier,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -10,11 +13,7 @@ import { jiraReadFailure, localJiraPage, projectJiraCollection } from "./jira-ma
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
 
-export const JIRA_ISSUE_TYPE_SCHEME_READS = [
-  "jira.issue-type-schemes",
-  "jira.issue-type-scheme",
-  "jira.issue-type-scheme-projects",
-] as const;
+export const JIRA_ISSUE_TYPE_SCHEME_READS = JIRA_READ_TOOL_FAMILIES.issueTypeSchemes;
 type Read = (typeof JIRA_ISSUE_TYPE_SCHEME_READS)[number];
 interface Selection {
   readonly path: string;

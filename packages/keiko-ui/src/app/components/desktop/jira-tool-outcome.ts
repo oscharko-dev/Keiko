@@ -46,6 +46,7 @@ import { JIRA_INSTANCE_TOOLS, jiraInstanceDetails } from "./jira-instance-presen
 import { JIRA_ROLE_TOOLS, jiraRoleDetails } from "./jira-role-presentation";
 import { JIRA_RELEASE_TOOLS, jiraReleaseDetails } from "./jira-release-presentation";
 import { JIRA_LOOKUP_TOOLS, jiraLookupDetails } from "./jira-lookup-presentation";
+import { JIRA_JQL_TOOLS, jiraJqlDetails } from "./jira-jql-presentation";
 
 export interface JiraOutcomeItem {
   readonly key?: string;
@@ -106,6 +107,7 @@ const STANDALONE_TOOLS = new Set([
   ...JIRA_ROLE_TOOLS,
   ...JIRA_RELEASE_TOOLS,
   ...JIRA_LOOKUP_TOOLS,
+  ...JIRA_JQL_TOOLS,
 ]);
 const BOARD_READ_TOOLS = new Set(["jira_board", "jira_boards", "jira_board_configuration"]);
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -245,6 +247,7 @@ function configurationDetails(tool: string, source: UnknownRecord): readonly Jir
   if (JIRA_ROLE_TOOLS.has(tool)) return jiraRoleDetails(tool, source);
   if (JIRA_RELEASE_TOOLS.has(tool)) return jiraReleaseDetails(tool, source);
   if (JIRA_LOOKUP_TOOLS.has(tool)) return jiraLookupDetails(tool, source);
+  if (JIRA_JQL_TOOLS.has(tool)) return jiraJqlDetails(tool, source);
   return JIRA_PROJECT_ASSOCIATION_TOOLS.has(tool)
     ? jiraProjectAssociationDetails(tool, source)
     : undefined;

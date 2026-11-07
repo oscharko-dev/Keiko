@@ -23,8 +23,8 @@ const ISSUE_TYPE_FIELDS = { ...NAMED_FIELDS, subtask: BOOL, avatarId: ID };
 const ISSUE_TYPE = object(ISSUE_TYPE_FIELDS, ["id", "name"]);
 const PRIORITY_FIELDS = { ...NAMED_FIELDS, statusColor: COLOR };
 const PRIORITY = object(PRIORITY_FIELDS, ["id", "name"]);
-// Published resolution DTO examples omit id; a caller's requested ID is separate context.
-const RESOLUTION = object(NAMED_FIELDS, ["name"]);
+// The documented native identity is mandatory; never borrow it from the request selector.
+const RESOLUTION = object(NAMED_FIELDS, ["id", "name"]);
 const CATEGORY_FIELDS = { id: ID, key: KEY, name: NAME, colorName: COLOR };
 const STATUS_CATEGORY = object(CATEGORY_FIELDS, ["id", "key"]);
 const STATUS_FIELDS = { ...NAMED_FIELDS, statusColor: COLOR, statusCategory: STATUS_CATEGORY };
@@ -54,8 +54,16 @@ function read(
   input: CatalogJsonObject,
   result: CatalogJsonObject,
   maxResultCount = 100,
+  requiredSuccessFields: readonly string[] = [],
 ): JiraNativeDefinition {
-  return { description, input, result: jiraNativeReadResult(result), risk: "read", maxResultCount };
+  const schema = jiraNativeReadResult(result);
+  return {
+    description, input, risk: "read", maxResultCount,
+    result: requiredSuccessFields.length === 0 ? schema : {
+      ...schema,
+      anyOf: [{ properties: { outcome: { enum: ["failed"] } } }, { required: requiredSuccessFields }],
+    },
+  };
 }
 
 export const JIRA_CORE_METADATA_READ_DEFINITIONS = {
@@ -97,18 +105,19 @@ export const JIRA_CORE_METADATA_READ_DEFINITIONS = {
     page(PRIORITY),
   ),
   "jira.resolutions": read(
-    "Inspect a local page of native resolutions. Published responses may omit resolution IDs; preserve that absence instead of inventing an identity. A listed resolution does not mean an issue is resolved or allow a transition.",
+    "Inspect a local page of native resolutions with their exact observed IDs. Every entry must supply its documented identity; missing or contradictory identities are refused. A listed resolution does not mean an issue is resolved or allow a transition.",
     object(PAGING),
     page(RESOLUTION, true),
   ),
   "jira.resolution": read(
-    "Read a resolution at the exact requested decimal resolutionId. Preserve the requested context separately because native responses may omit their own id; when Jira supplies an id it must match. This does not resolve or reopen an issue.",
+    "Read a resolution at the exact requested decimal resolutionId. The observed native id is required and must match that selector; never substitute the requested ID for missing response evidence. This does not resolve or reopen an issue.",
     object({ resolutionId: ID }, ["resolutionId"]),
-    { resolutionId: ID, ...NAMED_FIELDS },
+    NAMED_FIELDS,
     1,
+    ["id", "name"],
   ),
   "jira.resolution-page": read(
-    "Read a native resolution page with optional query text. Preserve native paging and optional observed IDs/totals, with no unsupported project or issue-type filter and no issue mutation.",
+    "Read a native resolution page with optional query text. Every entry retains its required observed ID; native totals remain optional. No unsupported project or issue-type filter and no issue mutation.",
     object(QUERY_PAGE),
     page(RESOLUTION),
   ),

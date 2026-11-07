@@ -120,6 +120,11 @@ it.each([
     .mockResolvedValueOnce(response(page(0, values.length, values)));
   expect((await read("jira.project-version-page", { projectIdOrKey: "SYN", maxResults: 1 }, port)).isError).toBe(true);
 });
+it("refuses duplicate version identities even when the native page fits its declared size", async () => {
+  const port = vi.fn<JiraMutationRequest>().mockResolvedValueOnce(response(PROJECT))
+    .mockResolvedValueOnce(response({ startAt: 0, maxResults: 2, total: 2, isLast: true, values: [VERSION, VERSION] }));
+  expect((await read("jira.project-version-page", { projectIdOrKey: "SYN", maxResults: 2 }, port)).data.reason).toBe("malformed-payload");
+});
 const INVALID: readonly [Parameters<typeof read>[0], CatalogJsonObject][] = [
   ["jira.component-related-issue-counts", { componentId: "../42" }],
   ["jira.version-unresolved-issue-count", { versionId: "42", expand: "all" }],

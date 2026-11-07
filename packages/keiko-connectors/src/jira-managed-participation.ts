@@ -1,4 +1,5 @@
 import {
+  JIRA_READ_TOOL_FAMILIES,
   isSafeAtlassianIdentifier,
   isSafeAtlassianConnectorBaseUrl,
   type JiraMutationAttempt,
@@ -18,7 +19,7 @@ import { dispatchFailure, JiraAcknowledgedMutationError } from "./jira-mutation-
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
 import { jiraResourceSelfMatches } from "./jira-resource-self.js";
 
-export const JIRA_PARTICIPATION_READS = ["jira.watchers", "jira.votes"] as const;
+export const JIRA_PARTICIPATION_READS = JIRA_READ_TOOL_FAMILIES.participation;
 export const JIRA_PARTICIPATION_WRITES = [
   "jira.watch",
   "jira.unwatch",

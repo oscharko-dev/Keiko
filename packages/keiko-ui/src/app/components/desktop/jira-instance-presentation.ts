@@ -2,7 +2,12 @@ import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentation";
 import { jiraDirectoryDetails } from "./jira-directory-presentation";
 
-type Source = Readonly<Record<string, unknown>>;
+import {
+  jiraPresentationFact as fact,
+  jiraPresentationRecord as record,
+  jiraPresentationText as text,
+  type JiraPresentationSource as Source,
+} from "./jira-presentation-values";
 export const JIRA_INSTANCE_TOOLS: ReadonlySet<string> = new Set([
   "jira_server_info", "jira_instance_configuration", "jira_permission_definitions", "jira_myself",
 ]);
@@ -31,17 +36,6 @@ const TIME_LABELS: Readonly<Record<string, Readonly<Record<string, WidgetMessage
     pretty: "chat.jira.instance.formatPretty", days: "chat.jira.instance.formatDays", hours: "chat.jira.instance.formatHours",
   },
 };
-function record(value: unknown): Source | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? Object.fromEntries(Object.entries(value)) : undefined;
-}
-function text(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-function fact(label: WidgetMessageKey, value: unknown): JiraOutcomeFact[] {
-  const content = text(value);
-  return content === undefined ? [] : [{ label, value: content }];
-}
 function serverInfo(source: Source): readonly JiraAgileDetails[] {
   if (text(source.version) === undefined) return [];
   const facts = Object.entries(SERVER_FACTS).flatMap(([field, label]) => fact(label, source[field]));

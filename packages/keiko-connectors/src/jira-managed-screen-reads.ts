@@ -1,4 +1,7 @@
-import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_READ_TOOL_FAMILIES,
+  isSafeAtlassianIdentifier,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -11,11 +14,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
 
-export const JIRA_SCREEN_READS = [
-  "jira.screen-tabs",
-  "jira.screen-tab-fields",
-  "jira.screen-available-fields",
-] as const;
+export const JIRA_SCREEN_READS = JIRA_READ_TOOL_FAMILIES.screens;
 type ScreenRead = (typeof JIRA_SCREEN_READS)[number];
 const READS: ReadonlySet<string> = new Set(JIRA_SCREEN_READS);
 interface Selection {

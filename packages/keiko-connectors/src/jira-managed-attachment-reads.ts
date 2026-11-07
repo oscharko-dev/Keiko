@@ -1,3 +1,4 @@
+import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -10,12 +11,7 @@ import { jiraReadFailure, localJiraPage } from "./jira-managed-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
 
-export const JIRA_ATTACHMENT_READS = [
-  "jira.attachment-settings",
-  "jira.attachment",
-  "jira.attachment-archive",
-  "jira.attachment-archive-summary",
-] as const;
+export const JIRA_ATTACHMENT_READS = JIRA_READ_TOOL_FAMILIES.attachments;
 type AttachmentRead = (typeof JIRA_ATTACHMENT_READS)[number];
 const READS: ReadonlySet<string> = new Set(JIRA_ATTACHMENT_READS);
 const FIELDS: Readonly<Record<AttachmentRead, readonly string[]>> = {

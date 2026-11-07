@@ -1,4 +1,7 @@
-import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_READ_TOOL_FAMILIES,
+  isSafeAtlassianIdentifier,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -20,12 +23,7 @@ import { jiraVersionSummary } from "./jira-managed-versions.js";
 import { jiraNativeId, jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
 import { jiraResourceSelfMatches } from "./jira-resource-self.js";
 
-export const JIRA_RELEASE_READS = [
-  "jira.component-related-issue-counts",
-  "jira.version-related-issue-counts",
-  "jira.version-unresolved-issue-count",
-  "jira.project-version-page",
-] as const;
+export const JIRA_RELEASE_READS = JIRA_READ_TOOL_FAMILIES.release;
 type ReleaseRead = (typeof JIRA_RELEASE_READS)[number];
 type CountRead = Exclude<ReleaseRead, "jira.project-version-page">;
 const READS: ReadonlySet<string> = new Set(JIRA_RELEASE_READS);

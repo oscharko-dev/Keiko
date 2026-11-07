@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **158 native identities: 129 reads and 29 writes**. Each is mapped to
+The current registry supplies **160 native identities: 131 reads and 29 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **281 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **279 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -136,7 +136,7 @@ the C6 comment-update/link/worklog read increment; bounded C8 attachment/archive
 worklog create/update with connected-user watching/voting; fourteen C9 workflow-/issue-type-scheme
 and screen reads; three reviewed comment/attachment/worklog deletions; and eight C10 user, group and
 application-role reads; ten permission/security/notification configuration reads; and five additional
-project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; and seven scoped directory/field reads. The three existing
+project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; and two JQL metadata/suggestion reads. The three existing
 report/draft composites remain compositions, not extra native API identities. Remaining filter
 creation, ranking, other estimate-adjustment modes and destructive operations, administration and
 other inventory gaps stay open. A registered declaration is not evidence that
@@ -185,8 +185,8 @@ Twenty core metadata reads expose global issue types and compatible alternatives
 resolutions, statuses/categories, project categories/types and grouped project statuses. Native
 paged endpoints retain their observed envelope and optional totals; unpaged native lists use the
 existing local pagination owner. Optional classifications, category names and grouped statuses
-remain unknown when omitted. Resolution IDs are not fabricated from URLs when the documented
-representation omits them. Project statuses require an independently read canonical project.
+remain unknown when omitted. Every resolution row requires its observed native ID; a single read must match the selected
+ID, and missing/mismatched identities are refused without consulting self URLs. Project statuses require an independently read canonical project.
 Icons, SVG and remote links are omitted; observed metadata grants no administration or migration
 authority and does not prove project-type license availability.
 
@@ -216,6 +216,13 @@ and do not invent missing branches or continuation. Global field flags/schema fa
 create/edit admission or imply required/default values. Custom-field options bind exact observed
 IDs and retain empty native values and unknown optional state. Highlight HTML, email, avatar and
 remote-link fields are omitted. The deprecated native permission search remains runtime-unqualified.
+
+Two JQL reads expose bounded visible field/function/reserved-word metadata and native value suggestions.
+Local pages describe only the native returned collection; they do not invent remote offsets or a complete
+value universe. Native boolean strings are decoded explicitly, missing metadata remains unknown and
+highlighted HTML is omitted. Closed field/predicate selectors do not execute JQL, grant permission or
+prove query validity. The published autocomplete item-schema/example mismatch is handled through the
+explicit DTO documented by Atlassian; runtime qualification remains separate.
 
 `currentRegistry` pins the existing server registry source file's SHA-256 and native declaration
 count. The reconciliation helper parses that file's literal `NATIVE` declarations and verified closed
@@ -295,3 +302,4 @@ Both gate modes check accounting integrity. They make no network calls, probe no
 and cannot certify operation correctness, authority, permissions, live compatibility or workflow
 acceptance. Refreshing sources requires retaining new original bytes, reviewing changes and
 updating provenance and all affected rows together; a changed digest is never silently accepted.
+

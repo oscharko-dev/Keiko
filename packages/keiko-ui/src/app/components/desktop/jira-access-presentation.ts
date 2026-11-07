@@ -1,7 +1,12 @@
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentation";
 
-type Source = Readonly<Record<string, unknown>>;
+import {
+  jiraPresentationFact as fact,
+  jiraPresentationRecord as record,
+  jiraPresentationText as text,
+  type JiraPresentationSource as Source,
+} from "./jira-presentation-values";
 const PERMISSION_SCHEMES = new Set(["jira_permission_schemes", "jira_permission_scheme"]);
 const GRANTS = new Set(["jira_permission_grants", "jira_permission_grant"]);
 const SECURITY_SCHEMES = new Set(["jira_issue_security_schemes", "jira_issue_security_scheme"]);
@@ -31,18 +36,6 @@ const RECIPIENT_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
   GroupCustomField: "chat.jira.access.recipient.groupCustomField",
   ProjectRole: "chat.jira.access.recipient.projectRole",
 };
-function record(value: unknown): Source | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? Object.fromEntries(Object.entries(value))
-    : undefined;
-}
-function text(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-function fact(label: WidgetMessageKey, value: unknown): JiraOutcomeFact[] {
-  const content = text(value);
-  return content === undefined ? [] : [{ label, value: content }];
-}
 function named(source: Source, label: WidgetMessageKey): JiraAgileDetails {
   const name = text(source.name);
   const body = text(source.description);

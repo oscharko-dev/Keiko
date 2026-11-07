@@ -1,3 +1,4 @@
+import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -11,15 +12,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeId, jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
 
-export const JIRA_ACCESS_SCHEME_READS = [
-  "jira.permission-schemes",
-  "jira.permission-scheme",
-  "jira.permission-grants",
-  "jira.permission-grant",
-  "jira.issue-security-schemes",
-  "jira.issue-security-scheme",
-  "jira.security-level",
-] as const;
+export const JIRA_ACCESS_SCHEME_READS = JIRA_READ_TOOL_FAMILIES.accessSchemes;
 type AccessRead = (typeof JIRA_ACCESS_SCHEME_READS)[number];
 const READS: ReadonlySet<string> = new Set(JIRA_ACCESS_SCHEME_READS);
 const FIELDS: Readonly<Record<AccessRead, readonly string[]>> = {

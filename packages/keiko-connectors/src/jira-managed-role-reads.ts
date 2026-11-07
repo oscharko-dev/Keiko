@@ -1,4 +1,7 @@
-import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_READ_TOOL_FAMILIES,
+  isSafeAtlassianIdentifier,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { TOOL_CATALOG_LIMITS, type CatalogJsonObject, type CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
@@ -11,7 +14,7 @@ import { readJiraBoundProject } from "./jira-managed-projects.js";
 import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeId, jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
 
-export const JIRA_ROLE_READS = ["jira.roles", "jira.role", "jira.role-default-actors", "jira.project-roles", "jira.project-role"] as const;
+export const JIRA_ROLE_READS = JIRA_READ_TOOL_FAMILIES.roles;
 type RoleRead = (typeof JIRA_ROLE_READS)[number];
 const READS: ReadonlySet<string> = new Set(JIRA_ROLE_READS);
 const FIELDS: Readonly<Record<RoleRead, readonly string[]>> = {

@@ -3,7 +3,12 @@ import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentatio
 import { jiraAccessDetails } from "./jira-access-presentation";
 import { jiraAdministrationDetails } from "./jira-administration-presentation";
 
-type Source = Readonly<Record<string, unknown>>;
+import {
+  jiraPresentationFact as fact,
+  jiraPresentationRecord as record,
+  jiraPresentationText as text,
+  type JiraPresentationSource as Source,
+} from "./jira-presentation-values";
 export const JIRA_PROJECT_ASSOCIATION_TOOLS: ReadonlySet<string> = new Set([
   "jira_project_permission_scheme",
   "jira_project_issue_security_scheme",
@@ -11,18 +16,6 @@ export const JIRA_PROJECT_ASSOCIATION_TOOLS: ReadonlySet<string> = new Set([
   "jira_project_workflow_scheme",
   "jira_project_priority_scheme",
 ]);
-function text(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-function fact(label: WidgetMessageKey, value: unknown): JiraOutcomeFact[] {
-  const content = text(value);
-  return content === undefined ? [] : [{ label, value: content }];
-}
-function record(value: unknown): Source | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? Object.fromEntries(Object.entries(value))
-    : undefined;
-}
 function projectFacts(source: Source): JiraOutcomeFact[] {
   return [
     ...fact("chat.jira.fact.projectId", source.projectId),

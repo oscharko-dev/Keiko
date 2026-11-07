@@ -1,4 +1,5 @@
 import {
+  JIRA_READ_TOOL_FAMILIES,
   isSafeAtlassianIdentifier,
   sanitizeJiraMutationFailureDetail,
   type JiraMutationAttempt,
@@ -20,8 +21,7 @@ import {
 } from "./jira-native-values.js";
 import { jiraReadbackValueMatches } from "./jira-readback-values.js";
 
-type ProjectRead =
-  "jira.project" | "jira.validate-project-key" | "jira.project-permissions" | "jira.project-type";
+type ProjectRead = (typeof JIRA_READ_TOOL_FAMILIES.projects)[number];
 type ProjectWrite = "jira.create-project" | "jira.update-project";
 type Failure = Extract<JiraMutationAttempt, { readonly ok: false }>;
 interface ProjectView {
@@ -42,12 +42,7 @@ type ProjectReadback = Failure | { readonly ok: true; readonly project: ProjectV
 type KeyValidation =
   | Failure
   | { readonly ok: true; readonly valid: boolean; readonly detail?: JiraMutationFailureDetail };
-const READS: ReadonlySet<string> = new Set([
-  "jira.project",
-  "jira.validate-project-key",
-  "jira.project-permissions",
-  "jira.project-type",
-]);
+const READS: ReadonlySet<string> = new Set(JIRA_READ_TOOL_FAMILIES.projects);
 const PROJECT_FIELDS = new Set(["name", "lead", "description", "url", "assigneeType"]);
 const MALFORMED: Failure = { ok: false, reason: "malformed-payload" };
 const INVALID: Failure = {

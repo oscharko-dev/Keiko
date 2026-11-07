@@ -6,7 +6,7 @@ import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 
 const ISSUE_TYPE = { id: "1", name: "Synthetic task", subtask: false, avatarId: "7" };
 const PRIORITY = { id: "2", name: "Synthetic priority", statusColor: "blue" };
-const RESOLUTION = { name: "Synthetic resolution", description: "" };
+const RESOLUTION = { id: "3", name: "Synthetic resolution", description: "" };
 const CATEGORY = { id: "4", key: "new", name: "Synthetic category", colorName: "blue-gray" };
 const STATUS = { id: "5", name: "Synthetic status", statusCategory: CATEGORY };
 const PROJECT_CATEGORY = { id: "6", name: "Synthetic project category" };
@@ -21,7 +21,7 @@ it.each([
   ["jira.priority", { priorityId: "2" }, PRIORITY],
   ["jira.priority-page", { query: "", projectIds: ["7"] }, { items: [PRIORITY], startAt: 0 }],
   ["jira.resolutions", {}, page(RESOLUTION)],
-  ["jira.resolution", { resolutionId: "3" }, { resolutionId: "3", ...RESOLUTION }],
+  ["jira.resolution", { resolutionId: "3" }, RESOLUTION],
   ["jira.resolution-page", { query: "fixed" }, { items: [RESOLUTION], startAt: 0 }],
   ["jira.statuses", {}, page(STATUS)],
   ["jira.status", { statusIdOrName: "Synthetic status" }, STATUS],
@@ -71,7 +71,10 @@ it.each([
 });
 it.each([
   ["jira.issue-type", { ...ISSUE_TYPE, iconUrl: "https://synthetic.invalid/icon" }],
-  ["jira.resolution", { ...RESOLUTION, resolutionId: "3", id: 3 }],
+  ["jira.resolution", { ...RESOLUTION, id: 3 }],
+  ["jira.resolution", { name: "Missing identity" }],
+  ["jira.resolutions", { items: [{ name: "Missing identity" }], startAt: 0, total: 1 }],
+  ["jira.resolution-page", { items: [{ name: "Missing identity" }], startAt: 0 }],
   ["jira.status", { ...STATUS, statusCategory: { ...CATEGORY, self: "https://synthetic.invalid/category" } }],
   ["jira.project-statuses", { projectId: "7", projectKey: "SYN", ...page({ id: "1", name: "Synthetic task", statuses: [{ name: "Missing native status ID" }] }) }],
   ["jira.project-type-definition", { ...PROJECT_TYPE, accessible: true }],

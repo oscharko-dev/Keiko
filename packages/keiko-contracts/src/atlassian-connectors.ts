@@ -1744,6 +1744,7 @@ export {
   JIRA_MANAGED_READ_TOOLS,
   type JiraManagedReadToolName,
 } from "./jira-tool-fields.js";
+export { JIRA_READ_TOOL_FAMILIES } from "./jira-read-tools.js";
 export {
   JIRA_ATTACHMENT_MAX_BYTES,
   JIRA_ATTACHMENT_NAME_MAX_BYTES,

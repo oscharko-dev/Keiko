@@ -1,4 +1,8 @@
 import {
+  jiraJqlDeclarationForTool,
+  type JIRA_JQL_READ_DEFINITIONS,
+} from "./jiraJqlDescriptors.js";
+import {
   jiraScopedDirectoryDeclarationForTool,
   type JIRA_SCOPED_DIRECTORY_READ_DEFINITIONS,
 } from "./jiraScopedDirectoryDescriptors.js";
@@ -200,6 +204,7 @@ type CoreReadToolName = Exclude<
       | keyof typeof JIRA_RELEASE_READ_DEFINITIONS
       | keyof typeof JIRA_DIRECTORY_READ_DEFINITIONS
       | keyof typeof JIRA_SCOPED_DIRECTORY_READ_DEFINITIONS
+      | keyof typeof JIRA_JQL_READ_DEFINITIONS
       | keyof typeof JIRA_SAVED_VIEW_READ_DEFINITIONS
       | keyof typeof JIRA_ASSET_READ_DEFINITIONS
     >
@@ -382,6 +387,7 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
     jiraReleaseDeclarationForTool,
     jiraDirectoryDeclarationForTool,
     jiraScopedDirectoryDeclarationForTool,
+    jiraJqlDeclarationForTool,
     jiraParticipationDeclarationForTool,
     jiraIssueCollaborationDeclarationForTool,
     jiraSavedViewDeclarationForTool,

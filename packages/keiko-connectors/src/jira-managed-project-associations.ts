@@ -1,4 +1,7 @@
-import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_READ_TOOL_FAMILIES,
+  isSafeAtlassianIdentifier,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -19,13 +22,7 @@ import { readJiraBoundProject } from "./jira-managed-projects.js";
 import { jiraWorkflowSchemeResult } from "./jira-managed-workflow-schemes.js";
 import { jiraNativeId, jiraNativeNumericId } from "./jira-native-values.js";
 
-export const JIRA_PROJECT_ASSOCIATION_READS = [
-  "jira.project-permission-scheme",
-  "jira.project-issue-security-scheme",
-  "jira.project-security-levels",
-  "jira.project-workflow-scheme",
-  "jira.project-priority-scheme",
-] as const;
+export const JIRA_PROJECT_ASSOCIATION_READS = JIRA_READ_TOOL_FAMILIES.projectAssociations;
 type AssociationRead = (typeof JIRA_PROJECT_ASSOCIATION_READS)[number];
 const READS: ReadonlySet<string> = new Set(JIRA_PROJECT_ASSOCIATION_READS);
 const SUFFIX: Readonly<Record<AssociationRead, string>> = {

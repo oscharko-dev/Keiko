@@ -1,4 +1,5 @@
 import {
+  JIRA_READ_TOOL_FAMILIES,
   isSafeAtlassianIdentifier,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -10,9 +11,7 @@ import { readJiraBoundProject } from "./jira-managed-projects.js";
 import { jiraNativeId } from "./jira-native-values.js";
 import { jiraNotificationScheme } from "./jira-notification-scheme-values.js";
 
-export const JIRA_NOTIFICATION_SCHEME_READS = [
-  "jira.notification-schemes", "jira.notification-scheme", "jira.project-notification-scheme",
-] as const;
+export const JIRA_NOTIFICATION_SCHEME_READS = JIRA_READ_TOOL_FAMILIES.notificationSchemes;
 type Operation = (typeof JIRA_NOTIFICATION_SCHEME_READS)[number];
 interface Selection {
   readonly startAt: number;

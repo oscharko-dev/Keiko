@@ -1,3 +1,4 @@
+import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -16,13 +17,7 @@ import {
   remoteJiraPage,
 } from "./jira-managed-metadata.js";
 
-export const JIRA_SAVED_VIEW_READS = [
-  "jira.dashboards",
-  "jira.dashboard",
-  "jira.filter-share-scope",
-  "jira.filter-permissions",
-  "jira.filter-permission",
-] as const;
+export const JIRA_SAVED_VIEW_READS = JIRA_READ_TOOL_FAMILIES.savedViews;
 type SavedViewRead = (typeof JIRA_SAVED_VIEW_READS)[number];
 const OPERATIONS: ReadonlySet<string> = new Set(JIRA_SAVED_VIEW_READS);
 const SCOPES: ReadonlySet<unknown> = new Set(["GLOBAL", "AUTHENTICATED", "PRIVATE"]);

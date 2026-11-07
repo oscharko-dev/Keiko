@@ -1,4 +1,7 @@
-import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_READ_TOOL_FAMILIES,
+  isSafeAtlassianIdentifier,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -22,12 +25,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { executeJiraSelectedRead, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeText } from "./jira-native-values.js";
 
-export const JIRA_DIRECTORY_READS = [
-  "jira.group-members",
-  "jira.groups",
-  "jira.application-roles",
-  "jira.application-role",
-] as const;
+export const JIRA_DIRECTORY_READS = JIRA_READ_TOOL_FAMILIES.directory;
 type DirectoryRead = (typeof JIRA_DIRECTORY_READS)[number];
 const READS: ReadonlySet<string> = new Set(JIRA_DIRECTORY_READS);
 const ARGUMENTS: Readonly<Record<DirectoryRead, ReadonlySet<string>>> = {

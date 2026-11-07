@@ -41,11 +41,9 @@ function optionalText(
   }
   return result;
 }
-function named(raw: Record<string, unknown>, idOptional = false): CatalogJsonObject | undefined {
-  if (!jiraNativeText(raw.name, 255)) return undefined;
-  if (raw.id === undefined || raw.id === null)
-    return idOptional ? { name: raw.name } : undefined;
-  return jiraNativeId(raw.id) ? { id: raw.id, name: raw.name } : undefined;
+function named(raw: Record<string, unknown>): CatalogJsonObject | undefined {
+  return jiraNativeId(raw.id) && jiraNativeText(raw.name, 255)
+    ? { id: raw.id, name: raw.name } : undefined;
 }
 function category(raw: Record<string, unknown>): CatalogJsonObject | undefined {
   const id = jiraNativeNumericId(raw.id);
@@ -106,7 +104,7 @@ export function jiraCoreMetadataProjection(
   if (raw === undefined) return undefined;
   if (kind === "status-category") return category(raw);
   if (kind === "project-type") return projectType(raw);
-  const base = named(raw, kind === "resolution");
+  const base = named(raw);
   const fields = kind === "project-statuses" ? []
     : kind === "priority" || kind === "status" ? ["description", "statusColor"]
       : ["description"];

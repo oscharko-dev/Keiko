@@ -1,3 +1,4 @@
+import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { TOOL_CATALOG_LIMITS, type CatalogJsonObject, type CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
@@ -9,7 +10,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeId, jiraNativeNumericId, jiraNativeText } from "./jira-native-values.js";
 
-export const JIRA_FIELD_DIRECTORY_READS = ["jira.fields", "jira.custom-field-option"] as const;
+export const JIRA_FIELD_DIRECTORY_READS = JIRA_READ_TOOL_FAMILIES.fieldDirectory;
 type FieldRead = (typeof JIRA_FIELD_DIRECTORY_READS)[number];
 const READS: ReadonlySet<string> = new Set(JIRA_FIELD_DIRECTORY_READS);
 interface Selection { readonly path: string; readonly startAt: number; readonly maxResults: number; readonly optionId?: string; }

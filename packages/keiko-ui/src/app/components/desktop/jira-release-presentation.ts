@@ -2,7 +2,12 @@ import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentation";
 import { jiraProjectMetadataDetails } from "./jira-project-metadata-presentation";
 
-type Source = Readonly<Record<string, unknown>>;
+import {
+  jiraPresentationFact as fact,
+  jiraPresentationRecord as record,
+  jiraPresentationText as text,
+  type JiraPresentationSource as Source,
+} from "./jira-presentation-values";
 export const JIRA_RELEASE_TOOLS: ReadonlySet<string> = new Set([
   "jira_component_related_issue_counts", "jira_version_related_issue_counts",
   "jira_version_unresolved_issue_count", "jira_project_version_page",
@@ -16,17 +21,6 @@ const COUNT_FIELDS: Readonly<Record<string, Readonly<Record<string, WidgetMessag
   },
   jira_version_unresolved_issue_count: { issuesUnresolvedCount: "chat.jira.release.unresolvedIssues" },
 };
-function record(value: unknown): Source | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? Object.fromEntries(Object.entries(value)) : undefined;
-}
-function text(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-function fact(label: WidgetMessageKey, value: unknown): JiraOutcomeFact[] {
-  const content = text(value);
-  return content === undefined ? [] : [{ label, value: content }];
-}
 function countFact(label: WidgetMessageKey, value: unknown): JiraOutcomeFact[] {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? [{ label, value: String(value) }] : [];

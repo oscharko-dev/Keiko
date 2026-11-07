@@ -1,7 +1,12 @@
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentation";
 
-type Source = Readonly<Record<string, unknown>>;
+import {
+  jiraPresentationFact as fact,
+  jiraPresentationRecord as record,
+  jiraPresentationText as text,
+  type JiraPresentationSource as Source,
+} from "./jira-presentation-values";
 const ISSUE_TYPES = new Set([
   "jira_global_issue_types", "jira_issue_type", "jira_issue_type_page", "jira_issue_type_alternatives",
 ]);
@@ -22,18 +27,6 @@ export const JIRA_CORE_METADATA_TOOLS: ReadonlySet<string> = new Set([
   "jira_project_statuses",
 ]);
 
-function record(value: unknown): Source | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? Object.fromEntries(Object.entries(value))
-    : undefined;
-}
-function text(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-function fact(label: WidgetMessageKey, value: unknown): JiraOutcomeFact[] {
-  const content = text(value);
-  return content === undefined ? [] : [{ label, value: content }];
-}
 function records(value: unknown): readonly Source[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const items = value.map(record);

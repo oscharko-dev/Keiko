@@ -32,6 +32,12 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.jql-autocomplete", args: { category: "fields", startAt: 0, maxResults: 1 } },
+  {
+    tool: "jira.jql-suggestions",
+    args: { fieldName: "project & team", fieldValue: '"Ac"', predicateName: "from", predicateValue: "Old & new", startAt: 0, maxResults: 1 },
+    query: { fieldName: "project & team", fieldValue: '"Ac"', predicateName: "from", predicateValue: "Old & new" },
+  },
   {
     tool: "jira.multi-project-assignable-users",
     args: { projectKeys: ["SYN", "OTHER"], query: "Synthetic + QA", maxResults: 1 },
@@ -908,6 +914,11 @@ function coreMetadataRead(path: string): AtlassianHttpBodyResult | undefined {
   });
   const bodies: Readonly<Record<string, unknown>> = {
     issuetype: [type], "issuetype/10001": type, "issuetype/page": page(type),
+    "jql/autocompletedata": {
+      visibleFieldNames: [{ value: "assignee", auto: "true", orderable: "false", operators: ["=", "was in"], types: ["User"], displayName: "<b>Assignee</b>" }],
+      visibleFunctionNames: [{ value: "currentUser()", types: ["User"] }], jqlReservedWords: ["empty"],
+    },
+    "jql/autocompletedata/suggestions": { results: [{ value: "Atlassian Connect", displayName: "<b>AC</b> Connect" }] },
     "issuetype/10001/alternatives": [{ id: "10002", name: "Task", subtask: false }],
     priority: [priority], "priority/3": priority, "priority/page": page(priority),
     resolution: [resolution], "resolution/41": resolution, "resolution/page": page(resolution),
@@ -1105,7 +1116,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(140);
+    expect(native).toHaveLength(142);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

@@ -1,4 +1,7 @@
-import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_READ_TOOL_FAMILIES,
+  isSafeAtlassianIdentifier,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -10,12 +13,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure, localJiraPage, projectJiraCollection } from "./jira-managed-metadata.js";
 
-export const JIRA_AVATAR_READS = [
-  "jira.system-avatars",
-  "jira.project-avatars",
-  "jira.user-avatars",
-  "jira.avatars",
-] as const;
+export const JIRA_AVATAR_READS = JIRA_READ_TOOL_FAMILIES.avatars;
 type AvatarRead = (typeof JIRA_AVATAR_READS)[number];
 type Category = "system" | "custom";
 const OPERATIONS: ReadonlySet<string> = new Set(JIRA_AVATAR_READS);

@@ -1,4 +1,5 @@
 import {
+  JIRA_READ_TOOL_FAMILIES,
   isSafeAtlassianIdentifier,
   type JiraMutationAttempt,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -15,10 +16,8 @@ import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure, localJiraPage, projectJiraCollection } from "./jira-managed-metadata.js";
 
 export const JIRA_ISSUE_DETAIL_READS = [
-  "jira.link-types",
-  "jira.issue-link",
-  "jira.worklogs",
-  "jira.worklog",
+  ...JIRA_READ_TOOL_FAMILIES.issueLinks,
+  ...JIRA_READ_TOOL_FAMILIES.worklogs,
 ] as const;
 type DetailRead = (typeof JIRA_ISSUE_DETAIL_READS)[number];
 interface Selection {

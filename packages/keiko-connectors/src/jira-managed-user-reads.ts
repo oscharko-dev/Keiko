@@ -1,3 +1,4 @@
+import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
@@ -14,12 +15,7 @@ import { executeJiraSelectedRead, type JiraReadResponse } from "./jira-managed-r
 import { jiraNativeText } from "./jira-native-values.js";
 import { jiraReadbackValueMatches } from "./jira-readback-values.js";
 
-export const JIRA_USER_READS = [
-  "jira.user",
-  "jira.users",
-  "jira.user-directory",
-  "jira.user-picker",
-] as const;
+export const JIRA_USER_READS = JIRA_READ_TOOL_FAMILIES.users;
 type UserRead = (typeof JIRA_USER_READS)[number];
 const READS: ReadonlySet<string> = new Set(JIRA_USER_READS);
 const ARGUMENTS: Readonly<Record<UserRead, ReadonlySet<string>>> = {

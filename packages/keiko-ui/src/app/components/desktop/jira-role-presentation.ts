@@ -2,7 +2,12 @@ import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentation";
 import { jiraProjectAssociationDetails } from "./jira-project-association-presentation";
 
-type Source = Readonly<Record<string, unknown>>;
+import {
+  jiraPresentationFact as fact,
+  jiraPresentationRecord as record,
+  jiraPresentationText as text,
+  type JiraPresentationSource as Source,
+} from "./jira-presentation-values";
 export const JIRA_ROLE_TOOLS: ReadonlySet<string> = new Set([
   "jira_roles", "jira_role", "jira_role_default_actors", "jira_project_roles", "jira_project_role",
   "jira_priority_schemes", "jira_priority_scheme",
@@ -12,17 +17,6 @@ const SCOPES: Readonly<Record<string, WidgetMessageKey>> = {
   "role-defaults": "chat.jira.role.defaultsScope",
   "project-membership": "chat.jira.role.membershipScope",
 };
-function record(value: unknown): Source | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? Object.fromEntries(Object.entries(value)) : undefined;
-}
-function text(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-function fact(label: WidgetMessageKey, value: unknown): JiraOutcomeFact[] {
-  const content = text(value);
-  return content === undefined ? [] : [{ label, value: content }];
-}
 function scope(value: unknown): WidgetMessageKey {
   return typeof value === "string" && Object.hasOwn(SCOPES, value)
     ? SCOPES[value] ?? "chat.jira.role.scopeUnknown" : "chat.jira.role.scopeUnknown";

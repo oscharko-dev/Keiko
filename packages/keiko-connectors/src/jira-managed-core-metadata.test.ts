@@ -75,13 +75,23 @@ describe("closed native issue and project metadata reads", () => {
     const result = await executeJiraCoreMetadataRead("jira.issue-type", { issueTypeId: "1" }, requestFor(single({ ...ISSUE_TYPE, avatarId: "9223372036854775807", self: "https://untrusted.invalid/type", iconUrl: "https://untrusted.invalid/icon", fields: { secret: "unprojected" } })));
     expect(result.data).toEqual({ outcome: "succeeded", ...ISSUE_TYPE, avatarId: "9223372036854775807" });
   });
-  it("keeps resolution IDs unknown when the documented native representation omits them", async () => {
-    const result = await executeJiraCoreMetadataRead("jira.resolution", { resolutionId: "3" }, requestFor(single({ name: "Fixed", description: "", self: "https://untrusted.invalid/resolution/999" })));
-    expect(result.data).toEqual({ outcome: "succeeded", name: "Fixed", description: "", resolutionId: "3" });
+  it("returns only the observed bound resolution identity", async () => {
+    const result = await executeJiraCoreMetadataRead("jira.resolution", { resolutionId: "3" }, requestFor(single({ id: "3", name: "Fixed", description: "", self: "https://untrusted.invalid/resolution/999" })));
+    expect(result.data).toEqual({ outcome: "succeeded", id: "3", name: "Fixed", description: "" });
   });
-  it("supports a native resolution page without IDs or a reported total", async () => {
-    const result = await executeJiraCoreMetadataRead("jira.resolution-page", {}, requestFor(page({ name: "Fixed" }, null)));
-    expect(result.data).toEqual({ outcome: "succeeded", items: [{ name: "Fixed" }], startAt: 0 });
+  it("retains bound resolution IDs when the native page omits its total", async () => {
+    const result = await executeJiraCoreMetadataRead("jira.resolution-page", {}, requestFor(page({ id: "3", name: "Fixed" }, null)));
+    expect(result.data).toEqual({ outcome: "succeeded", items: [{ id: "3", name: "Fixed" }], startAt: 0 });
+  });
+  it.each([
+    ["jira.resolution", { resolutionId: "3" }, single({ name: "Fixed", self: "https://untrusted.invalid/resolution/3" })],
+    ["jira.resolution", { resolutionId: "3" }, single({ id: null, name: "Fixed" })],
+    ["jira.resolutions", {}, list([{ name: "Fixed" }])],
+    ["jira.resolution-page", {}, page({ name: "Fixed" })],
+  ] as const)("refuses missing observed identity for %s without synthesizing it from input or a URL", async (name, args, response) => {
+    const request = requestFor(response);
+    expect((await executeJiraCoreMetadataRead(name, args, request)).data).toEqual({ outcome: "failed", reason: "malformed-payload" });
+    expect(request).toHaveBeenCalledTimes(1);
   });
   it("binds a literal status name while encoding the one selected path segment", async () => {
     const request = requestFor(single(STATUS));

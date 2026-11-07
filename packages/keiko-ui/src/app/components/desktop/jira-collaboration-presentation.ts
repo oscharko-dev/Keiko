@@ -1,7 +1,10 @@
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentation";
 
-type Source = Readonly<Record<string, unknown>>;
+import {
+  jiraPresentationText as text,
+  type JiraPresentationSource as Source,
+} from "./jira-presentation-values";
 const COMMENTS = new Set(["jira_get_comment", "jira_update_comment", "jira_delete_comment"]);
 const WORKLOGS = new Set([
   "jira_worklogs",
@@ -27,9 +30,6 @@ const TEXT_FACTS: Readonly<Record<string, WidgetMessageKey>> = {
   inwardIssueKey: "chat.jira.fact.inwardIssue",
   outwardIssueKey: "chat.jira.fact.outwardIssue",
 };
-function text(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
 function identityValue(tool: string, source: Source): unknown {
   if (COMMENTS.has(tool)) return tool === "jira_get_comment" ? source.id : source.commentId;
   if (WORKLOGS.has(tool))

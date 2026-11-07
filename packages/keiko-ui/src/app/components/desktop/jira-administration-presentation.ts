@@ -1,7 +1,12 @@
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import type { JiraAgileDetails, JiraOutcomeFact } from "./jira-agile-presentation";
 
-type Source = Readonly<Record<string, unknown>>;
+import {
+  jiraPresentationFact as fact,
+  jiraPresentationRecord as record,
+  jiraPresentationText as text,
+  type JiraPresentationSource as Source,
+} from "./jira-presentation-values";
 const SCREEN_FIELDS = new Set(["jira_screen_tab_fields", "jira_screen_available_fields"]);
 const WORKFLOW_SCHEMES = new Set(["jira_workflow_scheme", "jira_workflow_scheme_draft"]);
 export const JIRA_ADMINISTRATION_TOOLS: ReadonlySet<string> = new Set([
@@ -31,18 +36,6 @@ const TEXT_FACTS: Readonly<Record<string, WidgetMessageKey>> = {
   lastModified: "chat.jira.fact.lastModified",
   type: "chat.jira.fact.screenFieldType",
 };
-function text(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-function record(value: unknown): Source | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? Object.fromEntries(Object.entries(value))
-    : undefined;
-}
-function fact(label: WidgetMessageKey, value: unknown): JiraOutcomeFact[] {
-  const content = text(value);
-  return content === undefined ? [] : [{ label, value: content }];
-}
 function entityIdLabel(tool: string): WidgetMessageKey {
   if (tool === "jira_screen_tabs") return "chat.jira.fact.screenTabId";
   if (SCREEN_FIELDS.has(tool)) return "chat.jira.fact.screenFieldId";

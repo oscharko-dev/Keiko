@@ -1,3 +1,4 @@
+import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   ManagedMcpInvocationContext,
@@ -23,19 +24,7 @@ import { jiraAgileRequest } from "./jira-agile-request.js";
 import { agileInputId } from "./jira-agile-inputs.js";
 import { jiraBoardBrowseUrl, jiraBrowseUrl } from "./jira-browse-url.js";
 
-export const JIRA_AGILE_READ_OPERATIONS = [
-  "jira.boards",
-  "jira.board",
-  "jira.board-configuration",
-  "jira.board-backlog",
-  "jira.board-issues",
-  "jira.board-epics",
-  "jira.epic",
-  "jira.epic-issues",
-  "jira.sprints",
-  "jira.sprint",
-  "jira.sprint-issues",
-] as const;
+export const JIRA_AGILE_READ_OPERATIONS = JIRA_READ_TOOL_FAMILIES.agile;
 export type JiraAgileReadOperation = (typeof JIRA_AGILE_READ_OPERATIONS)[number];
 type Projection = (value: unknown) => CatalogJsonObject | undefined;
 const BOARD_LINK_READS: ReadonlySet<string> = new Set([

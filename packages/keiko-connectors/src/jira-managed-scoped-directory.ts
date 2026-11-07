@@ -1,4 +1,7 @@
-import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_READ_TOOL_FAMILIES,
+  isSafeAtlassianIdentifier,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { TOOL_CATALOG_LIMITS, type CatalogJsonObject, type CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
@@ -10,7 +13,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { executeJiraSelectedRead, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeId, jiraNativeText } from "./jira-native-values.js";
 
-export const JIRA_SCOPED_DIRECTORY_READS = ["jira.multi-project-assignable-users", "jira.permission-users", "jira.browse-permission-users", "jira.group-user-picker", "jira.project-picker"] as const;
+export const JIRA_SCOPED_DIRECTORY_READS = JIRA_READ_TOOL_FAMILIES.scopedDirectory;
 type ScopedRead = (typeof JIRA_SCOPED_DIRECTORY_READS)[number];
 const READS: ReadonlySet<string> = new Set(JIRA_SCOPED_DIRECTORY_READS);
 const FIELDS: Readonly<Record<ScopedRead, readonly string[]>> = {

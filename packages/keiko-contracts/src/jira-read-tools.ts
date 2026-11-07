@@ -1,0 +1,78 @@
+/** Closed read identities shared by their native owners and the governed provider catalog. */
+export const JIRA_READ_TOOL_FAMILIES = {
+  jqlMetadata: ["jira.jql-autocomplete", "jira.jql-suggestions"],
+  scopedDirectory: [
+    "jira.multi-project-assignable-users",
+    "jira.permission-users",
+    "jira.browse-permission-users",
+    "jira.group-user-picker",
+    "jira.project-picker",
+  ],
+  fieldDirectory: ["jira.fields", "jira.custom-field-option"],
+  release: [
+    "jira.component-related-issue-counts",
+    "jira.version-related-issue-counts",
+    "jira.version-unresolved-issue-count",
+    "jira.project-version-page",
+  ],
+  roles: [
+    "jira.roles", "jira.role", "jira.role-default-actors", "jira.project-roles", "jira.project-role",
+  ],
+  prioritySchemes: ["jira.priority-schemes", "jira.priority-scheme"],
+  instance: [
+    "jira.server-info", "jira.instance-configuration", "jira.permission-definitions", "jira.myself",
+  ],
+  coreMetadata: [
+    "jira.global-issue-types", "jira.issue-type", "jira.issue-type-page", "jira.issue-type-alternatives",
+    "jira.priorities", "jira.priority", "jira.priority-page",
+    "jira.resolutions", "jira.resolution", "jira.resolution-page",
+    "jira.statuses", "jira.status", "jira.status-page", "jira.status-categories", "jira.status-category",
+    "jira.project-categories", "jira.project-category", "jira.project-statuses",
+    "jira.project-types", "jira.project-type-definition",
+  ],
+  projectAssociations: [
+    "jira.project-permission-scheme", "jira.project-issue-security-scheme", "jira.project-security-levels",
+    "jira.project-workflow-scheme", "jira.project-priority-scheme",
+  ],
+  accessSchemes: [
+    "jira.permission-schemes", "jira.permission-scheme", "jira.permission-grants", "jira.permission-grant",
+    "jira.issue-security-schemes", "jira.issue-security-scheme", "jira.security-level",
+  ],
+  notificationSchemes: [
+    "jira.notification-schemes", "jira.notification-scheme", "jira.project-notification-scheme",
+  ],
+  users: ["jira.user", "jira.users", "jira.user-directory", "jira.user-picker"],
+  directory: ["jira.group-members", "jira.groups", "jira.application-roles", "jira.application-role"],
+  issueTypeSchemes: ["jira.issue-type-schemes", "jira.issue-type-scheme", "jira.issue-type-scheme-projects"],
+  workflowSchemes: [
+    "jira.workflow-scheme", "jira.workflow-scheme-default", "jira.workflow-scheme-draft",
+    "jira.workflow-scheme-draft-default", "jira.workflow-scheme-issue-type",
+    "jira.workflow-scheme-draft-issue-type", "jira.workflow-scheme-workflows", "jira.workflow-scheme-draft-workflows",
+  ],
+  screens: ["jira.screen-tabs", "jira.screen-tab-fields", "jira.screen-available-fields"],
+  projectList: ["jira.projects"],
+  projects: ["jira.project", "jira.validate-project-key", "jira.project-permissions", "jira.project-type"],
+  components: ["jira.components", "jira.component"],
+  versions: ["jira.versions", "jira.version"],
+  filters: ["jira.filter", "jira.favourite-filters"],
+  savedViews: [
+    "jira.dashboards", "jira.dashboard", "jira.filter-share-scope", "jira.filter-permissions", "jira.filter-permission",
+  ],
+  agile: [
+    "jira.boards", "jira.board", "jira.board-configuration", "jira.board-backlog", "jira.board-issues",
+    "jira.board-epics", "jira.epic", "jira.epic-issues", "jira.sprints", "jira.sprint", "jira.sprint-issues",
+  ],
+  issueMetadata: ["jira.issue-types", "jira.create-fields", "jira.edit-fields"],
+  issues: ["jira.search", "jira.issue", "jira.comments"],
+  comment: ["jira.get-comment"],
+  issueLinks: ["jira.link-types", "jira.issue-link"],
+  participation: ["jira.watchers", "jira.votes"],
+  worklogs: ["jira.worklogs", "jira.worklog"],
+  attachments: [
+    "jira.attachment-settings", "jira.attachment", "jira.attachment-archive", "jira.attachment-archive-summary",
+  ],
+  avatars: ["jira.system-avatars", "jira.project-avatars", "jira.user-avatars", "jira.avatars"],
+  issueWorkflow: ["jira.transitions", "jira.assignable-users"],
+  // Staging changes only the existing server-held draft; it performs no Jira mutation.
+  localCompositions: ["jira.report", "jira.draft-stage"],
+} as const;

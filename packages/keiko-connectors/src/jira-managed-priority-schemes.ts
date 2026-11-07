@@ -1,3 +1,4 @@
+import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { TOOL_CATALOG_LIMITS, type CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
@@ -9,7 +10,7 @@ import { jiraPrioritySchemeProjection } from "./jira-managed-project-association
 import { executeJiraSelectedRead, selectJiraReadPage, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeId } from "./jira-native-values.js";
 
-export const JIRA_PRIORITY_SCHEME_READS = ["jira.priority-schemes", "jira.priority-scheme"] as const;
+export const JIRA_PRIORITY_SCHEME_READS = JIRA_READ_TOOL_FAMILIES.prioritySchemes;
 type PriorityRead = (typeof JIRA_PRIORITY_SCHEME_READS)[number];
 const READS: ReadonlySet<string> = new Set(JIRA_PRIORITY_SCHEME_READS);
 interface Selection {

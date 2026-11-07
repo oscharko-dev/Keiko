@@ -1000,7 +1000,7 @@
       "effect": "read",
       "permissionPolicy": "visible-issue-metadata",
       "kind": "constrained-tool",
-      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector.",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to the required observed native ID, key or name; no path or header selector.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
         "packages/keiko-connectors/src/jira-core-metadata-values.ts",
@@ -1117,6 +1117,46 @@
       "constraints": "Create-metadata issue types for one selected project; does not expose global issue-type administration.",
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
       "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
+    },
+    "jira.jql-autocomplete": {
+      "identity": "GET /rest/api/2/jql/autocompletedata",
+      "effect": "read",
+      "permissionPolicy": "visible-jql-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed fields/functions/reserved-words selection over the bounded native autocomplete collection with local pagination only. Native string flags are explicitly decoded; missing types/operators/flags remain unknown. No highlighted HTML, remote links, string evaluation, query execution or effective-permission inference. The pinned item schema conflicts with its object examples; official REST documentation supplies the explicit DTO projection, without claiming deployment qualification.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-jql-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraJqlDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-jql-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraJqlDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.jql-suggestions": {
+      "identity": "GET /rest/api/2/jql/autocompletedata/suggestions",
+      "effect": "read",
+      "permissionPolicy": "visible-jql-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Closed fieldName/fieldValue and optional by/from/to predicate selectors. Local pagination applies only to the native returned results, never an invented remote offset or complete value universe. Plain native values are projected without highlighted HTML, query execution, string evaluation or authority inference. Missing native result collection is refused; no fabricated total outside the bounded returned collection.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-jql-metadata.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraJqlDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-jql-metadata.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraJqlDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
     },
     "jira.link-types": {
       "identity": "GET /rest/api/2/issueLinkType",
@@ -1346,7 +1386,7 @@
       "effect": "read",
       "permissionPolicy": "visible-issue-metadata",
       "kind": "constrained-tool",
-      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector.",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to the required observed native ID, key or name; no path or header selector.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
         "packages/keiko-connectors/src/jira-core-metadata-values.ts",
@@ -1475,7 +1515,7 @@
       "effect": "read",
       "permissionPolicy": "current-project-metadata",
       "kind": "constrained-tool",
-      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector.",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to the required observed native ID, key or name; no path or header selector.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
         "packages/keiko-connectors/src/jira-core-metadata-values.ts",
@@ -1663,7 +1703,7 @@
       "effect": "read",
       "permissionPolicy": "current-project-metadata",
       "kind": "constrained-tool",
-      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector. Independent project read binds canonical ID/key before the native grouped status read; absent nested statuses are unknown and explicit empty lists remain empty.",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to the required observed native ID, key or name; no path or header selector. Independent project read binds canonical ID/key before the native grouped status read; absent nested statuses are unknown and explicit empty lists remain empty.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
         "packages/keiko-connectors/src/jira-core-metadata-values.ts",
@@ -1694,7 +1734,7 @@
       "effect": "read",
       "permissionPolicy": "current-project-metadata",
       "kind": "constrained-tool",
-      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector. Project-type color and descriptionI18nKey are plain native facts; embedded SVG is omitted and license availability is not inferred.",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to the required observed native ID, key or name; no path or header selector. Project-type color and descriptionI18nKey are plain native facts; embedded SVG is omitted and license availability is not inferred.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
         "packages/keiko-connectors/src/jira-core-metadata-values.ts",
@@ -1787,7 +1827,7 @@
       "effect": "read",
       "permissionPolicy": "visible-issue-metadata",
       "kind": "constrained-tool",
-      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector. Resolution IDs can be omitted by the documented native DTO and are never inferred from self URLs; requested single resolutionId is separate context.",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to the required observed native ID, key or name; no path or header selector. Every resolution row requires its observed native string ID. Single resolution IDs must match the selected target; missing/mismatched IDs fail closed and neither inputs nor self URLs synthesize identity.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
         "packages/keiko-connectors/src/jira-core-metadata-values.ts",
@@ -1808,7 +1848,7 @@
       "effect": "read",
       "permissionPolicy": "visible-issue-metadata",
       "kind": "constrained-tool",
-      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Native startAt/maxResults/isLast envelope with optional total and only published typed query filters; exact repeated ID strings are never rounded. Resolution IDs can be omitted by the documented native DTO and are never inferred from self URLs; requested single resolutionId is separate context.",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Native startAt/maxResults/isLast envelope with optional total and only published typed query filters; exact repeated ID strings are never rounded. Every resolution row requires its observed native string ID. Single resolution IDs must match the selected target; missing/mismatched IDs fail closed and neither inputs nor self URLs synthesize identity.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
         "packages/keiko-connectors/src/jira-core-metadata-values.ts",
@@ -1829,7 +1869,7 @@
       "effect": "read",
       "permissionPolicy": "visible-issue-metadata",
       "kind": "constrained-tool",
-      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Bounded complete native arrays are locally paginated; no unpublished remote paging parameters. Resolution IDs can be omitted by the documented native DTO and are never inferred from self URLs; requested single resolutionId is separate context.",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. Bounded complete native arrays are locally paginated; no unpublished remote paging parameters. Every resolution row requires its observed native string ID. Single resolution IDs must match the selected target; missing/mismatched IDs fail closed and neither inputs nor self URLs synthesize identity.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
         "packages/keiko-connectors/src/jira-core-metadata-values.ts",
@@ -2098,7 +2138,7 @@
       "effect": "read",
       "permissionPolicy": "visible-issue-metadata",
       "kind": "constrained-tool",
-      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector.",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to the required observed native ID, key or name; no path or header selector.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
         "packages/keiko-connectors/src/jira-core-metadata-values.ts",
@@ -2140,7 +2180,7 @@
       "effect": "read",
       "permissionPolicy": "visible-issue-metadata",
       "kind": "constrained-tool",
-      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to observed native identity when supplied; no path or header selector.",
+      "constraints": "Closed native metadata projection; optional descriptions, classifications and category facts remain unknown when omitted. No icon, remote URL, arbitrary expansion or administration write. The selected identity is matched to the required observed native ID, key or name; no path or header selector.",
       "sourceFiles": [
         "packages/keiko-connectors/src/jira-managed-core-metadata.ts",
         "packages/keiko-connectors/src/jira-core-metadata-values.ts",
@@ -2707,8 +2747,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "c014f9cee55d1dee61306819e9897da6ca552ac5eebd6575be522c1785dfb063",
-    "nativeOperationCount": 158
+    "sha256": "4bf2b44d1efa1204b4e45b0e3bb2d7286f8caf6860b336b6adeaea92ebce0645",
+    "nativeOperationCount": 160
   },
   "operations": [
     {
@@ -9330,10 +9370,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.jql-autocomplete"]
     },
     {
       "identity": "GET /rest/api/2/jql/autocompletedata/suggestions",
@@ -9362,10 +9402,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.jql-suggestions"]
     },
     {
       "identity": "POST /rest/api/2/licenseValidator",

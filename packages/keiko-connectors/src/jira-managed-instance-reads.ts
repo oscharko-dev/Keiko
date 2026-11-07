@@ -1,3 +1,4 @@
+import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
@@ -12,12 +13,7 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { executeJiraSelectedRead, type JiraReadResponse } from "./jira-managed-read-request.js";
 import { jiraNativeText } from "./jira-native-values.js";
 
-export const JIRA_INSTANCE_READS = [
-  "jira.server-info",
-  "jira.instance-configuration",
-  "jira.permission-definitions",
-  "jira.myself",
-] as const;
+export const JIRA_INSTANCE_READS = JIRA_READ_TOOL_FAMILIES.instance;
 type InstanceRead = (typeof JIRA_INSTANCE_READS)[number];
 const READS: ReadonlySet<string> = new Set(JIRA_INSTANCE_READS);
 const PATHS: Readonly<Record<InstanceRead, string>> = {
