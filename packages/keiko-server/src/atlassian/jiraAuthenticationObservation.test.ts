@@ -26,6 +26,8 @@ const PATHS = [
   "screens/1/tabs",
   "screens/1/tabs/2/fields",
   "screens/1/availableFields",
+  "workflow",
+  "screens",
 ] as const;
 const directories: string[] = [];
 afterEach(() => {
@@ -172,7 +174,7 @@ it.each([403, 404, 429, 503, "malformed", "inactive", "wrong-shape"] as const)(
     expect(f.invalidated).toEqual([]);
   },
 );
-it.each(["project", "issuetypescheme/1", "workflowscheme/1/unknown", "screens/1/tabs/2", "myself"])(
+it.each(["project", "issuetypescheme/1", "workflowscheme/1/unknown", "workflow/unknown", "screens/1/tabs/2", "readonly-mode", "myself"])(
   "keeps ordinary401 invalidation on %s without a probe",
   async (path) => {
     const f = fixture(() => response({}, 401));
@@ -181,9 +183,9 @@ it.each(["project", "issuetypescheme/1", "workflowscheme/1/unknown", "screens/1/
     expect(f.invalidated).toEqual([2]);
   },
 );
-it("does not classify a write as an ambiguous administrator read", async () => {
+it.each(["workflowscheme/1", "workflow", "screens"])("does not classify a %s write as an ambiguous administrator read", async (path) => {
   const f = fixture(() => response({}, 401));
-  await f.deps.httpBodyPortFactory(f.metadata)({ ...request(), method: "PUT", bodyJson: "{}" });
+  await f.deps.httpBodyPortFactory(f.metadata)({ ...request(path), method: "PUT", bodyJson: "{}" });
   expect(f.urls).toHaveLength(1);
   expect(f.invalidated).toEqual([2]);
 });
@@ -311,9 +313,14 @@ it("also preserves the bounded bodyless request API", async () => {
   expect(f.urls).toHaveLength(2);
   expect(f.current()).toEqual(f.metadata);
 });
-it.each(["jira.workflow-scheme", "jira.screen-tabs"] as const)(
+it.each([
+  ["jira.workflow-scheme", { schemeId: "1" }],
+  ["jira.screen-tabs", { screenId: "1" }],
+  ["jira.workflows", {}],
+  ["jira.screens", {}],
+] as const)(
   "returns actionable %s permission failure through the real managed read",
-  async (name) => {
+  async (name, args) => {
     const f = fixture((index) => (index === 0 ? response({}, 401) : response(IDENTITY)));
     const provider = createJiraProviderForCatalog(
       () => ({
@@ -326,7 +333,7 @@ it.each(["jira.workflow-scheme", "jira.screen-tabs"] as const)(
     const tool = provider.tools()[0];
     if (tool === undefined) throw new TypeError("Missing Jira read");
     const result = await tool.execute(
-      name === "jira.screen-tabs" ? { screenId: "1" } : { schemeId: "1" },
+      args,
       {
         invocationId: "admin-read",
         correlationId: "admin-read",

@@ -37,6 +37,7 @@ const TEXT_FACTS: Readonly<Record<string, WidgetMessageKey>> = {
   type: "chat.jira.fact.screenFieldType",
 };
 function entityIdLabel(tool: string): WidgetMessageKey {
+  if (tool === "jira_screens") return "chat.jira.fact.screenId";
   if (tool === "jira_screen_tabs") return "chat.jira.fact.screenTabId";
   if (SCREEN_FIELDS.has(tool)) return "chat.jira.fact.screenFieldId";
   return tool === "jira_issue_type_scheme_projects"

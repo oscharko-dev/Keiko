@@ -19,6 +19,9 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "admin-workflow-configuration"
+  | "visible-custom-field-configuration"
+  | "observed-terminology"
   | "visible-jql-metadata"
   | "board-issue-estimation"
   | "scoped-user-candidates"
@@ -156,6 +159,15 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...reads("admin-workflow-configuration", { "jira.workflows": "/workflow" }),
+  ...reads("visible-custom-field-configuration", {
+    "jira.custom-fields": "/customFields",
+    "jira.custom-field-options": "/customFields/{customFieldId}/options",
+  }),
+  ...reads("observed-terminology", {
+    "jira.terminology": "/terminology/entries",
+    "jira.terminology-entry": "/terminology/entries/{originalName}",
+  }),
   ...reads("visible-jql-metadata", {
     "jira.jql-autocomplete": "/jql/autocompletedata",
     "jira.jql-suggestions": "/jql/autocompletedata/suggestions",
@@ -180,6 +192,7 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.priority-scheme": "/priorityschemes/{schemeId}",
   }),
   ...reads("observed-instance-metadata", {
+    "jira.read-only-mode": "/readonly-mode",
     "jira.server-info": "/serverInfo",
     "jira.instance-configuration": "/configuration",
   }),
@@ -253,6 +266,7 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.workflow-scheme-draft-workflows": "/workflowscheme/{id}/draft/workflow",
   }),
   ...reads("visible-screen-configuration", {
+    "jira.screens": "/screens",
     "jira.screen-tabs": "/screens/{screenId}/tabs",
     "jira.screen-tab-fields": "/screens/{screenId}/tabs/{tabId}/fields",
     "jira.screen-available-fields": "/screens/{screenId}/availableFields",

@@ -51,6 +51,12 @@ const FIELD = object({
   clauseNames: { ...array(NAME), uniqueItems: true },
   schema: FIELD_SCHEMA,
 }, ["id", "name"]);
+export const jiraCustomFieldOptionFields = {
+  id: ID,
+  value: text(32768),
+  disabled: BOOL,
+  childrenIds: { ...array(ID), uniqueItems: true },
+};
 function scopedInput(properties: CatalogJsonObject, required: readonly string[] = []): CatalogJsonObject {
   return {
     ...object({ ...TARGET, ...properties }, required),
@@ -95,7 +101,7 @@ export const JIRA_SCOPED_DIRECTORY_READ_DEFINITIONS = {
   "jira.custom-field-option": read(
     "Read one exact visible native custom-field option and its supplied disabled/child-ID metadata. Preserve the option value as native text, including an explicitly empty value. Missing children or disabled state remain unknown; no option, field or issue value is created or changed.",
     object({ optionId: ID }, ["optionId"]),
-    { id: ID, value: text(32768), disabled: BOOL, childrenIds: { ...array(ID), uniqueItems: true } },
+    jiraCustomFieldOptionFields,
     1,
   ),
 } as const satisfies Readonly<Record<string, JiraNativeDefinition>>;

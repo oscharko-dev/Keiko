@@ -58,25 +58,44 @@ function field(value: unknown): CatalogJsonObject | undefined {
   }
   return result;
 }
-function option(body: Record<string, unknown>, selected: Selection): ManagedMcpToolResult {
+export type JiraCustomFieldOptionProjection =
+  | { readonly ok: true; readonly item: CatalogJsonObject }
+  | { readonly ok: false; readonly reason: "bounds-exceeded" | "malformed-payload" };
+function optionBase(body: Record<string, unknown>, expectedId?: string): JiraCustomFieldOptionProjection {
   const id = jiraNativeNumericId(body.id);
   const value = body.value;
-  if (typeof value === "string" && (value.length > 32768 || !jiraProjectionTextFits(value))) return jiraReadFailure("bounds-exceeded");
-  if (id === undefined || id !== selected.optionId || !jiraNativeText(value, 32768, true)) return jiraReadFailure("malformed-payload");
-  const result: Record<string, CatalogJsonValue> = { outcome: "succeeded", id, value };
-  if (body.disabled !== undefined && body.disabled !== null) {
-    if (typeof body.disabled !== "boolean") return jiraReadFailure("malformed-payload");
-    result.disabled = body.disabled;
-  }
-  if (body.childrenIds !== undefined && body.childrenIds !== null) {
-    const values = asArray(body.childrenIds);
-    if (values === undefined) return jiraReadFailure("malformed-payload");
-    if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems) return jiraReadFailure("bounds-exceeded");
-    const children = values.map(jiraNativeNumericId);
-    if (!children.every((entry): entry is string => entry !== undefined) || new Set(children).size !== children.length) return jiraReadFailure("malformed-payload");
-    result.childrenIds = children;
-  }
-  return boundJiraReadResult({ data: result });
+  if (typeof value === "string" && (value.length > 32768 || !jiraProjectionTextFits(value))) return { ok: false, reason: "bounds-exceeded" };
+  if (id === undefined || (expectedId !== undefined && id !== expectedId) || !jiraNativeText(value, 32768, true)) return { ok: false, reason: "malformed-payload" };
+  return { ok: true, item: { id, value } };
+}
+function optionChildren(value: unknown): JiraCustomFieldOptionProjection {
+  if (value === undefined || value === null) return { ok: true, item: {} };
+  const values = asArray(value);
+  if (values === undefined) return { ok: false, reason: "malformed-payload" };
+  if (values.length > TOOL_CATALOG_LIMITS.maxArrayItems) return { ok: false, reason: "bounds-exceeded" };
+  const children = values.map(jiraNativeNumericId);
+  if (!children.every((entry): entry is string => entry !== undefined) || new Set(children).size !== children.length) return { ok: false, reason: "malformed-payload" };
+  return { ok: true, item: { childrenIds: children } };
+}
+function optionDetails(body: Record<string, unknown>): JiraCustomFieldOptionProjection {
+  const disabled = body.disabled;
+  if (disabled !== undefined && disabled !== null && typeof disabled !== "boolean") return { ok: false, reason: "malformed-payload" };
+  const children = optionChildren(body.childrenIds);
+  return children.ok ? { ok: true, item: { ...children.item, ...(typeof disabled === "boolean" ? { disabled } : {}) } } : children;
+}
+/** Shared native option DTO; a selected single resource additionally binds its expected ID. */
+export function jiraCustomFieldOptionProjection(value: unknown, expectedId?: string): JiraCustomFieldOptionProjection {
+  const body = asRecord(value);
+  if (body === undefined) return { ok: false, reason: "malformed-payload" };
+  const base = optionBase(body, expectedId);
+  if (!base.ok) return base;
+  const extra = optionDetails(body);
+  return extra.ok ? { ok: true, item: { ...base.item, ...extra.item } } : extra;
+}
+function option(body: Record<string, unknown>, selected: Selection): ManagedMcpToolResult {
+  const projected = jiraCustomFieldOptionProjection(body, selected.optionId);
+  return projected.ok ? boundJiraReadResult({ data: { outcome: "succeeded", ...projected.item } })
+    : jiraReadFailure(projected.reason);
 }
 function projectResponse(response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
   if (selected.optionId !== undefined) return response.body === undefined ? jiraReadFailure("malformed-payload") : option(response.body, selected);

@@ -16,3 +16,11 @@ export function jiraPresentationFact(label: WidgetMessageKey, value: unknown): J
   const content = jiraPresentationText(value);
   return content === undefined ? [] : [{ label, value: content }];
 }
+
+/** A supplied empty list has a known zero count; a missing or malformed list remains unknown. */
+export function jiraPresentationStringList(
+  value: unknown, label: WidgetMessageKey, countLabel: WidgetMessageKey,
+): JiraOutcomeFact[] | undefined {
+  if (!Array.isArray(value) || !value.every((entry: unknown) => typeof entry === "string")) return undefined;
+  return [...jiraPresentationFact(label, value.join(", ")), { label: countLabel, value: String(value.length) }];
+}

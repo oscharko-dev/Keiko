@@ -4,6 +4,7 @@ import {
   jiraPresentationFact as fact,
   jiraPresentationRecord as record,
   jiraPresentationText as text,
+  jiraPresentationStringList as strings,
   type JiraPresentationSource as Source,
 } from "./jira-presentation-values";
 
@@ -19,10 +20,6 @@ const FIELD_FLAGS: Readonly<Record<string, readonly [WidgetMessageKey, WidgetMes
   orderable: ["chat.jira.lookup.orderable", "chat.jira.lookup.notOrderable", "chat.jira.lookup.orderableUnknown"],
   searchable: ["chat.jira.lookup.searchable", "chat.jira.lookup.notSearchable", "chat.jira.lookup.searchableUnknown"],
 };
-function strings(value: unknown, label: WidgetMessageKey, countLabel: WidgetMessageKey): JiraOutcomeFact[] | undefined {
-  if (!Array.isArray(value) || !value.every((item: unknown) => typeof item === "string")) return undefined;
-  return [...fact(label, value.join(", ")), { label: countLabel, value: String(value.length) }];
-}
 function item(source: Source, category: unknown): JiraAgileDetails | undefined {
   const value = text(source.value);
   if (value === undefined) return undefined;

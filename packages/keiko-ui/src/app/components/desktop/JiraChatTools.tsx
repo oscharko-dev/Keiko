@@ -44,6 +44,7 @@ import { JIRA_RELEASE_TOOLS } from "./jira-release-presentation";
 import { JIRA_LOOKUP_TOOLS } from "./jira-lookup-presentation";
 import { JIRA_JQL_TOOLS } from "./jira-jql-presentation";
 import { JIRA_AGILE_CONTEXT_TOOLS } from "./jira-agile-context-presentation";
+import { JIRA_ADMIN_METADATA_TOOLS } from "./jira-admin-metadata-presentation";
 import { JIRA_PARTICIPATION_TOOLS } from "./jira-participation-presentation";
 import { JIRA_FILE_METADATA_TOOLS } from "./jira-file-metadata-presentation";
 import { JIRA_SAVED_VIEW_TOOLS } from "./jira-saved-view-presentation";
@@ -296,6 +297,7 @@ function resultCardSemantics(exchange: ChatToolExchange): {
     JIRA_LOOKUP_TOOLS,
     JIRA_JQL_TOOLS,
     JIRA_AGILE_CONTEXT_TOOLS,
+    JIRA_ADMIN_METADATA_TOOLS,
   ].some((tools) => tools.has(exchange.call.name))
     ? { tag: "div", role: "group", label: jiraToolLabel(exchange) }
     : { tag: "section", role: undefined, label: jiraToolRegionLabel(exchange) };

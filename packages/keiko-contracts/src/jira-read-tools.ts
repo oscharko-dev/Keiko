@@ -1,5 +1,9 @@
 /** Closed read identities shared by their native owners and the governed provider catalog. */
 export const JIRA_READ_TOOL_FAMILIES = {
+  configuration: [
+    "jira.screens", "jira.workflows", "jira.custom-fields", "jira.custom-field-options",
+    "jira.terminology", "jira.terminology-entry", "jira.read-only-mode",
+  ],
   jqlMetadata: ["jira.jql-autocomplete", "jira.jql-suggestions"],
   scopedDirectory: [
     "jira.multi-project-assignable-users",

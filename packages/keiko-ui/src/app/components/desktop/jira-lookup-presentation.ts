@@ -6,6 +6,7 @@ import {
   jiraPresentationFact as fact,
   jiraPresentationRecord as record,
   jiraPresentationText as text,
+  jiraPresentationStringList as listFacts,
   type JiraPresentationSource as Source,
 } from "./jira-presentation-values";
 const USERS = new Set([
@@ -28,10 +29,6 @@ const SCHEMA: Readonly<Record<string, WidgetMessageKey>> = {
 function count(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
-function listFacts(value: unknown, label: WidgetMessageKey, totalLabel: WidgetMessageKey): JiraOutcomeFact[] | undefined {
-  if (!Array.isArray(value) || !value.every((entry: unknown) => typeof entry === "string")) return undefined;
-  return [...fact(label, value.join(", ")), { label: totalLabel, value: String(value.length) }];
-}
 function field(source: Source): JiraAgileDetails | undefined {
   const id = text(source.id);
   const name = text(source.name);
@@ -49,7 +46,7 @@ function field(source: Source): JiraAgileDetails | undefined {
     labels: [...labels, "chat.jira.lookup.fieldScope"],
   };
 }
-function option(source: Source): JiraAgileDetails | undefined {
+export function jiraFieldOptionDetails(source: Source): JiraAgileDetails | undefined {
   const id = text(source.id);
   if (id === undefined || typeof source.value !== "string") return undefined;
   const children = listFacts(source.childrenIds, "chat.jira.lookup.childOptionIds", "chat.jira.lookup.childOptionCount");
@@ -112,7 +109,7 @@ export function jiraLookupDetails(tool: string, data: Source): readonly JiraAgil
     if (source === undefined) return [];
     const item = USERS.has(tool) ? directoryItem(source, true)
       : tool === "jira_project_picker" ? project(source)
-        : tool === "jira_fields" ? field(source) : option(source);
+        : tool === "jira_fields" ? field(source) : jiraFieldOptionDetails(source);
     return item === undefined ? [] : [item];
   });
 }

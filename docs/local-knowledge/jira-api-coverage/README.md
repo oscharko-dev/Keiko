@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **169 native identities: 140 reads and 29 writes**. Each is mapped to
+The current registry supplies **176 native identities: 147 reads and 29 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **270 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **263 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -136,7 +136,7 @@ the C6 comment-update/link/worklog read increment; bounded C8 attachment/archive
 worklog create/update with connected-user watching/voting; fourteen C9 workflow-/issue-type-scheme
 and screen reads; three reviewed comment/attachment/worklog deletions; and eight C10 user, group and
 application-role reads; ten permission/security/notification configuration reads; and five additional
-project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; two JQL metadata/suggestion reads; and nine additional Agile context reads. The three existing
+project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; two JQL metadata/suggestion reads; nine additional Agile context reads; and seven configuration metadata reads. The three existing
 report/draft composites remain compositions, not extra native API identities. Remaining filter
 creation, ranking, other estimate-adjustment modes and destructive operations, administration and
 other inventory gaps stay open. A registered declaration is not evidence that
@@ -234,6 +234,19 @@ Native Agile version timestamps are validated before retaining their local calen
 existing version summary. The official [Agile REST reference](https://docs.atlassian.com/jira-software/REST/8.20.1/)
 documents the page wrappers and timestamp examples where the retained Swagger references only an item.
 No runtime compatibility or live availability is inferred from that source interpretation.
+
+Seven configuration reads observe screens, workflows, custom fields/options, terminology and read-only
+status. Native screen and custom-field pages retain their different documented envelopes; workflow and
+terminology arrays use existing local paging. Custom-field options retain native one-based page numbers
+and repeated typed context IDs, with no unresumable prefix truncation. Empty context results may mean
+ambiguous or absent contexts, rather than no configured options. Single/list option projections share
+the existing exact-ID/value/children owner. Read-only metadata never changes Keiko authority or Jira
+enforcement; missing flags remain unknown and local banner dates are not converted. The official
+[ScreensResource](https://docs.atlassian.com/software/jira/docs/api/11.3.0/com/atlassian/jira/rest/v2/issue/ScreensResource.html)
+and [native REST reference](https://docs.atlassian.com/software/jira/docs/api/REST/9.12.2/) document read semantics
+and wrappers where the pinned screen description mistakenly describes a write. Workflow/screen401
+can mean missing administrative permission and retains that ambiguity. Source interpretation does not
+assert deployment qualification.
 
 `currentRegistry` pins the existing server registry source file's SHA-256 and native declaration
 count. The reconciliation helper parses that file's literal `NATIVE` declarations and verified closed

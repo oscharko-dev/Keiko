@@ -14,6 +14,7 @@ import { executeJiraNotificationSchemeRead, isJiraNotificationSchemeRead } from 
 import { executeJiraProjectAssociationRead, isJiraProjectAssociationRead } from "./jira-managed-project-associations.js";
 import { executeJiraCoreMetadataRead, isJiraCoreMetadataRead } from "./jira-managed-core-metadata.js";
 import { executeJiraInstanceRead, isJiraInstanceRead } from "./jira-managed-instance-reads.js";
+import { executeJiraConfigurationRead, isJiraConfigurationRead } from "./jira-managed-configuration-reads.js";
 import { executeJiraRoleRead, isJiraRoleRead } from "./jira-managed-role-reads.js";
 import { executeJiraPrioritySchemeRead, isJiraPrioritySchemeRead } from "./jira-managed-priority-schemes.js";
 import { executeJiraReleaseRead, isJiraReleaseRead } from "./jira-managed-release-reads.js";
@@ -345,6 +346,7 @@ async function read<Context extends ManagedMcpInvocationContext>(
 }
 
 type NativeDetailRead =
+  | Parameters<typeof executeJiraConfigurationRead>[0]
   | Parameters<typeof executeJiraIssueDetailRead>[0]
   | "jira.get-comment"
   | Parameters<typeof executeJiraSavedViewRead>[0]
@@ -369,6 +371,7 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraJqlMetadataRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return [
+    isJiraConfigurationRead,
     isJiraIssueDetailRead,
     isJiraCommentRead,
     isJiraSavedViewRead,
@@ -399,6 +402,7 @@ function administrationRead(
   request: ReturnType<typeof requestFor>,
 ): Promise<ManagedMcpToolResult> | undefined {
   if (isJiraIssueTypeSchemeRead(name)) return executeJiraIssueTypeSchemeRead(name, args, request);
+  if (isJiraConfigurationRead(name)) return executeJiraConfigurationRead(name, args, request);
   if (isJiraWorkflowSchemeRead(name)) return executeJiraWorkflowSchemeRead(name, args, request);
   if (isJiraScreenRead(name)) return executeJiraScreenRead(name, args, request);
   if (isJiraAccessSchemeRead(name)) return executeJiraAccessSchemeRead(name, args, request);

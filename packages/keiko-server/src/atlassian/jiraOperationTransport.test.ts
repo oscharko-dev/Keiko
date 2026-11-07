@@ -32,6 +32,18 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.screens", args: { startAt: 0, maxResults: 1, search: "Details & QA" }, query: { startAt: "0", maxResults: "1", search: "Details & QA" } },
+  { tool: "jira.workflows", args: { workflowName: "Review & QA" }, query: { workflowName: "Review & QA" } },
+  { tool: "jira.custom-fields", args: { startAt: 0, maxResults: 1, search: "Delivery" }, query: { startAt: "0", maxResults: "1", search: "Delivery" } },
+  { tool: "jira.custom-field-options", args: {
+    customFieldId: "10001", page: 2, maxResults: 1, query: "", useAllContexts: false,
+    sortByOptionName: true, projectIds: ["10000"], issueTypeIds: ["10001"],
+  }, parameters: { customFieldId: "10001" }, query: {
+    page: "2", maxResults: "1", query: "", useAllContexts: "false", sortByOptionName: "true", projectIds: "10000", issueTypeIds: "10001",
+  } },
+  { tool: "jira.terminology", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.terminology-entry", args: { originalName: "epic" }, parameters: { originalName: "epic" } },
+  { tool: "jira.read-only-mode", args: {} },
   { tool: "jira.jql-autocomplete", args: { category: "fields", startAt: 0, maxResults: 1 } },
   {
     tool: "jira.jql-suggestions",
@@ -787,7 +799,7 @@ function administrationRead(
   path: string,
   absoluteUrl: string,
 ): AtlassianHttpBodyResult | undefined {
-  const directory = directoryRead(path) ?? accessRead(path) ?? coreMetadataRead(path) ?? instanceRead(path) ?? roleRead(path);
+  const directory = directoryRead(path) ?? accessRead(path) ?? coreMetadataRead(path) ?? instanceRead(path) ?? roleRead(path) ?? configurationRead(path, absoluteUrl);
   if (directory !== undefined) return directory;
   const type = { id: "1", name: "Task", subtask: false };
   const scheme = { id: "37", name: "Delivery", issueTypes: [type], defaultIssueType: type };
@@ -818,6 +830,20 @@ function administrationRead(
     "screens/71/tabs": [{ id: 81, name: "Details" }],
     "screens/71/tabs/81/fields": [{ id: "summary", name: "Summary", showWhenEmpty: false }],
     "screens/71/availableFields": [{ id: "description", name: "Description" }],
+  };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
+}
+function configurationRead(path: string, absoluteUrl: string): AtlassianHttpBodyResult | undefined {
+  const workflow = { name: "Review & QA", description: "Native workflow", steps: 0, isDefault: false, lastModifiedDate: "07/Nov/26" };
+  const terminology = { originalName: "Epic", originalNamePlural: "Epics", newName: "Initiative", newNamePlural: "Initiatives", isDefault: false };
+  const bodies: Readonly<Record<string, unknown>> = {
+    screens: { screens: [{ id: 71, name: "Details & QA", deletable: false }], startAt: 0, maxResults: 1, total: 1 },
+    workflow: new URL(absoluteUrl).searchParams.has("workflowName") ? workflow : [workflow],
+    customFields: { values: [{ id: "customfield_10001", numericId: 10001, name: "Delivery", isLocked: false, projectIds: [], issuesWithValue: 0 }], startAt: 0, maxResults: 1, total: 1 },
+    "customFields/10001/options": { options: [{ id: 91, value: "", disabled: false, childrenIds: [] }], total: 3 },
+    "terminology/entries": [terminology, { originalName: "Sprint", isDefault: true }],
+    "terminology/entries/epic": terminology,
+    "readonly-mode": { enabled: false, message: "", endTime: "07/Nov/26 21:30", timeZone: "Europe/Berlin" },
   };
   return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
 }
@@ -1116,7 +1142,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(142);
+    expect(native).toHaveLength(149);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1139,6 +1165,22 @@ describe("native Jira registry and real connector transport agreement", () => {
     expect(url.pathname).toBe("/context/rest/api/2/status/page");
     expect(url.searchParams.getAll("projectIds")).toEqual(["10000", "9223372036854775807"]);
     expect(url.searchParams.getAll("issueTypeIds")).toEqual(["10001", "9007199254740993"]);
+    expect(observed.requests).toHaveLength(1);
+  });
+  it("keeps repeated option context IDs lossless and native page numbering unchanged", async () => {
+    const observed = await observe({ tool: "jira.custom-field-options", args: {
+      customFieldId: "10001", page: 2, maxResults: 1, projectIds: ["10000", "9223372036854775807"], issueTypeIds: ["10001", "9007199254740993"],
+    } });
+    const request = observed.requests[0];
+    if (request === undefined) throw new TypeError("Missing native option request");
+    const url = new URL(request.url);
+    expect(url.pathname).toBe("/context/rest/api/2/customFields/10001/options");
+    expect(url.searchParams.getAll("projectIds")).toEqual(["10000", "9223372036854775807"]);
+    expect(url.searchParams.getAll("issueTypeIds")).toEqual(["10001", "9007199254740993"]);
+    expect(url.searchParams.get("page")).toBe("2");
+    expect(url.searchParams.has("startAt")).toBe(false);
+    expect(observed.result.data).toMatchObject({ page: 2, nextPage: 3, total: 3, optionsScope: "native-context-options" });
+    expect(observed.result.data).not.toHaveProperty("startAt");
     expect(observed.requests).toHaveLength(1);
   });
   it.each(["jira.create", "jira.edit"] as const)(

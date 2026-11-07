@@ -719,9 +719,54 @@
         "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.ts"
       ],
       "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.test.ts",
         "packages/keiko-connectors/src/jira-managed-field-directory.test.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.custom-field-options": {
+      "identity": "GET /rest/api/2/customFields/{customFieldId}/options",
+      "effect": "read",
+      "permissionPolicy": "visible-custom-field-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Exact numeric custom-field resource, one-based native page/maxResults and typed repeated project/issue-type IDs, optional query/sort flag and explicit all-context selector. All-context selection cannot silently ignore supplied contexts. Shared option projection preserves exact IDs, empty values, optional disabled/children metadata. Empty context results may reflect missing or ambiguous contexts; no global absence claim. Unknown total yields no inferred next page; unresumable byte truncation or a next page beyond the declared bound is refused.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.ts",
+        "packages/keiko-connectors/src/jira-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraConfigurationDescriptors.ts",
+        "packages/keiko-connectors/src/jira-managed-field-directory.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraConfigurationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts",
+        "packages/keiko-connectors/src/jira-managed-field-directory.test.ts"
+      ]
+    },
+    "jira.custom-fields": {
+      "identity": "GET /rest/api/2/customFields",
+      "effect": "read",
+      "permissionPolicy": "visible-custom-field-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Native values page with bounded offset/size and optional search only; no unqualified sort or historical-update selectors. Exact native numeric or customfield-prefixed identity must agree with an observed numericId. Optional flags, counts, context IDs and type/searcher metadata retain unknown states and never grant writable-field admission.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.ts",
+        "packages/keiko-connectors/src/jira-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraConfigurationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraConfigurationDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -2021,6 +2066,27 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-tools.ts"],
       "testFiles": ["packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"]
     },
+    "jira.read-only-mode": {
+      "identity": "GET /rest/api/2/readonly-mode",
+      "effect": "read",
+      "permissionPolicy": "observed-instance-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Observe only native enabled/message/endTime/timeZone fields. Missing/null values remain unknown; explicit false and empty text remain observed. The local banner time is preserved without timezone conversion or enforcement/authority inference. No mode switch or compatibility/custody changes.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.ts",
+        "packages/keiko-connectors/src/jira-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraConfigurationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraConfigurationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.resolution": {
       "identity": "GET /rest/api/2/resolution/{id}",
       "effect": "read",
@@ -2199,6 +2265,27 @@
         "packages/keiko-server/src/atlassian/jiraAdministrationDescriptors.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
+      ]
+    },
+    "jira.screens": {
+      "identity": "GET /rest/api/2/screens",
+      "effect": "read",
+      "permissionPolicy": "visible-screen-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Bounded native screen pages with explicit startAt/maxResults and optional search. Only observed screen ID/name/description/deletable facts; no expansions or fields mutation. Official Javadoc and native REST documentation establish GET/200 despite the pinned copy/pasted write description. Missing native total/terminal metadata stays unknown without inferred continuation.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.ts",
+        "packages/keiko-connectors/src/jira-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraConfigurationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraConfigurationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.search": {
@@ -2451,6 +2538,48 @@
       "testFiles": [
         "packages/keiko-connectors/src/jira-managed-avatar-reads.test.ts",
         "packages/keiko-server/src/atlassian/jiraAssetDescriptors.test.ts"
+      ]
+    },
+    "jira.terminology": {
+      "identity": "GET /rest/api/2/terminology/entries",
+      "effect": "read",
+      "permissionPolicy": "observed-terminology",
+      "kind": "constrained-tool",
+      "constraints": "Bounded native terminology array with local pagination, distinct epic/sprint original identities and optional observed names/default flag. Native capitalization is preserved; duplicates under case-folded identity fail closed. No renaming, locale mutation or inference from absent custom names.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.ts",
+        "packages/keiko-connectors/src/jira-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraConfigurationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraConfigurationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.terminology-entry": {
+      "identity": "GET /rest/api/2/terminology/entries/{originalName}",
+      "effect": "read",
+      "permissionPolicy": "observed-terminology",
+      "kind": "constrained-tool",
+      "constraints": "Closed epic/sprint selector binds the observed native originalName case-insensitively while retaining native spelling. Optional plural/custom names and default flag stay unknown when omitted. No terminology mutation or arbitrary path selector.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.ts",
+        "packages/keiko-connectors/src/jira-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraConfigurationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraConfigurationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
     "jira.transition": {
@@ -2926,6 +3055,27 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.workflows": {
+      "identity": "GET /rest/api/2/workflow",
+      "effect": "read",
+      "permissionPolicy": "admin-workflow-configuration",
+      "kind": "constrained-tool",
+      "constraints": "Native workflow array with bounded local paging, or one exact workflowName query returning an identity-matched object. Description, step count, isDefault and literal local/relative modification text remain observed metadata; modifier identity and unsupported flags/diagrams omitted. Native 401 may mean missing administration permission, not revoked credentials.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.ts",
+        "packages/keiko-connectors/src/jira-configuration-values.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-connectors/src/jira-managed-metadata.ts",
+        "packages/keiko-server/src/atlassian/jiraConfigurationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-configuration-reads.test.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
+        "packages/keiko-server/src/atlassian/jiraConfigurationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.worklog": {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/worklog/{id}",
       "effect": "read",
@@ -2947,8 +3097,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "0b6a1ab757cf96e25cd74cafe0c6b284a49e514ed6a5cc60d39347630b12b7f3",
-    "nativeOperationCount": 169
+    "sha256": "ff36f91a4900eecc4e9256bff752870cfc266898221b769a4f87204569ea423f",
+    "nativeOperationCount": 176
   },
   "operations": [
     {
@@ -5618,10 +5768,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.custom-fields"]
     },
     {
       "identity": "GET /rest/api/2/customFields/{customFieldId}/options",
@@ -5650,10 +5800,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.custom-field-options"]
     },
     {
       "identity": "GET /rest/api/2/dashboard",
@@ -12378,10 +12528,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.read-only-mode"]
     },
     {
       "identity": "PUT /rest/api/2/readonly-mode",
@@ -13042,10 +13192,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.screens"]
     },
     {
       "identity": "POST /rest/api/2/screens/addToDefault/{fieldId}",
@@ -13914,10 +14064,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.terminology"]
     },
     {
       "identity": "POST /rest/api/2/terminology/entries",
@@ -13978,10 +14128,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.terminology-entry"]
     },
     {
       "identity": "GET /rest/api/2/universal_avatar/type/{type}/owner/{owningObjectId}",
@@ -15862,10 +16012,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.workflows"]
     },
     {
       "identity": "POST /rest/api/2/workflowscheme",

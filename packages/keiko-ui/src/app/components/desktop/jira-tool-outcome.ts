@@ -48,6 +48,7 @@ import { JIRA_RELEASE_TOOLS, jiraReleaseDetails } from "./jira-release-presentat
 import { JIRA_LOOKUP_TOOLS, jiraLookupDetails } from "./jira-lookup-presentation";
 import { JIRA_JQL_TOOLS, jiraJqlDetails } from "./jira-jql-presentation";
 import { JIRA_AGILE_CONTEXT_TOOLS, JIRA_AGILE_CONTEXT_METADATA_TOOLS, jiraAgileContextDetails } from "./jira-agile-context-presentation";
+import { JIRA_ADMIN_METADATA_TOOLS, jiraAdminMetadataDetails } from "./jira-admin-metadata-presentation";
 
 export interface JiraOutcomeItem {
   readonly key?: string;
@@ -110,6 +111,7 @@ const STANDALONE_TOOLS = new Set([
   ...JIRA_LOOKUP_TOOLS,
   ...JIRA_JQL_TOOLS,
   ...JIRA_AGILE_CONTEXT_TOOLS,
+  ...JIRA_ADMIN_METADATA_TOOLS,
 ]);
 const BOARD_READ_TOOLS = new Set(["jira_board", "jira_boards", "jira_board_configuration"]);
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -243,6 +245,7 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
     : undefined;
 }
 function configurationDetails(tool: string, source: UnknownRecord): readonly JiraAgileDetails[] | undefined {
+  if (JIRA_ADMIN_METADATA_TOOLS.has(tool)) return jiraAdminMetadataDetails(tool, source);
   if (JIRA_AGILE_CONTEXT_METADATA_TOOLS.has(tool)) return jiraAgileContextDetails(tool, source);
   if (JIRA_ACCESS_TOOLS.has(tool)) return jiraAccessDetails(tool, source);
   if (JIRA_CORE_METADATA_TOOLS.has(tool)) return jiraCoreMetadataDetails(tool, source);
