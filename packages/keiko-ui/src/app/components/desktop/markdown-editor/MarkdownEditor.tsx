@@ -327,7 +327,7 @@ function MarkdownStatus({
   return (
     <div className={styles.mdeStatus}>
       <output className={styles.mdeNotice}>{notice}</output>
-      <span>Markdown</span>
+      <span>{t("markdownEditor.format")}</span>
       <span>{t("markdownEditor.characters", { count: count.toLocaleString() })}</span>
     </div>
   );

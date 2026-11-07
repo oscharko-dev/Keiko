@@ -2162,6 +2162,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "This file uses Markdown the formatted view would change (such as tables or HTML), so it is edited as Markdown.",
   "markdownEditor.frontMatter": "Metadata (YAML)",
   "markdownEditor.lines": "{count} lines",
+  "markdownEditor.format": "Markdown",
   "markdownEditor.characters": "{count} characters",
   "markdownEditor.limit": "The text is too long. Shorten it before adding more.",
   "chat.model.menuTitle": "Models",
