@@ -405,7 +405,8 @@ function withoutTrailingColons(text: string): string {
 
 /** Normalised key shared by the template body and the description the checker reads. */
 export function normalizeJiraSectionHeading(heading: string): string {
-  return withoutTrailingColons(heading.replace(/[*_`]/gu, ""))
+  const text = heading.replaceAll(/\\([\\*_+^~{}[\]!|#?.>-])/gu, "$1");
+  return withoutTrailingColons(text.replace(/[*_`]/gu, ""))
     .replace(/\s+/gu, " ")
     .trim()
     .toLowerCase();

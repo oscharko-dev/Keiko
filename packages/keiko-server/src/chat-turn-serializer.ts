@@ -236,7 +236,7 @@ export function interruptChangedChatGenerations(
   )
     return;
   const handled = turnInterruptions.get(deps.store)?.get(current.id)?.(reason) === true;
-  const keepRunning = reason === undefined && handled;
+  const keepRunning = handled;
   const count = (deps.chatTurnSerializer ?? serializerForStore(deps.store)).interruptGenerations(
     current.id,
     keepRunning,

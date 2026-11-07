@@ -194,6 +194,7 @@ export type JiraMutationAttempt =
       readonly links?: JiraMutationLinkAccount;
       /** Internal bounded serializer evidence; omitted from model results and remote receipts. */
       readonly descriptionConvertedHeadingCount?: number;
+      readonly descriptionProjection?: "supported-markdown";
     }
   | {
       readonly ok: false;
@@ -206,6 +207,7 @@ export type JiraMutationAttempt =
       readonly violations?: readonly JiraTemplateViolation[];
       /** A prepared description is evidence even when the provider refuses the subsequent write. */
       readonly descriptionConvertedHeadingCount?: number;
+      readonly descriptionProjection?: "supported-markdown";
     };
 
 // eslint-disable-next-line no-control-regex -- remote text is shown to a model, not a terminal.

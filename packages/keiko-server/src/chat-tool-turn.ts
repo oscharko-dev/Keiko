@@ -1,12 +1,14 @@
+import { chatToolSelectionFits, offeredDefinitions } from "./chat-tool-schema-selection.js";
+import { JIRA_MUTATION_OPERATIONS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { jiraOperationForTool } from "./atlassian/jiraManagedProvider.js";
 import { gatewayToolDefinitions } from "@oscharko-dev/keiko-tool-catalog";
-import {
-  deriveContextProfileFromCapability,
-  estimateTokens,
-} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { chatKnowledgeScopes } from "./requirement-inventory.js";
 import { randomUUID } from "node:crypto";
 import { createCatalogToolBinder } from "./tool-catalog/catalogToolDispatch.js";
 import { createCodingToolInvocationRegistry } from "./coding-runtime/codingToolInvocationRegistry.js";
+import type { CodingToolInvocationRegistry } from "./coding-runtime/codingToolInvocationRegistry.js";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { processServerLogSink } from "./process-log-sink.js";
 import { defaultServerDiagnosticSink } from "./diagnostics-log.js";
 import {
@@ -47,6 +49,7 @@ import {
   type ChatToolTurnEndReason,
 } from "./chat-tool-turn-ending.js";
 import {
+  CHAT_TURN_JIRA_AUTHENTICATION_FAILED,
   onChatScopeInterruption,
   type ChatGenerationInterruption,
 } from "./chat-turn-serializer.js";
@@ -55,11 +58,7 @@ import {
   groundedNestedToolCallRelease,
 } from "./grounded-answer.js";
 import { withNestedCallerAdmission } from "./chat-tool-nested-admission.js";
-import {
-  estimateGatewayMessageTokens,
-  fitToolContinuation,
-  fitToolRoundOutput,
-} from "./chat-tool-continuation-fit.js";
+import { fitToolContinuation, fitToolRoundOutput } from "./chat-tool-continuation-fit.js";
 import {
   omittedReportFindingKeys,
   reportCoverageCorrection,
@@ -168,20 +167,31 @@ export function mintAndBoundChatTurn<
   return { authority, signal: AbortSignal.any([...signals, AbortSignal.timeout(remaining)]) };
 }
 type ModelAttempt = NonNullable<GatewayCallRequest["attemptAdmission"]>;
+type ChatRoundCatalog = Pick<ManagedProviderCatalog<CatalogConsumer>, "catalog" | "projection">;
+type ChatCatalogBind<Context extends ToolConsumerContext> = (
+  context: Context,
+  budget: ReturnType<typeof createHarnessCatalogBudget>["port"],
+  invocationRegistry: CodingToolInvocationRegistry,
+) => CatalogToolBinder;
+export interface ChatToolCatalogSelection<Context extends ToolConsumerContext> {
+  readonly managed: ChatRoundCatalog;
+  readonly bind: ChatCatalogBind<Context>;
+  readonly close: () => Promise<void>;
+}
 export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
   readonly deps: Pick<UiHandlerDeps, "store" | "gatewayConfig" | "atlassianActionApprovalRegistry">;
   readonly message: ChatMessage;
   readonly context: Context;
-  readonly managed: Pick<ManagedProviderCatalog<CatalogConsumer>, "catalog" | "projection">;
+  readonly managed: ChatRoundCatalog;
   readonly correlationId: string;
   /** The accepted Authority Envelope budget; it is the turn's only duration and call bound. */
   readonly budget: ChatToolAuthorityEnvelope["budget"];
   /** Rules shared by every offered tool of a source, said once instead of in each description. */
   readonly guidance?: string;
-  readonly bind: (
-    context: Context,
-    budget: ReturnType<typeof createHarnessCatalogBudget>["port"],
-  ) => CatalogToolBinder;
+  readonly bind: ChatCatalogBind<Context>;
+  readonly selectTools?: (
+    identities: readonly string[],
+  ) => Promise<ChatToolCatalogSelection<Context>>;
 }
 export function chatModelSupportsTools(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
@@ -242,6 +252,21 @@ function interruptedDraftProgress(
     ? progress.snapshot()
     : undefined;
 }
+function startedOperationBinding(
+  invocation: NonNullable<NormalizedResponse["toolCalls"][number]["invocation"]>,
+): NonNullable<ReturnType<typeof jiraOperationForTool>>["binding"] | undefined {
+  const operation = JIRA_MUTATION_OPERATIONS.find(
+    (name) => invocation.toolRef.canonicalId === `keiko.${name}`,
+  );
+  if (operation === undefined) return undefined;
+  const contract = jiraOperationForTool(operation);
+  requireDispatch(
+    contract?.declaration.descriptor.toolRef.contractVersion === invocation.toolRef.contractVersion,
+    "invalid",
+    "invalid-arguments",
+  );
+  return contract.binding;
+}
 export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolConsumerContext> {
   private readonly counters: RunCounters = {
     iterations: 0,
@@ -254,6 +279,20 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   protected readonly context: Context;
   private readonly budget: ReturnType<typeof createHarnessCatalogBudget>;
   private bound: CatalogToolBinder | undefined;
+  private managed: ChatRoundCatalog;
+  private readonly invocationRegistry = createCodingToolInvocationRegistry({ now: Date.now });
+  private selectedCatalog: ChatToolCatalogSelection<Context> | undefined;
+  private pendingCatalog:
+    (ChatToolCatalogSelection<Context> & { readonly binder: CatalogToolBinder }) | undefined;
+  private preparedCatalog:
+    | (ChatToolCatalogSelection<Context> & {
+        readonly binder: CatalogToolBinder;
+        readonly requestId: string;
+      })
+    | undefined;
+  private activeSelectionRequestId: string | undefined;
+  private activeRequest: GatewayCallRequest | undefined;
+  private roundDefinitions: readonly ToolDefinition[] = [];
   private inventoryPreparation: Promise<void> | undefined;
   private readonly continuation: GatewayMessage[] = [];
   private readonly runtimeContext: GatewayMessage[] = [];
@@ -271,6 +310,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private endedAnswer: NormalizedResponse | undefined;
   /** A change of the Chat's scope ended the turn, and its answer names the writes it made. */
   private scopeChangeEnded = false;
+  private scopeInterruption: ChatGenerationInterruption | undefined;
   private readonly abortController = new AbortController();
   private promptTokens = 0;
   private completionTokens = 0;
@@ -282,7 +322,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private elidedResults = 0;
   private reservedTranscriptBytes = CHAT_TOOL_TRANSCRIPT_BASE_BYTES;
   private readonly instruction: GatewayMessage;
-  private readonly toolDefinitions: readonly ToolDefinition[];
+  private toolDefinitions: readonly ToolDefinition[];
   /** The correction the next round carries after the gateway's own correction was rejected too. */
   private correction: GatewayMessage | undefined;
   /** The turn corrected a rejected call and no round has dispatched a tool call since. */
@@ -294,6 +334,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   /** Transcript exchanges when that answer was given; any later exchange makes it stale. */
   private uncorrectedExchangeCount = 0;
   protected constructor(private readonly options: ChatToolTurnOptions<Context>) {
+    this.managed = options.managed;
     this.toolDefinitions = gatewayToolDefinitions(
       options.managed.catalog,
       options.managed.projection.profile,
@@ -305,6 +346,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.context = {
       ...options.context,
       signal: AbortSignal.any([options.context.signal, this.abortController.signal]),
+      selectJiraOperations: this.selectJiraOperations,
+      jiraDiscoveryResultFits: this.jiraDiscoveryResultFits,
       knowledgeReviewModelId: (): string | undefined => this.activeModelId,
       retainDraftProgress: (
         actionId: string,
@@ -365,8 +408,115 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     }
   }
   private get binder(): CatalogToolBinder {
-    this.bound ??= this.options.bind(this.context, this.budget.port);
+    this.bound ??= this.options.bind(this.context, this.budget.port, this.invocationRegistry);
     return this.bound;
+  }
+  private readonly selectJiraOperations = (
+    identities: readonly string[],
+    result: CatalogJsonObject,
+  ): Promise<void> => this.prepareToolSelection(identities, result);
+  private readonly jiraDiscoveryResultFits = (result: CatalogJsonObject): boolean =>
+    this.activeRequest !== undefined &&
+    this.selectionFits(this.activeRequest, this.roundDefinitions, result);
+  /** Compile and admit a candidate without replacing the current round's immutable offer. */
+  private async prepareToolSelection(
+    identities: readonly string[],
+    result: CatalogJsonObject,
+  ): Promise<void> {
+    const request = this.activeRequest;
+    const requestId = this.activeSelectionRequestId;
+    requireDispatch(
+      this.options.selectTools !== undefined && request !== undefined && requestId !== undefined,
+      "failed",
+      "handler-unavailable",
+    );
+    const selection = await this.options.selectTools(identities);
+    try {
+      this.context.signal.throwIfAborted();
+      const binder = selection.bind(this.context, this.budget.port, this.invocationRegistry);
+      const offered = binder.offer();
+      const definitions = gatewayToolDefinitions(
+        selection.managed.catalog,
+        selection.managed.projection.profile,
+      );
+      const tools = offeredDefinitions(selection.managed, definitions, offered);
+      requireDispatch(this.selectionFits(request, tools, result), "denied", "budget-exhausted");
+      requireDispatch(this.activeSelectionRequestId === requestId, "cancelled", "parent-cancelled");
+      this.preparedCatalog = { ...selection, binder, requestId };
+    } catch (error) {
+      await selection.close();
+      throw error;
+    }
+  }
+  private selectionFits(
+    request: GatewayCallRequest,
+    tools: readonly ToolDefinition[],
+    result: CatalogJsonObject,
+  ): boolean {
+    const config = this.options.deps.gatewayConfig?.current();
+    const capability =
+      config === undefined ? undefined : findConfiguredCapability(config, request.modelId);
+    if (capability?.kind !== "chat") return false;
+    return chatToolSelectionFits(
+      {
+        ...request,
+        messages: [
+          this.instruction,
+          ...this.runtimeContext,
+          ...request.messages,
+          ...this.continuation,
+          { role: "tool", content: JSON.stringify(result) },
+        ],
+      },
+      tools,
+      deriveContextProfileFromCapability(capability),
+      this.options.budget.maxPromptTokens - this.promptTokens,
+      config?.providers.find((provider) => provider.modelId === request.modelId)
+        ?.reasoningHistoryField,
+    );
+  }
+  private async activateToolSelection(): Promise<void> {
+    const pending = this.pendingCatalog;
+    if (pending === undefined) return;
+    this.pendingCatalog = undefined;
+    const previous = this.selectedCatalog;
+    this.selectedCatalog = pending;
+    this.managed = pending.managed;
+    this.bound = pending.binder;
+    this.toolDefinitions = gatewayToolDefinitions(
+      this.managed.catalog,
+      this.managed.projection.profile,
+    );
+    await previous?.close();
+  }
+  private async releaseToolSelection(): Promise<void> {
+    const pending = this.pendingCatalog;
+    const selected = this.selectedCatalog;
+    const prepared = this.preparedCatalog;
+    this.pendingCatalog = undefined;
+    this.selectedCatalog = undefined;
+    this.preparedCatalog = undefined;
+    if (selected !== undefined) {
+      this.managed = this.options.managed;
+      this.bound = undefined;
+      this.toolDefinitions = gatewayToolDefinitions(
+        this.managed.catalog,
+        this.managed.projection.profile,
+      );
+    }
+    await Promise.all([pending?.close(), selected?.close(), prepared?.close()]);
+  }
+  private async settleToolSelection(requestId: string, succeeded: boolean): Promise<void> {
+    const prepared = this.preparedCatalog;
+    if (prepared?.requestId !== requestId) return;
+    this.preparedCatalog = undefined;
+    if (!succeeded) {
+      await prepared.close();
+      return;
+    }
+    const previous = this.pendingCatalog;
+    this.pendingCatalog = prepared;
+    await previous?.close();
   }
   protected abstract reserveAuthorityPrompt(promptTokens: number): boolean;
   protected abstract observedMutation(
@@ -578,6 +728,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const progress: ActiveDraftProgress = { actionId: identity };
     this.activeDraftProgress =
       invocation.toolRef.canonicalId === "keiko.jira.draft" ? progress : undefined;
+    this.activeSelectionRequestId = identity;
     try {
       const outcome = await this.binder.dispatch(invocation, {
         actionId: identity,
@@ -586,30 +737,26 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       return { outcome, progress };
     } finally {
       this.activeDraftProgress = undefined;
+      this.activeSelectionRequestId = undefined;
     }
   }
   private async dispatch(
     call: NormalizedResponse["toolCalls"][number],
     origin?: "runtime",
   ): Promise<void> {
-    const { deps, message, correlationId, managed } = this.options;
+    const { deps, message, correlationId } = this.options;
+    const managed = this.managed;
     requireDispatch(
       call.invocation !== undefined && !this.callIds.has(call.id),
       "invalid",
       "replay-conflict",
     );
     this.callIds.add(call.id);
-    const publicCall = publicToolCall(call);
-    this.reserveTranscript(publicCall, call.invocation.toolRef.canonicalId);
-    deps.store.updateChatToolTranscript(
-      message.id,
-      { kind: "started", call: publicCall },
-      correlationId,
-    );
-    await this.publish();
+    await this.startExchange(call, call.invocation);
     const identity = sha256Hex(canonicalise({ messageId: message.id, callId: call.id }));
     const { outcome, progress } = await this.dispatchWithProgress(call.invocation, identity);
     requireDispatch(outcome.kind === "settled", "invalid", "recovery-required");
+    await this.settleToolSelection(identity, outcome.result.status === "completed");
     this.refreshWriteApproval(call.id);
     const descriptor = managed.catalog.descriptors.find(
       (entry) => entry.toolRef.canonicalId === call.invocation?.toolRef.canonicalId,
@@ -636,9 +783,28 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.appendObservedExchange(call.id, origin);
     await this.publish();
   }
+  private async startExchange(
+    call: NormalizedResponse["toolCalls"][number],
+    invocation: NonNullable<NormalizedResponse["toolCalls"][number]["invocation"]>,
+  ): Promise<void> {
+    const { deps, message, correlationId } = this.options;
+    const publicCall = publicToolCall(call);
+    const operationBinding = startedOperationBinding(invocation);
+    this.reserveTranscript(publicCall, invocation.toolRef.canonicalId);
+    deps.store.updateChatToolTranscript(
+      message.id,
+      {
+        kind: "started",
+        call: publicCall,
+        ...(operationBinding === undefined ? {} : { operationBinding }),
+      },
+      correlationId,
+    );
+    await this.publish();
+  }
   /** A call whose worst-case exchange no longer fits the stored transcript ends the turn. */
   private reserveTranscript(call: ChatToolExchange["call"], canonicalId: string): void {
-    const descriptor = this.options.managed.catalog.descriptors.find(
+    const descriptor = this.managed.catalog.descriptors.find(
       (entry) => entry.toolRef.canonicalId === canonicalId,
     );
     requireDispatch(descriptor !== undefined, "invalid", "recovery-required");
@@ -737,6 +903,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.activeModelId = request.modelId;
     this.activeModel = model;
     this.activeAttemptAdmission = request.attemptAdmission;
+    this.activeRequest = request;
+    let keepSelection = false;
     const cancel = (): void => {
       this.abortController.abort();
     };
@@ -750,13 +918,17 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       return await this.runRounds(model, request, signal, observeRound, retryFollows);
     } catch (error) {
       // The owning window retry keeps this same turn and its settled effects open.
-      if (this.retryKeepsTurnOpen(signal) && retryFollows?.(error) === true) throw error;
+      if (this.retryKeepsTurnOpen(signal) && retryFollows?.(error) === true) {
+        keepSelection = true;
+        throw error;
+      }
       const partial = this.failedAnswer(error, request.modelId, signal);
       if (partial === undefined) throw error;
       return partial;
     } finally {
       release();
       signal.removeEventListener("abort", cancel);
+      if (!keepSelection) await this.releaseToolSelection();
     }
   }
 
@@ -786,6 +958,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     signal: AbortSignal,
   ): NormalizedResponse | undefined {
     this.clearCorrection();
+    if (this.scopeInterruption === CHAT_TURN_JIRA_AUTHENTICATION_FAILED)
+      return this.partialAnswer(error, modelId, signal);
     return this.answerBeforeCorrection(signal) ?? this.partialAnswer(error, modelId, signal);
   }
 
@@ -799,6 +973,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const exchanges = deps.store.findMessageById(message.id)?.toolTranscript?.exchanges ?? [];
     if (this.context.signal.aborted || !chatToolTurnHoldsWrite(exchanges)) return false;
     this.scopeChangeEnded = true;
+    this.scopeInterruption = reason;
     this.abortController.abort(reason);
     return true;
   }
@@ -885,6 +1060,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   }
 
   private endReason(error: unknown, expired: boolean): ChatToolTurnEndReason | undefined {
+    if (this.scopeInterruption === CHAT_TURN_JIRA_AUTHENTICATION_FAILED)
+      return "authentication-failed";
     if (expired) return "deadline";
     if (this.scopeChangeEnded) return "authority-invalid";
     return chatToolTurnEndReason(error, {
@@ -920,7 +1097,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     request: GatewayCallRequest,
     offered: ReturnType<CatalogToolBinder["offer"]>,
   ): GatewayCallRequest {
-    const { managed } = this.options;
+    const managed = this.managed;
+    const definitions = offeredDefinitions(managed, this.toolDefinitions, offered);
+    this.roundDefinitions = definitions;
     const round: GatewayCallRequest = {
       ...request,
       stream: false,
@@ -929,7 +1108,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         this.instruction,
         ...this.runtimeContext,
         ...request.messages,
-        ...this.fittedContinuation(request),
+        ...this.fittedContinuation(request, definitions),
         ...(this.correction === undefined ? [] : [this.correction]),
       ],
       toolCatalog: {
@@ -950,21 +1129,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const capability =
       config === undefined ? undefined : findConfiguredCapability(config, request.modelId);
     if (capability?.kind !== "chat") return request;
-    const aliases = new Set(
-      this.options.managed.projection.tools
-        .filter((tool) =>
-          offered.toolRefs.some(
-            (ref) =>
-              ref.canonicalId === tool.toolRef.canonicalId &&
-              ref.contractVersion === tool.toolRef.contractVersion,
-          ),
-        )
-        .map((tool) => tool.alias),
-    );
     return fitToolRoundOutput(
       request,
       deriveContextProfileFromCapability(capability),
-      this.toolDefinitions.filter((tool) => aliases.has(tool.name)),
+      offeredDefinitions(this.managed, this.toolDefinitions, offered),
       {
         maxOutputTokens: capability.maxOutputTokens,
         reasoningHistoryField: config?.providers.find(
@@ -974,18 +1142,30 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     );
   }
   /** The copy of the continuation sent this round, fitted to the model window (#4175). */
-  private fittedContinuation(request: GatewayCallRequest): readonly GatewayMessage[] {
+  private fittedContinuation(
+    request: GatewayCallRequest,
+    tools: readonly ToolDefinition[],
+  ): readonly GatewayMessage[] {
     const config = this.options.deps.gatewayConfig?.current();
     const capability =
       config === undefined ? undefined : findConfiguredCapability(config, request.modelId);
     if (capability?.kind !== "chat") return this.continuation;
     const output = request.maxOutputTokens ?? capability.maxOutputTokens;
-    const fixed =
-      estimateGatewayMessageTokens([
-        this.instruction,
-        ...this.runtimeContext,
-        ...request.messages,
-      ]) + estimateTokens(JSON.stringify(this.options.managed.projection));
+    const profile = deriveContextProfileFromCapability(capability);
+    const fixed = countGatewayPromptTokens(
+      {
+        ...request,
+        tools,
+        messages: [this.instruction, ...this.runtimeContext, ...request.messages],
+      },
+      profile.tokenAccounting,
+      {
+        contextWindow: profile.maxInputTokens,
+        reasoningHistoryField: config?.providers.find(
+          (provider) => provider.modelId === request.modelId,
+        )?.reasoningHistoryField,
+      },
+    );
     const budget = Math.floor((capability.contextWindow - output) * CONTINUATION_WINDOW_SHARE);
     const fitted = fitToolContinuation(this.continuation, this.settledExchanges, budget - fixed);
     if (fitted.elidedCount > this.elidedResults) {
@@ -1002,7 +1182,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
 
   /** A bounded source-membership receipt, through the same offered catalog and authority as reads. */
   private async prepareKnowledgeInventory(): Promise<void> {
-    const { deps, message, managed } = this.options;
+    const { deps, message } = this.options;
+    const managed = this.managed;
     if (chatKnowledgeScopes(deps.store.findChatById(message.chatId)).length === 0) return;
     const tool = managed.projection.tools.find(
       (entry) => entry.toolRef.canonicalId === "keiko.knowledge.documents",
@@ -1067,6 +1248,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       );
       this.retainToolResponse(request.modelId, response);
       for (const call of response.toolCalls) await this.dispatch(call); // NOSONAR typescript:S9382 -- dispatches share authority/budgets; receipts, mutation journals and transcripts must settle before the next admission
+      await this.activateToolSelection();
       this.currentToolResponse = undefined;
       this.correctedSinceProgress = false;
     }
@@ -1268,6 +1450,7 @@ export function bindChatToolCatalog<Consumer extends CatalogConsumer>(options: {
   readonly consumerPort: CatalogConsumerPort<Consumer>;
   readonly admission: Pick<CatalogToolBinderInput<Consumer>, "authorityPort" | "approvalPort">;
   readonly budgetPort: CatalogToolBudgetPort<Consumer>;
+  readonly invocationRegistry?: CodingToolInvocationRegistry;
 }): CatalogToolBinder {
   const { deps, managed, context, consumerPort, admission, budgetPort } = options;
   return createCatalogToolBinder<Consumer>(
@@ -1287,7 +1470,8 @@ export function bindChatToolCatalog<Consumer extends CatalogConsumer>(options: {
       context: () => context,
       now: Date.now,
       mintId: randomUUID,
-      invocationRegistry: createCodingToolInvocationRegistry({ now: Date.now }),
+      invocationRegistry:
+        options.invocationRegistry ?? createCodingToolInvocationRegistry({ now: Date.now }),
     },
   );
 }

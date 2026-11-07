@@ -21,6 +21,26 @@ const PARTIAL: JiraMutationAttempt = {
 };
 
 describe("internal description formatting evidence", () => {
+  it("keeps body-only Markdown projection evidence private and drops foreign values", () => {
+    const attempt: JiraMutationAttempt = {
+      ok: true,
+      receipt: { issueKey: "SYN-1" },
+      descriptionProjection: "supported-markdown",
+    };
+    const valid = validJiraMutationAttempt(attempt, "jira.edit");
+    expect(valid.descriptionProjection).toBe("supported-markdown");
+    expect(valid).not.toHaveProperty("descriptionConvertedHeadingCount");
+    expect(jiraAttemptToolResult("succeeded", valid).data).not.toHaveProperty(
+      "descriptionProjection",
+    );
+    const foreign = {
+      ...attempt,
+      descriptionProjection: "private body",
+    } as unknown as JiraMutationAttempt;
+    expect(validJiraMutationAttempt(foreign, "jira.edit")).not.toHaveProperty(
+      "descriptionProjection",
+    );
+  });
   it.each([true, false])(
     "keeps bounded counts internally and omits them from the model result (ok=%s)",
     (ok) => {

@@ -4069,8 +4069,14 @@ function interruptedChatResponse(
   ctx: RouteContext,
 ): RouteResult {
   const response =
-    chatAuthenticationInterruption(signal, deps, ctx.correlationId, "POST /api/desktop/chat") ??
-    (result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result);
+    result === CHAT_TURN_WAIT_CANCELLED
+      ? (chatAuthenticationInterruption(
+          signal,
+          deps,
+          ctx.correlationId,
+          "POST /api/desktop/chat",
+        ) ?? requestCancelledResult())
+      : result;
   return logChatResponse(response, ctx.correlationId);
 }
 

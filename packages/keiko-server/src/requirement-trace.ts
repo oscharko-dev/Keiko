@@ -121,8 +121,11 @@ function acceptanceCriteriaProblems(
   redact: (value: string) => string,
 ): readonly TraceProblem[] {
   const projected = projectJiraDescriptionInput(description.description)?.text ?? "";
-  const syntax = typeof description.description === "string" ? "jira-wiki" : "markdown";
-  const blocks = new Set(readJiraDescriptionBlocks(projected, syntax).map(criterionText));
+  const blocks = new Set(
+    readJiraDescriptionBlocks(projected, "jira-wiki").map((block) =>
+      criterionText(block.replaceAll(/\\([\\*_+^~{}[\]!|#?.>-])/gu, "$1")),
+    ),
+  );
   const criteria = new Map<string, string>();
   for (const item of resolved) {
     const required =

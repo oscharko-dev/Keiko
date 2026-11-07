@@ -1,3 +1,5 @@
+import { jiraOperationContracts } from "./jiraManagedProvider.js";
+import { invalidateJiraPodChats } from "./jiraPodLifecycle.js";
 import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
@@ -119,7 +121,7 @@ function context(body: Record<string, unknown>, params: Record<string, string> =
     correlationId: "jira-chat-loop-proof",
   };
 }
-function configure(deps: UiHandlerDeps, proof: ToolProof = true): void {
+function configure(deps: UiHandlerDeps, proof: ToolProof = true, contextWindow?: number): void {
   const provider = {
     modelId: MODEL,
     baseUrl: "https://model.example.invalid/v1",
@@ -136,6 +138,7 @@ function configure(deps: UiHandlerDeps, proof: ToolProof = true): void {
       capabilities: [
         {
           ...createDefaultChatCapability(MODEL),
+          ...(contextWindow === undefined ? {} : { contextWindow }),
           toolCalling: proof !== "unsupported",
           streaming: true,
           ...(proof === "missing"
@@ -346,6 +349,16 @@ async function* syntheticStream(
   if (resolved.content.length > 0) yield { type: "delta", token: resolved.content };
   yield { type: "done", response: resolved };
 }
+function preselectFixtureCatalog(deps: UiHandlerDeps): void {
+  // These lower-level lifecycle fixtures start with an explicitly selected set. The demand-entry
+  // tests below restore get() and exercise discovery and typed next-round admission end to end.
+  const catalog = deps.jiraChatCatalog;
+  if (catalog === undefined) throw new TypeError("Missing Jira catalog");
+  vi.spyOn(catalog, "get").mockImplementation(() =>
+    catalog.select(jiraOperationContracts().map((entry) => entry.binding.identity)),
+  );
+}
+
 function fixture(
   mutation: Mutation = false,
   writeResponse?: Promise<void>,
@@ -382,6 +395,7 @@ function fixture(
     rmSync(root, { recursive: true, force: true });
   });
   configure(deps);
+  preselectFixtureCatalog(deps);
   deps.store.createProject(root);
   const chat = deps.store.createChat(root, "Synthetic Jira", MODEL);
   // An unselected Chat resolves the default (Full access); every other fixture pins Ask for approval
@@ -2921,8 +2935,12 @@ describe("four-item Epic and Task template fullchain", () => {
       }),
     );
     expect(firstRequest?.messages.filter((message) => message.role === "user")).toHaveLength(1);
-    expect(exchanges.slice(0, -1).every((entry) => entry.result?.status === "completed")).toBe(
-      true,
+    expect(
+      exchanges
+        .slice(0, -1)
+        .map((entry) => ({ name: entry.call.name, status: entry.result?.status })),
+    ).toEqual(
+      exchanges.slice(0, -1).map((entry) => ({ name: entry.call.name, status: "completed" })),
     );
     expect(exchanges.at(-1)?.result).toBeUndefined();
     expect(approval.state).toBe("pending");
@@ -3197,3 +3215,178 @@ it("stops after the second unoffered alias with a truthful nonretryable HTTP fai
   expect(f.requests()).toBe(0);
   expect(f.writes()).toBe(0);
 });
+
+function demandExchanges(f: ReturnType<typeof fixture>): readonly ChatToolExchange[] {
+  return f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges ?? [];
+}
+/** The real demand protocol: metadata, then a typed invocation in the next immutable offer. */
+function demandSelectedModel(
+  f: ReturnType<typeof fixture>,
+  mutation: boolean,
+  afterWrite?: () => void,
+): void {
+  if (f.deps.jiraChatCatalog === undefined) throw new TypeError("Missing Jira catalog");
+  vi.mocked(f.deps.jiraChatCatalog.get).mockRestore();
+  const operation = mutation ? "jira_comment" : "jira_projects";
+  const identities = [
+    mutation ? "POST /rest/api/2/issue/{issueIdOrKey}/comment" : "GET /rest/api/2/project",
+  ];
+  const argumentsValue = mutation
+    ? { issueKey: "KEIKO-1", body: "Synthetic approved comment" }
+    : {};
+  let round = 0;
+  const call: ModelPort["call"] = (request, signal) => {
+    f.calls.push(request);
+    round++;
+    const admission = request.attemptAdmission?.({ promptTokens: 100, maxOutputTokens: 500 });
+    const response: NormalizedResponse = {
+      modelId: MODEL,
+      content: "Jira operation observed.",
+      finishReason: "stop",
+      toolCalls: [],
+      structuredOutput: null,
+      usage: {
+        requestId: `demand-${String(round)}`,
+        promptTokens: 100,
+        completionTokens: 10,
+        latencyMs: 1,
+        costClass: "low",
+      },
+    };
+    admission?.settle(response.usage, true, "observed");
+    if (round === 3) {
+      afterWrite?.();
+      signal.throwIfAborted();
+      return Promise.resolve(response);
+    }
+    if (request.toolCatalog?.kind !== "bound") throw new TypeError("Expected bound catalog");
+    const alias = round === 1 ? "jira_describe" : operation;
+    const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
+    return Promise.resolve({
+      ...response,
+      content: "",
+      finishReason: "tool_calls",
+      toolCalls: [
+        bridge.bind({
+          id: `demand-call-${String(round)}`,
+          name: alias,
+          arguments: round === 1 ? { identities } : argumentsValue,
+        }),
+      ],
+    });
+  };
+  Object.assign(f.model, {
+    call,
+    callStream: (
+      request: GatewayCallRequest,
+      signal: AbortSignal,
+    ): AsyncIterable<GatewayStreamChunk> => syntheticStream(call(request, signal)),
+  });
+}
+
+it("loads typed Jira schemas only after a settled describe round and preserves its original binding", async () => {
+  const f = fixture(false, undefined, true, false, false, undefined, true);
+  configure(f.deps, true, 32768);
+  demandSelectedModel(f, false);
+  expect((await handleSendDesktopChat(sendContext(f, "demand-selected-read"), f.deps)).status).toBe(
+    200,
+  );
+  expect(f.requests()).toBe(1);
+  expect(f.calls).toHaveLength(3);
+  const first = f.calls[0]?.toolCatalog;
+  const second = f.calls[1]?.toolCatalog;
+  if (first?.kind !== "bound" || second?.kind !== "bound")
+    throw new TypeError("Expected round catalogs");
+  expect(first.projection.tools.map((tool) => tool.alias)).not.toContain("jira_projects");
+  expect(second.projection.tools.map((tool) => tool.alias)).toContain("jira_projects");
+  expect(first.projection.projectionDigest).not.toBe(second.projection.projectionDigest);
+  const exchanges = demandExchanges(f);
+  expect(exchanges.map((entry) => entry.call.name)).toEqual(["jira_describe", "jira_projects"]);
+  expect(exchanges.every((entry) => entry.result?.status === "completed")).toBe(true);
+});
+
+it("closes the newly prepared subset when retiring the preceding pending host fails", async () => {
+  const f = fixture(false, undefined, true, false, false, undefined, true);
+  configure(f.deps, true, 32768);
+  demandSelectedModel(f, false);
+  const runtime = f.deps.jiraChatCatalog;
+  if (runtime === undefined) throw new TypeError("Missing Jira catalog");
+  const select = runtime.select;
+  const closed: number[] = [];
+  vi.spyOn(runtime, "select").mockImplementation(async (identities) => {
+    const catalog = await select(identities);
+    const index = closed.length;
+    closed.push(0);
+    return {
+      ...catalog,
+      close: async (): Promise<void> => {
+        closed[index] = (closed[index] ?? 0) + 1;
+        await catalog.close();
+        if (index === 0) throw new Error("Synthetic pending host close failure");
+      },
+    };
+  });
+  const original = f.model.call;
+  const call: ModelPort["call"] = async (request, signal): Promise<NormalizedResponse> => {
+    const response = await original(request, signal);
+    const first = response.toolCalls[0];
+    if (first?.name !== "jira_describe") return response;
+    const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
+    return {
+      ...response,
+      toolCalls: [
+        first,
+        bridge.bind({ id: "second-description", name: first.name, arguments: first.arguments }),
+      ],
+    };
+  };
+  Object.assign(f.model, { call });
+  await handleSendDesktopChat(sendContext(f, "failed-pending-host-close"), f.deps).catch(
+    () => undefined,
+  );
+  expect(closed).toEqual([1, 1]);
+  expect(f.requests()).toBe(0);
+  expect(f.writes()).toBe(0);
+});
+
+it.each([
+  { acknowledge: true, stream: false },
+  { acknowledge: false, stream: false },
+  { acknowledge: true, stream: true },
+  { acknowledge: false, stream: true },
+])(
+  "retains settled write receipts without replay when authentication fails afterwards (%j)",
+  async ({ acknowledge, stream }) => {
+    const f = fixture(true, undefined, acknowledge, false, false, undefined, true);
+    configure(f.deps, true, 32768);
+    demandSelectedModel(f, true, () => {
+      invalidateJiraPodChats(
+        f.deps.store,
+        POD,
+        null,
+        "authentication-after-write",
+        f.deps,
+        "authentication-failed",
+      );
+    });
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, "demand-auth-after-write"), res: response.res };
+    const result = stream
+      ? await handleSendDesktopChatStream(ctx, f.deps)
+      : await handleSendDesktopChat(ctx, f.deps);
+    if (stream) expect(response.body()).toContain("event: done");
+    else expect(result).toMatchObject({ status: 200 });
+    const answer = f.deps.store.listMessages(f.chatId).at(-1)?.content;
+    expect(answer).toContain("Jira authentication failed");
+    // An unacknowledged response carries no receipt key; retain its target in the transcript,
+    // without manufacturing a confirmed key in the deterministic answer.
+    expect(answer).toContain(acknowledge ? "KEIKO-1" : "jira_comment");
+    expect(answer).toContain(acknowledge ? "Completed in this turn" : "Sent but not confirmed");
+    expect(f.writes()).toBe(1);
+    const exchanges = demandExchanges(f);
+    const write = exchanges.find((entry) => entry.call.name === "jira_comment");
+    expect(write?.mutationOutcome).toBe(acknowledge ? "succeeded" : "unknown");
+    expect(write?.call.arguments).toMatchObject({ issueKey: "KEIKO-1" });
+    expect(f.calls).toHaveLength(3);
+  },
+);

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { JiraWriteApproval } from "./JiraWriteApproval";
 import type {
   ChatToolExchange,
@@ -29,8 +29,7 @@ import { JiraReportCard } from "./JiraReportCard";
 import { jiraReportView } from "./jira-report-view";
 import { ChatProcessingPipeline } from "./ChatProcessingPipeline";
 import { chatProcessingSteps } from "./chat-processing-pipeline";
-import { newClientCorrelationId } from "@/lib/bff-correlation";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { useJiraResultEvidence } from "./jira-result-evidence";
 import {
   jiraToolOutcomeView,
   JIRA_OUTCOME_ITEMS_SHOWN,
@@ -150,25 +149,6 @@ const VALIDATION_MESSAGES = {
   "bounds-exceeded": "chat.jira.outcome.validation.bounds-exceeded",
 } as const;
 
-function useJiraResultEvidence(exchange: ChatToolExchange): void {
-  useEffect(() => {
-    if (exchange.result === undefined && exchange.draftProgress === undefined) return;
-    const correlationId = newClientCorrelationId();
-    reportClientDiagnostic("Jira result presentation started.", {
-      correlationId,
-      stageReport: { stage: "jira result presentation", phase: "started", ordinal: 1 },
-    });
-    reportClientDiagnostic("Jira result presentation settled.", {
-      correlationId,
-      stageReport: {
-        stage: "jira result presentation",
-        phase: "settled",
-        ordinal: 1,
-        durationMs: 0,
-      },
-    });
-  }, [exchange.call.id, exchange.result, exchange.draftProgress]);
-}
 function JiraResultCounts({ view }: { readonly view: JiraToolOutcomeView }): ReactNode {
   const t = useTranslate();
   return (
@@ -248,7 +228,6 @@ function JiraResultProblems({ view }: { readonly view: JiraToolOutcomeView }): R
 /** Read the saved receipt directly; reloading a Chat neither fetches Jira nor repeats a write. */
 function JiraToolOutcome({ exchange }: { readonly exchange: ChatToolExchange }): ReactNode {
   const view = jiraToolOutcomeView(exchange);
-  useJiraResultEvidence(exchange);
   return (
     <>
       <JiraResultCounts view={view} />
@@ -304,15 +283,18 @@ export function JiraChatTools({
   transcript,
   turnState,
   chatId,
+  messageId,
   showPending = false,
   waitingForDecision = false,
 }: {
   readonly transcript: ChatToolTranscript | undefined;
   readonly turnState?: ChatTurnState | undefined;
   readonly chatId?: string | undefined;
+  readonly messageId?: string | undefined;
   readonly showPending?: boolean | undefined;
   readonly waitingForDecision?: boolean | undefined;
 }): ReactNode {
+  useJiraResultEvidence(transcript, turnState, messageId);
   const steps = chatProcessingSteps(transcript, turnState, showPending, waitingForDecision);
   if (steps.length === 0) return null;
   return (

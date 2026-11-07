@@ -588,9 +588,13 @@ already holds a write takes a scope change itself (2026-11-03, S17): it stops at
 its transcript, naming those writes, with `authority-invalid` on `chat.tool-turn.ended`. A turn with
 no write to report, a human stop and queued turns stay cancellations. Observed authentication
 revocation is carried as a server-owned interruption reason from custody through the same
-serializer, including the running tool-turn callback. It preserves the saved effect transcript
-but terminates with `JIRA_AUTHENTICATION_FAILED` in buffered, streamed and grounded Chat; a
-stream that already started emits the stable code in its terminal error frame. The cause is
+serializer, including the running tool-turn callback. A turn that holds a write finishes with its
+saved receipt answer and explicit re-verification guidance; its closed Activity Log end reason is
+`authentication-failed`. The answer distinguishes acknowledged and uncertain effects and never
+invents a key absent from the receipt. Other interrupted turns terminate with
+`JIRA_AUTHENTICATION_FAILED` in buffered, streamed and grounded Chat; a stream that already
+started emits the stable code in its terminal error frame. A completed response takes precedence
+over a later signal change. The cause is
 not inferred from mutable credential state after cancellation, so a later successful verification
 cannot rewrite the interrupted request’s outcome. HTTP 409 denotes the invalidated bound Jira
 credential, not failed local app-session authentication; EN/DE remediation points to the
@@ -689,6 +693,19 @@ tools map to this same table: `jira.create` → `create-issue`, `jira.edit` → 
 [`JIRA_MANAGED_READ_TOOLS`](../../packages/keiko-contracts/src/jira-tool-fields.ts) retains its
 name. Assignment has the same medium risk
 as a bounded field edit; no separate policy subsystem or broader connector scope is introduced.
+
+**Operation contracts (#4287, #4290).** The managed provider binds each implemented native
+operation to a server-owned method/path identity, reviewed effects, existing authority action,
+permission policy and typed argument/result descriptor. Composites have a distinct identity and
+pin their constituent contracts. A canonical digest binds these facts together. It travels through
+catalog validation, the exact write approval and journal action digest, dispatch and validated
+result projection, including preflight refusals. A caller cannot supply a URL or substitute a stale
+contract; the write owner compares the captured binding with the current registry before any
+effect. The HTTP verb alone never determines the operation's authority. Existing template,
+source, credential-generation, permission and one-use approval guards remain the execution owners.
+Persisted approval views use the private historical snapshot described in ADR-0181, without
+restoring execution authority from history. The discovery tools described there expose metadata
+under the existing Chat read grant; selecting schemas does not approve a remote operation.
 
 **Attachments (#4176, 2026-10-31).** `jira.attach` maps to `update-issue-fields` (medium): it
 changes an existing issue exactly as an edit does and is governed, approved, journaled and
@@ -1105,7 +1122,17 @@ the approval.
   Markdown: ATX, setext (three or more `=` or `-`) and Jira wiki (`h2.`) headings. The projected
   Data Center wire description is judged in native wiki mode: only `hN.` headings count, so a
   native `#` numbered list or setext-looking text never satisfies a required section. Explicit
-  Markdown is serialized to native headings before this check; native strings remain unchanged.
+  Explicit Markdown is projected before this check and before the reviewed draft/action digest.
+  The bounded CommonMark parser and constrained Jira writer support headings, ordinary paragraphs,
+  emphasis, inline and fenced/indented code, simple nested lists, validated links, simple quotes,
+  unaligned tables and strikethrough. Unsupported or lossy structures are refused as a whole,
+  including HTML, images, unsafe destinations, unterminated fences and discarded table cells.
+  Literal wiki punctuation and native heading/quote prefixes in Markdown prose are escaped;
+  code contents remain code. Bare native strings never enter that converter and remain unchanged.
+  Template section identities and source-criterion matching use the same rendered projection.
+  The existing Chat/Coding mutation evidence records the closed `supported-markdown` projection
+  even without a heading, alongside the actual converted-heading count; neither field contains
+  description content. The existing public headings-only helper remains unchanged for its callers.
   Backtick and tilde fences are Markdown syntax only: native descriptions and the native samples
   from which a template is proposed recognize matching `{code}` and `{noformat}` blocks instead.
   Markdown heading discovery ignores backtick/tilde fences and wiki code macros. Native wire

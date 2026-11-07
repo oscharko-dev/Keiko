@@ -702,6 +702,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
+  readonly jiraResultPresentation?: ClientJiraResultPresentation | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -892,6 +893,7 @@ function hasValidVoiceCaptureContext(value: Record<string, unknown>): boolean {
 const CLOSED_CLIENT_REPORT_KEYS = [
   "selectDismissal",
   "knowledgeCatalog",
+  "jiraResultPresentation",
   "answerCopy",
   "answerSpeech",
   "citationActivation",
@@ -950,10 +952,17 @@ function hasValidCodingReportContext(value: Record<string, unknown>): boolean {
 }
 
 // The closed, routine report shapes that may ride a message report (select dismissal, catalog).
+function hasValidCountedPresentationContext(value: Record<string, unknown>): boolean {
+  return (
+    isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
+    isOptional(value.jiraResultPresentation, isClientJiraResultPresentation)
+  );
+}
+
 function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
   return (
     isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal) &&
-    isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
+    hasValidCountedPresentationContext(value) &&
     isOptional(value.answerCopy, isClientDiagnosticAnswerCopy) &&
     isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech) &&
     hasExclusiveClosedReportContext(value) &&
@@ -1063,7 +1072,6 @@ export const CLIENT_STAGE_IDS = [
   "model selection availability",
   "markdown copy feedback",
   "transcript navigation",
-  "jira result presentation",
   "browser approval",
   "knowledge pod selection",
 ] as const;
@@ -1979,6 +1987,65 @@ export function isClientDiagnosticKnowledgeCatalog(
     (key) =>
       KNOWLEDGE_CATALOG_COUNT_KEYS.has(key) &&
       isBoundedNonNegativeInteger(value[key], CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX),
+  );
+}
+
+/** Closed presentation facts; the digest joins the existing parent transcript update event. */
+export const CLIENT_JIRA_RESULT_FAILURES = [
+  "none",
+  "auth",
+  "permission",
+  "not-found",
+  "rate-limited",
+  "conflict",
+  "transition",
+  "bounds",
+  "response",
+  "fields",
+  "unavailable",
+  "mixed",
+] as const;
+export type ClientJiraResultFailure = (typeof CLIENT_JIRA_RESULT_FAILURES)[number];
+export interface ClientJiraResultPresentation {
+  readonly messageDigest: string;
+  readonly exchangeCount: number;
+  readonly itemCount: number;
+  readonly shownCount: number;
+  readonly returnedCount: number;
+  readonly unreadableCount: number;
+  readonly problemCount: number;
+  readonly ruleCount: number;
+  readonly failure: ClientJiraResultFailure;
+  readonly restored: boolean;
+}
+const JIRA_RESULT_COUNT_KEYS = [
+  "exchangeCount",
+  "itemCount",
+  "shownCount",
+  "returnedCount",
+  "unreadableCount",
+  "problemCount",
+  "ruleCount",
+] as const;
+const JIRA_RESULT_KEYS = new Set<string>([
+  ...JIRA_RESULT_COUNT_KEYS,
+  "messageDigest",
+  "failure",
+  "restored",
+]);
+const JIRA_RESULT_FAILURE_SET: ReadonlySet<string> = new Set(CLIENT_JIRA_RESULT_FAILURES);
+export function isClientJiraResultPresentation(
+  value: unknown,
+): value is ClientJiraResultPresentation {
+  if (!isRecord(value) || Object.keys(value).length !== JIRA_RESULT_KEYS.size) return false;
+  return (
+    Object.keys(value).every((key) => JIRA_RESULT_KEYS.has(key)) &&
+    JIRA_RESULT_COUNT_KEYS.every((key) => isBoundedNonNegativeInteger(value[key], 1_000_000_000)) &&
+    isReportDigest(value.messageDigest) &&
+    typeof value.failure === "string" &&
+    JIRA_RESULT_FAILURE_SET.has(value.failure) &&
+    typeof value.restored === "boolean" &&
+    (value.shownCount as number) <= (value.itemCount as number)
   );
 }
 

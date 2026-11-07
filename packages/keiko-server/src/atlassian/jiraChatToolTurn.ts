@@ -39,6 +39,7 @@ import {
   type JiraChatTemplatePreflightPorts,
 } from "./jiraChatTemplatePreflight.js";
 import { jiraChatMutationOutcome } from "./jiraChatMutationOutcome.js";
+import { jiraOperationForTool, isCurrentJiraOperationBinding } from "./jiraManagedProvider.js";
 import {
   jiraDraftUntracedAdvice,
   observedJiraDraftOutcome,
@@ -50,7 +51,12 @@ import type {
   CatalogJsonObject,
   ToolResultEnvelope,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { ChatToolTurn, bindChatToolCatalog, mintAndBoundChatTurn } from "../chat-tool-turn.js";
+import {
+  ChatToolTurn,
+  bindChatToolCatalog,
+  mintAndBoundChatTurn,
+  type ChatToolTurnOptions,
+} from "../chat-tool-turn.js";
 export { chatModelSupportsTools as jiraChatModelSupportsTools } from "../chat-tool-turn.js";
 type TurnDeps = JiraChatAuthorityDeps &
   JiraChatAttachmentDeps &
@@ -185,34 +191,36 @@ async function reviewedAttachment(
   return access.readAllowed(action) ? preview : undefined;
 }
 
+function jiraTurnContext(options: JiraChatTurnOptions): JiraChatCatalogContext {
+  const { authority, correlationId, message, signal } = options;
+  return {
+    runId: authority.envelope.runId,
+    correlationId,
+    chatId: message.chatId,
+    userMessageId: message.id,
+    authority: authority.reference.envelopeDigest,
+    authorityReference: authority.reference,
+    authorityExpiresAt: authority.envelope.expiresAt,
+    deadlineAt: authority.envelope.expiresAt,
+    signal,
+  };
+}
+
 export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
   public constructor(private readonly jiraOptions: JiraChatTurnOptions) {
-    const { authority, deps, managed, signal, correlationId, message } = jiraOptions;
-    const context: JiraChatCatalogContext = {
-      runId: authority.envelope.runId,
-      correlationId,
-      chatId: message.chatId,
-      userMessageId: message.id,
-      authority: authority.reference.envelopeDigest,
-      authorityReference: authority.reference,
-      authorityExpiresAt: authority.envelope.expiresAt,
-      deadlineAt: authority.envelope.expiresAt,
-      signal,
-    };
-    super({
-      deps,
-      message,
-      managed,
-      context,
-      correlationId,
-      budget: authority.envelope.budget,
-      guidance: JIRA_TOOL_GUIDANCE,
-      bind: (current, budgetPort) =>
+    const { authority, deps, managed, correlationId, message } = jiraOptions;
+    const context = jiraTurnContext(jiraOptions);
+    const bind =
+      (
+        selected: ManagedProviderCatalog<JiraChatCatalogConsumer>,
+      ): ChatToolTurnOptions<JiraChatCatalogContext>["bind"] =>
+      (current, budgetPort, invocationRegistry) =>
         bindChatToolCatalog<JiraChatCatalogConsumer>({
           deps,
-          managed,
+          managed: selected,
           context: current,
           budgetPort,
+          invocationRegistry,
           consumerPort: jiraChatCatalogConsumerPort,
           admission: createJiraChatCatalogAdmission({
             deps,
@@ -225,7 +233,21 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
               readAllowed: () => !current.signal.aborted,
             }),
           }),
-        }),
+        });
+    super({
+      deps,
+      message,
+      managed,
+      context,
+      correlationId,
+      budget: authority.envelope.budget,
+      guidance: JIRA_TOOL_GUIDANCE,
+      bind: bind(managed),
+      selectTools: async (identities) => {
+        requireDispatch(deps.jiraChatCatalog !== undefined, "failed", "handler-unavailable");
+        const selected = await deps.jiraChatCatalog.select(identities);
+        return { managed: selected, bind: bind(selected), close: selected.close };
+      },
     });
   }
   protected override reserveAuthorityPrompt(promptTokens: number): boolean {
@@ -241,6 +263,25 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
   }
 }
 
+function currentMutationContract(
+  operation: string,
+  result: ToolResultEnvelope,
+): ReturnType<typeof jiraOperationForTool> {
+  const contract = jiraOperationForTool(operation);
+  const data = result.data;
+  const binding =
+    data !== null && typeof data === "object" && !Array.isArray(data)
+      ? (data as CatalogJsonObject).operationBinding
+      : undefined;
+  if (
+    contract === undefined ||
+    result.toolRef?.contractVersion !== contract.declaration.descriptor.toolRef.contractVersion ||
+    (result.data !== null && !isCurrentJiraOperationBinding(operation, binding))
+  )
+    return undefined;
+  return contract;
+}
+
 export function observeJiraChatMutation(
   options: JiraChatTurnOptions,
   call: NormalizedResponse["toolCalls"][number],
@@ -251,6 +292,8 @@ export function observeJiraChatMutation(
     (value) => result.toolRef?.canonicalId === `keiko.${value}`,
   );
   if (operation === undefined) return undefined;
+  const contract = currentMutationContract(operation, result);
+  if (contract === undefined) return undefined;
   const { message, authority, correlationId, deps } = options;
   const expected = createJiraChatMutationIntent(
     message,
@@ -261,6 +304,7 @@ export function observeJiraChatMutation(
       actionId: identity,
       idempotencyKey: identity,
       argumentsDigest: sha256Hex(canonicalise(call.arguments)),
+      operationBinding: contract.binding,
     },
     correlationId,
   );

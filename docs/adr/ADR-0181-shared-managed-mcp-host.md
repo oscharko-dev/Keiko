@@ -29,15 +29,32 @@ for each protocol exchange. That is request isolation, not a server/process/list
 configuration per Pod. The injected fetch invokes the handler directly and refuses any
 other address or method. The internal `.invalid` URL is never dialed.
 
-The server dependency graph now owns one lazy managed Jira catalog. Concurrent callers
-share its initialization and admitted descriptors. Disposal closes that same host before
-closing the graph's remaining services; closure before/during initialization refuses
-late consumers. Independently assembled application graphs remain isolated. Connection
+The server dependency graph owns the lazy managed Jira discovery catalog. Concurrent callers
+share its initialization and admitted descriptors. Ordinary Chat can select a narrowed operation
+catalog through the same managed-host implementation; the turn closes each replaced selection
+after its in-flight round settles, and graph disposal also closes outstanding selections.
+Closure before/during initialization refuses late consumers. Independently assembled application graphs remain isolated. Connection
 selection uses the private invocation context and current Chat authority, then obtains
 the existing generation-bound custody HTTP port with its final dispatch guard. Catalog
 discovery itself performs no credential resolution or Jira HTTP. Ordinary Chat turn
 orchestration uses the shared bounded loop with provider-specific admission adapters;
 complete acceptance remains tracked separately from this architectural decision.
+
+**On-demand Jira schemas (#4287, #4290).** A Chat initially offers `jira.discover`,
+`jira.describe` and the existing Knowledge tools. Discovery pages the closed registry of
+implemented operations; it does not advertise the unimplemented API inventory as executable.
+Describe accepts only exact registry identities and prepares the selected typed tools for the
+next model round. The selection activates only after that describe invocation completes;
+failed or timed-out candidates are closed. Neither metadata operation performs Jira HTTP.
+Each round still uses the normal authority-filtered binder offer and the same accepted-turn
+invocation registry, so selection cannot grant authority or replay earlier effects. Other
+connected tool sources remain present when the Jira subset changes.
+
+Schema admission counts the actual offered definitions with the gateway's prompt-token
+accounting, including the retained conversation, output reservation and safety margin, against
+both the selected model's context and remaining turn budget. A subset that cannot fit is refused
+without truncating its schemas. Discovery returns an explicit next-page position when only a
+prefix fits. The existing MCP and catalog admission limits remain unchanged.
 
 ### D2 — Explicit modern protocol and bounded capabilities
 
@@ -502,6 +519,15 @@ Catalog transport wrappers have a separate fixed depth allowance; each descripto
 all model arguments retain their original bounds and closed validation. Historical
 completed tool results retain their validated descriptor/projection snapshot privately
 in the existing Chat row; the public serializer omits that qualification metadata.
+Jira write calls likewise capture their immutable operation identity and contract digest before
+dispatch, privately beside the existing transcript. Exact approvals and late journal observations
+validate against that snapshot, including Full access calls without an approval view, so later
+registry revisions do not erase earlier receipts. Legacy rows without a snapshot retain
+their original digest validation. Neither form grants execution: the write owner requires the
+current registry binding and current authority before dispatch. Replacing a call's snapshot
+or digest is refused. Older builds do not understand the new private snapshot; reverting code
+requires a compatible forward repair or restoring the pre-update database backup, never dropping
+approval history to make an old reader accept it.
 
 ## Centrally configured external MCP servers (#4081)
 

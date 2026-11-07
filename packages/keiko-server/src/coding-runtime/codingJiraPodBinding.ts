@@ -252,6 +252,12 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
     linkCreatedCount: { type: "integer", dataClass: "count", required: false },
     linkFailedCount: { type: "integer", dataClass: "count", required: false },
     descriptionConvertedHeadingCount: { type: "integer", dataClass: "count", required: false },
+    descriptionProjection: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["supported-markdown"],
+    },
     durationMs: { type: "integer", dataClass: "duration", required: false },
     frames: {
       type: "string-array",
@@ -297,6 +303,7 @@ export interface CodingJiraPodLine
   readonly tool?:
     (typeof JIRA_MANAGED_READ_TOOLS)[number] | (typeof CODING_JIRA_MUTATIONS)[number] | undefined;
   readonly risk?: McpToolRisk | undefined;
+  readonly descriptionProjection?: "supported-markdown" | undefined;
 }
 
 const CODING_JIRA_POD_LINE_FIELDS = [
@@ -308,6 +315,7 @@ const CODING_JIRA_POD_LINE_FIELDS = [
   "linkCreatedCount",
   "linkFailedCount",
   "descriptionConvertedHeadingCount",
+  "descriptionProjection",
   "durationMs",
 ] as const;
 

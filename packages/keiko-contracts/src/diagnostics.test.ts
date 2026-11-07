@@ -459,6 +459,47 @@ describe("isClientDiagnosticIngestRequest", () => {
 
   // PR #3678 review: the Knowledge Pod catalog's availability picture is six bounded counts, never
   // a name, path or id, and never a field beyond them.
+  it("accepts only closed Jira result presentation counts and the parent digest", () => {
+    const presentation = {
+      messageDigest: "a".repeat(64),
+      exchangeCount: 1,
+      itemCount: 7,
+      shownCount: 5,
+      returnedCount: 8,
+      unreadableCount: 1,
+      problemCount: 2,
+      ruleCount: 1,
+      failure: "fields",
+      restored: true,
+    };
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), jiraResultPresentation: presentation }),
+    ).toBe(true);
+    const { ruleCount: _omitted, ...missing } = presentation;
+    for (const invalid of [
+      missing,
+      { ...presentation, issueKey: "PRIVATE-1" },
+      { ...presentation, itemCount: -1 },
+      { ...presentation, shownCount: 8 },
+      { ...presentation, itemCount: 1.5 },
+      { ...presentation, itemCount: 1_000_000_001 },
+      { ...presentation, failure: "Private error" },
+      { ...presentation, restored: "true" },
+      { ...presentation, messageDigest: "private-message-id" },
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({ ...validRequest(), jiraResultPresentation: invalid }),
+      ).toBe(false);
+    }
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        jiraResultPresentation: presentation,
+        errorKind: "unknown",
+      }),
+    ).toBe(false);
+  });
+
   it("accepts only the six bounded knowledge catalog counts", () => {
     const counts = {
       podCount: 2,

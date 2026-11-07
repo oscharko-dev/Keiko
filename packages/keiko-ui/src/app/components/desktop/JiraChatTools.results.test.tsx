@@ -485,11 +485,12 @@ it("keeps every returned issue available behind a readable bounded disclosure", 
   expect(screen.queryByRole("button", { name: /retry|next page/iu })).toBeNull();
 });
 
-it("records body-free presentation lifecycle evidence without issue content or links", () => {
+it("records live Jira result counts joined to the parent without private content", () => {
   const report = vi.spyOn(diagnostics, "reportClientDiagnostic");
   try {
     render(
       <JiraChatTools
+        messageId="private-message-id"
         transcript={{
           schemaVersion: 1,
           exchanges: [
@@ -505,14 +506,96 @@ it("records body-free presentation lifecycle evidence without issue content or l
             }),
           ],
         }}
-        turnState="completed"
+        turnState="pending"
       />,
     );
-    const stages = report.mock.calls.filter(
-      ([, meta]) => meta?.stageReport?.stage === "jira result presentation",
+    const events = report.mock.calls.filter(
+      ([, meta]) => meta?.jiraResultPresentation !== undefined,
     );
-    expect(stages.map(([, meta]) => meta?.stageReport?.phase)).toEqual(["started", "settled"]);
-    expect(JSON.stringify(stages)).not.toMatch(/SYN-1|Private issue name|jira\.example|call-jira/u);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.[1]?.jiraResultPresentation).toMatchObject({
+      exchangeCount: 1,
+      itemCount: 1,
+      shownCount: 1,
+      returnedCount: 1,
+      unreadableCount: 0,
+      problemCount: 0,
+      ruleCount: 0,
+      failure: "none",
+      restored: false,
+      messageDigest: "4a1187d989622c846f402ce31ebb6bb5e15355cedde1a803d16dfc8943dd87a0",
+    });
+    expect(JSON.stringify(events)).not.toMatch(
+      /SYN-1|Private issue name|jira\.example|call-jira|private-message-id|durationMs/u,
+    );
+  } finally {
+    report.mockRestore();
+  }
+});
+
+it("bounds restored history evidence and deduplicates equivalent live result states", () => {
+  const report = vi.spyOn(diagnostics, "reportClientDiagnostic");
+  const exchanges = Array.from({ length: 8 }, (_, index) => {
+    const result = resultExchange("jira_issue", {
+      items: [{ key: `SYN-${String(index + 1)}`, summary: "Private summary" }],
+    });
+    return { ...result, call: { ...result.call, id: `private-call-${String(index)}` } };
+  });
+  const transcript: ChatToolTranscript = { schemaVersion: 1, exchanges };
+  const first = exchanges[0];
+  if (first === undefined) throw new TypeError("Missing first result fixture");
+  const events = (): unknown[] =>
+    report.mock.calls.flatMap(([, meta]) =>
+      meta?.jiraResultPresentation === undefined ? [] : [meta.jiraResultPresentation],
+    );
+  try {
+    const restored = render(
+      <JiraChatTools transcript={transcript} turnState="completed" messageId="saved-parent" />,
+    );
+    expect(events()).toHaveLength(0);
+    restored.rerender(
+      <JiraChatTools
+        transcript={JSON.parse(JSON.stringify(transcript)) as ChatToolTranscript}
+        turnState="completed"
+        messageId="saved-parent"
+      />,
+    );
+    expect(events()).toHaveLength(0);
+    restored.unmount();
+    const reopened = render(
+      <>
+        <JiraChatTools transcript={transcript} turnState="completed" messageId="saved-parent" />
+        <JiraChatTools transcript={transcript} turnState="failed" messageId="second-saved-parent" />
+      </>,
+    );
+    expect(events()).toHaveLength(0);
+    reopened.unmount();
+    const live = render(
+      <JiraChatTools
+        transcript={{ schemaVersion: 1, exchanges: [{ call: first.call }] }}
+        turnState="pending"
+        messageId="live-parent"
+      />,
+    );
+    live.rerender(
+      <JiraChatTools
+        transcript={{ schemaVersion: 1, exchanges: [first] }}
+        turnState="pending"
+        messageId="live-parent"
+      />,
+    );
+    expect(events()).toHaveLength(1);
+    expect(events().at(-1)).toMatchObject({ exchangeCount: 1, itemCount: 1, restored: false });
+    live.rerender(
+      <JiraChatTools
+        transcript={
+          JSON.parse(JSON.stringify({ schemaVersion: 1, exchanges: [first] })) as ChatToolTranscript
+        }
+        turnState="completed"
+        messageId="live-parent"
+      />,
+    );
+    expect(events()).toHaveLength(1);
   } finally {
     report.mockRestore();
   }

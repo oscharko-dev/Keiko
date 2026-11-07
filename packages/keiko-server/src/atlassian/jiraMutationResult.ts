@@ -88,11 +88,18 @@ function failedAttempt(
 /** Internal serializer evidence has a hard count bound and never enters a receipt or model data. */
 function descriptionFormattingFacts(
   value: JiraMutationAttempt,
-): Pick<JiraMutationAttempt, "descriptionConvertedHeadingCount"> {
+): Pick<JiraMutationAttempt, "descriptionConvertedHeadingCount" | "descriptionProjection"> {
   const count = value.descriptionConvertedHeadingCount;
-  return typeof count === "number" && Number.isInteger(count) && count > 0 && count <= 32768
-    ? { descriptionConvertedHeadingCount: count }
-    : {};
+  const headingCount =
+    typeof count === "number" && Number.isInteger(count) && count > 0 && count <= 32768
+      ? { descriptionConvertedHeadingCount: count }
+      : {};
+  return {
+    ...headingCount,
+    ...(value.descriptionProjection === "supported-markdown"
+      ? { descriptionProjection: "supported-markdown" }
+      : {}),
+  };
 }
 
 function boundedViolations(

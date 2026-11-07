@@ -245,7 +245,7 @@ function descriptionMetadataItems(
           ...item,
           inputSchema: structuredClone(JIRA_DESCRIPTION_INPUT_SCHEMA),
           nativeFormat: "jira-wiki",
-          markdownSerialization: "headings-only",
+          markdownSerialization: "supported-markdown",
         }
       : item,
   );

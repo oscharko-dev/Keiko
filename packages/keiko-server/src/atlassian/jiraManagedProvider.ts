@@ -34,6 +34,12 @@ import {
 import { JIRA_DRAFT_STAGE_DECLARATION } from "./jiraDraftDescriptor.js";
 import { JIRA_REPORT_DECLARATION } from "./jiraReportDescriptor.js";
 import { JIRA_APPLICABLE_TEMPLATES_SCHEMA } from "./jiraTemplateMetadataSchema.js";
+import {
+  createJiraOperationContracts,
+  matchesJiraOperationBinding,
+  type JiraOperationBinding,
+  type JiraOperationContract,
+} from "./jiraOperationRegistry.js";
 
 const PAGE_NUMBER = { type: "integer", minimum: 0, maximum: 1000000 };
 const REFERENCE = object({
@@ -59,7 +65,7 @@ const FIELD = object(
     schemaType: text(129),
     inputSchema: { ...object({}), additionalProperties: true },
     nativeFormat: { type: "string", enum: ["jira-wiki"] },
-    markdownSerialization: { type: "string", enum: ["headings-only"] },
+    markdownSerialization: { type: "string", enum: ["supported-markdown"] },
   },
   ["id", "name", "required", "hasDefaultValue", "kind", "richText", "operations"],
 );
@@ -276,7 +282,31 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   });
   return Object.freeze({ name, risk: "read", descriptor });
 }
-const DECLARATIONS = [...JIRA_MANAGED_READ_TOOLS.map(declaration), ...JIRA_MUTATION_DECLARATIONS];
+const OPERATION_CONTRACTS = createJiraOperationContracts([
+  ...JIRA_MANAGED_READ_TOOLS.map(declaration),
+  ...JIRA_MUTATION_DECLARATIONS,
+]);
+
+/** Pure lookups let a consumer compile only its demanded subset of the existing provider. */
+export function jiraOperationContracts(): readonly JiraOperationContract[] {
+  return OPERATION_CONTRACTS;
+}
+export function jiraOperationForTool(tool: string): JiraOperationContract | undefined {
+  return OPERATION_CONTRACTS.find((entry) => entry.definition.tool === tool);
+}
+export function jiraDeclarationForTool(tool: string): ManagedMcpToolDeclaration | undefined {
+  return jiraOperationForTool(tool)?.declaration;
+}
+export function jiraOperationBindingForTool(tool: string): JiraOperationBinding | undefined {
+  return jiraOperationForTool(tool)?.binding;
+}
+export function isCurrentJiraOperationBinding(
+  tool: string,
+  value: unknown,
+): value is JiraOperationBinding {
+  const contract = jiraOperationForTool(tool);
+  return contract !== undefined && matchesJiraOperationBinding(contract, value);
+}
 
 /** Canonical descriptors are built by the server; the connector owns only Jira behavior. */
 export function createJiraProviderForCatalog<Context extends ManagedMcpInvocationContext>(
@@ -287,15 +317,30 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
   draft?: JiraDraftToolDeps<Context>,
 ): ManagedMcpProvider<Context> {
   const selected = tools.map((name) => {
-    const declaration = DECLARATIONS.find((item) => item.name === name);
+    const declaration = jiraDeclarationForTool(name);
     if (declaration === undefined) throw new TypeError("Unsupported Jira tool");
     return declaration;
   });
-  return createJiraManagedProvider({
+  const provider = createJiraManagedProvider({
     connection,
     declarations: selected,
     ...(executeMutation === undefined ? {} : { executeMutation }),
     ...(report === undefined ? {} : { report }),
     ...(draft === undefined ? {} : { draft }),
   });
+  const boundTools = Object.freeze(
+    provider.tools().map((tool) => {
+      const binding = jiraOperationBindingForTool(tool.name);
+      if (binding === undefined) throw new TypeError("Unknown Jira operation");
+      return Object.freeze({
+        ...tool,
+        execute: async (...args: Parameters<typeof tool.execute>) => {
+          const result = await tool.execute(...args);
+          // Provider response content never chooses the operation or its contract authority.
+          return { ...result, data: { ...result.data, operationBinding: binding } };
+        },
+      });
+    }),
+  );
+  return Object.freeze({ ...provider, tools: () => boundTools });
 }

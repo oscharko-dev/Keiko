@@ -16,6 +16,7 @@ import {
   ChatToolTurn,
   chatModelSupportsTools,
   type ChatToolTurnPort,
+  type ChatToolTurnOptions,
 } from "./chat-tool-turn.js";
 import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 import { correlationIdOrUnknown } from "./correlation.js";
@@ -95,25 +96,40 @@ function sourceContext(options: Options): ChatSourcesContext {
   };
 }
 
+function selectedSourceCatalog(
+  deps: UiHandlerDeps,
+  mcp: McpChatCatalog,
+  bind: (
+    managed: ReturnType<typeof combineChatCatalogs>,
+  ) => ChatToolTurnOptions<ChatSourcesContext>["bind"],
+): NonNullable<ChatToolTurnOptions<ChatSourcesContext>["selectTools"]> {
+  return async (identities) => {
+    requireDispatch(deps.jiraChatCatalog !== undefined, "failed", "handler-unavailable");
+    const selected = await deps.jiraChatCatalog.select(identities);
+    try {
+      const combined = combineChatCatalogs(selected, mcp);
+      return { managed: combined, bind: bind(combined), close: selected.close };
+    } catch (error) {
+      await selected.close();
+      throw error;
+    }
+  };
+}
+
 /** One binder, harness and model loop; source adapters keep their existing consent and effect owners. */
 class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
   constructor(private readonly sourceOptions: Options) {
     const { deps, message, correlationId, primary, mcp } = sourceOptions;
     const managed = combineChatCatalogs(primary.options.managed, mcp.managed);
-    super({
-      deps,
-      message,
-      correlationId,
-      managed,
-      context: sourceContext(sourceOptions),
-      budget: primary.options.authority.envelope.budget,
-      ...(primary.kind === "jira" ? { guidance: JIRA_TOOL_GUIDANCE } : {}),
-      bind: (context, budgetPort) =>
+    const bind =
+      (selected: typeof managed): ChatToolTurnOptions<ChatSourcesContext>["bind"] =>
+      (context, budgetPort, invocationRegistry) =>
         bindChatToolCatalog<ChatSourcesConsumer>({
           deps,
-          managed,
+          managed: selected,
           context: context,
           budgetPort,
+          invocationRegistry,
           consumerPort: chatSourcesConsumerPort,
           admission: createChatSourcesAdmission({
             deps,
@@ -130,7 +146,21 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
                 }
               : {}),
           }),
-        }),
+        });
+    super({
+      deps,
+      message,
+      correlationId,
+      managed,
+      context: sourceContext(sourceOptions),
+      budget: primary.options.authority.envelope.budget,
+      ...(primary.kind === "jira"
+        ? {
+            guidance: JIRA_TOOL_GUIDANCE,
+            selectTools: selectedSourceCatalog(deps, mcp.managed, bind),
+          }
+        : {}),
+      bind: bind(managed),
     });
   }
   protected override reserveAuthorityPrompt(promptTokens: number): boolean {

@@ -36,8 +36,11 @@ bindings. See the [Live Pod guide](../local-knowledge/atlassian-connector-guide.
 for the first-read disclosure, per-action write approvals and current platform limits.
 
 When an authenticated Jira read returns `401` or identifies the caller as anonymous, custody
-revokes the current generation and stops the Chat turn. Buffered, streamed and grounded Chat report
-`JIRA_AUTHENTICATION_FAILED` so the person can repair and reverify the connection; it does not
+revokes the current generation and stops further work in the Chat turn. If the turn already sent
+a write, its answer retains the acknowledged or uncertain receipts together with re-verification
+guidance; `chat.tool-turn.ended` records the closed reason `authentication-failed`. No missing
+receipt key is invented. Other interrupted buffered, streamed and grounded turns report
+`JIRA_AUTHENTICATION_FAILED` so the person can repair and reverify the connection; Keiko does not
 retry the request or conceal this failure as ordinary cancellation. Closing the request,
 removing the Pod or changing the Chat's mode still cancels the turn normally. Start with the
 body-free `atlassian.connection.checked` authentication outcome and the correlated structured

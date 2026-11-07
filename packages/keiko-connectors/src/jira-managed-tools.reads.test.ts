@@ -472,8 +472,10 @@ it("advertises explicit Markdown provenance only for Data Center description inp
     expect.objectContaining({
       id: "description",
       nativeFormat: "jira-wiki",
-      markdownSerialization: "headings-only",
+      markdownSerialization: "supported-markdown",
       inputSchema: {
+        description:
+          "Native Jira wiki text is unchanged. Explicit Markdown supports headings, inline formatting, links, simple lists, tables, quotes and closed code blocks. Unsupported structures are refused; use native wiki text when needed.",
         oneOf: [
           { type: "string", maxLength: 32768 },
           {
@@ -511,7 +513,7 @@ it("offers the same isolated Markdown input contract when editing a description"
   expect(firstItems[0]).toMatchObject({
     id: "description",
     nativeFormat: "jira-wiki",
-    markdownSerialization: "headings-only",
+    markdownSerialization: "supported-markdown",
   });
   expect(firstItems[1]).not.toHaveProperty("inputSchema");
   const originalSchema = structuredClone(descriptionSchemaOf(first));

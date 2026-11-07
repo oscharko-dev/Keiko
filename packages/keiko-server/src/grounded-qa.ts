@@ -3602,13 +3602,14 @@ function groundedTurnResult(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
 ): RouteResult {
+  if (result !== CHAT_TURN_WAIT_CANCELLED) return result;
   return (
     chatAuthenticationInterruption(
       prepared.signal,
       deps,
       prepared.correlationId,
       "POST /api/chats/messages/grounded",
-    ) ?? (result === CHAT_TURN_WAIT_CANCELLED ? groundedCancelledResult() : result)
+    ) ?? groundedCancelledResult()
   );
 }
 

@@ -30,7 +30,17 @@ import {
   managedCatalogToolDefinitions,
   type ManagedProviderCatalog,
 } from "../tool-catalog/managedProviderCatalog.js";
-import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
+import {
+  createJiraProviderForCatalog,
+  isCurrentJiraOperationBinding,
+  jiraOperationBindingForTool,
+} from "./jiraManagedProvider.js";
+import {
+  createJiraCatalogDiscoveryProvider,
+  JIRA_CATALOG_DISCOVERY_TOOLS,
+  jiraToolsForIdentities,
+} from "./jiraCatalogDiscovery.js";
+import { KNOWLEDGE_CHAT_TOOLS } from "../requirementsToolName.js";
 import { JIRA_MANAGED_ACTION_TYPES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { decideAtlassianEnvelopeAction } from "./actionPolicy.js";
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
@@ -73,6 +83,8 @@ type ApprovalRegistry = NonNullable<UiHandlerDeps["atlassianActionApprovalRegist
 const JIRA_CHAT_PROFILE = { id: "jira-chat", version: 1 } as const;
 export interface JiraChatCatalogRuntime {
   readonly get: () => Promise<ChatCatalog>;
+  /** Caller-owned subset host, closed after its turn; the application also closes outstanding hosts. */
+  readonly select: (identities: readonly string[]) => Promise<ChatCatalog>;
   /**
    * The tool definitions a Chat advertises with a bound Jira Pod. Static, so it is derived once
    * from the providers the catalog hosts without admitting a host or touching a connection.
@@ -124,7 +136,8 @@ function prepareMutation(
   );
   requireDispatch(
     write.action.tool === operation &&
-      write.action.argumentsDigest === sha256Hex(canonicalise(args)),
+      write.action.argumentsDigest === sha256Hex(canonicalise(args)) &&
+      isCurrentJiraOperationBinding(write.action.tool, write.action.operationBinding),
     "invalid",
     "invalid-arguments",
   );
@@ -203,7 +216,12 @@ function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
         deselected: approval?.excludedItemRefs ?? [],
         context,
         retainProgress: (snapshot): void => {
-          context.retainDraftProgress?.(intent.invocationId, context.invocationId, snapshot);
+          const binding = jiraOperationBindingForTool(operation);
+          requireDispatch(binding !== undefined, "invalid", "invalid-arguments");
+          context.retainDraftProgress?.(intent.invocationId, context.invocationId, () => ({
+            ...snapshot(),
+            operationBinding: { ...binding },
+          }));
         },
         connection: jiraChatDraftConnection(deps, current.credential),
         openTrace: () => openTraceSession(deps, turn),
@@ -415,15 +433,21 @@ function chatCatalogProviders(
   deps: UiHandlerDeps,
   store: JiraReportStore,
   draftStore: JiraDraftStore,
+  tools: typeof JIRA_CHAT_TOOLS = [],
 ): readonly ManagedMcpProvider<CatalogHandlerContext<JiraChatCatalogConsumer>>[] {
   return [
-    createJiraProviderForCatalog(
-      (context) => connection(deps, context),
-      JIRA_CHAT_TOOLS,
-      mutationExecutor(deps),
-      reportTool(deps, store),
-      draftTool(deps, draftStore),
-    ),
+    ...(tools.length === 0
+      ? []
+      : [
+          createJiraProviderForCatalog(
+            (context: CatalogHandlerContext<JiraChatCatalogConsumer>) => connection(deps, context),
+            tools,
+            mutationExecutor(deps),
+            reportTool(deps, store),
+            draftTool(deps, draftStore),
+          ),
+        ]),
+    createJiraCatalogDiscoveryProvider(),
     createKnowledgeRequirementsProvider(deps, store),
   ];
 }
@@ -433,10 +457,15 @@ function initializeCatalog(
   log: CatalogLifecycleLogPort,
   store: JiraReportStore,
   draftStore: JiraDraftStore,
+  tools: typeof JIRA_CHAT_TOOLS = [],
 ): Promise<ChatCatalog> {
   return createManagedProviderCatalog<JiraChatCatalogConsumer>({
-    providers: chatCatalogProviders(deps, store, draftStore),
-    routes: jiraChatCatalogRoutes(),
+    providers: chatCatalogProviders(deps, store, draftStore, tools),
+    routes: jiraChatCatalogRoutes([
+      ...tools,
+      ...JIRA_CATALOG_DISCOVERY_TOOLS,
+      ...KNOWLEDGE_CHAT_TOOLS,
+    ]),
     profile: JIRA_CHAT_PROFILE,
     log,
     correlationId: randomUUID(),
@@ -453,7 +482,7 @@ function staticToolDefinitions(
   let definitions: readonly ToolDefinition[] | undefined;
   return () => {
     definitions ??= managedCatalogToolDefinitions(
-      jiraChatCatalogRoutes(),
+      jiraChatCatalogRoutes([...JIRA_CATALOG_DISCOVERY_TOOLS, ...KNOWLEDGE_CHAT_TOOLS]),
       chatCatalogProviders(deps, store, draftStore).flatMap((provider) => provider.tools()),
       JIRA_CHAT_PROFILE,
       Date.now(),
@@ -462,16 +491,75 @@ function staticToolDefinitions(
   };
 }
 
-/** One lazy SDK host per application graph; neither Pods nor turns own protocol transports. */
+type SelectedRuntime = ReturnType<typeof createManagedChatCatalogRuntime<JiraChatCatalogConsumer>>;
+async function admitSelectedCatalog(
+  identities: readonly string[],
+  initialize: (tools: typeof JIRA_CHAT_TOOLS) => Promise<ChatCatalog>,
+  selections: Set<SelectedRuntime>,
+): Promise<ChatCatalog> {
+  const names = new Set(jiraToolsForIdentities(identities));
+  const tools = JIRA_CHAT_TOOLS.filter((name) => names.has(name));
+  requireDispatch(tools.length === names.size, "invalid", "invalid-arguments");
+  const selected = createManagedChatCatalogRuntime<JiraChatCatalogConsumer>(
+    () => [],
+    () => initialize(tools),
+  );
+  selections.add(selected);
+  try {
+    const catalog = await selected.get();
+    return {
+      ...catalog,
+      close: async (): Promise<void> => {
+        try {
+          await selected.close();
+        } finally {
+          selections.delete(selected);
+        }
+      },
+    };
+  } catch (error) {
+    selections.delete(selected);
+    await selected.close();
+    throw error;
+  }
+}
+
+/** The application owns the discovery host and tracks every transient narrowed SDK host. */
 export function createJiraChatCatalogRuntime(
   deps: UiHandlerDeps,
   log: CatalogLifecycleLogPort,
   store: JiraReportStore = createJiraReportStore(),
   draftStore: JiraDraftStore = createJiraDraftStore(),
 ): JiraChatCatalogRuntime {
-  return createManagedChatCatalogRuntime(staticToolDefinitions(deps, store, draftStore), () =>
-    initializeCatalog(deps, log, store, draftStore),
+  const initial = createManagedChatCatalogRuntime(
+    staticToolDefinitions(deps, store, draftStore),
+    () => initializeCatalog(deps, log, store, draftStore),
   );
+  const selections = new Set<
+    ReturnType<typeof createManagedChatCatalogRuntime<JiraChatCatalogConsumer>>
+  >();
+  let closed = false;
+  let closing: Promise<void> | undefined;
+  return {
+    get: initial.get,
+    toolDefinitions: initial.toolDefinitions,
+    select: async (identities): Promise<ChatCatalog> => {
+      requireDispatch(!closed, "failed", "handler-unavailable");
+      return admitSelectedCatalog(
+        identities,
+        (tools) => initializeCatalog(deps, log, store, draftStore, tools),
+        selections,
+      );
+    },
+    close: (): Promise<void> => {
+      closed = true;
+      closing ??= Promise.all([
+        initial.close(),
+        ...[...selections].map((selected) => selected.close()),
+      ]).then(() => undefined);
+      return closing;
+    },
+  };
 }
 
 export function installJiraChatCatalogRuntime(

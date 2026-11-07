@@ -60,6 +60,34 @@ function scopeOf(references: string): string {
 }
 
 describe("source acceptance criteria before a Jira draft can be staged or approved", () => {
+  it("matches exact source punctuation after the canonical Markdown-to-wiki projection", async () => {
+    const text = specification(1).text.replace(
+      "Thema 1 ist verfügbar.",
+      "Datei_a [42] ist verfügbar.",
+    );
+    const { open } = await session([{ capsuleId: "cap-criteria", text }]);
+    const trace = open();
+    try {
+      expect(
+        trace.resolve(["LH-001"], {
+          description: {
+            format: "markdown",
+            text: "## Criteria\n- Datei_a [42] ist verfügbar.\n- Fehler zu Thema 1 werden gemeldet.",
+          },
+        }).ok,
+      ).toBe(true);
+      expect(
+        trace.resolve(["LH-001"], {
+          description: {
+            format: "markdown",
+            text: "## Criteria\n```\nDatei_a [42] ist verfügbar.\nFehler zu Thema 1 werden gemeldet.\n```",
+          },
+        }).ok,
+      ).toBe(false);
+    } finally {
+      trace.close();
+    }
+  });
   it("refuses a traced item that omits an original acceptance criterion", async () => {
     const { open } = await session([{ capsuleId: "cap-criteria", text: specification(1).text }]);
     const trace = open();
