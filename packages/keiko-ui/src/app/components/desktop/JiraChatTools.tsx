@@ -9,6 +9,7 @@ import type {
 import {
   useOptionalWidgetTranslate as useTranslate,
   type OptionalWidgetTranslate,
+  type WidgetMessageKey,
 } from "@/lib/optional-widget-i18n";
 import {
   knowledgeTurnCoverage,
@@ -198,6 +199,32 @@ function JiraToolExchange({
     </section>
   );
 }
+/** States the progress beside the cards already shows; a card that says only this says nothing. */
+const PROGRESS_ONLY_STATES: ReadonlySet<WidgetMessageKey> = new Set([
+  "chat.jira.complete",
+  "chat.jira.running",
+]);
+function outcomeIsEmpty(view: ReturnType<typeof jiraToolOutcomeView>): boolean {
+  return (
+    view.issues.length === 0 &&
+    view.problems.length === 0 &&
+    view.rules.length === 0 &&
+    view.validation === undefined
+  );
+}
+/** A tool card appears only when it tells the person something the progress does not. */
+function toolCardHasContent(
+  exchange: ChatToolExchange,
+  turnState: ChatTurnState | undefined,
+): boolean {
+  if (!PROGRESS_ONLY_STATES.has(jiraToolState(exchange, turnState))) return true;
+  return (
+    knowledgeReviewFailureNotice(exchange) !== undefined ||
+    jiraReportOf(exchange) !== undefined ||
+    jiraToolPartialNotice(exchange) !== undefined ||
+    !outcomeIsEmpty(jiraToolOutcomeView(exchange))
+  );
+}
 /** The card already says what an undecided action is waiting for. */
 function awaitsDecision(exchange: ChatToolExchange, turnState: ChatTurnState | undefined): boolean {
   return (
@@ -205,6 +232,19 @@ function awaitsDecision(exchange: ChatToolExchange, turnState: ChatTurnState | u
     exchange.result === undefined &&
     turnState === "pending"
   );
+}
+/** The exchanges that earn a card, and whether any card or coverage notice shows at all. */
+function visibleToolCards(
+  transcript: ChatToolTranscript | undefined,
+  turnState: ChatTurnState | undefined,
+): { readonly exchanges: readonly ChatToolExchange[]; readonly cards: boolean } {
+  const all = transcript?.exchanges ?? [];
+  const exchanges = all.filter(
+    (exchange) => exchange.approval !== undefined || toolCardHasContent(exchange, turnState),
+  );
+  const notice =
+    turnState !== "pending" && knowledgeCoverageIssues(knowledgeTurnCoverage(all)).length > 0;
+  return { exchanges, cards: exchanges.length > 0 || notice };
 }
 export function JiraChatTools({
   transcript,
@@ -221,29 +261,51 @@ export function JiraChatTools({
 }): ReactNode {
   const steps = chatProcessingSteps(transcript, turnState, showPending, waitingForDecision);
   if (steps.length === 0) return null;
+  const { exchanges, cards } = visibleToolCards(transcript, turnState);
   return (
     <div className={styles.cmpLayout}>
-      <div className={styles.cmpContent}>
+      <div className={styles.cmpContent} data-cards={cards}>
         <ChatProcessingPipeline steps={steps} />
-        <div className={styles.cmpStack}>
-          <KnowledgeCoverageNotice transcript={transcript} turnState={turnState} />
-          {transcript?.exchanges.map((exchange) => (
-            <div key={exchange.call.id} className={styles.cmpExchange}>
-              {exchange.approval === undefined ? null : (
-                <JiraWriteApproval
-                  key={exchange.approval.approvalId}
-                  approval={exchange.approval}
-                  call={exchange.call}
-                  turnState={turnState}
-                />
-              )}
-              {awaitsDecision(exchange, turnState) ? null : (
-                <JiraToolExchange exchange={exchange} turnState={turnState} chatId={chatId} />
-              )}
-            </div>
-          ))}
-        </div>
+        {cards ? (
+          <div className={styles.cmpStack}>
+            <KnowledgeCoverageNotice transcript={transcript} turnState={turnState} />
+            {exchanges.map((exchange) => (
+              <ToolExchangeCards
+                key={exchange.call.id}
+                exchange={exchange}
+                turnState={turnState}
+                chatId={chatId}
+              />
+            ))}
+          </div>
+        ) : null}
       </div>
+    </div>
+  );
+}
+
+function ToolExchangeCards({
+  exchange,
+  turnState,
+  chatId,
+}: {
+  readonly exchange: ChatToolExchange;
+  readonly turnState: ChatTurnState | undefined;
+  readonly chatId: string | undefined;
+}): ReactNode {
+  return (
+    <div className={styles.cmpExchange}>
+      {exchange.approval === undefined ? null : (
+        <JiraWriteApproval
+          key={exchange.approval.approvalId}
+          approval={exchange.approval}
+          call={exchange.call}
+          turnState={turnState}
+        />
+      )}
+      {awaitsDecision(exchange, turnState) || !toolCardHasContent(exchange, turnState) ? null : (
+        <JiraToolExchange exchange={exchange} turnState={turnState} chatId={chatId} />
+      )}
     </div>
   );
 }

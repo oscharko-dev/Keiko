@@ -65,9 +65,15 @@ it.each([
           />
         </I18nProvider>,
       );
-      expect(screen.getByText(locale === "de" ? "Abgeschlossen" : "Completed")).toBeVisible();
-      if (partial) expect(screen.getByText(notice)).toBeVisible();
-      else expect(screen.queryByText(notice)).toBeNull();
+      const completed = locale === "de" ? "Abgeschlossen" : "Completed";
+      if (partial) {
+        expect(screen.getByText(completed)).toBeVisible();
+        expect(screen.getByText(notice)).toBeVisible();
+      } else {
+        // A complete read says nothing the progress does not already show: no card at all.
+        expect(screen.queryByText(completed)).toBeNull();
+        expect(screen.queryByText(notice)).toBeNull();
+      }
       // A person reads the state and the note, never the raw tool data (#4173).
       expect(screen.queryByText(/Synthetic project|"outcome"/u)).toBeNull();
       expect(document.querySelector("pre")).toBeNull();

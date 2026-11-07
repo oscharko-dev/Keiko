@@ -95,7 +95,8 @@ describe("knowledge.requirements transcript row", () => {
           />
         </I18nProvider>,
       );
-      expect(screen.getByText(COPY.en.label)).toBeVisible();
+      // A complete inventory earns no card: the progress already shows the step as done.
+      expect(screen.queryByText(COPY.en.label)).toBeNull();
       expect(screen.queryByText(COPY.en.partial)).toBeNull();
       expect(screen.queryByText(/Partial Jira result/)).toBeNull();
     } finally {

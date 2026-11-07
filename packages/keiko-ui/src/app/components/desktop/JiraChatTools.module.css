@@ -9,6 +9,10 @@
   gap: var(--space-5);
   min-width: 0;
 }
+/* Without a card, the progress stands alone instead of beside an empty column. */
+.cmpContent[data-cards="false"] {
+  grid-template-columns: minmax(0, 1fr);
+}
 .cmpStack {
   display: grid;
   align-content: start;
