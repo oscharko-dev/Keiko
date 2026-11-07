@@ -89,6 +89,7 @@ function readResult(fields: CatalogJsonObject): CatalogJsonObject {
       ...fields,
       ...FAILURE_FIELDS,
       reason: text(64),
+      browseUrl: text(4096),
       outcome: { type: "string", enum: ["succeeded", "failed"] },
     },
     ["outcome"],
@@ -232,6 +233,15 @@ function declaration(name: string, definition: Definition): ManagedMcpToolDeclar
     }),
   });
 }
+
+// The following native families use the same schema compiler and declaration bounds.
+export {
+  readResult as jiraNativeReadResult,
+  collection as jiraNativeCollectionResult,
+  writeResult as jiraNativeWriteResult,
+  declaration as jiraNativeDeclaration,
+};
+export type { Definition as JiraNativeDefinition };
 /** Pure typed selection within the existing provider; no path or method is a model argument. */
 export function jiraProjectStructureDeclarationForTool(
   name: string,

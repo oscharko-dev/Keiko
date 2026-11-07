@@ -74,6 +74,12 @@ const D4: Readonly<
   >
 > = {
   "governed-assist": {
+    "jira.get-comment": "review-required",
+    "jira.link-types": "review-required",
+    "jira.issue-link": "review-required",
+    "jira.worklogs": "review-required",
+    "jira.worklog": "review-required",
+    "update-issue-comment": "review-required",
     "jira.project": "review-required",
     "jira.validate-project-key": "review-required",
     "jira.project-permissions": "review-required",
@@ -133,6 +139,12 @@ const D4: Readonly<
   },
   // ADR-0138: supervised-coding internet-scope operations require approval at every risk.
   "supervised-coding": {
+    "jira.get-comment": "review-required",
+    "jira.link-types": "review-required",
+    "jira.issue-link": "review-required",
+    "jira.worklogs": "review-required",
+    "jira.worklog": "review-required",
+    "update-issue-comment": "review-required",
     "jira.project": "review-required",
     "jira.validate-project-key": "review-required",
     "jira.project-permissions": "review-required",
@@ -191,6 +203,12 @@ const D4: Readonly<
     "add-page-comment": "review-required",
   },
   "autonomous-delivery": {
+    "jira.get-comment": "allowed",
+    "jira.link-types": "allowed",
+    "jira.issue-link": "allowed",
+    "jira.worklogs": "allowed",
+    "jira.worklog": "allowed",
+    "update-issue-comment": "allowed",
     "jira.project": "allowed",
     "jira.validate-project-key": "allowed",
     "jira.project-permissions": "allowed",
@@ -252,6 +270,12 @@ const D4: Readonly<
 
 // Literal deny reason per action (reads → connector-access-denied, writes → connector-write-denied).
 const MISSING_SCOPE_REASON: Readonly<Record<AtlassianConnectorActionType, string>> = {
+  "jira.get-comment": "connector-access-denied",
+  "jira.link-types": "connector-access-denied",
+  "jira.issue-link": "connector-access-denied",
+  "jira.worklogs": "connector-access-denied",
+  "jira.worklog": "connector-access-denied",
+  "update-issue-comment": "connector-write-denied",
   "jira.project": "connector-access-denied",
   "jira.validate-project-key": "connector-access-denied",
   "jira.project-permissions": "connector-access-denied",
@@ -312,6 +336,12 @@ const MISSING_SCOPE_REASON: Readonly<Record<AtlassianConnectorActionType, string
 
 // Independent policy expectations: a future union member must receive an explicit risk and mode row.
 const EXPECTED_RISK: Readonly<Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>> = {
+  "jira.get-comment": "low",
+  "jira.link-types": "low",
+  "jira.issue-link": "low",
+  "jira.worklogs": "low",
+  "jira.worklog": "low",
+  "update-issue-comment": "medium",
   "jira.projects": "low",
   "jira.issue-types": "low",
   "jira.create-fields": "low",
@@ -371,6 +401,7 @@ const EXPECTED_RISK: Readonly<Record<AtlassianConnectorActionType, CodingWorkben
 };
 const MANAGED_WRITES: ReadonlySet<AtlassianConnectorActionType> =
   new Set<AtlassianConnectorActionType>([
+    "update-issue-comment",
     "assign-issue",
     "create-project",
     "update-project",

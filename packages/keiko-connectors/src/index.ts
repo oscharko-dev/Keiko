@@ -214,6 +214,17 @@ export {
 } from "./jira-agile-inputs.js";
 export { executeJiraFilterRead, JIRA_FILTER_READ_OPERATIONS } from "./jira-filter-reads.js";
 export {
+  executeJiraIssueDetailRead,
+  isJiraIssueDetailRead,
+  JIRA_ISSUE_DETAIL_READS,
+} from "./jira-managed-issue-details.js";
+export {
+  executeJiraCommentRead,
+  executeJiraCommentMutation,
+  isJiraCommentRead,
+  isJiraCommentMutation,
+} from "./jira-managed-comments.js";
+export {
   executeJiraComponentRead,
   executeJiraComponentMutation,
   isJiraComponentRead,

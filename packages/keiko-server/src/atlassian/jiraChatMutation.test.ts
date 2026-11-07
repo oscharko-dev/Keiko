@@ -126,6 +126,13 @@ it("commits before sending, records acknowledgement, and never repeats a complet
 });
 it.each([
   {
+    operation: "jira.update-comment",
+    path: "api/2/issue/SYN-1/comment/10002",
+    method: "PUT",
+    status: 200,
+    receipt: { issueKey: "SYN-1", commentId: "10002" },
+  },
+  {
     operation: "jira.create-component",
     path: "api/2/component",
     method: "POST",

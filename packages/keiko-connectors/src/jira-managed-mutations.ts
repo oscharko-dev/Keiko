@@ -51,6 +51,7 @@ import {
   isJiraComponentMutation,
 } from "./jira-managed-components.js";
 import { executeJiraVersionMutation, isJiraVersionMutation } from "./jira-managed-versions.js";
+import { executeJiraCommentMutation, isJiraCommentMutation } from "./jira-managed-comments.js";
 import { isJiraAgileMutation } from "./jira-agile-inputs.js";
 import { checkJiraAgileMutation, executeJiraAgileMutation } from "./jira-agile-mutations.js";
 import {
@@ -1322,6 +1323,12 @@ export function executeJiraManagedMutation(
     return Promise.resolve({ ok: false, reason: "unavailable" });
   if (isJiraAgileMutation(operation))
     return executeJiraAgileMutation(operation, structuredClone(source), context, connection);
+  if (isJiraCommentMutation(operation))
+    return executeJiraCommentMutation(
+      operation,
+      structuredClone(source),
+      requestFor(connection, context),
+    );
   if (isJiraComponentMutation(operation))
     return executeJiraComponentMutation(
       operation,
@@ -1364,7 +1371,7 @@ const TEMPLATE_CHECKED: ReadonlySet<JiraMutationOperation> = new Set([
  * a draft that violates an active template is refused instead of being put in front of a person.
  * It reads and validates only; it never issues a POST or PUT.
  */
-/** The operations a proposal is checked for; comments carry no field state to check. */
+/** Checks native prerequisites without writing; comment updates preserve observed visibility. */
 function checkedAttempt(
   operation: JiraMutationOperation,
   source: CatalogJsonObject,
@@ -1373,21 +1380,29 @@ function checkedAttempt(
 ): Promise<JiraMutationAttempt> {
   if (isJiraAgileMutation(operation))
     return checkJiraAgileMutation(operation, structuredClone(source), context, connection);
-  if (connection.deployment === "data-center" && isJiraComponentMutation(operation))
+  if (connection.deployment !== "data-center") return Promise.resolve({ ok: true, receipt: {} });
+  if (isJiraCommentMutation(operation))
+    return executeJiraCommentMutation(
+      operation,
+      structuredClone(source),
+      requestFor(connection, context),
+      true,
+    );
+  if (isJiraComponentMutation(operation))
     return executeJiraComponentMutation(
       operation,
       structuredClone(source),
       requestFor(connection, context),
       true,
     );
-  if (connection.deployment === "data-center" && isJiraVersionMutation(operation))
+  if (isJiraVersionMutation(operation))
     return executeJiraVersionMutation(
       operation,
       structuredClone(source),
       requestFor(connection, context),
       true,
     );
-  if (connection.deployment === "data-center" && isJiraProjectMutation(operation))
+  if (isJiraProjectMutation(operation))
     return executeJiraProjectMutation(
       operation,
       structuredClone(source),
@@ -1395,8 +1410,7 @@ function checkedAttempt(
       true,
     );
   // The check mode must never reach any write.
-  if (connection.deployment !== "data-center" || !TEMPLATE_CHECKED.has(operation))
-    return Promise.resolve({ ok: true, receipt: {} });
+  if (!TEMPLATE_CHECKED.has(operation)) return Promise.resolve({ ok: true, receipt: {} });
   return dispatchMutation(operation, structuredClone(source), requestFor(connection, context), {
     templates: connection.issueTemplates,
     check: true,
@@ -1437,7 +1451,7 @@ export async function checkJiraManagedMutation(
     return { ok: false, reason: attempt.reason, violations: attempt.violations };
   // Agile admission already resolved its concrete board/filter/issue prerequisites using GETs.
   // A known refusal must not be turned into an approval for a write that cannot proceed.
-  if (isJiraAgileMutation(operation))
+  if (isJiraAgileMutation(operation) || isJiraCommentMutation(operation))
     return {
       ok: false,
       reason: attempt.reason,

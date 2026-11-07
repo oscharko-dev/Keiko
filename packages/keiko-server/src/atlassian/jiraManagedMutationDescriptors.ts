@@ -39,6 +39,10 @@ import {
   type JIRA_AGILE_WRITE_DEFINITIONS,
 } from "./jiraAgileDescriptors.js";
 import {
+  jiraIssueCollaborationDeclarationForTool,
+  type JIRA_ISSUE_COLLABORATION_WRITE_DEFINITIONS,
+} from "./jiraIssueCollaborationDescriptors.js";
+import {
   jiraProjectStructureDeclarationForTool,
   type JIRA_PROJECT_STRUCTURE_WRITE_DEFINITIONS,
 } from "./jiraProjectStructureDescriptors.js";
@@ -377,6 +381,7 @@ type CoreMutationToolName = Exclude<
     JiraMutationOperation,
     | keyof typeof JIRA_AGILE_WRITE_DEFINITIONS
     | keyof typeof JIRA_PROJECT_STRUCTURE_WRITE_DEFINITIONS
+    | keyof typeof JIRA_ISSUE_COLLABORATION_WRITE_DEFINITIONS
   >
 >;
 const DEFINITIONS: Readonly<
@@ -549,6 +554,8 @@ function declaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
   if (agile !== undefined) return agile;
   const structure = jiraProjectStructureDeclarationForTool(name);
   if (structure !== undefined) return structure;
+  const collaboration = jiraIssueCollaborationDeclarationForTool(name);
+  if (collaboration !== undefined) return collaboration;
   if (!isCoreMutationTool(name)) throw new TypeError("Unsupported Jira mutation tool");
   return coreDeclaration(name);
 }

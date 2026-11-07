@@ -14,6 +14,7 @@ export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject
   "jira.edit": { issueKey: "SYN-1", fields: { summary: "Changed" } },
   "jira.assign": { issueKey: "SYN-1", assigneeName: "synthetic-user" },
   "jira.comment": { issueKey: "SYN-1", body: "Synthetic comment" },
+  "jira.update-comment": { issueKey: "SYN-1", commentId: "10002", body: "Changed comment" },
   "jira.transition": {
     issueKey: "SYN-1",
     transitionId: "31",
@@ -63,6 +64,10 @@ export const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
   "jira.edit": { fields: { summary: "Changed", labels: ["initial"] } },
   "jira.assign": { fields: { assignee: { name: "synthetic-user" } } },
   "jira.comment": { comment: "Synthetic comment" },
+  "jira.update-comment": {
+    comment: "Changed comment",
+    commentVisibility: { type: "role", value: "Developers" },
+  },
   "jira.transition": { fields: { status: { id: "3" }, customfield_10000: "Screen value" } },
   "jira.attach": { fields: { attachment: [{ id: "10300", size: ATTACHED.length }] } },
   "jira.create-project": {
@@ -100,6 +105,7 @@ export const SUCCESS_RECEIPTS: Readonly<Record<SingleMutation, CatalogJsonObject
   "jira.edit": ISSUE_RECEIPT,
   "jira.assign": ISSUE_RECEIPT,
   "jira.comment": ISSUE_RECEIPT,
+  "jira.update-comment": { ...ISSUE_RECEIPT, commentId: "10002" },
   "jira.transition": ISSUE_RECEIPT,
   "jira.attach": ISSUE_RECEIPT,
   "jira.create-project": PROJECT_RECEIPT,
@@ -118,6 +124,7 @@ export const SUCCESS_RECEIPTS: Readonly<Record<SingleMutation, CatalogJsonObject
 };
 
 export interface MutationRemoteState extends SyntheticJira {
+  commentVisibility: { readonly type: "role"; readonly value: string };
   project: Record<string, unknown>;
   component: Record<string, unknown>;
   version: Record<string, unknown>;
@@ -135,6 +142,7 @@ export function mutationRemoteState(): MutationRemoteState {
       labels: ["initial"],
     },
     comment: "",
+    commentVisibility: { type: "role", value: "Developers" },
     project: {
       id: "10000",
       key: "SYN",
@@ -161,6 +169,11 @@ export function nativeRead(
   state: MutationRemoteState,
 ): ReturnType<typeof response> | undefined {
   const resources: Readonly<Record<string, unknown>> = {
+    "/context/rest/api/2/issue/SYN-1/comment/10002": {
+      id: "10002",
+      body: state.comment,
+      visibility: state.commentVisibility,
+    },
     "/context/rest/api/2/project/SYN": state.project,
     "/context/rest/api/2/project/10000": state.project,
     "/context/rest/api/2/projectvalidate/key": { errors: {}, errorMessages: [] },
@@ -196,12 +209,28 @@ function projectWrite(
   }
   return undefined;
 }
+function commentWrite(
+  path: string,
+  body: Record<string, unknown>,
+  state: MutationRemoteState,
+): ReturnType<typeof response> | undefined {
+  if (path === "/context/rest/api/2/issue/SYN-1/comment/10002") {
+    if (
+      JSON.stringify(body.visibility) !== JSON.stringify(state.commentVisibility) ||
+      typeof body.body !== "string"
+    )
+      throw new TypeError("Expected the reviewed comment visibility to be preserved");
+    state.comment = body.body;
+    return response({ id: "10002", body: state.comment, visibility: state.commentVisibility });
+  }
+  return undefined;
+}
 function platformWrite(
   path: string,
   body: Record<string, unknown>,
   state: MutationRemoteState,
 ): ReturnType<typeof response> | undefined {
-  const project = projectWrite(path, body, state);
+  const project = projectWrite(path, body, state) ?? commentWrite(path, body, state);
   if (project !== undefined) return project;
   if (path === "/context/rest/api/2/component" || path === "/context/rest/api/2/component/71") {
     state.component = { ...state.component, ...body };

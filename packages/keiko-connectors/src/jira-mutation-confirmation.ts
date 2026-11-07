@@ -14,6 +14,11 @@ import {
 } from "./jira-field-metadata.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { jiraIssueLinksPresent, type JiraIssueLinkRequest } from "./jira-issue-links.js";
+import {
+  jiraCommentVisibility,
+  sameJiraCommentVisibility,
+  type JiraCommentVisibility,
+} from "./jira-comment-visibility.js";
 
 type Failure = Extract<JiraMutationAttempt, { ok: false }>;
 export type JiraIssueReadback =
@@ -264,13 +269,17 @@ export async function confirmJiraComment(
   issueKey: string,
   commentId: string,
   body: string,
+  visibility?: JiraCommentVisibility | null,
 ): Promise<JiraMutationAttempt> {
   const response = await request(
     `issue/${encodeURIComponent(issueKey)}/comment/${encodeURIComponent(commentId)}`,
   );
   if (!response.ok) return response;
   if (response.status !== 200 || response.body === undefined) return MALFORMED;
-  return response.body.id === commentId && response.body.body === body
+  return response.body.id === commentId &&
+    response.body.body === body &&
+    (visibility === undefined ||
+      sameJiraCommentVisibility(jiraCommentVisibility(response.body.visibility), visibility))
     ? { ok: true, receipt: { issueKey, commentId } }
     : CONFLICT;
 }

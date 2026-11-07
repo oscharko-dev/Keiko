@@ -4,6 +4,8 @@ import { JIRA_FILTER_READ_OPERATIONS, executeJiraFilterRead } from "./jira-filte
 import { jiraProjectBrowseUrl } from "./jira-project-browse-url.js";
 import { executeJiraComponentRead, isJiraComponentRead } from "./jira-managed-components.js";
 import { executeJiraVersionRead, isJiraVersionRead } from "./jira-managed-versions.js";
+import { executeJiraIssueDetailRead, isJiraIssueDetailRead } from "./jira-managed-issue-details.js";
+import { executeJiraCommentRead, isJiraCommentRead } from "./jira-managed-comments.js";
 import {
   executeJiraProjectRead,
   isJiraProjectRead,
@@ -301,9 +303,26 @@ async function read<Context extends ManagedMcpInvocationContext>(
   }
   if (isJiraComponentRead(name) || isJiraVersionRead(name))
     return projectMetadataRead(name, args, context, connection);
+  if (isJiraIssueDetailRead(name) || isJiraCommentRead(name))
+    return collaborationRead(name, args, context, connection);
   return isJiraProjectRead(name)
     ? projectRead(name, args, context, connection)
     : readIssueOrMetadata(name, args, context, connection);
+}
+
+async function collaborationRead<Context extends ManagedMcpInvocationContext>(
+  name: Parameters<typeof executeJiraIssueDetailRead>[0] | "jira.get-comment",
+  args: CatalogJsonObject,
+  context: Context,
+  connection: JiraManagedProviderDeps<Context>["connection"],
+): Promise<ManagedMcpToolResult> {
+  const connected = await connection(context);
+  if (connected.deployment !== "data-center") return failure("unsupported-deployment");
+  const request = requestFor(connected, context);
+  const result = isJiraCommentRead(name)
+    ? await executeJiraCommentRead(name, args, request)
+    : await executeJiraIssueDetailRead(name, args, request);
+  return boundJiraReadResult(withIssueLink(result, connected.baseUrl, args.issueKey));
 }
 
 async function projectMetadataRead<Context extends ManagedMcpInvocationContext>(

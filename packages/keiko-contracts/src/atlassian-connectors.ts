@@ -607,6 +607,7 @@ export type AtlassianConnectorActionType =
   | "update-issue-fields"
   | "transition-issue"
   | "add-issue-comment"
+  | "update-issue-comment"
   | "create-page"
   | "update-page"
   | "add-page-comment";
@@ -620,6 +621,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorAction
     "update-issue-fields",
     "transition-issue",
     "add-issue-comment",
+    "update-issue-comment",
     "create-page",
     "update-page",
     "add-page-comment",
@@ -668,6 +670,7 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   "jira.edit": "update-issue-fields",
   "jira.assign": "assign-issue",
   "jira.comment": "add-issue-comment",
+  "jira.update-comment": "update-issue-comment",
   "jira.transition": "transition-issue",
   // A draft only creates issues: it is governed exactly like one create.
   "jira.draft": "create-issue",
@@ -721,6 +724,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   "update-issue-fields": "connector-write",
   "transition-issue": "connector-write",
   "add-issue-comment": "connector-write",
+  "update-issue-comment": "connector-write",
   "create-page": "connector-write",
   "update-page": "connector-write",
   "add-page-comment": "connector-write",
@@ -751,6 +755,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   "update-issue-fields": "jira",
   "transition-issue": "jira",
   "add-issue-comment": "jira",
+  "update-issue-comment": "jira",
   "create-page": "confluence",
   "update-page": "confluence",
   "add-page-comment": "confluence",
@@ -781,6 +786,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   "update-issue-fields": "issue-tracker.write",
   "transition-issue": "issue-tracker.write",
   "add-issue-comment": "issue-tracker.write",
+  "update-issue-comment": "issue-tracker.write",
   "create-page": "knowledge-base.write",
   "update-page": "knowledge-base.write",
   "add-page-comment": "knowledge-base.write",
@@ -814,6 +820,7 @@ export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   "update-issue-fields": "medium",
   "transition-issue": "high",
   "add-issue-comment": "low",
+  "update-issue-comment": "medium",
   "create-page": "high",
   "update-page": "medium",
   "add-page-comment": "low",

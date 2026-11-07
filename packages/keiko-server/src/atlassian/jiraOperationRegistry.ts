@@ -36,6 +36,11 @@ type JiraPermissionPolicy =
   | "issue-membership-and-readback"
   | "epic-update-and-readback"
   | "visible-components"
+  | "visible-comments"
+  | "visible-link-types"
+  | "visible-issue-links"
+  | "visible-worklogs"
+  | "comment-update-and-readback"
   | "visible-versions"
   | "component-create-and-readback"
   | "component-update-and-readback"
@@ -94,6 +99,17 @@ const NATIVE: Readonly<
     ]
   >
 > = {
+  "jira.get-comment": ["GET", "read", "/issue/{issueIdOrKey}/comment/{id}", "visible-comments"],
+  "jira.update-comment": [
+    "PUT",
+    "write",
+    "/issue/{issueIdOrKey}/comment/{id}",
+    "comment-update-and-readback",
+  ],
+  "jira.link-types": ["GET", "read", "/issueLinkType", "visible-link-types"],
+  "jira.issue-link": ["GET", "read", "/issueLink/{linkId}", "visible-issue-links"],
+  "jira.worklogs": ["GET", "read", "/issue/{issueIdOrKey}/worklog", "visible-worklogs"],
+  "jira.worklog": ["GET", "read", "/issue/{issueIdOrKey}/worklog/{id}", "visible-worklogs"],
   "jira.components": ["GET", "read", "/project/{projectIdOrKey}/components", "visible-components"],
   "jira.component": ["GET", "read", "/component/{id}", "visible-components"],
   "jira.versions": ["GET", "read", "/project/{projectIdOrKey}/versions", "visible-versions"],
@@ -143,7 +159,7 @@ const NATIVE: Readonly<
     "visible-issues",
     "/rest/agile/1.0",
   ],
-  "jira.filter": ["GET", "read", "/filter/{filterId}", "visible-filters"],
+  "jira.filter": ["GET", "read", "/filter/{id}", "visible-filters"],
   "jira.favourite-filters": ["GET", "read", "/filter/favourite", "visible-filters"],
   "jira.board-create": ["POST", "write", "/board", "board-create-and-readback", "/rest/agile/1.0"],
   "jira.sprint-create": [

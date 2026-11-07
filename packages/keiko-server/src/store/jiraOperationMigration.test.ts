@@ -7,7 +7,7 @@ afterEach(() => {
   for (const db of databases.splice(0)) db.close();
 });
 
-function priorDatabase(version: 61 | 62 = 61): DatabaseSync {
+function priorDatabase(version: 61 | 62 | 63 = 61): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   databases.push(db);
   db.exec("PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;");
@@ -199,4 +199,39 @@ describe("V63 journals the closed component and version operations", () => {
       }).toThrow(/CHECK/u);
     }
   });
+});
+
+it("V64 admits only native comment updates while retaining V63 metadata journals", () => {
+  const db = priorDatabase(63);
+  insertMutation(db, "jira.create-component", "component");
+  insertMutation(db, "jira.update-version", "version");
+  insertCodingMutation(db);
+  const before = db.prepare("SELECT * FROM chat_tool_mutations ORDER BY invocation_id").all();
+  const shape = journalShape(db);
+  expect(() => {
+    insertMutation(db, "jira.update-comment", "before");
+  }).toThrow(/CHECK/u);
+  runMigrations(db);
+  runMigrations(db);
+  expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(64);
+  expect(db.prepare("SELECT * FROM chat_tool_mutations ORDER BY invocation_id").all()).toEqual(
+    before,
+  );
+  expect(journalShape(db)).toEqual(shape);
+  expect(db.prepare("PRAGMA synchronous").get()).toEqual({ synchronous: 2 });
+  expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+  expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  expect(() => {
+    insertMutation(db, "jira.update-comment", "after");
+  }).not.toThrow();
+  for (const invalid of [
+    "jira.delete-comment",
+    "jira.update-worklog",
+    "jira.draft",
+    "jira.unknown",
+  ]) {
+    expect(() => {
+      insertMutation(db, invalid, invalid);
+    }).toThrow(/CHECK/u);
+  }
 });

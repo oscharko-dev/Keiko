@@ -33,6 +33,41 @@ function fixture(body: unknown): Fixture {
 }
 
 describe("closed Jira Agile reads", () => {
+  it.each([
+    [
+      "jira.board",
+      { boardId: "7" },
+      { id: 7, name: "Team", type: "scrum" },
+      "secure/RapidBoard.jspa?rapidView=7",
+    ],
+    [
+      "jira.board-configuration",
+      { boardId: "7" },
+      { id: 7, name: "Team", type: "scrum", filter: { id: "42" }, columnConfig: { columns: [] } },
+      "secure/RapidBoard.jspa?rapidView=7",
+    ],
+    [
+      "jira.epic",
+      { epicIdOrKey: "SYN-11" },
+      { id: 11, key: "SYN-11", name: "Delivery", summary: "Delivery epic", done: false },
+      "browse/SYN-11",
+    ],
+  ] as const)(
+    "mints %s links only from the bound instance and context path",
+    async (operation, args, entity, suffix) => {
+      const f = fixture({
+        ...entity,
+        self: "https://untrusted.invalid/",
+        browseUrl: "https://untrusted.invalid/",
+      });
+      const result = await executeJiraAgileRead(operation, args, f.context, f.connection);
+      expect(result.data).toMatchObject({
+        outcome: "succeeded",
+        items: [{ browseUrl: `https://jira.example.invalid/context/${suffix}` }],
+      });
+      expect(JSON.stringify(result)).not.toContain("untrusted.invalid");
+    },
+  );
   it("reads a board page through its fixed Agile root, normalizing IDs and retaining the next page", async () => {
     const f = fixture({
       startAt: 0,
@@ -53,8 +88,18 @@ describe("closed Jira Agile reads", () => {
     expect(result.data).toEqual({
       outcome: "succeeded",
       items: [
-        { id: "7", name: "Team", type: "scrum" },
-        { id: "8", name: "Delivery", type: "kanban" },
+        {
+          id: "7",
+          name: "Team",
+          type: "scrum",
+          browseUrl: "https://jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=7",
+        },
+        {
+          id: "8",
+          name: "Delivery",
+          type: "kanban",
+          browseUrl: "https://jira.example.invalid/context/secure/RapidBoard.jspa?rapidView=8",
+        },
       ],
       startAt: 0,
       total: 3,

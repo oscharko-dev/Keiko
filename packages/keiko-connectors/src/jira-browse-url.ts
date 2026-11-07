@@ -16,3 +16,15 @@ export function jiraBrowseUrl(baseUrl: string, issueKey: unknown): string | unde
   const base = jiraBrowseBaseFor(atlassianApiEndpointsFor(baseUrl, "/rest/api/2/"));
   return `${base}/browse/${issueKey}`;
 }
+
+/** A board destination from the selected instance, never an upstream self or homepage URL. */
+export function jiraBoardBrowseUrl(baseUrl: string, boardId: unknown): string | undefined {
+  if (
+    typeof boardId !== "string" ||
+    !/^[1-9][0-9]{0,15}$/u.test(boardId) ||
+    !Number.isSafeInteger(Number(boardId))
+  )
+    return undefined;
+  const base = jiraBrowseBaseFor(atlassianApiEndpointsFor(baseUrl, "/rest/api/2/"));
+  return `${base}/secure/RapidBoard.jspa?rapidView=${boardId}`;
+}

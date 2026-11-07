@@ -53,6 +53,216 @@ function show(exchange: ChatToolExchange): ReturnType<typeof render> {
 
 afterEach(() => localStorage.removeItem(I18N_STORAGE_KEY));
 
+describe.each(["en", "de"] as const)("saved collaboration facts in %s (#4298)", (locale) => {
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    localStorage.setItem(I18N_STORAGE_KEY, locale);
+  });
+  it("restores comments and distinct worklogs for the same issue with named facts and accessible links", async () => {
+    const exchanges = [
+      projectExchange(
+        {
+          outcome: "succeeded",
+          browseUrl: "https://jira.example.test/context/browse/SYN-7",
+          items: [
+            {
+              id: "9007199254740993",
+              issueKey: "SYN-7",
+              body: "Updated native comment",
+              authorDisplayName: "Comment owner",
+              visibility: { type: "role", value: "Developers" },
+            },
+          ],
+        },
+        "jira_get_comment",
+      ),
+      projectExchange(
+        {
+          outcome: "succeeded",
+          issueKey: "SYN-7",
+          items: [
+            { id: "22", issueKey: "SYN-7", comment: "First work entry", timeSpentSeconds: 0 },
+            { id: "23", issueKey: "SYN-7", comment: "Second work entry", timeSpentSeconds: 1800 },
+          ],
+          startAt: 0,
+          total: 2,
+        },
+        "jira_worklogs",
+      ),
+      projectExchange(
+        {
+          outcome: "succeeded",
+          items: [
+            {
+              id: "30",
+              name: "Blocks",
+              inward: "is blocked by",
+              outward: "blocks",
+              inwardIssueKey: "SYN-7",
+              outwardIssueKey: "SYN-8",
+            },
+          ],
+        },
+        "jira_issue_link",
+      ),
+    ].map((exchange, index) => ({
+      ...exchange,
+      call: { ...exchange.call, id: `collaboration-${String(index)}` },
+    }));
+    const transcript = { schemaVersion: 1 as const, exchanges };
+    const first = render(
+      <I18nProvider>
+        <JiraChatTools transcript={transcript} turnState="completed" />
+      </I18nProvider>,
+    );
+    expect(screen.getByText("Updated native comment")).toBeVisible();
+    first.unmount();
+    const restored = JSON.parse(JSON.stringify(transcript)) as ChatToolTranscript;
+    const { container } = render(
+      <I18nProvider>
+        <JiraChatTools transcript={restored} turnState="completed" />
+      </I18nProvider>,
+    );
+    for (const value of [
+      "Updated native comment",
+      "First work entry",
+      "Second work entry",
+      "Blocks",
+    ])
+      expect(screen.getByText(value, { exact: true })).toBeVisible();
+    expect(
+      screen.getByText(
+        locale === "en" ? "Comment ID: 9007199254740993" : "Kommentar-ID: 9007199254740993",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        locale === "en" ? "Visible to role: Developers" : "Sichtbar für Rolle: Developers",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(locale === "en" ? "Time spent (seconds): 0" : "Zeitaufwand (Sekunden): 0"),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        locale === "en" ? "Time spent (seconds): 1800" : "Zeitaufwand (Sekunden): 1800",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(locale === "en" ? "Outward issue: SYN-8" : "Ausgehender Vorgang: SYN-8"),
+    ).toBeVisible();
+    expect(screen.getByRole("link", { name: /SYN-7/u })).toHaveAttribute(
+      "href",
+      "https://jira.example.test/context/browse/SYN-7",
+    );
+    expect(container.querySelector("pre, details")).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+  it("does not invent effort or visibility and preserves a partial native page notice", () => {
+    show(
+      projectExchange(
+        {
+          outcome: "succeeded",
+          items: [{ id: "24", issueKey: "SYN-7", comment: "Unmeasured entry" }],
+          startAt: 1,
+          total: 3,
+          nextStartAt: 2,
+        },
+        "jira_worklogs",
+      ),
+    );
+    expect(screen.getByText("Unmeasured entry")).toBeVisible();
+    expect(screen.queryByText(/Time spent|Zeitaufwand|Visible to|Sichtbar für/u)).toBeNull();
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? "Partial Jira result. Some available data is not included."
+          : "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
+      ),
+    ).toBeVisible();
+  });
+  it("keeps an unknown comment mutation distinct from confirmed success", () => {
+    show(
+      projectExchange(
+        { outcome: "unknown", ...{ issueKey: "SYN-7", commentId: "91" } },
+        "jira_update_comment",
+      ),
+    );
+    expect(screen.getByText(locale === "en" ? "Comment ID: 91" : "Kommentar-ID: 91")).toBeVisible();
+    expect(
+      screen.getByText(
+        locale === "en" ? "Jira outcome unknown" : "Ausgang der Jira-Aktion unbekannt",
+      ),
+    ).toBeVisible();
+  });
+});
+
+describe("server-minted board read links", () => {
+  beforeEach(async () => {
+    await Promise.all([loadLocaleMessages("en"), loadOptionalWidgetMessages("en")]);
+  });
+  it("keeps the saved context and exact board identity", () => {
+    show(
+      projectExchange(
+        {
+          outcome: "succeeded",
+          items: [
+            {
+              id: "17",
+              name: "Delivery board",
+              type: "scrum",
+              browseUrl: "https://jira.example.test/context/secure/RapidBoard.jspa?rapidView=17",
+            },
+          ],
+        },
+        "jira_board",
+      ),
+    );
+    expect(screen.getByRole("link", { name: /Delivery board/u })).toHaveAttribute(
+      "href",
+      "https://jira.example.test/context/secure/RapidBoard.jspa?rapidView=17",
+    );
+  });
+  it("does not use an issue URL as a fallback destination for a board", () => {
+    show(
+      projectExchange(
+        {
+          outcome: "succeeded",
+          items: [
+            {
+              id: "17",
+              name: "Delivery board",
+              issueKey: "SYN-7",
+              browseUrl: "https://jira.example.test/context/browse/SYN-7",
+            },
+          ],
+        },
+        "jira_board",
+      ),
+    );
+    expect(screen.getByText("Delivery board")).toBeVisible();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+  it.each([
+    "https://jira.example.test/context/secure/RapidBoard.jspa?rapidView=18",
+    "https://jira.example.test/context/secure/RapidBoard.jspa?rapidView=17&rapidView=17",
+    "https://jira.example.test/context/secure/RapidBoard.jspa?rapidView=17&other=1",
+    "https://jira.example.test/context/secure/RapidBoard.jspa?rapidView=17#fragment",
+    "https://secret@jira.example.test/context/secure/RapidBoard.jspa?rapidView=17",
+    "http://jira.example.test/context/secure/RapidBoard.jspa?rapidView=17",
+    "https://jira.example.test/context/projects/SYN/summary?rapidView=17",
+  ])("refuses a URL that does not preserve the exact trusted board route", (browseUrl) => {
+    show(
+      projectExchange(
+        { outcome: "succeeded", items: [{ id: "17", name: "Delivery board", browseUrl }] },
+        "jira_board",
+      ),
+    );
+    expect(screen.getByText("Delivery board")).toBeVisible();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+});
+
 describe.each(["en", "de"] as const)(
   "saved version and component results in %s (#4297)",
   (locale) => {

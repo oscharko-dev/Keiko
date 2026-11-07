@@ -21,6 +21,7 @@ export const JIRA_MUTATION_OPERATIONS = [
   "jira.edit",
   "jira.assign",
   "jira.comment",
+  "jira.update-comment",
   "jira.transition",
   "jira.draft",
   "jira.attach",

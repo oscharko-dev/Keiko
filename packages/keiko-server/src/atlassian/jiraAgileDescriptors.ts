@@ -90,7 +90,6 @@ const SPRINT = object(
     activatedDate: DATE,
     completeDate: DATE,
     goal: text(2048),
-    browseUrl: text(4096),
   },
   ["id", "name", "state"],
 );
@@ -369,7 +368,6 @@ function writeResult(definition: WriteDefinition): CatalogJsonObject {
       reason: { type: "string", enum: ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS },
       replayed: { type: "boolean" },
       guidance: text(512),
-      browseUrl: text(4096),
       fieldId: text(64),
       validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },
       fieldErrors: FAILURE_FIELD_ERRORS,

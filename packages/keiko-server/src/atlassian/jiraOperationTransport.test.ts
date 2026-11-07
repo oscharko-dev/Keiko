@@ -5,14 +5,7 @@ import type {
   AtlassianHttpBodyRequest,
   AtlassianHttpBodyResult,
   JiraManagedConnection,
-  JiraManagedMutationExecutor,
 } from "@oscharko-dev/keiko-connectors";
-import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type {
-  ManagedMcpInvocationContext,
-  ManagedMcpToolResult,
-} from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import {
   FIELDS,
   LINKS_FIELD,
@@ -22,20 +15,14 @@ import {
   response,
   type SyntheticJira,
 } from "../../../../tests/support/jira-managed-remote.js";
+import { jiraOperationContracts } from "./jiraManagedProvider.js";
 import {
-  createJiraProviderForCatalog,
-  jiraOperationContracts,
-  jiraOperationForTool,
-} from "./jiraManagedProvider.js";
-import type { JiraOperationDefinition, JiraOperationTool } from "./jiraOperationRegistry.js";
+  observeNativeJiraOperation,
+  assertNativeJiraPrimary as assertPrimary,
+  type Scenario,
+  type Observation,
+} from "../../../../tests/support/jira-operation-transport-contract.js";
 
-interface Scenario {
-  readonly tool: JiraOperationTool;
-  readonly args: CatalogJsonObject;
-  readonly parameters?: Readonly<Record<string, string>>;
-  readonly query?: Readonly<Record<string, string>>;
-  readonly primaryMethodIndex?: number;
-}
 const ISSUE_PARAMETERS = { issueIdOrKey: "SYN-1" };
 const PAGING = { startAt: "0", maxResults: "25" };
 const CREATE = {
@@ -45,8 +32,32 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  {
+    tool: "jira.get-comment",
+    args: { issueKey: "SYN-1", commentId: "10002" },
+    parameters: { issueIdOrKey: "SYN-1", id: "10002" },
+  },
+  {
+    tool: "jira.update-comment",
+    args: { issueKey: "SYN-1", commentId: "10002", body: "Updated comment" },
+    parameters: { issueIdOrKey: "SYN-1", id: "10002" },
+  },
+  { tool: "jira.link-types", args: { startAt: 0, maxResults: 1 } },
+  { tool: "jira.issue-link", args: { linkId: "21" }, parameters: { linkId: "21" } },
+  {
+    tool: "jira.worklogs",
+    args: { issueKey: "SYN-1", startAt: 0, maxResults: 25 },
+    parameters: { issueIdOrKey: "10001" },
+    primaryMethodIndex: 1,
+  },
+  {
+    tool: "jira.worklog",
+    args: { issueKey: "SYN-1", worklogId: "101" },
+    parameters: { issueIdOrKey: "10001", id: "101" },
+    primaryMethodIndex: 1,
+  },
   { tool: "jira.projects", args: {} },
-  { tool: "jira.filter", args: { filterId: "37" }, parameters: { filterId: "37" } },
+  { tool: "jira.filter", args: { filterId: "37" }, parameters: { id: "37" } },
   { tool: "jira.favourite-filters", args: { startAt: 0, maxResults: 25 } },
   {
     tool: "jira.components",
@@ -176,6 +187,34 @@ interface RemoteState extends SyntheticJira {
   component: Record<string, unknown>;
   version: Record<string, unknown>;
 }
+function collaborationRead(path: string): AtlassianHttpBodyResult | undefined {
+  const type = { id: "11", name: "Relates", inward: "relates to", outward: "relates to" };
+  const worklog = { id: "101", issueId: "10001", timeSpentSeconds: 3600 };
+  const bodies: Readonly<Record<string, unknown>> = {
+    issueLinkType: { issueLinkTypes: [type] },
+    "issueLink/21": {
+      id: "21",
+      type,
+      inwardIssue: { key: "SYN-1" },
+      outwardIssue: { key: "SYN-2" },
+    },
+    "issue/10001/worklog": { startAt: 0, maxResults: 1, total: 1, worklogs: [worklog] },
+    "issue/10001/worklog/101": worklog,
+  };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
+}
+function collaborationWrite(
+  path: string,
+  request: AtlassianHttpBodyRequest,
+  state: RemoteState,
+): AtlassianHttpBodyResult | undefined {
+  if (path !== "issue/SYN-1/comment/10002") return undefined;
+  const body = JSON.parse(request.bodyJson ?? "{}") as Record<string, unknown>;
+  if (request.method !== "PUT" || typeof body.body !== "string")
+    throw new TypeError("Expected the selected comment update");
+  state.comment = body.body;
+  return response({ id: "10002", body: state.comment });
+}
 function structureRead(path: string, state: RemoteState): AtlassianHttpBodyResult | undefined {
   if (path === "component/71") return response(state.component);
   if (path === "version/81") return response(state.version);
@@ -269,6 +308,16 @@ function projectWrite(
     ? response({ id: 10000, key: "SYN" }, 201)
     : response(state.project);
 }
+function remoteRead(path: string, absolute: string, state: RemoteState): AtlassianHttpBodyResult {
+  return (
+    projectRead(path, state) ??
+    structureRead(path, state) ??
+    collaborationRead(path) ??
+    filterRead(path) ??
+    issueMetadata(path) ??
+    fixtureRead(absolute, state)
+  );
+}
 function remote(): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
   const state: RemoteState = {
     fields: {
@@ -293,18 +342,12 @@ function remote(): ReturnType<typeof vi.fn<AtlassianHttpBodyPort>> {
   return vi.fn<AtlassianHttpBodyPort>((request) => {
     const absolute = new URL(request.url).pathname;
     const path = absolute.replace("/context/rest/api/2/", "");
-    if (request.method === "GET")
-      return Promise.resolve(
-        projectRead(path, state) ??
-          structureRead(path, state) ??
-          filterRead(path) ??
-          issueMetadata(path) ??
-          fixtureRead(absolute, state),
-      );
+    if (request.method === "GET") return Promise.resolve(remoteRead(path, absolute, state));
     return Promise.resolve(
       path === "project" || path === "project/10000"
         ? projectWrite(request, state)
-        : (structureWrite(path, request, state) ??
+        : (collaborationWrite(path, request, state) ??
+            structureWrite(path, request, state) ??
             fixtureWrite(absolute, request.bodyJson, state, request.upload)),
     );
   });
@@ -326,68 +369,8 @@ function connection(http: AtlassianHttpBodyPort): JiraManagedConnection {
       }),
   };
 }
-interface Observation {
-  readonly requests: readonly AtlassianHttpBodyRequest[];
-  readonly result: ManagedMcpToolResult;
-  readonly definition: Extract<JiraOperationDefinition, { readonly kind: "native" }>;
-}
-async function observe(scenario: Scenario): Promise<Observation> {
-  const http = remote();
-  const executor: JiraManagedMutationExecutor<ManagedMcpInvocationContext> = async (
-    _operation,
-    _args,
-    _context,
-    execute,
-  ) => {
-    const attempt = await execute(http);
-    expect(attempt).toMatchObject({ ok: true });
-    return { data: { outcome: "succeeded", ...attempt.receipt } };
-  };
-  const provider = createJiraProviderForCatalog(() => connection(http), [scenario.tool], executor);
-  const tool = provider.tools()[0];
-  const contract = jiraOperationForTool(scenario.tool);
-  if (tool === undefined || contract?.definition.kind !== "native")
-    throw new TypeError("Missing native fixture operation");
-  expect(describeCatalogSchemaMismatch(tool.descriptor.inputSchema, scenario.args)).toBeUndefined();
-  const result = await tool.execute(structuredClone(scenario.args), {
-    invocationId: "transport-contract",
-    correlationId: "transport-contract",
-    signal: new AbortController().signal,
-    beforeEffect: (): boolean => true,
-  });
-  expect(result).toMatchObject({
-    data: { outcome: "succeeded", operationBinding: contract.binding },
-  });
-  expect(result.isError).toBeUndefined();
-  return {
-    requests: http.mock.calls.map(([request]) => request),
-    result,
-    definition: contract.definition,
-  };
-}
-function assertPrimary(observation: Observation, scenario: Scenario): void {
-  const { definition, requests } = observation;
-  const primary = requests
-    .filter((request) => request.method === definition.method)
-    .at(scenario.primaryMethodIndex ?? 0);
-  if (primary === undefined) throw new TypeError("No native operation was dispatched");
-  const expectedPath =
-    definition.apiRoot +
-    definition.pathTemplate.replaceAll(/\{([^{}]+)\}/gu, (_match, parameter: string) => {
-      const value = scenario.parameters?.[parameter];
-      if (value === undefined) throw new TypeError(`Missing fixture path parameter ${parameter}`);
-      return encodeURIComponent(value);
-    });
-  const actual = new URL(primary.url);
-  expect([primary.method, actual.origin, actual.pathname]).toEqual([
-    definition.method,
-    "https://jira.example.invalid",
-    `/context${expectedPath}`,
-  ]);
-  expect(Object.fromEntries(actual.searchParams)).toEqual(scenario.query ?? {});
-  expect(definition.identity).toBe(
-    `${primary.method} ${definition.apiRoot}${definition.pathTemplate}`,
-  );
+function observe(scenario: Scenario): Promise<Observation> {
+  return observeNativeJiraOperation(scenario, connection(remote()));
 }
 
 describe("native Jira registry and real connector transport agreement", () => {
@@ -396,7 +379,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(31);
+    expect(native).toHaveLength(37);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

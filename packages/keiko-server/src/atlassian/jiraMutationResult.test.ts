@@ -20,6 +20,28 @@ const PARTIAL: JiraMutationAttempt = {
   links: LINKS,
 };
 
+describe("updated comment receipts", () => {
+  it("requires both the issue and the independently confirmed comment identity", () => {
+    const receipt = { issueKey: "SYN-1", commentId: "10002" };
+    expect(validJiraMutationAttempt({ ok: true, receipt }, "jira.update-comment")).toEqual({
+      ok: true,
+      receipt,
+    });
+    expect(
+      validJiraMutationAttempt({ ok: true, receipt: { issueKey: "SYN-1" } }, "jira.update-comment"),
+    ).toEqual({ ok: false, reason: "malformed-payload" });
+    expect(
+      jiraAttemptToolResult(
+        "succeeded-unconfirmed",
+        validJiraMutationAttempt(
+          { ok: false, reason: "unavailable", receipt },
+          "jira.update-comment",
+        ),
+      ).data,
+    ).toMatchObject({ ...receipt, outcome: "succeeded-unconfirmed" });
+  });
+});
+
 describe("Agile entity and membership receipts", () => {
   it.each([
     { operation: "jira.board-create", receipt: { boardId: "37" } },

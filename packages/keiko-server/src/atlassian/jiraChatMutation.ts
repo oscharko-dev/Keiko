@@ -146,6 +146,7 @@ const ATOMIC_ERROR_OPERATIONS: ReadonlySet<string> = new Set([
   "jira.edit",
   "jira.assign",
   "jira.comment",
+  "jira.update-comment",
   "jira.transition",
   "jira.attach",
   "jira.create-project",

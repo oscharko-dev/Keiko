@@ -73,6 +73,21 @@ afterEach(() => {
   window.localStorage.removeItem(I18N_STORAGE_KEY);
 });
 
+describe.each(["en", "de"] as const)("readable comment updates in %s (#4298)", (locale) => {
+  it("names the exact existing comment and keeps the native body readable without JSON", async () => {
+    const review = await reviewed(
+      "jira.update-comment",
+      { issueKey: "SYN-7", commentId: "9007199254740993", body: "Updated native comment" },
+      locale,
+    );
+    expect(review.text).toContain(locale === "en" ? "Comment ID" : "Kommentar-ID");
+    for (const value of ["SYN-7", "9007199254740993", "Updated native comment"])
+      expect(review.text).toContain(value);
+    expectNoJson(review);
+    expect(await axe(review.container)).toHaveNoViolations();
+  });
+});
+
 describe.each(["en", "de"] as const)(
   "readable project metadata approvals in %s (#4297)",
   (locale) => {

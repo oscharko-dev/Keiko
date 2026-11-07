@@ -25,6 +25,7 @@ const ARGUMENT_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
   issueTypeId: "chat.jira.fact.issueType",
   transitionId: "chat.jira.fact.transition",
   body: "chat.jira.fact.comment",
+  commentId: "chat.jira.fact.commentId",
   assigneeName: "chat.jira.fact.assignee",
   name: "chat.jira.fact.fileName",
   requirementIds: "chat.jira.fact.requirements",

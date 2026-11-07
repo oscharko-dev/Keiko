@@ -40,6 +40,10 @@ import {
   type JIRA_FILTER_READ_DEFINITIONS,
 } from "./jiraAgileDescriptors.js";
 import {
+  jiraIssueCollaborationDeclarationForTool,
+  type JIRA_ISSUE_COLLABORATION_READ_DEFINITIONS,
+} from "./jiraIssueCollaborationDescriptors.js";
+import {
   jiraProjectStructureDeclarationForTool,
   type JIRA_PROJECT_STRUCTURE_READ_DEFINITIONS,
 } from "./jiraProjectStructureDescriptors.js";
@@ -142,6 +146,7 @@ type CoreReadToolName = Exclude<
       | keyof typeof JIRA_AGILE_READ_DEFINITIONS
       | keyof typeof JIRA_FILTER_READ_DEFINITIONS
       | keyof typeof JIRA_PROJECT_STRUCTURE_READ_DEFINITIONS
+      | keyof typeof JIRA_ISSUE_COLLABORATION_READ_DEFINITIONS
     >
 >;
 const DEFINITIONS: Readonly<Record<CoreReadToolName, ReadDefinition>> = {
@@ -315,6 +320,8 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   if (agile !== undefined) return agile;
   const structure = jiraProjectStructureDeclarationForTool(name);
   if (structure !== undefined) return structure;
+  const collaboration = jiraIssueCollaborationDeclarationForTool(name);
+  if (collaboration !== undefined) return collaboration;
   if (name === "jira.report") return JIRA_REPORT_DECLARATION;
   if (name === "jira.draft-stage") return JIRA_DRAFT_STAGE_DECLARATION;
   if (!isCoreReadTool(name)) throw new TypeError("Unsupported Jira read tool");

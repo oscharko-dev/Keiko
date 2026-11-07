@@ -21,6 +21,7 @@ import {
 } from "./jira-agile-projection.js";
 import { jiraAgileRequest } from "./jira-agile-request.js";
 import { agileInputId } from "./jira-agile-inputs.js";
+import { jiraBoardBrowseUrl, jiraBrowseUrl } from "./jira-browse-url.js";
 
 export const JIRA_AGILE_READ_OPERATIONS = [
   "jira.boards",
@@ -37,6 +38,24 @@ export const JIRA_AGILE_READ_OPERATIONS = [
 ] as const;
 export type JiraAgileReadOperation = (typeof JIRA_AGILE_READ_OPERATIONS)[number];
 type Projection = (value: unknown) => CatalogJsonObject | undefined;
+const BOARD_LINK_READS: ReadonlySet<string> = new Set([
+  "jira.boards",
+  "jira.board",
+  "jira.board-configuration",
+]);
+const EPIC_LINK_READS: ReadonlySet<string> = new Set(["jira.epic", "jira.board-epics"]);
+function linkedProjection(operation: string, baseUrl: string, project: Projection): Projection {
+  return (value): CatalogJsonObject | undefined => {
+    const item = project(value);
+    if (item === undefined) return undefined;
+    const browseUrl = BOARD_LINK_READS.has(operation)
+      ? jiraBoardBrowseUrl(baseUrl, item.id)
+      : EPIC_LINK_READS.has(operation)
+        ? jiraBrowseUrl(baseUrl, item.key)
+        : undefined;
+    return browseUrl === undefined ? item : { ...item, browseUrl };
+  };
+}
 const BOARD_TYPES: ReadonlySet<unknown> = new Set(["scrum", "kanban"]);
 const SPRINT_STATES: ReadonlySet<unknown> = new Set(["future", "active", "closed"]);
 interface ReadRoute {
@@ -168,8 +187,12 @@ function selection(
     maxResults,
   };
 }
-function single(route: ReadRoute, body: Record<string, unknown>): ManagedMcpToolResult {
-  const item = route.project(body);
+function single(
+  route: ReadRoute,
+  body: Record<string, unknown>,
+  project: Projection,
+): ManagedMcpToolResult {
+  const item = project(body);
   if (
     item === undefined ||
     (route.identity !== undefined && item.id !== route.identity && item.key !== route.identity)
@@ -192,15 +215,14 @@ export async function executeJiraAgileRead(
   if (response.status !== 200 || response.body === undefined)
     return jiraReadFailure("malformed-payload");
   const { route, startAt, maxResults } = selected;
-  if (route.mode === "single") return single(route, response.body);
+  const project = linkedProjection(operation, connection.baseUrl, route.project);
+  if (route.mode === "single") return single(route, response.body, project);
   if (route.mode === "issues")
     return boundJiraReadResult(
       jiraIssueReadResult("jira.search", connection.baseUrl, response.body, startAt, maxResults),
     );
   const values = asArray(response.body.values);
   const items =
-    values === undefined
-      ? undefined
-      : projectJiraCollection(values, maxResults, route.project, "id");
+    values === undefined ? undefined : projectJiraCollection(values, maxResults, project, "id");
   return boundJiraReadResult(remoteJiraPage(response.body, items, startAt, maxResults));
 }

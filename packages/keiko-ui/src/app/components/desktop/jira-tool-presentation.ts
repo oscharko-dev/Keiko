@@ -9,6 +9,8 @@ import {
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import { actionTypeLabelKey } from "./widgets/connectors/connector-labels";
 import { JIRA_PROJECT_METADATA_TOOLS } from "./jira-project-metadata-presentation";
+import { JIRA_COLLABORATION_TOOLS } from "./jira-collaboration-presentation";
+const LOCALLY_PAGED_TOOLS = new Set([...JIRA_PROJECT_METADATA_TOOLS, ...JIRA_COLLABORATION_TOOLS]);
 
 const OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKey>> = {
   "not-dispatched": "chat.jira.write.notDispatched",
@@ -124,7 +126,7 @@ export function jiraToolPartialNotice(exchange: ChatToolExchange): WidgetMessage
     : undefined;
 }
 function projectMetadataPageCut(exchange: ChatToolExchange): boolean {
-  if (!JIRA_PROJECT_METADATA_TOOLS.has(exchange.call.name)) return false;
+  if (!LOCALLY_PAGED_TOOLS.has(exchange.call.name)) return false;
   const data = plainRecord(exchange.result?.data);
   const startAt = data?.startAt;
   const next = data?.nextStartAt;

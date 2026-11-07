@@ -59,6 +59,7 @@ const REQUIRED_RECEIPTS: Readonly<
   "jira.edit": ["issueKey"],
   "jira.assign": ["issueKey"],
   "jira.comment": ["issueKey", "commentId"],
+  "jira.update-comment": ["issueKey", "commentId"],
   "jira.transition": ["issueKey", "transitionId"],
   "jira.attach": ["issueKey", "attachmentId"],
   // A draft is never one attempt: each item is a journaled jira.create with its own receipt.

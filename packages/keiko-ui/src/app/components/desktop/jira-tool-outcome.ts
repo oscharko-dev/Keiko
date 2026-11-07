@@ -15,6 +15,10 @@ import {
   JIRA_PROJECT_METADATA_TOOLS,
   jiraProjectMetadataDetails,
 } from "./jira-project-metadata-presentation";
+import {
+  JIRA_COLLABORATION_TOOLS,
+  jiraCollaborationDetails,
+} from "./jira-collaboration-presentation";
 
 export interface JiraOutcomeItem {
   readonly key?: string;
@@ -58,6 +62,12 @@ export const JIRA_PROJECT_TOOLS: ReadonlySet<string> = new Set([
   "jira_project_type",
   "jira_project_permissions",
 ]);
+const STANDALONE_TOOLS = new Set([
+  ...JIRA_PROJECT_TOOLS,
+  ...JIRA_AGILE_TOOLS,
+  ...JIRA_PROJECT_METADATA_TOOLS,
+]);
+const BOARD_READ_TOOLS = new Set(["jira_board", "jira_boards", "jira_board_configuration"]);
 type UnknownRecord = Readonly<Record<string, unknown>>;
 function record(value: unknown): UnknownRecord | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -85,17 +95,31 @@ function textMembers<Key extends string>(
 }
 
 /** Retain the saved instance/context path; never manufacture a link from a current connector. */
-function savedUrl(value: unknown): URL | undefined {
+function savedUrl(value: unknown, queryAllowed = false): URL | undefined {
   if (typeof value !== "string") return undefined;
   try {
     const url = new URL(value);
     return url.protocol === "https:" &&
-      [url.username, url.password, url.search, url.hash].every((part) => part === "")
+      [url.username, url.password, queryAllowed ? "" : url.search, url.hash].every(
+        (part) => part === "",
+      )
       ? url
       : undefined;
   } catch {
     return undefined;
   }
+}
+function boardLink(value: unknown, tool: string, source: UnknownRecord): string | undefined {
+  if (!BOARD_READ_TOOLS.has(tool)) return undefined;
+  const id = text(source.boardId ?? source.id);
+  if (id === undefined || !/^[1-9]\d{0,15}$/u.test(id) || !Number.isSafeInteger(Number(id)))
+    return undefined;
+  const url = savedUrl(value, true);
+  return url?.pathname.endsWith("/secure/RapidBoard.jspa") === true &&
+    [...url.searchParams].length === 1 &&
+    url.searchParams.get("rapidView") === id
+    ? url.href
+    : undefined;
 }
 function issueLink(value: unknown, key: string | undefined): string | undefined {
   if (key === undefined || !ISSUE_KEY.test(key)) return undefined;
@@ -156,6 +180,7 @@ function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined 
   if (source === undefined) return undefined;
   if (JIRA_PROJECT_METADATA_TOOLS.has(tool)) return metadataOutcomeItem(source, tool);
   const agile = jiraAgileDetails(tool, source);
+  const collaboration = jiraCollaborationDetails(tool, source);
   const projectKey = text(source.projectKey);
   const key = firstText([
     projectKey,
@@ -167,6 +192,7 @@ function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined 
   const author = record(source.author) ?? {};
   const name = firstText([
     source.projectName,
+    collaboration.name,
     agile.name,
     source.summary,
     source.displayName,
@@ -175,18 +201,24 @@ function outcomeItem(value: unknown, tool: string): JiraOutcomeItem | undefined 
     author.displayName,
     author.name,
   ]);
-  const body = firstText([agile.body, tool === "jira_comments" ? source.body : source.description]);
-  if (![key, name, body, ...agile.facts].some((entry) => entry !== undefined)) return undefined;
+  const body = firstText([
+    collaboration.body,
+    agile.body,
+    tool === "jira_comments" ? source.body : source.description,
+  ]);
+  const facts = [...agile.facts, ...collaboration.facts];
+  if (![key, name, body, ...facts].some((entry) => entry !== undefined)) return undefined;
   const status = firstText([record(source.status)?.name, record(source.to)?.name]);
-  const href =
-    projectKey === undefined
+  const href = BOARD_READ_TOOLS.has(tool)
+    ? boardLink(source.browseUrl, tool, source)
+    : projectKey === undefined
       ? issueLink(source.browseUrl, key)
       : projectLink(source.browseUrl, projectKey);
   const projectId = text(source.projectId);
   return {
     ...textMembers({ key, name, body, status, href, projectId }),
     labels: [...itemLabels(source), ...agile.labels],
-    facts: agile.facts,
+    facts,
   };
 }
 function returnedEntries(
@@ -205,12 +237,17 @@ function outcomeItems(
 ): JiraOutcomeItem[] {
   const items = returnedEntries(data, exchange.call.name) ?? [];
   const progress = Array.isArray(exchange.draftProgress?.items) ? exchange.draftProgress.items : [];
-  const single =
-    data?.issueKey !== undefined ||
-    JIRA_PROJECT_TOOLS.has(exchange.call.name) ||
-    JIRA_AGILE_TOOLS.has(exchange.call.name) ||
-    JIRA_PROJECT_METADATA_TOOLS.has(exchange.call.name);
+  const single = data?.issueKey !== undefined || STANDALONE_TOOLS.has(exchange.call.name);
   const source = single ? [data, ...items, ...progress] : [...items, ...progress];
+  if (JIRA_COLLABORATION_TOOLS.has(exchange.call.name) && items.length > 0)
+    return items.flatMap((entry) => {
+      const raw = record(entry);
+      const item = outcomeItem(
+        { ...raw, browseUrl: raw?.browseUrl ?? data?.browseUrl },
+        exchange.call.name,
+      );
+      return item === undefined ? [] : [item];
+    });
   const seen = new Set<string>();
   return source.flatMap((entry) => {
     const item = outcomeItem(entry, exchange.call.name);
