@@ -116,7 +116,9 @@ type RemoteMode =
   | "lost-response"
   | "jira-error-document"
   | "html-error-page"
-  | "server-error";
+  | "server-error"
+  | "voting-disabled"
+  | "time-tracking-disabled";
 /** The value this synthetic Jira refuses, as Data Center does for a bad option. */
 const REJECTED_VALUE = "Rot";
 const JIRA_FIELD_ERROR = "Option 'Rot' is not valid.";
@@ -132,10 +134,34 @@ const REFUSALS: Readonly<Record<string, { readonly status: number; readonly body
   "server-error": { status: 503, body: JIRA_ERROR_DOCUMENT },
 };
 async function scriptedRefusal(mode: RemoteMode, request: Request): Promise<Response | undefined> {
+  const native = nativeOperationRefusal(mode, request);
+  if (native !== undefined) return native;
   const refusal = REFUSALS[mode];
   if (refusal === undefined || !(await request.clone().text()).includes(REJECTED_VALUE))
     return undefined;
   return new Response(refusal.body, {
+    status: refusal.status,
+    headers: { "content-type": "application/json" },
+  });
+}
+const NATIVE_REFUSALS = {
+  "voting-disabled": {
+    resource: "/votes",
+    status: 404,
+    message: "Voting is disabled, or you are the reporter of this issue.",
+  },
+  "time-tracking-disabled": {
+    resource: "/worklog",
+    status: 400,
+    message: "Time tracking is disabled. Ask a Jira administrator to enable it.",
+  },
+} as const;
+function nativeOperationRefusal(mode: RemoteMode, request: Request): Response | undefined {
+  if (mode !== "voting-disabled" && mode !== "time-tracking-disabled") return undefined;
+  const refusal = NATIVE_REFUSALS[mode];
+  if (request.method !== "POST" || !new URL(request.url).pathname.endsWith(refusal.resource))
+    return undefined;
+  return new Response(JSON.stringify({ errorMessages: [refusal.message], errors: {} }), {
     status: refusal.status,
     headers: { "content-type": "application/json" },
   });
@@ -513,6 +539,31 @@ it.each(SINGLE_MUTATIONS)(
     expect(f.state).toMatchObject(REMOTE_STATE[operation]);
   },
 );
+it.each([
+  { operation: "jira.vote", mode: "voting-disabled" },
+  { operation: "jira.create-worklog", mode: "time-tracking-disabled" },
+] as const)(
+  "returns an actionable rejection for $mode without an uncertain write",
+  async ({ operation, mode }) => {
+    const f = await fixture(mode, undefined, operation);
+    const before = structuredClone(f.state);
+    expect(await f.invoke(operation)).toMatchObject({
+      kind: "settled",
+      result: { data: { outcome: "rejected", messages: [NATIVE_REFUSALS[mode].message] } },
+    });
+    expect(f.journal.find(f.intent().invocationId)).toMatchObject({
+      outcome: "rejected",
+      httpStatus: NATIVE_REFUSALS[mode].status,
+    });
+    expect(f.state).toEqual(before);
+    expect(await f.invoke(operation)).toMatchObject({
+      kind: "settled",
+      result: { data: { outcome: "rejected", replayed: true } },
+    });
+    expect(f.writes()).toBe(1);
+  },
+);
+
 function create(value: string): CatalogJsonObject {
   return {
     projectId: "10000",

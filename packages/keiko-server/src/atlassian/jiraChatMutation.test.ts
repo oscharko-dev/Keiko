@@ -516,6 +516,12 @@ it.each([
   ["jira.update-component", "PUT", "api/2/component/37"],
   ["jira.create-version", "POST", "api/2/version"],
   ["jira.update-version", "PUT", "api/2/version/37"],
+  ["jira.create-worklog", "POST", "api/2/issue/SYN-1/worklog"],
+  ["jira.update-worklog", "PUT", "api/2/issue/SYN-1/worklog/37"],
+  ["jira.watch", "POST", "api/2/issue/SYN-1/watchers"],
+  ["jira.unwatch", "DELETE", "api/2/issue/SYN-1/watchers?username=synthetic-user"],
+  ["jira.vote", "POST", "api/2/issue/SYN-1/votes"],
+  ["jira.unvote", "DELETE", "api/2/issue/SYN-1/votes"],
 ] as const)(
   "allows correction after %s returns a structured 400 without effects",
   async (operation, method, path) => {
@@ -536,7 +542,7 @@ it.each([
         await http({
           method,
           url: `https://jira.example.invalid/rest/${path}`,
-          bodyJson: "{}",
+          ...(method === "DELETE" ? {} : { bodyJson: "{}" }),
           maxBodyBytes: 1000,
           timeoutMs: 1000,
         });

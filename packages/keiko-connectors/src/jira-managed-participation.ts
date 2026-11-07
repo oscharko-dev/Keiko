@@ -146,6 +146,10 @@ async function inspect(
   return parsed === undefined ? MALFORMED : { ok: true, view: parsed };
 }
 function selfMatches(value: unknown, binding: Binding, watch: boolean): boolean {
+  // These singleton subresources have no global resource ID beyond the resolved issue. Their
+  // published WatchersBean/VoteBean schemas do not require self: retain native route binding
+  // when absent and check any supplied identity. A comment's independent global ID needs the
+  // stronger positive issue-membership proof in jiraCommentSelfMatches.
   if (value === undefined || value === null) return true;
   return [binding.issueId, binding.issueKey].some((id) =>
     jiraResourceSelfMatches(value, resource(id, watch)),

@@ -131,6 +131,34 @@ describe("closed current-user participation", () => {
       "issue/10001/watchers",
     ]);
   });
+  it.each([undefined, null])(
+    "retains issue route binding when optional singleton self is absent: %s",
+    async (self) => {
+      const request = vi
+        .fn<JiraMutationRequest>()
+        .mockResolvedValueOnce(ISSUE)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          body: { watchCount: 0, isWatching: false, self },
+        })
+        .mockResolvedValueOnce({ ok: true, status: 204, body: undefined })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          body: { watchCount: 1, isWatching: true, self },
+        });
+      expect(
+        await executeJiraParticipationMutation("jira.watch", { issueKey: "APP-1" }, request),
+      ).toEqual({ ok: true, receipt: { issueKey: "APP-1", issueId: "10001", isWatching: true } });
+      expect(request.mock.calls.map(([path]) => path)).toEqual([
+        "issue/APP-1?fields=summary",
+        "issue/10001/watchers",
+        "issue/10001/watchers",
+        "issue/10001/watchers",
+      ]);
+    },
+  );
   it.each([
     { watchCount: -1, isWatching: false },
     { watchCount: 2, isWatching: "false" },
