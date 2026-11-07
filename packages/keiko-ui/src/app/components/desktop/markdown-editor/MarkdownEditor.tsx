@@ -350,7 +350,6 @@ function MarkdownStatus({
   return (
     <div className={styles.cmpMdeStatus}>
       <output className={styles.cmpMdeNotice}>{notice}</output>
-      <span>{t("markdownEditor.format")}</span>
       <span>{t("markdownEditor.characters", { count: count.toLocaleString() })}</span>
     </div>
   );

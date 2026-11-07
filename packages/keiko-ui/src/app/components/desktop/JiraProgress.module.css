@@ -45,3 +45,32 @@
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
+.cmpRegion {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+/* Work without a countable end yet: the design system's shimmer, still when motion is reduced. */
+.cmpProgress[data-indeterminate="true"] .cmpFill {
+  inline-size: 100%;
+  background: linear-gradient(
+    90deg,
+    var(--skeleton-base),
+    var(--skeleton-highlight),
+    var(--skeleton-base)
+  );
+  background-size: 200% 100%;
+  animation: cmp-working 1.3s linear infinite;
+}
+@keyframes cmp-working {
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmpProgress[data-indeterminate="true"] .cmpFill {
+    animation: none;
+    background: var(--feedback-info);
+    opacity: 0.4;
+  }
+}

@@ -38,7 +38,7 @@ export function SkillWorkspacePane(props: PaneProps): ReactNode {
   const { workspace } = props;
   const view = workspace.view;
   return (
-    <section className={styles.cmpWorkspace} aria-live="polite" aria-busy={props.library.busy}>
+    <section className={styles.cmpWorkspace}>
       {workspace.confirming ? <DiscardBar workspace={workspace} /> : null}
       {view.kind === "empty" ? <EmptyWorkspace workspace={workspace} /> : null}
       {view.kind === "author" ? (

@@ -170,6 +170,11 @@ describe("a new skill", () => {
     seedStore([]);
     const dialog = await openDialog();
     expect(within(dialog).getByText("Open a skill or start a new one")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("Choose a skill or template, or write a new one."),
+    ).toBeInTheDocument();
+    // The editor is never one live region: only its alerts are announced.
+    expect(dialog.querySelector("[aria-live], [aria-busy]")).toBeNull();
     newSkill(dialog);
     expect(documentTitle(dialog)).toBe("New skill");
     expect(openFileMeta(dialog).getByText("Not saved yet")).toBeInTheDocument();

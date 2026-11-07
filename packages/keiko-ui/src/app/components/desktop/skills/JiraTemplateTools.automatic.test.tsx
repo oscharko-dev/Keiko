@@ -114,10 +114,10 @@ describe("Jira templates are compared with the selected Jira without a click (#4
     render(<Panel />);
     const wrong = await row("KERNBANK · Epic");
     const notice = await within(wrong).findByText(/Project KERNBANK does not exist/u);
-    expect(notice).toHaveTextContent("does not apply");
+    expect(notice).toHaveTextContent("Not applied");
     expect(stateOf(notice)).toBe("mismatch");
     const right = await row("KER · Task");
-    const match = await within(right).findByText(/matches Jira\./u);
+    const match = await within(right).findByText(/Matches Jira\./u);
     expect(stateOf(match)).toBe("ok");
     expect(templates.validateJiraTemplate).toHaveBeenCalledWith(
       "pod-1",
@@ -135,9 +135,9 @@ describe("Jira templates are compared with the selected Jira without a click (#4
     vi.mocked(templates.validateJiraTemplate).mockRejectedValueOnce(new Error("offline"));
     render(<Panel />);
     const right = await row("KER · Task");
-    expect(await within(right).findByText(/matches Jira\./u)).toBeInTheDocument();
+    expect(await within(right).findByText(/Matches Jira\./u)).toBeInTheDocument();
     const wrong = await row("KERNBANK · Epic");
-    const failed = within(wrong).getByText(/could not be checked against Jira right now\./u);
+    const failed = within(wrong).getByText(/Could not be checked against Jira right now\./u);
     expect(stateOf(failed)).toBe("mismatch");
     expect(within(wrong).queryByText(/does not exist/u)).toBeNull();
     expect(within(right).queryByText(/could not be checked/u)).toBeNull();

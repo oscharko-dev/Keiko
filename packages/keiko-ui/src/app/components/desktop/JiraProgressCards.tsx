@@ -1,6 +1,6 @@
 "use client";
 import { useId, type CSSProperties, type ReactNode } from "react";
-import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatToolExchange, ChatTurnState } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import cardStyles from "./JiraChatTools.module.css";
 import styles from "./JiraProgress.module.css";
@@ -27,7 +27,8 @@ function ProgressBar({
   readonly stopped?: boolean;
 }): ReactNode {
   const labelId = useId();
-  const percent = value === undefined ? 0 : Math.min(100, Math.round((value / max) * 100));
+  const indeterminate = value === undefined;
+  const percent = indeterminate ? 0 : Math.min(100, Math.round((value / max) * 100));
   const fill = { "--cmp-progress": `${String(percent)}%` } as CSSProperties;
   const counted = value === undefined ? {} : { "aria-valuemax": max, "aria-valuenow": value };
   return (
@@ -35,6 +36,7 @@ function ProgressBar({
       className={styles.cmpProgress}
       data-tone={tone}
       data-stopped={stopped ? "true" : undefined}
+      data-indeterminate={indeterminate && !stopped ? "true" : undefined}
     >
       <span id={labelId} className={styles.cmpLabel}>
         {label}
@@ -55,18 +57,18 @@ function ProgressBar({
 /** The counted progress of a draft batch, shown inside the batch's own tool card. */
 export function BatchProgress({
   exchange,
-  settled,
+  turnState,
 }: {
   readonly exchange: ChatToolExchange;
-  /** True once the turn no longer runs: a batch that never completed has stopped. */
-  readonly settled: boolean;
+  /** Once the turn no longer runs, a batch that never completed has stopped; this says why. */
+  readonly turnState: ChatTurnState | undefined;
 }): ReactNode {
   const t = useTranslate();
   const progress = batchProgressOf(exchange);
   if (progress === undefined) return null;
-  const view = batchProgressView(exchange, progress, settled);
+  const view = batchProgressView(exchange, progress, turnState);
   return (
-    <>
+    <output className={styles.cmpRegion}>
       <ProgressBar
         tone={view.tone}
         label={t(view.text, view.values)}
@@ -81,7 +83,7 @@ export function BatchProgress({
           ))}
         </ul>
       )}
-    </>
+    </output>
   );
 }
 
@@ -97,19 +99,19 @@ export function RequirementsReadCard({
   const text = t("chat.requirements.read", { done: view.done, total: view.total });
   return (
     <section className={cardStyles.cmpCard} aria-label={label}>
-      <ProgressBar
-        tone={requirementsTone(view)}
-        label={text}
-        value={view.done}
-        max={Math.max(view.total, 1)}
-      />
-      {view.cuts.length === 0 ? null : (
-        <ul className={cardStyles.cmpProblems}>
-          {view.cuts.map((cut) => (
-            <li key={cut.key}>{t(cut.key, { count: cut.count })}</li>
-          ))}
-        </ul>
-      )}
+      <output className={styles.cmpRegion}>
+        <ProgressBar
+          tone={requirementsTone(view)}
+          label={text}
+          value={view.done}
+          max={Math.max(view.total, 1)}
+        />
+        {view.cuts.length === 0 ? null : (
+          <ul className={cardStyles.cmpProblems}>
+            <li>{view.cuts.map((cut) => t(cut.key, { count: cut.count })).join(" · ")}</li>
+          </ul>
+        )}
+      </output>
     </section>
   );
 }

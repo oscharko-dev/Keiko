@@ -65,28 +65,30 @@ async function renderTools(
 const BATCH_COPY = {
   en: {
     title: "Draft Jira issues from requirements",
-    drafting: "Drafted 24 of 40 issues · 87 of 131 requirements covered",
+    drafting: "Drafted 24 of 40 issues",
     outlining: "Grouping requirements …",
     complete: "Drafted 40 of 40 issues · 131 of 131 requirements covered",
-    failed: "Requirements that could not be drafted: 3.",
-    stopped: "Stopped after 24 of 40 issues",
-    stoppedOutlining: "Stopped while grouping requirements",
+    failed: "Requirements that could not be drafted: 3",
+    stopped: "You stopped it after 24 of 40 issues",
+    couldNotFinish: "Could not finish: 24 of 40 issues drafted",
+    stoppedOutlining: "You stopped it while grouping requirements",
     none: "No issues drafted",
-    uncovered: "Requirements not covered: 4.",
-    unfinished: "Issues not finished: 2.",
+    uncovered: "Requirements not covered: 4",
+    unfinished: "Issues not finished: 2",
     step: "Create draft · 24/40",
   },
   de: {
     title: "Jira-Vorgänge aus Anforderungen entwerfen",
-    drafting: "24 von 40 Vorgängen entworfen · 87 von 131 Anforderungen abgedeckt",
+    drafting: "24 von 40 Vorgängen entworfen",
     outlining: "Anforderungen werden gruppiert …",
     complete: "40 von 40 Vorgängen entworfen · 131 von 131 Anforderungen abgedeckt",
-    failed: "Anforderungen, die nicht entworfen werden konnten: 3.",
-    stopped: "Abgebrochen nach 24 von 40 Vorgängen",
-    stoppedOutlining: "Abgebrochen beim Gruppieren der Anforderungen",
+    failed: "Anforderungen, die nicht entworfen werden konnten: 3",
+    stopped: "Von dir abgebrochen nach 24 von 40 Vorgängen",
+    couldNotFinish: "Nicht abgeschlossen: 24 von 40 Vorgängen entworfen",
+    stoppedOutlining: "Von dir abgebrochen beim Gruppieren der Anforderungen",
     none: "Keine Vorgänge entworfen",
-    uncovered: "Nicht abgedeckte Anforderungen: 4.",
-    unfinished: "Nicht fertiggestellte Vorgänge: 2.",
+    uncovered: "Nicht abgedeckte Anforderungen: 4",
+    unfinished: "Nicht fertiggestellte Vorgänge: 2",
     step: "Entwurf erstellen · 24/40",
   },
 } as const;
@@ -162,20 +164,46 @@ describe.each(["en", "de"] as const)("draft batch progress card in %s", (locale)
     expect(await axe(container)).toHaveNoViolations();
   });
 
-  it.each(["failed", "cancelled"] as const)(
-    "freezes in warning when the turn %s before the batch completed",
-    async (turnState) => {
-      const { container } = await renderTools(locale, [batch(PROGRESS)], turnState);
-      expect(screen.getByRole("progressbar", { name: copy.stopped })).toHaveAttribute(
-        "aria-valuenow",
-        "24",
-      );
-      const root = container.querySelector("[data-tone]");
-      expect(root).toHaveAttribute("data-tone", "warning");
-      expect(root).toHaveAttribute("data-stopped", "true");
-      expect(await axe(container)).toHaveNoViolations();
-    },
-  );
+  it("freezes in warning and says the person stopped it when the turn was cancelled", async () => {
+    const { container } = await renderTools(locale, [batch(PROGRESS)], "cancelled");
+    expect(screen.getByRole("progressbar", { name: copy.stopped })).toHaveAttribute(
+      "aria-valuenow",
+      "24",
+    );
+    const root = container.querySelector("[data-tone]");
+    expect(root).toHaveAttribute("data-tone", "warning");
+    expect(root).toHaveAttribute("data-stopped", "true");
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("says it could not finish, not that it was stopped, when the turn failed", async () => {
+    const { container } = await renderTools(locale, [batch(PROGRESS)], "failed");
+    expect(screen.getByRole("progressbar", { name: copy.couldNotFinish })).toHaveAttribute(
+      "aria-valuenow",
+      "24",
+    );
+    expect(screen.queryByText(copy.stopped)).toBeNull();
+    expect(container.querySelector("[data-tone]")).toHaveAttribute("data-tone", "warning");
+    expect(container.querySelector("[data-stopped]")).toHaveAttribute("data-stopped", "true");
+  });
+
+  it("announces its phase in a status region and marks grouping as working", async () => {
+    const { container } = await renderTools(
+      locale,
+      [batch({ ...PROGRESS, phase: "outlining", draftedCount: 0, plannedCount: 0 })],
+      "pending",
+    );
+    const region = screen
+      .getAllByRole("status")
+      .find((node) => node.contains(screen.getByRole("progressbar")));
+    expect(region).toBeDefined();
+    expect(container.querySelector("[data-tone]")).toHaveAttribute("data-indeterminate", "true");
+  });
+
+  it("does not mark a counted bar as working", async () => {
+    const { container } = await renderTools(locale, [batch(PROGRESS)], "pending");
+    expect(container.querySelector("[data-tone]")).not.toHaveAttribute("data-indeterminate");
+  });
 
   it("names a stop while grouping without a count", async () => {
     await renderTools(
@@ -260,13 +288,13 @@ const READ_COPY = {
     label: "Requirements",
     thirty: "Requirements read: 30 of 131",
     all: "Requirements read: 131 of 131",
-    cut: "Documents that could not be read: 2.",
+    cut: "Documents that could not be read: 2",
   },
   de: {
     label: "Anforderungen",
     thirty: "Anforderungen gelesen: 30 von 131",
     all: "Anforderungen gelesen: 131 von 131",
-    cut: "Dokumente, die nicht gelesen werden konnten: 2.",
+    cut: "Dokumente, die nicht gelesen werden konnten: 2",
   },
 } as const;
 

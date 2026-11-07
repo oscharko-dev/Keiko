@@ -138,6 +138,28 @@ function JiraTemplateRules({ rules }: { readonly rules: readonly JiraOutcomeRule
     </ul>
   );
 }
+/** Why a refused change could not be sent, and once that nothing was. */
+function JiraValidationNotes({
+  view,
+}: {
+  readonly view: ReturnType<typeof jiraToolOutcomeView>;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <>
+      {view.validation === undefined ? null : <p>{t(VALIDATION_MESSAGES[view.validation])}</p>}
+      {view.itemValidations.map((item) => (
+        <p key={item.ref}>
+          <code>{item.ref} </code>
+          {t(VALIDATION_MESSAGES[item.validation])}
+        </p>
+      ))}
+      {view.validation === undefined && view.itemValidations.length === 0 ? null : (
+        <p>{t("chat.jira.outcome.nothingSent")}</p>
+      )}
+    </>
+  );
+}
 /** What happened, in a person's terms: the issues touched and why Jira refused, never raw data. */
 function JiraToolOutcome({
   view,
@@ -177,13 +199,7 @@ function JiraToolOutcome({
           )}
         </ul>
       )}
-      {view.validation === undefined ? null : <p>{t(VALIDATION_MESSAGES[view.validation])}</p>}
-      {view.itemValidations.map((item) => (
-        <p key={item.ref}>
-          <code>{item.ref} </code>
-          {t(VALIDATION_MESSAGES[item.validation])}
-        </p>
-      ))}
+      <JiraValidationNotes view={view} />
       <JiraTemplateRules rules={view.rules} />
     </>
   );
@@ -213,7 +229,7 @@ function JiraToolExchange({
       {help === undefined ? null : <p>{t(help)}</p>}
       {report === undefined ? null : <JiraReportCard view={report} chatId={chatId} />}
       {report === undefined && partial !== undefined ? <p>{t(partial)}</p> : null}
-      <BatchProgress exchange={exchange} settled={turnState !== "pending"} />
+      <BatchProgress exchange={exchange} turnState={turnState} />
       {report === undefined ? <JiraToolOutcome view={jiraToolOutcomeView(exchange)} /> : null}
     </section>
   );

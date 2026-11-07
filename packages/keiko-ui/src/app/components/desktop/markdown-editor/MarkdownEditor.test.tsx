@@ -244,9 +244,21 @@ describe("MarkdownEditor", () => {
     expect(onChange).toHaveBeenLastCalledWith("---\nk: v\n---\n\nhello world");
   });
 
-  it("counts characters of the whole file", () => {
+  it("counts characters of the whole file without repeating the format name", () => {
     render(<Harness initial={"---\nk: v\n---\n\nhello"} />);
     expect(screen.getByText(/19 characters/u)).toBeTruthy();
+    expect(screen.getByText(/19 characters/u).parentElement).not.toHaveTextContent("Markdown");
+  });
+
+  it.each([
+    ["MacIntel", "Bold (⌘B)", "Redo (⇧⌘Z)"],
+    ["Win32", "Bold (Ctrl+B)", "Redo (Shift+Ctrl+Z)"],
+  ])("writes shortcuts for the platform %s", (platform, bold, redo) => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+    render(<Harness initial="hello" />);
+    expect(screen.getByRole("button", { name: bold })).toBeTruthy();
+    expect(screen.getByRole("button", { name: redo })).toBeTruthy();
+    vi.restoreAllMocks();
   });
 
   it("handles a very long line and HTML in source view without throwing", () => {

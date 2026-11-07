@@ -43,17 +43,17 @@ const COPY = {
   en: {
     label: "Requirements",
     partial: "Not all requirements were read.",
-    unitsOmitted: "Requirements that were left out: 2.",
-    documentsOmitted: "Documents that were left out: 1.",
-    notExtracted: "Documents that could not be read: 1.",
+    unitsOmitted: "Requirements left out: 2",
+    documentsOmitted: "Documents left out: 1",
+    notExtracted: "Documents that could not be read: 1",
     paged: "Requirements read: 1 of 3",
   },
   de: {
     label: "Anforderungen",
     partial: "Nicht alle Anforderungen wurden gelesen.",
-    unitsOmitted: "Anforderungen, die ausgelassen wurden: 2.",
-    documentsOmitted: "Dokumente, die ausgelassen wurden: 1.",
-    notExtracted: "Dokumente, die nicht gelesen werden konnten: 1.",
+    unitsOmitted: "Ausgelassene Anforderungen: 2",
+    documentsOmitted: "Ausgelassene Dokumente: 1",
+    notExtracted: "Dokumente, die nicht gelesen werden konnten: 1",
     paged: "Anforderungen gelesen: 1 von 3",
   },
 } as const;
@@ -94,7 +94,7 @@ describe("knowledge.requirements transcript row", () => {
           // A further page is progress, not a cut: nothing is said to be missing.
           expect(
             within(card).queryByText(
-              /left out|ausgelassen|could not|nicht gelesen|Not all|Nicht alle/u,
+              /left out|Ausgelassene|could not|nicht gelesen|Not all|Nicht alle/u,
             ),
           ).toBeNull();
         } else {

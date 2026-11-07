@@ -447,9 +447,7 @@ describe("Jira tool outcome for a business user (#4173)", () => {
         turnState="completed"
       />,
     );
-    expect(
-      screen.getByText("A required Jira field was missing, so nothing was sent."),
-    ).toBeVisible();
+    expect(screen.getByText("A required Jira field was missing.")).toBeVisible();
     expect(screen.queryByText(/customfield_10103|required-field/u)).toBeNull();
   });
 

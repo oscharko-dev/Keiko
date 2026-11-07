@@ -20,6 +20,10 @@ import {
   type MarkdownWrapFormat,
 } from "./markdown-editor-commands";
 import type { MarkdownDocumentController } from "./markdown-document-controller";
+import {
+  detectKeyboardShortcutPlatform,
+  shortcutLabelForPlatform,
+} from "../keyboardShortcutLabels";
 import styles from "./MarkdownEditor.module.css";
 
 export type MarkdownView = "rich" | "source" | "split";
@@ -58,14 +62,23 @@ function ToolButton({
 }
 
 const MARKS = [
-  { mark: "strong", icon: "bold", label: "markdownEditor.mark.strong" },
-  { mark: "em", icon: "italic", label: "markdownEditor.mark.em" },
-  { mark: "code", icon: "code", label: "markdownEditor.mark.code" },
+  { mark: "strong", icon: "bold", label: "markdownEditor.mark.strong", keys: "CtrlOrMeta+B" },
+  { mark: "em", icon: "italic", label: "markdownEditor.mark.em", keys: "CtrlOrMeta+I" },
+  { mark: "code", icon: "code", label: "markdownEditor.mark.code", keys: "CtrlOrMeta+`" },
 ] as const satisfies readonly {
   readonly mark: MarkdownMarkFormat;
   readonly icon: IconName;
   readonly label: string;
+  readonly keys: string;
 }[];
+
+const UNDO_KEYS = "CtrlOrMeta+Z";
+const REDO_KEYS = "Shift+CtrlOrMeta+Z";
+
+/** The shortcut as this platform writes it: the Command key on a Mac, Ctrl elsewhere. */
+function shortcutOf(keys: string): string {
+  return shortcutLabelForPlatform(keys, detectKeyboardShortcutPlatform());
+}
 const WRAPS = [
   { wrap: "bullet_list", icon: "listBullet", label: "markdownEditor.wrap.bullet_list" },
   { wrap: "ordered_list", icon: "listOrdered", label: "markdownEditor.wrap.ordered_list" },
@@ -121,13 +134,13 @@ function HistoryButtons({
     <>
       <ToolButton
         icon="undo"
-        label={t("markdownEditor.undo")}
+        label={t("markdownEditor.undo", { shortcut: shortcutOf(UNDO_KEYS) })}
         disabled={!history.undo}
         onRun={() => controller.run(undoCommand)}
       />
       <ToolButton
         icon="redo"
-        label={t("markdownEditor.redo")}
+        label={t("markdownEditor.redo", { shortcut: shortcutOf(REDO_KEYS) })}
         disabled={!history.redo}
         onRun={() => controller.run(redoCommand)}
       />
@@ -149,11 +162,11 @@ export function MarkdownEditorToolbar({
     <div className={styles.cmpMdeTools} role="toolbar" aria-label={t("markdownEditor.toolbar")}>
       <BlockStyleSelect controller={controller} t={t} />
       <span className={styles.cmpMdeDivider} />
-      {MARKS.map(({ mark, icon, label }) => (
+      {MARKS.map(({ mark, icon, label, keys }) => (
         <ToolButton
           key={mark}
           icon={icon}
-          label={t(label)}
+          label={t(label, { shortcut: shortcutOf(keys) })}
           pressed={markActive(state, mark)}
           onRun={run(toggleMarkCommand(mark))}
         />

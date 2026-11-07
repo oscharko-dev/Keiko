@@ -92,8 +92,9 @@ describe("Jira draft results as the production draft tool reports them", () => {
     expect(problems).toHaveTextContent("story-7");
     expect(problems).toHaveTextContent("Epic Name: Epic Name is required.");
     const refused = screen.getByText(/task-9/u).closest("p");
-    expect(refused).toHaveTextContent("A required Jira field was missing, so nothing was sent.");
+    expect(refused).toHaveTextContent("A required Jira field was missing.");
     expect(within(problems).queryByText(/task-9/u)).toBeNull();
+    expect(screen.getAllByText("Nothing was sent to Jira.")).toHaveLength(1);
   });
 
   it("counts the keys of a compact large-draft result instead of showing nothing", async () => {
@@ -140,7 +141,7 @@ describe("Jira draft results as the production draft tool reports them", () => {
         failedRequirementRefs: ["R-1", "R-2", "R-3"],
       }),
     );
-    expect(screen.getByText("Requirements that could not be drafted: 3.")).toBeVisible();
+    expect(screen.getByText("Requirements that could not be drafted: 3")).toBeVisible();
     expect(screen.queryByRole("list", { name: "Jira issues" })).toBeNull();
   });
 });

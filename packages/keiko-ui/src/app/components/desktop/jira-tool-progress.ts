@@ -3,6 +3,7 @@ import {
   isChatToolBatchProgress,
   type ChatToolBatchProgress,
   type ChatToolExchange,
+  type ChatTurnState,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 
@@ -86,13 +87,23 @@ function batchNotes(
   return failed === undefined ? rest : [failed, ...rest];
 }
 
-function batchText(progress: ChatToolBatchProgress, stopped: boolean): WidgetMessageKey {
+/** The ending of a stopped batch: the person stopped it, or it could not go on. */
+function stoppedText(progress: ChatToolBatchProgress, turnState: ChatTurnState): WidgetMessageKey {
+  const outlining = progress.phase === "outlining";
+  if (turnState === "cancelled") {
+    return outlining ? "chat.batch.stoppedOutlining" : "chat.batch.stopped";
+  }
+  return outlining ? "chat.batch.failedOutlining" : "chat.batch.failed";
+}
+
+function batchText(
+  progress: ChatToolBatchProgress,
+  stoppedBy: ChatTurnState | undefined,
+): WidgetMessageKey {
   if (progress.phase === "complete") {
-    return progress.plannedCount === 0 ? "chat.batch.none" : "chat.batch.drafted";
+    return progress.plannedCount === 0 ? "chat.batch.none" : "chat.batch.complete";
   }
-  if (stopped) {
-    return progress.phase === "outlining" ? "chat.batch.stoppedOutlining" : "chat.batch.stopped";
-  }
+  if (stoppedBy !== undefined) return stoppedText(progress, stoppedBy);
   return progress.phase === "outlining" ? "chat.batch.outlining" : "chat.batch.drafted";
 }
 
@@ -116,17 +127,17 @@ function batchTone(
 export function batchProgressView(
   exchange: ChatToolExchange,
   progress: ChatToolBatchProgress,
-  settled: boolean,
+  turnState: ChatTurnState | undefined,
 ): BatchProgressView {
   const complete = progress.phase === "complete";
-  const stopped = settled && !complete;
+  const stopped = turnState !== undefined && turnState !== "pending" && !complete;
   const notes = batchNotes(exchange, progress);
   const noIssues = complete && progress.plannedCount === 0;
   return {
     tone: batchTone(progress, stopped, notes.length),
     value: progress.phase === "outlining" || noIssues ? undefined : progress.draftedCount,
     max: Math.max(progress.plannedCount, 1),
-    text: batchText(progress, stopped),
+    text: batchText(progress, stopped ? turnState : undefined),
     values: {
       drafted: progress.draftedCount,
       planned: progress.plannedCount,

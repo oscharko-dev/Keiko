@@ -135,7 +135,7 @@ async function row(name: string): Promise<HTMLElement> {
   return rowFor(name);
 }
 
-const SYN_MATCH = /SYN · Story — matches Jira\./u;
+const SYN_MATCH = /SYN · Story — Matches Jira\./u;
 
 describe("the template list", () => {
   it("reads the templates at once and names which stored skills are templates", async () => {
@@ -158,7 +158,7 @@ describe("the template list", () => {
   it("lists templates with project and issue type, marks an unreadable one and is accessible", async () => {
     render(<Panel stored={libraryOf([DOCUMENT])} />);
     const story = await row("Story template");
-    await within(story).findByText(/matches Jira\./u);
+    await within(story).findByText(/Matches Jira\./u);
     expect(within(story).getByText(/SYN · Story — /u)).toBeInTheDocument();
     expect(within(rowFor("Broken")).getByText("Needs repair")).toBeInTheDocument();
     // An unreadable template is never sent to Jira.
@@ -222,9 +222,9 @@ describe("the automatic check names its findings", () => {
     });
     render(<Panel stored={library} />);
     expect(
-      await screen.findByText(/matches Jira; fields, workflow statuses could not be read\./u),
+      await screen.findByText(/Matches Jira; fields, workflow statuses could not be read\./u),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/— matches Jira\.$/u)).toBeNull();
+    expect(screen.queryByText(/— Matches Jira\.$/u)).toBeNull();
     expect(await axe(document.body)).toHaveNoViolations();
   });
 
@@ -245,7 +245,7 @@ describe("the automatic check names its findings", () => {
     vi.mocked(templates.validateJiraTemplate).mockReturnValue(pending.promise);
     render(<Panel stored={library} />);
     expect(
-      await within(await row("Story template")).findByText(/checking against Jira…/u),
+      await within(await row("Story template")).findByText(/Checking against Jira…/u),
     ).toBeInTheDocument();
     await act(async () => {
       pending.resolve(MATCH);
@@ -263,13 +263,13 @@ describe("the automatic check names its findings", () => {
       body === "BODY:skill-1" ? Promise.resolve(MATCH) : pending.promise,
     );
     render(<Panel stored={library} />);
-    expect(await within(await row(ENTRY.name)).findByText(/matches Jira\./u)).toBeInTheDocument();
-    expect(within(rowFor(TASK.name)).getByText(/checking against Jira…/u)).toBeInTheDocument();
-    expect(within(rowFor(TASK.name)).queryByText(/matches Jira\./u)).toBeNull();
+    expect(await within(await row(ENTRY.name)).findByText(/Matches Jira\./u)).toBeInTheDocument();
+    expect(within(rowFor(TASK.name)).getByText(/Checking against Jira…/u)).toBeInTheDocument();
+    expect(within(rowFor(TASK.name)).queryByText(/Matches Jira\./u)).toBeNull();
     await act(async () => {
       pending.resolve(MATCH);
     });
-    expect(await within(rowFor(TASK.name)).findByText(/matches Jira\./u)).toBeInTheDocument();
+    expect(await within(rowFor(TASK.name)).findByText(/Matches Jira\./u)).toBeInTheDocument();
   });
 });
 
@@ -371,7 +371,7 @@ describe("the automatic check follows the stored library", () => {
       old.resolve(MATCH);
     });
     expect(screen.queryByText(SYN_MATCH)).toBeNull();
-    expect(screen.getByText(/checking against Jira…/u)).toBeInTheDocument();
+    expect(screen.getByText(/Checking against Jira…/u)).toBeInTheDocument();
     await act(async () => {
       current.resolve(MATCH);
     });
@@ -402,7 +402,7 @@ describe("the automatic check follows the selected Pod", () => {
     const select = await screen.findByRole("combobox", { name: "Jira Pod" });
     await user.selectOptions(select, "pod-2");
     expect(screen.queryByText(SYN_MATCH)).toBeNull();
-    expect(await screen.findByText(/checking against Jira…/u)).toBeInTheDocument();
+    expect(await screen.findByText(/Checking against Jira…/u)).toBeInTheDocument();
     expect(templates.validateJiraTemplate).toHaveBeenLastCalledWith(
       "pod-2",
       "BODY",
@@ -439,7 +439,7 @@ describe("the automatic check follows the selected Pod", () => {
     });
     expect(screen.queryByText(/STALE/u)).toBeNull();
     expect(screen.queryByText(SYN_MATCH)).toBeNull();
-    expect(screen.getByText(/checking against Jira…/u)).toBeInTheDocument();
+    expect(screen.getByText(/Checking against Jira…/u)).toBeInTheDocument();
     await act(async () => {
       current.resolve(MATCH);
     });
