@@ -39,7 +39,7 @@ export function batchProgressOf(exchange: ChatToolExchange): ChatToolBatchProgre
 
 export type ProgressTone = "info" | "success" | "warning";
 
-export interface ProgressNote {
+interface ProgressNote {
   readonly key: WidgetMessageKey;
   readonly values: Readonly<Record<string, number>>;
 }

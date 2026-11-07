@@ -99,6 +99,16 @@ export const chatSourcesConsumerPort: CatalogConsumerPort<ChatSourcesConsumer> =
   captureApprovedAction: captureSourceAction,
 };
 
+const OPTIONAL_INVOCATION_KEYS = [
+  "meterModel",
+  "retainDraftProgress",
+  "reportBatchProgress",
+  "remainingModelCalls",
+  "knowledgeReviewModelId",
+  "confirmModelOperation",
+] as const;
+type OptionalInvocationKey = (typeof OPTIONAL_INVOCATION_KEYS)[number];
+
 function invocationFields(
   context: CatalogHandlerContext<ChatSourcesConsumer>,
 ): Pick<
@@ -115,23 +125,13 @@ function invocationFields(
   | "reportBatchProgress"
   | "remainingModelCalls"
 > {
+  const optional: Partial<Pick<CatalogHandlerContext<ChatSourcesConsumer>, OptionalInvocationKey>> =
+    {};
+  for (const key of OPTIONAL_INVOCATION_KEYS) {
+    if (context[key] !== undefined) Object.assign(optional, { [key]: context[key] });
+  }
   return {
-    ...(context.meterModel === undefined ? {} : { meterModel: context.meterModel }),
-    ...(context.retainDraftProgress === undefined
-      ? {}
-      : { retainDraftProgress: context.retainDraftProgress }),
-    ...(context.reportBatchProgress === undefined
-      ? {}
-      : { reportBatchProgress: context.reportBatchProgress }),
-    ...(context.remainingModelCalls === undefined
-      ? {}
-      : { remainingModelCalls: context.remainingModelCalls }),
-    ...(context.knowledgeReviewModelId === undefined
-      ? {}
-      : { knowledgeReviewModelId: context.knowledgeReviewModelId }),
-    ...(context.confirmModelOperation === undefined
-      ? {}
-      : { confirmModelOperation: context.confirmModelOperation }),
+    ...optional,
     invocationId: context.invocationId,
     signal: context.signal,
     beforeEffect: context.beforeEffect,

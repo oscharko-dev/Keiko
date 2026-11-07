@@ -682,6 +682,16 @@ function slowCrc32(buffer) {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
+/** Writes `[width, offset, value]` little-endian fields (width 2 or 4 bytes) into a header buffer. */
+function header(size, fields) {
+  const buffer = Buffer.alloc(size);
+  for (const [width, offset, value] of fields) {
+    if (width === 4) buffer.writeUInt32LE(value, offset);
+    else buffer.writeUInt16LE(value, offset);
+  }
+  return buffer;
+}
+
 /** A ZIP of stored (uncompressed) entries with a fixed timestamp: the bytes are reproducible on every platform. */
 function zip(entries) {
   const local = [];
@@ -690,41 +700,41 @@ function zip(entries) {
   for (const entry of entries) {
     const name = Buffer.from(entry.name, "utf8");
     const raw = Buffer.from(entry.content, "utf8");
-    const packed = raw;
     const checksum = crc32(raw);
-    const head = Buffer.alloc(30);
-    head.writeUInt32LE(0x04034b50, 0);
-    head.writeUInt16LE(20, 4);
-    head.writeUInt16LE(0, 8);
-    head.writeUInt16LE(0x6000, 10);
-    head.writeUInt16LE(0x5c27, 12);
-    head.writeUInt32LE(checksum, 14);
-    head.writeUInt32LE(packed.length, 18);
-    head.writeUInt32LE(raw.length, 22);
-    head.writeUInt16LE(name.length, 26);
-    const dir = Buffer.alloc(46);
-    dir.writeUInt32LE(0x02014b50, 0);
-    dir.writeUInt16LE(20, 4);
-    dir.writeUInt16LE(20, 6);
-    dir.writeUInt16LE(0, 10);
-    dir.writeUInt16LE(0x6000, 12);
-    dir.writeUInt16LE(0x5c27, 14);
-    dir.writeUInt32LE(checksum, 16);
-    dir.writeUInt32LE(packed.length, 20);
-    dir.writeUInt32LE(raw.length, 24);
-    dir.writeUInt16LE(name.length, 28);
-    dir.writeUInt32LE(offset, 42);
-    local.push(head, name, packed);
+    const head = header(30, [
+      [4, 0, 0x04034b50],
+      [2, 4, 20],
+      [2, 10, 0x6000],
+      [2, 12, 0x5c27],
+      [4, 14, checksum],
+      [4, 18, raw.length],
+      [4, 22, raw.length],
+      [2, 26, name.length],
+    ]);
+    const dir = header(46, [
+      [4, 0, 0x02014b50],
+      [2, 4, 20],
+      [2, 6, 20],
+      [2, 12, 0x6000],
+      [2, 14, 0x5c27],
+      [4, 16, checksum],
+      [4, 20, raw.length],
+      [4, 24, raw.length],
+      [2, 28, name.length],
+      [4, 42, offset],
+    ]);
+    local.push(head, name, raw);
     central.push(dir, name);
-    offset += head.length + name.length + packed.length;
+    offset += head.length + name.length + raw.length;
   }
   const size = central.reduce((sum, part) => sum + part.length, 0);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(entries.length, 8);
-  end.writeUInt16LE(entries.length, 10);
-  end.writeUInt32LE(size, 12);
-  end.writeUInt32LE(offset, 16);
+  const end = header(22, [
+    [4, 0, 0x06054b50],
+    [2, 8, entries.length],
+    [2, 10, entries.length],
+    [4, 12, size],
+    [4, 16, offset],
+  ]);
   return Buffer.concat([...local, ...central, end]);
 }
 
@@ -873,7 +883,7 @@ export function buildArtifacts() {
   };
 }
 
-function main(argv) {
+export function main(argv) {
   const here = join(
     dirname(fileURLToPath(import.meta.url)),
     "../tests/fixtures/requirements/lastenheft-kundenportal",

@@ -42,7 +42,7 @@ export interface JiraToolOutcomeView {
 }
 
 /** One draft item Keiko's own field check refused before Jira saw it. */
-export interface JiraOutcomeItemValidation {
+interface JiraOutcomeItemValidation {
   readonly ref: string;
   readonly validation: JiraFieldValidationFailure;
 }
