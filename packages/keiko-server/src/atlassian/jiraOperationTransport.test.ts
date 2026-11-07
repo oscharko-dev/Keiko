@@ -90,6 +90,8 @@ const SCENARIOS: readonly Scenario[] = [
   { tool: "jira.duplicate-user-count", args: {}, query: { flush: "false" } },
   { tool: "jira.duplicate-users", args: { maxResults: 1 }, query: { flush: "false" } },
   { tool: "jira.search-error", args: {} },
+  { tool: "jira.permission-scheme-attribute", args: { schemeId: "37", attributeKey: "review ~state" }, parameters: { permissionSchemeId: "37", attributeKey: "review ~state" }, primaryMethodIndex: 1 },
+  { tool: "jira.email-template-types", args: { maxResults: 1 } },
   { tool: "jira.application-properties", args: { key: "jira.option.voting" }, query: { key: "jira.option.voting" } },
   { tool: "jira.advanced-settings", args: { maxResults: 1 } },
   { tool: "jira.my-preference", args: { key: "user.issues.per.page" }, query: { key: "user.issues.per.page" } },
@@ -1104,6 +1106,10 @@ function jobObservationRead(path: string): AtlassianHttpBodyResult | undefined {
 }
 function accountDiagnosticRead(path: string): AtlassianHttpBodyResult | undefined {
   const bodies: Readonly<Record<string, unknown>> = {
+    "permissionscheme/37/attribute/review%20~state": { key: "review ~state", value: "" },
+    "email-templates/types": { userEmailAddress: "discarded@example.invalid", emailTypes: [
+      { id: 1, eventName: "Issue created", templateName: "issuecreated.vm", active: false, batchedNotification: false, html: true, text: false },
+    ] },
     "application-properties": { key: "jira.option.voting", value: "false", example: "discarded" },
     "application-properties/advanced-settings": [{ key: "jira.clone.prefix", value: "" }],
     mypreferences: "0",
@@ -1378,7 +1384,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(216);
+    expect(native).toHaveLength(218);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),

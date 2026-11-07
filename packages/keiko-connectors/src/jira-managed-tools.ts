@@ -20,6 +20,7 @@ import { executeJiraMaintenanceRead, isJiraMaintenanceRead } from "./jira-manage
 import { executeJiraJobObservationRead, isJiraJobObservationRead } from "./jira-managed-job-observations.js";
 import { executeJiraAccountDiagnosticRead, isJiraAccountDiagnosticRead } from "./jira-managed-account-diagnostics.js";
 import { executeJiraApplicationSettingsRead, isJiraApplicationSettingsRead } from "./jira-managed-application-settings.js";
+import { executeJiraAdministrativeObservationRead, isJiraAdministrativeObservationRead } from "./jira-managed-administrative-observations.js";
 import { executeJiraEntityPropertyRead, isJiraEntityPropertyRead } from "./jira-managed-entity-properties.js";
 import { executeJiraIssueContextRead, isJiraIssueContextRead } from "./jira-managed-issue-context-reads.js";
 import { executeJiraResourceLookupRead, isJiraResourceLookupRead } from "./jira-managed-resource-lookups.js";
@@ -356,6 +357,7 @@ async function read<Context extends ManagedMcpInvocationContext>(
 }
 
 type NativeDetailRead =
+  | Parameters<typeof executeJiraAdministrativeObservationRead>[0]
   | Parameters<typeof executeJiraApplicationSettingsRead>[0]
   | Parameters<typeof executeJiraAccountDiagnosticRead>[0]
   | Parameters<typeof executeJiraIssueContextRead>[0]
@@ -390,6 +392,7 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraJqlMetadataRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return [
+    isJiraAdministrativeObservationRead,
     isJiraApplicationSettingsRead,
     isJiraAccountDiagnosticRead,
     isJiraIssueContextRead,
@@ -429,6 +432,7 @@ function administrationRead(
   args: CatalogJsonObject,
   request: ReturnType<typeof requestFor>,
 ): Promise<ManagedMcpToolResult> | undefined {
+  if (isJiraAdministrativeObservationRead(name)) return executeJiraAdministrativeObservationRead(name, args, request);
   if (isJiraIssueTypeSchemeRead(name)) return executeJiraIssueTypeSchemeRead(name, args, request);
   if (isJiraResourceLookupRead(name)) return executeJiraResourceLookupRead(name, args, request);
   if (isJiraColumnRead(name)) return executeJiraColumnRead(name, args, request);

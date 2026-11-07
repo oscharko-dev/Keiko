@@ -3,7 +3,7 @@ import {
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/jira-read-tools";
+import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
 import { jiraReadFailure, localJiraPage, projectJiraCollection, projectJiraOptionalFields } from "./jira-managed-metadata.js";

@@ -8,8 +8,10 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { createGatewayToolCatalogBridge } from "@oscharko-dev/keiko-model-gateway";
 import {
   JIRA_MUTATION_OPERATIONS,
+  jiraRequiredConnectorScope,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { CodingWorkbenchConnectorScope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   AtlassianCredentialMetadata,
@@ -36,6 +38,7 @@ import {
   type SingleMutation,
 } from "../../../../tests/support/jira-managed-mutation-scenarios.js";
 import { jiraMutationToolId } from "./jiraMutationToolId.js";
+import { nativeAdministrationWrite } from "../../../../tests/support/jira-managed-administration-scenarios.js";
 import { jiraChatCatalogRoutes } from "./jiraChatCatalogConsumer.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
@@ -74,6 +77,13 @@ afterEach(async () => {
 const SINGLE_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
   (operation): operation is SingleMutation => operation !== "jira.draft",
 );
+const ADMIN_MUTATIONS = SINGLE_MUTATIONS.filter(
+  (operation) => jiraRequiredConnectorScope(operation) === "issue-tracker.admin",
+);
+interface FixtureAuthoritySelection { readonly adminScope?: true }
+function reviewedAuthority(operation: JiraMutationOperation): FixtureAuthoritySelection {
+  return jiraRequiredConnectorScope(operation) === "issue-tracker.admin" ? { adminScope: true } : {};
+}
 function database(): {
   journal: ReturnType<typeof createChatToolMutationStore>;
   chatId: string;
@@ -233,6 +243,8 @@ async function fixtureWriteResult(
   path: string,
   state: MutationRemoteState,
 ): Promise<ReturnType<typeof fixtureWrite>> {
+  const administration = await nativeAdministrationWrite(request, state.administration);
+  if (administration !== undefined) return administration;
   const deletion = nativeDeletionWrite(request, state);
   if (deletion !== undefined) return deletion;
   const participation = nativeParticipationWrite(request, state);
@@ -296,6 +308,7 @@ async function fixture(
   mode: RemoteMode = "confirmed",
   afterAcknowledgement?: "binding-revoked" | "cancelled",
   initialOperation?: JiraMutationOperation,
+  authoritySelection: FixtureAuthoritySelection = {},
 ): Promise<{
   invoke: (
     operation: JiraMutationOperation,
@@ -309,6 +322,12 @@ async function fixture(
   offered: unknown;
 }> {
   const db = database();
+  // Explicit fixture authority mirrors the independent human opt-in; mode and custody add no admin.
+  const connectorScopes = new Set<CodingWorkbenchConnectorScope>([
+    "issue-tracker.read",
+    "issue-tracker.write",
+    ...(authoritySelection.adminScope === true ? ["issue-tracker.admin" as const] : []),
+  ]);
   let activeInvocation = "";
   let activeIntent: ChatToolMutationIntent | undefined;
   let invalidate = (): void => undefined;
@@ -317,6 +336,9 @@ async function fixture(
   });
   jira.state.isWatching = initialOperation === "jira.unwatch";
   jira.state.hasVoted = initialOperation === "jira.unvote";
+  jira.state.administration.jmxExposed = initialOperation === "jira.stop-jmx-metrics";
+  if (initialOperation === "jira.set-comment-property" || initialOperation === "jira.delete-comment-property")
+    jira.state.comment = "Original";
   if (initialOperation === "jira.delete-comment") jira.state.comment = "Original";
   if (initialOperation === "jira.delete-attachment") jira.state.fields.attachment = [{ id: "10300", filename: "report.txt", size: ATTACHED.length }];
   if (initialOperation === "jira.delete-worklog") {
@@ -337,7 +359,7 @@ async function fixture(
       podId: "synthetic-pod",
       bindingGeneration: context.binding.generation,
       credentialGeneration: 1,
-      authorityDigest: sha256Hex(context.authority),
+      authorityDigest: sha256Hex(canonicalise({ authority: context.authority, connectorScopes: [...connectorScopes] })),
       actionDigest: sha256Hex(canonicalise({ operation, args })),
       operation,
       correlationId: context.correlationId,
@@ -354,8 +376,8 @@ async function fixture(
             return observed;
           },
         }),
-      beforeEffect: context.beforeEffect,
-      beforeMutation: context.beforeEffect,
+      beforeEffect: () => context.beforeEffect() && connectorScopes.has(jiraRequiredConnectorScope(operation)),
+      beforeMutation: () => context.beforeEffect() && connectorScopes.has(jiraRequiredConnectorScope(operation)),
     };
     if (operation !== "jira.draft") return executeJiraChatMutation({ ...shared, execute });
     // The draft itself is never journaled; its one synthetic item is what reaches Jira.
@@ -485,7 +507,7 @@ it.each(["binding-revoked", "cancelled"] as const)(
 it.each(SINGLE_MUTATIONS)(
   "executes %s through the real gateway/binder/SDK and durable journal",
   async (operation) => {
-    const f = await fixture("confirmed", undefined, operation);
+    const f = await fixture("confirmed", undefined, operation, reviewedAuthority(operation));
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
       result: {
@@ -514,7 +536,7 @@ it.each(SINGLE_MUTATIONS)(
 it.each(SINGLE_MUTATIONS)(
   "keeps %s unconfirmed when readback is denied and blocks further writes",
   async (operation) => {
-    const f = await fixture("readback-denied", undefined, operation);
+    const f = await fixture("readback-denied", undefined, operation, reviewedAuthority(operation));
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
       result: { status: "failed", data: { outcome: "succeeded-unconfirmed" } },
@@ -535,7 +557,7 @@ it.each(SINGLE_MUTATIONS)(
 it.each(SINGLE_MUTATIONS)(
   "never repeats %s after losing the response to an applied mutation",
   async (operation) => {
-    const f = await fixture("lost-response", undefined, operation);
+    const f = await fixture("lost-response", undefined, operation, reviewedAuthority(operation));
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
       result: { data: { outcome: "unknown" } },
@@ -844,3 +866,18 @@ it.each([51, 100])(
       ).toMatchObject({ reason: "invalid-arguments" });
   },
 );
+
+it("keeps an independent complete argument/state/receipt case for every registered native mutation", () => {
+  expect(Object.keys(ARGUMENTS).sort()).toEqual([...JIRA_MUTATION_OPERATIONS].sort());
+  expect(Object.keys(REMOTE_STATE).sort()).toEqual([...SINGLE_MUTATIONS].sort());
+  expect(Object.keys(SUCCESS_RECEIPTS).sort()).toEqual([...SINGLE_MUTATIONS].sort());
+  expect(ADMIN_MUTATIONS).toHaveLength(9);
+});
+it.each(ADMIN_MUTATIONS)("does not grant %s administration from ordinary issue scopes or verified credentials", async (operation) => {
+  const f = await fixture("confirmed", undefined, operation);
+  const before = structuredClone(f.state);
+  expect(await f.invoke(operation)).toMatchObject({ kind: "settled", result: { data: { outcome: "pending", reason: "permission-denied" } } });
+  expect(f.writes()).toBe(0);
+  expect(f.journal.find(f.intent().invocationId)).toBeUndefined();
+  expect(f.state).toEqual(before);
+});

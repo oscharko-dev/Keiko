@@ -3,7 +3,7 @@ import {
   type CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/jira-read-tools";
+import { JIRA_READ_TOOL_FAMILIES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { asRecord } from "./atlassian-sync-classify.js";
 import { jiraPropertyKey } from "./jira-entity-property-values.js";
 import { boundJiraReadResult } from "./jira-managed-issue-reads.js";
@@ -38,7 +38,7 @@ const APPLICATION_VALUE_KINDS: Readonly<Record<string, ValueKind>> = {
   "jira.option.watching": "boolean",
   "jira.option.timetracking": "boolean",
 };
-const PREFERENCE_VALUE_KINDS: Readonly<Record<string, ValueKind>> = {
+export const JIRA_NONSECRET_PREFERENCE_KINDS: Readonly<Record<string, ValueKind>> = {
   "jira.user.locale": "string",
   "jira.user.timezone": "string",
   "user.notifications.mimetype": "string",
@@ -82,7 +82,7 @@ function selection(name: SettingsRead, args: CatalogJsonObject): Selection | und
   };
 }
 function valueKind(key: string, preference: boolean): ValueKind | undefined {
-  const kinds = preference ? PREFERENCE_VALUE_KINDS : APPLICATION_VALUE_KINDS;
+  const kinds = preference ? JIRA_NONSECRET_PREFERENCE_KINDS : APPLICATION_VALUE_KINDS;
   return Object.hasOwn(kinds, key) ? kinds[key] : undefined;
 }
 function integerValue(key: string, value: string): Projection {
@@ -105,6 +105,13 @@ function projectValue(key: string, raw: unknown, kind: ValueKind): Projection {
     return { reason: "malformed-payload" };
   if (raw.length > VALUE_MAX_CHARS) return { reason: "bounds-exceeded" };
   return observedValue(key, raw, kind);
+}
+/** Shared by read and write admission; the key map is fixed and no native value is re-parsed as JSON. */
+export function projectJiraPreferenceValue(key: string, raw: unknown): Projection {
+  const kind = valueKind(key, true);
+  return kind === undefined
+    ? { item: { key, valueState: "withheld" } }
+    : projectValue(key, raw, kind);
 }
 function property(value: unknown): Projection {
   const raw = asRecord(value);
@@ -149,10 +156,7 @@ function propertyList(response: JiraReadResponse, selected: Selection): ManagedM
 function preference(response: JiraReadResponse, selected: Selection): ManagedMcpToolResult {
   const key = selected.key;
   if (key === undefined) return jiraReadFailure("malformed-payload");
-  const kind = valueKind(key, true);
-  const projected = kind === undefined
-    ? { item: { key, valueState: "withheld" } }
-    : projectValue(key, response.scalar, kind);
+  const projected = projectJiraPreferenceValue(key, response.scalar);
   if ("reason" in projected) return jiraReadFailure(projected.reason);
   return boundJiraReadResult({ data: { outcome: "succeeded", ...scopeFields(selected), ...projected.item } });
 }

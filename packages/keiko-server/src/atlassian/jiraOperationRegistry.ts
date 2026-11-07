@@ -19,6 +19,7 @@ type CompositeTool = "jira.report" | "jira.draft-stage" | "jira.draft";
 type NativeTool = Exclude<JiraOperationTool, CompositeTool>;
 type JiraOperationEffect = "remote-read" | "remote-write" | "local-report" | "local-draft";
 type JiraPermissionPolicy =
+  | "admin-email-template-metadata"
   | "observed-application-settings"
   | "observed-account-diagnostics"
   | "entity-property-and-readback"
@@ -169,6 +170,12 @@ function writes<const K extends NativeTool>(
   return result as NativeGroup<K>;
 }
 const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
+  ...reads("visible-permission-configuration", {
+    "jira.permission-scheme-attribute": "/permissionscheme/{permissionSchemeId}/attribute/{attributeKey}",
+  }),
+  ...reads("admin-email-template-metadata", {
+    "jira.email-template-types": "/email-templates/types",
+  }),
   ...reads("observed-application-settings", {
     "jira.application-properties": "/application-properties",
     "jira.advanced-settings": "/application-properties/advanced-settings",

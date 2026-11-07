@@ -49,6 +49,7 @@ import { JIRA_RUNTIME_SETTINGS_TOOLS } from "./jira-runtime-settings-presentatio
 import { JIRA_MAINTENANCE_TOOLS } from "./jira-maintenance-presentation";
 import { JIRA_VIEW_SETTINGS_TOOLS } from "./jira-view-settings-presentation";
 import { JIRA_JOB_OBSERVATION_TOOLS } from "./jira-job-observation-presentation";
+import { JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS } from "./jira-administrative-observation-presentation";
 import { JIRA_PROPERTY_TOOLS } from "./jira-property-presentation";
 import { JIRA_ISSUE_CONTEXT_TOOLS } from "./jira-issue-context-presentation";
 import { JIRA_MONITORING_WRITE_TOOLS } from "./jira-monitoring-presentation";
@@ -314,6 +315,7 @@ function resultCardSemantics(exchange: ChatToolExchange): {
     JIRA_MAINTENANCE_TOOLS,
     JIRA_VIEW_SETTINGS_TOOLS,
     JIRA_JOB_OBSERVATION_TOOLS,
+    JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS,
     JIRA_PROPERTY_TOOLS,
     JIRA_ISSUE_CONTEXT_TOOLS,
     JIRA_MONITORING_WRITE_TOOLS,

@@ -54,6 +54,7 @@ import { JIRA_MAINTENANCE_TOOLS, jiraMaintenanceDetails } from "./jira-maintenan
 import { JIRA_VIEW_SETTINGS_TOOLS, jiraViewSettingsDetails } from "./jira-view-settings-presentation";
 import { JIRA_JOB_OBSERVATION_TOOLS, jiraJobObservationDetails } from "./jira-job-observation-presentation";
 import { JIRA_ACCOUNT_DIAGNOSTIC_TOOLS, jiraAccountDiagnosticDetails } from "./jira-account-diagnostic-presentation";
+import { JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS, jiraAdministrativeObservationDetails } from "./jira-administrative-observation-presentation";
 import { JIRA_APPLICATION_SETTINGS_TOOLS, jiraApplicationSettingsDetails } from "./jira-application-settings-presentation";
 import { JIRA_PROPERTY_TOOLS, jiraPropertyDetails } from "./jira-property-presentation";
 import { JIRA_MONITORING_WRITE_TOOLS, jiraMonitoringDetails } from "./jira-monitoring-presentation";
@@ -266,6 +267,7 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
 }
 type ConfigurationPresenter = (tool: string, source: UnknownRecord) => readonly JiraAgileDetails[];
 const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, ConfigurationPresenter])[] = [
+  [JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS, jiraAdministrativeObservationDetails],
   [JIRA_APPLICATION_SETTINGS_TOOLS, jiraApplicationSettingsDetails],
   [JIRA_ACCOUNT_DIAGNOSTIC_TOOLS, jiraAccountDiagnosticDetails],
   [JIRA_PROPERTY_MUTATION_TOOLS, jiraPropertyMutationDetails],

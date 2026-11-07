@@ -1590,6 +1590,22 @@
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
       ]
     },
+    "jira.email-template-types": {
+      "identity": "GET /rest/api/2/email-templates/types",
+      "effect": "read",
+      "permissionPolicy": "admin-email-template-metadata",
+      "kind": "constrained-tool",
+      "constraints": "Complete bounded native EmailTypes wrapper before local paging, with recipient email omitted. Repeated event IDs retain distinct formats; missing flags unknown. No email send, pack export, path follow or configuration effect.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-administrative-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrativeObservationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-administrative-observations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrativeObservationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
+      ]
+    },
     "jira.epic": {
       "identity": "GET /rest/agile/1.0/epic/{epicIdOrKey}",
       "effect": "read",
@@ -2630,6 +2646,22 @@
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts"
+      ]
+    },
+    "jira.permission-scheme-attribute": {
+      "identity": "GET /rest/api/2/permissionscheme/{permissionSchemeId}/attribute/{attributeKey}",
+      "effect": "read",
+      "permissionPolicy": "visible-permission-configuration",
+      "kind": "constrained-tool",
+      "constraints": "One independently bound readable native scheme and an exact matching attribute key. Empty string stays observed; omitted/null value unknown. Configuration is never effective authority.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-administrative-observations.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrativeObservationDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-administrative-observations.test.ts",
+        "packages/keiko-server/src/atlassian/jiraAdministrativeObservationDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts"
       ]
     },
     "jira.permission-schemes": {
@@ -5034,8 +5066,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "87830bffe5ae48772f70572b812a1d9a3b02e594cb132c64655440732d5bee4b",
-    "nativeOperationCount": 251
+    "sha256": "f494ddceb735481efa7485fb3cb8673532e5309a78edf48e93de28b89f545f5b",
+    "nativeOperationCount": 253
   },
   "operations": [
     {
@@ -8437,10 +8469,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.email-template-types"
+      ]
     },
     {
       "identity": "GET /rest/api/2/field",
@@ -13288,10 +13322,12 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": [
+        "jira.permission-scheme-attribute"
+      ]
     },
     {
       "identity": "PUT /rest/api/2/permissionscheme/{permissionSchemeId}/attribute/{key}",

@@ -28,6 +28,7 @@ import { JIRA_ADMIN_METADATA_TOOLS, jiraAdminMetadataNotice } from "./jira-admin
 import { JIRA_MAINTENANCE_TOOLS } from "./jira-maintenance-presentation";
 import { JIRA_VIEW_SETTINGS_TOOLS } from "./jira-view-settings-presentation";
 import { JIRA_JOB_OBSERVATION_TOOLS } from "./jira-job-observation-presentation";
+import { JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS } from "./jira-administrative-observation-presentation";
 import { JIRA_PROPERTY_KEY_TOOLS } from "./jira-property-presentation";
 import { JIRA_PROPERTY_MUTATION_TOOLS, jiraPropertyMutationIdentityComplete } from "./jira-property-mutation-presentation";
 import { JIRA_ACCOUNT_DIAGNOSTIC_TOOLS } from "./jira-account-diagnostic-presentation";
@@ -58,6 +59,7 @@ const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_MAINTENANCE_TOOLS,
   ...JIRA_VIEW_SETTINGS_TOOLS,
   ...JIRA_JOB_OBSERVATION_TOOLS,
+  ...JIRA_ADMINISTRATIVE_OBSERVATION_TOOLS,
   ...JIRA_PROPERTY_KEY_TOOLS,
 ]);
 

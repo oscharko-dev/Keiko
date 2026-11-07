@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **251 native identities: 199 reads and 52 writes**. Each is mapped to
+The current registry supplies **253 native identities: 201 reads and 52 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **188 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **186 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -150,6 +150,8 @@ and duplicate accounts. The projections follow the primary
 [duplicate count DTO](https://docs.atlassian.com/software/jira/docs/api/11.3.3/com/atlassian/jira/rest/v2/issue/users/DuplicatedUsersCountBean.html)
 and [duplicate mapping factory](https://docs.atlassian.com/software/jira/docs/api/11.3.3/com/atlassian/jira/rest/v2/issue/users/DuplicatedUsersMapBeanFactory.html).
 The pinned source bytes and original operation identities remain unchanged.
+
+Two further native observations bind a permission-scheme attribute and read the documented EmailTypes notification/template metadata. Attribute keys must match after independently binding the scheme; missing and empty values remain distinct. Notification formats with repeated event IDs are retained, recipient email is omitted and template names never become file links. No email is sent or template pack exported. New native-wire, schema and EN/DE reload/accessibility regression sources remain unexecuted.
 
 Nine instance-administration writes (four monitoring changes, three screen-tab changes and two
 global issue-type property mutations) require the explicit `issue-tracker.admin` grant. Ordinary

@@ -1,11 +1,20 @@
 import type { JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { response, type SyntheticJira } from "./jira-managed-remote.js";
+import {
+  ADMINISTRATION_ARGUMENTS,
+  ADMINISTRATION_REMOTE_STATE,
+  ADMINISTRATION_SUCCESS_RECEIPTS,
+  administrationRemoteState,
+  nativeAdministrationRead,
+  type AdministrationRemoteState,
+} from "./jira-managed-administration-scenarios.js";
 
 /** A draft dispatches journaled issue creates; every other registered write has its own case. */
 export type SingleMutation = Exclude<JiraMutationOperation, "jira.draft">;
 export const ATTACHED = new TextEncoder().encode("synthetic attachment body");
 export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject>> = {
+  ...ADMINISTRATION_ARGUMENTS,
   "jira.create": {
     projectId: "10000",
     issueTypeId: "10001",
@@ -68,6 +77,7 @@ export const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject
 
 /** Observed remote state after the request, independent of returned receipts and registry metadata. */
 export const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
+  ...ADMINISTRATION_REMOTE_STATE,
   "jira.create": {
     fields: {
       summary: "Changed",
@@ -127,6 +137,7 @@ const PROJECT_RECEIPT = {
 };
 const COMPONENT_RECEIPT = { componentId: "71", projectId: "10000", projectKey: "SYN" };
 export const SUCCESS_RECEIPTS: Readonly<Record<SingleMutation, CatalogJsonObject>> = {
+  ...ADMINISTRATION_SUCCESS_RECEIPTS,
   "jira.create": ISSUE_RECEIPT,
   "jira.edit": ISSUE_RECEIPT,
   "jira.assign": ISSUE_RECEIPT,
@@ -159,6 +170,7 @@ export const SUCCESS_RECEIPTS: Readonly<Record<SingleMutation, CatalogJsonObject
 };
 
 export interface MutationRemoteState extends SyntheticJira {
+  administration: AdministrationRemoteState;
   commentDeleted: boolean;
   worklogDeleted: boolean;
   worklog: Record<string, unknown>;
@@ -175,6 +187,7 @@ export interface MutationRemoteState extends SyntheticJira {
 }
 export function mutationRemoteState(): MutationRemoteState {
   return {
+    administration: administrationRemoteState(),
     fields: {
       summary: "Original",
       assignee: { name: "previous-user" },
@@ -257,6 +270,8 @@ export function nativeRead(
   path: string,
   state: MutationRemoteState,
 ): ReturnType<typeof response> | undefined {
+  const administration = nativeAdministrationRead(path, state.administration);
+  if (administration !== undefined) return administration;
   const deletion = nativeDeletionRead(path, state);
   if (deletion !== undefined) return deletion;
   if (path === `/context/rest/api/2/issue/10001/worklog/${String(state.worklog.id)}`)
