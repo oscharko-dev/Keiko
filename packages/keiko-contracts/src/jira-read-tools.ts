@@ -2,6 +2,10 @@ import { deepFreeze } from "./deep-freeze.js";
 
 /** Closed immutable read identities shared by native owners and the governed provider catalog. */
 export const JIRA_READ_TOOL_FAMILIES = deepFreeze({
+  issueContext: [
+    "jira.issue-picker", "jira.pinned-comments", "jira.subtasks",
+    "jira.subtask-move-availability", "jira.remote-links", "jira.remote-link",
+  ],
   entityProperties: [
     "jira.board-property-keys", "jira.board-property", "jira.sprint-property-keys", "jira.sprint-property",
     "jira.comment-property-keys", "jira.comment-property", "jira.dashboard-item-property-keys", "jira.dashboard-item-property",

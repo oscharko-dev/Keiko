@@ -30,6 +30,9 @@ import { JIRA_VIEW_SETTINGS_TOOLS } from "./jira-view-settings-presentation";
 import { JIRA_JOB_OBSERVATION_TOOLS } from "./jira-job-observation-presentation";
 import { JIRA_PROPERTY_KEY_TOOLS } from "./jira-property-presentation";
 const LOCALLY_PAGED_TOOLS = new Set([
+  "jira_pinned_comments",
+  "jira_subtasks",
+  "jira_remote_links",
   ...JIRA_PROJECT_METADATA_TOOLS,
   ...JIRA_COLLABORATION_TOOLS,
   ...JIRA_SAVED_VIEW_TOOLS,

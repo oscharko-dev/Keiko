@@ -19,6 +19,7 @@ import { executeJiraRuntimeSettingsRead, isJiraRuntimeSettingsRead } from "./jir
 import { executeJiraMaintenanceRead, isJiraMaintenanceRead } from "./jira-managed-maintenance-reads.js";
 import { executeJiraJobObservationRead, isJiraJobObservationRead } from "./jira-managed-job-observations.js";
 import { executeJiraEntityPropertyRead, isJiraEntityPropertyRead } from "./jira-managed-entity-properties.js";
+import { executeJiraIssueContextRead, isJiraIssueContextRead } from "./jira-managed-issue-context-reads.js";
 import { executeJiraResourceLookupRead, isJiraResourceLookupRead } from "./jira-managed-resource-lookups.js";
 import { executeJiraColumnRead, isJiraColumnRead } from "./jira-managed-column-reads.js";
 import { executeJiraRoleRead, isJiraRoleRead } from "./jira-managed-role-reads.js";
@@ -353,6 +354,7 @@ async function read<Context extends ManagedMcpInvocationContext>(
 }
 
 type NativeDetailRead =
+  | Parameters<typeof executeJiraIssueContextRead>[0]
   | Parameters<typeof executeJiraEntityPropertyRead>[0]
   | Parameters<typeof executeJiraJobObservationRead>[0]
   | Parameters<typeof executeJiraResourceLookupRead>[0]
@@ -384,6 +386,7 @@ type NativeDetailRead =
   | Parameters<typeof executeJiraJqlMetadataRead>[0];
 function isNativeDetailRead(name: string): name is NativeDetailRead {
   return [
+    isJiraIssueContextRead,
     isJiraEntityPropertyRead,
     isJiraJobObservationRead,
     isJiraResourceLookupRead,
@@ -464,6 +467,7 @@ function linkedIssueDetailRead(
   request: ReturnType<typeof requestFor>,
   baseUrl: string,
 ): Promise<ManagedMcpToolResult> {
+  if (isJiraIssueContextRead(name)) return executeJiraIssueContextRead(name, args, request, baseUrl);
   if (isJiraCommentRead(name)) return executeJiraCommentRead(name, args, request, baseUrl);
   if (isJiraIssueDetailRead(name)) return executeJiraIssueDetailRead(name, args, request);
   throw new TypeError("Unsupported Jira detail read");

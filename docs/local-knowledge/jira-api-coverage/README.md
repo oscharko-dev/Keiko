@@ -123,10 +123,10 @@ to Chat or Coding, grant authority, or bypass those owners.
 
 ## Current constrained implementation snapshot
 
-The current registry supplies **218 native identities: 186 reads and 32 writes**. Each is mapped to
+The current registry supplies **224 native identities: 192 reads and 32 writes**. Each is mapped to
 its exact published method/path identity and remains `partial`: the closed typed operation exposes
 only the documented supported fields and behavior, rather than the entire upstream API contract.
-The other **221 operations remain `not-implemented`**. No row is marked fully implemented,
+The other **215 operations remain `not-implemented`**. No row is marked fully implemented,
 executable, owner-deferred or excluded by this snapshot. All 439 source/version IDs, cluster
 assignments, dependencies and qualification fields are retained.
 
@@ -136,7 +136,7 @@ the C6 comment-update/link/worklog read increment; bounded C8 attachment/archive
 worklog create/update with connected-user watching/voting; fourteen C9 workflow-/issue-type-scheme
 and screen reads; three reviewed comment/attachment/worklog deletions; and eight C10 user, group and
 application-role reads; ten permission/security/notification configuration reads; and five additional
-project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; two JQL metadata/suggestion reads; nine additional Agile context reads; seven configuration metadata reads; three scalar runtime-setting observations; four maintenance-status observations; seven resource-page/link-type/accessibility/column-layout reads; nine additional job/monitoring observations; sixteen entity-property reads; and three reviewed screen-tab writes. The three existing
+project scheme/accessible-security associations; twenty core issue/project metadata reads; four instance/current-actor observations; seven role/priority-scheme reads; four release-count/project-version-page reads; seven scoped directory/field reads; two JQL metadata/suggestion reads; nine additional Agile context reads; seven configuration metadata reads; three scalar runtime-setting observations; four maintenance-status observations; seven resource-page/link-type/accessibility/column-layout reads; nine additional job/monitoring observations; sixteen entity-property reads; three reviewed screen-tab writes; and six additional issue-context reads. The three existing
 report/draft composites remain compositions, not extra native API identities. Remaining filter
 creation, ranking, other estimate-adjustment modes and destructive operations, administration and
 other inventory gaps stay open. A registered declaration is not evidence that
@@ -296,6 +296,15 @@ independently confirm the fresh same-screen tab collection and never retarget fr
 metadata. Missing or contradictory readback remains unconfirmed with no replay. Forward migration
 V67 adds only these three operation names while preserving V66 records, columns, indexes, foreign
 keys, ownership and durability. Regression sources are written; execution remains pending.
+
+Six issue-context reads add native picker suggestions, pinned comments, subtasks, ordering availability
+and remote-link list/single views. Issue-scoped primary requests use an independently observed native
+issue ID. Supplied pin/link self identities are compared through existing helpers without following URLs;
+proxy origins may differ, while contradictory resource identity is refused. Supplied subtask parent
+identity must match the bound context. Picker sections use plain summaryText and retain unknown versus
+empty populations without invented totals. Subtask ordering availability is a boolean observation within
+the parent, not reparenting or execution authority. Remote-link arrays and selected globalId objects have
+distinct native codecs; returned IDs match exactly and external URLs/icons are omitted.
 
 `currentRegistry` pins the existing server registry source file's SHA-256 and native declaration
 count. The reconciliation helper parses that file's literal `NATIVE` declarations and verified closed

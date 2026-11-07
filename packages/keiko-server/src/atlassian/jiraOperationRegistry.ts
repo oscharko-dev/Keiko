@@ -334,6 +334,7 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.filter-permission": "/filter/{id}/permission/{permissionId}",
   }),
   ...reads("visible-comments", {
+    "jira.pinned-comments": "/issue/{issueIdOrKey}/pinned-comments",
     "jira.get-comment": "/issue/{issueIdOrKey}/comment/{id}",
     "jira.comment-property-keys": "/comment/{commentId}/properties",
     "jira.comment-property": "/comment/{commentId}/properties/{propertyKey}",
@@ -342,7 +343,11 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
     "jira.link-types": "/issueLinkType",
     "jira.link-type": "/issueLinkType/{issueLinkTypeId}",
   }),
-  ...reads("visible-issue-links", { "jira.issue-link": "/issueLink/{linkId}" }),
+  ...reads("visible-issue-links", {
+    "jira.issue-link": "/issueLink/{linkId}",
+    "jira.remote-links": "/issue/{issueIdOrKey}/remotelink",
+    "jira.remote-link": "/issue/{issueIdOrKey}/remotelink/{linkId}",
+  }),
   ...reads("visible-worklogs", {
     "jira.worklogs": "/issue/{issueIdOrKey}/worklog",
     "jira.worklog": "/issue/{issueIdOrKey}/worklog/{id}",
@@ -425,6 +430,9 @@ const NATIVE: Readonly<Record<NativeTool, NativeSpecification>> = {
   }),
   ...reads("current-edit-metadata", { "jira.edit-fields": "/issue/{issueIdOrKey}/editmeta" }),
   ...reads("visible-issues", {
+    "jira.issue-picker": "/issue/picker",
+    "jira.subtasks": "/issue/{issueIdOrKey}/subtask",
+    "jira.subtask-move-availability": "/issue/{issueIdOrKey}/subtask/move",
     "jira.search": "/search",
     "jira.issue-property-keys": "/issue/{issueIdOrKey}/properties",
     "jira.issue-property": "/issue/{issueIdOrKey}/properties/{propertyKey}",

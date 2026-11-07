@@ -1600,6 +1600,29 @@
       "sourceFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.ts"],
       "testFiles": ["packages/keiko-connectors/src/jira-managed-issue-details.test.ts"]
     },
+    "jira.issue-picker": {
+      "identity": "GET /rest/api/2/issue/picker",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "Closed bounded query/currentJQL, optional independently bound current issue/project context and explicit native subtask flags. Native suggestion sections preserve missing versus empty populations without invented totals or cursors. Only plain summaryText is projected; HTML, icons and native URLs are omitted. Browse links are minted from the bound connection.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-context-reads.ts",
+        "packages/keiko-connectors/src/jira-issue-context-values.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-connectors/src/jira-mutation-confirmation.ts",
+        "packages/keiko-connectors/src/jira-comment-binding.ts",
+        "packages/keiko-connectors/src/jira-resource-self.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueContextDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-context-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueContextDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.issue-property": {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/properties/{propertyKey}",
       "effect": "read",
@@ -2151,6 +2174,29 @@
         "packages/keiko-connectors/src/jira-managed-scoped-directory.test.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraScopedDirectoryDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.pinned-comments": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}/pinned-comments",
+      "effect": "read",
+      "permissionPolicy": "visible-comments",
+      "kind": "constrained-tool",
+      "constraints": "The selected issue is independently resolved to its observed positive native ID and canonical key before the fixed primary GET. The native pin array is fully validated before local pagination and reuses existing comment projection. Supplied comment self must match the bound issue/comment identity through the existing comparison-only helper, accepting proxy-origin differences without following the URL. Missing pin metadata remains unknown; oversized bodies or collections are refused.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-context-reads.ts",
+        "packages/keiko-connectors/src/jira-issue-context-values.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-connectors/src/jira-mutation-confirmation.ts",
+        "packages/keiko-connectors/src/jira-comment-binding.ts",
+        "packages/keiko-connectors/src/jira-resource-self.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueContextDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-context-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueContextDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -2764,6 +2810,52 @@
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
     },
+    "jira.remote-link": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}/remotelink/{linkId}",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-links",
+      "kind": "constrained-tool",
+      "constraints": "The selected issue is independently resolved to its observed positive native ID and canonical key before the fixed primary GET. One exact positive native link ID, preserving string int64 identity without rounding. The returned ID must match, and any supplied self must identify that link under the same issue through the existing comparison-only helper. Projection retains bounded observed relation/application/title/summary/resolved facts and omits upstream URLs/icons. No link mutation or generic proxy.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-context-reads.ts",
+        "packages/keiko-connectors/src/jira-issue-context-values.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-connectors/src/jira-mutation-confirmation.ts",
+        "packages/keiko-connectors/src/jira-comment-binding.ts",
+        "packages/keiko-connectors/src/jira-resource-self.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueContextDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-context-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueContextDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.remote-links": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}/remotelink",
+      "effect": "read",
+      "permissionPolicy": "visible-issue-links",
+      "kind": "constrained-tool",
+      "constraints": "The selected issue is independently resolved to its observed positive native ID and canonical key before the fixed primary GET. Unfiltered native arrays are validated and locally paged; supplying one exact globalId selects the documented single-object form and excludes paging inputs. Returned global identity must match. Native self evidence is compared against the same issue and observed link ID without origin-following. Only bounded relation/application/title/summary/resolved facts are returned; missing stays unknown, false/empty survive and URLs/icons are omitted.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-context-reads.ts",
+        "packages/keiko-connectors/src/jira-issue-context-values.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-connectors/src/jira-mutation-confirmation.ts",
+        "packages/keiko-connectors/src/jira-comment-binding.ts",
+        "packages/keiko-connectors/src/jira-resource-self.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueContextDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-context-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueContextDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
     "jira.rename-screen-tab": {
       "identity": "PUT /rest/api/2/screens/{screenId}/tabs/{tabId}",
       "effect": "write",
@@ -3310,6 +3402,52 @@
         "packages/keiko-connectors/src/jira-managed-core-metadata.test.ts",
         "packages/keiko-connectors/src/jira-managed-read-request.test.ts",
         "packages/keiko-server/src/atlassian/jiraCoreMetadataDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.subtask-move-availability": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}/subtask/move",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "The selected issue is independently resolved to its observed positive native ID and canonical key before the fixed primary GET. Requires the published native boolean response and preserves false explicitly. canReorderSubtasks observes ordering availability within the parent only; it neither means reparenting capability nor grants execution authority. No POST or other effect is dispatched.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-context-reads.ts",
+        "packages/keiko-connectors/src/jira-issue-context-values.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-connectors/src/jira-mutation-confirmation.ts",
+        "packages/keiko-connectors/src/jira-comment-binding.ts",
+        "packages/keiko-connectors/src/jira-resource-self.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueContextDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-context-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueContextDescriptors.test.ts",
+        "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
+        "tests/atlassian-connectors/policy-regression.integration.test.ts"
+      ]
+    },
+    "jira.subtasks": {
+      "identity": "GET /rest/api/2/issue/{issueIdOrKey}/subtask",
+      "effect": "read",
+      "permissionPolicy": "visible-issues",
+      "kind": "constrained-tool",
+      "constraints": "The selected issue is independently resolved to its observed positive native ID and canonical key before the fixed primary GET. The native issue-reference array uses the existing issue-summary projection and local paging. Supplied parent ID/key must agree with the bound parent; absent parent evidence is never invented. Native child IDs remain exact and duplicate identities are refused. No task creation, reparenting or remote self URL navigation.",
+      "sourceFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-context-reads.ts",
+        "packages/keiko-connectors/src/jira-issue-context-values.ts",
+        "packages/keiko-connectors/src/jira-managed-issue-reads.ts",
+        "packages/keiko-connectors/src/jira-mutation-confirmation.ts",
+        "packages/keiko-connectors/src/jira-comment-binding.ts",
+        "packages/keiko-connectors/src/jira-resource-self.ts",
+        "packages/keiko-connectors/src/jira-managed-read-request.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueContextDescriptors.ts"
+      ],
+      "testFiles": [
+        "packages/keiko-connectors/src/jira-managed-issue-context-reads.test.ts",
+        "packages/keiko-server/src/atlassian/jiraIssueContextDescriptors.test.ts",
         "packages/keiko-server/src/atlassian/jiraOperationTransport.test.ts",
         "tests/atlassian-connectors/policy-regression.integration.test.ts"
       ]
@@ -3988,8 +4126,8 @@
   },
   "currentRegistry": {
     "sourceFile": "packages/keiko-server/src/atlassian/jiraOperationRegistry.ts",
-    "sha256": "412d6dadab1f1016e1c02004feaed80455a7f71f30474e941b6e54b7c11cc31e",
-    "nativeOperationCount": 218
+    "sha256": "c17368d24e2515d681f1f46f9fac0c911caa8150032a6e540d9c8742c0d4210d",
+    "nativeOperationCount": 224
   },
   "operations": [
     {
@@ -8099,10 +8237,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.issue-picker"]
     },
     {
       "identity": "POST /rest/api/2/issue/remotelink/reciprocal",
@@ -8603,10 +8741,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.pinned-comments"]
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/properties",
@@ -8795,10 +8933,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.remote-links"]
     },
     {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/remotelink",
@@ -8891,10 +9029,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.remote-link"]
     },
     {
       "identity": "PUT /rest/api/2/issue/{issueIdOrKey}/remotelink/{linkId}",
@@ -8987,10 +9125,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.subtasks"]
     },
     {
       "identity": "GET /rest/api/2/issue/{issueIdOrKey}/subtask/move",
@@ -9019,10 +9157,10 @@
         }
       ],
       "baselineCapabilityIds": [],
-      "implementationState": "not-implemented",
+      "implementationState": "partial",
       "runtimeAvailability": "unknown",
       "verificationReferences": [],
-      "currentCapabilityIds": []
+      "currentCapabilityIds": ["jira.subtask-move-availability"]
     },
     {
       "identity": "POST /rest/api/2/issue/{issueIdOrKey}/subtask/move",

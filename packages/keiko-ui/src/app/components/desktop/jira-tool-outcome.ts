@@ -54,6 +54,12 @@ import { JIRA_MAINTENANCE_TOOLS, jiraMaintenanceDetails } from "./jira-maintenan
 import { JIRA_VIEW_SETTINGS_TOOLS, jiraViewSettingsDetails } from "./jira-view-settings-presentation";
 import { JIRA_JOB_OBSERVATION_TOOLS, jiraJobObservationDetails } from "./jira-job-observation-presentation";
 import { JIRA_PROPERTY_TOOLS, jiraPropertyDetails } from "./jira-property-presentation";
+import {
+  JIRA_ISSUE_CONTEXT_METADATA_TOOLS,
+  jiraIssueContextDetails,
+  jiraIssuePickerGroups,
+  jiraPinnedCommentDetails,
+} from "./jira-issue-context-presentation";
 
 export interface JiraOutcomeItem {
   readonly key?: string;
@@ -256,6 +262,7 @@ function boardContextLink(tool: string, source: UnknownRecord): string | undefin
 }
 type ConfigurationPresenter = (tool: string, source: UnknownRecord) => readonly JiraAgileDetails[];
 const CONFIGURATION_PRESENTERS: readonly (readonly [ReadonlySet<string>, ConfigurationPresenter])[] = [
+  [JIRA_ISSUE_CONTEXT_METADATA_TOOLS, jiraIssueContextDetails],
   [JIRA_PROPERTY_TOOLS, jiraPropertyDetails],
   [JIRA_JOB_OBSERVATION_TOOLS, jiraJobObservationDetails],
   [JIRA_VIEW_SETTINGS_TOOLS, jiraViewSettingsDetails],
@@ -276,6 +283,7 @@ function configurationDetails(tool: string, source: UnknownRecord): readonly Jir
   return CONFIGURATION_PRESENTERS.find(([tools]) => tools.has(tool))?.[1](tool, source);
 }
 function metadataDetails(tool: string, source: UnknownRecord): JiraAgileDetails | undefined {
+  if (tool === "jira_pinned_comments") return jiraPinnedCommentDetails(source);
   const configuration = configurationDetails(tool, source);
   if (configuration !== undefined) return configuration[0] ?? { facts: [], labels: [] };
   if (JIRA_AGILE_CONTEXT_TOOLS.has(tool)) return jiraAgileContextDetails(tool, source)[0];
@@ -340,16 +348,39 @@ function returnedEntries(
     ? data.issueKeys.map((issueKey) => ({ issueKey }))
     : undefined;
 }
+function presentedDetails(details: readonly JiraAgileDetails[]): JiraOutcomeItem[] {
+  return details.flatMap((entry) => {
+    const item = metadataDetailsItem(entry);
+    return item === undefined ? [] : [item];
+  });
+function issueContextItems(tool: string, data: UnknownRecord): JiraOutcomeItem[] | undefined {
+  if (tool === "jira_issue_picker")
+    return jiraIssuePickerGroups(data).flatMap((group) => [
+      ...presentedDetails([group.details]),
+      ...group.issues.flatMap((issue) => {
+        const item = outcomeItem(issue, "jira_issue");
+        return item === undefined ? [] : [item];
+      }),
+    ]);
+  if (tool !== "jira_pinned_comments" && tool !== "jira_subtasks") return undefined;
+  if (data.outcome === "failed") return [];
+  const items = Array.isArray(data.items) ? data.items : [];
+  return [
+    ...presentedDetails(jiraIssueContextDetails(tool, data)),
+    ...items.flatMap((value: unknown) => {
+      const item = outcomeItem(value, tool);
+      return item === undefined ? [] : [item];
+    }),
+  ];
+}
 function outcomeItems(
   exchange: ChatToolExchange,
   data: UnknownRecord | undefined,
 ): JiraOutcomeItem[] {
+  const issueContext = issueContextItems(exchange.call.name, data ?? {});
+  if (issueContext !== undefined) return issueContext;
   const configuration = configurationDetails(exchange.call.name, data ?? {});
-  if (configuration !== undefined)
-    return configuration.flatMap((details) => {
-      const item = metadataDetailsItem(details);
-      return item === undefined ? [] : [item];
-    });
+  if (configuration !== undefined) return presentedDetails(configuration);
   const items = returnedEntries(data, exchange.call.name) ?? [];
   const progress = Array.isArray(exchange.draftProgress?.items) ? exchange.draftProgress.items : [];
   const single = data?.issueKey !== undefined || STANDALONE_TOOLS.has(exchange.call.name);

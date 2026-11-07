@@ -32,6 +32,18 @@ const CREATE = {
 };
 // Inputs and selected resource identities are independent fixtures, not generated from the registry.
 const SCENARIOS: readonly Scenario[] = [
+  { tool: "jira.issue-picker", args: { query: "Plan & QA", currentIssueKey: "SYN-1", currentProjectId: "10000", showSubTasks: false, showSubTaskParent: true },
+    query: { query: "Plan & QA", currentIssueKey: "SYN-1", currentProjectId: "10000", showSubTasks: "false", showSubTaskParent: "true" }, primaryMethodIndex: 2 },
+  { tool: "jira.pinned-comments", args: { issueIdOrKey: "SYN-1", startAt: 0, maxResults: 1 },
+    parameters: { issueIdOrKey: "10001" }, primaryMethodIndex: 1 },
+  { tool: "jira.subtasks", args: { issueIdOrKey: "SYN-1", startAt: 0, maxResults: 1 },
+    parameters: { issueIdOrKey: "10001" }, primaryMethodIndex: 1 },
+  { tool: "jira.subtask-move-availability", args: { issueIdOrKey: "SYN-1" },
+    parameters: { issueIdOrKey: "10001" }, primaryMethodIndex: 1 },
+  { tool: "jira.remote-links", args: { issueIdOrKey: "SYN-1", startAt: 0, maxResults: 1 },
+    parameters: { issueIdOrKey: "10001" }, primaryMethodIndex: 1 },
+  { tool: "jira.remote-link", args: { issueIdOrKey: "SYN-1", linkId: "71" },
+    parameters: { issueIdOrKey: "10001", linkId: "71" }, primaryMethodIndex: 1 },
   { tool: "jira.create-screen-tab", args: { screenId: "71", expectedScreenName: "Details & QA", name: "After" },
     parameters: { screenId: "71" } },
   { tool: "jira.rename-screen-tab", args: { screenId: "71", expectedScreenName: "Details & QA", tabId: "81", expectedName: "Details", name: "After" },
@@ -1156,6 +1168,23 @@ function issueMetadata(path: string, state: RemoteState): AtlassianHttpBodyResul
     return response({ comments: [], startAt: 0, maxResults: 25, total: 0 });
   return undefined;
 }
+function issueContextRead(path: string, absoluteUrl: string): AtlassianHttpBodyResult | undefined {
+  const link = { id: 71, globalId: "app=synthetic&id=1", application: { type: "synthetic", name: "Reference app" },
+    relationship: "references", self: "https://jira.example.invalid/context/rest/api/2/issue/10001/remotelink/71",
+    object: { title: "Remote reference", summary: "Plain remote description", url: "https://untrusted.invalid/target", status: { resolved: false } } };
+  if (path === "issue/10001/remotelink")
+    return response(new URL(absoluteUrl).searchParams.has("globalId") ? link : [link]);
+  const bodies: Readonly<Record<string, unknown>> = {
+    "issue/picker": { sections: [{ id: "history", label: "Recent issues", issues: [{ key: "SYN-2", summaryText: "Plain suggestion", summary: "<b>Discarded HTML</b>" }] }] },
+    "issue/10001/pinned-comments": [{ comment: { id: "10002", body: "Pinned native text", created: "2026-11-07T09:00:00.000+0000",
+      author: { name: "synthetic-user", displayName: "Synthetic author" }, self: "https://jira.example.invalid/context/rest/api/2/issue/10001/comment/10002" },
+      pinnedBy: "synthetic-user", pinnedDate: "2026-11-07T10:00:00.000+0000" }],
+    "issue/10001/subtask": [{ id: "10002", key: "SYN-2", fields: { summary: "Observed subtask", status: { name: "Open" }, parent: { id: "10001", key: "SYN-1" } } }],
+    "issue/10001/subtask/move": false,
+    "issue/10001/remotelink/71": link,
+  };
+  return Object.hasOwn(bodies, path) ? response(bodies[path]) : undefined;
+}
 function projectWrite(
   request: AtlassianHttpBodyRequest,
   state: RemoteState,
@@ -1188,6 +1217,7 @@ function remoteRead(
     administrationRead(path, absoluteUrl) ??
     jobObservationRead(path) ??
     entityPropertyRead(path) ??
+    issueContextRead(path, absoluteUrl) ??
     issueMetadata(path, state) ??
     fixtureRead(absolute, state)
   );
@@ -1274,7 +1304,7 @@ describe("native Jira registry and real connector transport agreement", () => {
     const native = jiraOperationContracts().filter(
       ({ definition }) => definition.kind === "native" && platformRoots.has(definition.apiRoot),
     );
-    expect(native).toHaveLength(187);
+    expect(native).toHaveLength(193);
     expect(SCENARIOS).toHaveLength(native.length);
     expect(new Set(SCENARIOS.map(({ tool }) => tool))).toEqual(
       new Set(native.map(({ definition }) => definition.tool)),
@@ -1285,6 +1315,35 @@ describe("native Jira registry and real connector transport agreement", () => {
     assertPrimary(observed, scenario);
     const writes = observed.requests.filter((request) => request.method !== "GET");
     expect(writes).toHaveLength(observed.definition.method === "GET" ? 0 : 1);
+  });
+  it("keeps a false native reorder observation and binds its parent without authorizing a write", async () => {
+    const observed = await observe({ tool: "jira.subtask-move-availability", args: { issueIdOrKey: "SYN-1" } });
+    expect(observed.requests).toHaveLength(2);
+    expect(observed.requests[1]?.expect).toBe("json-scalar");
+    expect(observed.requests.every(({ method }) => method === "GET")).toBe(true);
+    expect(observed.result.data).toMatchObject({ issueId: "10001", issueKey: "SYN-1", canReorderSubtasks: false });
+  });
+  it("binds a global remote-link selector to one native object without following its URL", async () => {
+    const scenario: Scenario = { tool: "jira.remote-links", args: { issueIdOrKey: "SYN-1", globalId: "app=synthetic&id=1" },
+      parameters: { issueIdOrKey: "10001" }, query: { globalId: "app=synthetic&id=1" }, primaryMethodIndex: 1 };
+    const observed = await observe(scenario);
+    assertPrimary(observed, scenario);
+    expect(observed.requests).toHaveLength(2);
+    expect(observed.requests[1]?.expect).toBe("json");
+    expect(observed.result.data).toMatchObject({ issueId: "10001", issueKey: "SYN-1", id: "71", resolved: false });
+    expect(observed.result.data).not.toHaveProperty("items");
+    expect(JSON.stringify(observed.result.data)).not.toContain("untrusted.invalid");
+  });
+  it("keeps picker contexts bound while returning only plain suggestions and trusted browse URLs", async () => {
+    const scenario = SCENARIOS.find(({ tool }) => tool === "jira.issue-picker");
+    if (scenario === undefined) throw new TypeError("Missing issue picker fixture");
+    const observed = await observe(scenario);
+    expect(observed.requests).toHaveLength(3);
+    expect(observed.result.data).toMatchObject({ suggestionsScope: "native-suggestions", sections: [{ id: "history", label: "Recent issues", issues: [{
+      key: "SYN-2", summary: "Plain suggestion", browseUrl: "https://jira.example.invalid/context/browse/SYN-2",
+    }] }] });
+    expect(observed.result.data).not.toHaveProperty("total");
+    expect(JSON.stringify(observed.result.data)).not.toContain("Discarded HTML");
   });
   it("keeps repeated metadata filters lossless on the native status page", async () => {
     const observed = await observe({
