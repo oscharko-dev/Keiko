@@ -88,6 +88,19 @@ describe("admitProposedFact", () => {
       "Ich zahle gern von [REDACTED]",
       "evidence-not-verbatim",
     ],
+    // The projection masks a JSON value holding an identifier whole: the quote is the placeholder.
+    [
+      "a wholly masked quote of a message with an IBAN",
+      "M1_DENIED_IBAN: I pay from DE89 3704 0044 0532 0130 00.",
+      "[REDACTED]",
+      "personal-identifier",
+    ],
+    [
+      "a wholly masked quote of a message without an identifier",
+      "Ich mag Tabellen mit Rahmen.",
+      "[REDACTED]",
+      "evidence-not-verbatim",
+    ],
     [
       "a span over two sentences",
       "Ich mag Tabellen. Ich mag Listen.",

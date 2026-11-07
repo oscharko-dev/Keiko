@@ -6,6 +6,7 @@ import type {
   ProjectId,
   UserId,
 } from "@oscharko-dev/keiko-contracts/memory";
+import { REDACTION_PLACEHOLDER, redact } from "@oscharko-dev/keiko-security";
 
 import {
   buildSalienceMessages,
@@ -318,6 +319,21 @@ describe("extractSalientMemories", () => {
     expect(diagnostics).toContainEqual({
       kind: "dropped-model-items",
       reason: "denied-content",
+      count: 1,
+    });
+  });
+
+  // #4206: the learner reads the model's answer through the strict projection, which masks a JSON
+  // value holding an IBAN whole. The production redactor makes that answer here.
+  it("drops a quote the projection masked whole as a personal identifier", async () => {
+    const text = "Ich zahle von DE89 3704 0044 0532 0130 00.";
+    const projected = redact(reply(fact(text, text)));
+    expect(projected).toContain(`"evidence":"${REDACTION_PLACEHOLDER}"`);
+    const { deps, diagnostics } = harness(projected);
+    expect(await extractSalientMemories(input(text), deps)).toEqual([]);
+    expect(diagnostics).toContainEqual({
+      kind: "dropped-model-items",
+      reason: "personal-identifier",
       count: 1,
     });
   });

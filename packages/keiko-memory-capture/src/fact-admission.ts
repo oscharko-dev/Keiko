@@ -1469,13 +1469,18 @@ function derivedConfidence(body: string, evidence: string, subjectless: boolean)
   return 0.4 + subjectBonus + coverageBonus;
 }
 
-// The model reads the person's words through the provider projection, which masks an identifier
-// such as an IBAN. Its quote then holds the placeholder where the person wrote the identifier and
-// is not verbatim, though what the person said was an identifier Keiko never keeps (#4206). The
-// quote's other parts are found in order in the person's words; a masked span between them that
-// is an identifier names the real reason. A span stays inside its own sentence and is short, so a
-// quote the model made up cannot borrow an identifier from elsewhere in the message. No pattern is
-// built from the quote.
+// The learner reads the model's answer through the strict projection, which masks an identifier
+// such as an IBAN (under KEIKO_CONTENT_REDACTION=on the model's input is masked too). The quote then
+// holds the placeholder where the person wrote the identifier and is not verbatim, though what the
+// person said was an identifier Keiko never keeps (#4206). The quote's other parts are found in
+// order in the person's words; a masked span between them that is an identifier names the real
+// reason. A span stays inside its own sentence and is short, so a quote the model made up cannot
+// borrow an identifier from elsewhere in the message. No pattern is built from the quote.
+//
+// The projection reads a JSON answer by its values and masks a value holding an identifier whole,
+// so the quote can also be the bare placeholder. Nothing of it can be located then; the identifier
+// in the person's own message is the reason the value was masked. This only names the reason of a
+// quote that is dropped anyway; it never admits one.
 const MASKED_SPAN_MAX_CHARS = 64;
 const MASK_SENTENCE_END_RE = /[.!?](?=\s|$)/u;
 const MASK_SENTENCE_ENDS_RE = /[.!?](?=\s|$)/gu;
@@ -1531,6 +1536,7 @@ function maskedSpans(evidence: string, text: string): readonly string[] {
 
 function quotesMaskedIdentifier(evidence: string, text: string): boolean {
   if (!evidence.includes(REDACTION_PLACEHOLDER)) return false;
+  if (evidence === REDACTION_PLACEHOLDER) return looksLikePersonalIdentifier(text);
   return maskedSpans(evidence, text).some((span) => looksLikePersonalIdentifier(span));
 }
 
