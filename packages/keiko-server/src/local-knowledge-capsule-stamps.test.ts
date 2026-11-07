@@ -76,6 +76,16 @@ describe("currentCapsuleStampLookup", () => {
     expect(opens).toBe(1);
   });
 
+  it("surfaces a metadata failure other than a missing file instead of reading it as absent", () => {
+    const id = seedCapsule();
+    // A path component longer than any file system allows fails for every user, root included.
+    dbPath = join(dir, "x".repeat(300), "capsules.db");
+    expect(() => currentCapsuleStampLookup(source(), [id])).toThrow(
+      expect.objectContaining({ code: "ENAMETOOLONG" }),
+    );
+    expect(opens).toBe(0);
+  });
+
   it("flips a stamp after the store file changed", () => {
     const id = seedCapsule();
     const before = currentCapsuleStampLookup(source(), [id]).lookup(id);
