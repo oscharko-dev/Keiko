@@ -285,3 +285,46 @@ it("observes changes to either source and rejects a foreign Chat within the gran
   stop();
   expect(publish.mock.calls.map(([entry]) => entry)).toEqual([pending, granted]);
 });
+
+it("publishes each counted page of a running draft batch while its call stays unsettled", async () => {
+  vi.useFakeTimers();
+  const call = { id: "call-batch", name: "jira_draft_batch", arguments: {} };
+  const page = (phase: "outlining" | "drafting", draftedCount: number): ChatMessage => ({
+    ...message,
+    toolTranscript: {
+      ...message.toolTranscript,
+      schemaVersion: 1,
+      exchanges: [
+        {
+          call,
+          batchProgress: {
+            phase,
+            draftedCount,
+            plannedCount: phase === "outlining" ? 0 : 10,
+            coveredRequirementCount: draftedCount,
+            requirementCount: 10,
+            failedCount: 0,
+          },
+        },
+      ],
+    },
+  });
+  const outlining = page("outlining", 0);
+  const firstPage = page("drafting", 0);
+  const secondPage = page("drafting", 4);
+  vi.spyOn(api, "fetchChatMessages")
+    .mockResolvedValueOnce({ messages: [outlining] })
+    .mockResolvedValueOnce({ messages: [firstPage] })
+    .mockResolvedValue({ messages: [secondPage] });
+  const publish = vi.fn();
+  const stop = watchChatToolConsent(
+    chat,
+    "/repo",
+    () => Promise.resolve("scoped-digest"),
+    new AbortController().signal,
+    publish,
+  );
+  await vi.advanceTimersByTimeAsync(3500);
+  expect(publish.mock.calls.map(([entry]) => entry)).toEqual([outlining, firstPage, secondPage]);
+  stop();
+});

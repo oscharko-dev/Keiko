@@ -39,6 +39,15 @@ async function readConsent(
         entry.mutationOutcome,
         entry.result?.status,
         entry.result?.reason,
+        // A running draft batch changes only its counted page until its call settles (#4173).
+        entry.batchProgress === undefined
+          ? undefined
+          : [
+              entry.batchProgress.phase,
+              entry.batchProgress.draftedCount,
+              entry.batchProgress.plannedCount,
+              entry.batchProgress.failedCount,
+            ],
       ]),
     ]),
   };
