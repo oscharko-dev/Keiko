@@ -595,6 +595,54 @@ describe("late replies never overwrite newer work", () => {
   });
 });
 
+describe("a pending open or import never overwrites newer edits to the visible file", () => {
+  it("keeps edits typed into the open file while another skill is still being read", async () => {
+    seedStore([REVIEW, PLAN]);
+    const dialog = await openDialog();
+    fireEvent.click(await within(dialog).findByRole("button", { name: /Release plan/u }));
+    await waitForVersion(dialog, "v1");
+    const reply = deferred<MarkdownSkillDocument>();
+    vi.mocked(api.readMarkdownSkill).mockImplementation(() => reply.promise);
+    fireEvent.click(item(dialog, "Boundary review"));
+    await waitFor(() => expect(api.readMarkdownSkill).toHaveBeenCalledTimes(2));
+    const typed = `${PLAN.body}Typed while loading.\n`;
+    writeMarkdown(dialog, typed);
+    reply.resolve(REVIEW);
+    await act(() => Promise.resolve());
+    await waitFor(() => expect(within(dialog).getByLabelText("Import")).toBeEnabled());
+    expect(documentTitle(dialog)).toBe("Release plan");
+    expect(sourceValue(dialog)).toBe(typed);
+    expect(within(dialog).getByText("Unsaved changes")).toBeInTheDocument();
+  });
+
+  it("keeps edits typed into the open file while an imported file is still being stored", async () => {
+    const store = seedStore([REVIEW]);
+    const dialog = await openDialog();
+    fireEvent.click(await within(dialog).findByRole("button", { name: /Boundary review/u }));
+    await waitForVersion(dialog, "v1");
+    const gate = deferred<undefined>();
+    const stored = vi.mocked(api.saveMarkdownSkill).getMockImplementation();
+    vi.mocked(api.saveMarkdownSkill).mockImplementation(async (upload, previous) => {
+      await gate.promise;
+      return (stored as NonNullable<typeof stored>)(upload, previous);
+    });
+    const input = within(dialog).getByLabelText("Import");
+    fireEvent.change(input, {
+      target: { files: [new File([PLAN.body], "plan.md", { type: "text/markdown" })] },
+    });
+    await waitFor(() => expect(api.saveMarkdownSkill).toHaveBeenCalledOnce());
+    const typed = `${REVIEW.body}Typed while importing.\n`;
+    writeMarkdown(dialog, typed);
+    gate.resolve(undefined);
+    await waitFor(() => expect(store.all).toHaveLength(2));
+    await act(() => Promise.resolve());
+    await waitFor(() => expect(within(dialog).getByLabelText("Import")).toBeEnabled());
+    expect(documentTitle(dialog)).toBe("Boundary review");
+    expect(sourceValue(dialog)).toBe(typed);
+    expect(within(dialog).getByText("Unsaved changes")).toBeInTheDocument();
+  });
+});
+
 describe("a saved text the server normalized", () => {
   function fakeLibrary(preview: MarkdownSkillDocument | undefined): MarkdownSkillLibrary {
     return {

@@ -61,9 +61,20 @@ function newFileName(text: string, fallback: string): string {
   return slug.length > 0 ? `${slug.toLowerCase()}.md` : fallback;
 }
 
+/** The document that was visible, and its text, when an open or import was requested. */
+interface Origin {
+  readonly key: string;
+  readonly text: string;
+}
+
 type Expectation =
-  | { readonly kind: "open"; readonly id: string; readonly key: string }
-  | { readonly kind: "import"; readonly key: string }
+  | {
+      readonly kind: "open";
+      readonly id: string;
+      readonly key: string;
+      readonly origin: Origin | undefined;
+    }
+  | { readonly kind: "import"; readonly key: string; readonly origin: Origin | undefined }
   | { readonly kind: "save"; readonly key: string; readonly sent: string };
 
 type SetView = Dispatch<SetStateAction<SkillWorkspaceView>>;
@@ -87,15 +98,26 @@ function storedDocument(
 
 /**
  * Applies a stored file that arrived for an expectation. An opened or imported file starts its
- * document. A save only confirms the saved baseline of the document that asked for it, and keeps
- * whatever the person typed since; a document that was left in the meantime is not touched.
+ * document, unless the visible document was edited since the request. A save only confirms the
+ * saved baseline of the document that asked for it, and keeps whatever the person typed since; a
+ * document that was left in the meantime is not touched.
  */
 function applyArrival(
   expectation: Expectation,
   preview: MarkdownSkillDocument,
   current: SkillWorkspaceView,
 ): SkillWorkspaceView {
-  if (expectation.kind !== "save") return storedDocument(expectation.key, preview, preview.body);
+  if (expectation.kind !== "save") {
+    // The outgoing document stays editable while loading: text typed since the request is newer
+    // work than the arriving file, so the arrival yields instead of discarding it.
+    const { origin } = expectation;
+    const edited =
+      origin !== undefined &&
+      current.kind === "document" &&
+      current.document.key === origin.key &&
+      current.document.text !== origin.text;
+    return edited ? current : storedDocument(expectation.key, preview, preview.body);
+  }
   if (current.kind !== "document" || current.document.key !== expectation.key) return current;
   // The server stores normalized text (line endings, BOM): text still equal to what was sent
   // adopts the stored body, newer typing stays and is dirty against the new baseline.
@@ -174,6 +196,10 @@ interface ActionContext {
   readonly pending: (() => void) | undefined;
 }
 
+function originOf(document: SkillDocument | undefined): Origin | undefined {
+  return document === undefined ? undefined : { key: document.key, text: document.text };
+}
+
 function nextKey(drafts: { current: number }, prefix: string): string {
   drafts.current += 1;
   return `${prefix}:${String(drafts.current)}`;
@@ -188,11 +214,20 @@ function libraryActions({
 }: ActionContext): Pick<SkillWorkspace, "open" | "importFile" | "save"> {
   return {
     open: (skill): void => {
-      expected.current = { kind: "open", id: skill.id, key: nextKey(drafts, skill.id) };
+      expected.current = {
+        kind: "open",
+        id: skill.id,
+        key: nextKey(drafts, skill.id),
+        origin: originOf(document),
+      };
       void library.inspect(skill);
     },
     importFile: (file): void => {
-      expected.current = { kind: "import", key: nextKey(drafts, "import") };
+      expected.current = {
+        kind: "import",
+        key: nextKey(drafts, "import"),
+        origin: originOf(document),
+      };
       void library.upload(file);
     },
     save: (): void => {
