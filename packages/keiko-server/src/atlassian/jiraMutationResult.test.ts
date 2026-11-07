@@ -432,6 +432,17 @@ describe("what the model is told to do next (#4176)", () => {
 // S19 of epic #4173: a create a Keiko draft already made is refused before any request. The model
 // must report the existing key, not "correct the fields" into a second issue.
 describe("a create refused because a draft already made the issue", () => {
+  it("reports an unchanged project as the existing result without suggesting another write", () => {
+    const result = jiraAttemptToolResult("rejected", {
+      ok: false,
+      reason: "conflict",
+      receipt: { projectId: "10000", projectKey: "SYN" },
+      detail: { messages: ["The project already holds these values. Nothing was written."] },
+    });
+    expect(result.data.guidance).toBe(JIRA_EXISTING_GUIDANCE);
+    expect(result.data.guidance).not.toMatch(/issueKey|the issue|correct the fields/iu);
+    expect(result.data.projectKey).toBe("SYN");
+  });
   it("names the existing key and tells the model to report it, not to correct and resend", () => {
     const message =
       "SYN-4 already exists as this issue: a Keiko draft created it in this project with this type and summary. Nothing was created. Report SYN-4 as the result; do not create it again.";

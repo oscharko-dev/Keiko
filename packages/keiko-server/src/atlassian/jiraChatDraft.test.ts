@@ -150,6 +150,21 @@ function itemsOf(result: Awaited<ReturnType<typeof executeJiraChatDraft>>): unkn
 }
 
 describe("executeJiraChatDraft (#4178)", () => {
+  it("passes each dispatched item ref to the source guard, including link continuations", async () => {
+    const jira = syntheticJira();
+    const beforeMutation = vi.fn<(itemRef?: string) => boolean>(() => true);
+    const input = { ...execution(jira, HUB), beforeMutation };
+    const result = await executeJiraChatDraft(input);
+    expect(result.data.outcome).toBe("succeeded");
+    expect(beforeMutation.mock.calls).toEqual([
+      ["one"],
+      ["two"],
+      ["three"],
+      ["hub"],
+      ["hub"],
+      ["hub"],
+    ]);
+  });
   it("creates every item once, in dependency order, behind one journal record each", async () => {
     const jira = syntheticJira();
     const input = execution(jira);

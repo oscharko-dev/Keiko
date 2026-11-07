@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "58f832232494297445fa4bbf931c558b470d5cd41306d863dd8797d99ceb3ac3"
+    "catalogDigest": "3413909e29fd5a698f55b245940835b20bdf5f1d6c6fb2e95309ca51d211329f"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2613,6 +2613,7 @@
       "packages/keiko-local-knowledge/src/knowledge-log.test.ts"
     ],
     "knowledge.requirement-trace.applied.line": [
+      "packages/keiko-server/src/atlassian/jiraChatRequirementBinding.test.ts",
       "packages/keiko-server/src/atlassian/jiraChatTracedMutation.test.ts",
       "packages/keiko-server/src/requirement-trace.test.ts"
     ],

@@ -219,6 +219,7 @@ export function jiraSourcePreparationForTurn(
 ): JiraChatSourcePreparation {
   return createJiraChatSourcePreparation({
     chatId: options.message.chatId,
+    correlationId: context.correlationId,
     draftStore: options.deps.jiraDraftStore,
     openTrace: () =>
       options.openTrace?.(context) ?? {

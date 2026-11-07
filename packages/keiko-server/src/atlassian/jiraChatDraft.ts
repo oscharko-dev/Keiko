@@ -77,7 +77,7 @@ export interface JiraChatDraftExecution {
   readonly connection: Omit<JiraManagedConnection, "http">;
   readonly httpPortFactory: (lifecycle: AtlassianHttpLifecycleOptions) => AtlassianHttpBodyPort;
   readonly beforeEffect: () => boolean;
-  readonly beforeMutation: () => boolean;
+  readonly beforeMutation: (itemRef?: string) => boolean;
   /**
    * The trace of the Chat's Knowledge Pods for this draft (#4179). An item's explicit
    * `requirementIds` are validated before any item is created; an unknown or ambiguous reference
@@ -248,7 +248,7 @@ async function runTracedItem(
     intent: jiraDraftChildIntent(input.intent, item.ref),
     httpPortFactory: input.httpPortFactory,
     beforeEffect: input.beforeEffect,
-    beforeMutation: input.beforeMutation,
+    beforeMutation: () => input.beforeMutation(item.ref),
     execute: async (http) => {
       attempt = await executeJiraDraftItem(
         item,

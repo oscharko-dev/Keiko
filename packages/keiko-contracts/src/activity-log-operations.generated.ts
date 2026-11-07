@@ -31711,6 +31711,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
       },
+      sourceRefusal: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["source-changed", "unavailable"],
+      },
+      sourceChangedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "end",

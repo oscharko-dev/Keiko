@@ -333,7 +333,7 @@ function linkData(links: JiraMutationLinkAccount | undefined): Record<string, un
 export const JIRA_REJECTED_GUIDANCE =
   "Jira refused this change and nothing was changed. Correct the fields named in fieldErrors (fieldId, fieldName, message) or messages, then send the corrected change once. If Jira refuses it again, tell the user in plain language which field is the problem and what Jira said.";
 export const JIRA_EXISTING_GUIDANCE =
-  "Nothing was written: the issue under the issueKey of this result already exists or already holds this, as messages say. Report that as the result. Do not send it again, and do not change its fields to create another one.";
+  "Nothing was written: the Jira resource identified by this result already exists or already holds these values, as messages say. Report that as the result. Do not send it again, and do not change its fields to create another one.";
 /** The journal holds no arguments or results, so a replay cannot repeat the earlier reasons. */
 export const JIRA_ALREADY_REFUSED_GUIDANCE =
   "This exact request was refused earlier in this Chat and nothing was changed, so sending it again cannot succeed. Do what the earlier result said instead.";
@@ -349,7 +349,11 @@ export function jiraResultGuidance(
 ): string | undefined {
   if (uncertainOutcome(outcome, reason)) return JIRA_UNCERTAIN_GUIDANCE;
   // Refused before any write: a Keiko draft already made that issue (S19), or the issue holds this.
-  if (outcome === "rejected" && reason === "conflict" && receipt.issueKey !== undefined)
+  if (
+    outcome === "rejected" &&
+    reason === "conflict" &&
+    (receipt.issueKey !== undefined || receipt.projectKey !== undefined)
+  )
     return JIRA_EXISTING_GUIDANCE;
   return outcome === "rejected" && jiraExplained(detail) ? JIRA_REJECTED_GUIDANCE : undefined;
 }

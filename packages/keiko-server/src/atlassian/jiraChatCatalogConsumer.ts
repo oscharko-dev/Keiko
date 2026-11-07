@@ -94,7 +94,7 @@ export interface JiraChatCatalogConsumer extends CatalogConsumer {
   readonly guard: ToolEffectGuard & {
     readonly write?: {
       readonly action: JiraChatCatalogAction;
-      readonly beforeMutation: () => boolean;
+      readonly beforeMutation: (itemRef?: string) => boolean;
       readonly source?: import("./jiraChatRequirementBinding.js").PreparedJiraSource;
     };
   };
@@ -446,12 +446,12 @@ function mutationGuard(
         write: {
           action,
           ...(source === undefined ? {} : { source }),
-          beforeMutation: (): boolean => {
+          beforeMutation: (itemRef): boolean => {
             if (!check()) return false;
             if (
               action.sourceDigest !== undefined &&
               (source?.sourceDigest !== action.sourceDigest ||
-                options.sourcePreparation?.current(source) !== true)
+                options.sourcePreparation?.current(source, itemRef) !== true)
             )
               return false;
             // One approval covers one action; a backlog draft dispatches its items under it (#4178).

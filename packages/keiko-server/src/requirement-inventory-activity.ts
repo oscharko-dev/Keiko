@@ -146,6 +146,8 @@ export interface RequirementTraceActivity {
   readonly droppedLabelCount: number;
   /** The Pods could not be read; the write was refused. */
   readonly unavailable: boolean;
+  readonly sourceRefusal?: "source-changed" | "unavailable";
+  readonly sourceChangedCount?: number;
 }
 
 const REQUIREMENT_TRACE_APPLIED_OPERATION = defineActivityLogOperation({
@@ -170,6 +172,13 @@ const REQUIREMENT_TRACE_APPLIED_OPERATION = defineActivityLogOperation({
     footerAppliedCount: COUNT,
     droppedLabelCount: COUNT,
     unavailable: { type: "boolean", dataClass: "closed-enum", required: true },
+    sourceRefusal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["source-changed", "unavailable"],
+    },
+    sourceChangedCount: { ...COUNT, required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },

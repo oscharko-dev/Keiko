@@ -36,7 +36,7 @@ export interface JiraChatMutationExecution {
   /** Current binding, authority, approval and budget admission for metadata and confirmation reads. */
   readonly beforeEffect: () => boolean;
   /** Claim this exact mutation's approval inside the journal transaction, only before POST/PUT. */
-  readonly beforeMutation: () => boolean;
+  readonly beforeMutation: (itemRef?: string) => boolean;
   readonly execute: (http: AtlassianHttpBodyPort) => Promise<JiraMutationAttempt>;
 }
 const FAILED: JiraMutationAttempt = { ok: false, reason: "unavailable" };
@@ -128,7 +128,7 @@ function jiraRejectedWithoutEffect(
   record: ChatToolMutationRecord,
   attempt: JiraMutationAttempt,
 ): boolean {
-  // Only reviewed single-resource error contracts establish no effect. Bulk/Agile errors may
+  // Only reviewed single-resource error contracts establish no effect. Bulk errors may
   // follow a partial effect, even with a structured Jira error document, and remain uncertain.
   return (
     ATOMIC_ERROR_OPERATIONS.has(record.operation) &&
@@ -150,6 +150,10 @@ const ATOMIC_ERROR_OPERATIONS: ReadonlySet<string> = new Set([
   "jira.attach",
   "jira.create-project",
   "jira.update-project",
+  "jira.board-create",
+  "jira.sprint-create",
+  "jira.sprint-update",
+  "jira.epic-update",
 ]);
 /** The outcome to settle, and whether it rests on Jira's own error document. */
 function settlement(

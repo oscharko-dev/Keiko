@@ -498,6 +498,66 @@ it.each([400, 401, 403, 429, 500, 503])(
     expect(f.effects).toHaveBeenCalledOnce();
   },
 );
+it.each([
+  ["jira.board-create", "/board"],
+  ["jira.sprint-create", "/sprint"],
+  ["jira.sprint-update", "/sprint/37"],
+  ["jira.epic-update", "/epic/SYN-1"],
+] as const)(
+  "allows correction after %s returns a structured 400 without effects",
+  async (operation, path) => {
+    const f = fixture();
+    if (f.input.journal === undefined) throw new TypeError("Expected mutation journal");
+    const settle = vi.spyOn(f.input.journal, "settle");
+    f.effects.mockImplementation(() =>
+      Promise.resolve(
+        new Response('{"errorMessages":["Correct the requested fields"],"errors":{}}', {
+          status: 400,
+        }),
+      ),
+    );
+    const input: JiraChatMutationExecution = {
+      ...f.input,
+      intent: { ...f.input.intent, operation },
+      execute: async (http) => {
+        await http({
+          method: "POST",
+          url: `https://jira.example.invalid/rest/agile/1.0${path}`,
+          bodyJson: "{}",
+          maxBodyBytes: 1000,
+          timeoutMs: 1000,
+        });
+        return {
+          ok: false,
+          reason: "field-validation",
+          detail: { messages: ["Correct the requested fields"] },
+        };
+      },
+    };
+    expect(await executeJiraChatMutation(input)).toMatchObject({
+      data: {
+        outcome: "rejected",
+        messages: ["Correct the requested fields"],
+      },
+    });
+    expect(f.input.journal.find(input.intent.invocationId)).toMatchObject({
+      outcome: "rejected",
+      httpStatus: 400,
+    });
+    expect(settle).toHaveBeenCalledWith(
+      input.intent.invocationId,
+      "rejected",
+      undefined,
+      { jiraErrorDocument: true },
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(await executeJiraChatMutation(input)).toMatchObject({
+      data: { outcome: "rejected", replayed: true },
+    });
+    expect(f.effects).toHaveBeenCalledOnce();
+  },
+);
 it("preserves a possible Agile bulk effect despite a structured 400 and never replays it", async () => {
   const f = fixture();
   f.effects.mockImplementation(() =>

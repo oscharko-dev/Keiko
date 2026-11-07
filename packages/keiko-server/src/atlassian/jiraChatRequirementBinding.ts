@@ -11,6 +11,7 @@ import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/go
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { chatDraftArguments } from "./jiraChatDraftArguments.js";
 import { traceRefusalData, type ItemTrace, type TraceSession } from "../requirement-trace.js";
+import { logRequirementTrace } from "../requirement-inventory-activity.js";
 
 type SourceOperation = "jira.create" | "jira.edit" | "jira.draft";
 export interface PreparedJiraRequirementItem {
@@ -27,6 +28,7 @@ export interface PreparedJiraSource {
   readonly argumentsDigest: string;
   readonly sourceDigest: string;
   readonly items: readonly PreparedJiraRequirementItem[];
+  readonly itemRefs: readonly string[];
 }
 interface SourceEntry {
   readonly argumentsDigest: string;
@@ -41,13 +43,14 @@ export interface JiraChatSourcePreparation {
   readonly sourceFor: (actionId: string, argumentsDigest: string) => PreparedJiraSource | undefined;
   readonly sourceDigestFor: (actionId: string, argumentsDigest: string) => string | undefined;
   readonly refusalFor: (actionId: string, argumentsDigest: string) => CatalogJsonObject | undefined;
-  readonly current: (source: PreparedJiraSource) => boolean;
+  readonly current: (source: PreparedJiraSource, itemRef?: string) => boolean;
 }
 interface SourcePreparationOptions {
   readonly chatId: string;
   readonly draftStore: JiraDraftStore | undefined;
   readonly openTrace: () => TraceSession;
   readonly admitted: () => boolean;
+  readonly correlationId?: string;
 }
 
 function object(value: unknown): CatalogJsonObject | undefined {
@@ -57,6 +60,28 @@ function object(value: unknown): CatalogJsonObject | undefined {
 }
 function unavailable(): CatalogJsonObject {
   return { outcome: "rejected", reason: "field-validation", requirementRefusal: "unavailable" };
+}
+type SourceRefusal = "source-changed" | "unavailable";
+function sourceRefusal(
+  options: SourcePreparationOptions,
+  operation: SourceOperation,
+  reason: SourceRefusal,
+  count: number,
+): CatalogJsonObject {
+  logRequirementTrace(options.correlationId, {
+    operation: operation === "jira.draft" ? "draft" : operation === "jira.edit" ? "edit" : "create",
+    tracedItemCount: count,
+    refusedItemCount: count,
+    referenceProblemCount: 0,
+    acceptanceCriteriaMissingCount: 0,
+    labelsAppliedCount: 0,
+    footerAppliedCount: 0,
+    droppedLabelCount: 0,
+    unavailable: reason === "unavailable",
+    sourceRefusal: reason,
+    sourceChangedCount: reason === "source-changed" ? count : 0,
+  });
+  return { outcome: "rejected", reason: "field-validation", requirementRefusal: reason };
 }
 function projectedFields(
   fields: CatalogJsonObject,
@@ -170,33 +195,34 @@ export function prepareJiraDraftRequirements(
     openTrace,
   );
   if (result.refusal !== undefined) return { ok: false, data: result.refusal, violationCount: 1 };
+  const preparedByRef = new Map(result.items.map((candidate) => [candidate.ref, candidate.item]));
   return {
     ok: true,
-    items: items.map(
-      (item) => result.items.find((candidate) => candidate.ref === item.ref)?.item ?? item,
-    ),
+    items: items.map((item) => preparedByRef.get(String(item.ref)) ?? item),
     sourceBindings: result.items.map(({ ref, sourceDigest }) => ({ ref, sourceDigest })),
   };
 }
 
-function stagedSourceMatches(
+function stagedSourceRefusal(
   options: SourcePreparationOptions,
   operation: SourceOperation,
   args: CatalogJsonObject,
   items: readonly PreparedJiraRequirementItem[],
-): boolean {
+): SourceRefusal | undefined {
   const staged =
     operation === "jira.draft" && typeof args.draftId === "string"
       ? options.draftStore?.peek(args.draftId, options.chatId)
       : undefined;
-  return (
-    staged === undefined ||
-    items.every((item) =>
-      staged.sourceBindings?.some(
-        (binding) => binding.ref === item.ref && binding.sourceDigest === item.sourceDigest,
-      ),
-    )
+  if (staged === undefined) return undefined;
+  const bindings = new Map(
+    staged.sourceBindings?.map((binding) => [binding.ref, binding.sourceDigest]),
   );
+  for (const item of items) {
+    const digest = bindings.get(item.ref);
+    if (digest === undefined) return "unavailable";
+    if (digest !== item.sourceDigest) return "source-changed";
+  }
+  return undefined;
 }
 function preparedEntry(
   options: SourcePreparationOptions,
@@ -211,8 +237,12 @@ function preparedEntry(
       : { ok: true as const, arguments: args };
   if (!draft.ok) return { argumentsDigest, refusal: unavailable() };
   const result = prepareItems(operation, draft.arguments, options.openTrace);
-  if (!stagedSourceMatches(options, operation, args, result.items)) {
-    return { argumentsDigest, refusal: unavailable() };
+  const refusal = stagedSourceRefusal(options, operation, args, result.items);
+  if (refusal !== undefined) {
+    return {
+      argumentsDigest,
+      refusal: sourceRefusal(options, operation, refusal, result.items.length),
+    };
   }
   const source =
     result.items.length === 0
@@ -222,6 +252,9 @@ function preparedEntry(
           argumentsDigest,
           sourceDigest: bindingDigest(result.items),
           items: result.items,
+          itemRefs: itemList(operation, draft.arguments).map((item) =>
+            operation === "jira.draft" && typeof item.ref === "string" ? item.ref : "single",
+          ),
         };
   return deepFreeze(
     structuredClone({
@@ -231,21 +264,56 @@ function preparedEntry(
     }),
   );
 }
-function sourceIsCurrent(options: SourcePreparationOptions, source: PreparedJiraSource): boolean {
+function sourceIsCurrent(
+  options: SourcePreparationOptions,
+  source: PreparedJiraSource,
+  items: readonly PreparedJiraRequirementItem[],
+): boolean {
   if (!options.admitted()) return false;
   const args =
     source.operation === "jira.draft"
-      ? { items: source.items.map((item) => item.item) }
-      : (source.items[0]?.item ?? {});
+      ? { items: items.map((item) => item.item) }
+      : (items[0]?.item ?? {});
   const current = prepareItems(source.operation, args, options.openTrace);
-  return current.refusal === undefined && bindingDigest(current.items) === source.sourceDigest;
+  if (current.refusal === undefined && bindingDigest(current.items) === bindingDigest(items))
+    return true;
+  const reason =
+    current.refusal?.requirementRefusal === "unavailable" ? "unavailable" : "source-changed";
+  sourceRefusal(options, source.operation, reason, items.length);
+  return false;
 }
 
 /** Owned by one existing Chat turn; no entry is replaced and no state survives that turn. */
+function indexSource(
+  source: PreparedJiraSource,
+): ReadonlyMap<string, PreparedJiraRequirementItem | undefined> {
+  const index = new Map<string, PreparedJiraRequirementItem | undefined>(
+    source.itemRefs.map((ref) => [ref, undefined]),
+  );
+  for (const item of source.items) index.set(item.ref, item);
+  return index;
+}
+function currentSource(
+  options: SourcePreparationOptions,
+  source: PreparedJiraSource,
+  index: ReadonlyMap<string, PreparedJiraRequirementItem | undefined> | undefined,
+  itemRef: string | undefined,
+): boolean {
+  if (index === undefined || !options.admitted()) return false;
+  if (itemRef === undefined) return sourceIsCurrent(options, source, source.items);
+  if (!index.has(itemRef)) return false;
+  const item = index.get(itemRef);
+  return item === undefined || sourceIsCurrent(options, source, [item]);
+}
+
 export function createJiraChatSourcePreparation(
   options: SourcePreparationOptions,
 ): JiraChatSourcePreparation {
   const prepared = new Map<string, SourceEntry>();
+  const sourceItems = new WeakMap<
+    PreparedJiraSource,
+    ReadonlyMap<string, PreparedJiraRequirementItem | undefined>
+  >();
   const sourceFor = (actionId: string, argumentsDigest: string): PreparedJiraSource | undefined => {
     const entry = prepared.get(actionId);
     return entry?.argumentsDigest === argumentsDigest ? entry.source : undefined;
@@ -259,6 +327,7 @@ export function createJiraChatSourcePreparation(
     if (held !== undefined) return held.argumentsDigest === argumentsDigest ? held : undefined;
     const entry = preparedEntry(options, operation, args, argumentsDigest);
     prepared.set(actionId, entry);
+    if (entry.source !== undefined) sourceItems.set(entry.source, indexSource(entry.source));
     return entry;
   };
   return {
@@ -277,6 +346,7 @@ export function createJiraChatSourcePreparation(
       const entry = prepared.get(actionId);
       return entry?.argumentsDigest === digest ? entry.refusal : undefined;
     },
-    current: (source) => sourceIsCurrent(options, source),
+    current: (source, itemRef): boolean =>
+      currentSource(options, source, sourceItems.get(source), itemRef),
   };
 }

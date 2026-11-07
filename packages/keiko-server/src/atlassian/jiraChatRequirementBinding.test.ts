@@ -1,8 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createJiraDraftStore } from "@oscharko-dev/keiko-connectors";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { podFixture, specification, type PodFixture } from "../_requirementSupport.js";
 import { openTraceSession } from "../requirement-trace.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import {
+  formatActivityLogProofLine,
+  expectActivityLogProof,
+} from "../../../../tests/support/activity-log-proof.js";
 import {
   createJiraChatSourcePreparation,
   prepareJiraDraftRequirements,
@@ -10,8 +17,14 @@ import {
 } from "./jiraChatRequirementBinding.js";
 
 const fixtures: PodFixture[] = [];
+let sink = createBufferedServerLogSink();
+beforeEach(() => {
+  sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+});
 afterEach(() => {
   for (const fixture of fixtures.splice(0)) fixture.cleanup();
+  resetServerLogger();
 });
 const description = {
   format: "markdown",
@@ -28,7 +41,7 @@ const item = {
 async function fixture(): Promise<{
   source: PodFixture;
   draftStore: ReturnType<typeof createJiraDraftStore>;
-  openTrace: () => ReturnType<typeof openTraceSession>;
+  openTrace: ReturnType<typeof vi.fn<() => ReturnType<typeof openTraceSession>>>;
   prepared: JiraChatSourcePreparation;
   changeSource: () => void;
 }> {
@@ -37,18 +50,21 @@ async function fixture(): Promise<{
   ]);
   fixtures.push(source);
   const draftStore = createJiraDraftStore();
-  const openTrace = vi.fn(() =>
-    openTraceSession(source.deps, {
+  const openTrace = vi.fn(() => {
+    const session = openTraceSession(source.deps, {
       chatId: source.chatId,
       userMessageId: "binding-turn",
       correlationId: "binding-proof",
-    }),
-  );
+    });
+    vi.spyOn(session, "resolve");
+    return session;
+  });
   const prepared = createJiraChatSourcePreparation({
     chatId: source.chatId,
     draftStore,
     openTrace,
     admitted: () => true,
+    correlationId: "binding-proof",
   });
   const changeSource = (): void => {
     source.withStore((store) => {
@@ -64,6 +80,57 @@ async function fixture(): Promise<{
 }
 
 describe("Jira source payload captured before review", () => {
+  it("rechecks only the dispatched draft item, with linear resolution work and no stale cache", async () => {
+    const f = await fixture();
+    const items = Array.from({ length: 16 }, (_, index) => ({
+      ...item,
+      ref: `item-${String(index)}`,
+    }));
+    const args = { items };
+    await f.prepared.prepareInvocation(
+      { id: "linear", name: "jira_draft", arguments: args },
+      "linear",
+    );
+    const held = f.prepared.sourceFor("linear", sha256Hex(canonicalise(args)));
+    if (held === undefined) throw new TypeError("Expected traced draft");
+    for (const candidate of items) expect(f.prepared.current(held, candidate.ref)).toBe(true);
+    expect(f.openTrace).toHaveBeenCalledTimes(items.length + 1);
+    const resolutions = f.openTrace.mock.results.reduce(
+      (total, result) =>
+        total + (result.type === "return" ? vi.mocked(result.value.resolve).mock.calls.length : 0),
+      0,
+    );
+    expect(resolutions).toBe(items.length * 2);
+    f.changeSource();
+    expect(f.prepared.current(held, items[0]?.ref)).toBe(false);
+    const event = sink.events.find((event) => event.op === "knowledge.requirement-trace.applied");
+    const line = expectActivityLogProof(
+      "knowledge.requirement-trace.applied.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(line).toMatchObject({
+      sourceRefusal: "source-changed",
+      sourceChangedCount: 1,
+      refusedItemCount: 1,
+      unavailable: false,
+    });
+    expect(JSON.stringify(line)).not.toMatch(/original|revised|LH-001|source-binding/u);
+  });
+
+  it("does not open Knowledge for an untraced sibling and refuses an unknown draft ref", async () => {
+    const f = await fixture();
+    const args = { items: [item, { ref: "untraced", fields: { summary: "Manual" } }] };
+    await f.prepared.prepareInvocation(
+      { id: "mixed", name: "jira_draft", arguments: args },
+      "mixed",
+    );
+    const held = f.prepared.sourceFor("mixed", sha256Hex(canonicalise(args)));
+    if (held === undefined) throw new TypeError("Expected traced draft");
+    f.openTrace.mockClear();
+    expect(f.prepared.current(held, "untraced")).toBe(true);
+    expect(f.prepared.current(held, "not-in-the-approved-draft")).toBe(false);
+    expect(f.openTrace).not.toHaveBeenCalled();
+  });
   it.each(["jira_create", "jira_edit"])(
     "binds %s exactly once and refuses a changed source before effects",
     async (name) => {
@@ -146,7 +213,7 @@ describe("Jira source payload captured before review", () => {
       ),
     ).toBeUndefined();
     expect(f.prepared.refusalFor("changed", sha256Hex(canonicalise(args)))).toMatchObject({
-      requirementRefusal: "unavailable",
+      requirementRefusal: "source-changed",
     });
     const legacy = f.draftStore.append(f.source.chatId, undefined, "connection", [item]);
     if (!legacy.ok) throw new TypeError("Expected legacy draft");

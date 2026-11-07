@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "58f832232494297445fa4bbf931c558b470d5cd41306d863dd8797d99ceb3ac3",
+    "catalogDigest": "3413909e29fd5a698f55b245940835b20bdf5f1d6c6fb2e95309ca51d211329f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -33064,6 +33064,17 @@
             "type": "boolean",
             "dataClass": "closed-enum",
             "required": true
+          },
+          "sourceRefusal": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["source-changed", "unavailable"]
+          },
+          "sourceChangedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "diagnosticWhen": [
@@ -33086,8 +33097,8 @@
         "failureClasses": ["requirement-inventory"],
         "proofIds": ["knowledge.requirement-trace.applied.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/requirement-inventory-activity.ts:151",
-        "emitterSites": ["packages/keiko-server/src/requirement-inventory-activity.ts:193"]
+        "registrationSite": "packages/keiko-server/src/requirement-inventory-activity.ts:153",
+        "emitterSites": ["packages/keiko-server/src/requirement-inventory-activity.ts:202"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -99926,6 +99937,18 @@
                   "required": true
                 },
                 {
+                  "name": "sourceChangedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "sourceRefusal",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "tracedItemCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -111111,21 +111134,21 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:197",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:201",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:223",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:227",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:229",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:233",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -114496,7 +114519,7 @@
     {
       "op": "knowledge.requirement-trace.applied",
       "category": "search",
-      "site": "packages/keiko-server/src/requirement-inventory-activity.ts:154",
+      "site": "packages/keiko-server/src/requirement-inventory-activity.ts:156",
       "package": "keiko-server"
     },
     {
