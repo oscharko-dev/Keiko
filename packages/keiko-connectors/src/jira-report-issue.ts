@@ -139,6 +139,8 @@ function estimateOf(
   fields: Record<string, unknown>,
   plan: JiraReportFieldPlan,
 ): number | undefined {
+  // An explicit null is unestimated; a requested field Jira withholds is unreadable evidence.
+  if (!Object.hasOwn(fields, plan.estimateFieldId)) plan.omittedFields.add(plan.estimateFieldId);
   const value = fields[plan.estimateFieldId];
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }

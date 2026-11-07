@@ -14,6 +14,7 @@ import { CONTEXT, NOW, idOf, record, reportOf } from "./jira-report.harness.js";
 import {
   ACCEPTANCE,
   DECOY_BLOB,
+  POINTS,
   fixtureJira,
   response,
   syntheticProject,
@@ -25,7 +26,11 @@ import type { JiraReportHttp } from "./jira-report-http.js";
 import { loadRequiredFields } from "./jira-report-metadata.js";
 import { JIRA_REPORT_SESSION_MAX_BYTES } from "./jira-report-session.js";
 import { createJiraReportStore } from "./jira-report-store.js";
-import { executeJiraReportTool, type JiraReportToolDeps } from "./jira-report-tool.js";
+import {
+  executeJiraReportTool,
+  type JiraReportActivity,
+  type JiraReportToolDeps,
+} from "./jira-report-tool.js";
 import type { JiraIssueTemplateSet } from "./jira-managed-template-gate.js";
 import type { JiraReport } from "./jira-report-types.js";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
@@ -138,6 +143,85 @@ describe("an omitted requested field is unreadable evidence, never an empty valu
     const { result } = await run(options, { rewrite: strip });
     expect(completenessOf(result)).toMatchObject({ complete: false, failure: "permission" });
   });
+
+  it.each(["timeoriginalestimate", POINTS])(
+    "refuses to report a complete zero estimate when requested field %s is absent",
+    async (estimateFieldId) => {
+      const { result } = await run(options, {
+        args: { estimateFieldId },
+        rewrite: (path, body) => {
+          if (path === "search")
+            for (const issue of issuesOf(body))
+              Reflect.deleteProperty(fieldsOf(issue), estimateFieldId);
+          return body;
+        },
+      });
+      expect(result.data.status).toBe("incomplete");
+      expect(completenessOf(result)).toMatchObject({
+        complete: false,
+        reason: "read-failed",
+        failure: "permission",
+        issuesRead: 0,
+      });
+    },
+  );
+
+  it("retains only the measured prefix when a later page omits an estimate, with body-free failure facts", async () => {
+    const activity: JiraReportActivity[] = [];
+    const { result } = await run(
+      { ...options, pageClamp: 7 },
+      {
+        deps: { activity: (item) => activity.push(item) },
+        rewrite: (path, body) => {
+          if (path === "search")
+            for (const issue of issuesOf(body))
+              if (issue.key === "REP-15")
+                Reflect.deleteProperty(fieldsOf(issue), "timeoriginalestimate");
+          return body;
+        },
+      },
+    );
+    expect(result.data.status).toBe("incomplete");
+    expect(completenessOf(result)).toMatchObject({
+      complete: false,
+      failure: "permission",
+      issuesRead: 14,
+      issuesTotal: 40,
+    });
+    const expected = issues.slice(0, 14).reduce((sum, issue) => sum + (issue.seconds ?? 0), 0);
+    expect(record(record(record(reportOf(result).progress).project).estimate).total).toBe(expected);
+    expect(activity).toHaveLength(1);
+    expect(activity[0]).toMatchObject({
+      phase: "read",
+      status: "incomplete",
+      reason: "read-failed",
+      failure: "permission",
+      issuesRead: 14,
+      issuesTotal: 40,
+    });
+    expect(activity[0]?.pageCount).toBeGreaterThan(2);
+    expect(JSON.stringify(activity)).not.toMatch(/REP-|timeoriginalestimate|jira\.example/u);
+  });
+
+  it.each([null, 0])(
+    "keeps an explicit %s estimate distinct from an unreadable field",
+    async (estimate) => {
+      const { result } = await run(options, {
+        rewrite: (path, body) => {
+          if (path === "search")
+            for (const issue of issuesOf(body)) fieldsOf(issue).timeoriginalestimate = estimate;
+          return body;
+        },
+      });
+      expect(result.data.status).toBe("complete");
+      expect(record(record(record(reportOf(result).progress).project).estimate)).toEqual({
+        total: 0,
+        done: 0,
+        remaining: 0,
+        unestimated: estimate === null ? 40 : 0,
+      });
+    },
+  );
 });
 
 describe("create metadata is trusted only with Jira's completion evidence (D2)", () => {
