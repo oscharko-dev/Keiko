@@ -50,6 +50,7 @@
   "chat.tool-turn.context-fitted": "bff",
   "chat.tool-turn.corrected": "bff",
   "chat.tool-turn.ended": "bff",
+  "chat.tool-turn.result-condensed": "bff",
   "chat.turn.started": "bff",
   "cli.audit.completed": "runtime-packages",
   "cli.audit.failed": "runtime-packages",

@@ -40,6 +40,7 @@ import type {
   CatalogToolBinder,
 } from "./tool-catalog/catalogToolPorts.js";
 import { gatewayMessagesForToolExchange } from "./conversation-gateway.js";
+import { jiraDraftCondensedRows } from "./atlassian/jiraDraftModelData.js";
 import { parseJiraDraft } from "@oscharko-dev/keiko-connectors";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { ProviderEmptyAnswerError } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -52,6 +53,7 @@ import {
   chatToolTurnHoldsWrite,
   chatToolTurnPartialAnswer,
   recordChatToolTurnContextFitted,
+  recordChatToolTurnResultCondensed,
   recordChatToolTurnCorrected,
   recordChatToolBatchDraftOffer,
   recordChatToolTurnEnded,
@@ -297,6 +299,27 @@ interface ActiveBatchProgress {
   readonly callId: string;
   publishedKey?: string;
 }
+/** A batch progress page that could not be persisted or published: a redacted server diagnostic. */
+function reportBatchProgressFailure(
+  options: Pick<ChatToolTurnOptions<ToolConsumerContext>, "deps" | "correlationId">,
+  error: unknown,
+): void {
+  const { deps, correlationId } = options;
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "chat.tool-turn.batch-progress",
+      source: "chat-tool-turn",
+      error,
+      redact: (text): string => {
+        const redacted = deps.redactor?.(text);
+        return typeof redacted === "string" ? redacted : text;
+      },
+    }),
+  );
+}
+
 export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolConsumerContext> {
   private readonly counters: RunCounters = {
     iterations: 0,
@@ -655,14 +678,14 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       );
     } catch (error: unknown) {
       // A page that cannot be persisted is dropped; the batch and its next page carry on.
-      this.diagnoseBatchProgress(error);
+      reportBatchProgressFailure(this.options, error);
       return;
     }
     active.publishedKey = key;
     this.batchPublication = this.batchPublication
       .then(() => this.publish())
       .catch((error: unknown) => {
-        this.diagnoseBatchProgress(error);
+        reportBatchProgressFailure(this.options, error);
       });
   }
   /** Model calls left for nested work once the turn's own answer rounds are kept. */
@@ -672,22 +695,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       this.limits.maxModelCalls - this.counters.modelCalls - ANSWER_ROUND_MODEL_CALL_RESERVE,
     );
   }
-  private diagnoseBatchProgress(error: unknown): void {
-    const { deps, correlationId } = this.options;
-    emitServerDiagnostic(
-      deps.diagnostics,
-      serverDiagnosticFromError({
-        correlationId,
-        operation: "chat.tool-turn.batch-progress",
-        source: "chat-tool-turn",
-        error,
-        redact: (text): string => {
-          const redacted = deps.redactor?.(text);
-          return typeof redacted === "string" ? redacted : text;
-        },
-      }),
-    );
-  }
+
   private async dispatchWithProgress(
     call: NormalizedResponse["toolCalls"][number],
     identity: string,
@@ -778,6 +786,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       ?.toolTranscript?.exchanges.find((exchange) => exchange.call.id === id);
     requireDispatch(stored?.result !== undefined, "invalid", "recovery-required");
     const messages = gatewayMessagesForToolExchange(stored);
+    this.recordCondensedResult(stored);
     if (origin === "runtime")
       this.runtimeContext.push(
         ...promptStableRuntimeMessages(messages, this.runtimeContext.length),
@@ -792,6 +801,19 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     // Only this turn's validated, redacted result actually published to the model is evidence.
     // A successful empty list is useful; a settled denial, failure or missing payload is not.
     if (usableModelObservation(stored, origin)) this.usableObservation = true;
+  }
+
+  private recordCondensedResult(stored: ChatToolExchange): void {
+    const condensed = jiraDraftCondensedRows(
+      stored.result?.toolRef?.canonicalId,
+      stored.result?.data,
+    );
+    if (condensed === undefined) return;
+    recordChatToolTurnResultCondensed(processServerLogSink(), {
+      correlationId: this.options.correlationId,
+      messageId: this.options.message.id,
+      ...condensed,
+    });
   }
 
   public async *stream(

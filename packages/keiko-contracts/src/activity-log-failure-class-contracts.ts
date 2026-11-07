@@ -44,6 +44,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
         "chat.tool-turn.context-fitted",
         "chat.tool-turn.corrected",
         "chat.tool-turn.ended",
+        "chat.tool-turn.result-condensed",
       ],
       end: [],
       failure: [],
@@ -56,6 +57,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "chat.tool-turn.context-fitted",
       "chat.tool-turn.corrected",
       "chat.tool-turn.ended",
+      "chat.tool-turn.result-condensed",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
@@ -65,6 +67,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "chat.tool-turn.context-fitted",
       "chat.tool-turn.corrected",
       "chat.tool-turn.ended",
+      "chat.tool-turn.result-condensed",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
@@ -74,6 +77,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "chat.tool-turn.context-fitted",
       "chat.tool-turn.corrected",
       "chat.tool-turn.ended",
+      "chat.tool-turn.result-condensed",
     ],
     requiredEvidenceClasses: [
       "closed-enum",

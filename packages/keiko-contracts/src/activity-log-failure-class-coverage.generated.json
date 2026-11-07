@@ -3864,7 +3864,8 @@
           "chat.tool-turn.batch-draft-offer",
           "chat.tool-turn.context-fitted",
           "chat.tool-turn.corrected",
-          "chat.tool-turn.ended"
+          "chat.tool-turn.ended",
+          "chat.tool-turn.result-condensed"
         ],
         "end": [],
         "failure": [],
@@ -3894,6 +3895,10 @@
         {
           "op": "chat.tool-turn.ended",
           "mode": "correlation"
+        },
+        {
+          "op": "chat.tool-turn.result-condensed",
+          "mode": "correlation"
         }
       ],
       "lossSignals": [],
@@ -3903,7 +3908,8 @@
         "chat.tool-turn.batch-draft-offer",
         "chat.tool-turn.context-fitted",
         "chat.tool-turn.corrected",
-        "chat.tool-turn.ended"
+        "chat.tool-turn.ended",
+        "chat.tool-turn.result-condensed"
       ],
       "replayReferences": [],
       "operations": [
@@ -4217,6 +4223,42 @@
             "causeChain": false
           },
           "proofIds": ["chat.tool-turn.ended.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "chat.tool-turn.result-condensed",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "keptRowCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "messageDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "rowCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["completeness-state", "count", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.tool-turn.result-condensed.line"],
           "replayReferences": [],
           "missingObligations": []
         }

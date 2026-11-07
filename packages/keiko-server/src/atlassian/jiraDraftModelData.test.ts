@@ -3,8 +3,10 @@ import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { gatewayMessagesForToolExchange } from "../conversation-gateway.js";
 import { draftResult } from "./jiraChatDraft.js";
+import { JIRA_DRAFT_UNLISTED_GUIDANCE } from "./jiraDraftKeyRanges.js";
 import {
   JIRA_DRAFT_MODEL_ROWS_MAX,
+  jiraDraftCondensedRows,
   jiraDraftModelData,
   jiraDraftRowsForModel,
 } from "./jiraDraftModelData.js";
@@ -104,5 +106,61 @@ describe("the model's view of a long draft result", () => {
 
     expect(sent.result.data).toMatchObject({ createdRanges: ["KER-4..KER-33"], items: [] });
     expect(sent.draftProgress).toMatchObject({ createdRanges: ["KER-4..KER-33"], items: [] });
+  });
+
+  it("keeps uncertain and pending rows and drops only listed or deselected ones", () => {
+    const rows = [
+      ...created(12),
+      { ref: "maybe", state: "uncertain", issueKey: "KER-90" },
+      { ref: "later", state: "pending" },
+      { ref: "off", state: "excluded" },
+      { ref: "found", state: "existing", issueKey: "KER-99" },
+    ] as unknown as Item[];
+    const data = stored(rows);
+
+    const model = jiraDraftModelData("keiko.jira.draft", data) as Record<string, unknown>;
+
+    expect(model.items).toEqual([
+      expect.objectContaining({ ref: "maybe", state: "uncertain", issueKey: "KER-90" }),
+      expect.objectContaining({ ref: "later", state: "pending" }),
+    ]);
+    expect(model).toMatchObject({
+      createdRanges: ["KER-4..KER-15"],
+      existingRanges: ["KER-99"],
+      excludedCount: 1,
+      guidance: data.guidance,
+    });
+    expect(jiraDraftCondensedRows("keiko.jira.draft", data)).toEqual({
+      rowCount: 16,
+      keptRowCount: 2,
+    });
+    // The same stored data always reads the same, so an unchanged prompt prefix stays reusable.
+    expect(JSON.stringify(jiraDraftModelData("keiko.jira.draft", data))).toBe(
+      JSON.stringify(model),
+    );
+  });
+
+  it("adds the unlisted-key guidance to the producer's own when keys do not fit", () => {
+    // Every other key of a long project key: no two are adjacent, so no range can pack them.
+    const scattered = Array.from({ length: 900 }, (_, index) => ({
+      ref: `item-${String(index)}`,
+      state: "created",
+      issueKey: `KERNBANKMIGRATION-${String(2 * index + 1)}`,
+    })) as unknown as Item[];
+    const failed = { ref: "bad", state: "failed", detail: { messages: ["refused"] } };
+    const data = stored([...scattered, failed as unknown as Item]);
+
+    const model = jiraDraftModelData("keiko.jira.draft", data) as Record<string, unknown>;
+
+    expect(model.rangesTruncated).toBe(true);
+    expect(model.unlistedKeyCount).toBeGreaterThan(0);
+    const own = data.guidance;
+    if (typeof own !== "string") throw new TypeError("The producer gave no guidance");
+    expect(model.guidance).toBe(`${own} ${JIRA_DRAFT_UNLISTED_GUIDANCE}`);
+  });
+
+  it("names no condensed rows for a short draft or another tool", () => {
+    expect(jiraDraftCondensedRows("keiko.jira.draft", stored(created(10)))).toBeUndefined();
+    expect(jiraDraftCondensedRows("keiko.jira.create", stored(created(40)))).toBeUndefined();
   });
 });

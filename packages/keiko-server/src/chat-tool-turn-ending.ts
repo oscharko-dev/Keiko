@@ -257,6 +257,69 @@ export function recordChatToolTurnEnded(
   }
 }
 
+const RESULT_CONDENSED = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.tool-turn.result-condensed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "chat-tool-turn-ending.recordChatToolTurnResultCondensed",
+  fields: {
+    messageDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: true,
+      maxLength: 64,
+    },
+    rowCount: { type: "integer", dataClass: "count", required: true },
+    keptRowCount: { type: "integer", dataClass: "count", required: true },
+    completeness: {
+      type: "string",
+      dataClass: "completeness-state",
+      required: true,
+    },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-tool-transcript"],
+  proofIds: ["chat.tool-turn.result-condensed.line"],
+  releaseImpact: "minor",
+});
+
+/**
+ * Recorded when the model read a long Jira draft result as key ranges: how many rows the stored
+ * result holds and how many still reached the model one by one (#4292).
+ */
+export function recordChatToolTurnResultCondensed(
+  log: ServerLogSink,
+  input: {
+    readonly correlationId: string;
+    readonly messageId: string;
+    readonly rowCount: number;
+    readonly keptRowCount: number;
+  },
+): void {
+  try {
+    log.write(
+      activityLogEvent(
+        RESULT_CONDENSED,
+        { correlationId: input.correlationId, level: "info" },
+        {
+          messageDigest: sha256Hex(input.messageId),
+          rowCount: input.rowCount,
+          keptRowCount: input.keptRowCount,
+          completeness: "complete",
+          loss: "none",
+        },
+      ),
+    );
+  } catch {
+    recordActivityLogLoss("port-sink-failed");
+  }
+}
+
 const CONTEXT_FITTED = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,

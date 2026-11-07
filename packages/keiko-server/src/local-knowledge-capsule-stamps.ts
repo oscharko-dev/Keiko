@@ -31,13 +31,15 @@ interface CapsuleStampMemo {
 
 const memos = new Map<string, CapsuleStampMemo>();
 
+/**
+ * A missing file (no WAL yet, say) is part of the token. Any other metadata failure is thrown to the
+ * caller, exactly as opening the store itself would fail there.
+ */
 function fileToken(path: string): string {
-  try {
-    const stat = statSync(path, { bigint: true });
-    return `${String(stat.ino)}:${String(stat.size)}:${String(stat.mtimeNs)}`;
-  } catch {
-    return "absent";
-  }
+  const stat = statSync(path, { bigint: true, throwIfNoEntry: false });
+  return stat === undefined
+    ? "absent"
+    : `${String(stat.ino)}:${String(stat.size)}:${String(stat.mtimeNs)}`;
 }
 
 function storeChangeToken(dbPath: string): string {

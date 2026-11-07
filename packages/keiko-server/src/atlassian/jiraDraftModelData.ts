@@ -41,14 +41,22 @@ function keysOf(rows: readonly unknown[], state: "created" | "existing"): string
   });
 }
 
+/** The producer's own guidance stays first; unlisted keys add theirs, so no key is ever guessed. */
+function joinedGuidance(own: unknown, unlisted: boolean): string | undefined {
+  const parts = [
+    typeof own === "string" ? own : undefined,
+    unlisted ? JIRA_DRAFT_UNLISTED_GUIDANCE : undefined,
+  ].filter((part): part is string => part !== undefined);
+  return parts.length === 0 ? undefined : parts.join(" ");
+}
+
 function compactRows(body: JsonRecord, rows: readonly unknown[]): JsonRecord {
   const listed = listIssueKeys(
     { created: keysOf(rows, "created"), existing: keysOf(rows, "existing") },
     MODEL_KEY_LIST_BYTES,
     JIRA_DRAFT_RESULT_ROWS_MAX,
   );
-  const guidance =
-    body.guidance ?? (listed.unlisted > 0 ? JIRA_DRAFT_UNLISTED_GUIDANCE : undefined);
+  const guidance = joinedGuidance(body.guidance, listed.unlisted > 0);
   return {
     ...body,
     ...(guidance === undefined ? {} : { guidance }),
@@ -60,15 +68,34 @@ function compactRows(body: JsonRecord, rows: readonly unknown[]): JsonRecord {
   };
 }
 
+/** A stored row-by-row draft body with more rows than the model reads one by one. */
+function longRows(
+  data: unknown,
+): { readonly body: JsonRecord; readonly rows: readonly unknown[] } | undefined {
+  const body = record(data);
+  const rows: unknown = body?.items;
+  if (body === undefined || body.compact === true || !Array.isArray(rows)) return undefined;
+  return rows.length > JIRA_DRAFT_MODEL_ROWS_MAX ? { body, rows } : undefined;
+}
+
 /**
  * A draft's rows as the model reads them: as stored up to {@link JIRA_DRAFT_MODEL_ROWS_MAX} rows,
  * otherwise compact. An already compact body and anything not shaped as rows stay as they are.
  */
 export function jiraDraftRowsForModel<T>(data: T): T | JsonRecord {
-  const body = record(data);
-  const rows = body?.items;
-  if (body === undefined || body.compact === true || !Array.isArray(rows)) return data;
-  return rows.length <= JIRA_DRAFT_MODEL_ROWS_MAX ? data : compactRows(body, rows as unknown[]);
+  const long = longRows(data);
+  return long === undefined ? data : compactRows(long.body, long.rows);
+}
+
+/** How many stored rows a `jira.draft` result has and how many the model reads; none if unchanged. */
+export function jiraDraftCondensedRows(
+  canonicalId: string | undefined,
+  data: unknown,
+): { readonly rowCount: number; readonly keptRowCount: number } | undefined {
+  const long = canonicalId === DRAFT_TOOL_ID ? longRows(data) : undefined;
+  return long === undefined
+    ? undefined
+    : { rowCount: long.rows.length, keptRowCount: long.rows.filter(needsAttention).length };
 }
 
 /** The data the model reads of one tool result: only a `jira.draft` result can change. */
