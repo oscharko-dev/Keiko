@@ -68,7 +68,7 @@ export function BatchProgress({
   if (progress === undefined) return null;
   const view = batchProgressView(exchange, progress, turnState);
   return (
-    <output className={styles.cmpRegion}>
+    <div className={styles.cmpRegion}>
       <ProgressBar
         tone={view.tone}
         label={t(view.text, view.values)}
@@ -83,7 +83,7 @@ export function BatchProgress({
           ))}
         </ul>
       )}
-    </output>
+    </div>
   );
 }
 
@@ -99,7 +99,7 @@ export function RequirementsReadCard({
   const text = t("chat.requirements.read", { done: view.done, total: view.total });
   return (
     <section className={cardStyles.cmpCard} aria-label={label}>
-      <output className={styles.cmpRegion}>
+      <div className={styles.cmpRegion}>
         <ProgressBar
           tone={requirementsTone(view)}
           label={text}
@@ -111,7 +111,7 @@ export function RequirementsReadCard({
             <li>{view.cuts.map((cut) => t(cut.key, { count: cut.count })).join(" · ")}</li>
           </ul>
         )}
-      </output>
+      </div>
     </section>
   );
 }

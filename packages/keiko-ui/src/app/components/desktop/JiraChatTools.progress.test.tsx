@@ -83,9 +83,9 @@ const BATCH_COPY = {
     outlining: "Anforderungen werden gruppiert …",
     complete: "40 von 40 Vorgängen entworfen · 131 von 131 Anforderungen abgedeckt",
     failed: "Anforderungen, die nicht entworfen werden konnten: 3",
-    stopped: "Von dir abgebrochen nach 24 von 40 Vorgängen",
+    stopped: "Abgebrochen nach 24 von 40 Vorgängen",
     couldNotFinish: "Nicht abgeschlossen: 24 von 40 Vorgängen entworfen",
-    stoppedOutlining: "Von dir abgebrochen beim Gruppieren der Anforderungen",
+    stoppedOutlining: "Beim Gruppieren der Anforderungen abgebrochen",
     none: "Keine Vorgänge entworfen",
     uncovered: "Nicht abgedeckte Anforderungen: 4",
     unfinished: "Nicht fertiggestellte Vorgänge: 2",
@@ -187,16 +187,15 @@ describe.each(["en", "de"] as const)("draft batch progress card in %s", (locale)
     expect(container.querySelector("[data-stopped]")).toHaveAttribute("data-stopped", "true");
   });
 
-  it("announces its phase in a status region and marks grouping as working", async () => {
+  it("leaves announcements to the conversation log and marks grouping as working", async () => {
     const { container } = await renderTools(
       locale,
       [batch({ ...PROGRESS, phase: "outlining", draftedCount: 0, plannedCount: 0 })],
       "pending",
     );
-    const region = screen
-      .getAllByRole("status")
-      .find((node) => node.contains(screen.getByRole("progressbar")));
-    expect(region).toBeDefined();
+    // The chat's role="log" container announces changes; a nested live region reads them twice.
+    const progressbar = screen.getByRole("progressbar");
+    expect(progressbar.closest('[aria-live], [role="status"], output')).toBeNull();
     expect(container.querySelector("[data-tone]")).toHaveAttribute("data-indeterminate", "true");
   });
 

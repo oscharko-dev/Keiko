@@ -23,6 +23,12 @@
 .cmpProgress[data-tone="warning"] .cmpFill {
   background: var(--feedback-warning);
 }
+@media (forced-colors: active) {
+  .cmpProgress[data-indeterminate="true"] .cmpFill {
+    animation: none;
+    background: Highlight;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .cmpFill {
     transition: none;

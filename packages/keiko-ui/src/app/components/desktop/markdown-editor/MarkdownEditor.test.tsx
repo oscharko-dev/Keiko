@@ -29,6 +29,7 @@ vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: diagnostics
 afterEach(() => {
   controllers.length = 0;
   diagnostics.report.mockClear();
+  vi.restoreAllMocks();
 });
 
 function selectedText(): string {
@@ -258,7 +259,6 @@ describe("MarkdownEditor", () => {
     render(<Harness initial="hello" />);
     expect(screen.getByRole("button", { name: bold })).toBeTruthy();
     expect(screen.getByRole("button", { name: redo })).toBeTruthy();
-    vi.restoreAllMocks();
   });
 
   it("handles a very long line and HTML in source view without throwing", () => {

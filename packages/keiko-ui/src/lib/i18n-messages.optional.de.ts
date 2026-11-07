@@ -146,8 +146,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.requirements.cut.unitsOmitted": "Ausgelassene Anforderungen: {count}",
   "chat.batch.outlining": "Anforderungen werden gruppiert …",
   "chat.batch.drafted": "{drafted} von {planned} Vorgängen entworfen",
-  "chat.batch.stopped": "Von dir abgebrochen nach {drafted} von {planned} Vorgängen",
-  "chat.batch.stoppedOutlining": "Von dir abgebrochen beim Gruppieren der Anforderungen",
+  "chat.batch.stopped": "Abgebrochen nach {drafted} von {planned} Vorgängen",
+  "chat.batch.stoppedOutlining": "Beim Gruppieren der Anforderungen abgebrochen",
   "chat.batch.failedOutlining": "Das Gruppieren der Anforderungen wurde nicht abgeschlossen",
   "chat.batch.failed": "Nicht abgeschlossen: {drafted} von {planned} Vorgängen entworfen",
   "chat.batch.complete":

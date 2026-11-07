@@ -289,7 +289,11 @@ it("observes changes to either source and rejects a foreign Chat within the gran
 it("publishes each counted page of a running draft batch while its call stays unsettled", async () => {
   vi.useFakeTimers();
   const call = { id: "call-batch", name: "jira_draft_batch", arguments: {} };
-  const page = (phase: "outlining" | "drafting", draftedCount: number): ChatMessage => ({
+  const page = (
+    phase: "outlining" | "drafting",
+    draftedCount: number,
+    coveredRequirementCount = draftedCount,
+  ): ChatMessage => ({
     ...message,
     toolTranscript: {
       ...message.toolTranscript,
@@ -301,7 +305,7 @@ it("publishes each counted page of a running draft batch while its call stays un
             phase,
             draftedCount,
             plannedCount: phase === "outlining" ? 0 : 10,
-            coveredRequirementCount: draftedCount,
+            coveredRequirementCount,
             requirementCount: 10,
             failedCount: 0,
           },
@@ -312,10 +316,13 @@ it("publishes each counted page of a running draft batch while its call stays un
   const outlining = page("outlining", 0);
   const firstPage = page("drafting", 0);
   const secondPage = page("drafting", 4);
+  // A grouped issue covers more requirements than it adds issues.
+  const widerPage = page("drafting", 4, 7);
   vi.spyOn(api, "fetchChatMessages")
     .mockResolvedValueOnce({ messages: [outlining] })
     .mockResolvedValueOnce({ messages: [firstPage] })
-    .mockResolvedValue({ messages: [secondPage] });
+    .mockResolvedValueOnce({ messages: [secondPage] })
+    .mockResolvedValue({ messages: [widerPage] });
   const publish = vi.fn();
   const stop = watchChatToolConsent(
     chat,
@@ -324,7 +331,12 @@ it("publishes each counted page of a running draft batch while its call stays un
     new AbortController().signal,
     publish,
   );
-  await vi.advanceTimersByTimeAsync(3500);
-  expect(publish.mock.calls.map(([entry]) => entry)).toEqual([outlining, firstPage, secondPage]);
+  await vi.advanceTimersByTimeAsync(4500);
+  expect(publish.mock.calls.map(([entry]) => entry)).toEqual([
+    outlining,
+    firstPage,
+    secondPage,
+    widerPage,
+  ]);
   stop();
 });
