@@ -1,3 +1,4 @@
+import { JIRA_PROJECT_REFERENCE_PATTERN } from "@oscharko-dev/keiko-connectors";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { REQUIREMENT_DOCUMENT_SCOPE_SCHEMA } from "@oscharko-dev/keiko-quality-intelligence";
 import {
@@ -30,7 +31,7 @@ const DESCRIPTION =
 
 const PROJECT_REFERENCE = {
   ...text(32),
-  pattern: "^[A-Za-z0-9_]{1,32}$",
+  pattern: JIRA_PROJECT_REFERENCE_PATTERN,
   description: "Project key (e.g. KER) or numeric id.",
 };
 const ISSUE_TYPE_REFERENCE = {
@@ -99,6 +100,9 @@ export const JIRA_DRAFT_BATCH_DECLARATION: ManagedMcpToolDeclaration = Object.fr
         },
         createRequested: { type: "boolean" },
         guidance: text(1024),
+        paused: { type: "boolean" },
+        remainingCount: COUNT,
+        remainingRequirementIds: { type: "array", maxItems: 50, items: text(80) },
         availableIssueTypes: { type: "array", maxItems: 20, items: text(120) },
         availableRequirementCount: COUNT,
         availableDocuments: { type: "array", maxItems: 20, items: text(512) },

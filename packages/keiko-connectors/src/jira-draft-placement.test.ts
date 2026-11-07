@@ -81,6 +81,26 @@ describe("resolveJiraDraftPlacementWith (#4173)", () => {
     expect(!result.ok && result.issueTypeNames).toHaveLength(20);
   });
 
+  it("upper-cases a project key for the read and leaves a numeric id alone", async () => {
+    const paths: string[] = [];
+    const request: JiraMutationRequest = (path, ...rest) => {
+      paths.push(path);
+      return project(OK_BODY)(path, ...rest);
+    };
+    await resolveJiraDraftPlacementWith(request, "ker", undefined);
+    await resolveJiraDraftPlacementWith(request, "10000", undefined);
+    expect(paths).toEqual(["project/KER", "project/10000"]);
+  });
+
+  it("names a project with only subtask types as having no usable issue type", async () => {
+    const onlySubtasks = { ...OK_BODY, issueTypes: [TYPES[1]] };
+    for (const type of [undefined, "Story"])
+      expect(await resolveJiraDraftPlacementWith(project(onlySubtasks), "KER", type)).toEqual({
+        ok: false,
+        reason: "no-usable-issue-type",
+      });
+  });
+
   it("refuses an unknown project, an unreadable one and a malformed body", async () => {
     expect(await resolveJiraDraftPlacementWith(project(undefined, 404), "ZZZ", undefined)).toEqual({
       ok: false,

@@ -152,6 +152,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.batch.failed": "Nicht abgeschlossen: {drafted} von {planned} Vorgängen entworfen",
   "chat.batch.complete":
     "{drafted} von {planned} Vorgängen entworfen · {covered} von {requirements} Anforderungen abgedeckt",
+  "chat.batch.paused":
+    "Pausiert nach {drafted} von {planned} Vorgängen. Weiter, um den Rest zu entwerfen",
   "chat.batch.none": "Keine Vorgänge entworfen",
   "chat.batch.uncovered": "Nicht abgedeckte Anforderungen: {count}",
   "chat.batch.unfinished": "Nicht fertiggestellte Vorgänge: {count}",
@@ -295,6 +297,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.batch.refused.noKnowledgePod":
     "An diesen Chat ist kein Knowledge Pod mit Anforderungen angehängt",
   "chat.jira.batch.refused.projectNotFound": "Projekt nicht gefunden",
+  "chat.jira.batch.refused.noUsableIssueType":
+    "Kein Vorgangstyp zum Entwerfen in diesem Projekt verfügbar",
   "chat.jira.batch.refused.issueTypeNotFound": "Vorgangstyp in diesem Projekt nicht verfügbar",
   "browserApproval.title": "Diesen Browser verbinden",
   "browserApproval.close": "Schließen",

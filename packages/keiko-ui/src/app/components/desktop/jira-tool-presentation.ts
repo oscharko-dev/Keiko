@@ -130,6 +130,7 @@ const BATCH_REFUSAL_KEYS: Readonly<Record<string, WidgetMessageKey>> = {
   "no-knowledge-pod": "chat.jira.batch.refused.noKnowledgePod",
   "project-not-found": "chat.jira.batch.refused.projectNotFound",
   "issue-type-not-found": "chat.jira.batch.refused.issueTypeNotFound",
+  "no-usable-issue-type": "chat.jira.batch.refused.noUsableIssueType",
 };
 function batchRefusalState(exchange: ChatToolExchange): WidgetMessageKey | undefined {
   const { result } = exchange;

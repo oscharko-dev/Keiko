@@ -72,9 +72,11 @@ function refused(
 
 const REFUSAL_GUIDANCE: Partial<Record<JiraDraftBatchRefusal, string>> = {
   "invalid-input":
-    "Send projectId (project key such as KER, or numeric id), granularity, and create; issueTypeId (name or id) is optional.",
+    "Send projectId (project key such as KER, or numeric id; letters, digits and underscore only), granularity, and create; issueTypeId (name or id) is optional.",
   "project-not-found":
     "Jira has no project with that key or id that this connection can read. Ask the user for the project key and call again.",
+  "no-usable-issue-type":
+    "This project offers no issue type for drafting (only subtask types). Tell the user and ask for another project.",
   "issue-type-not-found":
     "The project has no such issue type. Call again with one of availableIssueTypes, or omit issueTypeId.",
   "no-knowledge-pod":
@@ -125,11 +127,22 @@ function selectedRequirements(
   units: Parameters<typeof selectUnits>[0],
   args: JiraDraftBatchArguments,
   redact: (value: string) => string,
-): { readonly requirements: readonly DraftBatchRequirement[]; readonly duplicateRefs: string[] } {
+  drafted: ReadonlySet<string>,
+): {
+  readonly requirements: readonly DraftBatchRequirement[];
+  readonly duplicateRefs: string[];
+  /** Selected requirements the continued draft already holds; a re-run never drafts them twice. */
+  readonly alreadyDrafted: number;
+} {
+  let alreadyDrafted = 0;
   const byRef = new Map<string, DraftBatchRequirement>();
   const duplicateRefs = new Set<string>();
   for (const { entry } of selectUnits(units, args.filter, redact)) {
     const ref = requirementReference(entry);
+    if (drafted.has(ref)) {
+      alreadyDrafted += 1;
+      continue;
+    }
     if (byRef.has(ref)) {
       duplicateRefs.add(ref);
       continue;
@@ -143,18 +156,21 @@ function selectedRequirements(
       criteria: entry.acceptanceCriteria.map((item) => redact(item.text)),
     });
   }
-  return { requirements: [...byRef.values()], duplicateRefs: [...duplicateRefs] };
+  return { requirements: [...byRef.values()], duplicateRefs: [...duplicateRefs], alreadyDrafted };
 }
 
 function noRequirements(
   count: number,
   units: Parameters<typeof selectUnits>[0],
   args: JiraDraftBatchArguments,
+  alreadyDrafted: number,
 ): Collected {
   const guidance =
-    args.filtered && count > 0
-      ? `No requirement matched the requirements filter. Omit requirements to draft all ${String(count)}.`
-      : (REFUSAL_GUIDANCE["no-requirements"] ?? "");
+    alreadyDrafted > 0
+      ? "Every selected requirement is already in this draft. Tell the user the draft is complete."
+      : args.filtered && count > 0
+        ? `No requirement matched the requirements filter. Omit requirements to draft all ${String(count)}.`
+        : (REFUSAL_GUIDANCE["no-requirements"] ?? "");
   return { ok: false, refusal: "no-requirements", facts: unfilteredFacts(units, guidance) };
 }
 
@@ -162,6 +178,7 @@ function collectRequirements(
   deps: UiHandlerDeps,
   context: JiraDraftBatchContext,
   args: JiraDraftBatchArguments,
+  drafted: ReadonlySet<string>,
 ): Collected {
   const scopes = chatKnowledgeScopes(deps.store.findChatById(context.chatId));
   if (scopes.length === 0) return { ok: false, refusal: "no-knowledge-pod" };
@@ -173,9 +190,15 @@ function collectRequirements(
       return { ok: false, refusal: "scope-unavailable" };
     const cut = collection.cutReasons.length > 0 || collection.unitsOmitted > 0;
     if (cut && !args.filtered) return { ok: false, refusal: "requirements-cut" };
-    const selected = selectedRequirements(collection.units, args, contentRedact(deps));
-    if (selected.requirements.length > 0) return { ok: true, cut, ...selected };
-    return noRequirements(collection.units.length, collection.units, args);
+    const selected = selectedRequirements(collection.units, args, contentRedact(deps), drafted);
+    if (selected.requirements.length > 0)
+      return {
+        ok: true,
+        cut,
+        requirements: selected.requirements,
+        duplicateRefs: selected.duplicateRefs,
+      };
+    return noRequirements(collection.units.length, collection.units, args, selected.alreadyDrafted);
   } finally {
     session.close();
   }
@@ -341,7 +364,9 @@ function resultGuidance(run: BatchRun, result: DraftBatchResult, failedCount: nu
 
 function partialGuidance(run: BatchRun, result: DraftBatchResult, drafted: number): string {
   const notes = [
-    `${String(drafted)} of ${String(result.progress.plannedCount)} issues are drafted. Report failedRequirementRefs to the user and offer to retry them with requirements.ids and the same draftId.`,
+    result.stopReason === "deadline"
+      ? `Time ran out: ${String(drafted)} of ${String(result.progress.plannedCount)} issues are drafted and saved. Tell the user, and once the draft is handled call jira_draft_batch again with the same draftId and no requirements filter (or requirements.ids = remainingRequirementIds if the draft is gone); only the ${String(remainingCount(result))} requirements not yet drafted are drafted.`
+      : `${String(drafted)} of ${String(result.progress.plannedCount)} issues are drafted. Report failedRequirementRefs to the user and offer to retry them with requirements.ids and the same draftId.`,
     result.stopReason === "model-failed"
       ? "The model failed part-way; the issues drafted before are saved."
       : "",
@@ -353,6 +378,19 @@ function partialGuidance(run: BatchRun, result: DraftBatchResult, drafted: numbe
       : "",
   ];
   return notes.filter((note) => note !== "").join(" ");
+}
+
+/** Ids `requirements.ids` takes; the schema bounds how many one call may name. */
+const REMAINING_IDS_MAX = 50;
+
+function remainingCount(result: DraftBatchResult): number {
+  return result.deferredRequirementRefs.length;
+}
+
+function remainingIds(result: DraftBatchResult): string[] {
+  return result.deferredRequirementRefs
+    .map((ref) => ref.slice(ref.lastIndexOf(":") + 1))
+    .slice(0, REMAINING_IDS_MAX);
 }
 
 function failedRefs(run: BatchRun, result: DraftBatchResult): readonly string[] {
@@ -382,6 +420,13 @@ function resultData(run: BatchRun, result: DraftBatchResult): CatalogJsonObject 
     coveredRequirementCount: progress.coveredRequirementCount,
     failedRequirementRefs: failedRefs(run, result).slice(0, JIRA_DRAFT_BATCH_FAILED_REFS_MAX),
     createRequested: run.args.create,
+    ...(result.stopReason === "deadline"
+      ? {
+          paused: true,
+          remainingCount: remainingCount(result),
+          remainingRequirementIds: remainingIds(result),
+        }
+      : {}),
     guidance: succeeded ? resultGuidance(run, result, failedCount) : failureGuidance(result, fatal),
   };
 }
@@ -434,6 +479,22 @@ function refusalResult(
   return refused(refusal, REFUSAL_GUIDANCE[refusal], facts);
 }
 
+/** Requirements the continued draft already holds, so a resumed batch drafts only the rest. */
+function draftedRefs(
+  draft: JiraDraftToolDeps<JiraDraftBatchContext>,
+  context: JiraDraftBatchContext,
+  args: JiraDraftBatchArguments,
+): ReadonlySet<string> {
+  const current =
+    args.draftId === undefined ? undefined : draft.store.peek(args.draftId, draft.owner(context));
+  const refs = new Set<string>();
+  for (const item of current?.items ?? [])
+    if (Array.isArray(item.requirementIds))
+      for (const ref of item.requirementIds as unknown[])
+        if (typeof ref === "string") refs.add(ref);
+  return refs;
+}
+
 /** The project and issue type as numeric ids, or the refusal that tells the model how to retry. */
 async function resolvePlacement(
   run: BatchRun,
@@ -448,6 +509,8 @@ async function resolvePlacement(
   );
   if (placement.ok) return placement;
   if (placement.reason === "project-not-found") return refusalResult(run, "project-not-found");
+  if (placement.reason === "no-usable-issue-type")
+    return refusalResult(run, "no-usable-issue-type");
   if (placement.reason === "issue-type-not-found")
     return refusalResult(run, "issue-type-not-found", {
       availableIssueTypes: [...(placement.issueTypeNames ?? [])],
@@ -491,7 +554,7 @@ async function runBatch(
   draft: JiraDraftToolDeps<JiraDraftBatchContext>,
 ): Promise<ManagedMcpToolResult> {
   const { deps, context, args } = run;
-  const collected = collectRequirements(deps, context, args);
+  const collected = collectRequirements(deps, context, args, draftedRefs(draft, context, args));
   if (!collected.ok) return refusalResult(run, collected.refusal, collected.facts);
   run.duplicateRefs = collected.duplicateRefs;
   const placement = await resolvePlacement(run, connection);
@@ -521,6 +584,7 @@ async function runBatch(
       observation(run, observed);
     },
     signal: context.signal,
+    budget: context.mutationGuard.executionBudget,
     remainingCalls: context.remainingModelCalls,
   };
   const result = await runJiraDraftBatch(

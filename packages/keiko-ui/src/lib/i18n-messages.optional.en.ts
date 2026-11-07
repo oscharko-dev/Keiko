@@ -146,6 +146,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.batch.failed": "Could not finish: {drafted} of {planned} issues drafted",
   "chat.batch.complete":
     "Drafted {drafted} of {planned} issues · {covered} of {requirements} requirements covered",
+  "chat.batch.paused": "Paused after {drafted} of {planned} issues. Continue to draft the rest",
   "chat.batch.none": "No issues drafted",
   "chat.batch.uncovered": "Requirements not covered: {count}",
   "chat.batch.unfinished": "Issues not finished: {count}",
@@ -283,6 +284,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.batch.refused.noKnowledgePod":
     "No Knowledge Pod with requirements is attached to this Chat",
   "chat.jira.batch.refused.projectNotFound": "Project not found",
+  "chat.jira.batch.refused.noUsableIssueType":
+    "No issue type available for drafting in this project",
   "chat.jira.batch.refused.issueTypeNotFound": "Issue type not available in this project",
   "browserApproval.title": "Connect this browser",
   "browserApproval.close": "Close",

@@ -95,6 +95,8 @@ export interface DraftBatchPorts {
   readonly progress: (progress: ChatToolBatchProgress) => void;
   readonly observe: (observation: DraftBatchObservation) => void;
   readonly signal: AbortSignal;
+  /** The invocation's clock and hard deadline; absent means no deadline to respect. */
+  readonly budget?: { readonly nowMs: () => number; readonly deadlineAtMs: number } | undefined;
   /** Model calls the accepted turn still allows; read before each call. Absent means unbounded. */
   readonly remainingCalls?: (() => number) | undefined;
 }
@@ -116,7 +118,7 @@ export interface DraftBatchInput {
 }
 
 export type DraftBatchStopReason =
-  "no-requirements" | "stage-failed" | "call-limit" | "model-failed";
+  "no-requirements" | "stage-failed" | "call-limit" | "model-failed" | "deadline";
 
 export interface DraftBatchResult {
   readonly progress: ChatToolBatchProgress;
@@ -125,6 +127,8 @@ export interface DraftBatchResult {
   readonly itemCount: number;
   readonly pageCount: number;
   readonly failedRequirementRefs: readonly string[];
+  /** Requirements the batch had not begun when the deadline stopped it; a new call drafts them. */
+  readonly deferredRequirementRefs: readonly string[];
   readonly stopReason?: DraftBatchStopReason | undefined;
   /** The error that stopped the batch (`model-failed`, `stage-failed`), for the failure line. */
   readonly error?: unknown;
@@ -144,6 +148,8 @@ class BatchState {
   calls = 0;
   itemTokens: number;
   tooLargeCount = 0;
+  /** The slowest page so far, retries included: the estimate of the next one. */
+  slowestPageMs = 0;
   error: unknown;
   readonly drafted = new Set<string>();
   readonly failed: DraftBatchEntry[] = [];
@@ -588,6 +594,18 @@ function withoutOversized(state: BatchState, ports: DraftBatchPorts): DraftBatch
   return fits;
 }
 
+/** Share added to the slowest observed page, and time kept to settle the result. */
+const PAGE_ESTIMATE_MARGIN = 1.25;
+const DEADLINE_RESERVE_MS = 10_000;
+
+/** A next page runs only when the slowest page so far, with a margin, still ends before the deadline. */
+function pageFitsDeadline(state: BatchState, ports: DraftBatchPorts): boolean {
+  const { budget } = ports;
+  if (budget === undefined || state.slowestPageMs === 0) return true;
+  const estimate = state.slowestPageMs * PAGE_ESTIMATE_MARGIN + DEADLINE_RESERVE_MS;
+  return budget.nowMs() + estimate <= budget.deadlineAtMs;
+}
+
 async function draftAll(state: BatchState, ports: DraftBatchPorts): Promise<void> {
   const pending = withoutOversized(state, ports);
   const retries: (readonly DraftBatchEntry[])[] = [];
@@ -596,7 +614,14 @@ async function draftAll(state: BatchState, ports: DraftBatchPorts): Promise<void
     page !== undefined;
     page = nextPage(state, retries, pending)
   ) {
+    if (!pageFitsDeadline(state, ports)) {
+      state.stopReason = "deadline";
+      break;
+    }
+    const startedAt = ports.budget?.nowMs() ?? 0;
     const outcome = await draftPage(state, ports, page);
+    if (ports.budget !== undefined)
+      state.slowestPageMs = Math.max(state.slowestPageMs, ports.budget.nowMs() - startedAt);
     if (outcome.kind === "stopped") break;
     if (outcome.kind === "redo") retries.push(...[...outcome.pages].reverse());
     else if (outcome.kind !== "staged") settleUndrafted(state, ports, page, outcome, retries);
@@ -604,9 +629,21 @@ async function draftAll(state: BatchState, ports: DraftBatchPorts): Promise<void
   }
 }
 
+function refsOf(entries: readonly DraftBatchEntry[]): readonly string[] {
+  return [...new Set(entries.flatMap((entry) => entry.requirements.map((item) => item.ref)))];
+}
+
 function undraftedRefs(state: BatchState): readonly string[] {
-  const failed = state.entries.filter((entry) => !state.drafted.has(entry.ref));
-  return [...new Set(failed.flatMap((entry) => entry.requirements.map((item) => item.ref)))];
+  return refsOf(state.entries.filter((entry) => !state.drafted.has(entry.ref)));
+}
+
+/** Undrafted issues that were neither tried nor given up: only a deadline leaves such issues. */
+function deferredRefs(state: BatchState): readonly string[] {
+  if (state.stopReason !== "deadline") return [];
+  const failed = new Set(state.failed.map((entry) => entry.ref));
+  return refsOf(
+    state.entries.filter((entry) => !state.drafted.has(entry.ref) && !failed.has(entry.ref)),
+  );
 }
 
 /**
@@ -624,6 +661,7 @@ export async function runJiraDraftBatch(
       itemCount: 0,
       pageCount: 0,
       failedRequirementRefs: [],
+      deferredRequirementRefs: [],
       stopReason: "no-requirements",
       tooLargeCount: 0,
     };
@@ -643,6 +681,7 @@ export async function runJiraDraftBatch(
     itemCount: state.itemCount,
     pageCount: state.pageCount,
     failedRequirementRefs: undraftedRefs(state),
+    deferredRequirementRefs: deferredRefs(state),
     stopReason: state.stopReason,
     ...(state.error === undefined ? {} : { error: state.error }),
     tooLargeCount: state.tooLargeCount,

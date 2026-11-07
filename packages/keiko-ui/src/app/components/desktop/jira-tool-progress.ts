@@ -97,11 +97,13 @@ function stoppedText(progress: ChatToolBatchProgress, turnState: ChatTurnState):
 }
 
 function batchText(
+  exchange: ChatToolExchange,
   progress: ChatToolBatchProgress,
   stoppedBy: ChatTurnState | undefined,
 ): WidgetMessageKey {
   if (progress.phase === "complete") {
-    return progress.plannedCount === 0 ? "chat.batch.none" : "chat.batch.complete";
+    if (progress.plannedCount === 0) return "chat.batch.none";
+    return dataOf(exchange)?.paused === true ? "chat.batch.paused" : "chat.batch.complete";
   }
   if (stoppedBy !== undefined) return stoppedText(progress, stoppedBy);
   return progress.phase === "outlining" ? "chat.batch.outlining" : "chat.batch.drafted";
@@ -137,7 +139,7 @@ export function batchProgressView(
     tone: batchTone(progress, stopped, notes.length),
     value: progress.phase === "outlining" || noIssues ? undefined : progress.draftedCount,
     max: Math.max(progress.plannedCount, 1),
-    text: batchText(progress, stopped ? turnState : undefined),
+    text: batchText(exchange, progress, stopped ? turnState : undefined),
     values: {
       drafted: progress.draftedCount,
       planned: progress.plannedCount,

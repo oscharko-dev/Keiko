@@ -53,6 +53,7 @@ export const JIRA_DRAFT_BATCH_REFUSALS = [
   "draft-unavailable",
   "project-not-found",
   "issue-type-not-found",
+  "no-usable-issue-type",
 ] as const;
 export type JiraDraftBatchRefusal = (typeof JIRA_DRAFT_BATCH_REFUSALS)[number];
 
@@ -64,6 +65,7 @@ export const JIRA_DRAFT_BATCH_STOP_REASONS = [
   "stage-failed",
   "call-limit",
   "model-failed",
+  "deadline",
   "cancelled",
 ] as const;
 export type JiraDraftBatchStopReason = (typeof JIRA_DRAFT_BATCH_STOP_REASONS)[number];
@@ -165,12 +167,14 @@ const REFUSAL_KIND: Readonly<Record<JiraDraftBatchRefusal, ActivityLogErrorKind>
   "draft-unavailable": "conflict",
   "project-not-found": "invalid-request",
   "issue-type-not-found": "invalid-request",
+  "no-usable-issue-type": "invalid-request",
 };
 
 const STOP_KIND: Readonly<Record<JiraDraftBatchStopReason, ActivityLogErrorKind>> = {
   "stage-failed": "conflict",
   "call-limit": "validation-failed",
   "model-failed": "unavailable",
+  deadline: "timeout",
   cancelled: "cancelled",
 };
 

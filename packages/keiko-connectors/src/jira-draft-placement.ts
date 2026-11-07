@@ -8,13 +8,18 @@ import { requestFor } from "./jira-managed-mutations.js";
 export const JIRA_PLACEMENT_TYPE_NAMES_MAX = 20;
 
 const NUMERIC_ID = /^[0-9]{1,32}$/u;
-const PROJECT_KEY = /^[A-Za-z][A-Za-z0-9_]{0,31}$/u;
+/**
+ * One rule for the tool schema and the parser. A key Jira does not know ("1AB", "_AB") is then
+ * answered as an unknown project, with the retry hint, instead of as malformed input.
+ */
+export const JIRA_PROJECT_REFERENCE_PATTERN = "^[A-Za-z0-9_]{1,32}$";
+const PROJECT_REFERENCE = new RegExp(JIRA_PROJECT_REFERENCE_PATTERN, "u");
 const TYPE_NAME_CHARS_MAX = 120;
 const TYPES_SCANNED_MAX = 200;
 
 /** A project is a numeric id or a project key; the model never needs a prior read for either. */
 export function isJiraProjectReference(value: unknown): value is string {
-  return typeof value === "string" && (NUMERIC_ID.test(value) || PROJECT_KEY.test(value));
+  return typeof value === "string" && PROJECT_REFERENCE.test(value);
 }
 
 /** An issue type is a numeric id or a name. */
@@ -36,7 +41,12 @@ export type JiraDraftPlacementResult =
   | {
       readonly ok: false;
       readonly reason:
-        "project-not-found" | "issue-type-not-found" | "unavailable" | "malformed-payload";
+        | "project-not-found"
+        | "issue-type-not-found"
+        /** The project offers only subtask types, or none. */
+        | "no-usable-issue-type"
+        | "unavailable"
+        | "malformed-payload";
       /** The project's usable issue type names, bounded, for a retry with one of them. */
       readonly issueTypeNames?: readonly string[];
     };
@@ -105,13 +115,16 @@ export async function resolveJiraDraftPlacementWith(
   project: string,
   issueType: string | undefined,
 ): Promise<JiraDraftPlacementResult> {
-  const read = await request(`project/${encodeURIComponent(project)}`);
+  // Jira project keys are upper case; a numeric id is passed through unchanged.
+  const reference = NUMERIC_ID.test(project) ? project : project.toUpperCase();
+  const read = await request(`project/${encodeURIComponent(reference)}`);
   if (!read.ok) {
     return { ok: false, reason: read.reason === "not-found" ? "project-not-found" : "unavailable" };
   }
   const found = projectOf(read.body);
   if (found === undefined) return { ok: false, reason: "malformed-payload" };
   const { id, key, types } = found;
+  if (types.length === 0) return { ok: false, reason: "no-usable-issue-type" };
   const chosen = chooseType(types, issueType);
   if (chosen === undefined) {
     return {

@@ -1,3 +1,4 @@
+import { JIRA_PROJECT_REFERENCE_PATTERN } from "@oscharko-dev/keiko-connectors";
 import { describe, expect, it } from "vitest";
 import { parseJiraDraftBatchArguments } from "./jiraDraftBatchArguments.js";
 
@@ -22,9 +23,17 @@ describe("parseJiraDraftBatchArguments (#4173)", () => {
     ).toMatchObject({ issueTypeId: "Story" });
   });
 
+  it("accepts exactly what the tool schema's project pattern accepts", () => {
+    const pattern = new RegExp(JIRA_PROJECT_REFERENCE_PATTERN, "u");
+    for (const projectId of ["_AB", "1AB", "KER", "10000", "k_9"])
+      expect(parseJiraDraftBatchArguments({ ...BASE, projectId }) !== undefined).toBe(
+        pattern.test(projectId),
+      );
+  });
+
   it.each([
     ["a key with a space", { projectId: "K E R" }],
-    ["a key starting with a digit and letters", { projectId: "1KER" }],
+    ["a key with a hyphen", { projectId: "K-E" }],
     ["a missing project", {}],
     ["an over-long issue type", { projectId: "KER", issueTypeId: "x".repeat(121) }],
     ["a blank issue type", { projectId: "KER", issueTypeId: "  " }],

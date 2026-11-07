@@ -649,6 +649,50 @@ describe("runJiraDraftBatch without template sections", () => {
   });
 });
 
+describe("runJiraDraftBatch deadline", () => {
+  /** Every model call takes 100 s on a fake clock. */
+  function clocked(deadlineAtMs: number): { h: Harness; ports: DraftBatchPorts } {
+    let now = 0;
+    const h = harness({
+      completionPerKey: undefined,
+      onGenerate: () => {
+        now += 100_000;
+      },
+    });
+    return { h, ports: { ...h.ports, budget: { nowMs: () => now, deadlineAtMs } } };
+  }
+
+  it("stops before a page that cannot fit and keeps the staged draft", async () => {
+    const { h, ports } = clocked(300_000);
+    const result = await runJiraDraftBatch(input(25), ports);
+    expect(result.stopReason).toBe("deadline");
+    expect(h.fillCalls).toHaveLength(2);
+    expect(result.progress.draftedCount).toBe(20);
+    expect(result.draftId).toBe("draft-1");
+    const rest = requirements(25)
+      .slice(20)
+      .map((item) => item.ref);
+    expect(result.deferredRequirementRefs).toEqual(rest);
+    expect(result.failedRequirementRefs).toEqual(rest);
+  });
+
+  it("always drafts the first page, whatever the deadline", async () => {
+    const { h, ports } = clocked(1);
+    const result = await runJiraDraftBatch(input(25), ports);
+    expect(h.fillCalls).toHaveLength(1);
+    expect(result.stopReason).toBe("deadline");
+    expect(result.progress.draftedCount).toBe(10);
+  });
+
+  it("is unchanged when every page fits", async () => {
+    const { h, ports } = clocked(100_000_000);
+    const result = await runJiraDraftBatch(input(25), ports);
+    expectComplete(result, 25, h);
+    expect(result.stopReason).toBeUndefined();
+    expect(result.deferredRequirementRefs).toEqual([]);
+  });
+});
+
 describe("runJiraDraftBatch model and stage errors", () => {
   it("stops at the call allowance and reports what is not drafted", async () => {
     const h = harness({ completionPerKey: undefined });

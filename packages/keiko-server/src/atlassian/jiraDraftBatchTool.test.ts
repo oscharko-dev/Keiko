@@ -83,6 +83,16 @@ function templateFor(section: string, ...frontMatter: readonly string[]): JiraIs
 function connection(templates: JiraIssueTemplateSet | undefined): JiraManagedConnection {
   const http: AtlassianHttpBodyPort = (request) => {
     const path = new URL(request.url).pathname;
+    if (path.endsWith("/project/DENIED")) return Promise.resolve(response({}, 401));
+    if (path.endsWith("/project/FORBID")) return Promise.resolve(response({}, 403));
+    if (path.endsWith("/project/NOTYPES"))
+      return Promise.resolve(
+        response({
+          id: "10009",
+          key: "NOTYPES",
+          issueTypes: [{ id: "1", name: "Sub", subtask: true }],
+        }),
+      );
     if (path.endsWith("/project/10000") || path.endsWith("/project/SYN"))
       return Promise.resolve(
         response({
@@ -172,6 +182,7 @@ interface Harness {
       readonly model?: boolean;
       readonly beforeEffect?: () => boolean;
       readonly signal?: AbortSignal;
+      readonly budget?: { readonly nowMs: () => number; readonly deadlineAtMs: number };
     },
   ) => ReturnType<ReturnType<typeof createJiraDraftBatchExecutor>>;
   readonly requests: GatewayCallRequest[];
@@ -222,6 +233,7 @@ async function harness(
         correlationId: "batch-correlation-1",
         signal: runOptions.signal ?? new AbortController().signal,
         beforeEffect: runOptions.beforeEffect ?? ((): boolean => true),
+        mutationGuard: { check: (): boolean => true, executionBudget: runOptions.budget },
         chatId: f.chatId,
         userMessageId: "turn-1",
         knowledgeReviewModelId: () => "chat-model",
@@ -567,6 +579,52 @@ describe("jira.draft-batch (#4173)", () => {
     expect(result.data.guidance).toContain("availableIssueTypes");
   });
 
+  it("resolves a lower-case project key", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [{ capsuleId: "cap-a", text: specification(2).text }],
+    );
+    const result = await h.run({ ...ARGS, projectId: "syn", issueTypeId: undefined });
+    expect(result.data).toMatchObject({ outcome: "succeeded", draftedCount: 2 });
+  });
+
+  it.each(["DENIED", "FORBID"])(
+    "reports an unreadable project (%s) as unavailable, not as unknown",
+    async (projectId) => {
+      const h = await harness(
+        (request) => page(keysOf(request)),
+        [{ capsuleId: "cap-a", text: specification(2).text }],
+      );
+      const result = await h.run({ ...ARGS, projectId });
+      expect(result.data.reason).toBe("template-unavailable");
+      expect(h.requests).toHaveLength(0);
+    },
+  );
+
+  it("refuses a project with only subtask types with its own closed reason", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [{ capsuleId: "cap-a", text: specification(2).text }],
+    );
+    const result = await h.run({ ...ARGS, projectId: "NOTYPES", issueTypeId: undefined });
+    expect(result.data.reason).toBe("no-usable-issue-type");
+    expect(result.data.availableIssueTypes).toBeUndefined();
+  });
+
+  it("keeps issue type and document names out of the Activity Log", async () => {
+    const h = await harness(
+      (request) => page(keysOf(request)),
+      [{ capsuleId: "cap-a", text: specification(2).text }],
+    );
+    const typeRefusal = await h.run({ ...ARGS, issueTypeId: "Saga" });
+    const filterRefusal = await h.run({ ...ARGS, requirements: { ids: ["NOPE-1"] } });
+    const scopes = filterRefusal.data.availableDocuments as string[];
+    const log = JSON.stringify(proofLines(h));
+    expect(typeRefusal.data.availableIssueTypes).toEqual(["Epic", "Story"]);
+    expect(scopes.length).toBeGreaterThan(0);
+    for (const secret of ["Saga", "Epic", "Story", ...scopes]) expect(log).not.toContain(secret);
+  });
+
   it("tells a model whose filter matched nothing how many requirements it can draft", async () => {
     const h = await harness(
       (request) => page(keysOf(request)),
@@ -581,6 +639,65 @@ describe("jira.draft-batch (#4173)", () => {
     expect(proofLines(h)).toEqual([
       expect.objectContaining({ refusal: "no-requirements", requirementCount: 3 }),
     ]);
+  });
+
+  it("pauses at the deadline with the draft kept, and a re-run drafts only the rest", async () => {
+    let now = 0;
+    const h = await harness(
+      (request) => {
+        now += 100_000;
+        return page(keysOf(request));
+      },
+      [{ capsuleId: "cap-a", text: specification(60).text }],
+    );
+
+    const first = await h.run(ARGS, { budget: { nowMs: () => now, deadlineAtMs: 200_000 } });
+
+    expect(first.isError).not.toBe(true);
+    const drafted = Number(first.data.draftedCount);
+    expect(first.data).toMatchObject({ outcome: "succeeded", paused: true, draftId: DRAFT_ID });
+    expect(drafted).toBeGreaterThan(0);
+    expect(drafted).toBeLessThan(60);
+    expect(first.data.remainingCount).toBe(60 - drafted);
+    expect(first.data.remainingRequirementIds).toHaveLength(60 - drafted);
+    expect(first.data.guidance).toEqual(expect.stringContaining("call jira_draft_batch again"));
+    expect(
+      describeCatalogSchemaMismatch(
+        JIRA_DRAFT_BATCH_DECLARATION.descriptor.resultSchema,
+        first.data,
+      ),
+    ).toBeUndefined();
+    expect(proofLines(h).at(-1)).toMatchObject({ phase: "completed", stopReason: "deadline" });
+
+    now = 0;
+    const second = await h.run(
+      { ...ARGS, draftId: DRAFT_ID },
+      { budget: { nowMs: () => now, deadlineAtMs: 100_000_000 } },
+    );
+
+    expect(second.data).toMatchObject({ outcome: "succeeded", requirementCount: 60 - drafted });
+    expect(second.data.paused).toBeUndefined();
+    const covered = stagedItems(h).flatMap((item) => item.requirementIds as string[]);
+    expect(covered).toHaveLength(60);
+    expect(new Set(covered).size).toBe(60);
+  });
+
+  it("leaves a batch that fits its deadline unchanged", async () => {
+    let now = 0;
+    const h = await harness(
+      (request) => {
+        now += 100_000;
+        return page(keysOf(request));
+      },
+      [{ capsuleId: "cap-a", text: specification(60).text }],
+    );
+
+    const result = await h.run(ARGS, {
+      budget: { nowMs: () => now, deadlineAtMs: 100_000_000 },
+    });
+
+    expect(result.data).toMatchObject({ outcome: "succeeded", draftedCount: 60, failedCount: 0 });
+    expect(result.data.paused).toBeUndefined();
   });
 
   it("limits the batch to the requirements the filter names", async () => {

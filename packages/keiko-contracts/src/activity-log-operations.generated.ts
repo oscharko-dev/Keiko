@@ -1287,13 +1287,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "draft-unavailable",
           "project-not-found",
           "issue-type-not-found",
+          "no-usable-issue-type",
         ],
       },
       stopReason: {
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["stage-failed", "call-limit", "model-failed", "cancelled"],
+        values: ["stage-failed", "call-limit", "model-failed", "deadline", "cancelled"],
       },
       requirementCount: {
         type: "integer",

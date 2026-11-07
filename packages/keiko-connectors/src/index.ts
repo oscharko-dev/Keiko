@@ -199,6 +199,7 @@ export {
 export {
   isJiraIssueTypeReference,
   isJiraProjectReference,
+  JIRA_PROJECT_REFERENCE_PATTERN,
   resolveJiraDraftPlacement,
   resolveJiraDraftPlacementWith,
   JIRA_PLACEMENT_TYPE_NAMES_MAX,
