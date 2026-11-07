@@ -124,7 +124,8 @@ function criterionForms(text: string): readonly string[] {
   if (text.length === 0) return [];
   const projected = projectJiraDescriptionInput({ format: "markdown", text: `- ${text}` });
   const blocks = readJiraDescriptionBlocks(projected?.text ?? "", "markdown");
-  // No readable block (for example a literal `{code}` macro marker): it cannot be traced.
+  // No readable block (for example a literal `{code}` macro marker): it has no checkable
+  // representation, so the caller refuses it instead of treating it as present.
   if (blocks.length === 0) return [];
   const converted = blocks.map(criterionText).join(" ");
   return converted === text ? [text] : [text, converted];
@@ -158,7 +159,7 @@ function acceptanceCriteriaProblems(
       blocks.has(traceable.map((options) => options[index] ?? options[0] ?? "").join(" ")),
     );
   return [...forms].flatMap(([reference, options]): TraceProblem[] =>
-    options.length === 0 || completeBlock || options.some((form) => blocks.has(form))
+    options.length > 0 && (completeBlock || options.some((form) => blocks.has(form)))
       ? []
       : [{ reference, reason: "acceptance-criteria-missing" }],
   );
