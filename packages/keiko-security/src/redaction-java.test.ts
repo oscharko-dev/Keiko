@@ -20,6 +20,26 @@ import {
 
 const options = { sourceLanguage: "java" as const, preserveSourceLineBreaks: true };
 
+// A stand-in grammar module that loads the real `java-parser` around fixed statements. The module
+// is constant text: the real parser's path and every marker file are data it reads from its own
+// directory (`here(name)`), so no path is ever written into the code it runs.
+function writeParserFixture(directory: string, before: string[], after: string[]): string {
+  writeFileSync(join(directory, "target"), createRequire(import.meta.url).resolve("java-parser"));
+  const parserPath = join(directory, "parser.cjs");
+  writeFileSync(
+    parserPath,
+    [
+      'const fs = require("node:fs");',
+      'const path = require("node:path");',
+      "const here = (name) => path.join(__dirname, name);",
+      ...before,
+      'module.exports = require(fs.readFileSync(here("target"), "utf8"));',
+      ...after,
+    ].join("\n"),
+  );
+  return parserPath;
+}
+
 describe("Java redaction uses the initializer's syntax ownership", () => {
   it.each(["password", "pa\u200cssword"])(
     "keeps an invalid bare private assignment unavailable (%s)",
@@ -314,19 +334,12 @@ describe("the bounded Java parser worker", () => {
   // leave a slow machine room; what they pin is the order: 2 s at most for one caller, no wait for
   // the next, and a start measured by the worker itself.
   const slowParser = (directory: string): { parserPath: string; loaded: string } => {
-    const parserPath = join(directory, "parser.cjs");
-    const loaded = join(directory, "loaded");
-    const realParser = createRequire(import.meta.url).resolve("java-parser");
-    writeFileSync(
-      parserPath,
-      [
-        "const loading = Date.now();",
-        "while (Date.now() - loading < 3000) {}",
-        `module.exports = require(${JSON.stringify(realParser)});`,
-        `require("node:fs").writeFileSync(${JSON.stringify(loaded)}, "");`,
-      ].join("\n"),
+    const parserPath = writeParserFixture(
+      directory,
+      ["const loading = Date.now();", "while (Date.now() - loading < 3000) {}"],
+      ['fs.writeFileSync(here("loaded"), "");'],
     );
-    return { parserPath, loaded };
+    return { parserPath, loaded: join(directory, "loaded") };
   };
 
   it("waits for a starting worker once and briefly, then uses it when it is ready", async () => {
@@ -394,19 +407,16 @@ describe("the bounded Java parser worker", () => {
   it("replaces a worker that exited before any parse, and refuses starts once that repeats", async () => {
     const directory = mkdtempSync(join(tmpdir(), "keiko-java-exited-"));
     try {
-      const parserPath = join(directory, "parser.cjs");
       const loaded = join(directory, "loaded");
       const exited = join(directory, "exited");
-      const realParser = createRequire(import.meta.url).resolve("java-parser");
-      writeFileSync(
-        parserPath,
+      const parserPath = writeParserFixture(
+        directory,
+        [],
         [
-          'const fs = require("node:fs");',
-          `module.exports = require(${JSON.stringify(realParser)});`,
-          `fs.appendFileSync(${JSON.stringify(loaded)}, "x");`,
-          `process.on("exit", () => fs.appendFileSync(${JSON.stringify(exited)}, "x"));`,
+          'fs.appendFileSync(here("loaded"), "x");',
+          'process.on("exit", () => fs.appendFileSync(here("exited"), "x"));',
           "setTimeout(() => process.exit(0), 50);",
-        ].join("\n"),
+        ],
       );
       const count = (file: string): number =>
         existsSync(file) ? readFileSync(file, "utf8").length : 0;
