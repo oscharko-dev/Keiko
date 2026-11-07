@@ -5,17 +5,45 @@ import { clientErrorEvidence } from "./client-error-evidence";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { bffRequestErrorKind } from "./http";
 type BoundChat = Pick<Chat, "id" | "jiraPodBinding">;
+/**
+ * The newest messages a progress read asks for (#4292). The turn's row is the Chat's newest user
+ * message, so reading the whole history every second (46 KB a read in a long Chat) only to find it
+ * was wasted; a window that misses the row still falls back to the whole page.
+ */
+export const CHAT_TOOL_PROGRESS_WINDOW = 8;
+function turnRow(
+  messages: readonly ChatMessage[],
+  chatId: string,
+  reference: string,
+): ChatMessage | undefined {
+  return messages.find(
+    (entry) =>
+      entry.role === "user" && entry.chatId === chatId && entry.canonicalTurnRef === reference,
+  );
+}
+async function readTurnRow(
+  chatId: string,
+  projectPath: string,
+  reference: string,
+  signal: AbortSignal,
+): Promise<ChatMessage | undefined> {
+  const recent = await fetchChatMessages(chatId, projectPath, signal, CHAT_TOOL_PROGRESS_WINDOW);
+  const message = turnRow(recent.messages, chatId, reference);
+  // The server drops legacy placeholders after its limit, so a short window is no proof of the end.
+  if (message !== undefined) return message;
+  return turnRow(
+    (await fetchChatMessages(chatId, projectPath, signal)).messages,
+    chatId,
+    reference,
+  );
+}
 async function readConsent(
   chatId: string,
   projectPath: string,
   reference: string,
   signal: AbortSignal,
 ): Promise<{ message: ChatMessage; identity: string } | undefined> {
-  const response = await fetchChatMessages(chatId, projectPath, signal);
-  const message = response.messages.find(
-    (entry) =>
-      entry.role === "user" && entry.chatId === chatId && entry.canonicalTurnRef === reference,
-  );
+  const message = await readTurnRow(chatId, projectPath, reference, signal);
   const transcript = message?.toolTranscript;
   if (message === undefined || transcript === undefined) return undefined;
   const grants = chatToolReadGrants(transcript);
