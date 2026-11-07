@@ -44,7 +44,7 @@
     },
     {
       "path": "docs/design-system/evidence/1300/browser/capture.mjs",
-      "sha256": "0cf20a8782eeb190ac35ca193d162b127c92b377abcdc3af67db74bea7b55f45"
+      "sha256": "87a32500e9c7c177f3e8e0a651455dab3a58f9a930eb78d9cd02d2a222802f8b"
     },
     {
       "path": "docs/design-system/evidence/1300/component-fixture-data.json",
@@ -88,7 +88,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/PdfCitationPreviewWindow.module.css",
-      "sha256": "cff8d9ba0a72bc481669096937ab47a6f2c28bd46a3dffe73bfd4515bdf2ea39"
+      "sha256": "b5a381e654ff6e6f60dd3bc80d17dc47ec9b3755e14c3c9a5bf3317dee1e99e1"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css",
@@ -139,9 +139,9 @@
     "keiko-nav.css": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b"
   },
   "run": {
-    "startedAt": "2026-11-03T20:50:18.378Z",
-    "generatedAt": "2026-11-03T20:50:21.456Z",
-    "repoHeadSha": "298e939febfcc0f2959bfeffb9f377acaf9f5999"
+    "startedAt": "2026-11-07T15:39:05.843Z",
+    "generatedAt": "2026-11-07T15:39:08.698Z",
+    "repoHeadSha": "b062bc72b25fa32b9cbe36dab16236c12ac46e0d"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "groupR": {
@@ -395,7 +395,7 @@
   "boundedRowSmoke": {
     "ok": true,
     "rowCount": 250,
-    "durationMs": 0.09999990463256836,
+    "durationMs": 0.10000014305114746,
     "afterScrollTop": 8363,
     "scrollHeight": 8783,
     "clientHeight": 420,

@@ -834,7 +834,7 @@ function writeStreamFailure(
   writeTerminalFrame(ctx, sseMessage(event));
 }
 
-function toolTranscriptEvents(message: ChatMessage): readonly DesktopChatStreamEvent[] {
+export function toolTranscriptEvents(message: ChatMessage): readonly DesktopChatStreamEvent[] {
   const transcript = message.toolTranscript;
   const events: DesktopChatStreamEvent[] = [];
   if (transcript?.readGrant !== undefined)
@@ -852,15 +852,20 @@ function toolTranscriptEvents(message: ChatMessage): readonly DesktopChatStreamE
   }
   return events;
 }
-function toolEventIdentity(event: DesktopChatStreamEvent): string | undefined {
+export function toolEventIdentity(event: DesktopChatStreamEvent): string | undefined {
   switch (event.event) {
     case "tool-read-consent":
       return `read:${event.data.grant.grantId}:${event.data.grant.state}`;
     case "tool-write-approval":
       return `write:${event.data.approval.approvalId}:${event.data.approval.state}`;
     case "tool-exchange": {
-      const { call, result, mutationOutcome } = event.data.exchange;
-      return `exchange:${call.id}:${result?.status ?? "started"}:${mutationOutcome ?? ""}`;
+      const { call, result, mutationOutcome, batchProgress } = event.data.exchange;
+      // Each counted page of a running batch is its own frame; a repeated state is not.
+      const page =
+        batchProgress === undefined
+          ? ""
+          : `:${[batchProgress.phase, batchProgress.draftedCount, batchProgress.failedCount].join(":")}`;
+      return `exchange:${call.id}:${result?.status ?? "started"}:${mutationOutcome ?? ""}${page}`;
     }
     default:
       return undefined;

@@ -1252,7 +1252,7 @@ const CLIENT_CITATION_ACTIVATED_OPERATION = defineActivityLogOperation({
   op: "client.citation.activated",
   category: "diagnostic",
   owner: "keiko-server",
-  emitter: "client-diagnostics-routes.logClientCitationActivation",
+  emitter: "client-diagnostics-routes.logClientCitationEvidence",
   fields: {
     reason: {
       type: "string",
@@ -1285,7 +1285,7 @@ const CLIENT_CITATION_HIGHLIGHTED_OPERATION = defineActivityLogOperation({
   op: "client.citation.highlighted",
   category: "diagnostic",
   owner: "keiko-server",
-  emitter: "client-diagnostics-routes.logClientCitationHighlight",
+  emitter: "client-diagnostics-routes.logClientCitationEvidence",
   fields: {
     outcome: {
       type: "string",
@@ -2483,36 +2483,29 @@ function logClientFilesScopeDecision(
   return true;
 }
 
-function logClientCitationActivation(
+// A citation click and the frame the PDF viewer drew for it: closed values and counts only.
+function logClientCitationEvidence(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
 ): boolean {
-  const activation = request.citationActivation;
-  if (activation === undefined) return false;
-  getServerLogger().info(
-    activityLogEvent(
-      CLIENT_CITATION_ACTIVATED_OPERATION,
-      clientDiagnosticCorrelation(request, correlationId),
-      { ...activation, completeness: "complete", loss: "none" },
-    ),
-  );
-  return true;
-}
-
-function logClientCitationHighlight(
-  request: ClientDiagnosticIngestRequest,
-  correlationId: string,
-): boolean {
-  const highlight = request.citationHighlight;
-  if (highlight === undefined) return false;
-  getServerLogger().info(
-    activityLogEvent(
-      CLIENT_CITATION_HIGHLIGHTED_OPERATION,
-      clientDiagnosticCorrelation(request, correlationId),
-      { ...highlight, completeness: "complete", loss: "none" },
-    ),
-  );
-  return true;
+  const { citationActivation: activation, citationHighlight: highlight } = request;
+  const envelope = clientDiagnosticCorrelation(request, correlationId);
+  const settled = { completeness: "complete", loss: "none" } as const;
+  if (activation !== undefined)
+    getServerLogger().info(
+      activityLogEvent(CLIENT_CITATION_ACTIVATED_OPERATION, envelope, {
+        ...activation,
+        ...settled,
+      }),
+    );
+  if (highlight !== undefined)
+    getServerLogger().info(
+      activityLogEvent(CLIENT_CITATION_HIGHLIGHTED_OPERATION, envelope, {
+        ...highlight,
+        ...settled,
+      }),
+    );
+  return activation !== undefined || highlight !== undefined;
 }
 
 function logClientScopeNotice(
@@ -2612,8 +2605,7 @@ function logRetrievalClientReport(
   correlationId: string,
 ): boolean {
   return (
-    logClientCitationActivation(request, correlationId) ||
-    logClientCitationHighlight(request, correlationId) ||
+    logClientCitationEvidence(request, correlationId) ||
     logClientScopeNotice(request, correlationId) ||
     logClientEvidenceInspection(request, correlationId)
   );

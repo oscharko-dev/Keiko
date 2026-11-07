@@ -1,0 +1,47 @@
+/* Counted progress of a long read or draft (#4173): blue while it runs, green when complete. */
+.cmpProgress {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.cmpTrack {
+  block-size: 6px;
+  border-radius: var(--radius-sm);
+  background: var(--border-subtle);
+  overflow: hidden;
+}
+.cmpFill {
+  block-size: 100%;
+  inline-size: var(--cmp-progress, 0%);
+  border-radius: inherit;
+  background: var(--feedback-info);
+  transition: inline-size 200ms ease-out;
+}
+.cmpProgress[data-tone="success"] .cmpFill {
+  background: var(--feedback-success);
+}
+.cmpProgress[data-tone="warning"] .cmpFill {
+  background: var(--feedback-warning);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmpFill {
+    transition: none;
+  }
+}
+.cmpProgress[data-stopped="true"] .cmpFill {
+  transition: none;
+}
+@media (forced-colors: active) {
+  .cmpTrack {
+    border: 1px solid CanvasText;
+    background: Canvas;
+  }
+  .cmpFill {
+    background: Highlight;
+    forced-color-adjust: none;
+  }
+}
+.cmpLabel {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  LINEAR_RATIO_MAX,
+  measureScaling,
+  scalingRatio,
+} from "../../../tests/support/property-testing.js";
+import {
   markdownBlocksToJiraWiki,
   markdownInlineToJiraWiki,
   readsAsMarkdownOnly,
@@ -187,5 +192,132 @@ describe("hostile input converts in linear time", () => {
     );
     expect(readsAsMarkdownOnly("See [Docs](https://example.test/x).")).toBe(true);
     expect(readsAsMarkdownOnly("See [Docs|https://example.test/x] and **this**.")).toBe(false);
+  });
+});
+
+describe("an active code block keeps its content literal (F5)", () => {
+  it("keeps a fenced example inside a {code} macro literal", () => {
+    const text = "# Goal\n\n{code}\n```js\n**literal**\n```\n{code}";
+    expect(projectJiraDescriptionInput({ format: "markdown", text })?.text).toBe(
+      "h1. Goal\n\n{code}\n```js\n**literal**\n```\n{code}",
+    );
+  });
+
+  it("keeps fence lines inside a {noformat} block literal", () => {
+    expect(markdownBlocksToJiraWiki("{noformat}\n~~~\n**x**\n```\n{noformat}\n**y**")).toBe(
+      "{noformat}\n~~~\n**x**\n```\n{noformat}\n*y*",
+    );
+  });
+
+  it("does not close a fence with another marker character or trailing text", () => {
+    expect(markdownBlocksToJiraWiki("```\ncode\n```~\n~~~\n``` x\n```")).toBe(
+      "{code}\ncode\n```~\n~~~\n``` x\n{code}",
+    );
+    expect(markdownBlocksToJiraWiki("```\ncode\n```~")).toBeUndefined();
+  });
+
+  it("closes a fence with the same character at an equal or longer length only", () => {
+    expect(markdownBlocksToJiraWiki("````\n```\n````\n**a**")).toBe("{code}\n```\n{code}\n*a*");
+    expect(markdownBlocksToJiraWiki("```\nx\n`````  \n**a**")).toBe("{code}\nx\n{code}\n*a*");
+    expect(markdownBlocksToJiraWiki("~~~~\nx\n~~~\n")).toBeUndefined();
+  });
+});
+
+describe("nested lists keep the ancestor marker path (F6)", () => {
+  it.each([
+    ["- Parent\n  1. First step\n  2. Second step", "* Parent\n*# First step\n*# Second step"],
+    ["1. Parent\n   - a\n   - b", "# Parent\n#* a\n#* b"],
+    ["- a\n  1. b\n     - c\n       1. d", "* a\n*# b\n*#* c\n*#*# d"],
+    ["- a\n  1. b\n     - c\n- e\n  - f", "* a\n*# b\n*#* c\n* e\n** f"],
+    ["- a\n  1. b\n     - c\n  2. d", "* a\n*# b\n*#* c\n*# d"],
+    ["10. ten\n    - child\n1. one\n   - child", "# ten\n#* child\n# one\n#* child"],
+  ])("%j", (markdown, wiki) => {
+    expect(markdownBlocksToJiraWiki(markdown)).toBe(wiki);
+  });
+
+  it("keeps the list open across a wrapped continuation line", () => {
+    expect(markdownBlocksToJiraWiki("- a\n  wrapped\n  - b")).toBe("* a\n  wrapped\n** b");
+    expect(markdownBlocksToJiraWiki("- a\n\n  - b")).toBe("* a\n\n** b");
+  });
+
+  it.each([
+    ["a wiki heading", "- a\n\nh2. T\n  - b", "* a\n\nh2. T\n* b"],
+    ["a rule", "- a\n---\n  - b", "* a\n----\n* b"],
+    ["a quote", "- a\n> q\n  - b", "* a\n> q\n* b"],
+    ["unindented prose", "- a\ntext\n  - b", "* a\ntext\n* b"],
+  ])("ends the list at %s", (_name, markdown, wiki) => {
+    expect(markdownBlocksToJiraWiki(markdown)).toBe(wiki);
+  });
+
+  it("starts a new list after a paragraph", () => {
+    expect(markdownBlocksToJiraWiki("1. a\ntext\n  - b")).toBe("# a\ntext\n* b");
+  });
+});
+
+describe("a link with balanced URL parentheses is Markdown (F11)", () => {
+  it("projects the balanced URL the converter already supports", () => {
+    expect(projectJiraDescriptionInput("See [Docs](https://example.test/a_(b)).")?.text).toBe(
+      "See [Docs|https://example.test/a_(b)].",
+    );
+  });
+
+  it.each([
+    ["See [Docs](https://example.test/x).", true],
+    ["[Docs](/a_(b)(c)) tail", true],
+    ["[Docs](#top)", true],
+    ["[Docs](mailto:a@example.test)", true],
+    ["[Docs](https://example.test/a_(b(c)))", false],
+    ["[Docs](https://example.test/a_(b)", false],
+    ["[Docs](ftp://example.test/x)", false],
+    ["[](https://example.test/x)", false],
+    ["[a [b](https://example.test/x)", true],
+    ["[a\nb](https://example.test/x)", false],
+    ["[Docs](https://example.test/a b)", false],
+  ])("%j reads as Markdown: %s", (text, expected) => {
+    expect(readsAsMarkdownOnly(text)).toBe(expected);
+  });
+
+  it.each([
+    ["a balanced-URL link", "[Docs](https://example.test/a_(b)) "],
+    ["nested link openers", "[a](/("],
+    ["closers without openers", "](/("],
+    ["empty labels", "[](("],
+    ["unclosed labels", "[a"],
+    ["unclosed targets", "[a](/b("],
+  ])("reads %s in linear time", { timeout: 60_000 }, (_name, piece) => {
+    const scaling = measureScaling({
+      build: (size) => piece.repeat(Math.ceil(size / piece.length)),
+      run: (text) => {
+        readsAsMarkdownOnly(text);
+        return markdownBlocksToJiraWiki(text);
+      },
+      size: 1_000,
+      maximumSize: 400_000,
+    });
+    expect(scaling.measurable, JSON.stringify(scaling)).toBe(true);
+    expect(scalingRatio(scaling), JSON.stringify(scaling)).toBeLessThan(LINEAR_RATIO_MAX);
+  });
+});
+
+describe("a typical batch description renders as Jira wiki", () => {
+  it("renders sections, acceptance criteria with bold and code", () => {
+    const text = [
+      "## Ziel",
+      "Das **Login** funktioniert.",
+      "",
+      "## Akzeptanzkriterien",
+      "- Der Nutzer sieht **Willkommen** nach `POST /login`",
+      "- Fehler liefern `401`",
+    ].join("\n");
+    expect(projectJiraDescriptionInput({ format: "markdown", text })?.text).toBe(
+      [
+        "h2. Ziel",
+        "Das *Login* funktioniert.",
+        "",
+        "h2. Akzeptanzkriterien",
+        "* Der Nutzer sieht *Willkommen* nach {{POST /login}}",
+        "* Fehler liefern {{401}}",
+      ].join("\n"),
+    );
   });
 });

@@ -1537,6 +1537,7 @@
         "start": [],
         "state": [
           "atlassian.jira-draft",
+          "atlassian.jira-draft-batch",
           "atlassian.jira-report",
           "jira.attachment.source",
           "jira.citation.markers",
@@ -1553,6 +1554,10 @@
         },
         {
           "op": "atlassian.jira-draft",
+          "mode": "correlation"
+        },
+        {
+          "op": "atlassian.jira-draft-batch",
           "mode": "correlation"
         },
         {
@@ -1576,6 +1581,7 @@
       "resourceSignals": [
         "atlassian.action.outcome",
         "atlassian.jira-draft",
+        "atlassian.jira-draft-batch",
         "atlassian.jira-report",
         "jira.attachment.source",
         "jira.citation.markers",
@@ -1736,6 +1742,140 @@
             "causeChain": false
           },
           "proofIds": ["atlassian.jira-draft.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "atlassian.jira-draft-batch",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "completionTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "createRequested",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "draftedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "failedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "safe-platform-class",
+              "required": false
+            },
+            {
+              "name": "granularity",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "groupCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "itemCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "pageItemCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "phase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "plannedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "plannedItemTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "refusal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "requirementCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "stopReason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "duration",
+            "error-kind",
+            "loss-state",
+            "safe-platform-class"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["atlassian.jira-draft-batch.line"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -3709,6 +3849,7 @@
         "state": [
           "chat.tool-mutation.projected",
           "chat.tool-transcript.updated",
+          "chat.tool-turn.batch-draft-offer",
           "chat.tool-turn.context-fitted",
           "chat.tool-turn.corrected",
           "chat.tool-turn.ended"
@@ -3724,6 +3865,10 @@
         },
         {
           "op": "chat.tool-transcript.updated",
+          "mode": "correlation"
+        },
+        {
+          "op": "chat.tool-turn.batch-draft-offer",
           "mode": "correlation"
         },
         {
@@ -3743,6 +3888,7 @@
       "resourceSignals": [
         "chat.tool-mutation.projected",
         "chat.tool-transcript.updated",
+        "chat.tool-turn.batch-draft-offer",
         "chat.tool-turn.context-fitted",
         "chat.tool-turn.corrected",
         "chat.tool-turn.ended"
@@ -3788,6 +3934,30 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "batchDraftedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "batchFailedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "batchPhase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "batchPlannedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "draftReceiptCount",
               "type": "integer",
               "dataClass": "count",
@@ -3818,6 +3988,42 @@
             "causeChain": false
           },
           "proofIds": ["chat.tool-transcript.updated.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "chat.tool-turn.batch-draft-offer",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "messageDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.tool-turn.batch-draft-offer.line"],
           "replayReferences": [],
           "missingObligations": []
         },

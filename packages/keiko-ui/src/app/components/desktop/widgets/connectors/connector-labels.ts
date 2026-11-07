@@ -140,6 +140,7 @@ const ACTION_LABEL: Readonly<Record<AtlassianConnectorActionType, MessageKey>> =
   "jira.assignable-users": "atlassianConnectors.action.jira.assignable-users",
   "jira.report": "atlassianConnectors.action.jira.report",
   "jira.draft-stage": "atlassianConnectors.action.jira.draft-stage",
+  "jira.draft-batch": "atlassianConnectors.action.jira.draft-batch",
   "assign-issue": "atlassianConnectors.action.assign-issue",
   "sync-space": "atlassianConnectors.action.sync-space",
   "sync-project": "atlassianConnectors.action.sync-project",

@@ -57,6 +57,16 @@ const ISSUE_READ_NAMES: ReadonlySet<string> = new Set([
   "jira.comments",
 ]);
 
+/**
+ * `jira.draft-batch` (#4173): the composing server runs the batch with the connection the provider
+ * selected for the call. The connector owns no model and no Knowledge access, so it owns no batch.
+ */
+export type JiraDraftBatchExecutor<Context extends ManagedMcpInvocationContext> = (
+  args: CatalogJsonObject,
+  context: Context,
+  connection: JiraManagedConnection,
+) => Promise<ManagedMcpToolResult>;
+
 export interface JiraManagedProviderDeps<Context extends ManagedMcpInvocationContext> {
   readonly connection: (context: Context) => JiraManagedConnection | Promise<JiraManagedConnection>;
   readonly declarations: readonly ManagedMcpToolDeclaration[];
@@ -65,6 +75,8 @@ export interface JiraManagedProviderDeps<Context extends ManagedMcpInvocationCon
   readonly report?: JiraReportToolDeps<Context>;
   /** Owner binding, store and log for `jira.draft-stage`; defaults to a private in-memory store. */
   readonly draft?: JiraDraftToolDeps<Context>;
+  /** Runs `jira.draft-batch`; without it the tool refuses as unavailable. */
+  readonly batch?: JiraDraftBatchExecutor<Context>;
 }
 /** The server owns durable intent, current authority and the final credential-bearing transport. */
 export type JiraManagedMutationExecutor<Context extends ManagedMcpInvocationContext> = (
@@ -327,6 +339,20 @@ function withIssueLink(
   return { ...result, data };
 }
 
+function batchTool<Context extends ManagedMcpInvocationContext>(
+  declaration: ManagedMcpToolDeclaration,
+  connection: JiraManagedProviderDeps<Context>["connection"],
+  batch: JiraDraftBatchExecutor<Context> | undefined,
+): ManagedMcpTool<Context> {
+  return Object.freeze({
+    ...declaration,
+    execute: async (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> =>
+      batch === undefined
+        ? failure("unavailable")
+        : batch(args, context, await connection(context)),
+  });
+}
+
 /** Private connection/context stays outside the MCP declaration and arguments. */
 function managedTool<Context extends ManagedMcpInvocationContext>(
   declaration: ManagedMcpToolDeclaration,
@@ -393,7 +419,9 @@ export function createJiraManagedProvider<Context extends ManagedMcpInvocationCo
   };
   const tools: readonly ManagedMcpTool<Context>[] = Object.freeze(
     deps.declarations.map((declaration) =>
-      managedTool(declaration, connection, executeMutation, report, draft),
+      declaration.name === "jira.draft-batch" && declaration.risk === "read"
+        ? batchTool(declaration, connection, deps.batch)
+        : managedTool(declaration, connection, executeMutation, report, draft),
     ),
   );
   return Object.freeze({ id: "jira", tools: (): readonly ManagedMcpTool<Context>[] => tools });

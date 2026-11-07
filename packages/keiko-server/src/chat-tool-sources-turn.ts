@@ -1,3 +1,4 @@
+import { chatKnowledgeScopes } from "./requirement-inventory.js";
 import {
   isKnowledgeChatAuthorityEnvelope,
   prepareAcceptedKnowledgeChatAuthority,
@@ -222,9 +223,11 @@ export async function createChatSourcesToolTurn(
     logConversationAdmission("observation-unavailable", correlation, generation, generation);
     throw new ConversationModelNotReadyError("tool-calling");
   }
-  const jira = await (
-    primaryKind === "knowledge" ? deps.knowledgeChatCatalog : deps.jiraChatCatalog
-  )?.get();
+  const jira = await (primaryKind === "knowledge"
+    ? deps.knowledgeChatCatalog?.get()
+    : deps.jiraChatCatalog?.get({
+        knowledgeScoped: chatKnowledgeScopes(deps.store.findChatById(message.chatId)).length > 0,
+      }));
   requireDispatch(jira !== undefined, "denied", "authority-invalid");
   const {
     primary: { authority },

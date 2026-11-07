@@ -5,7 +5,11 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { createMarkdownDocumentState } from "../composer/composer-editor-state";
 import { ComposerCodeView } from "../composer/composer-code-view";
 import type { ComposerEditorLabels } from "../composer/composer-editor-types";
-import { parseMarkdownDocument, serializeMarkdownDocument } from "./markdown-document";
+import {
+  parseMarkdownDocument,
+  serializeMarkdownDocument,
+  supportsFormattedEditing,
+} from "./markdown-document";
 
 export interface MarkdownDocumentOptions {
   readonly body: string;
@@ -18,21 +22,97 @@ export interface MarkdownDocumentOptions {
   /** Selection or history changed, so the toolbar re-reads its pressed and enabled states. */
   readonly onState: () => void;
   readonly onLimit: () => void;
+  /**
+   * Pasted Markdown the formatted view would rewrite (strikethrough, tables, task lists, ...):
+   * the document with the paste inserted unchanged, for the Markdown source view to take over.
+   */
+  readonly onSourcePaste: (body: string) => void;
 }
 
-/** Pasted Markdown or plain text is read as Markdown: this edits a Markdown document. */
-function pasteMarkdown(view: EditorView, event: ClipboardEvent): boolean {
+function clipboardText(event: ClipboardEvent): string | undefined {
   const data = event.clipboardData;
   const text = data?.types.includes("text/markdown")
     ? data.getData("text/markdown")
     : data?.getData("text/plain");
-  if (!text) return false;
-  view.dispatch(
-    view.state.tr
-      .replaceSelection(Slice.maxOpen(parseMarkdownDocument(text).content))
-      .scrollIntoView(),
-  );
-  return true;
+  // Line endings are Markdown line breaks, never literal carriage returns.
+  return text === undefined || text === "" ? undefined : text.replace(/\r\n?/gu, "\n");
+}
+
+/** A marker the document does not contain, standing where the paste goes while it serializes. */
+function pasteMarker(body: string): string {
+  let marker = "KEIKOPASTEMARKER";
+  while (body.includes(marker)) marker += "X";
+  return marker;
+}
+
+const CONTAINER_PREFIX = /^(?:[ \t]*(?:>|[-*+][ \t]|\d+[.)][ \t]))*[ \t]*/u;
+const BLOCK_START = /^[ \t]*(?:[|>#]|[-*+][ \t]|\d+[.)][ \t]|`{3}|~{3})/mu;
+
+/** Continuation lines of a paste inside a list item or quote stay inside it. */
+function continuationIndent(linePrefix: string): string {
+  const prefix = CONTAINER_PREFIX.exec(linePrefix)?.[0] ?? "";
+  return prefix.replace(/[-*+]|\d+[.)]/gu, (marker) => " ".repeat(marker.length));
+}
+
+/** A paste inside a list item or quote: block syntax gets its own paragraph within that item. */
+function pasteInContainer(before: string, text: string, after: string, indent: string): string {
+  const prefixLength = CONTAINER_PREFIX.exec(before.slice(before.lastIndexOf("\n") + 1))?.[0]
+    .length;
+  const lineStart = before.lastIndexOf("\n") + 1;
+  const hasLead = before.slice(lineStart + (prefixLength ?? 0)).trim() !== "";
+  const lines = text.replace(/\s+$/u, "").replace(/\n/gu, `\n${indent}`);
+  if (!BLOCK_START.test(text) || !hasLead)
+    return `${before}${text.replace(/\n/gu, `\n${indent}`)}${after}`;
+  const blank = `\n${indent.trimEnd()}\n`;
+  const tail = after.trimStart();
+  return `${before.trimEnd()}${blank}${indent}${lines}${tail === "" ? "" : `${blank}${indent}${tail}`}`;
+}
+
+/**
+ * The document as Markdown with the clipboard text inserted verbatim at the selection (which it
+ * replaces). Inside a list item or quote the text stays in that block; in a plain paragraph, text
+ * that starts block constructs (a table, a list) is set apart by blank lines so they still start.
+ */
+function bodyWithPaste(view: EditorView, text: string): string {
+  const marker = pasteMarker(serializeMarkdownDocument(view.state.doc) + text);
+  const body = serializeMarkdownDocument(view.state.tr.insertText(marker).doc);
+  const at = body.indexOf(marker);
+  const before = body.slice(0, at);
+  const after = body.slice(at + marker.length);
+  if (!text.includes("\n")) return `${before}${text}${after}`;
+  const linePrefix = before.slice(before.lastIndexOf("\n") + 1);
+  const indent = continuationIndent(linePrefix);
+  if (indent.length > 0) return pasteInContainer(before, text, after, indent);
+  if (linePrefix.trim() === "" && after.startsWith("\n")) return `${before}${text}${after}`;
+  if (!BLOCK_START.test(text)) return `${before}${text}${after}`;
+  const parts = [before.trimEnd(), text.replace(/\s+$/u, ""), after.trimStart()];
+  return parts.filter((part) => part.length > 0).join("\n\n");
+}
+
+/**
+ * Pasted Markdown or plain text is read as Markdown: this edits a Markdown document. Text the
+ * formatted view cannot hold is not parsed (it would be escaped into literal characters); it
+ * goes in unchanged and the document continues in Markdown source. Inside a code block the
+ * text is code, so the fidelity check does not apply.
+ */
+function pasteMarkdown(
+  options: MarkdownDocumentOptions,
+): (view: EditorView, event: ClipboardEvent) => boolean {
+  return (view, event) => {
+    const text = clipboardText(event);
+    if (text === undefined) return false;
+    const inCode = view.state.selection.$from.parent.type.name === "code_block";
+    if (!inCode && !supportsFormattedEditing(text)) {
+      options.onSourcePaste(bodyWithPaste(view, text));
+      return true;
+    }
+    view.dispatch(
+      view.state.tr
+        .replaceSelection(Slice.maxOpen(parseMarkdownDocument(text).content))
+        .scrollIntoView(),
+    );
+    return true;
+  };
 }
 
 function placeholder(text: string): (state: EditorView["state"]) => DecorationSet | null {
@@ -71,11 +151,14 @@ export class MarkdownDocumentController {
         role: "textbox",
         "aria-multiline": "true",
         "aria-label": options.ariaLabel,
+        // A contenteditable is already a tab stop; stating it lets the scrolling page around it
+        // count as keyboard-reachable for accessibility checks, without adding a second stop.
+        tabindex: "0",
         spellcheck: "true",
         "data-shell-chord-bypass": "",
       },
       dispatchTransaction: (tr): void => this.dispatch(tr),
-      handlePaste: pasteMarkdown,
+      handlePaste: pasteMarkdown(options),
       nodeViews: {
         code_block: (node, view, getPos): ComposerCodeView =>
           ComposerCodeView.create(node, view, getPos, options.labels),

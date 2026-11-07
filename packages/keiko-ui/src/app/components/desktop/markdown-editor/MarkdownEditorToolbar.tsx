@@ -43,7 +43,7 @@ function ToolButton({
   return (
     <button
       type="button"
-      className={styles.mdeTool}
+      className={styles.cmpMdeTool}
       aria-label={label}
       title={label}
       aria-pressed={pressed}
@@ -92,7 +92,7 @@ function BlockStyleSelect({
   const style = blockStyle(controller.view.state);
   return (
     <select
-      className={styles.mdeBlock}
+      className={styles.cmpMdeBlock}
       aria-label={t("markdownEditor.blockStyle")}
       value={style === "other" ? "" : style}
       onChange={(event) =>
@@ -142,13 +142,13 @@ export function MarkdownEditorToolbar({
   readonly controller: MarkdownDocumentController | null;
 }): ReactNode {
   const t = useTranslate();
-  if (controller === null) return <span className={styles.mdeGrow} />;
+  if (controller === null) return <span className={styles.cmpMdeGrow} />;
   const state = controller.view.state;
   const run = (command: Command) => (): void => controller.run(command);
   return (
-    <div className={styles.mdeTools} role="toolbar" aria-label={t("markdownEditor.toolbar")}>
+    <div className={styles.cmpMdeTools} role="toolbar" aria-label={t("markdownEditor.toolbar")}>
       <BlockStyleSelect controller={controller} t={t} />
-      <span className={styles.mdeDivider} />
+      <span className={styles.cmpMdeDivider} />
       {MARKS.map(({ mark, icon, label }) => (
         <ToolButton
           key={mark}
@@ -158,7 +158,7 @@ export function MarkdownEditorToolbar({
           onRun={run(toggleMarkCommand(mark))}
         />
       ))}
-      <span className={styles.mdeDivider} />
+      <span className={styles.cmpMdeDivider} />
       {WRAPS.map(({ wrap, icon, label }) => (
         <ToolButton
           key={wrap}
@@ -173,7 +173,7 @@ export function MarkdownEditorToolbar({
         label={t("markdownEditor.codeBlock")}
         onRun={run(codeBlockCommand)}
       />
-      <span className={styles.mdeDivider} />
+      <span className={styles.cmpMdeDivider} />
       <HistoryButtons controller={controller} t={t} />
     </div>
   );
@@ -201,7 +201,7 @@ export function MarkdownViewSwitch({
 }): ReactNode {
   const t = useTranslate();
   return (
-    <div className={styles.mdeViews} role="group" aria-label={t("markdownEditor.view")}>
+    <div className={styles.cmpMdeViews} role="group" aria-label={t("markdownEditor.view")}>
       {VIEWS.map((item) => {
         const Icon = Icons[item.icon];
         return (

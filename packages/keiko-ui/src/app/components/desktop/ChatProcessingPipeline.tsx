@@ -83,8 +83,10 @@ function compactStepIndices(groups: readonly PresentedStep[]): ReadonlySet<numbe
 function ProcessingStep({ step, index, count }: PresentedStep): ReactNode {
   const t = useTranslate();
   const current = step.state === "active" || step.state === "approval";
+  const stepLabel =
+    step.progress === undefined ? t(step.label) : `${t(step.label)} · ${step.progress}`;
   const label =
-    count === 1 ? t(step.label) : t("chat.processing.repeated", { label: t(step.label), count });
+    count === 1 ? stepLabel : t("chat.processing.repeated", { label: stepLabel, count });
   const state = t(CHAT_PROCESSING_STATE_LABELS[step.state]);
   return (
     <li

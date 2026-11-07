@@ -1,4 +1,13 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type {
@@ -11,7 +20,8 @@ import * as jiraTemplates from "@/lib/jira-templates-api";
 import { notifyCodingAppSessionChanged } from "@/lib/coding-app-session-client";
 import { useChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { MarkdownSkillDialog } from "./MarkdownSkillDialog";
-import { skillHeading } from "./useSkillWorkspace";
+import { skillHeading, useSkillWorkspace } from "./useSkillWorkspace";
+import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
 
 vi.mock("@/lib/markdown-skills-api", () => ({
   fetchMarkdownSkills: vi.fn(),
@@ -488,5 +498,144 @@ describe("download and delete", () => {
     expect(api.deleteMarkdownSkill).toHaveBeenCalledWith(REVIEW);
     expect(within(dialog).queryByRole("button", { name: /Boundary review/u })).toBeNull();
     expect(within(dialog).getByRole("button", { name: /Release plan/u })).toBeInTheDocument();
+  });
+});
+
+describe("a delete confirmation belongs to the file it was started for", () => {
+  async function startDeleteOnReview(): Promise<HTMLElement> {
+    seedStore([REVIEW, PLAN]);
+    const dialog = await openDialog();
+    fireEvent.click(await within(dialog).findByRole("button", { name: /Boundary review/u }));
+    await waitForVersion(dialog, "v1");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(within(dialog).getByRole("button", { name: "Delete skill" })).toBeInTheDocument();
+    return dialog;
+  }
+
+  it("is discarded when another skill opens, so the old confirmation cannot delete it", async () => {
+    const dialog = await startDeleteOnReview();
+    fireEvent.click(item(dialog, "Release plan"));
+    await waitFor(() => expect(documentTitle(dialog)).toBe("Release plan"));
+    expect(within(dialog).queryByRole("button", { name: "Delete skill" })).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(api.deleteMarkdownSkill).not.toHaveBeenCalled();
+  });
+
+  it("is discarded across a new draft in between, and deleting then needs a fresh decision", async () => {
+    const dialog = await startDeleteOnReview();
+    newSkill(dialog);
+    await waitFor(() => expect(documentTitle(dialog)).toBe("New skill"));
+    expect(within(dialog).queryByRole("button", { name: "Delete skill" })).toBeNull();
+    fireEvent.click(item(dialog, "Release plan"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(documentTitle(dialog)).toBe("Release plan"));
+    expect(within(dialog).queryByRole("button", { name: "Delete skill" })).toBeNull();
+    expect(api.deleteMarkdownSkill).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete skill" }));
+    await waitFor(() => expect(api.deleteMarkdownSkill).toHaveBeenCalledOnce());
+    expect(api.deleteMarkdownSkill).toHaveBeenCalledWith(PLAN);
+  });
+});
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function sourceValue(dialog: HTMLElement): string {
+  return (within(dialog).getByRole("textbox", { name: /· Markdown$/u }) as HTMLTextAreaElement)
+    .value;
+}
+
+describe("late replies never overwrite newer work", () => {
+  it("keeps text typed while a save is in flight, dirty against the confirmed baseline", async () => {
+    seedStore([REVIEW]);
+    const dialog = await openDialog();
+    fireEvent.click(await within(dialog).findByRole("button", { name: /Boundary review/u }));
+    await waitForVersion(dialog, "v1");
+    const sent = `${REVIEW.body}First edit.\n`;
+    const newer = `${sent}Typed during the save.\n`;
+    const reply = deferred<MarkdownSkillDocument>();
+    vi.mocked(api.saveMarkdownSkill).mockImplementation(() => reply.promise);
+    writeMarkdown(dialog, sent);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.saveMarkdownSkill).toHaveBeenCalledOnce());
+    writeMarkdown(dialog, newer);
+    reply.resolve({ ...REVIEW, revision: 2, digest: "2".repeat(64), body: sent });
+    await waitForVersion(dialog, "v2");
+    expect(sourceValue(dialog)).toBe(newer);
+    expect(within(dialog).getByText("Unsaved changes")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  it("ignores the reply of an open that a new draft has overtaken", async () => {
+    seedStore([REVIEW]);
+    const dialog = await openDialog();
+    const reply = deferred<MarkdownSkillDocument>();
+    vi.mocked(api.readMarkdownSkill).mockImplementation(() => reply.promise);
+    fireEvent.click(await within(dialog).findByRole("button", { name: /Boundary review/u }));
+    await waitFor(() => expect(api.readMarkdownSkill).toHaveBeenCalledOnce());
+    newSkill(dialog);
+    writeMarkdown(dialog, "# Newer draft\n\nMine.\n");
+    reply.resolve(REVIEW);
+    await waitFor(() => expect(within(dialog).getByLabelText("Import")).toBeEnabled());
+    await act(() => Promise.resolve());
+    expect(documentTitle(dialog)).toBe("Newer draft");
+    expect(sourceValue(dialog)).toBe("# Newer draft\n\nMine.\n");
+    expect(within(dialog).getByText("Not saved yet")).toBeInTheDocument();
+  });
+});
+
+describe("a saved text the server normalized", () => {
+  function fakeLibrary(preview: MarkdownSkillDocument | undefined): MarkdownSkillLibrary {
+    return {
+      skills: preview === undefined ? [] : [preview],
+      preview,
+      busy: false,
+      available: true,
+      error: undefined,
+      refresh: vi.fn(),
+      inspect: vi.fn(),
+      upload: vi.fn(() => Promise.resolve()),
+      remove: vi.fn(),
+      download: vi.fn(),
+    };
+  }
+
+  it("is adopted as text and baseline, so a CRLF draft is clean after its save", () => {
+    const { result, rerender } = renderHook(
+      ({ preview }: { preview: MarkdownSkillDocument | undefined }) =>
+        useSkillWorkspace(fakeLibrary(preview)),
+      { initialProps: { preview: undefined as MarkdownSkillDocument | undefined } },
+    );
+    act(() => result.current.create("# Crlf\r\n\r\nBody\r\n", "skill.md"));
+    act(() => result.current.save());
+    rerender({ preview: { ...REVIEW, body: "# Crlf\n\nBody\n" } });
+    const view = result.current.view;
+    if (view.kind !== "document") throw new TypeError("expected a document");
+    expect(view.document.text).toBe("# Crlf\n\nBody\n");
+    expect(view.document.saved).toBe("# Crlf\n\nBody\n");
+    expect(result.current.dirty).toBe(false);
+  });
+
+  it("keeps newer typing dirty against the normalized baseline", () => {
+    const { result, rerender } = renderHook(
+      ({ preview }: { preview: MarkdownSkillDocument | undefined }) =>
+        useSkillWorkspace(fakeLibrary(preview)),
+      { initialProps: { preview: undefined as MarkdownSkillDocument | undefined } },
+    );
+    act(() => result.current.create("# Crlf\r\n", "skill.md"));
+    act(() => result.current.save());
+    act(() => result.current.edit("# Crlf\r\nmore"));
+    rerender({ preview: { ...REVIEW, body: "# Crlf\n" } });
+    const view = result.current.view;
+    if (view.kind !== "document") throw new TypeError("expected a document");
+    expect(view.document.text).toBe("# Crlf\r\nmore");
+    expect(view.document.saved).toBe("# Crlf\n");
+    expect(result.current.dirty).toBe(true);
   });
 });

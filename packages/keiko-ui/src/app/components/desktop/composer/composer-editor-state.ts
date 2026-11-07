@@ -29,7 +29,7 @@ const insertHardBreak: Command = (state, dispatch) => {
  * The chat composer sends on Enter (its owner handles the key) and starts a new block on
  * Shift+Enter; a Markdown document starts a new block on Enter and breaks the line on Shift+Enter.
  */
-export type ComposerEditingMode = "composer" | "document";
+type ComposerEditingMode = "composer" | "document";
 
 function editorKeymap(mode: ComposerEditingMode): Plugin {
   const { strong, em, code } = composerSchema.marks;

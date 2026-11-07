@@ -72,6 +72,13 @@ export interface JiraDraftToolDeps<Context extends ManagedMcpInvocationContext> 
         context: Context,
       ) => { readonly data: CatalogJsonObject; readonly violationCount: number } | undefined)
     | undefined;
+  /**
+   * Rewrites a well-formed page before anything reads it: the checks, the store and the draft digest
+   * all see the projected items, so preview, approval, replay and Jira hold the same text.
+   */
+  readonly projectItems?:
+    | ((items: readonly StagedJiraDraftItem[], context: Context) => readonly StagedJiraDraftItem[])
+    | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -321,6 +328,16 @@ function stagedActivity<Context extends ManagedMcpInvocationContext>(
   );
 }
 
+/** The page after the composing server's projection; later checks see only the projected items. */
+function projectedStageArgs<Context extends ManagedMcpInvocationContext>(
+  parsed: StageArgs | undefined,
+  deps: JiraDraftToolDeps<Context>,
+  context: Context,
+): StageArgs | undefined {
+  if (parsed === undefined || deps.projectItems === undefined) return parsed;
+  return { ...parsed, items: deps.projectItems(parsed.items, context) };
+}
+
 /** `jira.draft-stage`: append a page of validated items to a draft; it changes nothing in Jira. */
 export async function executeJiraDraftStageTool<Context extends ManagedMcpInvocationContext>(
   rawArgs: CatalogJsonObject,
@@ -330,7 +347,8 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
 ): Promise<ManagedMcpToolResult> {
   const now = deps.now ?? Date.now;
   const startedAt = now();
-  const args = parseStageArgs(rawArgs);
+  const parsed = parseStageArgs(rawArgs);
+  const args = projectedStageArgs(parsed, deps, context);
   const run: StageRun<Context> = { deps, context, args, startedAt };
   if (args === undefined) {
     const refused = refuseStage(run, "invalid-input", 0);

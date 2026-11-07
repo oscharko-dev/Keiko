@@ -27,6 +27,9 @@ import type {
   CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import type { ChatToolBatchProgress } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { UiHandlerDeps } from "../deps.js";
 import { recordChatAuthorityResult } from "../editor/chatAuthorityActivity.js";
 import { decideAtlassianEnvelopeAction } from "./actionPolicy.js";
@@ -61,6 +64,18 @@ export interface JiraChatCatalogContext extends ToolConsumerContext {
   readonly retainDraftProgress?:
     | ((actionId: string, invocationId: string, snapshot: () => CatalogJsonObject) => void)
     | undefined;
+  /** Publishes the counted progress of the running jira.draft-batch call (#4173); counts only. */
+  readonly reportBatchProgress?: ((progress: ChatToolBatchProgress) => void) | undefined;
+  /** Model calls the turn can still spend on nested work after reserving its answer rounds. */
+  readonly remainingModelCalls?: (() => number) | undefined;
+  /** The model the accepted turn runs on; a draft batch writes its pages with the same model. */
+  readonly knowledgeReviewModelId?: () => string | undefined;
+  /** The sources the model's `[n]` markers designate in this turn; staged drafts name them too. */
+  readonly citationSources?: (() => ReadonlyMap<number, string>) | undefined;
+  /** Runs a nested model call under the accepted turn's readiness guard and meter. */
+  readonly meterModel?: (model: ModelPort) => ModelPort;
+  /** Releases the provisional synthesis charge of a nested call whose answer was used. */
+  readonly confirmModelOperation?: (response: NormalizedResponse) => void;
 }
 export interface JiraChatCatalogAction extends ToolConsumerActionIdentity {
   readonly tool: JiraManagedReadToolName | JiraMutationOperation | KnowledgeChatToolName;

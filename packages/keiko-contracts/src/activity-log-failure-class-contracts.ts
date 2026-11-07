@@ -40,6 +40,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       state: [
         "chat.tool-mutation.projected",
         "chat.tool-transcript.updated",
+        "chat.tool-turn.batch-draft-offer",
         "chat.tool-turn.context-fitted",
         "chat.tool-turn.corrected",
         "chat.tool-turn.ended",
@@ -51,6 +52,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredCausalOperations: [
       "chat.tool-mutation.projected",
       "chat.tool-transcript.updated",
+      "chat.tool-turn.batch-draft-offer",
       "chat.tool-turn.context-fitted",
       "chat.tool-turn.corrected",
       "chat.tool-turn.ended",
@@ -59,6 +61,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProofOperations: [
       "chat.tool-mutation.projected",
       "chat.tool-transcript.updated",
+      "chat.tool-turn.batch-draft-offer",
       "chat.tool-turn.context-fitted",
       "chat.tool-turn.corrected",
       "chat.tool-turn.ended",
@@ -67,6 +70,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredResourceOperations: [
       "chat.tool-mutation.projected",
       "chat.tool-transcript.updated",
+      "chat.tool-turn.batch-draft-offer",
       "chat.tool-turn.context-fitted",
       "chat.tool-turn.corrected",
       "chat.tool-turn.ended",
@@ -140,6 +144,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       start: [],
       state: [
         "atlassian.jira-draft",
+        "atlassian.jira-draft-batch",
         "atlassian.jira-report",
         "jira.attachment.source",
         "jira.citation.markers",
@@ -152,6 +157,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredCausalOperations: [
       "atlassian.action.outcome",
       "atlassian.jira-draft",
+      "atlassian.jira-draft-batch",
       "atlassian.jira-report",
       "jira.attachment.source",
       "jira.citation.markers",
@@ -161,6 +167,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProofOperations: [
       "atlassian.action.outcome",
       "atlassian.jira-draft",
+      "atlassian.jira-draft-batch",
       "atlassian.jira-report",
       "jira.attachment.source",
       "jira.citation.markers",
@@ -170,6 +177,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredResourceOperations: [
       "atlassian.action.outcome",
       "atlassian.jira-draft",
+      "atlassian.jira-draft-batch",
       "atlassian.jira-report",
       "jira.attachment.source",
       "jira.citation.markers",
@@ -180,11 +188,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "completeness-state",
       "count",
       "duration",
+      "error-kind",
       "loss-state",
       "opaque-id",
+      "safe-platform-class",
     ],
-    requiredFrameOperations: [],
-    requiredCauseOperations: [],
+    requiredFrameOperations: ["atlassian.jira-draft-batch"],
+    requiredCauseOperations: ["atlassian.jira-draft-batch"],
   },
   {
     contractKind: "activity-log-failure-class",

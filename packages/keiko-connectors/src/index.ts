@@ -189,7 +189,13 @@ export {
   type JiraManagedConnection,
   type JiraManagedProviderDeps,
   type JiraManagedMutationExecutor,
+  type JiraDraftBatchExecutor,
 } from "./jira-managed-tools.js";
+export {
+  readJiraCreateTemplateRules,
+  type JiraCreateTemplateRules,
+  type JiraCreateTemplateRulesResult,
+} from "./jira-create-template-metadata.js";
 export { JIRA_METADATA_MAX_UPDATES } from "./jira-field-metadata.js";
 export {
   JIRA_ISSUE_LINKS_MAX,
@@ -275,8 +281,10 @@ export {
   createJiraDraftStore,
   type JiraDraftStore,
   type StagedJiraDraft,
+  type StagedJiraDraftItem,
 } from "./jira-draft-store.js";
 export {
+  executeJiraDraftStageTool,
   firstJiraDraftTemplateRefusal,
   parseJiraDraftReference,
   resolveJiraDraftArguments,

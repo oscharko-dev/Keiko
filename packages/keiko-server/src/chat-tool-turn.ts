@@ -8,7 +8,17 @@ import { randomUUID } from "node:crypto";
 import { createCatalogToolBinder } from "./tool-catalog/catalogToolDispatch.js";
 import { createCodingToolInvocationRegistry } from "./coding-runtime/codingToolInvocationRegistry.js";
 import { processServerLogSink } from "./process-log-sink.js";
-import { defaultServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  defaultServerDiagnosticSink,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+} from "./diagnostics-log.js";
+import {
+  batchDraftDecision,
+  JIRA_DRAFT_BATCH_TOOL_ID,
+  JIRA_DRAFT_TOOL_ID,
+  type BatchDraftSkipReason,
+} from "./chat-tool-batch-draft.js";
 import {
   acceptChatToolReadGrant,
   waitForChatToolWriteConsent,
@@ -43,6 +53,7 @@ import {
   chatToolTurnPartialAnswer,
   recordChatToolTurnContextFitted,
   recordChatToolTurnCorrected,
+  recordChatToolBatchDraftOffer,
   recordChatToolTurnEnded,
   type ChatToolTurnEndReason,
 } from "./chat-tool-turn-ending.js";
@@ -77,7 +88,11 @@ import {
   type GatewayStreamChunk,
 } from "@oscharko-dev/keiko-model-gateway";
 import { isToolCallingVerificationFresh } from "@oscharko-dev/keiko-contracts/runtime/gateway";
-import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  isChatToolBatchProgress,
+  type ChatToolBatchProgress,
+  type ChatToolExchange,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ToolConsumerContext } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type {
   CatalogJsonObject,
@@ -106,6 +121,7 @@ import {
   latestCitationLabels,
   recordJiraCitationMarkers,
   resolveJiraCitationMarkers,
+  unambiguousCitationLabels,
 } from "./atlassian/jiraCitationMarkers.js";
 
 const TOOL_TURN_RULES =
@@ -174,8 +190,9 @@ type ModelAttempt = NonNullable<GatewayCallRequest["attemptAdmission"]>;
 export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
   readonly deps: Pick<
     UiHandlerDeps,
-    "store" | "gatewayConfig" | "atlassianActionApprovalRegistry" | "activityLog"
-  >;
+    "store" | "gatewayConfig" | "atlassianActionApprovalRegistry" | "activityLog" | "diagnostics"
+  > &
+    Partial<Pick<UiHandlerDeps, "redactor">>;
   readonly message: ChatMessage;
   readonly context: Context;
   readonly managed: Pick<ManagedProviderCatalog<CatalogConsumer>, "catalog" | "projection">;
@@ -254,6 +271,13 @@ function interruptedDraftProgress(
     ? progress.snapshot()
     : undefined;
 }
+/** Model calls a nested batch leaves to the turn's final answer and citation repair rounds. */
+const ANSWER_ROUND_MODEL_CALL_RESERVE = 3;
+/** The one running draft batch call; its throttle key is the last progress it published. */
+interface ActiveBatchProgress {
+  readonly callId: string;
+  publishedKey?: string;
+}
 export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolConsumerContext> {
   private readonly counters: RunCounters = {
     iterations: 0,
@@ -274,8 +298,16 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private usableObservation = false;
   /** One active serial dispatch, retired before any later turn can reuse its private snapshot. */
   private activeDraftProgress: ActiveDraftProgress | undefined;
+  /** The draft batch call being dispatched; only it may report progress. */
+  private activeBatchProgress: ActiveBatchProgress | undefined;
+  /** Progress publications in order; a publication failure is diagnosed, never thrown at the batch. */
+  private batchPublication: Promise<void> = Promise.resolve();
+  /** Batch calls whose approval offer was decided; a batch earns at most one. */
+  private readonly offeredBatchCalls = new Set<string>();
   private readonly callIds = new Set<string>();
   private citationLabels: ReadonlyMap<number, string> | undefined;
+  /** The marker namespace of the evidence pack the turn's current synthesis actually sent. */
+  private evidenceSources: ReadonlyMap<number, string> | undefined;
   private notify: ((message: ChatMessage) => void | Promise<void>) | undefined;
   private uncertainBudget = false;
   /** The turn's own envelope refused a model attempt; the caller's caps are not this turn's. */
@@ -318,7 +350,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     this.context = {
       ...options.context,
       signal: AbortSignal.any([options.context.signal, this.abortController.signal]),
-      knowledgeReviewModelId: (): string | undefined => this.activeModelId,
+      ...this.turnReadouts(),
       retainDraftProgress: (
         actionId: string,
         invocationId: string,
@@ -333,6 +365,10 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         active.invocationId = invocationId;
         active.snapshot = snapshot;
       },
+      reportBatchProgress: (progress: ChatToolBatchProgress): void => {
+        this.reportBatchProgress(progress);
+      },
+      remainingModelCalls: (): number => this.remainingNestedModelCalls(),
       confirmModelOperation: (response: NormalizedResponse): void => {
         const confirm = this.nestedModelConfirmations.get(response);
         this.nestedModelConfirmations.delete(response);
@@ -581,16 +617,72 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
           }),
     };
   }
+  /** Persists and publishes a page of the running batch when its counted state changed. */
+  private reportBatchProgress(progress: ChatToolBatchProgress): void {
+    const active = this.activeBatchProgress;
+    requireDispatch(
+      active !== undefined && isChatToolBatchProgress(progress),
+      "invalid",
+      "recovery-required",
+    );
+    const key = [progress.phase, progress.draftedCount, progress.failedCount].join(":");
+    if (active.publishedKey === key) return;
+    const { deps, message, correlationId } = this.options;
+    try {
+      deps.store.updateChatToolTranscript(
+        message.id,
+        { kind: "progress", callId: active.callId, batchProgress: progress },
+        correlationId,
+      );
+    } catch (error: unknown) {
+      // A page that cannot be persisted is dropped; the batch and its next page carry on.
+      this.diagnoseBatchProgress(error);
+      return;
+    }
+    active.publishedKey = key;
+    this.batchPublication = this.batchPublication
+      .then(() => this.publish())
+      .catch((error: unknown) => {
+        this.diagnoseBatchProgress(error);
+      });
+  }
+  /** Model calls left for nested work once the turn's own answer rounds are kept. */
+  private remainingNestedModelCalls(): number {
+    return Math.max(
+      0,
+      this.limits.maxModelCalls - this.counters.modelCalls - ANSWER_ROUND_MODEL_CALL_RESERVE,
+    );
+  }
+  private diagnoseBatchProgress(error: unknown): void {
+    const { deps, correlationId } = this.options;
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "chat.tool-turn.batch-progress",
+        source: "chat-tool-turn",
+        error,
+        redact: (text): string => {
+          const redacted = deps.redactor?.(text);
+          return typeof redacted === "string" ? redacted : text;
+        },
+      }),
+    );
+  }
   private async dispatchWithProgress(
-    invocation: NonNullable<NormalizedResponse["toolCalls"][number]["invocation"]>,
+    call: NormalizedResponse["toolCalls"][number],
     identity: string,
   ): Promise<{
     outcome: Awaited<ReturnType<CatalogToolBinder["dispatch"]>>;
     progress: ActiveDraftProgress;
   }> {
+    const invocation = call.invocation;
+    requireDispatch(invocation !== undefined, "invalid", "replay-conflict");
     const progress: ActiveDraftProgress = { actionId: identity };
     this.activeDraftProgress =
-      invocation.toolRef.canonicalId === "keiko.jira.draft" ? progress : undefined;
+      invocation.toolRef.canonicalId === JIRA_DRAFT_TOOL_ID ? progress : undefined;
+    this.activeBatchProgress =
+      invocation.toolRef.canonicalId === JIRA_DRAFT_BATCH_TOOL_ID ? { callId: call.id } : undefined;
     try {
       const outcome = await this.binder.dispatch(invocation, {
         actionId: identity,
@@ -599,6 +691,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       return { outcome, progress };
     } finally {
       this.activeDraftProgress = undefined;
+      this.activeBatchProgress = undefined;
+      await this.batchPublication;
     }
   }
   private async dispatch(
@@ -621,7 +715,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     );
     await this.publish();
     const identity = sha256Hex(canonicalise({ messageId: message.id, callId: call.id }));
-    const { outcome, progress } = await this.dispatchWithProgress(call.invocation, identity);
+    const { outcome, progress } = await this.dispatchWithProgress(call, identity);
     requireDispatch(outcome.kind === "settled", "invalid", "recovery-required");
     this.refreshWriteApproval(call.id);
     const descriptor = managed.catalog.descriptors.find(
@@ -1054,6 +1148,78 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     );
   }
 
+  /**
+   * A clean draft batch ends in Keiko's own `jira.draft` call for exactly the staged draft, so the
+   * human meets the existing write approval instead of waiting for the model to ask. The call is
+   * dispatched like any other: mode, approval, authority, budget and idempotency all still apply,
+   * and its result reaches the model's next round like a model-issued one.
+   */
+  private async offerBatchDrafts(calls: NormalizedResponse["toolCalls"]): Promise<void> {
+    for (const call of calls) {
+      if (
+        call.invocation?.toolRef.canonicalId !== JIRA_DRAFT_BATCH_TOOL_ID ||
+        this.offeredBatchCalls.has(call.id)
+      )
+        continue;
+      this.offeredBatchCalls.add(call.id);
+      if (this.batchOfferEnded()) {
+        this.recordBatchDraftOffer("turn-ended");
+        continue;
+      }
+      const stored = this.options.deps.store
+        .findMessageById(this.options.message.id)
+        ?.toolTranscript?.exchanges.find((exchange) => exchange.call.id === call.id);
+      if (stored === undefined) {
+        this.recordBatchDraftOffer("no-stored-result");
+        continue;
+      }
+      const decision = batchDraftDecision(stored);
+      if (decision.kind === "skip") this.recordBatchDraftOffer(decision.reason);
+      else await this.dispatchBatchDraft(decision); // NOSONAR typescript:S9382 -- the approval of one batch settles before the next batch is offered
+    }
+  }
+  /** A cancelled, early-ended or scope-changed turn never gets a draft offered on its behalf. */
+  private batchOfferEnded(): boolean {
+    return this.context.signal.aborted || this.endedEarly || this.scopeChangeEnded;
+  }
+  private recordBatchDraftOffer(decision: "dispatched" | BatchDraftSkipReason): void {
+    recordChatToolBatchDraftOffer(processServerLogSink(), {
+      correlationId: this.options.correlationId,
+      messageId: this.options.message.id,
+      decision,
+    });
+  }
+  private async dispatchBatchDraft(draft: {
+    readonly draftId: string;
+    readonly draftDigest: string;
+  }): Promise<void> {
+    if (this.batchOfferEnded()) {
+      this.recordBatchDraftOffer("turn-ended");
+      return;
+    }
+    const tool = this.options.managed.projection.tools.find(
+      (entry) => entry.toolRef.canonicalId === JIRA_DRAFT_TOOL_ID,
+    );
+    if (tool === undefined || this.counters.toolCalls >= this.limits.maxToolCalls) {
+      this.recordBatchDraftOffer(tool === undefined ? "not-offered" : "budget-exhausted");
+      return;
+    }
+    this.recordBatchDraftOffer("dispatched");
+    const args = { draftId: draft.draftId, draftDigest: draft.draftDigest };
+    await this.dispatch({
+      id: `runtime-draft-${randomUUID().replaceAll("-", "").slice(0, 24)}`,
+      name: tool.alias,
+      arguments: args,
+      invocation: {
+        kind: "bound",
+        toolRef: tool.toolRef,
+        projectionDigest: this.options.managed.projection.projectionDigest,
+        offerId: this.binder.offerTool(tool.toolRef).offerId,
+        arguments: args,
+      },
+    });
+  }
+
   private async runRounds(
     model: ModelPort,
     request: GatewayCallRequest,
@@ -1096,9 +1262,48 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       this.retainToolResponse(request.modelId, prepared);
       for (const call of prepared.toolCalls) await this.dispatch(call); // NOSONAR typescript:S9382 -- dispatches share authority/budgets; receipts, mutation journals and transcripts must settle before the next admission
       this.currentToolResponse = undefined;
+      await this.offerBatchDrafts(prepared.toolCalls);
       this.correctedSinceProgress = false;
     }
     requireDispatch(false, "denied", "budget-exhausted");
+  }
+
+  /** What the turn's tools may read of it: the model it runs on and the sources `[n]` designates. */
+  private turnReadouts(): {
+    readonly knowledgeReviewModelId: () => string | undefined;
+    readonly citationSources: () => ReadonlyMap<number, string>;
+  } {
+    return {
+      knowledgeReviewModelId: (): string | undefined => this.activeModelId,
+      citationSources: (): ReadonlyMap<number, string> => this.currentCitationLabels(),
+    };
+  }
+
+  /**
+   * Binds the `[n]` namespace of this turn to the evidence pack its synthesis sent, so a marker in
+   * Jira text names that pack's source and never an earlier answer's of the same number.
+   */
+  bindEvidenceSources(sources: ReadonlyMap<number, string>): void {
+    this.evidenceSources = sources;
+  }
+
+  /**
+   * The sources the model's `[n]` markers designate: the current turn's evidence pack when it sent
+   * one, otherwise the chat's latest grounded answer where no older answer defines the same number
+   * differently. The same numeral of another turn is never a match, and an ambiguous one is left.
+   */
+  private currentCitationLabels(): ReadonlyMap<number, string> {
+    if (this.evidenceSources !== undefined) return this.evidenceSources;
+    const { deps, message } = this.options;
+    if (this.citationLabels === undefined) {
+      const messages = deps.store.listMessages(message.chatId);
+      this.citationLabels = unambiguousCitationLabels(
+        messages,
+        message.id,
+        latestCitationLabels(messages, message.id),
+      );
+    }
+    return this.citationLabels;
   }
 
   /**
@@ -1111,12 +1316,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       isJiraTextWrite(call.invocation?.toolRef.canonicalId),
     );
     if (writes.length === 0) return response;
-    const { deps, message, correlationId } = this.options;
-    this.citationLabels ??= latestCitationLabels(
-      deps.store.listMessages(message.chatId),
-      message.id,
-    );
-    const labels = this.citationLabels;
+    const { deps, correlationId } = this.options;
+    const labels = this.currentCitationLabels();
     const counts = {
       callCount: writes.length,
       labelCount: labels.size,
@@ -1329,6 +1530,7 @@ export type ChatToolTurnPort = Pick<
   | "endedEarly"
   | "dispatchedChange"
   | "settleRetryFailure"
+  | "bindEvidenceSources"
 >;
 
 /** Source-specific authority adapters use the same catalog/log/budget and invocation registry wiring. */

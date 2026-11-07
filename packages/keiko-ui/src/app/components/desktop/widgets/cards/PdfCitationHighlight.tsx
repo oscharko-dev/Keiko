@@ -12,6 +12,7 @@ import {
   type HighlightBox,
   type PdfViewportLike,
 } from "./pdf-citation-highlight";
+import styles from "./PdfCitationPreviewWindow.module.css";
 
 /** The rendered page a highlight reads its text layer from. */
 export interface HighlightedPage {
@@ -94,7 +95,7 @@ export function PdfCitationHighlight({
   return boxes.map((box, index) => (
     <span
       key={index}
-      className="pdfv-citation-box"
+      className={styles.cmpCitationBox}
       data-citation-box=""
       aria-hidden="true"
       style={{

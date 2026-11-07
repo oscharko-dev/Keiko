@@ -135,6 +135,67 @@ describe("criterion text is active content, not a substring or quotation", () =>
   });
 });
 
+const FORMATTED_CRITERIA = [
+  "Der **Status** wird angezeigt.",
+  "Der *Status* wird angezeigt.",
+  "Der Wert `max` wird angezeigt.",
+  "Siehe [Hilfe](https://example.test/hilfe) dazu.",
+] as const;
+
+function formattedSpecification(criterion: string): string {
+  return [
+    "# Lastenheft",
+    "",
+    "### LH-001 Thema",
+    "",
+    "Das Portal unterstützt das Thema; die Bearbeitung ist innerhalb von 10 Minuten abgeschlossen.",
+    "",
+    "Abnahmekriterien:",
+    `- ${criterion}`,
+    "",
+    "Priorität: Muss.",
+    "",
+  ].join("\n");
+}
+
+describe("criteria with Markdown formatting survive the Markdown-to-wiki conversion", () => {
+  it.each(FORMATTED_CRITERIA)("accepts %s written as a Markdown bullet", async (criterion) => {
+    const { open } = await session([
+      { capsuleId: "cap-fmt", text: formattedSpecification(criterion) },
+    ]);
+    const trace = open();
+    try {
+      const collapsed = criterion.replace(/\s+/gu, " ");
+      expect(
+        trace.resolve(["LH-001"], { description: { format: "markdown", text: `- ${collapsed}` } })
+          .ok,
+      ).toBe(true);
+      expect(
+        trace.resolve(["LH-001"], {
+          description: { format: "markdown", text: "- Etwas ganz anderes." },
+        }).ok,
+      ).toBe(false);
+    } finally {
+      trace.close();
+    }
+  });
+
+  it("accepts a multi-line criterion collapsed to one bullet and refuses a paraphrase", async () => {
+    const { open } = await session([
+      { capsuleId: "cap-fmt", text: formattedSpecification("Der Status\nwird angezeigt.") },
+    ]);
+    const trace = open();
+    try {
+      const accepted = { format: "markdown", text: "- Der Status wird angezeigt." };
+      expect(trace.resolve(["LH-001"], { description: accepted }).ok).toBe(true);
+      const paraphrase = { format: "markdown", text: "- Der Status wird dargestellt." };
+      expect(trace.resolve(["LH-001"], { description: paraphrase }).ok).toBe(false);
+    } finally {
+      trace.close();
+    }
+  });
+});
+
 describe("trace session", () => {
   it("resolves a scoped reference to doc-scoped labels and a footer with the document and revision", async () => {
     const { f, open } = await session([

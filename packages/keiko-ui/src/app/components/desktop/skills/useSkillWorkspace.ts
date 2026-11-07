@@ -1,7 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import type { MarkdownSkillMetadata } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import type {
+  MarkdownSkillDocument,
+  MarkdownSkillMetadata,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { skillTextFits } from "./useMarkdownSkillAuthor";
 import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
 
@@ -17,7 +20,7 @@ export interface SkillDocument {
 }
 
 /** What the right-hand side shows: nothing yet, a file, or one of the two ways to draft one. */
-export type SkillWorkspaceView =
+type SkillWorkspaceView =
   | { readonly kind: "empty" }
   | { readonly kind: "document"; readonly document: SkillDocument }
   | { readonly kind: "author" }
@@ -60,15 +63,53 @@ function newFileName(text: string, fallback: string): string {
 
 type Expectation =
   | { readonly kind: "open"; readonly id: string; readonly key: string }
-  | { readonly kind: "save"; readonly key: string };
+  | { readonly kind: "import"; readonly key: string }
+  | { readonly kind: "save"; readonly key: string; readonly sent: string };
+
+type SetView = Dispatch<SetStateAction<SkillWorkspaceView>>;
+
+function storedDocument(
+  key: string,
+  preview: MarkdownSkillDocument,
+  text: string,
+): SkillWorkspaceView {
+  return {
+    kind: "document",
+    document: {
+      key,
+      stored: preview,
+      fileName: newFileName(preview.body, "skill.md"),
+      saved: preview.body,
+      text,
+    },
+  };
+}
 
 /**
- * A stored file arrives through the library preview, after opening or saving it. A saved file
- * keeps its editor document (the text is already there); an opened one starts a new document.
+ * Applies a stored file that arrived for an expectation. An opened or imported file starts its
+ * document. A save only confirms the saved baseline of the document that asked for it, and keeps
+ * whatever the person typed since; a document that was left in the meantime is not touched.
+ */
+function applyArrival(
+  expectation: Expectation,
+  preview: MarkdownSkillDocument,
+  current: SkillWorkspaceView,
+): SkillWorkspaceView {
+  if (expectation.kind !== "save") return storedDocument(expectation.key, preview, preview.body);
+  if (current.kind !== "document" || current.document.key !== expectation.key) return current;
+  // The server stores normalized text (line endings, BOM): text still equal to what was sent
+  // adopts the stored body, newer typing stays and is dirty against the new baseline.
+  const unchanged = current.document.text === expectation.sent;
+  return storedDocument(expectation.key, preview, unchanged ? preview.body : current.document.text);
+}
+
+/**
+ * A stored file arrives through the library preview, after opening or saving it. Leaving the
+ * document (a new draft, another view) withdraws the expectation, so a late reply is ignored.
  */
 function useArrivals(
   library: MarkdownSkillLibrary,
-  setView: (view: SkillWorkspaceView) => void,
+  setView: SetView,
 ): { current: Expectation | undefined } {
   const expected = useRef<Expectation | undefined>(undefined);
   const preview = library.preview;
@@ -77,16 +118,7 @@ function useArrivals(
     if (preview === undefined || expectation === undefined) return;
     if (expectation.kind === "open" && expectation.id !== preview.id) return;
     expected.current = undefined;
-    setView({
-      kind: "document",
-      document: {
-        key: expectation.key,
-        stored: preview,
-        fileName: newFileName(preview.body, "skill.md"),
-        saved: preview.body,
-        text: preview.body,
-      },
-    });
+    setView((current) => applyArrival(expectation, preview, current));
   }, [preview, setView]);
   return expected;
 }
@@ -137,7 +169,7 @@ interface ActionContext {
   readonly document: SkillDocument | undefined;
   readonly expected: { current: Expectation | undefined };
   readonly drafts: { current: number };
-  readonly setView: (view: SkillWorkspaceView) => void;
+  readonly setView: SetView;
   readonly setPending: (action: (() => void) | undefined) => void;
   readonly pending: (() => void) | undefined;
 }
@@ -160,12 +192,12 @@ function libraryActions({
       void library.inspect(skill);
     },
     importFile: (file): void => {
-      expected.current = { kind: "save", key: nextKey(drafts, "import") };
+      expected.current = { kind: "import", key: nextKey(drafts, "import") };
       void library.upload(file);
     },
     save: (): void => {
       if (document === undefined) return;
-      expected.current = { kind: "save", key: document.key };
+      expected.current = { kind: "save", key: document.key, sent: document.text };
       const fileName =
         document.stored === undefined
           ? newFileName(document.text, document.fileName)
@@ -184,19 +216,28 @@ function workspaceActions(
   SkillWorkspace,
   "open" | "create" | "importFile" | "show" | "edit" | "save" | "discard" | "keepEditing"
 > {
-  const { document, drafts, setView, setPending, pending } = context;
+  const { document, drafts, expected, setView, setPending, pending } = context;
   return {
     ...libraryActions(context),
     create: (text, fileName): void => {
       const key = nextKey(drafts, "draft");
+      expected.current = undefined;
       setView({
         kind: "document",
         document: { key, stored: undefined, fileName, saved: "", text },
       });
     },
-    show: (kind): void => setView({ kind }),
+    show: (kind): void => {
+      expected.current = undefined;
+      setView({ kind });
+    },
     edit: (text): void => {
-      if (document !== undefined) setView({ kind: "document", document: { ...document, text } });
+      // Against the latest document, so an edit never resurrects one a reply has since replaced.
+      setView((current) =>
+        current.kind === "document"
+          ? { kind: "document", document: { ...current.document, text } }
+          : current,
+      );
     },
     discard: (): void => {
       setPending(undefined);

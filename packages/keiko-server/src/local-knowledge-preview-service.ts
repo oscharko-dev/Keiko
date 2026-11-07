@@ -285,6 +285,10 @@ function citedPassage(
   if (current?.characterStart === undefined || current.characterEnd === undefined) {
     return undefined;
   }
+  // The store keeps the normalized text of the current revision only. When the cited revision
+  // differs, the viewer is served the archived blob of the cited version, and text of another
+  // revision must not be framed on its pages: the same version decision as the display anchor.
+  if (current.documentContentHash !== authority.citation.documentContentHash) return undefined;
   const excerpt = readCitationExcerpt(
     store,
     current.lineage.capsuleId,

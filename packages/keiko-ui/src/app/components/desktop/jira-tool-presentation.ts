@@ -1,4 +1,8 @@
-import type { ChatToolExchange, ChatTurnState } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  CHAT_TOOL_BATCH_TOOL_NAME,
+  type ChatToolExchange,
+  type ChatTurnState,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MANAGED_ACTION_TYPES,
@@ -8,6 +12,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import { actionTypeLabelKey } from "./widgets/connectors/connector-labels";
+import { REQUIREMENTS_TOOL_ALIAS, requirementsReadGroups } from "./jira-tool-progress";
 
 const OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKey>> = {
   "not-dispatched": "chat.jira.write.notDispatched",
@@ -26,8 +31,6 @@ const MCP_OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKe
   pending: "chat.mcp.write.pending",
 };
 const MANAGED_TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
-/** The Chat alias of the local `knowledge.requirements` read (#4179). */
-const REQUIREMENTS_TOOL_ALIAS = "knowledge_requirements";
 const KNOWLEDGE_TOOLS: Readonly<Record<string, { readonly label: WidgetMessageKey }>> = {
   knowledge_requirements: { label: "chat.requirements.tool" },
   knowledge_documents: { label: "chat.documents.tool" },
@@ -61,6 +64,8 @@ export function jiraCallLabel(
     : jiraOperationLabel(operation);
 }
 export function jiraToolLabel(exchange: ChatToolExchange): WidgetMessageKey {
+  if (exchange.call.name === CHAT_TOOL_BATCH_TOOL_NAME)
+    return actionTypeLabelKey("jira.draft-batch");
   const knowledge = KNOWLEDGE_TOOLS[exchange.call.name];
   if (knowledge !== undefined) return knowledge.label;
   const operation = MANAGED_TOOLS.find(
@@ -80,13 +85,12 @@ function plainRecord(value: unknown): Record<string, unknown> | undefined {
     ? Object.fromEntries(Object.entries(value))
     : undefined;
 }
-/** The inventory is cut when the tool's own totals name an omission, or a further page remains. */
+/** The inventory is cut only when the tool's own totals name an omission; a further page is not. */
 type CompletedResult = Extract<NonNullable<ChatToolExchange["result"]>, { status: "completed" }>;
 function requirementsCut(result: CompletedResult): boolean {
   const totals = plainRecord(plainRecord(result.data)?.totals);
   const reasons = totals?.cutReasons;
   return (
-    result.page.truncated ||
     (Array.isArray(reasons) && reasons.length > 0) ||
     REQUIREMENTS_CUT_COUNTS.some((name) => {
       const value = totals?.[name];
@@ -98,8 +102,11 @@ function requirementsCut(result: CompletedResult): boolean {
 export function jiraToolPartialNotice(exchange: ChatToolExchange): WidgetMessageKey | undefined {
   if (exchange.call.name.startsWith("mcp_") || exchange.result?.status !== "completed")
     return undefined;
+  // Paged unit reads are counted by the consolidated card, which names what a cut left out.
   if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS)
-    return requirementsCut(exchange.result) ? "chat.requirements.partial" : undefined;
+    return requirementsReadGroups([exchange]).members.size === 0 && requirementsCut(exchange.result)
+      ? "chat.requirements.partial"
+      : undefined;
   if (KNOWLEDGE_TOOLS[exchange.call.name] !== undefined)
     return exchange.result.page.truncated ? "chat.knowledge.partial" : undefined;
   return exchange.result.page.truncated ? "chat.jira.partial" : undefined;

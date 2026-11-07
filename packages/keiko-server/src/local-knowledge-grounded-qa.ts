@@ -1069,6 +1069,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       model: this.model,
       deps: this.context.deps,
       evidenceCount: this.sentReferences.length,
+      evidenceSources: sentReferenceSources(this.sentReferences, this.redactExcerpt),
       coverage: requirementCoverage({
         deps: this.context.deps,
         store: this.store,
@@ -1092,6 +1093,20 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       },
     });
   }
+}
+
+/** The `[n]` markers of the references this prompt sent, with the label the model was shown. */
+function sentReferenceSources(
+  references: readonly RetrievalReference[],
+  redactExcerpt: (value: string) => string,
+): ReadonlyMap<number, string> {
+  const safeRedact = (value: string): string => redactExcerpt(stripUnsafeFormatChars(value));
+  return new Map(
+    references.map((reference, index) => [
+      index + 1,
+      renderCitationLabel(reference.citation, safeRedact),
+    ]),
+  );
 }
 
 function promptText(messages: GatewayCallRequest["messages"]): string {

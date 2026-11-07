@@ -138,7 +138,23 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.resultUnavailable": "Ergebnis nicht verfügbar",
   "chat.jira.partial": "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
   "chat.requirements.tool": "Anforderungen",
-  "chat.requirements.partial": "Teilliste. Nicht alle Anforderungen sind enthalten.",
+  "chat.requirements.partial": "Nicht alle Anforderungen wurden gelesen.",
+  "chat.requirements.read": "Anforderungen gelesen: {done} von {total}",
+  "chat.requirements.cut.documentsNotExtracted":
+    "Dokumente, die nicht gelesen werden konnten: {count}.",
+  "chat.requirements.cut.documentsOmitted": "Dokumente, die ausgelassen wurden: {count}.",
+  "chat.requirements.cut.unitsOmitted": "Anforderungen, die ausgelassen wurden: {count}.",
+  "chat.batch.outlining": "Anforderungen werden gruppiert …",
+  "chat.batch.drafted":
+    "{drafted} von {planned} Vorgängen entworfen · {covered} von {requirements} Anforderungen abgedeckt",
+  "chat.batch.stopped": "Abgebrochen nach {drafted} von {planned} Vorgängen",
+  "chat.batch.stoppedOutlining": "Abgebrochen beim Gruppieren der Anforderungen",
+  "chat.batch.none": "Keine Vorgänge entworfen",
+  "chat.batch.uncovered": "Nicht abgedeckte Anforderungen: {count}.",
+  "chat.batch.unfinished": "Nicht fertiggestellte Vorgänge: {count}.",
+  "chat.batch.failedRequirements": "Anforderungen, die nicht entworfen werden konnten: {count}.",
+  "chat.batch.failedIssues": "Vorgänge, die nicht entworfen werden konnten: {count}.",
+  "chat.processing.draftBatch": "Entwurf erstellen",
   "chat.documents.tool": "Dokumente",
   "chat.review.tool": "Dokumentenbewertung",
   "chat.knowledge.partial": "Teilergebnis. Nicht alle Dokumentinformationen sind enthalten.",
@@ -3214,6 +3230,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.action.jira.report":
     "Jira-Fortschritts-, Konformitäts- und Abdeckungsbericht berechnen",
   "atlassianConnectors.action.jira.draft-stage": "Teil eines Jira-Backlog-Entwurfs vorbereiten",
+  "atlassianConnectors.action.jira.draft-batch": "Jira-Vorgänge aus Anforderungen entwerfen",
   "chat.jira.report.figures":
     "Die Zahlen berechnet Keiko aus den gelesenen Jira-Daten, nicht das Modell.",
   "chat.jira.report.reading": "Jira wird gelesen: {read} von {total} Vorgängen",

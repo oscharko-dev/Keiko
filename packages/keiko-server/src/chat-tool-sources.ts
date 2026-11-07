@@ -54,6 +54,8 @@ export interface ChatSourcesContext extends ToolConsumerContext {
   readonly knowledgeReviewModelId?: () => string | undefined;
   readonly confirmModelOperation?: (response: NormalizedResponse) => void;
   readonly retainDraftProgress?: JiraChatCatalogContext["retainDraftProgress"];
+  readonly reportBatchProgress?: JiraChatCatalogContext["reportBatchProgress"];
+  readonly remainingModelCalls?: JiraChatCatalogContext["remainingModelCalls"];
   readonly jira: JiraChatCatalogContext;
   readonly mcp: McpChatCatalogContext;
 }
@@ -110,12 +112,20 @@ function invocationFields(
   | "knowledgeReviewModelId"
   | "confirmModelOperation"
   | "retainDraftProgress"
+  | "reportBatchProgress"
+  | "remainingModelCalls"
 > {
   return {
     ...(context.meterModel === undefined ? {} : { meterModel: context.meterModel }),
     ...(context.retainDraftProgress === undefined
       ? {}
       : { retainDraftProgress: context.retainDraftProgress }),
+    ...(context.reportBatchProgress === undefined
+      ? {}
+      : { reportBatchProgress: context.reportBatchProgress }),
+    ...(context.remainingModelCalls === undefined
+      ? {}
+      : { remainingModelCalls: context.remainingModelCalls }),
     ...(context.knowledgeReviewModelId === undefined
       ? {}
       : { knowledgeReviewModelId: context.knowledgeReviewModelId }),

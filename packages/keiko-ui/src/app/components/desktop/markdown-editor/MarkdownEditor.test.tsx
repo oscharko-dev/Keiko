@@ -87,6 +87,13 @@ function viewButton(name: string): HTMLButtonElement {
 }
 
 describe("MarkdownEditor", () => {
+  it("keeps the formatted document a single keyboard stop inside its scrolling page", () => {
+    render(<Harness initial="text" />);
+    const textbox = screen.getByRole("textbox", { name: "Prompt" });
+    expect(textbox.getAttribute("tabindex")).toBe("0");
+    expect(textbox.parentElement?.hasAttribute("tabindex")).toBe(false);
+  });
+
   it("opens formatted by default with the toolbar", () => {
     render(<Harness initial={"# Title\n\ntext"} />);
     expect(screen.getByRole("textbox", { name: "Prompt" })).toBeTruthy();
@@ -300,5 +307,142 @@ describe("MarkdownEditor", () => {
       render(editor("a ~~b~~", "src", true));
       expect(controllers).toHaveLength(0);
     });
+  });
+});
+
+function paste(text: string, type: "text/markdown" | "text/plain" = "text/markdown"): void {
+  const event = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", {
+    value: { types: [type], getData: (wanted: string) => (wanted === type ? text : "") },
+  });
+  act(() => {
+    editorView().dom.dispatchEvent(event);
+  });
+}
+
+function lastValue(onChange: ReturnType<typeof vi.fn>): string {
+  return String(onChange.mock.calls.at(-1)?.[0]);
+}
+
+describe("pasting Markdown the formatted view cannot hold", () => {
+  const EXISTING = "# Plan\n\nExisting paragraph.";
+
+  it.each([
+    ["strikethrough", "Please ~~do not~~ do this"],
+    ["a table", "| a | b |\n| - | - |\n| 1 | 2 |"],
+    ["a task list", "- [x] done\n- [ ] open"],
+  ])("keeps %s unchanged, with the existing document, in Markdown source", (_name, pasted) => {
+    const onChange = vi.fn();
+    render(<Harness initial={EXISTING} onChange={onChange} />);
+    const { state } = editorView();
+    act(() => {
+      editorView().dispatch(state.tr.setSelection(TextSelection.atEnd(state.doc)));
+    });
+    paste(pasted);
+    const saved = lastValue(onChange);
+    expect(saved).toContain(pasted);
+    expect(saved).not.toContain("\\~");
+    expect(saved).toContain("# Plan");
+    expect(saved).toContain("Existing paragraph.");
+    expect(viewButton("Markdown").getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("textbox", { name: "Prompt · Markdown" })).toHaveValue(saved);
+  });
+
+  it("still parses ordinary pasted Markdown into the formatted document", () => {
+    const onChange = vi.fn();
+    render(<Harness initial={EXISTING} onChange={onChange} />);
+    paste("some **bold** words", "text/plain");
+    expect(lastValue(onChange)).toContain("some **bold** words");
+    expect(viewButton("Formatted").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  function select(text: string, inner?: string): void {
+    const view = editorView();
+    let found = -1;
+    view.state.doc.descendants((node, pos) => {
+      if (found < 0 && node.isText && node.text?.includes(text) === true)
+        found = pos + node.text.indexOf(text);
+      return found < 0;
+    });
+    if (found < 0) throw new TypeError("text not in document");
+    const length = inner === undefined ? 0 : text.length;
+    act(() => {
+      view.dispatch(
+        view.state.tr.setSelection(
+          TextSelection.create(
+            view.state.doc,
+            found + (inner === undefined ? text.length : 0),
+            found + (inner === undefined ? text.length : length),
+          ),
+        ),
+      );
+    });
+  }
+
+  it("inserts in the middle of a paragraph, keeping both halves", () => {
+    const onChange = vi.fn();
+    render(<Harness initial={"Start middle end"} onChange={onChange} />);
+    select("Start ");
+    paste("~~gone~~");
+    expect(lastValue(onChange)).toBe("Start ~~gone~~middle end");
+  });
+
+  it("replaces a non-empty selection", () => {
+    const onChange = vi.fn();
+    render(<Harness initial={"Keep REPLACE keep"} onChange={onChange} />);
+    select("REPLACE", "all");
+    paste("~~new~~");
+    expect(lastValue(onChange)).toBe("Keep ~~new~~ keep");
+  });
+
+  it("keeps multi-line text inside the list item it was pasted into", () => {
+    const onChange = vi.fn();
+    render(<Harness initial={"- first item tail\n- second"} onChange={onChange} />);
+    select("first ");
+    paste("~~x~~\n~~y~~");
+    const lines = lastValue(onChange).split("\n");
+    expect(lines).toEqual(["* first ~~x~~", "  ~~y~~item tail", "* second"]);
+  });
+
+  it("keeps a table pasted inside a list item as its own block of that item", () => {
+    const onChange = vi.fn();
+    render(<Harness initial={"- first item tail\n- second"} onChange={onChange} />);
+    select("first ");
+    paste("| a | b |\n| - | - |\n| 1 | 2 |");
+    expect(lastValue(onChange).split("\n")).toEqual([
+      "* first",
+      "",
+      "  | a | b |",
+      "  | - | - |",
+      "  | 1 | 2 |",
+      "",
+      "  item tail",
+      "* second",
+    ]);
+  });
+
+  it("sets a pasted table apart from the paragraph it interrupts", () => {
+    const onChange = vi.fn();
+    render(<Harness initial={"Intro tail"} onChange={onChange} />);
+    select("Intro");
+    paste("| a | b |\n| - | - |\n| 1 | 2 |");
+    expect(lastValue(onChange)).toBe("Intro\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\ntail");
+  });
+
+  it("turns CRLF clipboard text into line breaks without carriage returns", () => {
+    const onChange = vi.fn();
+    render(<Harness initial={"Existing."} onChange={onChange} />);
+    select("Existing.");
+    paste("| a |\r\n| - |\r\n| 1 |\r\n");
+    expect(lastValue(onChange)).not.toContain("\r");
+    expect(lastValue(onChange)).toContain("| a |\n| - |\n| 1 |");
+  });
+
+  it("keeps unsupported text/plain clipboard text too", () => {
+    const onChange = vi.fn();
+    render(<Harness initial={"Existing."} onChange={onChange} />);
+    paste("a ~~b~~ c", "text/plain");
+    expect(lastValue(onChange)).toContain("a ~~b~~ c");
+    expect(viewButton("Markdown").getAttribute("aria-pressed")).toBe("true");
   });
 });

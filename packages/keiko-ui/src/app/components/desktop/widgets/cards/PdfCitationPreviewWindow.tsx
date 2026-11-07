@@ -500,7 +500,7 @@ function PdfCanvasPage({
   }, [active, onError, onMeasured, pageNumber, pdf, rotation, scale]);
 
   return (
-    <div className="pdfv-page-layer">
+    <div className={styles.cmpPageLayer}>
       <canvas
         ref={canvasRef}
         className="pdfv-page-canvas"
@@ -1193,7 +1193,7 @@ export function PdfCitationPreviewWindow({
     <div className="pdfv-group">
       <button
         type="button"
-        className="pdfv-btn pdfv-icon-btn tm-action"
+        className={`pdfv-btn ${styles.cmpIconButton} tm-action`}
         aria-label={t("pdfCitationPreviewWindow.toolbar.previous")}
         data-tip={t("pdfCitationPreviewWindow.toolbar.previous")}
         disabled={currentPage <= 1}
@@ -1220,7 +1220,7 @@ export function PdfCitationPreviewWindow({
       <span className="pdfv-page-count mono">/ {numPages > 0 ? String(numPages) : "--"}</span>
       <button
         type="button"
-        className="pdfv-btn pdfv-icon-btn tm-action"
+        className={`pdfv-btn ${styles.cmpIconButton} tm-action`}
         aria-label={t("pdfCitationPreviewWindow.toolbar.next")}
         data-tip={t("pdfCitationPreviewWindow.toolbar.next")}
         disabled={currentPage >= numPages}
@@ -1235,7 +1235,7 @@ export function PdfCitationPreviewWindow({
     <div className="pdfv-group">
       <button
         type="button"
-        className="pdfv-btn pdfv-icon-btn tm-action"
+        className={`pdfv-btn ${styles.cmpIconButton} tm-action`}
         aria-label={t("pdfCitationPreviewWindow.toolbar.zoomOut")}
         data-tip={t("pdfCitationPreviewWindow.toolbar.zoomOut")}
         disabled={!scalarIntentControlsEnabled || effectiveScale <= MIN_SCALE}
@@ -1258,7 +1258,7 @@ export function PdfCitationPreviewWindow({
       </button>
       <button
         type="button"
-        className="pdfv-btn pdfv-icon-btn tm-action"
+        className={`pdfv-btn ${styles.cmpIconButton} tm-action`}
         aria-label={t("pdfCitationPreviewWindow.toolbar.zoomIn")}
         data-tip={t("pdfCitationPreviewWindow.toolbar.zoomIn")}
         disabled={!scalarIntentControlsEnabled || effectiveScale >= MAX_SCALE}

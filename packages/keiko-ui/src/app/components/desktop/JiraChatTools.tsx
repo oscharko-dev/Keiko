@@ -34,6 +34,12 @@ import {
   type JiraOutcomeRule,
 } from "./jira-tool-outcome";
 import { chatProcessingSteps } from "./chat-processing-pipeline";
+import { BatchProgress, RequirementsReadCard } from "./JiraProgressCards";
+import {
+  batchProgressOf,
+  requirementsReadGroups,
+  type RequirementsReadGroups,
+} from "./jira-tool-progress";
 const COVERAGE_ISSUE_MESSAGES = {
   "pending-reads": "chat.knowledgeCoverage.pendingReads",
   "unavailable-documents": "chat.knowledgeCoverage.unavailableDocuments",
@@ -159,13 +165,25 @@ function JiraToolOutcome({
         <ul className={styles.cmpProblems} aria-label={t("chat.jira.outcome.problems")}>
           {view.problems.map((problem, index) => (
             <li key={`${problem.field ?? ""}:${String(index)}`}>
+              {problem.ref === undefined ? null : <code>{problem.ref} </code>}
               {problem.field === undefined ? null : <strong>{problem.field}: </strong>}
               {problem.message}
             </li>
           ))}
+          {view.hiddenProblemCount === 0 ? null : (
+            <li className={styles.cmpMoreIssues}>
+              {t("chat.jira.outcome.more", { count: view.hiddenProblemCount })}
+            </li>
+          )}
         </ul>
       )}
       {view.validation === undefined ? null : <p>{t(VALIDATION_MESSAGES[view.validation])}</p>}
+      {view.itemValidations.map((item) => (
+        <p key={item.ref}>
+          <code>{item.ref} </code>
+          {t(VALIDATION_MESSAGES[item.validation])}
+        </p>
+      ))}
       <JiraTemplateRules rules={view.rules} />
     </>
   );
@@ -195,6 +213,7 @@ function JiraToolExchange({
       {help === undefined ? null : <p>{t(help)}</p>}
       {report === undefined ? null : <JiraReportCard view={report} chatId={chatId} />}
       {report === undefined && partial !== undefined ? <p>{t(partial)}</p> : null}
+      <BatchProgress exchange={exchange} settled={turnState !== "pending"} />
       {report === undefined ? <JiraToolOutcome view={jiraToolOutcomeView(exchange)} /> : null}
     </section>
   );
@@ -209,6 +228,7 @@ function outcomeIsEmpty(view: ReturnType<typeof jiraToolOutcomeView>): boolean {
     view.issues.length === 0 &&
     view.problems.length === 0 &&
     view.rules.length === 0 &&
+    view.itemValidations.length === 0 &&
     view.validation === undefined
   );
 }
@@ -217,6 +237,7 @@ function toolCardHasContent(
   exchange: ChatToolExchange,
   turnState: ChatTurnState | undefined,
 ): boolean {
+  if (batchProgressOf(exchange) !== undefined) return true;
   if (!PROGRESS_ONLY_STATES.has(jiraToolState(exchange, turnState))) return true;
   return (
     knowledgeReviewFailureNotice(exchange) !== undefined ||
@@ -239,8 +260,12 @@ function visibleToolCards(
   turnState: ChatTurnState | undefined,
 ): { readonly exchanges: readonly ChatToolExchange[]; readonly cards: boolean } {
   const all = transcript?.exchanges ?? [];
+  const reads = requirementsReadGroups(all);
   const exchanges = all.filter(
-    (exchange) => exchange.approval !== undefined || toolCardHasContent(exchange, turnState),
+    (exchange) =>
+      exchange.approval !== undefined ||
+      reads.cards.has(exchange.call.id) ||
+      toolCardHasContent(exchange, turnState),
   );
   const notice =
     turnState !== "pending" && knowledgeCoverageIssues(knowledgeTurnCoverage(all)).length > 0;
@@ -262,6 +287,7 @@ export function JiraChatTools({
   const steps = chatProcessingSteps(transcript, turnState, showPending, waitingForDecision);
   if (steps.length === 0) return null;
   const { exchanges, cards } = visibleToolCards(transcript, turnState);
+  const reads = requirementsReadGroups(transcript?.exchanges ?? []);
   return (
     <div className={styles.cmpLayout}>
       <div className={styles.cmpContent} data-cards={cards}>
@@ -273,6 +299,7 @@ export function JiraChatTools({
               <ToolExchangeCards
                 key={exchange.call.id}
                 exchange={exchange}
+                reads={reads}
                 turnState={turnState}
                 chatId={chatId}
               />
@@ -286,13 +313,19 @@ export function JiraChatTools({
 
 function ToolExchangeCards({
   exchange,
+  reads,
   turnState,
   chatId,
 }: {
   readonly exchange: ChatToolExchange;
+  readonly reads: RequirementsReadGroups;
   readonly turnState: ChatTurnState | undefined;
   readonly chatId: string | undefined;
 }): ReactNode {
+  const t = useTranslate();
+  const read = reads.cards.get(exchange.call.id);
+  if (read !== undefined)
+    return <RequirementsReadCard view={read} label={t("chat.requirements.tool")} />;
   return (
     <div className={styles.cmpExchange}>
       {exchange.approval === undefined ? null : (

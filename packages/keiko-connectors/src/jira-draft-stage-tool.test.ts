@@ -160,6 +160,72 @@ describe("jira.draft-stage (#4178)", () => {
     ]);
   });
 
+  it("projects every page before the checks, the store and the digest see it (F7)", async () => {
+    const h = harness();
+    const projectItems = vi.fn((items: readonly Record<string, unknown>[]) =>
+      items.map((entry) => ({
+        ...entry,
+        fields: { ...(entry.fields as object), description: `projected ${String(entry.ref)}` },
+      })),
+    );
+    const checkRequirements = vi.fn((_items: readonly unknown[]) => undefined);
+    const deps = { ...h.deps, projectItems, checkRequirements };
+    const first = await executeJiraDraftStageTool(pageOf("a"), CONTEXT, connection(), deps);
+    const second = await executeJiraDraftStageTool(
+      { draftId: text(first.data.draftId), ...pageOf("b") },
+      CONTEXT,
+      connection(),
+      deps,
+    );
+    expect(checkRequirements.mock.calls[0]?.[0]).toMatchObject([
+      { fields: { description: "projected a" } },
+    ]);
+    const resolved = resolveJiraDraftArguments(
+      { draftId: text(first.data.draftId), draftDigest: text(second.data.draftDigest) },
+      (id) => h.deps.store.get(id, "chat-1"),
+    );
+    expect(resolved?.ok === true ? JSON.stringify(resolved.arguments) : "").toContain(
+      "projected a",
+    );
+    expect(resolved?.ok === true ? JSON.stringify(resolved.arguments) : "").not.toContain(
+      "acceptance criteria\n* works",
+    );
+    expect(resolved?.ok === true ? JSON.stringify(resolved.arguments) : "").toContain(
+      "projected b",
+    );
+  });
+
+  it("refuses a page whose projection pushes a description past its limit, staging nothing (F7)", async () => {
+    const h = harness();
+    const nearLimit = "x".repeat(32_760);
+    const lengthen = (items: readonly Record<string, unknown>[]): Record<string, unknown>[] =>
+      items.map((entry) => ({
+        ...entry,
+        fields: { ...(entry.fields as object), description: `${nearLimit} (a long source label)` },
+      }));
+    const append = vi.spyOn(h.deps.store, "append");
+    const fits = await executeJiraDraftStageTool(
+      { items: [{ ...item("ok"), fields: { summary: "ok", description: nearLimit } }] },
+      CONTEXT,
+      connection(),
+      h.deps,
+    );
+    expect(fits.isError).toBeUndefined();
+    append.mockClear();
+    const refused = await executeJiraDraftStageTool(pageOf("long"), CONTEXT, connection(), {
+      ...h.deps,
+      projectItems: lengthen,
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.data).toMatchObject({
+      reason: "field-validation",
+      ref: "long",
+      fieldId: "description",
+    });
+    expect(append).not.toHaveBeenCalled();
+    expect(h.activity.at(-1)).toMatchObject({ phase: "refused", refusal: "invalid-fields" });
+  });
+
   it("assembles a 70-item draft in pages and resolves to exactly those items", async () => {
     const h = harness();
     const first = await h.stage({ items: page(0, JIRA_DRAFT_PAGE_ITEMS_MAX) });

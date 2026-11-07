@@ -118,7 +118,7 @@ export const JIRA_DRAFT_RUN_BUDGET: JiraDraftRunBudget = Object.freeze({
 /** A progress line is written to the Activity Log after this many items were attempted. */
 const PROGRESS_EVERY = 100;
 
-interface DraftItemResult {
+export interface DraftItemResult {
   readonly ref: string;
   readonly state: JiraDraftItemState;
   readonly issueKey?: string;
@@ -628,7 +628,16 @@ function keysOf(items: readonly DraftItemResult[], state: "created" | "existing"
     item.state === state && item.issueKey !== undefined ? [item.issueKey] : [],
   );
 }
+/**
+ * The browse prefix every listed key shares (`https://jira.example/browse/`): the compact lists carry
+ * keys without rows, so the viewer links them as prefix plus key. Never stored in activity evidence.
+ */
+function browsePrefix(baseUrl: string): string | undefined {
+  const probe = jiraBrowseUrl(baseUrl, "KEIKO-1");
+  return probe?.endsWith("KEIKO-1") === true ? probe.slice(0, -"KEIKO-1".length) : undefined;
+}
 function compactData(
+  baseUrl: string,
   items: readonly DraftItemResult[],
   projected: ProjectedRows,
 ): CatalogJsonObject {
@@ -637,15 +646,20 @@ function compactData(
     RESULT_DATA_BYTES - jsonBytes(projected.rows),
     JIRA_DRAFT_RESULT_ROWS_MAX,
   );
+  const prefix = browsePrefix(baseUrl);
   return {
     compact: true,
+    ...(prefix === undefined ? {} : { browseUrlPrefix: prefix }),
     omittedRowCount: projected.omitted,
     createdRanges: listed.created.map((entry) => entry.text),
     existingRanges: listed.existing.map((entry) => entry.text),
     ...(listed.unlisted === 0 ? {} : { rangesTruncated: true, unlistedKeyCount: listed.unlisted }),
   };
 }
-function draftResult(baseUrl: string, items: readonly DraftItemResult[]): ManagedMcpToolResult {
+export function draftResult(
+  baseUrl: string,
+  items: readonly DraftItemResult[],
+): ManagedMcpToolResult {
   const counts: Record<string, number> = Object.fromEntries(
     Object.values(STATE_COUNTS).map((name) => [name, 0]),
   );
@@ -659,7 +673,7 @@ function draftResult(baseUrl: string, items: readonly DraftItemResult[]): Manage
   // is still no error. An item that did not land (failed, uncertain, skipped, pending) makes it one.
   const complete = items.every((item) => SETTLED_STATES.has(item.state));
   const projected = projectRows(baseUrl, items);
-  const compact = projected.compact ? compactData(items, projected) : {};
+  const compact = projected.compact ? compactData(baseUrl, items, projected) : {};
   const guidance =
     draftGuidance(items) ??
     (compact.rangesTruncated === true ? JIRA_DRAFT_UNLISTED_GUIDANCE : undefined);

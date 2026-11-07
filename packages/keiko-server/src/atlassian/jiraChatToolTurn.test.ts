@@ -13,6 +13,9 @@ import { CHAT_CATALOG_TOOLS } from "./jiraChatCatalogConsumer.js";
 import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import { JiraChatToolTurn } from "./jiraChatToolTurn.js";
+import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { createJiraDraftBatchExecutor } from "./jiraDraftBatchTool.js";
+import type { ChatToolBatchProgress } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatReadGrantEntry } from "./chatReadGrantState.js";
 import { findMessageById as readStoredMessage } from "../store/messages.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -69,6 +72,11 @@ import { recordChatToolTurnCorrected } from "../chat-tool-turn-ending.js";
 import { conversationModelNotReadyResult } from "../conversation-readiness-admission.js";
 import { updateCapsuleState } from "@oscharko-dev/keiko-local-knowledge";
 import { openKnowledgeStoreForDeps } from "../local-knowledge-store-open.js";
+import {
+  requirementReference,
+  type RequirementInventoryEntry,
+} from "@oscharko-dev/keiko-quality-intelligence";
+import { chatKnowledgeScopes, collectForTurn } from "../requirement-inventory.js";
 import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 import type {
   CatalogJsonObject,
@@ -105,6 +113,15 @@ vi.mock("./jiraCitationMarkers.js", async (importOriginal) => {
   };
 });
 
+// Pass-through spy: the production batch tool runs unless a test scripts the batch it reports.
+vi.mock("./jiraDraftBatchTool.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./jiraDraftBatchTool.js")>();
+  return {
+    ...actual,
+    createJiraDraftBatchExecutor: vi.fn(actual.createJiraDraftBatchExecutor),
+  };
+});
+
 vi.mock("../chat-tool-knowledge-coverage.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../chat-tool-knowledge-coverage.js")>();
   return { ...actual, logKnowledgeCoverage: vi.fn(actual.logKnowledgeCoverage) };
@@ -116,6 +133,7 @@ const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   draftToSend = DRAFT_ARGUMENTS;
+  batchToSend = undefined;
   commentKeysByRound = [];
   citationSources.labels = new Map();
   for (const cleanup of cleanups.splice(0)) await cleanup();
@@ -259,11 +277,14 @@ const NESTED_DRAFT_ARGUMENTS = {
 let commentKeysByRound: readonly string[] = [];
 /** The arguments the scripted model sends as its backlog draft. */
 let draftToSend: Record<string, unknown> = DRAFT_ARGUMENTS;
+/** The arguments the scripted model sends to the draft batch; set means round one calls it. */
+let batchToSend: Record<string, unknown> | undefined;
 /** An attachment call names a connected file; `beforeCall` connects the folder as the model calls. */
 type Mutation = boolean | { readonly attach: string; beforeCall?: () => void };
 /** A backlog draft call: the fixed three-item draft, or arguments produced when the model calls. */
 type DraftCall = boolean | (() => Record<string, unknown>);
 function offeredTool(mutation: Mutation, draft: DraftCall): string {
+  if (batchToSend !== undefined) return "keiko.jira.draft.batch";
   if (draft) return "keiko.jira.draft";
   if (typeof mutation === "object") return "keiko.jira.attach";
   return mutation ? "keiko.jira.comment" : "keiko.jira.projects";
@@ -279,6 +300,7 @@ function toolArguments(
   body = "Synthetic approved comment",
   issueKey = "KEIKO-1",
 ): Record<string, unknown> {
+  if (batchToSend !== undefined) return batchToSend;
   if (draft) return typeof draft === "function" ? draft() : draftToSend;
   if (typeof mutation === "object")
     return {
@@ -831,6 +853,34 @@ function attachmentBody(method: string, path: string, uploads: readonly number[]
     fields: { attachment: stored },
   });
 }
+/** Connects a ready Knowledge Pod with requirements to the fixture's Chat. */
+async function journeyPod(f: ReturnType<typeof fixture>): Promise<void> {
+  const session = openKnowledgeStoreForDeps(f.deps);
+  const { store } = session;
+  try {
+    const pod = await seedCapsuleWithVectors(store, {
+      displayName: "Original requirements.md",
+      text: specification(2).text,
+    });
+    updateCapsuleState(store, pod.capsuleId, "ready");
+    const chat = f.deps.store.findChatById(f.chatId);
+    if (chat === undefined) throw new TypeError("Missing journey Chat");
+    const selected = await handleUpdateChat(
+      {
+        ...context({
+          localKnowledgeScopes: [{ kind: "capsule", capsuleId: pod.capsuleId, connectedAtMs: 1 }],
+          expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat),
+        }),
+        url: new URL(`http://127.0.0.1/api/chats?id=${encodeURIComponent(f.chatId)}`),
+      },
+      f.deps,
+    );
+    expect(selected.status).toBe(200);
+    expect(f.deps.store.findChatById(f.chatId)?.localKnowledgeScopes).toHaveLength(1);
+  } finally {
+    session.close();
+  }
+}
 function send(
   f: ReturnType<typeof fixture>,
   clientTurnId: string,
@@ -878,7 +928,9 @@ function expectUnchangedJiraOffer(calls: readonly GatewayCallRequest[]): void {
 function expectJiraDraftUnionOffered(calls: readonly GatewayCallRequest[]): void {
   const offered = calls[0]?.toolCatalog;
   if (offered?.kind !== "bound") throw new Error("Missing real Chat catalog offer");
-  expect(offered.projection.tools).toHaveLength(CHAT_CATALOG_TOOLS.length);
+  // The fixture Chat has no Knowledge scope, so the requirement batch is not offered to it.
+  expect(offered.projection.tools).toHaveLength(CHAT_CATALOG_TOOLS.length - 1);
+  expect(offered.projection.tools.map((tool) => tool.alias)).not.toContain("jira_draft_batch");
   expect(
     offered.projection.tools.find((tool) => tool.alias === "jira_draft")?.inputSchema.oneOf,
   ).toHaveLength(2);
@@ -2727,33 +2779,6 @@ describe("four-item Epic and Task template fullchain", () => {
         return undefined;
     }
   }
-  async function journeyPod(f: ReturnType<typeof fixture>): Promise<void> {
-    const session = openKnowledgeStoreForDeps(f.deps);
-    const { store } = session;
-    try {
-      const pod = await seedCapsuleWithVectors(store, {
-        displayName: "Original requirements.md",
-        text: specification(2).text,
-      });
-      updateCapsuleState(store, pod.capsuleId, "ready");
-      const chat = f.deps.store.findChatById(f.chatId);
-      if (chat === undefined) throw new TypeError("Missing journey Chat");
-      const selected = await handleUpdateChat(
-        {
-          ...context({
-            localKnowledgeScopes: [{ kind: "capsule", capsuleId: pod.capsuleId, connectedAtMs: 1 }],
-            expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat),
-          }),
-          url: new URL(`http://127.0.0.1/api/chats?id=${encodeURIComponent(f.chatId)}`),
-        },
-        f.deps,
-      );
-      expect(selected.status).toBe(200);
-      expect(f.deps.store.findChatById(f.chatId)?.localKnowledgeScopes).toHaveLength(1);
-    } finally {
-      session.close();
-    }
-  }
   function journeyModel(f: ReturnType<typeof fixture>): () => void {
     const original = f.model.call;
     let round = 0;
@@ -3112,6 +3137,124 @@ describe("four-item Epic and Task template fullchain", () => {
     });
   });
 
+  // F7: a backlog written in pages through `jira.draft-stage` carries the same `[n]` markers as a
+  // direct draft. The sources are named before a page is staged and its digest is minted, so the
+  // preview, the approval, the replay and Jira all hold exactly the same text.
+  function citedPage(ref: string, parent?: string): Record<string, unknown> {
+    const isEpic = parent === undefined;
+    return {
+      ref,
+      projectId: "10000",
+      issueTypeId: isEpic ? EPIC_TYPE : TASK_TYPE,
+      fields: {
+        summary: `${isEpic ? "Epic" : "Task"} ${ref}`,
+        description: `Goal of ${ref} [1].\n{code}ids = [1]{code}`,
+        ...(isEpic ? { [EPIC_NAME]: `Epic name ${ref}` } : {}),
+      },
+      ...(isEpic ? {} : { parent: { fieldId: EPIC_LINK, ref: parent } }),
+    };
+  }
+  function pagedModel(f: ReturnType<typeof fixture>): { readonly repeat: () => void } {
+    const original = f.model.call;
+    let round = 0;
+    let repeated: CatalogJsonObject | undefined;
+    const stepOf = (): { tool: string; args: Record<string, unknown> } | undefined => {
+      if (repeated !== undefined)
+        return round === 1 ? { tool: "jira.draft", args: repeated } : undefined;
+      if (round === 1) return { tool: "jira.draft-stage", args: { items: [citedPage("epic1")] } };
+      if (round === 2) {
+        const first = journeyData(f, "jira_draft_stage");
+        return {
+          tool: "jira.draft-stage",
+          args: { draftId: journeyString(first.draftId), items: [citedPage("task1", "epic1")] },
+        };
+      }
+      return round === 3 ? { tool: "jira.draft", args: journeyReference(f) } : undefined;
+    };
+    const call = async (
+      request: GatewayCallRequest,
+      signal: AbortSignal,
+    ): Promise<NormalizedResponse> => {
+      const base = await original(request, signal);
+      round += 1;
+      const step = stepOf();
+      if (request.toolCatalog?.kind !== "bound" || step === undefined)
+        return { ...base, toolCalls: [], finishReason: "stop", content: "The draft is ready." };
+      const tool = request.toolCatalog.projection.tools.find(
+        (entry) => entry.toolRef.canonicalId === `keiko.${step.tool.replaceAll("-", ".")}`,
+      );
+      if (tool === undefined) throw new TypeError(`Missing offered ${step.tool}`);
+      const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
+      return {
+        ...base,
+        content: "",
+        finishReason: "tool_calls",
+        toolCalls: [
+          bridge.bind({ id: `paged-${String(round)}`, name: tool.alias, arguments: step.args }),
+        ],
+      };
+    };
+    Object.assign(f.deps, {
+      modelPortFactory: (): ModelPort => ({
+        call,
+        callStream: (
+          request: GatewayCallRequest,
+          signal: AbortSignal,
+        ): AsyncIterable<GatewayStreamChunk> => syntheticStream(call(request, signal)),
+      }),
+    });
+    return {
+      repeat: (): void => {
+        repeated = journeyReference(f);
+        round = 0;
+      },
+    };
+  }
+  it("names the sources of every staged page before the digest, then approves and replays that exact draft", async () => {
+    citationSources.labels = new Map([[1, "Spec A.pdf · page 2"]]);
+    const f = fixture(true, undefined, true, false, true);
+    typedJira(f);
+    const model = pagedModel(f);
+    const pending = sendBatch(f, "cited-paged-first");
+    void pending.catch(() => undefined);
+    const approval = await pendingApproval(f);
+    expect(f.writes()).toBe(0);
+    const reference = journeyReference(f);
+    expect(latestExchange(f)?.call.arguments).toEqual(reference);
+    const preview = readJiraDraftRoute(
+      {
+        ...context({}, { draftId: journeyString(reference.draftId) }),
+        url: new URL(
+          `http://127.0.0.1/api/atlassian-connectors/jira-drafts/${journeyString(reference.draftId)}?chatId=${f.chatId}&digest=${journeyString(reference.draftDigest)}`,
+        ),
+      },
+      f.deps,
+    );
+    expect(preview).toMatchObject({ status: 200, body: { ...reference, itemCount: 2 } });
+    const shown = JSON.stringify(preview.body);
+    expect(shown).toContain("Goal of epic1 (Spec A.pdf · page 2).");
+    expect(shown).toContain("Goal of task1 (Spec A.pdf · page 2).");
+    expect(shown).not.toContain("epic1 [1]");
+    expect(shown).not.toContain("task1 [1]");
+    expect(await postWriteDecision(f, approval, "approve")).toBe(200);
+    expect((await pending).status).toBe(200);
+    expect(f.writes()).toBe(2);
+    for (const ref of ["epic1", "task1"])
+      expect(
+        f.jira.issues.find((issue) => String(issue.fields.description).includes(`of ${ref} `))
+          ?.fields.description,
+      ).toBe(`Goal of ${ref} (Spec A.pdf · page 2).\n{code}ids = [1]{code}`);
+    model.repeat();
+    const second = sendBatch(f, "cited-paged-replay");
+    void second.catch(() => undefined);
+    const secondApproval = await pendingApproval(f);
+    expect(latestExchange(f)?.call.arguments).toEqual(reference);
+    expect(await postWriteDecision(f, secondApproval, "approve")).toBe(200);
+    expect((await second).status).toBe(200);
+    expect(f.writes()).toBe(2);
+    expect(f.jira.issues).toHaveLength(2);
+  });
+
   it.each(["Epic Name", "Epic Link", "Task section"] as const)(
     "refuses the entire batch before approval when the saved template requires %s",
     async (missing) => {
@@ -3240,4 +3383,404 @@ it("stops after the second unoffered alias with a truthful nonretryable HTTP fai
   expect(calls).toHaveLength(2);
   expect(f.requests()).toBe(0);
   expect(f.writes()).toBe(0);
+});
+
+// The turn offers the approval of a clean draft batch itself (#4173): Keiko dispatches `jira.draft`
+// for exactly the staged draft, the human decides through the ordinary write approval, and the
+// model learns the outcome like it learns any tool result.
+describe("a clean draft batch is offered for approval by the turn itself (#4173)", () => {
+  const PAGES: readonly ChatToolBatchProgress[] = [
+    {
+      phase: "outlining",
+      draftedCount: 0,
+      plannedCount: 0,
+      coveredRequirementCount: 0,
+      requirementCount: 3,
+      failedCount: 0,
+    },
+    {
+      phase: "drafting",
+      draftedCount: 0,
+      plannedCount: 3,
+      coveredRequirementCount: 0,
+      requirementCount: 3,
+      failedCount: 0,
+    },
+    {
+      phase: "drafting",
+      draftedCount: 2,
+      plannedCount: 3,
+      coveredRequirementCount: 2,
+      requirementCount: 3,
+      failedCount: 0,
+    },
+    // A repeated state is no new page.
+    {
+      phase: "drafting",
+      draftedCount: 2,
+      plannedCount: 3,
+      coveredRequirementCount: 2,
+      requirementCount: 3,
+      failedCount: 0,
+    },
+    {
+      phase: "complete",
+      draftedCount: 3,
+      plannedCount: 3,
+      coveredRequirementCount: 3,
+      requirementCount: 3,
+      failedCount: 0,
+    },
+  ];
+  const BATCH_ARGUMENTS = {
+    projectId: "10000",
+    issueTypeId: "10001",
+    granularity: "per-requirement",
+    create: true,
+  };
+
+  function batchRequirements(f: ReturnType<typeof fixture>): readonly RequirementInventoryEntry[] {
+    const session = openKnowledgeStoreForDeps(f.deps);
+    try {
+      const scopes = chatKnowledgeScopes(f.deps.store.findChatById(f.chatId));
+      return collectForTurn(session.store, scopes, f.chatId, undefined).units.map(
+        ({ entry }) => entry,
+      );
+    } finally {
+      session.close();
+    }
+  }
+
+  /** A scripted batch: it stages a real three-item draft, reports its pages and returns `data`. */
+  function scriptBatch(
+    f: ReturnType<typeof fixture>,
+    outcome: CatalogJsonObject = {},
+  ): { reported: () => number } {
+    let reported = 0;
+    vi.mocked(createJiraDraftBatchExecutor).mockImplementation(
+      () =>
+        async (_args, handlerContext): Promise<ManagedMcpToolResult> => {
+          const store = f.deps.jiraDraftStore;
+          if (store === undefined) throw new Error("Missing draft store");
+          // The batch derives its items from the Pod's requirements, so each names one.
+          const entries = batchRequirements(f);
+          const items = DRAFT_ARGUMENTS.items.map((item, index) => {
+            const entry = entries[index % Math.max(entries.length, 1)];
+            if (entry === undefined) return item;
+            const criteria = entry.acceptanceCriteria.map((c) => `* ${c.text}`).join("\n");
+            return {
+              ...item,
+              fields: { ...item.fields, description: `${item.fields.summary}\n\n${criteria}` },
+              requirementIds: [requirementReference(entry)],
+            };
+          });
+          const appended = store.append(f.chatId, undefined, "fingerprint", items);
+          if (!appended.ok) throw new Error("Expected the batch page to stage");
+          for (const page of PAGES) {
+            handlerContext.reportBatchProgress?.(page);
+            reported += 1;
+            // Pages come minutes apart in production; a turn of the event loop lets each publish.
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
+          }
+          return Promise.resolve({
+            data: {
+              outcome: "succeeded",
+              draftId: appended.draft.id,
+              draftDigest: appended.draft.digest,
+              newDraft: true,
+              itemCount: 3,
+              pageCount: 1,
+              unresolvedRefCount: 0,
+              unresolvedRefs: [],
+              plannedCount: 3,
+              draftedCount: 3,
+              failedCount: 0,
+              requirementCount: 3,
+              coveredRequirementCount: 3,
+              failedRequirementRefs: [],
+              createRequested: true,
+              ...outcome,
+            },
+          });
+        },
+    );
+    return { reported: (): number => reported };
+  }
+  async function batchFixture(withPod = true): Promise<ReturnType<typeof fixture>> {
+    batchToSend = BATCH_ARGUMENTS;
+    const f = fixture(false, undefined, true, false, () => ({}));
+    // The batch drafts from Knowledge requirements, so only a Chat with a Knowledge scope offers it.
+    if (withPod) await journeyPod(f);
+    return f;
+  }
+  function exchanges(f: ReturnType<typeof fixture>): readonly ChatToolExchange[] {
+    // A Chat with a Knowledge Pod first reads its document inventory; the batch is what is under test.
+    return (f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges ?? []).filter(
+      (exchange) => exchange.call.name !== "knowledge_documents",
+    );
+  }
+  async function pendingOfferedApproval(
+    f: ReturnType<typeof fixture>,
+  ): Promise<ChatToolWriteApprovalView> {
+    await vi.waitFor(() => {
+      expect(exchanges(f)[1]?.approval?.state).toBe("pending");
+    });
+    const approval = exchanges(f)[1]?.approval;
+    if (approval === undefined) throw new Error("Missing offered approval");
+    return approval;
+  }
+  function logsFor(): BufferedServerLogSink {
+    const logs = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: logs, level: "info" }));
+    cleanups.push(() => {
+      resetServerLogger();
+      return Promise.resolve();
+    });
+    return logs;
+  }
+  function expectOfferedDraft(
+    draft: ChatToolExchange | undefined,
+    staged: { draftId: string; draftDigest: string },
+  ): void {
+    expect(draft?.call.id).toMatch(/^runtime-draft-/u);
+    expect(draft?.call.name).toBe("jira_draft");
+    expect(draft?.call.arguments).toEqual({
+      draftId: staged.draftId,
+      draftDigest: staged.draftDigest,
+    });
+    expect(draft?.batchProgress).toBeUndefined();
+    expect(draft?.approval?.state).toBe("claimed");
+    expect(draft?.mutationOutcome).toBe("succeeded");
+  }
+  function toolResultsSeenByModel(f: ReturnType<typeof fixture>): string {
+    return (f.calls[1]?.messages ?? [])
+      .filter((message) => message.role === "tool")
+      .map((message) => message.content)
+      .join("\n");
+  }
+  function recordProgress(f: ReturnType<typeof fixture>): ChatToolBatchProgress[] {
+    const recorded: ChatToolBatchProgress[] = [];
+    const update = f.deps.store.updateChatToolTranscript.bind(f.deps.store);
+    vi.spyOn(f.deps.store, "updateChatToolTranscript").mockImplementation(
+      (id, change, correlationId) => {
+        if (change.kind === "progress") recorded.push(change.batchProgress);
+        update(id, change, correlationId);
+      },
+    );
+    return recorded;
+  }
+  const offers = (logs: BufferedServerLogSink): readonly unknown[] =>
+    logs.events
+      .filter((event) => event.op === "chat.tool-turn.batch-draft-offer")
+      .map((event) => event.extra);
+
+  it("asks for the approval of exactly the staged draft, creates it once approved and tells the model", async () => {
+    const logs = logsFor();
+    const f = await batchFixture();
+    const script = scriptBatch(f);
+    const progressUpdates = recordProgress(f);
+    const pending = send(f, "batch-offer-approve");
+    void pending.catch(() => undefined);
+    await awaitReadGrantedForWrite(f);
+    const approval = await pendingOfferedApproval(f);
+    expect(f.writes()).toBe(0);
+    expect(approval.operation).toBe("jira.draft");
+    expect(await postWriteDecision(f, approval, "approve")).toBe(200);
+    expect((await pending).status).toBe(200);
+
+    const [batch, draft] = exchanges(f);
+    const staged = batch?.result?.data as { draftId: string; draftDigest: string };
+    expect(script.reported()).toBe(PAGES.length);
+    // The repeated drafting state is no page: four distinct states are persisted and published.
+    expect(progressUpdates).toEqual([PAGES[0], PAGES[1], PAGES[2], PAGES[4]]);
+    expectOfferedDraft(draft, staged);
+    expect(batch?.batchProgress).toEqual(PAGES[4]);
+    expect(f.jira.issues).toHaveLength(3);
+    // The model's next round learns the creation result like a model-issued call's.
+    expect(toolResultsSeenByModel(f)).toContain('"mutationOutcome":"succeeded"');
+    expect(offers(logs)).toEqual([expect.objectContaining({ outcome: "dispatched" })]);
+  });
+
+  it("leaves the draft unexecuted when the human rejects the offered approval", async () => {
+    const logs = logsFor();
+    const f = await batchFixture();
+    scriptBatch(f);
+    const pending = send(f, "batch-offer-reject");
+    void pending.catch(() => undefined);
+    await awaitReadGrantedForWrite(f);
+    const approval = await pendingOfferedApproval(f);
+    expect(await postWriteDecision(f, approval, "reject")).toBe(200);
+    expect((await pending).status).toBe(200);
+    const draft = exchanges(f)[1];
+    expect(draft?.approval?.state).toBe("rejected");
+    expect(draft?.mutationOutcome ?? "not-dispatched").toBe("not-dispatched");
+    expect(f.writes()).toBe(0);
+    expect(f.jira.issues).toHaveLength(0);
+    expect(offers(logs)).toEqual([expect.objectContaining({ outcome: "dispatched" })]);
+  });
+
+  it.each([
+    ["the user did not ask to create", { createRequested: false }, "not-requested"],
+    ["an issue failed", { failedCount: 1, draftedCount: 2 }, "items-failed"],
+    [
+      "references are unresolved",
+      { unresolvedRefCount: 1, unresolvedRefs: ["x"] },
+      "refs-unresolved",
+    ],
+    [
+      "the batch did not succeed",
+      { outcome: "failed", reason: "model-unavailable" },
+      "not-completed",
+    ],
+  ])("asks nothing when %s", async (_name, outcome, reason) => {
+    const logs = logsFor();
+    const f = await batchFixture();
+    scriptBatch(f, outcome);
+    expect((await send(f, `batch-no-offer-${reason}`)).status).toBe(200);
+    expect(exchanges(f)).toHaveLength(1);
+    expect(exchanges(f)[0]?.approval).toBeUndefined();
+    expect(f.writes()).toBe(0);
+    expect(offers(logs)).toEqual([
+      {
+        messageDigest: expect.any(String) as string,
+        outcome: "skipped",
+        reason,
+        completeness: "complete",
+        loss: "none",
+      },
+    ]);
+  });
+
+  it("hands the batch the model calls left after reserving the answer rounds", async () => {
+    const f = await batchFixture();
+    let remaining: number | undefined;
+    vi.mocked(createJiraDraftBatchExecutor).mockImplementation(
+      () =>
+        (_args, handlerContext): Promise<ManagedMcpToolResult> => {
+          remaining = handlerContext.remainingModelCalls?.();
+          return Promise.resolve({ data: { outcome: "failed", reason: "model-unavailable" } });
+        },
+    );
+    Object.assign(f.deps, { chatToolTurnBudget: TEN_CALL_BUDGET });
+    expect((await send(f, "batch-remaining-calls")).status).toBe(200);
+    // Ten tool calls give eleven rounds and twenty-two model calls; one is spent, three are kept.
+    expect(remaining).toBe(22 - 1 - 3);
+  });
+
+  it("drops a page that cannot be persisted, diagnoses it and lets the batch finish", async () => {
+    const logs = logsFor();
+    const f = await batchFixture();
+    const script = scriptBatch(f, { createRequested: false });
+    const update = f.deps.store.updateChatToolTranscript.bind(f.deps.store);
+    let failed = false;
+    vi.spyOn(f.deps.store, "updateChatToolTranscript").mockImplementation(
+      (id, change, correlationId) => {
+        if (change.kind === "progress" && !failed) {
+          failed = true;
+          throw new Error("disk full Bearer fixture-secret");
+        }
+        update(id, change, correlationId);
+      },
+    );
+    const record = vi.fn();
+    const deps: UiHandlerDeps = { ...f.deps, diagnostics: { record } };
+    expect((await handleSendDesktopChat(sendContext(f, "batch-progress-fails"), deps)).status).toBe(
+      200,
+    );
+    expect(script.reported()).toBe(PAGES.length);
+    expect(exchanges(f)[0]?.batchProgress).toEqual(PAGES[4]);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "chat.tool-turn.batch-progress" }),
+    );
+    expect(JSON.stringify(record.mock.calls)).not.toContain("fixture-secret");
+    expect(offers(logs)).toEqual([expect.objectContaining({ reason: "not-requested" })]);
+  });
+
+  it("records a skip when the settled batch has no stored result to read", async () => {
+    const logs = logsFor();
+    const f = await batchFixture();
+    scriptBatch(f);
+    const find = f.deps.store.findMessageById.bind(f.deps.store);
+    vi.spyOn(f.deps.store, "findMessageById").mockImplementation((id) => {
+      const found = find(id);
+      if (found?.toolTranscript === undefined) return found;
+      // Only the offer's own read finds the stored batch exchange missing.
+      if (!(new Error().stack ?? "").includes("offerBatchDrafts")) return found;
+      return { ...found, toolTranscript: { ...found.toolTranscript, exchanges: [] } };
+    });
+    await send(f, "batch-no-stored-result");
+    expect(offers(logs)).toEqual([
+      expect.objectContaining({ outcome: "skipped", reason: "no-stored-result" }),
+    ]);
+  });
+
+  it("offers nothing once the turn's deadline ended it", async () => {
+    const logs = logsFor();
+    const f = await batchFixture();
+    const deadline = controlledTurnDeadline(3_000);
+    Object.assign(f.deps, { chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 3_000 } });
+    scriptBatch(f);
+    vi.mocked(createJiraDraftBatchExecutor).mockImplementation(
+      () => (): Promise<ManagedMcpToolResult> => {
+        deadline.expire();
+        return Promise.resolve({
+          data: {
+            outcome: "succeeded",
+            createRequested: true,
+            failedCount: 0,
+            unresolvedRefCount: 0,
+            draftId: "0b6f7a9e-1c2d-4e3f-8a4b-5c6d7e8f9a0b",
+            draftDigest: "a".repeat(64),
+          },
+        });
+      },
+    );
+    await send(f, "batch-turn-ended");
+    expect(f.writes()).toBe(0);
+    expect(exchanges(f).some((exchange) => exchange.call.id.startsWith("runtime-draft-"))).toBe(
+      false,
+    );
+    expect(offers(logs)).toEqual([
+      expect.objectContaining({ outcome: "skipped", reason: "turn-ended" }),
+    ]);
+  });
+
+  it("publishes each counted page of the running batch on the stream, once", async () => {
+    // A Chat with a Knowledge scope and Jira Pod is not streamed, so offer the scripted batch to a
+    // streamed Chat directly; this test pins the stream's page frames, not the offer rule.
+    const f = await batchFixture(false);
+    const catalog = f.deps.jiraChatCatalog;
+    if (catalog === undefined) throw new Error("Missing Jira catalog");
+    const get = catalog.get.bind(catalog);
+    vi.spyOn(catalog, "get").mockImplementation(() => get({ knowledgeScoped: true }));
+    scriptBatch(f, { createRequested: false });
+    const response = mockResponse({ captureBody: true });
+    await handleSendDesktopChatStream(
+      { ...sendContext(f, "batch-stream"), res: response.res },
+      f.deps,
+    );
+    const body = response.body();
+    const progressFrames = body
+      .split("\n\n")
+      .filter((frame) => frame.startsWith("event: tool-exchange\ndata: "))
+      .map((frame) => frame.slice("event: tool-exchange\ndata: ".length))
+      .filter((data) => data.includes('"batchProgress"'));
+    const states = new Set<string>(
+      progressFrames.map((line) => {
+        const { draftedCount, failedCount, phase } = (
+          JSON.parse(line) as {
+            exchange: { batchProgress: ChatToolBatchProgress };
+          }
+        ).exchange.batchProgress;
+        return `${phase}:${String(draftedCount)}:${String(failedCount)}`;
+      }),
+    );
+    // Every distinct page reached the client; the settled exchange repeats the last one.
+    expect(states).toEqual(
+      new Set(["outlining:0:0", "drafting:0:0", "drafting:2:0", "complete:3:0"]),
+    );
+    expect(progressFrames.length).toBeGreaterThanOrEqual(states.size);
+  });
 });

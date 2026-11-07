@@ -3,6 +3,11 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { projectJiraDescriptionInput } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  findCitationMarkerGroups,
+  markdownCodeRanges,
+  type CitationMarkerGroup,
+} from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -25,24 +30,10 @@ const JIRA_TEXT_WRITES: ReadonlySet<string> = new Set([
 ]);
 const DEPTH_MAX = 8;
 const LABEL_CHARS_MAX = 200;
-// A run of markers such as `[13]`, `[13][14]` or `[13], [14]`; never a link `[5](…)` or `[5|…]`.
-const MARKER_RUN = /(?<![\w![])\[\d{1,3}\](?:[ \t]*,?[ \t]*\[\d{1,3}\])*(?![(|\w])/gu;
-const SPACED_MARKER_RUN = new RegExp(`([ \\t]*)(?:${MARKER_RUN.source})`, "gu");
+const MARKER_INDEX_MAX = 999;
 // Data Center wiki reads these as markup in a description; a source label is plain text. A
 // backslash is wiki's line break, so a label's backslash (a Windows path) is written as a slash.
 const WIKI_SPECIAL = /[[\]{}|*_^~+!]/gu;
-// Code keeps its brackets: a fenced block, a wiki code or noformat macro, or an inline code span.
-const FENCE = "```";
-const CODE_REGION = new RegExp(
-  [
-    String.raw`${FENCE}[\s\S]*?(?:${FENCE}|$)`,
-    String.raw`\{(code|noformat)(?::[^}]*)?\}[\s\S]*?(?:\{\1\}|$)`,
-    "`[^`\\n]+`",
-    String.raw`\{\{[^}\n]*\}\}`,
-  ].join("|"),
-  "gu",
-);
-
 export interface JiraCitationRewrite {
   readonly arguments: Record<string, unknown>;
   readonly resolvedCount: number;
@@ -107,6 +98,30 @@ export function latestCitationLabels(
   return new Map();
 }
 
+/**
+ * The latest answer's labels without the numbers an older answer defines differently. Every
+ * grounded answer numbers its own pack from 1, so a marker that two earlier answers define with
+ * different sources designates none of them for a turn that sent no pack of its own; it stays as
+ * written rather than naming a guess.
+ */
+export function unambiguousCitationLabels(
+  messages: readonly ChatMessage[],
+  requestMessageId: string,
+  latest: ReadonlyMap<number, string>,
+): ReadonlyMap<number, string> {
+  const end = messages.findIndex((message) => message.id === requestMessageId);
+  const earlier = (end === -1 ? messages : messages.slice(0, end)).flatMap((message) =>
+    message.role === "assistant" && message.groundedAnswer !== undefined
+      ? [answerLabels(message.groundedAnswer)]
+      : [],
+  );
+  const agreed = new Map<number, string>();
+  for (const [number, label] of latest)
+    if (earlier.every((labels) => (labels.get(number) ?? label) === label))
+      agreed.set(number, label);
+  return agreed;
+}
+
 interface Counter {
   resolved: number;
   unresolved: number;
@@ -126,16 +141,16 @@ function wikiLabel(label: string): string {
 }
 
 function rewriteRun(
-  run: string,
+  numbers: readonly number[],
+  original: string,
   labels: ReadonlyMap<number, string>,
   placement: Placement,
   counter: Counter,
 ): string {
-  const numbers = [...new Set((run.match(/\d{1,3}/gu) ?? []).map(Number))];
   const known = numbers.filter((number) => labels.has(number));
   const unknown = numbers.filter((number) => !labels.has(number));
   counter.unresolved += unknown.length;
-  if (known.length === 0) return run;
+  if (known.length === 0) return original;
   counter.resolved += known.length;
   const rest = unknown.map((number) => `[${String(number)}]`).join("");
   // A summary is a title of at most 255 characters; its sources live in the description.
@@ -144,21 +159,155 @@ function rewriteRun(
   return `(${names.join("; ")})${rest}`;
 }
 
-function rewriteProse(
-  text: string,
-  labels: ReadonlyMap<number, string>,
-  placement: Placement,
-  counter: Counter,
-): string {
-  if (placement === "wiki")
-    return text.replaceAll(MARKER_RUN, (run) => rewriteRun(run, labels, placement, counter));
-  // A removed marker takes the blank before it along: "Kick-off [5]" becomes "Kick-off".
-  return text.replaceAll(SPACED_MARKER_RUN, (match: string, lead: string) => {
-    const run = match.slice(lead.length);
-    const rewritten = rewriteRun(run, labels, placement, counter);
-    if (rewritten === run) return match;
-    return rewritten === "" ? "" : `${lead}${rewritten}`;
+interface Span {
+  readonly start: number;
+  readonly end: number;
+}
+
+/** The next `character` at or after `from`, found once per stretch instead of once per start. */
+class NextIndex {
+  private found = -2;
+  private from = 0;
+  constructor(
+    private readonly text: string,
+    private readonly character: string,
+  ) {}
+  at(from: number): number {
+    if (this.found === -1 && from >= this.from) return -1;
+    if (this.found >= from && from >= this.from) return this.found;
+    this.found = this.text.indexOf(this.character, from);
+    this.from = from;
+    return this.found;
+  }
+}
+
+const BLOCK_MACRO_OPEN = /\{(code|noformat)(?=[:}])/gu;
+
+/** A `{code}` or `{noformat}` macro up to its closing tag, or to the end of an unclosed one. */
+function blockMacroSpans(text: string): Span[] {
+  const spans: Span[] = [];
+  const brace = new NextIndex(text, "}");
+  let cursor = 0;
+  for (;;) {
+    BLOCK_MACRO_OPEN.lastIndex = cursor;
+    const open = BLOCK_MACRO_OPEN.exec(text);
+    if (open === null) return spans;
+    const headEnd = open.index + open[0].length;
+    const close = text.charAt(headEnd) === ":" ? brace.at(headEnd) : headEnd;
+    if (close === -1) {
+      cursor = open.index + 1;
+      continue;
+    }
+    const tag = `{${open[1] ?? ""}}`;
+    const closing = text.indexOf(tag, close + 1);
+    const end = closing === -1 ? text.length : closing + tag.length;
+    spans.push({ start: open.index, end });
+    cursor = end;
+  }
+}
+
+/** An inline `{{monospace}}` span: no closing brace or line break before its `}}`. */
+function inlineMacroSpans(text: string): Span[] {
+  const spans: Span[] = [];
+  const brace = new NextIndex(text, "}");
+  const newline = new NextIndex(text, "\n");
+  let start = text.indexOf("{{");
+  while (start !== -1) {
+    const close = brace.at(start + 2);
+    const line = newline.at(start + 2);
+    const closed = close !== -1 && (line === -1 || close < line) && text[close + 1] === "}";
+    if (closed) spans.push({ start, end: close + 2 });
+    start = text.indexOf("{{", closed ? close + 2 : start + 1);
+  }
+  return spans;
+}
+
+/** Every region whose brackets are code: Markdown fences and inline code, and Jira macros. */
+function codeSpans(text: string): readonly Span[] {
+  const all = [...markdownCodeRanges(text), ...blockMacroSpans(text), ...inlineMacroSpans(text)];
+  all.sort((left, right) => left.start - right.start || right.end - left.end);
+  const merged: Span[] = [];
+  for (const span of all) {
+    const last = merged.at(-1);
+    if (last !== undefined && span.start < last.end)
+      merged[merged.length - 1] = { start: last.start, end: Math.max(last.end, span.end) };
+    else merged.push(span);
+  }
+  return merged;
+}
+
+/** The shared marker grammar's groups that stand in prose, never inside code. */
+function proseMarkerGroups(text: string, code: readonly Span[]): readonly CitationMarkerGroup[] {
+  let next = 0;
+  return findCitationMarkerGroups(text).filter((group) => {
+    while (code[next] !== undefined && (code[next]?.end ?? 0) <= group.start) next++;
+    const inCode = code[next] !== undefined && (code[next]?.start ?? 0) < group.end;
+    return !inCode && group.indices.every((index) => index <= MARKER_INDEX_MAX);
   });
+}
+
+/** Spaces and tabs around at most one comma: the separator of `[1], [2]` and `[1][2]`. */
+function isMarkerSeparator(text: string, from: number, to: number): boolean {
+  let commas = 0;
+  for (let position = from; position < to; position++) {
+    const character = text.charAt(position);
+    if (character === ",") commas++;
+    else if (character !== " " && character !== "\t") return false;
+  }
+  return commas <= 1;
+}
+
+const NOT_BEFORE_MARKER = /[\w![]/u;
+const NOT_AFTER_MARKER = /[\w(|]/u;
+
+/** A link `[5](…)`, a wiki link `[5|…]` or a bracket inside a word is never a source marker. */
+function standsAlone(text: string, group: CitationMarkerGroup, side: "start" | "end"): boolean {
+  return side === "start"
+    ? !NOT_BEFORE_MARKER.test(text.charAt(group.start - 1))
+    : !NOT_AFTER_MARKER.test(text.charAt(group.end));
+}
+
+function endsAlone(text: string, group: CitationMarkerGroup | undefined): boolean {
+  return group !== undefined && standsAlone(text, group, "end");
+}
+
+interface MarkerRun extends Span {
+  readonly numbers: readonly number[];
+}
+
+function runOfChain(text: string, chain: readonly CitationMarkerGroup[]): MarkerRun | undefined {
+  const first = chain[0] !== undefined && standsAlone(text, chain[0], "start") ? 0 : 1;
+  let last = chain.length - 1;
+  while (last >= first && !endsAlone(text, chain[last])) last--;
+  const head = chain[first];
+  const tail = chain[last];
+  if (head === undefined || tail === undefined) return undefined;
+  const numbers = chain.slice(first, last + 1).flatMap((group) => group.indices);
+  return { start: head.start, end: tail.end, numbers: [...new Set(numbers)] };
+}
+
+/** Runs of markers such as `[13]`, `[13][14]`, `[13], [14]` or `[13, 14]`, in one pass. */
+function markerRuns(text: string, groups: readonly CitationMarkerGroup[]): readonly MarkerRun[] {
+  const runs: MarkerRun[] = [];
+  let chain: CitationMarkerGroup[] = [];
+  const flush = (): void => {
+    const run = runOfChain(text, chain);
+    if (run !== undefined) runs.push(run);
+    chain = [];
+  };
+  for (const group of groups) {
+    const previous = chain.at(-1);
+    if (previous !== undefined && !isMarkerSeparator(text, previous.end, group.start)) flush();
+    chain.push(group);
+  }
+  flush();
+  return runs;
+}
+
+function trimBlanks(text: string): string {
+  let end = text.length;
+  while (text.charAt(end - 1) === " " || text.charAt(end - 1) === "\t") end--;
+  return text.slice(0, end);
 }
 
 function rewriteText(
@@ -167,13 +316,18 @@ function rewriteText(
   placement: Placement,
   counter: Counter,
 ): string {
+  const groups = proseMarkerGroups(text, codeSpans(text));
   let out = "";
-  let start = 0;
-  for (const code of text.matchAll(CODE_REGION)) {
-    out += rewriteProse(text.slice(start, code.index), labels, placement, counter) + code[0];
-    start = code.index + code[0].length;
+  let cursor = 0;
+  for (const run of markerRuns(text, groups)) {
+    const original = text.slice(run.start, run.end);
+    const rewritten = rewriteRun(run.numbers, original, labels, placement, counter);
+    const before = text.slice(cursor, run.start);
+    // A removed marker takes the blank before it along: "Kick-off [5]" becomes "Kick-off".
+    out += rewritten === "" ? trimBlanks(before) : before + rewritten;
+    cursor = run.end;
   }
-  return out + rewriteProse(text.slice(start), labels, placement, counter);
+  return out + text.slice(cursor);
 }
 
 function rewriteString(

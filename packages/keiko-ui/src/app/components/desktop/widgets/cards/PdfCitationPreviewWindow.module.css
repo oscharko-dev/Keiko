@@ -35,7 +35,7 @@
   gap: 6px;
 }
 
-.lazyWidgetScope :global(.pdfv-icon-btn) {
+.lazyWidgetScope .cmpIconButton {
   width: 30px;
   min-height: 30px;
   padding: 0;
@@ -204,12 +204,12 @@
 
 /* The cited passage, framed on its page (#4173): the layer matches the canvas, and each box is
    positioned in fractions of the page so it follows zoom and the shown width. */
-.lazyWidgetScope :global(.pdfv-page-layer) {
+.cmpPageLayer {
   position: relative;
   max-width: 100%;
 }
 
-.lazyWidgetScope :global(.pdfv-citation-box) {
+.cmpCitationBox {
   position: absolute;
   border: 2px solid var(--accent);
   border-radius: var(--radius-sm);
@@ -218,7 +218,7 @@
 }
 
 @media (forced-colors: active) {
-  .lazyWidgetScope :global(.pdfv-citation-box) {
+  .cmpCitationBox {
     border-color: Highlight;
     background: transparent;
   }

@@ -317,7 +317,13 @@ describe("Chat Markdown skill controls", () => {
     render(<Harness />);
     const dialog = await open();
     await openSkill(dialog);
-    const revised = { ...DOCUMENT, revision: 2, digest: "b".repeat(64) };
+    // The server answers with what it stored: exactly the text that was sent.
+    const revised = {
+      ...DOCUMENT,
+      revision: 2,
+      digest: "b".repeat(64),
+      body: `${DOCUMENT.body}\nRevised.`,
+    };
     vi.mocked(api.saveMarkdownSkill).mockResolvedValue(revised);
     vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([revised]);
     fireEvent.click(within(dialog).getByRole("button", { name: "Markdown" }));

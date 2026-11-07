@@ -1,3 +1,4 @@
+import { chatKnowledgeScopes } from "../requirement-inventory.js";
 import { reserveChatToolPrompt } from "../chat-tool-approvals.js";
 import { JIRA_TOOL_GUIDANCE } from "./jiraToolGuidance.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -290,7 +291,9 @@ export async function createJiraChatToolTurn(
   if (deps.store.findChatById(message.chatId)?.jiraPodBinding === undefined) return undefined;
   const catalog = deps.jiraChatCatalog;
   requireDispatch(catalog !== undefined, "denied", "authority-invalid");
-  const managed = await catalog.get();
+  const managed = await catalog.get({
+    knowledgeScoped: chatKnowledgeScopes(deps.store.findChatById(message.chatId)).length > 0,
+  });
   const correlation = correlationIdOrUnknown(correlationId);
   const bound = mintAndBoundChatTurn<JiraChatTurnOptions["authority"]>(
     deps,

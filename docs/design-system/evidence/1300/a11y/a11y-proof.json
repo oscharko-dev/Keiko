@@ -45,7 +45,7 @@
     },
     {
       "path": "docs/design-system/evidence/1300/browser/capture.mjs",
-      "sha256": "0cf20a8782eeb190ac35ca193d162b127c92b377abcdc3af67db74bea7b55f45"
+      "sha256": "87a32500e9c7c177f3e8e0a651455dab3a58f9a930eb78d9cd02d2a222802f8b"
     },
     {
       "path": "docs/design-system/evidence/1300/component-fixture-data.json",
@@ -89,7 +89,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/PdfCitationPreviewWindow.module.css",
-      "sha256": "cff8d9ba0a72bc481669096937ab47a6f2c28bd46a3dffe73bfd4515bdf2ea39"
+      "sha256": "b5a381e654ff6e6f60dd3bc80d17dc47ec9b3755e14c3c9a5bf3317dee1e99e1"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css",
@@ -122,8 +122,8 @@
   ],
   "postCssSha256": "a75653326a80e3d3ca9212fe75c233744952b1129d216cbb11741b094da870c2",
   "run": {
-    "generatedAt": "2026-11-03T20:54:13.970Z",
-    "repoHeadSha": "298e939febfcc0f2959bfeffb9f377acaf9f5999"
+    "generatedAt": "2026-11-07T15:39:21.631Z",
+    "repoHeadSha": "b062bc72b25fa32b9cbe36dab16236c12ac46e0d"
   },
   "gate": "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",
   "coverage": "contrast (color-contrast), name/role/value (aria-*, label, button-name, link-name), keyboard semantics (tablist/grid/listbox roles), reduced-motion, forced-colors, prefers-contrast",

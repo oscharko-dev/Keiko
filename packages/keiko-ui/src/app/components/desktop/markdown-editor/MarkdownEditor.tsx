@@ -106,6 +106,7 @@ function useMarkdownEditorState(props: MarkdownEditorProps): {
   readonly notice: string;
   readonly setNotice: (notice: string) => void;
   readonly changeBody: (body: string) => void;
+  readonly keepPasteAsSource: (body: string) => void;
 } {
   const body = splitMarkdownDocument(props.value).body;
   const [view, setView] = useDocumentView(props.documentKey, body);
@@ -123,8 +124,25 @@ function useMarkdownEditorState(props: MarkdownEditorProps): {
     const frontMatter = splitMarkdownDocument(latest.current.value).frontMatter;
     latest.current.onChange(joinMarkdownDocument({ frontMatter, body: next }));
   };
+  const keepPasteAsSource = (next: string): void => {
+    reportClientDiagnostic("Keiko Markdown editor kept pasted Markdown in source.", {
+      composerActivity: "markdown-rich-unavailable",
+    });
+    changeBody(next);
+    setView("source");
+  };
   useSourceFallbackReport(props.documentKey, view, formattable);
-  return { view, setView, formattable, controller, refreshToolbar, notice, setNotice, changeBody };
+  return {
+    view,
+    setView,
+    formattable,
+    controller,
+    refreshToolbar,
+    notice,
+    setNotice,
+    changeBody,
+    keepPasteAsSource,
+  };
 }
 
 /**
@@ -138,12 +156,12 @@ export function MarkdownEditor(props: MarkdownEditorProps): ReactNode {
   const title = useTitleSelection(props);
   const { view, formattable } = editor;
   return (
-    <div className={styles.mdeRoot} data-view={view}>
-      <div className={styles.mdeBar}>
+    <div className={styles.cmpMdeRoot} data-view={view}>
+      <div className={styles.cmpMdeBar}>
         {view === "rich" ? (
           <MarkdownEditorToolbar controller={editor.controller.current} />
         ) : (
-          <span className={styles.mdeGrow} />
+          <span className={styles.cmpMdeGrow} />
         )}
         <MarkdownViewSwitch view={view} formattable={formattable} onView={editor.setView} />
       </div>
@@ -156,7 +174,7 @@ export function MarkdownEditor(props: MarkdownEditorProps): ReactNode {
           }
         />
       )}
-      <div className={styles.mdeBody}>
+      <div className={styles.cmpMdeBody}>
         {view === "rich" ? (
           <FormattedSurface
             key={props.documentKey}
@@ -167,6 +185,7 @@ export function MarkdownEditor(props: MarkdownEditorProps): ReactNode {
             onChange={editor.changeBody}
             onState={editor.refreshToolbar}
             onLimit={() => editor.setNotice(t("markdownEditor.limit"))}
+            onSourcePaste={editor.keepPasteAsSource}
             title={title}
           />
         ) : (
@@ -204,6 +223,7 @@ interface FormattedSurfaceProps {
   readonly onChange: (body: string) => void;
   readonly onState: () => void;
   readonly onLimit: () => void;
+  readonly onSourcePaste: (body: string) => void;
   readonly title: ReturnType<typeof useTitleSelection>;
 }
 
@@ -218,11 +238,12 @@ function openFormattedDocument(
     maxLength: options.props.maxLength,
     ariaLabel: options.props.ariaLabel,
     placeholder: options.props.placeholder ?? "",
-    className: styles.mdeDocument ?? "",
+    className: styles.cmpMdeDocument ?? "",
     labels: options.labels,
     onChange: (next): void => current.current.onChange(next),
     onState: (): void => current.current.onState(),
     onLimit: (): void => current.current.onLimit(),
+    onSourcePaste: (next): void => current.current.onSourcePaste(next),
   });
   if (options.title.pending) {
     options.title.done();
@@ -249,7 +270,7 @@ function FormattedSurface(surface: FormattedSurfaceProps): ReactNode {
       controller.current = null;
     };
   }, [controller]);
-  return <div ref={host} className={styles.mdePage} />;
+  return <div ref={host} className={styles.cmpMdePage} />;
 }
 
 function SourceSurface({
@@ -267,7 +288,7 @@ function SourceSurface({
   return (
     <>
       <textarea
-        className={styles.mdeSource}
+        className={styles.cmpMdeSource}
         aria-label={`${props.ariaLabel} · ${t("markdownEditor.view.source")}`}
         placeholder={props.placeholder}
         value={body}
@@ -277,7 +298,7 @@ function SourceSurface({
       />
       {view === "split" ? (
         <section
-          className={styles.mdePreview}
+          className={styles.cmpMdePreview}
           aria-label={t("markdownEditor.preview")}
           // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- the preview scrolls on its own
           tabIndex={0}
@@ -300,10 +321,12 @@ function FrontMatterField({
   const t = useTranslate();
   const lines = value.length === 0 ? 0 : value.split("\n").length;
   return (
-    <details className={styles.mdeMeta}>
+    <details className={styles.cmpMdeMeta}>
       <summary>
         {t("markdownEditor.frontMatter")}
-        <span className={styles.mdeMetaCount}>{t("markdownEditor.lines", { count: lines })}</span>
+        <span className={styles.cmpMdeMetaCount}>
+          {t("markdownEditor.lines", { count: lines })}
+        </span>
       </summary>
       <textarea
         aria-label={t("markdownEditor.frontMatter")}
@@ -325,8 +348,8 @@ function MarkdownStatus({
 }): ReactNode {
   const t = useTranslate();
   return (
-    <div className={styles.mdeStatus}>
-      <output className={styles.mdeNotice}>{notice}</output>
+    <div className={styles.cmpMdeStatus}>
+      <output className={styles.cmpMdeNotice}>{notice}</output>
       <span>{t("markdownEditor.format")}</span>
       <span>{t("markdownEditor.characters", { count: count.toLocaleString() })}</span>
     </div>

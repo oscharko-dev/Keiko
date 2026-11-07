@@ -83,8 +83,17 @@ export function markdownInlineToJiraWiki(line: string): string {
     .join("");
 }
 
-function listDepth(indent: string): number {
-  return Math.min(6, Math.floor(indent.replaceAll("\t", "  ").length / 2) + 1);
+/** Jira wiki lists nest six levels deep. */
+const LIST_DEPTH_MAX = 6;
+
+/** One open list item: where its marker starts and the wiki character of its list. */
+interface ListLevel {
+  readonly indent: number;
+  readonly type: "*" | "#";
+}
+
+function indentWidth(indent: string): number {
+  return indent.replaceAll("\t", "  ").length;
 }
 
 function tableCells(line: string): readonly string[] {
@@ -92,27 +101,49 @@ function tableCells(line: string): readonly string[] {
   return inner.split("|").map((cell) => markdownInlineToJiraWiki(cell.trim()));
 }
 
-/** A bullet or numbered item, nested by its indentation; undefined for any other line. */
-function listLine(line: string): string | undefined {
+/**
+ * A bullet or numbered item. The wiki marker is the path of its ancestors' list types plus its own
+ * (`*#` is a numbered item under a bullet). An item nests under the open item whose marker starts
+ * at least two columns before its own, which holds for `- `, `1. ` and `10. ` parents alike.
+ */
+function listLine(list: ListLevel[], line: string): string | undefined {
   const bullet = BULLET.exec(line);
   const item = bullet ?? ORDERED.exec(line);
   if (item === null) return undefined;
-  const marker = bullet === null ? "#" : "*";
-  return `${marker.repeat(listDepth(item[1] ?? ""))} ${markdownInlineToJiraWiki(item[2] ?? "")}`;
+  const indent = indentWidth(item[1] ?? "");
+  while (list.length > 0 && indent < (list.at(-1)?.indent ?? 0) + 2) list.pop();
+  const type = bullet === null ? "#" : "*";
+  list.push({ indent, type });
+  const marker = list
+    .slice(0, LIST_DEPTH_MAX)
+    .map((level) => level.type)
+    .join("");
+  return `${marker} ${markdownInlineToJiraWiki(item[2] ?? "")}`;
+}
+
+/** Whether a non-list line is the wrapped continuation of the open item above it. */
+function continuesItem(list: readonly ListLevel[], line: string): boolean {
+  const top = list.at(-1);
+  if (top === undefined || line.trim() === "") return top !== undefined;
+  return indentWidth(/^[ \t]*/u.exec(line)?.[0] ?? "") >= top.indent + 2;
 }
 
 /** One line outside code. Wiki headings keep their marker; everything else is block + inline. */
-function blockLine(line: string): string {
-  if (QUOTED.test(line)) return line;
-  if (WIKI_HEADING.test(line)) return markdownInlineToJiraWiki(line);
-  if (RULE.test(line)) return "----";
-  const list = listLine(line);
-  if (list !== undefined) return list;
-  return markdownInlineToJiraWiki(line);
+function blockLine(list: ListLevel[], line: string): string {
+  const quoted = QUOTED.test(line);
+  const rule = RULE.test(line);
+  const boundary = quoted || rule || WIKI_HEADING.test(line);
+  const item = boundary ? undefined : listLine(list, line);
+  if (item !== undefined) return item;
+  // A blank line or an indented continuation keeps the list open; any other line ends it.
+  if (boundary || !continuesItem(list, line)) list.length = 0;
+  if (rule) return "----";
+  return quoted ? line : markdownInlineToJiraWiki(line);
 }
 
 interface Converter {
   readonly out: string[];
+  readonly list: ListLevel[];
   fence: Fence | undefined;
   macro: string | undefined;
   header: boolean;
@@ -132,15 +163,21 @@ function fenceOpen(
   return { marker: body.slice(0, length), language: FENCE_LANGUAGE.exec(info)?.[1] ?? "" };
 }
 
+/** A closing fence: the opening character, at least as long, and nothing else on the line. */
+function closesFence(marker: string, line: string): boolean {
+  const closing = line.trim();
+  return closing.length >= marker.length && closing.replaceAll(marker.slice(0, 1), "") === "";
+}
+
+/** Inside a fence: every line is literal until its closing fence. */
+function activeFenceLine(state: Converter, fence: Fence, line: string): void {
+  if (closesFence(fence.marker, line)) {
+    state.out.push("{code}");
+    state.fence = undefined;
+  } else state.out.push(line);
+}
+
 function fenceLine(state: Converter, line: string): boolean {
-  if (state.fence !== undefined) {
-    const closing = line.trim();
-    if (closing.startsWith(state.fence.marker) && /^[`~]+$/u.test(closing)) {
-      state.out.push("{code}");
-      state.fence = undefined;
-    } else state.out.push(line);
-    return true;
-  }
   const open = fenceOpen(line);
   if (open === undefined) return false;
   state.fence = { marker: open.marker };
@@ -148,13 +185,14 @@ function fenceLine(state: Converter, line: string): boolean {
   return true;
 }
 
+/** Inside a `{code}`/`{noformat}` macro: every line is literal until its closing macro line. */
+function activeMacroLine(state: Converter, line: string): void {
+  state.out.push(line);
+  if (MACRO_FENCE.exec(line)?.[1] === state.macro) state.macro = undefined;
+}
+
 function macroLine(state: Converter, line: string): boolean {
   const macro = MACRO_FENCE.exec(line)?.[1];
-  if (state.macro !== undefined) {
-    state.out.push(line);
-    if (macro === state.macro) state.macro = undefined;
-    return true;
-  }
   if (macro === undefined) return false;
   state.out.push(line);
   state.macro = macro;
@@ -182,6 +220,19 @@ function tableLine(state: Converter, line: string, next: string | undefined): bo
   return true;
 }
 
+/** Active code states first, so an open block is never reinterpreted; then new blocks. */
+function codeOrTableLine(state: Converter, line: string, next: string | undefined): boolean {
+  if (state.fence !== undefined) {
+    activeFenceLine(state, state.fence, line);
+    return true;
+  }
+  if (state.macro !== undefined) {
+    activeMacroLine(state, line);
+    return true;
+  }
+  return fenceLine(state, line) || macroLine(state, line) || tableLine(state, line, next);
+}
+
 /**
  * Converts Markdown to Data Center wiki markup, line ending by line ending. The input is expected
  * to have its headings serialized already (`hN. Title`). Returns undefined when a fence is left
@@ -190,22 +241,61 @@ function tableLine(state: Converter, line: string, next: string | undefined): bo
 export function markdownBlocksToJiraWiki(text: string): string | undefined {
   const parts = text.split(/(\r\n|\r|\n)/u);
   const lines = parts.filter((_part, index) => index % 2 === 0);
-  const state: Converter = { out: [], fence: undefined, macro: undefined, header: false };
+  const state: Converter = {
+    out: [],
+    list: [],
+    fence: undefined,
+    macro: undefined,
+    header: false,
+  };
   for (const [index, line] of lines.entries()) {
     const before = state.out.length;
-    if (
-      !fenceLine(state, line) &&
-      !macroLine(state, line) &&
-      !tableLine(state, line, lines[index + 1])
-    ) {
+    if (!codeOrTableLine(state, line, lines[index + 1])) {
       state.header = false;
-      state.out.push(blockLine(line));
-    }
+      state.out.push(blockLine(state.list, line));
+    } else state.list.length = 0;
     // A dropped table rule takes its own line ending with it; every kept line keeps its ending.
     if (state.out.length > before)
       state.out[before] = `${state.out[before] ?? ""}${parts[index * 2 + 1] ?? ""}`;
   }
   return state.fence === undefined ? state.out.join("") : undefined;
+}
+
+const LINK_SCHEMES = ["https://", "http://", "mailto:", "/", "#"];
+
+/** The label before a `](` at `close`: non-empty, and it spans no bracket or line ending. */
+function labelBefore(text: string, close: number): boolean {
+  let index = close - 1;
+  while (index >= 0 && text[index] !== "[" && text[index] !== "]" && text[index] !== "\n")
+    index -= 1;
+  return index >= 0 && text[index] === "[" && index < close - 1;
+}
+
+/** The target after `](`: a known scheme, then no whitespace or `[`, parentheses balanced one deep. */
+function targetAfter(text: string, start: number): boolean {
+  if (!LINK_SCHEMES.some((scheme) => text.startsWith(scheme, start))) return false;
+  let depth = 0;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index] ?? "";
+    if (char === "(") {
+      if (depth === 1) return false;
+      depth = 1;
+    } else if (char === ")") {
+      if (depth === 0) return true;
+      depth = 0;
+    } else if (char === "[" || /\s/u.test(char)) return false;
+  }
+  return false;
+}
+
+/**
+ * A `[label](target)` link, found by a linear scan: each `](` looks back to its own label and
+ * forward to the end of its own target, and neither walk crosses the next bracket or parenthesis.
+ */
+function hasMarkdownLink(text: string): boolean {
+  for (let at = text.indexOf("]("); at >= 0; at = text.indexOf("](", at + 1))
+    if (labelBefore(text, at) && targetAfter(text, at + 2)) return true;
+  return false;
 }
 
 /**
@@ -215,7 +305,7 @@ export function markdownBlocksToJiraWiki(text: string): string | undefined {
 export function readsAsMarkdownOnly(text: string): boolean {
   const markdown =
     /\*\*(?=\S)[^*\n]*?\S\*\*/u.test(text) ||
-    /\[[^[\]\n]+\]\((?:https?:\/\/|mailto:|\/|#)[^()[\s]*\)/u.test(text) ||
+    hasMarkdownLink(text) ||
     /^ {0,3}(?:`{3,}|~{3,})/mu.test(text);
   const wiki =
     /^h[1-6]\.\s/mu.test(text) ||

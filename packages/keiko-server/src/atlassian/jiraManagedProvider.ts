@@ -3,6 +3,7 @@ import {
   type JiraManagedConnection,
   type JiraManagedMutationExecutor,
   type JiraDraftToolDeps,
+  type JiraDraftBatchExecutor,
   type JiraReportToolDeps,
 } from "@oscharko-dev/keiko-connectors";
 import {
@@ -31,6 +32,7 @@ import {
   JIRA_FAILURE_MESSAGES_SCHEMA,
   JIRA_MUTATION_DECLARATIONS,
 } from "./jiraManagedMutationDescriptors.js";
+import { JIRA_DRAFT_BATCH_DECLARATION } from "./jiraDraftBatchDescriptor.js";
 import { JIRA_DRAFT_STAGE_DECLARATION } from "./jiraDraftDescriptor.js";
 import { JIRA_REPORT_DECLARATION } from "./jiraReportDescriptor.js";
 import { JIRA_APPLICABLE_TEMPLATES_SCHEMA } from "./jiraTemplateMetadataSchema.js";
@@ -118,7 +120,10 @@ interface ReadDefinition {
   readonly paged?: boolean;
 }
 const DEFINITIONS: Readonly<
-  Record<Exclude<JiraManagedReadToolName, "jira.report" | "jira.draft-stage">, ReadDefinition>
+  Record<
+    Exclude<JiraManagedReadToolName, "jira.report" | "jira.draft-stage" | "jira.draft-batch">,
+    ReadDefinition
+  >
 > = {
   "jira.projects": {
     description: "Read projects visible to the connected identity.",
@@ -230,6 +235,7 @@ function readToolRef(name: JiraManagedReadToolName): ReturnType<typeof createToo
 function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   if (name === "jira.report") return JIRA_REPORT_DECLARATION;
   if (name === "jira.draft-stage") return JIRA_DRAFT_STAGE_DECLARATION;
+  if (name === "jira.draft-batch") return JIRA_DRAFT_BATCH_DECLARATION;
   const definition = DEFINITIONS[name];
   const descriptor = createToolDescriptor({
     toolRef: readToolRef(name),
@@ -285,6 +291,7 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
   executeMutation?: JiraManagedMutationExecutor<Context>,
   report?: JiraReportToolDeps<Context>,
   draft?: JiraDraftToolDeps<Context>,
+  batch?: JiraDraftBatchExecutor<Context>,
 ): ManagedMcpProvider<Context> {
   const selected = tools.map((name) => {
     const declaration = DECLARATIONS.find((item) => item.name === name);
@@ -297,5 +304,6 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
     ...(executeMutation === undefined ? {} : { executeMutation }),
     ...(report === undefined ? {} : { report }),
     ...(draft === undefined ? {} : { draft }),
+    ...(batch === undefined ? {} : { batch }),
   });
 }

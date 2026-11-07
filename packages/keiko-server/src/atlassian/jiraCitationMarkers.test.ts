@@ -4,12 +4,18 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import {
+  LINEAR_RATIO_MAX,
+  measureScaling,
+  scalingRatio,
+} from "../../../../tests/support/property-testing.js";
 import type { ChatMessage } from "../store/index.js";
 import {
   isJiraTextWrite,
   latestCitationLabels,
   recordJiraCitationMarkers,
   resolveJiraCitationMarkers,
+  unambiguousCitationLabels,
 } from "./jiraCitationMarkers.js";
 
 function answer(id: string, citations: readonly { marker: string; label: string }[]): ChatMessage {
@@ -183,5 +189,146 @@ describe("Jira text names the sources of the grounded answer it was written from
     });
     expect(JSON.stringify(sink.events)).not.toContain("Lastenheft");
     expectActivityLogProof("jira.citation.markers.line", formatActivityLogProofLine(line ?? {}));
+  });
+
+  describe("source replacement is confined to prose (F3)", () => {
+    const spec = new Map([[1, "Spec A"]]);
+    const resolve = (description: string): unknown =>
+      resolveJiraCitationMarkers({ description }, spec).arguments;
+
+    it("keeps a tilde fence untouched", () => {
+      const code = "~~~python\nvalues = [1]\n~~~";
+      expect(resolve(`Ziel [1]\n${code}`)).toEqual({ description: `Ziel (Spec A)\n${code}` });
+    });
+
+    it("keeps a four-backtick block with an inner three-backtick run untouched", () => {
+      const code = "````md\n```\ninner [1]\n```\nafter [1]\n````";
+      expect(resolve(`Ziel [1]\n${code}\nEnde [1]`)).toEqual({
+        description: `Ziel (Spec A)\n${code}\nEnde (Spec A)`,
+      });
+    });
+
+    it("resolves grouped, lenticular and fullwidth markers like the shared grammar", () => {
+      const labels = new Map([
+        [1, "Spec A"],
+        [2, "Spec B"],
+      ]);
+      const rewrite = resolveJiraCitationMarkers(
+        { description: "Gruppe [1, 2] und \u30101\u3011 sowie \uff3b2\uff3d." },
+        labels,
+      );
+      expect(rewrite.arguments).toEqual({
+        description: "Gruppe (Spec A; Spec B) und (Spec A) sowie (Spec B).",
+      });
+      expect(rewrite).toMatchObject({ resolvedCount: 4, unresolvedCount: 0 });
+    });
+
+    it("keeps links, adjacent and comma-separated runs and counts unknown markers", () => {
+      const labels = new Map([
+        [1, "A"],
+        [2, "B"],
+      ]);
+      const rewrite = resolveJiraCitationMarkers(
+        { description: "x [1][2] y [1] ,\t[2] z [1](http://u) w [9] v a[2]" },
+        labels,
+      );
+      expect(rewrite.arguments).toEqual({
+        description: "x (A; B) y (A; B) z [1](http://u) w [9] v a[2]",
+      });
+      expect(rewrite).toMatchObject({ resolvedCount: 4, unresolvedCount: 1 });
+    });
+
+    it("keeps the wiki code, noformat and inline macros protected", () => {
+      const description = "{code:java}[1]{code} {noformat}[1]{noformat} {{x[1]}} `y[1]` [1]";
+      expect(resolve(description)).toEqual({
+        description: "{code:java}[1]{code} {noformat}[1]{noformat} {{x[1]}} `y[1]` (Spec A)",
+      });
+    });
+
+    it("removes a summary marker with the blank before it", () => {
+      expect(resolveJiraCitationMarkers({ summary: "Titel  [1]" }, spec).arguments).toEqual({
+        summary: "Titel",
+      });
+      expect(resolveJiraCitationMarkers({ summary: "Titel [1], [9]" }, spec).arguments).toEqual({
+        summary: "Titel [9]",
+      });
+    });
+  });
+
+  describe("marker and separator processing is linear (F13)", () => {
+    const labels = new Map([[1, "Spec A"]]);
+    const ratio = (build: (size: number) => Record<string, unknown>): number => {
+      const scaling = measureScaling({
+        build,
+        run: (args) => resolveJiraCitationMarkers(args, labels),
+        size: 8_000,
+        maximumSize: 8_000,
+      });
+      expect(scaling.measurable, JSON.stringify(scaling)).toBe(true);
+      return scalingRatio(scaling);
+    };
+
+    const spaces = (size: number): Record<string, unknown> => ({ summary: " ".repeat(size) + "x" });
+    const markerThenSpaces = (size: number): Record<string, unknown> => ({
+      description: "[1]" + " ".repeat(size) + "x",
+    });
+    const markerThenTabs = (size: number): Record<string, unknown> => ({
+      description: "[1]" + "\t".repeat(size) + "x",
+    });
+    const summaryMarkerThenSpaces = (size: number): Record<string, unknown> => ({
+      summary: "[1]" + " ".repeat(size) + "x",
+    });
+    type Build = (size: number) => Record<string, unknown>;
+    const repeating =
+      (piece: string): Build =>
+      (size: number): Record<string, unknown> => ({
+        description: piece.repeat(Math.ceil(size / piece.length)) + " [1]",
+      });
+    it.each<[string, Build]>([
+      ["a summary of spaces without markers", spaces],
+      ["a description with a marker followed by spaces", markerThenSpaces],
+      ["a description with a marker followed by tabs", markerThenTabs],
+      ["a summary with a marker followed by spaces", summaryMarkerThenSpaces],
+      ["unclosed {code: parameters", repeating("{code:")],
+      ["unclosed {noformat macros", repeating("{noformat")],
+      ["many opening {{ without a close", repeating("{{")],
+      ["{{ spans broken by a line end", repeating("{{x\n")],
+      ["{{ followed by single braces", repeating("{{}")],
+    ])("scales linearly for %s", { timeout: 60_000 }, (_name, build) => {
+      expect(ratio(build)).toBeLessThan(LINEAR_RATIO_MAX);
+    });
+  });
+
+  describe("an earlier answer's numbering is used only when it is unambiguous (F8)", () => {
+    const messages = [
+      answer("a1", [{ marker: "[1]", label: "Spec A" }]),
+      request("u1"),
+      answer("a2", [
+        { marker: "[1]", label: "Spec C" },
+        { marker: "[2]", label: "Spec C2" },
+      ]),
+      request("u2"),
+    ];
+    it("leaves a number that two earlier answers define differently, and keeps the others", () => {
+      const latest = latestCitationLabels(messages, "u3");
+      const labels = unambiguousCitationLabels(messages, "u3", latest);
+      expect([...labels.entries()]).toEqual([[2, "Spec C2"]]);
+      expect(resolveJiraCitationMarkers({ body: "x [1] y [2]" }, labels).arguments).toEqual({
+        body: "x [1] y (Spec C2)",
+      });
+    });
+
+    it("keeps a number every defining answer agrees on, and a single prior answer", () => {
+      const agreeing = [
+        answer("a1", [{ marker: "[1]", label: "Spec A" }]),
+        answer("a2", [{ marker: "[1]", label: "Spec A" }]),
+      ];
+      const labels = unambiguousCitationLabels(agreeing, "u", latestCitationLabels(agreeing, "u"));
+      expect([...labels.entries()]).toEqual([[1, "Spec A"]]);
+      const single = [answer("a1", [{ marker: "[1]", label: "Spec A" }])];
+      expect(unambiguousCitationLabels(single, "u", latestCitationLabels(single, "u")).get(1)).toBe(
+        "Spec A",
+      );
+    });
   });
 });

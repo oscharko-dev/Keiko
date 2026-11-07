@@ -197,7 +197,10 @@ function DocumentHeader(
         <DocumentMeta document={document} template={props.template} dirty={workspace.dirty} />
       </div>
       <div className={styles.cmpInline}>
-        <DocumentFileActions {...props} />
+        <DocumentFileActions
+          key={`${document.key}:${document.stored?.id ?? ""}:${String(document.stored?.revision ?? 0)}`}
+          {...props}
+        />
         <button
           type="button"
           className={styles.cmpPrimary}
