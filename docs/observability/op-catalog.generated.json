@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6f94612c42a29f216c37f6a07dbed1a19ce3209ac734b0048ffacb01ab7518e3",
+    "catalogDigest": "e4a66355b69af7c894251c8dc178917cef9a88f922f07a43c0d3311e2c3df53d",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -38914,9 +38914,12 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
-        "op": "security.java-parser.worker-recycled",
         "category": "security",
         "owner": "keiko-security",
+        "causal": "none",
+        "failureClasses": ["security-java-parse-bound"],
+        "releaseImpact": "patch",
+        "op": "security.java-parser.worker-recycled",
         "emitter": "redaction-java-parser.emitWorkerRecycled",
         "fields": {
           "completeness": {
@@ -38950,21 +38953,21 @@
             "required": true
           }
         },
-        "causal": "none",
         "lifecycle": "end",
         "analyzerProjection": "timeline",
-        "failureClasses": ["security-java-parse-bound"],
         "proofIds": ["security.java-parser.worker-recycled.line"],
-        "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/redaction-java-parser.ts:106",
-        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:272"]
+        "registrationSite": "packages/keiko-security/src/redaction-java-parser.ts:113",
+        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:267"]
       },
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
-        "op": "security.java-parser.worker-retired",
         "category": "security",
         "owner": "keiko-security",
+        "causal": "none",
+        "failureClasses": ["security-java-parse-bound"],
+        "releaseImpact": "patch",
+        "op": "security.java-parser.worker-retired",
         "emitter": "redaction-java-parser.emitWorkerRetired",
         "fields": {
           "completeness": {
@@ -38999,21 +39002,21 @@
             "required": true
           }
         },
-        "causal": "none",
         "lifecycle": "failure",
         "analyzerProjection": "failure-cluster",
-        "failureClasses": ["security-java-parse-bound"],
         "proofIds": ["security.java-parser.worker-retired.line"],
-        "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/redaction-java-parser.ts:127",
-        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:288"]
+        "registrationSite": "packages/keiko-security/src/redaction-java-parser.ts:128",
+        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:283"]
       },
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
-        "op": "security.java-parser.worker-started",
         "category": "security",
         "owner": "keiko-security",
+        "causal": "none",
+        "failureClasses": ["security-java-parse-bound"],
+        "releaseImpact": "patch",
+        "op": "security.java-parser.worker-started",
         "emitter": "redaction-java-parser.emitWorkerStarted",
         "fields": {
           "completeness": {
@@ -39037,14 +39040,11 @@
             "required": true
           }
         },
-        "causal": "none",
         "lifecycle": "state",
         "analyzerProjection": "timeline",
-        "failureClasses": ["security-java-parse-bound"],
         "proofIds": ["security.java-parser.worker-started.line"],
-        "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/redaction-java-parser.ts:87",
-        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:261"]
+        "registrationSite": "packages/keiko-security/src/redaction-java-parser.ts:100",
+        "emitterSites": ["packages/keiko-security/src/redaction-java-parser.ts:256"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -109389,7 +109389,7 @@
     {
       "op": "security.java-parser.worker-recycled",
       "category": "security",
-      "site": "packages/keiko-security/src/redaction-java-parser.ts:109",
+      "site": "packages/keiko-security/src/redaction-java-parser.ts:115",
       "package": "keiko-security"
     },
     {
@@ -109401,7 +109401,7 @@
     {
       "op": "security.java-parser.worker-started",
       "category": "security",
-      "site": "packages/keiko-security/src/redaction-java-parser.ts:90",
+      "site": "packages/keiko-security/src/redaction-java-parser.ts:102",
       "package": "keiko-security"
     },
     {

@@ -2,45 +2,24 @@
 
 import { createServer } from "node:http";
 
+import { isSalienceRequest, readBody, salienceReply } from "./salience-model-mock.mjs";
+
 const PORT = Number(process.env.KEIKO_E2E_MODEL_PORT ?? "32554");
 const HOST = "127.0.0.1";
 const REPLY_MARKER = "KEIKO_M1_CERT_STREAM_OK";
 const REPLY_TOKENS = [REPLY_MARKER, " deterministic", " response."];
 const REPLY_TEXT = REPLY_TOKENS.join("");
-const SALIENCE_SYSTEM_PROMPT_MARKER =
-  "You extract durable memories from a chat turn so an assistant can remember the user across future conversations.";
-const SALIENCE_USER_PREFIX = "User said:\n";
 
-const CANDIDATES = [
-  ["M1_GOVERNED_CAPTURE", "M1_GOVERNED_CAPTURE: The fixture uses a governed release cadence."],
-  [
-    "M1_SUPERVISED_CAPTURE",
-    "M1_SUPERVISED_CAPTURE: The certified-supervised detail is a weekly release cadence.",
-  ],
-  [
-    "M1_AUTONOMOUS_CAPTURE",
-    "M1_AUTONOMOUS_CAPTURE: The fixture silently learns an autonomous release preference.",
-  ],
-  ["M1_VOICE_CAPTURE", "M1_VOICE_CAPTURE: The fixture uses voice-first release notes."],
-  [
-    "M1_REPEAT_CORRECTION",
-    "M1_REPEAT_CORRECTION: The fixture repeated a correction to an existing release detail.",
-  ],
-  [
-    "M1_FIRST_CORRECTION",
-    "M1_FIRST_CORRECTION: The fixture supplied a first correction to a build detail.",
-  ],
-  ["M1_DISABLED_CAPTURE", "M1_DISABLED_CAPTURE: This candidate must remain disabled."],
+// The markers whose turns this mock extracts (see salienceReply).
+const CANDIDATE_MARKERS = [
+  "M1_GOVERNED_CAPTURE",
+  "M1_SUPERVISED_CAPTURE",
+  "M1_AUTONOMOUS_CAPTURE",
+  "M1_VOICE_CAPTURE",
+  "M1_REPEAT_CORRECTION",
+  "M1_FIRST_CORRECTION",
+  "M1_DISABLED_CAPTURE",
 ];
-
-function readBody(req) {
-  return new Promise((resolve) => {
-    const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", () => resolve(""));
-  });
-}
 
 function chunkFrame(delta, finishReason) {
   return `data: ${JSON.stringify({
@@ -99,38 +78,8 @@ function parseRequest(rawRequest) {
   return { messages, stream: parsed.stream === true };
 }
 
-function isSalienceRequest(messages) {
-  return messages.some(
-    (message) =>
-      message.role === "system" && message.content.startsWith(SALIENCE_SYSTEM_PROMPT_MARKER),
-  );
-}
-
-function currentSalienceUserText(messages) {
-  const current = messages.at(-1);
-  if (current?.role !== "user" || !current.content.startsWith(SALIENCE_USER_PREFIX)) return null;
-  return current.content.slice(SALIENCE_USER_PREFIX.length);
-}
-
-function salienceContent(userText) {
-  const match = CANDIDATES.find(([marker]) => userText.includes(marker));
-  if (match === undefined) return "[]";
-  return JSON.stringify([
-    {
-      source: "user",
-      body: match[1],
-      type: "fact",
-      confidence: 0.91,
-      scope: "project",
-      tags: ["m1-certification"],
-    },
-  ]);
-}
-
 function completionContent(messages) {
-  if (!isSalienceRequest(messages)) return REPLY_TEXT;
-  const userText = currentSalienceUserText(messages);
-  return userText === null ? "[]" : salienceContent(userText);
+  return isSalienceRequest(messages) ? salienceReply(messages, CANDIDATE_MARKERS) : REPLY_TEXT;
 }
 
 function bufferedCompletion(res, content) {

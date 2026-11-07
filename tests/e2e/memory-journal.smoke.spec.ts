@@ -180,10 +180,7 @@ async function exerciseDeniedCaptures(context: JournalJourneyContext): Promise<v
 async function captureAndOpenJournal(
   context: JournalJourneyContext,
 ): Promise<{ readonly memoryId: string; readonly memoryWindow: Locator; readonly row: Locator }> {
-  await sendTurn(
-    context.chatWindow,
-    `${CAPTURE_MARKER}: remember the deterministic release window.`,
-  );
+  await sendTurn(context.chatWindow, `${CAPTURE_MARKER}: I keep a deterministic release window.`);
   await expectPersistedCount(context.request, context.since, 1);
   const recent = await fetchRecent(context.request, context.since);
   const memoryId = persistedCaptures(recent)[0]?.memoryId;

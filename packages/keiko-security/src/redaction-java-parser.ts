@@ -84,70 +84,65 @@ const RETIREMENT_REASONS = [
 ] as const;
 type RetirementReason = (typeof RETIREMENT_REASONS)[number];
 
-const JAVA_PARSER_WORKER_STARTED_OPERATION = defineActivityLogOperation({
+const JAVA_PARSER_WORKER_OPERATION_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "security.java-parser.worker-started",
   category: "security",
   owner: "keiko-security",
+  causal: "none",
+  failureClasses: ["security-java-parse-bound"],
+  releaseImpact: "patch",
+} as const;
+
+const COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
+const DURATION_FIELD = { type: "integer", dataClass: "duration", required: true } as const;
+
+const JAVA_PARSER_WORKER_STARTED_OPERATION = defineActivityLogOperation({
+  ...JAVA_PARSER_WORKER_OPERATION_BASE,
+  op: "security.java-parser.worker-started",
   emitter: "redaction-java-parser.emitWorkerStarted",
   fields: {
-    workerOrdinal: { type: "integer", dataClass: "count", required: true },
-    startupMs: { type: "integer", dataClass: "duration", required: true },
+    workerOrdinal: COUNT_FIELD,
+    startupMs: DURATION_FIELD,
   },
-  causal: "none",
   lifecycle: "state",
   analyzerProjection: "timeline",
-  failureClasses: ["security-java-parse-bound"],
   proofIds: ["security.java-parser.worker-started.line"],
-  releaseImpact: "patch",
 });
 
 const JAVA_PARSER_WORKER_RECYCLED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...JAVA_PARSER_WORKER_OPERATION_BASE,
   op: "security.java-parser.worker-recycled",
-  category: "security",
-  owner: "keiko-security",
   emitter: "redaction-java-parser.emitWorkerRecycled",
   fields: {
-    workerOrdinal: { type: "integer", dataClass: "count", required: true },
-    parseCount: { type: "integer", dataClass: "count", required: true },
-    workerAgeMs: { type: "integer", dataClass: "duration", required: true },
-    heapMiB: { type: "integer", dataClass: "count", required: true },
+    workerOrdinal: COUNT_FIELD,
+    parseCount: COUNT_FIELD,
+    workerAgeMs: DURATION_FIELD,
+    heapMiB: COUNT_FIELD,
   },
-  causal: "none",
   lifecycle: "end",
   analyzerProjection: "timeline",
-  failureClasses: ["security-java-parse-bound"],
   proofIds: ["security.java-parser.worker-recycled.line"],
-  releaseImpact: "patch",
 });
 
 const JAVA_PARSER_WORKER_RETIRED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...JAVA_PARSER_WORKER_OPERATION_BASE,
   op: "security.java-parser.worker-retired",
-  category: "security",
-  owner: "keiko-security",
   emitter: "redaction-java-parser.emitWorkerRetired",
   fields: {
-    workerOrdinal: { type: "integer", dataClass: "count", required: true },
+    workerOrdinal: COUNT_FIELD,
     reason: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
       values: [...RETIREMENT_REASONS],
     },
-    parseCount: { type: "integer", dataClass: "count", required: true },
-    workerAgeMs: { type: "integer", dataClass: "duration", required: true },
+    parseCount: COUNT_FIELD,
+    workerAgeMs: DURATION_FIELD,
   },
-  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
-  failureClasses: ["security-java-parse-bound"],
   proofIds: ["security.java-parser.worker-retired.line"],
-  releaseImpact: "patch",
 });
 
 // Plain JavaScript: the worker evaluates this source, so it needs no file beside the module and

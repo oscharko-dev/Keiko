@@ -225,7 +225,7 @@ describe("recent memory capture journey", () => {
       ["auto-accepted", "autonomous-delivery"],
       ["proposed", "governed-assist"],
     ]);
-    expect(initial.map((capture) => capture.scope.kind)).toEqual(["project", "user", "user"]);
+    expect(initial.map((capture) => capture.scope.kind)).toEqual(["user", "user", "user"]);
     expect(
       initial.every(
         (capture) =>
@@ -398,5 +398,40 @@ describe("voice-passive-capture journey", () => {
       (capture) => capture.provenance.initiatorSurface === "conversation-center",
     );
     expect(desktopDecision).toBeDefined();
+  });
+});
+
+describe("refused turn in the Journal", () => {
+  it("shows a refused turn beside private memories under the default authorization", async () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    const vault = makeVault(evidenceStore);
+    const { memoryAuthorization: _authorization, ...unscoped } = depsFor(
+      vault,
+      evidenceStore,
+      "autonomous-delivery",
+      modelFact("I use deterministic deployment windows."),
+    );
+    const deps: UiHandlerDeps = unscoped;
+    const ctx = context();
+    const since = Date.now() - 1_000;
+
+    await captureSalientFromTurn(
+      deps,
+      makeRequest("I use deterministic deployment windows."),
+      ctx,
+      "gpt-test",
+      "ok",
+    );
+    await captureSalientFromTurn(deps, makeRequest(SECRET_TURN), ctx, "gpt-test", "ok");
+
+    // Only the person's private scope holds memory, so only that scope is listed by default.
+    expect(vault.listMemoryScopes().map((scope) => scope.kind)).toEqual(["user"]);
+    const captures = recentCaptures(deps, since);
+    expect(captures.map(({ outcome, scope }) => [outcome, scope.kind])).toEqual([
+      ["rejected", "user"],
+      ["auto-accepted", "user"],
+    ]);
+    expect(captures[0]).not.toHaveProperty("bodyExcerpt");
+    expect(JSON.stringify(captures)).not.toContain(SECRET_MARKER);
   });
 });

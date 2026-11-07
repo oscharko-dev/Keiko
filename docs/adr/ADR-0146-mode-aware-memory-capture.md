@@ -299,7 +299,11 @@ D2 lets a fact through.
   context, never as a source, and a person's pronoun stays a third party. Two limits are
   accepted: a bare first name outside these forms cannot be told from a German noun, and an English
   role behind a determiner ("the customer database") is treated as a person, because privacy
-  outranks recall. Credentials, IBANs, phone numbers and customer identifiers are refused. The model's statement may paraphrase or translate the span, because the span is what is stored, but it
+  outranks recall. Credentials, IBANs, phone numbers and customer identifiers are refused. A message
+  refused as a whole before extraction is the person's own words and names no team, so its
+  content-free decision is recorded in their private user scope, where what Keiko learns about them
+  lands. The Journal lists decisions only for scopes that hold memory, so the refusal is visible
+  while that private scope holds memory; a vault holding only team facts does not show it. The model's statement may paraphrase or translate the span, because the span is what is stored, but it
   keeps the span's polarity, where a verb that rejects its object ("hasse", "avoid") and "ohne"
   count as negation; an inverted statement shows the model misread the fact. Each drop is one closed reason.
 - **Confidence** is derived from what the checks saw, never from the model:

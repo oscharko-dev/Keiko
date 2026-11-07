@@ -857,6 +857,9 @@ async function persistSalienceActions(
   return { actions, summary };
 }
 
+// A refused message is the person's own words and names no team, so its decision belongs to their
+// private scope, where what Keiko learns about them lands. A project scope holding none of their
+// memories would hide the content-free refusal from the Journal.
 function recordTurnCaptureRefusal(
   deps: UiHandlerDeps,
   mode: CodingWorkbenchMode,
@@ -867,7 +870,7 @@ function recordTurnCaptureRefusal(
 ): void {
   recordCaptureDecision(deps, mode, surface, {
     outcome: "rejected",
-    scope: { kind: "project", projectId: context.projectId },
+    scope: { kind: "user", userId: context.userId },
     sourceKind: "system-default",
     reason,
     occurredAt,

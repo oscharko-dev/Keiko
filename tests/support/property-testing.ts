@@ -265,7 +265,7 @@ const EDGE_CHARACTERS: readonly string[] = [
   "&",
 ];
 
-export const unicodeCharacter: Generator<string> = (random) => {
+const unicodeCharacter: Generator<string> = (random) => {
   if (random.chance(0.35)) return random.pick(EDGE_CHARACTERS);
   if (random.chance(0.7)) return String.fromCharCode(random.integer(0x20, 0x7e));
   return String.fromCodePoint(random.integer(0x00a0, 0x2fff));
